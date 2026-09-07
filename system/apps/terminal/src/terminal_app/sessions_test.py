@@ -14,10 +14,16 @@ from app_instances.errors import (
 from app_instances.primitives import InstanceKey, InstanceTitle, LocationPath
 from app_manifest.primitives import ActionId
 
-from terminal_app.data_types import TmuxSession
+from terminal_app.data_types import TerminalPaths, TmuxSession
+from terminal_app.errors import TmuxCommandError
 from terminal_app.sessions import TmuxSessionSource, is_agent_session
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import DEFAULT_TEST_WORKDIR, FakeTmux, make_terminal_record
+from terminal_app.testing import (
+    DEFAULT_TEST_WORKDIR,
+    TEST_SESSION_COMMAND,
+    FakeTmux,
+    make_terminal_record,
+)
 
 _NEW = ActionId("new")
 _ACTIVITY = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
@@ -25,6 +31,15 @@ _ACTIVITY = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
 
 def _session(name: str, session_id: str) -> TmuxSession:
     return TmuxSession(name=name, session_id=session_id, last_activity=_ACTIVITY)
+
+
+def _creates(fake_tmux: FakeTmux) -> list[list[str]]:
+    return [call for call in fake_tmux.calls() if call[0] == "new-session"]
+
+
+def _session_id_file(paths: TerminalPaths, name: str) -> str | None:
+    path = paths.sessions_dir / name
+    return path.read_text() if path.exists() else None
 
 
 def test_is_agent_session_needs_a_configured_prefix() -> None:
@@ -67,6 +82,47 @@ def test_list_merges_live_sessions_with_remembered_ones_and_hides_agents(
     assert all(record.renameable for record in listed)
 
 
+def test_list_matches_a_record_to_its_session_by_id_whatever_tmux_calls_it(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    # Renamed inside tmux; the key and the title are the record's, not the session's name.
+    fake_tmux.set_sessions([_session("my-build", "$5"), _session("terminal-2", "$9")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$5")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir=None, session_id="$9")
+    )
+
+    listed = session_source.list_instances()
+
+    assert [(record.key, record.title, record.status) for record in listed] == [
+        ("terminal-1", "Build", InstanceStatus.IDLE),
+        ("terminal-2", "Terminal 2", InstanceStatus.IDLE),
+    ]
+
+
+def test_list_skips_a_second_session_under_a_tracked_terminals_name(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    # terminal-1's session was renamed inside tmux and a hand-made session took its old name.
+    fake_tmux.set_sessions([_session("terminal-1", "$8"), _session("renamed", "$5")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    )
+
+    listed = session_source.list_instances()
+
+    assert [(record.key, record.status) for record in listed] == [
+        ("terminal-1", InstanceStatus.IDLE)
+    ]
+    assert listed[0].last_active == _ACTIVITY
+
+
 def test_list_is_empty_without_a_tmux_server_or_a_store(
     fake_tmux: FakeTmux, session_source: TmuxSessionSource
 ) -> None:
@@ -75,10 +131,11 @@ def test_list_is_empty_without_a_tmux_server_or_a_store(
     assert session_source.list_instances() == []
 
 
-def test_create_allocates_the_lowest_free_number_over_live_and_remembered_names(
+def test_create_makes_the_session_at_once_with_the_lowest_free_number(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3"), _session("terminal-3", "$4")])
     session_store.save_record(
@@ -88,21 +145,37 @@ def test_create_allocates_the_lowest_free_number_over_live_and_remembered_names(
     created = session_source.create_instance(_NEW, {"workdir": "/home/user/workspace"})
 
     assert created.key == "terminal-4"
-    assert created.status == InstanceStatus.STOPPED
+    assert created.status == InstanceStatus.IDLE
     assert (
         created.url
         == "/?arg=_&arg=session&arg=terminal-4&arg={tab}&arg=%2Fhome%2Fuser%2Fworkspace"
     )
-    assert [record.name for record in session_store.list_records()] == [
-        "terminal-2",
-        "terminal-4",
+    assert fake_tmux.session_names() == ["terminal-1", "terminal-3", "terminal-4"]
+    assert _creates(fake_tmux) == [
+        [
+            "new-session",
+            "-d",
+            "-s",
+            "terminal-4",
+            "-c",
+            "/home/user/workspace",
+            "-P",
+            "-F",
+            "#{session_id}",
+            *TEST_SESSION_COMMAND,
+        ]
     ]
-    # The session itself is created on first attach, so no tmux command ran beyond the listing.
-    assert all(call[0] == "list-sessions" for call in fake_tmux.calls())
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-2", title=None, workdir=None),
+        make_terminal_record(
+            name="terminal-4", title=None, workdir="/home/user/workspace", session_id="$5"
+        ),
+    ]
+    assert _session_id_file(terminal_paths, "terminal-4") == "$5\n"
 
 
-def test_two_creates_before_any_attach_get_distinct_names(
-    session_source: TmuxSessionSource,
+def test_two_creates_get_distinct_names_and_the_default_workdir(
+    fake_tmux: FakeTmux, session_source: TmuxSessionSource
 ) -> None:
     first = session_source.create_instance(_NEW, {})
     second = session_source.create_instance(_NEW, {"workdir": ""})
@@ -114,6 +187,7 @@ def test_two_creates_before_any_attach_get_distinct_names(
         second.url
         == f"/?arg=_&arg=session&arg=terminal-2&arg={{tab}}&arg={default_directory}"
     )
+    assert [call[5] for call in _creates(fake_tmux)] == [DEFAULT_TEST_WORKDIR] * 2
 
 
 def test_create_refuses_other_actions_and_other_params(
@@ -127,21 +201,49 @@ def test_create_refuses_other_actions_and_other_params(
         session_source.create_instance(_NEW, {"workdir": "/tmp/\x00"})
 
 
-def test_delete_kills_the_session_and_forgets_it(
+def test_create_fails_loudly_and_remembers_nothing_when_tmux_refuses(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
 ) -> None:
-    fake_tmux.set_sessions([_session("terminal-1", "$3")])
+    fake_tmux.refuse_creates()
+
+    with pytest.raises(TmuxCommandError, match="could not create session 'terminal-1'"):
+        session_source.create_instance(_NEW, {})
+
+    assert session_store.list_records() == []
+
+
+def test_delete_kills_the_session_by_its_id_and_forgets_it(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    fake_tmux.set_sessions([_session("renamed-in-tmux", "$3")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None)
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
     )
+    terminal_paths.sessions_dir.mkdir(parents=True)
+    (terminal_paths.sessions_dir / "terminal-1").write_text("$3\n")
 
     session_source.delete_instance(InstanceKey("terminal-1"))
 
     assert fake_tmux.session_names() == []
     assert session_store.list_records() == []
-    assert ["kill-session", "-t", "=terminal-1"] in fake_tmux.calls()
+    assert ["kill-session", "-t", "$3"] in fake_tmux.calls()
+    assert _session_id_file(terminal_paths, "terminal-1") is None
+
+
+def test_delete_kills_a_session_with_no_record_by_name(
+    fake_tmux: FakeTmux, session_source: TmuxSessionSource
+) -> None:
+    fake_tmux.set_sessions([_session("hand-made", "$3")])
+
+    session_source.delete_instance(InstanceKey("hand-made"))
+
+    assert fake_tmux.session_names() == []
+    assert ["kill-session", "-t", "=hand-made"] in fake_tmux.calls()
 
 
 def test_delete_of_an_unknown_or_impossible_key_is_not_an_error(
@@ -166,32 +268,32 @@ def test_delete_refuses_an_agents_session(
     assert fake_tmux.session_names() == ["mngr-alice"]
 
 
-def test_rename_canonicalizes_the_title_renames_in_tmux_and_rekeys_the_record(
+def test_rename_changes_only_the_title_and_never_the_key_or_the_session(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3")])
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir="/srv")
+        make_terminal_record(name="terminal-1", title=None, workdir="/srv", session_id="$3")
     )
 
     renamed = session_source.rename_instance(
         InstanceKey("terminal-1"), InstanceTitle("My Build")
     )
 
-    assert renamed.key == "My-Build"
+    assert renamed.key == "terminal-1"
     assert renamed.title == "My Build"
     assert renamed.status == InstanceStatus.IDLE
-    assert renamed.url == "/?arg=_&arg=session&arg=My-Build&arg={tab}&arg=%2Fsrv"
-    assert ["rename-session", "-t", "=terminal-1", "My-Build"] in fake_tmux.calls()
-    assert fake_tmux.session_names() == ["My-Build"]
+    assert renamed.url == "/?arg=_&arg=session&arg=terminal-1&arg={tab}&arg=%2Fsrv"
+    assert fake_tmux.session_names() == ["terminal-1"]
+    assert all(call[0] == "list-sessions" for call in fake_tmux.calls())
     assert session_store.list_records() == [
-        make_terminal_record(name="My-Build", title="My Build", workdir="/srv")
+        make_terminal_record(name="terminal-1", title="My Build", workdir="/srv", session_id="$3")
     ]
 
 
-def test_rename_of_a_live_session_the_store_never_saw_remembers_it(
+def test_rename_of_a_live_session_the_store_never_saw_remembers_it_with_its_id(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
@@ -200,41 +302,32 @@ def test_rename_of_a_live_session_the_store_never_saw_remembers_it(
 
     session_source.rename_instance(InstanceKey("terminal-1"), InstanceTitle("Build"))
 
-    assert [record.name for record in session_store.list_records()] == ["Build"]
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir=None, session_id="$3")
+    ]
 
 
-def test_rename_to_a_title_that_canonicalizes_to_the_same_name_only_stores_the_title(
-    fake_tmux: FakeTmux,
-    session_store: JsonTerminalSessionStore,
-    session_source: TmuxSessionSource,
-) -> None:
-    fake_tmux.set_sessions([_session("terminal-1", "$3")])
-
-    renamed = session_source.rename_instance(
-        InstanceKey("terminal-1"), InstanceTitle("terminal 1")
-    )
-
-    assert renamed.key == "terminal-1"
-    assert renamed.title == "terminal 1"
-    assert not any(call[0] == "rename-session" for call in fake_tmux.calls())
-    assert session_store.list_records()[0].title == "terminal 1"
-
-
-def test_rename_of_a_stopped_terminal_rekeys_the_record_without_touching_tmux(
+def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
 ) -> None:
     session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir=None)
+        make_terminal_record(name="terminal-1", title=None, workdir=None, is_stopped=True)
     )
 
     renamed = session_source.rename_instance(
         InstanceKey("terminal-1"), InstanceTitle("Later")
     )
 
-    assert (renamed.key, renamed.status) == ("Later", InstanceStatus.STOPPED)
-    assert not any(call[0] == "rename-session" for call in fake_tmux.calls())
+    assert (renamed.key, renamed.title, renamed.status) == (
+        "terminal-1",
+        "Later",
+        InstanceStatus.STOPPED,
+    )
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Later", workdir=None, is_stopped=True)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -244,7 +337,7 @@ def test_rename_of_a_stopped_terminal_rekeys_the_record_without_touching_tmux(
         ("x" * 200, "over the 128-character limit"),
     ],
 )
-def test_rename_refuses_a_title_that_makes_no_session_name(
+def test_rename_refuses_a_title_that_makes_no_usable_name(
     fake_tmux: FakeTmux,
     session_source: TmuxSessionSource,
     title: str,
@@ -256,25 +349,27 @@ def test_rename_refuses_a_title_that_makes_no_session_name(
         session_source.rename_instance(InstanceKey("terminal-1"), InstanceTitle(title))
 
 
-def test_rename_refuses_a_name_another_terminal_holds_case_insensitively(
+def test_rename_refuses_a_title_another_terminal_holds_case_insensitively(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
 ) -> None:
     fake_tmux.set_sessions([_session("terminal-1", "$3"), _session("build", "$4")])
     session_store.save_record(
-        make_terminal_record(name="deploy", title=None, workdir=None)
+        make_terminal_record(name="terminal-2", title="Deploy", workdir=None)
     )
 
     with pytest.raises(InstanceConflictError, match="already named 'Build'"):
         session_source.rename_instance(
             InstanceKey("terminal-1"), InstanceTitle("Build")
         )
-    with pytest.raises(InstanceConflictError, match="already named 'Deploy'"):
+    with pytest.raises(InstanceConflictError, match="already named 'deploy'"):
         session_source.rename_instance(
-            InstanceKey("terminal-1"), InstanceTitle("Deploy")
+            InstanceKey("terminal-1"), InstanceTitle("deploy")
         )
-    assert fake_tmux.session_names() == ["terminal-1", "build"]
+    # A terminal may keep its own title under another spelling.
+    retitled = session_source.rename_instance(InstanceKey("build"), InstanceTitle("BUILD"))
+    assert retitled.title == "BUILD"
 
 
 def test_rename_of_an_unknown_key_is_404_and_of_an_agent_is_refused(
@@ -288,10 +383,101 @@ def test_rename_of_an_unknown_key_is_404_and_of_an_agent_is_refused(
         session_source.rename_instance(
             InstanceKey("mngr-alice"), InstanceTitle("Alice")
         )
-    with pytest.raises(InstanceConflictError, match="non-terminal session"):
-        session_source.rename_instance(InstanceKey("ghost"), InstanceTitle("mngr-bob"))
 
 
 def test_set_location_is_not_tracked(session_source: TmuxSessionSource) -> None:
     with pytest.raises(LocationNotTrackedError):
         session_source.set_location(InstanceKey("terminal-1"), LocationPath("/"))
+
+
+def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_ones(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    # terminal-1 survived (by id, under another name); terminal-2 survived under its name from
+    # before ids were kept; terminal-3 was lost to a container restart; terminal-4 was stopped.
+    fake_tmux.set_sessions([_session("renamed", "$5"), _session("terminal-2", "$6")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir=None)
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-3", title="Build", workdir="/srv")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-4", title=None, workdir=None, is_stopped=True)
+    )
+    terminal_paths.sessions_dir.mkdir(parents=True)
+    (terminal_paths.sessions_dir / "terminal-4").write_text("$2\n")
+
+    session_source.recreate_remembered_sessions()
+
+    assert fake_tmux.session_names() == ["renamed", "terminal-2", "terminal-3"]
+    assert _creates(fake_tmux) == [
+        ["new-session", "-d", "-s", "terminal-3", "-c", "/srv", "-P", "-F", "#{session_id}", *TEST_SESSION_COMMAND]
+    ]
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5"),
+        make_terminal_record(name="terminal-2", title=None, workdir=None, session_id="$6"),
+        make_terminal_record(name="terminal-3", title="Build", workdir="/srv", session_id="$7"),
+        make_terminal_record(name="terminal-4", title=None, workdir=None, is_stopped=True),
+    ]
+    assert {
+        name: _session_id_file(terminal_paths, name)
+        for name in ("terminal-1", "terminal-2", "terminal-3", "terminal-4")
+    } == {"terminal-1": "$5\n", "terminal-2": "$6\n", "terminal-3": "$7\n", "terminal-4": None}
+    assert [(record.key, record.status) for record in session_source.list_instances()] == [
+        ("terminal-1", InstanceStatus.IDLE),
+        ("terminal-2", InstanceStatus.IDLE),
+        ("terminal-3", InstanceStatus.IDLE),
+        ("terminal-4", InstanceStatus.STOPPED),
+    ]
+
+
+def test_startup_leaves_a_terminal_stopped_when_tmux_cannot_recreate_it(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    fake_tmux.refuse_creates()
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
+    )
+
+    session_source.recreate_remembered_sessions()
+
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title=None, workdir=None)
+    ]
+    assert [record.status for record in session_source.list_instances()] == [
+        InstanceStatus.STOPPED
+    ]
+
+
+def test_observe_attached_session_keys_by_id_adopts_by_name_and_ignores_agents(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir=None, is_stopped=True)
+    )
+
+    assert session_source.observe_attached_session("$5", "renamed") == "terminal-1"
+    assert session_source.observe_attached_session("$8", "terminal-2") == "terminal-2"
+    assert session_source.observe_attached_session("$9", "hand-made") == "hand-made"
+    assert session_source.observe_attached_session("$1", "mngr-alice") is None
+    assert session_source.observe_attached_session("$2", "hand made") is None
+
+    assert session_store.list_records()[1] == make_terminal_record(
+        name="terminal-2", title=None, workdir=None, session_id="$8"
+    )
+    assert _session_id_file(terminal_paths, "terminal-2") == "$8\n"

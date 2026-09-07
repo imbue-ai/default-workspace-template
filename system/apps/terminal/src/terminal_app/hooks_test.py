@@ -2,19 +2,13 @@ from pathlib import Path
 
 import pytest
 from app_instances.testing import RecordedShellRequests, RecordingNudger
-from app_manifest.primitives import AppName
-from flask import Flask
 from flask.testing import FlaskClient
 
-from terminal_app.data_types import TerminalPaths, TmuxClient
-from terminal_app.hooks import (
-    HttpShellPoster,
-    build_tmux_hook_blueprint,
-    resolve_tab_id_for_tty,
-)
+from terminal_app.data_types import TerminalPaths, TmuxSession
+from terminal_app.hooks import resolve_tab_id_for_tty
 from terminal_app.primitives import ClientTty
-from terminal_app.testing import FakeTmux
-from terminal_app.tmux import SubprocessTmux
+from terminal_app.store import JsonTerminalSessionStore
+from terminal_app.testing import FakeTmux, make_terminal_record
 
 
 def _record_tab(paths: TerminalPaths, tab_id: str, tty: str) -> None:
@@ -110,27 +104,70 @@ def test_session_changed_to_a_session_that_cannot_be_a_key_only_nudges(
     assert recording_shell.paths() == []
 
 
-def test_session_renamed_repoints_every_attached_tab_and_nudges(
+def test_session_changed_keys_the_tab_by_the_terminal_whose_session_id_it_is(
     hook_client: FlaskClient,
     fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
     terminal_paths: TerminalPaths,
+    recording_shell: RecordedShellRequests,
+) -> None:
+    # The session was renamed inside tmux; the tab still shows terminal-1, the record's key.
+    fake_tmux.set_sessions([TmuxSession(name="my-build", session_id="$4", last_activity=None)])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$4")
+    )
+    _record_tab(terminal_paths, "term-a", "/dev/pts/3")
+
+    hook_client.post(
+        "/tmux-hook",
+        json={
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/3",
+            "session_name": "my-build",
+            "session_id": "$4",
+        },
+    )
+
+    assert recording_shell.requests[0].body == {"app": "terminal", "key": "terminal-1"}
+
+
+def test_session_changed_adopts_a_session_recreated_on_attach(
+    hook_client: FlaskClient,
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    terminal_paths: TerminalPaths,
+    recording_shell: RecordedShellRequests,
+) -> None:
+    # The tab of a stopped terminal was opened: the dispatch created the session by name, and
+    # the switch is how the app learns its id.
+    fake_tmux.set_sessions([TmuxSession(name="terminal-1", session_id="$9", last_activity=None)])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+    )
+    _record_tab(terminal_paths, "term-a", "/dev/pts/3")
+
+    hook_client.post(
+        "/tmux-hook",
+        json={
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/3",
+            "session_name": "terminal-1",
+            "session_id": "$9",
+        },
+    )
+
+    assert recording_shell.requests[0].body == {"app": "terminal", "key": "terminal-1"}
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$9")
+    ]
+    assert (terminal_paths.sessions_dir / "terminal-1").read_text() == "$9\n"
+
+
+def test_session_renamed_changes_no_tab_and_only_nudges(
+    hook_client: FlaskClient,
     recording_shell: RecordedShellRequests,
     recording_nudger: RecordingNudger,
 ) -> None:
-    _record_tab(terminal_paths, "term-a", "/dev/pts/3")
-    _record_tab(terminal_paths, "term-b", "/dev/pts/4")
-    _record_tab(terminal_paths, "term-c", "/dev/pts/5")
-    fake_tmux.set_clients(
-        [
-            TmuxClient(client_tty="/dev/pts/3", session_name="deploy", session_id="$4"),
-            TmuxClient(client_tty="/dev/pts/4", session_name="deploy", session_id="$4"),
-            TmuxClient(
-                client_tty="/dev/pts/5", session_name="terminal-2", session_id="$7"
-            ),
-            TmuxClient(client_tty="/dev/pts/6", session_name="deploy", session_id="$4"),
-        ]
-    )
-
     response = hook_client.post(
         "/tmux-hook",
         json={
@@ -142,12 +179,7 @@ def test_session_renamed_repoints_every_attached_tab_and_nudges(
     )
 
     assert response.status_code == 204
-    assert recording_shell.paths() == [
-        ("POST", "/api/tabs/term-a/instance"),
-        ("POST", "/api/tabs/term-b/instance"),
-    ]
-    assert recording_shell.requests[0].body == {"app": "terminal", "key": "deploy"}
-    assert recording_shell.requests[1].body == {"app": "terminal", "key": "deploy"}
+    assert recording_shell.requests == []
     assert recording_nudger.nudge_count == 1
 
 
@@ -184,33 +216,28 @@ def test_hook_rejects_non_loopback_callers_and_malformed_bodies(
     assert recording_nudger.nudge_count == 0
 
 
-def test_a_tmux_failure_on_the_hook_route_answers_500_with_a_detail_body(
+def test_a_store_failure_on_the_hook_route_answers_500_with_a_detail_body(
+    hook_client: FlaskClient,
+    session_store: JsonTerminalSessionStore,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
     recording_nudger: RecordingNudger,
 ) -> None:
-    app = Flask(__name__, static_folder=None)
-    app.register_blueprint(
-        build_tmux_hook_blueprint(
-            tmux=SubprocessTmux(tmux_executable="/nonexistent/tmux-binary"),
-            paths=terminal_paths,
-            shell=HttpShellPoster(shell_url=recording_shell.base_url),
-            nudger=recording_nudger,
-            app_name=AppName("terminal"),
-        )
-    )
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text("not json")
+    _record_tab(terminal_paths, "term-a", "/dev/pts/3")
 
-    response = app.test_client().post(
+    response = hook_client.post(
         "/tmux-hook",
         json={
-            "kind": "session-renamed",
-            "client_tty": "",
+            "kind": "session-changed",
+            "client_tty": "/dev/pts/3",
             "session_name": "deploy",
             "session_id": "$4",
         },
     )
 
     assert response.status_code == 500
-    assert "cannot run /nonexistent/tmux-binary" in response.get_json()["detail"]
+    assert "is not valid JSON" in response.get_json()["detail"]
     assert recording_shell.requests == []
     assert recording_nudger.nudge_count == 0

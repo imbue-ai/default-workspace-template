@@ -10,7 +10,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
 from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
-from terminal_app.primitives import TmuxSessionName, Workdir
+from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
+from terminal_app.tmux import parse_tmux_sessions
 
 # Where the fake tmux keeps its canned answers and its call log.
 ENV_FAKE_TMUX_DIR: Final[str] = "FAKE_TMUX_DIR"
@@ -19,6 +20,8 @@ ENV_FAKE_TTYD_DIR: Final[str] = "FAKE_TTYD_DIR"
 
 # Where a test source starts a terminal created without a workdir.
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
+# The command a test source gives a new session (the fake tmux records it, never runs it).
+TEST_SESSION_COMMAND: Final[tuple[str, ...]] = ("python3", "/opt/oom_tag_service.py", "terminal-session", "bash", "-l")
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 
@@ -42,12 +45,24 @@ answer = ""
 error = ""
 
 
-def target_name() -> str:
-    return sys.argv[sys.argv.index("-t") + 1].removeprefix("=")
+def target() -> str:
+    return sys.argv[sys.argv.index("-t") + 1]
+
+
+def matches_target(line: str, wanted: str) -> bool:
+    name, session_id = line.split("\\t")[:2]
+    if wanted.startswith("$"):
+        return session_id == wanted
+    return name == wanted.removeprefix("=")
 
 
 def session_lines() -> list[str]:
     return sessions_path.read_text().splitlines() if sessions_path.exists() else []
+
+
+def next_session_id(lines: list[str]) -> str:
+    numbers = [int(line.split("\\t")[1].removeprefix("$")) for line in lines if "\\t$" in line]
+    return f"${{max(numbers, default=0) + 1}}"
 
 
 if command == "list-sessions":
@@ -61,27 +76,27 @@ elif command == "list-clients":
     else:
         error = "no server running on /tmp/tmux-1000/default"
 elif command == "kill-session":
-    name = target_name()
+    wanted = target()
     lines = session_lines()
-    remaining = [line for line in lines if line.split("\\t")[0] != name]
+    remaining = [line for line in lines if not matches_target(line, wanted)]
     if (state / "refuse-kill").exists() or len(remaining) == len(lines):
-        error = f"can't find session: {{name}}"
+        error = f"can't find session: {{wanted}}"
     else:
         sessions_path.write_text("".join(line + "\\n" for line in remaining))
-elif command == "rename-session":
-    name = target_name()
-    new_name = sys.argv[-1]
+elif command == "new-session":
+    name = sys.argv[sys.argv.index("-s") + 1]
     lines = session_lines()
-    renamed = [
-        "\\t".join([new_name, *line.split("\\t")[1:]]) if line.split("\\t")[0] == name else line
-        for line in lines
-    ]
-    if any(line.split("\\t")[0] == new_name for line in lines):
-        error = f"duplicate session: {{new_name}}"
-    elif renamed == lines:
-        error = f"can't find session: {{name}}"
+    if (state / "refuse-create").exists():
+        error = "fake tmux: refusing to create sessions"
+    elif any(line.split("\\t")[0] == name for line in lines):
+        error = f"duplicate session: {{name}}"
     else:
-        sessions_path.write_text("".join(line + "\\n" for line in renamed))
+        session_id = next_session_id(lines)
+        state.mkdir(parents=True, exist_ok=True)
+        with sessions_path.open("a") as sessions_file:
+            sessions_file.write(f"{{name}}\\t{{session_id}}\\t\\n")
+        if "-P" in sys.argv:
+            answer = session_id + "\\n"
 else:
     error = f"fake tmux: unknown command {{command}}"
 
@@ -130,6 +145,17 @@ class FakeTmux(MutableModel):
     def refuse_kills(self) -> None:
         """Make every kill-session fail while leaving the session in place."""
         (self.state_dir / "refuse-kill").touch()
+
+    def refuse_creates(self) -> None:
+        """Make every new-session fail, as a tmux server that cannot fork a shell would."""
+        (self.state_dir / "refuse-create").touch()
+
+    def sessions(self) -> list[TmuxSession]:
+        """The sessions the fake currently reports, as the real parser reads them."""
+        sessions_path = self.state_dir / "sessions.tsv"
+        if not sessions_path.exists():
+            return []
+        return parse_tmux_sessions(sessions_path.read_text())
 
     def session_names(self) -> list[str]:
         sessions_path = self.state_dir / "sessions.tsv"
@@ -182,11 +208,17 @@ def read_fake_ttyd_argv(record_dir: Path) -> list[str] | None:
 
 
 def make_terminal_record(
-    name: str, title: str | None, workdir: str | None
+    name: str,
+    title: str | None,
+    workdir: str | None,
+    session_id: str | None = None,
+    is_stopped: bool = False,
 ) -> TerminalSessionRecord:
-    """A store record from plain strings; None for a title or workdir the record has none of."""
+    """A store record from plain strings; None for a title, workdir, or session id the record has none of."""
     return TerminalSessionRecord(
         name=TmuxSessionName(name),
         title=InstanceTitle(title) if title is not None else None,
         workdir=Workdir(workdir) if workdir is not None else None,
+        session_id=TmuxSessionId(session_id) if session_id is not None else None,
+        is_stopped=is_stopped,
     )

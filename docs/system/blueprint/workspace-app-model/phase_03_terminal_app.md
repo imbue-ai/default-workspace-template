@@ -73,3 +73,11 @@ Two terminals, switch sessions inside one with `tmux switch-client`, rename one 
 ## Exit criteria
 
 The terminal's behaviour is indistinguishable from today from the user's seat, and `curl http://127.0.0.1:7682/_instances` lists the open sessions.
+
+## Revised after the phase 10 live test (2026-09-07)
+
+Three of the behaviours above were reversed once the arc was exercised in a real workspace; contracts section 4.3 and the terminal README describe the current state.
+
+- **Keys never change.** A rename changes only the record's title. The `canonical rename rule` above (the session renamed to the title's canonical form, the key re-pointed through the tab route) is gone: a rename that re-keyed a terminal silently unfiled it from every project whose tab set held the old address. The title checks stay (a title that canonicalizes to nothing is a 400, a canonical case-insensitive collision with another terminal's title a 409). The store matches a remembered terminal to its live session by tmux's immutable session id (recorded at create, adopted on attach), so a session renamed inside tmux keeps its key and title; the `session-renamed` hook only nudges, and `session.sh` attaches by the id the app writes under `data/.state/terminal/sessions/<key>`, falling back to `new-session -A` by name.
+- **The session is created at create time.** `new` runs `tmux new-session -d` itself, so a terminal is `idle` from the start (a terminal an agent opened for another client showed a stopped dot until opened). At startup the app recreates the session of every remembered terminal tmux lost (a container restart), adopts live ones, and leaves a terminal the user stopped (`is_stopped` in the store) alone.
+- **The shell carries a memory band.** Both the app's create and the dispatch's fallback create run the login shell through `oom_tag_service.py terminal-session` (`SERVICE_BANDS["terminal-session"]`, the user-service level), so a terminal's shell and everything run in it are shed before any built-in service; a pane inherited the tmux server's protected 0 before.

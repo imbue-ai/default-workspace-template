@@ -5,3 +5,5 @@ The backstop event listener resolves a program's band through the app registry: 
 The dynamic chat band's comment names the chat app's `ChatOomPrioritizer`.
 
 The README names the chat app's presence route and its message sends as the prioritizer's engagement events in place of the removed `/api/activity`.
+
+`SERVICE_BANDS` gains `terminal-session` at the user-service level (200): the terminal app runs every `terminal-N` tmux session's shell through `oom_tag_service.py terminal-session`, so a terminal tab's shell and whatever it runs are shed before any built-in service and after every agent. Before, the pane inherited the tmux server's fully protected 0 and a runaway build in a terminal outlived the workspace UI.

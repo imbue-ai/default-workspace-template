@@ -19,6 +19,7 @@ from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
     DEFAULT_TEST_WORKDIR,
     ENV_FAKE_TMUX_DIR,
+    TEST_SESSION_COMMAND,
     FakeTmux,
     install_fake_tmux,
 )
@@ -48,13 +49,17 @@ def session_store(tmp_path: Path) -> JsonTerminalSessionStore:
 
 @pytest.fixture
 def session_source(
-    fake_tmux: FakeTmux, session_store: JsonTerminalSessionStore
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    terminal_paths: TerminalPaths,
 ) -> TmuxSessionSource:
     return TmuxSessionSource(
         tmux=SubprocessTmux(),
         store=session_store,
         agent_session_prefix="mngr-",
         default_workdir=DEFAULT_TEST_WORKDIR,
+        sessions_dir=terminal_paths.sessions_dir,
+        session_command=TEST_SESSION_COMMAND,
     )
 
 
@@ -71,7 +76,7 @@ def recording_nudger() -> RecordingNudger:
 
 @pytest.fixture
 def hook_client(
-    fake_tmux: FakeTmux,
+    session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
     recording_shell: RecordedShellRequests,
     recording_nudger: RecordingNudger,
@@ -80,7 +85,7 @@ def hook_client(
     app = Flask(__name__, static_folder=None)
     app.register_blueprint(
         build_tmux_hook_blueprint(
-            tmux=SubprocessTmux(),
+            source=session_source,
             paths=terminal_paths,
             shell=HttpShellPoster(shell_url=recording_shell.base_url),
             nudger=recording_nudger,

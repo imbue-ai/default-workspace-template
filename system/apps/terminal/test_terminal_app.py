@@ -223,6 +223,23 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
         )
         assert created.status_code == 201, created.text
         assert created.json()["instance"]["key"] == "terminal-1"
+        assert created.json()["instance"]["status"] == "idle"
+        # The session exists from the create, running the tagged login shell in the workdir.
+        assert [session.name for session in fake_tmux.sessions()] == [
+            "terminal-2",
+            "mngr-alice",
+            "terminal-1",
+        ]
+        create_call = next(call for call in fake_tmux.calls() if call[0] == "new-session")
+        assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]
+        assert create_call[-5:] == [
+            "python3",
+            str(Path("system/services/oom_priority/bin/oom_tag_service.py").absolute()),
+            "terminal-session",
+            "bash",
+            "-l",
+        ]
+        assert (app.paths.sessions_dir / "terminal-1").read_text() == "$6\n"
         # A create naming no workdir starts the shell where the app runs: the cwd it was
         # spawned with, which is this test's.
         default_directory = urllib.parse.quote(os.getcwd(), safe="")
@@ -231,9 +248,9 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             == f"/?arg=_&arg=session&arg=terminal-1&arg={{tab}}&arg={default_directory}"
         )
         assert [
-            session["name"]
+            (session["name"], session["session_id"])
             for session in json.loads(app.store_path.read_text())["sessions"]
-        ] == ["terminal-1"]
+        ] == [("terminal-1", "$6")]
 
         # The hook route is served by the same process.
         hook = httpx.post(

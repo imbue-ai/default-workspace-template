@@ -259,6 +259,13 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # shed, so this is the most expendable built-in service of all.
     "files": 75,
     "user": USER_SERVICE,
+    # The shell of a workspace terminal tab (and everything run in it), tagged by the
+    # terminal app's session command. Not a supervisord program: the pane is a child of the
+    # tmux server, which sits at the protected default, so without this tag a runaway build
+    # in a terminal would outlive every service. It shares the user-service level: a user's
+    # interactive shell is worth as much as a user's own service, and both are shed before
+    # any built-in service but after every agent.
+    "terminal-session": USER_SERVICE,
 }
 
 # The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a

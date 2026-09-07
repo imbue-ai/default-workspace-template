@@ -27,8 +27,8 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
     assert json.loads(session_store.store_path.read_text()) == {
         "version": 1,
         "sessions": [
-            {"name": "terminal-1", "title": None, "workdir": None},
-            {"name": "terminal-2", "title": None, "workdir": "/home/user"},
+            {"name": "terminal-1", "title": None, "workdir": None, "session_id": None, "is_stopped": False},
+            {"name": "terminal-2", "title": None, "workdir": "/home/user", "session_id": None, "is_stopped": False},
         ],
     }
 
@@ -52,27 +52,6 @@ def test_save_record_replaces_the_record_with_the_same_name_in_its_place(
     ]
 
 
-def test_replace_record_swaps_a_renamed_terminal_in_one_write_keeping_its_place(
-    session_store: JsonTerminalSessionStore,
-) -> None:
-    session_store.save_record(
-        make_terminal_record(name="terminal-1", title=None, workdir="/srv")
-    )
-    session_store.save_record(
-        make_terminal_record(name="terminal-2", title=None, workdir=None)
-    )
-
-    session_store.replace_record(
-        TmuxSessionName("terminal-1"),
-        make_terminal_record(name="build", title="Build", workdir="/srv"),
-    )
-
-    assert session_store.list_records() == [
-        make_terminal_record(name="build", title="Build", workdir="/srv"),
-        make_terminal_record(name="terminal-2", title=None, workdir=None),
-    ]
-
-
 def test_remove_record_forgets_a_terminal_and_tolerates_an_absent_one(
     session_store: JsonTerminalSessionStore,
 ) -> None:
@@ -84,6 +63,19 @@ def test_remove_record_forgets_a_terminal_and_tolerates_an_absent_one(
     session_store.remove_record(TmuxSessionName("terminal-1"))
 
     assert session_store.list_records() == []
+
+
+def test_store_reads_records_written_before_the_session_id_and_stopped_flag_existed(
+    session_store: JsonTerminalSessionStore,
+) -> None:
+    session_store.store_path.parent.mkdir(parents=True)
+    session_store.store_path.write_text(
+        '{"version": 1, "sessions": [{"name": "terminal-1", "title": "Build", "workdir": "/srv"}]}'
+    )
+
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv")
+    ]
 
 
 def test_store_refuses_a_document_of_another_version(

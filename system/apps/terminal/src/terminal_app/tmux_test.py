@@ -4,7 +4,7 @@ import pytest
 
 from terminal_app.data_types import TmuxClient, TmuxSession
 from terminal_app.errors import TmuxCommandError
-from terminal_app.primitives import TmuxSessionName
+from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 from terminal_app.testing import FakeTmux
 from terminal_app.tmux import (
     CLIENTS_FORMAT,
@@ -85,23 +85,59 @@ def test_kill_session_raises_when_the_session_survives(fake_tmux: FakeTmux) -> N
         SubprocessTmux().kill_session(TmuxSessionName("terminal-1"))
 
 
-def test_rename_session_renames_and_reports_a_refusal(fake_tmux: FakeTmux) -> None:
-    fake_tmux.set_sessions(
-        [
-            TmuxSession(name="terminal-1", session_id="$3", last_activity=None),
-            TmuxSession(name="build", session_id="$4", last_activity=None),
-        ]
-    )
-    tmux = SubprocessTmux()
-
-    tmux.rename_session(TmuxSessionName("terminal-1"), TmuxSessionName("deploy"))
-
-    assert fake_tmux.session_names() == ["deploy", "build"]
-    assert fake_tmux.calls()[-1] == ["rename-session", "-t", "=terminal-1", "deploy"]
-    with pytest.raises(TmuxCommandError, match="duplicate session: build"):
-        tmux.rename_session(TmuxSessionName("deploy"), TmuxSessionName("build"))
-
-
 def test_a_missing_tmux_binary_is_a_command_error() -> None:
     with pytest.raises(TmuxCommandError, match="cannot run"):
         SubprocessTmux(tmux_executable="/nonexistent/tmux-binary").list_sessions()
+
+
+def test_create_session_returns_the_new_sessions_id_and_runs_the_command(
+    fake_tmux: FakeTmux,
+) -> None:
+    fake_tmux.set_sessions([TmuxSession(name="terminal-1", session_id="$3", last_activity=None)])
+
+    session_id = SubprocessTmux().create_session(
+        TmuxSessionName("terminal-2"), Workdir("/srv"), ["python3", "tag.py", "bash", "-l"]
+    )
+
+    assert session_id == "$4"
+    assert [session.name for session in fake_tmux.sessions()] == ["terminal-1", "terminal-2"]
+    assert fake_tmux.calls()[-1] == [
+        "new-session",
+        "-d",
+        "-s",
+        "terminal-2",
+        "-c",
+        "/srv",
+        "-P",
+        "-F",
+        "#{session_id}",
+        "python3",
+        "tag.py",
+        "bash",
+        "-l",
+    ]
+
+
+def test_create_session_refuses_a_name_tmux_already_has(fake_tmux: FakeTmux) -> None:
+    fake_tmux.set_sessions([TmuxSession(name="terminal-1", session_id="$3", last_activity=None)])
+
+    with pytest.raises(TmuxCommandError, match="duplicate session"):
+        SubprocessTmux().create_session(TmuxSessionName("terminal-1"), Workdir("/srv"), ["bash"])
+
+
+def test_kill_session_targets_a_name_exactly_or_an_id_verbatim(fake_tmux: FakeTmux) -> None:
+    fake_tmux.set_sessions(
+        [
+            TmuxSession(name="terminal-1", session_id="$3", last_activity=None),
+            TmuxSession(name="terminal-10", session_id="$4", last_activity=None),
+        ]
+    )
+
+    SubprocessTmux().kill_session(TmuxSessionName("terminal-1"))
+    SubprocessTmux().kill_session(TmuxSessionId("$4"))
+
+    assert fake_tmux.session_names() == []
+    assert [call for call in fake_tmux.calls() if call[0] == "kill-session"] == [
+        ["kill-session", "-t", "=terminal-1"],
+        ["kill-session", "-t", "$4"],
+    ]

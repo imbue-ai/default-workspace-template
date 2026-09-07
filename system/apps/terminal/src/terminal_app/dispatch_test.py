@@ -7,6 +7,7 @@ from inline_snapshot import snapshot
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.dispatch import (
+    build_session_command,
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
@@ -18,6 +19,8 @@ from terminal_app.dispatch import (
 from terminal_app.errors import UnsafeDispatchPathError
 
 _COMMANDS_DIR = Path("/home/user/workspace/data/.state/terminal/commands")
+_SESSIONS_DIR = Path("/home/user/workspace/data/.state/terminal/sessions")
+_OOM_TAG_SCRIPT = Path("/home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py")
 
 
 def test_dispatch_snippet_is_todays_apart_from_the_commands_directory() -> None:
@@ -65,23 +68,25 @@ cd "$1" 2>/dev/null && exec bash
 """)
 
 
-def test_session_script_is_todays_apart_from_the_clients_directory_and_the_tab_argument() -> (
-    None
-):
-    assert render_session_script(_COMMANDS_DIR / "clients") == snapshot("""\
+def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> None:
+    assert render_session_script(_COMMANDS_DIR / "clients", _SESSIONS_DIR, _OOM_TAG_SCRIPT) == snapshot("""\
 #!/bin/bash
 # Attach to (or create) a named, in-memory tmux terminal session.
 #
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
-#   $1 = session name (e.g. "terminal-1")
+#   $1 = session name (e.g. "terminal-1"), the terminal's key
 #   $2 = tab id       (per-tab id used to map this ttyd client's pty back to
 #                      the dockview tab for live tab-title tracking; may be "")
 #   $3 = working directory to anchor a newly-created session in (may be "")
 #
-# `tmux new-session -A` attaches when the session exists and creates it
-# otherwise, so this single path covers reattach (tab reopen / reload / ttyd
-# restart) and first creation, as well as recreation after a container restart
-# cleared the tmux server (the tab just comes back as a fresh shell).
+# The terminal app records the tmux session id of every terminal it created
+# under the sessions directory, named by key; attaching by that id keeps the
+# tab on its session even after someone renamed the session inside tmux. When
+# there is no id (a record from before the app kept them) or the session is
+# gone (a container restart cleared the tmux server), `tmux new-session -A`
+# attaches when a session of that name exists and creates it otherwise, so the
+# tab comes back as a fresh shell. A created session runs the login shell
+# through the memory-shedding tag, as the app's own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 TAB_ID="${2:-}"
@@ -115,36 +120,56 @@ if [ -n "$TAB_ID" ]; then
     fi
 fi
 
+SESSION_ID_FILE="/home/user/workspace/data/.state/terminal/sessions/$SESSION_NAME"
+if [ -f "$SESSION_ID_FILE" ]; then
+    SESSION_ID="$(cat "$SESSION_ID_FILE" 2>/dev/null || true)"
+    if [ -n "$SESSION_ID" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
+        exec tmux attach-session -t "$SESSION_ID"
+    fi
+fi
+
 WORKDIR_ARGS=()
 if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
     WORKDIR_ARGS=(-c "$WORKDIR")
 fi
 
-exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}"
+exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l
 """)
 
 
 def test_a_directory_that_needs_shell_quoting_is_refused() -> None:
     with pytest.raises(UnsafeDispatchPathError, match="needs shell quoting"):
         render_dispatch_snippet(Path("/tmp/has space"))
+    with pytest.raises(UnsafeDispatchPathError, match="needs shell quoting"):
+        build_session_command(Path("/tmp/has space/oom_tag_service.py"))
+
+
+def test_session_command_tags_the_login_shell_into_the_terminal_session_band() -> None:
+    assert build_session_command(_OOM_TAG_SCRIPT) == [
+        "python3",
+        str(_OOM_TAG_SCRIPT),
+        "terminal-session",
+        "bash",
+        "-l",
+    ]
 
 
 def test_install_writes_executable_scripts_and_keeps_an_existing_workdir_script(
     terminal_paths: TerminalPaths,
 ) -> None:
-    install_dispatch_scripts(terminal_paths)
+    install_dispatch_scripts(terminal_paths, _OOM_TAG_SCRIPT)
     (terminal_paths.commands_dir / "workdir.sh").write_text(
         "#!/bin/bash\n# customised\n"
     )
     (terminal_paths.commands_dir / "agent.sh").write_text("stale")
 
-    install_dispatch_scripts(terminal_paths)
+    install_dispatch_scripts(terminal_paths, _OOM_TAG_SCRIPT)
 
     scripts = {path.name: path for path in terminal_paths.commands_dir.iterdir()}
     assert sorted(scripts) == ["agent.sh", "session.sh", "workdir.sh"]
     assert scripts["agent.sh"].read_text() == render_agent_script()
     assert scripts["session.sh"].read_text() == render_session_script(
-        terminal_paths.clients_dir
+        terminal_paths.clients_dir, terminal_paths.sessions_dir, _OOM_TAG_SCRIPT
     )
     assert scripts["workdir.sh"].read_text() == "#!/bin/bash\n# customised\n"
     for script in scripts.values():
