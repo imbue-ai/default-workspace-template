@@ -264,13 +264,18 @@ def _pull_in_pane(browser_name: str) -> None:
 # --- commands -----------------------------------------------------------------
 
 
+def _stopped_hint(browser_name: str) -> str:
+    """How to bring a stopped browser back (the daemon sends the same in its ``hint``)."""
+    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_name}`"
+
+
 def _owner_label(browser: dict[str, Any], me: str | None) -> str:
     if browser.get("crashed") or browser.get("lifecycle") == "crashed":
         return "crashed (gone -- start a new one)"
     if browser.get("lifecycle") == "init":
         return "starting (Chromium launching -- ready shortly)"
     if browser.get("lifecycle") == "stopped":
-        return f"stopped (start it from its tab, or `layout.py start app:browser?instance={browser['id']}`)"
+        return f"stopped ({_stopped_hint(browser['id'])})"
     if browser["controller"] == "agent":
         name = browser.get("owner_name") or browser.get("owner_agent_id") or "?"
         return "you" if browser.get("owner_agent_id") == me else f"agent {name}"
@@ -507,8 +512,7 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
              f"Start a fresh one with `new` (it gets a new name); browser {browser_name} won't come back.")
         return _EXIT_ERROR
     if status == "stopped":
-        _err(payload.get("hint") or f"browser {browser_name} is stopped; start it from its tab, or with "
-             f"`layout.py start app:browser?instance={browser_name}`")
+        _err(payload.get("hint") or f"browser {browser_name} is stopped; {_stopped_hint(browser_name)}")
         return _EXIT_ERROR
     if status == "closed":
         _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
