@@ -83,7 +83,13 @@ def test_user_created_services_are_shed_before_every_builtin_service() -> None:
 def test_the_builtin_key_set_matches_the_documented_order() -> None:
     # Catch a service added to SERVICE_BANDS without being placed in the ordering
     # above (which would leave its rank unasserted).
-    assert set(bands.SERVICE_BANDS) == {*_BUILTIN_SERVICE_ORDER, "user"}
+    assert set(bands.SERVICE_BANDS) == {*_BUILTIN_SERVICE_ORDER, "user", "terminal-session"}
+
+
+def test_terminal_sessions_share_the_user_service_level() -> None:
+    # A terminal tab's shell is a user's own process: shed before any built-in service and
+    # after every agent, like a user-created service.
+    assert bands.SERVICE_BANDS["terminal-session"] == bands.USER_SERVICE
 
 
 def test_unrecognized_supervisord_program_falls_back_to_the_user_service_band() -> None:

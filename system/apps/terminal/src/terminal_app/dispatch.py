@@ -9,6 +9,7 @@ from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.errors import UnsafeDispatchPathError
+from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
 
 # The dispatch scripts the ttyd dispatch snippet runs by URL key: ``?arg=_&arg=<key>&arg=...``
 # runs ``<commands_dir>/<key>.sh`` with the remaining arguments.
@@ -60,19 +61,30 @@ _WORKDIR_SCRIPT: Final[str] = """#!/bin/bash
 cd "$1" 2>/dev/null && exec bash
 """
 
+# The shell a terminal session runs, tagged into its memory-shedding band first: the tagging
+# script raises its own oom_score_adj and execs the login shell, so the shell and everything
+# run in it carry the band. Shared by the session script (a create on attach) and the app's
+# own creates, so both paths make the same session.
+_PYTHON_EXECUTABLE: Final[str] = "python3"
+_LOGIN_SHELL_COMMAND: Final[tuple[str, ...]] = ("bash", "-l")
+
 _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Attach to (or create) a named, in-memory tmux terminal session.
 #
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
-#   $1 = session name (e.g. "terminal-1")
+#   $1 = session name (e.g. "terminal-1"), the terminal's key
 #   $2 = tab id       (per-tab id used to map this ttyd client's pty back to
 #                      the dockview tab for live tab-title tracking; may be "")
 #   $3 = working directory to anchor a newly-created session in (may be "")
 #
-# `tmux new-session -A` attaches when the session exists and creates it
-# otherwise, so this single path covers reattach (tab reopen / reload / ttyd
-# restart) and first creation, as well as recreation after a container restart
-# cleared the tmux server (the tab just comes back as a fresh shell).
+# The terminal app records the tmux session id of every terminal it created
+# under the sessions directory, named by key; attaching by that id keeps the
+# tab on its session even after someone renamed the session inside tmux. When
+# there is no id (a record from before the app kept them) or the session is
+# gone (a container restart cleared the tmux server), `tmux new-session -A`
+# attaches when a session of that name exists and creates it otherwise, so the
+# tab comes back as a fresh shell. A created session runs the login shell
+# through the memory-shedding tag, as the app's own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 TAB_ID="${2:-}"
@@ -106,12 +118,20 @@ if [ -n "$TAB_ID" ]; then
     fi
 fi
 
+SESSION_ID_FILE="{sessions_dir}/$SESSION_NAME"
+if [ -f "$SESSION_ID_FILE" ]; then
+    SESSION_ID="$(cat "$SESSION_ID_FILE" 2>/dev/null || true)"
+    if [ -n "$SESSION_ID" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
+        exec tmux attach-session -t "$SESSION_ID"
+    fi
+fi
+
 WORKDIR_ARGS=()
 if [ -n "$WORKDIR" ] && [ -d "$WORKDIR" ]; then
     WORKDIR_ARGS=(-c "$WORKDIR")
 fi
 
-exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}"
+exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" {session_command}
 """
 
 
@@ -145,10 +165,25 @@ def render_workdir_script() -> str:
 
 
 @pure
-def render_session_script(clients_dir: Path) -> str:
-    """The named-session dispatch script, recording each tab's pty under ``clients_dir``."""
-    return _SESSION_SCRIPT_TEMPLATE.replace(
-        "{clients_dir}", _shell_verbatim_path(clients_dir)
+def build_session_command(oom_tag_script: Path) -> list[str]:
+    """The command a terminal session runs: the login shell, tagged into the terminal-session band first."""
+    return [
+        _PYTHON_EXECUTABLE,
+        _shell_verbatim_path(oom_tag_script),
+        TERMINAL_SESSION_BAND_KEY,
+        *_LOGIN_SHELL_COMMAND,
+    ]
+
+
+@pure
+def render_session_script(
+    clients_dir: Path, sessions_dir: Path, oom_tag_script: Path
+) -> str:
+    """The named-session dispatch script: pty records under ``clients_dir``, session ids under ``sessions_dir``, and the tagged shell."""
+    return (
+        _SESSION_SCRIPT_TEMPLATE.replace("{clients_dir}", _shell_verbatim_path(clients_dir))
+        .replace("{sessions_dir}", _shell_verbatim_path(sessions_dir))
+        .replace("{session_command}", " ".join(build_session_command(oom_tag_script)))
     )
 
 
@@ -157,7 +192,7 @@ def _write_executable(path: Path, contents: str) -> None:
     path.chmod(_EXECUTABLE_MODE)
 
 
-def install_dispatch_scripts(paths: TerminalPaths) -> None:
+def install_dispatch_scripts(paths: TerminalPaths, oom_tag_script: Path) -> None:
     """Write the three dispatch scripts into the commands directory.
 
     ``agent.sh`` and ``session.sh`` are rewritten on every start so an existing workspace picks
@@ -171,7 +206,7 @@ def install_dispatch_scripts(paths: TerminalPaths) -> None:
         _write_executable(workdir_script, render_workdir_script())
     _write_executable(
         paths.commands_dir / SESSION_SCRIPT_FILENAME,
-        render_session_script(paths.clients_dir),
+        render_session_script(paths.clients_dir, paths.sessions_dir, oom_tag_script),
     )
 
 

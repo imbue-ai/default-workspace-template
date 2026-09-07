@@ -50,6 +50,7 @@ without inspecting the process tree:
 | never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
 | a built-in supervisord service or app | launch | its `SERVICE_BANDS` value (an app's is the `priority` its manifest declares) | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
 | a user-created supervisord service or app | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
+| a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, the most expendable built-in service) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |

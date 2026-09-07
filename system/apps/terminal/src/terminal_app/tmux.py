@@ -11,7 +11,7 @@ from pydantic import Field
 from terminal_app.data_types import TmuxClient, TmuxSession
 from terminal_app.errors import InvalidTerminalValueError, TmuxCommandError
 from terminal_app.interfaces import TmuxInterface
-from terminal_app.primitives import ClientTty, TmuxSessionName
+from terminal_app.primitives import ClientTty, TmuxSessionId, TmuxSessionName, Workdir
 
 # A tmux command is one round trip to a local socket; past the first threshold it is suspicious,
 # past the second it is broken.
@@ -20,6 +20,7 @@ TMUX_TIMEOUT_SECONDS: Final[float] = 5.0
 
 SESSIONS_FORMAT: Final[str] = "#{session_name}\t#{session_id}\t#{session_activity}"
 CLIENTS_FORMAT: Final[str] = "#{client_tty}\t#{session_name}\t#{session_id}"
+SESSION_ID_FORMAT: Final[str] = "#{session_id}"
 
 
 @pure
@@ -71,6 +72,14 @@ def parse_tmux_clients(output: str) -> list[TmuxClient]:
 
 
 @pure
+def tmux_target(target: TmuxSessionName | TmuxSessionId) -> str:
+    """The ``-t`` argument that names exactly this session: ``=<name>``, or the id verbatim."""
+    if isinstance(target, TmuxSessionId):
+        return str(target)
+    return f"={target}"
+
+
+@pure
 def _is_client_tty(value: str) -> bool:
     try:
         ClientTty(value)
@@ -101,23 +110,48 @@ class SubprocessTmux(TmuxInterface):
             return []
         return parse_tmux_clients(completed.stdout)
 
-    def kill_session(self, name: TmuxSessionName) -> None:
-        # ``=`` forces an exact match so tmux's prefix fallback cannot target another session.
-        # tmux exits non-zero both for a real failure and for an already-absent session, so
-        # the two are told apart by re-listing.
-        completed = self._run(["kill-session", "-t", f"={name}"])
-        if completed.returncode == 0:
-            return
-        if any(session.name == name for session in self.list_sessions()):
-            raise TmuxCommandError(
-                f"tmux could not kill session {name!r}: {completed.stderr.strip()}"
-            )
-
-    def rename_session(self, name: TmuxSessionName, new_name: TmuxSessionName) -> None:
-        completed = self._run(["rename-session", "-t", f"={name}", new_name])
+    def create_session(
+        self, name: TmuxSessionName, workdir: Workdir, command: Sequence[str]
+    ) -> TmuxSessionId:
+        # -P -F prints the new session's id; a name already in use is a refusal.
+        completed = self._run(
+            [
+                "new-session",
+                "-d",
+                "-s",
+                name,
+                "-c",
+                workdir,
+                "-P",
+                "-F",
+                SESSION_ID_FORMAT,
+                *command,
+            ]
+        )
         if completed.returncode != 0:
             raise TmuxCommandError(
-                f"tmux could not rename session {name!r} to {new_name!r}: {completed.stderr.strip()}"
+                f"tmux could not create session {name!r}: {completed.stderr.strip()}"
+            )
+        try:
+            return TmuxSessionId(completed.stdout.strip())
+        except InvalidTerminalValueError as e:
+            raise TmuxCommandError(
+                f"tmux created session {name!r} but printed no session id: {completed.stdout.strip()!r}"
+            ) from e
+
+    def kill_session(self, target: TmuxSessionName | TmuxSessionId) -> None:
+        # ``=`` forces an exact name match so tmux's prefix fallback cannot target another
+        # session; an id is exact on its own. tmux exits non-zero both for a real failure and
+        # for an already-absent session, so the two are told apart by re-listing.
+        completed = self._run(["kill-session", "-t", tmux_target(target)])
+        if completed.returncode == 0:
+            return
+        if any(
+            session.name == target or session.session_id == target
+            for session in self.list_sessions()
+        ):
+            raise TmuxCommandError(
+                f"tmux could not kill session {target!r}: {completed.stderr.strip()}"
             )
 
     def _run(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:

@@ -29,13 +29,8 @@ class JsonTerminalSessionStore(TerminalSessionStoreInterface):
             return list(self._read())
 
     def save_record(self, record: TerminalSessionRecord) -> None:
-        self.replace_record(record.name, record)
-
-    def replace_record(
-        self, name: TmuxSessionName, record: TerminalSessionRecord
-    ) -> None:
         with self._lock:
-            self._write(_with_record(self._read(), name, record))
+            self._write(_with_record(self._read(), record))
 
     def remove_record(self, name: TmuxSessionName) -> None:
         with self._lock:
@@ -63,25 +58,11 @@ class JsonTerminalSessionStore(TerminalSessionStoreInterface):
 
 @pure
 def _with_record(
-    records: tuple[TerminalSessionRecord, ...],
-    name: TmuxSessionName,
-    record: TerminalSessionRecord,
+    records: tuple[TerminalSessionRecord, ...], record: TerminalSessionRecord
 ) -> tuple[TerminalSessionRecord, ...]:
-    """``records`` with the one named ``name`` replaced in place by ``record`` (appended when there is none).
-
-    Any other record already holding ``record.name`` is dropped; the source refuses such a
-    rename before it reaches the store.
-    """
-    updated: list[TerminalSessionRecord] = []
-    is_replaced = False
-    for existing in records:
-        if existing.name == name:
-            updated.append(record)
-            is_replaced = True
-        elif existing.name == record.name:
-            continue
-        else:
-            updated.append(existing)
-    if not is_replaced:
-        updated.append(record)
-    return tuple(updated)
+    """``records`` with the one of the same name replaced in place by ``record`` (appended when there is none)."""
+    if not any(existing.name == record.name for existing in records):
+        return records + (record,)
+    return tuple(
+        record if existing.name == record.name else existing for existing in records
+    )

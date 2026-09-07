@@ -7,7 +7,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import AwareDatetime, Field, computed_field, field_validator
 
 from terminal_app.errors import InvalidTerminalValueError
-from terminal_app.primitives import ClientTty, TmuxSessionName, Workdir
+from terminal_app.primitives import ClientTty, TmuxSessionId, TmuxSessionName, Workdir
 
 
 class TmuxHookKind(StrEnum):
@@ -62,6 +62,15 @@ class TerminalSessionRecord(FrozenModel):
     workdir: Workdir | None = Field(
         description="The directory a newly created session starts in; None for the default"
     )
+    # Both fields default so a store written before they existed still reads.
+    session_id: TmuxSessionId | None = Field(
+        default=None,
+        description="tmux's immutable id of the session backing this terminal; None when the app never created or adopted one",
+    )
+    is_stopped: bool = Field(
+        default=False,
+        description="Whether the user stopped this terminal, so its session is not recreated at startup",
+    )
 
 
 class TerminalStoreDocument(FrozenModel):
@@ -104,6 +113,12 @@ class TerminalPaths(FrozenModel):
     def clients_dir(self) -> Path:
         """One file per attached tab, named by tab id and holding the client's pty."""
         return self.commands_dir / "clients"
+
+    @computed_field
+    @cached_property
+    def sessions_dir(self) -> Path:
+        """One file per terminal the app created or adopted, named by key and holding the tmux session id the dispatch attaches by."""
+        return self.state_dir / "sessions"
 
     @computed_field
     @cached_property

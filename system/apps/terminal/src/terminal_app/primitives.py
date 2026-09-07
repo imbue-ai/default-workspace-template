@@ -29,6 +29,15 @@ TERMINAL_TAB_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 MAX_WORKDIR_LENGTH: Final[int] = 1024
 
+# tmux's immutable session id (``$3``): what a record is matched to a live session by, so a
+# session renamed inside tmux keeps its key and title.
+TMUX_SESSION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\$[0-9]+$")
+
+# The memory-shedding band a terminal's shell (and everything run in it) is tagged into: a key
+# of ``oom_priority.bands.SERVICE_BANDS``, passed to ``oom_tag_service.py`` by the session
+# command. The pane would otherwise inherit the tmux server's fully protected 0.
+TERMINAL_SESSION_BAND_KEY: Final[str] = "terminal-session"
+
 # The names the allocator mints, whose titles derive back from the number ("Terminal 3").
 _NUMBERED_TERMINAL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^terminal-([0-9]+)$")
 
@@ -56,6 +65,25 @@ class TmuxSessionName(str):
         if not TMUX_SESSION_NAME_PATTERN.fullmatch(value):
             raise InvalidTerminalValueError(
                 f"invalid session name {value!r}: names match {TMUX_SESSION_NAME_PATTERN.pattern}"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+class TmuxSessionId(str):
+    """tmux's immutable id for a session, ``$<number>``, as ``#{session_id}`` prints it."""
+
+    def __new__(cls, value: str) -> Self:
+        if not TMUX_SESSION_ID_PATTERN.fullmatch(value):
+            raise InvalidTerminalValueError(
+                f"invalid session id {value!r}: ids match {TMUX_SESSION_ID_PATTERN.pattern}"
             )
         return super().__new__(cls, value)
 

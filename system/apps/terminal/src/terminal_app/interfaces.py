@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from imbue.imbue_common.mutable_model import MutableModel
 
 from terminal_app.data_types import TerminalSessionRecord, TmuxClient, TmuxSession
-from terminal_app.primitives import TmuxSessionName
+from terminal_app.primitives import TmuxSessionId, TmuxSessionName, Workdir
 
 
 class TmuxInterface(MutableModel, ABC):
@@ -20,12 +20,14 @@ class TmuxInterface(MutableModel, ABC):
         """Every attached client; none when no server is running."""
 
     @abstractmethod
-    def kill_session(self, name: TmuxSessionName) -> None:
-        """Kill the session; an absent session is not an error, one that survives raises TmuxCommandError."""
+    def create_session(
+        self, name: TmuxSessionName, workdir: Workdir, command: Sequence[str]
+    ) -> TmuxSessionId:
+        """Create a detached session running ``command`` in ``workdir`` and return its id; raises TmuxCommandError when tmux refuses (a name already taken included)."""
 
     @abstractmethod
-    def rename_session(self, name: TmuxSessionName, new_name: TmuxSessionName) -> None:
-        """Rename the session; raises TmuxCommandError when tmux refuses."""
+    def kill_session(self, target: TmuxSessionName | TmuxSessionId) -> None:
+        """Kill the session; an absent session is not an error, one that survives raises TmuxCommandError."""
 
 
 class TerminalSessionStoreInterface(MutableModel, ABC):
@@ -38,12 +40,6 @@ class TerminalSessionStoreInterface(MutableModel, ABC):
     @abstractmethod
     def save_record(self, record: TerminalSessionRecord) -> None:
         """Remember a terminal, replacing any record with the same name in its place."""
-
-    @abstractmethod
-    def replace_record(
-        self, name: TmuxSessionName, record: TerminalSessionRecord
-    ) -> None:
-        """Swap ``record`` in for ``name`` in one write, keeping its place in the order (a rename)."""
 
     @abstractmethod
     def remove_record(self, name: TmuxSessionName) -> None:

@@ -19,6 +19,7 @@ from pydantic import Field
 from terminal_app.data_types import TerminalPaths
 from terminal_app.discovery import write_server_registered_event
 from terminal_app.dispatch import (
+    build_session_command,
     build_ttyd_argv,
     install_dispatch_scripts,
     install_ttyd_web_client,
@@ -41,6 +42,8 @@ TTYD_WEB_CLIENT_ARCHIVE: Final[Path] = Path(
     "system/vendor/mngr/libs/mngr_ttyd/imbue/mngr_ttyd/resources/ttyd_index.html.gz"
 )
 TTYD_EXECUTABLE: Final[str] = "ttyd"
+# The tagging wrapper every terminal session runs its shell through (the terminal-session band).
+OOM_TAG_SCRIPT: Final[Path] = Path("system/services/oom_priority/bin/oom_tag_service.py")
 
 # The mngr session-name prefix; agent sessions carry it, terminals do not (as the shell reads it).
 ENV_AGENT_SESSION_PREFIX: Final[str] = "MNGR_PREFIX"
@@ -60,6 +63,9 @@ class TerminalAppArguments(FrozenModel):
         description="The vendored, gzip-compressed OSC 52-capable ttyd web client"
     )
     ttyd_executable: str = Field(description="The ttyd binary to run")
+    oom_tag_script: Path = Field(
+        description="The memory-shedding tag wrapper a terminal session runs its shell through"
+    )
     agent_state_dir: Path | None = Field(
         description="The mngr agent state directory the discovery event is written under; None writes none"
     )
@@ -73,8 +79,9 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     # The dispatch scripts bake the directory in, so it is anchored here rather than left to the
     # cwd of every shell ttyd spawns.
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
+    oom_tag_script = arguments.oom_tag_script.absolute()
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
-        install_dispatch_scripts(paths)
+        install_dispatch_scripts(paths, oom_tag_script)
     is_client_installed = install_ttyd_web_client(
         arguments.ttyd_web_client_archive, paths.ttyd_index_path
     )
@@ -83,19 +90,22 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
             write_server_registered_event(
                 arguments.agent_state_dir, APP_NAME, arguments.app_url
             )
-    tmux = SubprocessTmux()
     source = TmuxSessionSource(
-        tmux=tmux,
+        tmux=SubprocessTmux(),
         store=JsonTerminalSessionStore(store_path=arguments.store_path),
         agent_session_prefix=arguments.agent_session_prefix,
         default_workdir=Workdir(os.getcwd()),
+        sessions_dir=paths.sessions_dir,
+        session_command=tuple(build_session_command(oom_tag_script)),
     )
+    with log_span("Recreating the remembered terminal sessions"):
+        source.recreate_remembered_sessions()
 
     def build_app(manifest: AppManifest, nudger: InstanceNudgerInterface) -> Flask:
         app = build_instances_app(source, nudger)
         app.register_blueprint(
             build_tmux_hook_blueprint(
-                tmux=tmux,
+                source=source,
                 paths=paths,
                 shell=HttpShellPoster(shell_url=shell_base_url()),
                 nudger=nudger,
@@ -169,6 +179,14 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     show_default=True,
     help="The ttyd binary",
 )
+@click.option(
+    "--oom-tag-script",
+    "oom_tag_script",
+    type=click.Path(path_type=Path),
+    default=OOM_TAG_SCRIPT,
+    show_default=True,
+    help="The memory-shedding tag wrapper a terminal session runs its shell through",
+)
 def main(
     manifest_path: Path,
     app_url: str,
@@ -177,6 +195,7 @@ def main(
     store_path: Path,
     ttyd_web_client_archive: Path,
     ttyd_executable: str,
+    oom_tag_script: Path,
 ) -> None:
     """Run the workspace terminal: ttyd plus the instances API over the workspace's tmux sessions."""
     agent_state_dir = os.environ.get(ENV_AGENT_STATE_DIR, "")
@@ -188,6 +207,7 @@ def main(
         store_path=store_path,
         ttyd_web_client_archive=ttyd_web_client_archive,
         ttyd_executable=ttyd_executable,
+        oom_tag_script=oom_tag_script,
         agent_state_dir=Path(agent_state_dir) if agent_state_dir else None,
         agent_session_prefix=os.environ.get(
             ENV_AGENT_SESSION_PREFIX, DEFAULT_AGENT_SESSION_PREFIX

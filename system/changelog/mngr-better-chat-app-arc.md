@@ -84,3 +84,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 The root `pyproject.toml` keeps `import-linter` in its dev group: the vendored ratchet library imports it at module level, so every project's `test_ratchets.py` needs it even where no import contract is declared.
 
 `system/supervisord.conf`: `[program:browser]` is stopped with `stopasgroup=false` (`killasgroup=true` stays, and `stopwaitsecs` is 30 seconds), so a stop or restart of the browser app signals the daemon alone and it checkpoints every browser's tabs while Chromium can still be asked before closing each browser in order; a group-wide SIGTERM killed every Chromium in the same instant as the daemon and the final checkpoint saved no tabs.
+
+The workspace app model specs record the terminal changes made after the phase 10 live test: contracts section 4.3's terminal row (keys never change, a rename retitles, the session is created with the terminal and recreated at startup unless stopped, the `terminal-session` band), a revision section in `phase_03_terminal_app.md`, and the meta spec's terminal section.

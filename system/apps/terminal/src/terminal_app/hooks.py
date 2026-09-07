@@ -18,8 +18,9 @@ from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths, TmuxHookEvent, TmuxHookKind
 from terminal_app.errors import InvalidTerminalValueError
-from terminal_app.interfaces import ShellPosterInterface, TmuxInterface
-from terminal_app.primitives import ClientTty, TerminalTabId, TmuxSessionName
+from terminal_app.interfaces import ShellPosterInterface
+from terminal_app.primitives import ClientTty, TerminalTabId
+from terminal_app.sessions import TmuxSessionSource
 
 TMUX_HOOK_PATH: Final[str] = "/tmux-hook"
 BLUEPRINT_NAME: Final[str] = "tmux_hooks"
@@ -71,7 +72,7 @@ def resolve_tab_id_for_tty(
 
 
 def build_tmux_hook_blueprint(
-    tmux: TmuxInterface,
+    source: TmuxSessionSource,
     paths: TerminalPaths,
     shell: ShellPosterInterface,
     nudger: InstanceNudgerInterface,
@@ -79,27 +80,13 @@ def build_tmux_hook_blueprint(
 ) -> Blueprint:
     """``POST /tmux-hook``, which the tmux hooks call when a client switches sessions or a session is renamed.
 
-    A session switch re-points the switching client's tab at the session it now shows; a rename
-    re-points every tab attached to the renamed session. Either way the shell is nudged, because
-    the instance list may have changed: a switch may be the attach that created the session,
-    and a rename re-keys one (the key is the name).
+    A session switch re-points the switching client's tab at the terminal whose session it now
+    shows (by the session's id, so a session renamed inside tmux is still its terminal). A
+    rename changes no key and no title, since the shell title is the record's, so it only
+    nudges. Either way the shell is nudged, because the instance list may have changed: a
+    switch may be the attach that recreated a session.
     """
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
-
-    def rebind_tab(tab_id: TerminalTabId, session_name: str) -> None:
-        try:
-            key = TmuxSessionName(session_name)
-        except InvalidTerminalValueError:
-            logger.debug(
-                "Skipped re-pointing tab {}: session {!r} cannot be an instance key",
-                tab_id,
-                session_name,
-            )
-            return
-        shell.post_json(
-            TAB_INSTANCE_ROUTE_TEMPLATE.format(tab_id=tab_id),
-            {"app": app_name, "key": key},
-        )
 
     def handle_session_changed(event: TmuxHookEvent) -> None:
         try:
@@ -118,15 +105,18 @@ def build_tmux_hook_blueprint(
                 event.client_tty,
             )
             return
-        rebind_tab(tab_id, event.session_name)
-
-    def handle_session_renamed(event: TmuxHookEvent) -> None:
-        for client in tmux.list_clients():
-            if client.session_id != event.session_id:
-                continue
-            tab_id = resolve_tab_id_for_tty(paths.clients_dir, client.client_tty)
-            if tab_id is not None:
-                rebind_tab(tab_id, event.session_name)
+        key = source.observe_attached_session(event.session_id, event.session_name)
+        if key is None:
+            logger.debug(
+                "Skipped re-pointing tab {}: session {!r} is no terminal",
+                tab_id,
+                event.session_name,
+            )
+            return
+        shell.post_json(
+            TAB_INSTANCE_ROUTE_TEMPLATE.format(tab_id=tab_id),
+            {"app": app_name, "key": key},
+        )
 
     @blueprint.post(TMUX_HOOK_PATH)
     def receive_tmux_hook() -> ResponseReturnValue:
@@ -139,7 +129,7 @@ def build_tmux_hook_blueprint(
             case TmuxHookKind.SESSION_CHANGED:
                 handle_session_changed(event)
             case TmuxHookKind.SESSION_RENAMED:
-                handle_session_renamed(event)
+                pass
             case _ as unreachable:
                 assert_never(unreachable)
         nudger.nudge()
