@@ -24,6 +24,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_destroy_command
+from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
@@ -47,7 +48,6 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _build_fast_mode_answered_label_command
-from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application

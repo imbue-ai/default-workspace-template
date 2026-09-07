@@ -59,10 +59,10 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
-from imbue.chat.models import AgentStopError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import CreatedChatAgent
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
