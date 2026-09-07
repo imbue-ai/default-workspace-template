@@ -29,7 +29,7 @@ class BrowserSnapshot(FrozenModel):
     name: BrowserName = Field(
         description="The browser's name, which is its instance key"
     )
-    lifecycle: BrowserLifecycle = Field(description="Launching, running, or crashed")
+    lifecycle: BrowserLifecycle = Field(description="Launching, running, crashed, or stopped by the user")
     controller: BrowserController = Field(
         description="Who holds control: the human (also when nobody does) or an agent"
     )

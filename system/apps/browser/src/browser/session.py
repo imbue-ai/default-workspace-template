@@ -616,8 +616,10 @@ class LiveBrowser(MutableModel):
     # lazily when an action finds the connection gone. A crashed browser reports
     # "crashed" to agents and the viewer rather than silently freezing; its name is never
     # reused (a new browser gets a new random name), so the dead one stays clearly
-    # labeled until it is closed. All transitions stay on the single loop thread, so this
-    # plain field needs no lock (cooperative single-thread atomicity).
+    # labeled until it is closed. ``stopped`` is a browser the user ended on purpose:
+    # no Chromium, but registered with its profile and last known tabs until a start
+    # relaunches it (``init`` again). All transitions stay on the single loop thread, so
+    # this plain field needs no lock (cooperative single-thread atomicity).
     _lifecycle: Lifecycle = PrivateAttr(default="init")
     # Set by the manager: a no-arg hook that checkpoints the fleet manifest. Fired on
     # crash so a browser that died is dropped from the manifest promptly (not only on
@@ -1104,10 +1106,11 @@ class LiveBrowser(MutableModel):
     def _control_message(self) -> dict[str, Any]:
         msg: dict[str, Any] = {
             "type": "control",
-            # The explicit lifecycle (init/running/crashed) the viewer renders off of:
-            # init -> full "Starting browser…" overlay, running -> live page, crashed ->
-            # crashed overlay. Carried on EVERY control broadcast so the viewer reacts
-            # to each transition deterministically (not by guessing from frames).
+            # The explicit lifecycle (init/running/crashed/stopped) the viewer renders off
+            # of: init -> full "Starting browser…" overlay, running -> live page, crashed ->
+            # crashed overlay, stopped -> stopped overlay with a Start button. Carried on
+            # EVERY control broadcast so the viewer reacts to each transition
+            # deterministically (not by guessing from frames).
             "lifecycle": self._lifecycle,
             "owner": self.controller,
             "owner_agent_id": self.owner_agent_id,
@@ -1657,10 +1660,11 @@ class LiveBrowser(MutableModel):
     async def describe(self) -> dict[str, Any]:
         """Snapshot for ``GET /browsers``: id, lifecycle, owner, and the tab list.
 
-        ``lifecycle`` (init/running/crashed) is the explicit state the whole system
-        reads; ``crashed`` is kept as a derived convenience for existing consumers (the
-        CLI ``ls`` owner label). A browser still in ``init`` has no Chromium yet, so its
-        tab list is empty (the round-trip would have nothing to read)."""
+        ``lifecycle`` (init/running/crashed/stopped) is the explicit state the whole
+        system reads; ``crashed`` is kept as a derived convenience for existing consumers
+        (the CLI ``ls`` owner label). A browser still in ``init`` has no Chromium yet, so
+        its tab list is empty (the round-trip would have nothing to read); so has a
+        stopped one, whose last known tabs the manifest keeps instead."""
         return {
             "id": self.browser_id,
             "lifecycle": self._lifecycle,
@@ -2066,8 +2070,9 @@ class BrowserSessionManager(MutableModel):
         launch flips the browser to ``running`` (and broadcasts) when Chromium is up.
 
         Cap: ``init`` browsers COUNT toward the cap (a half-started fleet still reserves
-        its slots); only crashed shells are excluded (they're dead, kept only to report
-        "crashed"). A ``None`` name is minted as the first free ``browser-<N>`` --
+        its slots); crashed shells (dead, kept only to report "crashed") and stopped
+        browsers (no Chromium until started) are excluded. A ``None`` name is minted as
+        the first free ``browser-<N>`` --
         the canonical form of the "Browser N" display name the UI derives from it.
         A provided name is validated (:class:`InvalidBrowserNameError`) and rejected
         on collision (:class:`DuplicateBrowserNameError`). Both paths count the
@@ -2266,9 +2271,10 @@ class BrowserSessionManager(MutableModel):
     # --- persistence: profiles (Tier A) + manifest (Tier B) -------------------
 
     def live_browsers(self) -> list[LiveBrowser]:
-        """Non-crashed sessions (init + running), by name -- the set that counts toward
-        the cap. An ``init`` browser reserves its slot the moment it's registered, so it
-        counts here even before Chromium is up.
+        """Non-crashed sessions (init + running + stopped), by name -- the set the
+        manifest snapshots. The cap is a narrower count (:meth:`_launched_count`: init +
+        running, since a stopped browser holds no Chromium); an ``init`` browser reserves
+        its slot the moment it's registered, so it counts there even before Chromium is up.
 
         Snapshots ``_browsers`` with ``list(...)`` up front so iteration can't
         KeyError if the dict is mutated concurrently (e.g. a close on the loop
@@ -2309,8 +2315,8 @@ class BrowserSessionManager(MutableModel):
         )
 
     async def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
-        """Build the durable manifest from the LIVE fleet (init + running). Caller holds
-        ``_lock``.
+        """Build the durable manifest from the LIVE fleet (init + running + stopped, the
+        last with its ``stopped`` flag and last known tabs). Caller holds ``_lock``.
 
         Init browsers ARE persisted now (finding [5]): a browser the user just created is
         registered ``init`` and its Chromium launch is multi-second, so a daemon crash in
@@ -2321,7 +2327,8 @@ class BrowserSessionManager(MutableModel):
         stranded; only an explicit ``close`` forgets it.
 
         Crashed (not explicitly-closed) browsers are PRESERVED too, carried forward with
-        their last-known entry (we can't query dead Chromium for tabs). Dropping them here
+        their last-known entry (the last manifest's, as they were before the tab cache;
+        ``tab_urls`` now answers from that cache too). Dropping them here
         was silent data loss: a crash excluded the browser from the manifest, so the next
         restart swept its profile -- deleting every login -- contradicting "logins persist
         across restarts". Keeping the entry means its profile survives and it relaunches
