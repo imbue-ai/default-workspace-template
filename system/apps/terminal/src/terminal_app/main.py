@@ -14,6 +14,7 @@ from app_manifest.primitives import AppName, AppUrl, InstancesUrl
 from flask import Flask
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from loguru import logger
 from pydantic import Field
 
 from terminal_app.data_types import TerminalPaths
@@ -80,6 +81,12 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     # cwd of every shell ttyd spawns.
     paths = TerminalPaths(state_dir=arguments.state_dir.absolute())
     oom_tag_script = arguments.oom_tag_script.absolute()
+    if not oom_tag_script.is_file():
+        # Every session's shell runs through it, so a missing one exits every pane at once.
+        logger.warning(
+            "The memory-shedding tag wrapper {} does not exist; terminal sessions will not start a shell",
+            oom_tag_script,
+        )
     with log_span("Installing the ttyd dispatch scripts under {}", paths.commands_dir):
         install_dispatch_scripts(paths, oom_tag_script)
     is_client_installed = install_ttyd_web_client(
