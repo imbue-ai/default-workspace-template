@@ -126,7 +126,7 @@ class TerminalPaths(FrozenModel):
     @computed_field
     @cached_property
     def sessions_dir(self) -> Path:
-        """One file per terminal the app created or adopted, named by key and holding the tmux session id the dispatch attaches by."""
+        """One file per terminal the app created or adopted, named by key and holding the tmux session id and creation time the dispatch attaches by."""
         return self.state_dir / "sessions"
 
     @computed_field

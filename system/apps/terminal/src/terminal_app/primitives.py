@@ -29,8 +29,9 @@ TERMINAL_TAB_ID_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 MAX_WORKDIR_LENGTH: Final[int] = 1024
 
-# tmux's immutable session id (``$3``): what a record is matched to a live session by, so a
-# session renamed inside tmux keeps its key and title.
+# tmux's session id (``$3``): what a record is matched to a live session by (together with the
+# session's creation time, since a later server hands the same ids out again), so a session
+# renamed inside tmux keeps its key and title.
 TMUX_SESSION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\$[0-9]+$")
 
 # The memory-shedding band a terminal's shell (and everything run in it) is tagged into: a key

@@ -228,9 +228,10 @@ class TmuxSessionSource(InstanceSourceInterface):
     """The terminal's instances: the user's tmux sessions, plus the terminals the store remembers that tmux no longer has.
 
     Keys are the names the app allocated (``terminal-<N>``) and never change: a record is matched
-    to its live session by tmux's immutable session id, a rename changes only the record's title,
-    and the session id of every terminal the app created or adopted is written under
-    ``sessions_dir`` for the dispatch script to attach by.
+    to its live session by tmux's session id and the session's creation time (``is_same_session``),
+    a rename changes only the record's title, and the session id and creation time of every
+    terminal the app created or adopted are written under ``sessions_dir`` for the dispatch
+    script to attach by.
     """
 
     tmux: TmuxInterface = Field(frozen=True, description="The default tmux server")
@@ -248,7 +249,7 @@ class TmuxSessionSource(InstanceSourceInterface):
     )
     sessions_dir: Path = Field(
         frozen=True,
-        description="Where the session id of each terminal is written, named by key, for the dispatch to attach by",
+        description="Where the session id and creation time of each terminal are written, named by key, for the dispatch to attach by",
     )
     session_command: tuple[str, ...] = Field(
         frozen=True,
