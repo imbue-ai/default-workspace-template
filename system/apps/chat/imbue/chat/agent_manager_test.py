@@ -1217,6 +1217,7 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
     git_work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    true_binary: str,
 ) -> None:
     """The AgentStateItem registered before observe relists carries the same
     canonical name + display_name label the created mngr agent will hold, so
@@ -1228,8 +1229,6 @@ def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    true_binary = shutil.which("true")
-    assert true_binary is not None
     manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
     try:
         created = manager.create_chat_agent("My planning chat")

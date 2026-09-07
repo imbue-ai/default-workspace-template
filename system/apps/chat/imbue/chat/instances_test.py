@@ -1,4 +1,3 @@
-import shutil
 from uuid import uuid4
 
 import pytest
@@ -468,9 +467,9 @@ def test_agents_are_stoppable_and_provisional_and_subagent_records_are_not(agent
         source.start_instance(subagent.key)
 
 
-def test_stop_runs_mngr_stop_and_answers_the_chat_as_stopped(broadcaster: WebSocketBroadcaster) -> None:
-    true_binary = shutil.which("true")
-    assert true_binary is not None
+def test_stop_runs_mngr_stop_and_answers_the_chat_as_stopped(
+    broadcaster: WebSocketBroadcaster, true_binary: str
+) -> None:
     agent_manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
     agent_id = _agent_id()
     _seed_agent(agent_manager, agent_id, "Chat-1", activity_state=ActivityState.THINKING)
