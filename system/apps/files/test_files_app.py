@@ -177,6 +177,7 @@ def test_files_app_registers_runs_dufs_serves_instances_and_stops_with_dufs(
             "status": "idle",
             "lifetime": "referenced",
             "renameable": False,
+            "stoppable": False,
         }
         second = _create(app, {})
         assert second.status_code == 201, second.text
