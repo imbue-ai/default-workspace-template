@@ -86,9 +86,11 @@ export function App(): m.Component {
     view() {
       return m(
         "div",
-        { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
+        // h-screen is the full viewport: inside the minds desktop shell this
+        // app renders in a sandboxed iframe the shell already places below its
+        // title bar, so there is no title-bar height to subtract here.
+        { class: "app-layout flex h-screen flex-col" },
         [
-          m("div", { class: "minds-titlebar-spacer" }),
           // Present only when the workspace's code has moved under this
           // interface: a failed update's rollback could not restore it, an
           // update apply was interrupted, or the tree advanced without a
@@ -106,7 +108,12 @@ export function App(): m.Component {
           // composer's model bar clipped off the bottom. The minds shell
           // shrinking this window for its recovery band is how that happens
           // without the user touching the window.
-          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80" }, [
+          // pt/pl-1: the canvas runs edge to edge, with the padding as the
+          // outermost pane gap -- the top against the title bar, the left so
+          // the rail has a few pixels of canvas to hover into. Right and
+          // bottom stay flush against the viewport. The --si-* theme vars the
+          // canvas colour comes from live on .app-main in style.css.
+          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80 bg-(--si-canvas) pt-1 pl-1" }, [
             // Every attr is read straight off the workspace on each draw rather
             // than cached: the registry loads asynchronously, and a rename, a
             // new tab or another client's change all arrive as a redraw, so the

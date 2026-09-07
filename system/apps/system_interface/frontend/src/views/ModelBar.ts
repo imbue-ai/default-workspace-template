@@ -1,9 +1,8 @@
 /**
  * The composer's combo card: which PROVIDER this chat runs on, and which model on it.
  *
- * Ported from the mockup (`imbue-ai/mind-sketches`, `prototypes/minds-harness`). The provider
- * leads, because with several accounts signed in it is the first thing worth knowing about a
- * chat.
+ * The provider leads, because with several accounts signed in it is the first thing worth
+ * knowing about a chat.
  *
  * Everything it shows is data: the static per-harness catalog from HarnessCatalog.ts, the
  * agent's live `model_choice` pushed onto the agents store, and its `account` label resolved
@@ -27,8 +26,9 @@ import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "./DockviewWorkspace";
 import { placeFlyout } from "./flyout-position";
 import { Portal } from "./portal";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
+import { inputClass } from "./components/Input";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
@@ -68,7 +68,7 @@ const CARD_MARGIN = 8;
  *  is a `closest` call rather than three element references that can go stale. */
 const POPOVER_ATTR = "data-model-popover";
 
-/** The slider's filled portion, deepening with effort. From the mockup verbatim. */
+/** The slider's filled portion, deepening with effort. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
 }
@@ -142,6 +142,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   function closeCard(): void {
     cardAnchor = null;
+    // A drag that never released (the card can be torn down mid-gesture) would otherwise
+    // still be driving the label and the thumb the next time the card opens.
+    draggingEffortIndex = null;
     setFlyout(null);
   }
 
@@ -198,16 +201,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       {
         type: "button",
         class: opts.openable ? css.ROW : css.ROW_INERT,
-        // The mockup's own row hook, kept so the two can be diffed and so a test can address
-        // a row by what it is rather than by its classes.
+        // A stable hook so a test can address a row by what it is rather than by its classes.
         "data-card-row": opts.which,
         ...tooltipAttrs(opts.tooltip),
-        // CLICK, not hover. The mockup opens these on `onMouseEnter`, which is free in a
-        // prototype and expensive here: opening the model flyout fetches this agent's
-        // offerable models, which for pi shells out to `pi --list-models` (up to 15s) and
-        // for codex connects to its daemon. On hover that fires on every pointer sweep
-        // across the card. Clicking also makes the mockup's safe-triangle hover-aim
-        // machinery unnecessary, which is ~60 lines of slope math not ported.
+        // CLICK, not hover. Opening the model flyout fetches this agent's offerable models,
+        // which for pi shells out to `pi --list-models` (up to 15s) and for codex connects to
+        // its daemon -- on hover that would fire on every pointer sweep across the card.
+        // Clicking also spares us the safe-triangle hover-aim machinery a hover menu needs.
         onclick: (event: MouseEvent) => {
           if (!opts.openable) return;
           flyoutRowBottom = (event.currentTarget as HTMLElement).getBoundingClientRect().bottom;
@@ -235,16 +235,17 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** The effort slider, or null when there is nothing to slide.
    *
-   * Two deliberate divergences from the mockup, both decided rather than discovered:
+   * Two deliberate choices, both decided rather than discovered:
    *
-   * 1. `onchange`, not `oninput`. The mockup's React `onChange` maps to the DOM `input`
-   *    event, which fires once per notch passed during a drag -- and every notch here is a
-   *    live switch typed into the agent's pane (claude), a socket call (codex) or a parked
-   *    intent (pi). `setModelChoice` chains rather than debounces, so a low-to-max drag
-   *    would queue four sequential switches. This commits once, on release.
+   * 1. `onchange`, not `oninput`. The `input` event fires once per notch passed during a
+   *    drag -- and every notch here is a live switch typed into the agent's pane (claude), a
+   *    socket call (codex) or a parked intent (pi). `setModelChoice` chains rather than
+   *    debounces, so a low-to-max drag would queue four sequential switches. This commits
+   *    once, on release.
    * 2. Indexed over the SHOWN list, accepting that an agent on a hidden level (claude's
-   *    `ultra`) pins its thumb at the far left. The LABEL still reads correctly, because it
-   *    comes from the value rather than the position.
+   *    `ultra`) pins its thumb at the far left. AT REST the label still reads correctly,
+   *    because it comes from the value rather than the position. Mid-drag it follows the
+   *    position instead, which is the point of dragging.
    */
   function effortRow(opts: {
     efforts: readonly { level: string; in_picker: boolean }[];
@@ -258,18 +259,26 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // one-stop slider renders as an immovable full-green track labelled "Off" -- which looks
     // broken and says the opposite of the truth.
     if (shown.length < 2) return null;
-    const index = Math.max(
+    const committed = Math.max(
       0,
       shown.findIndex((effort) => effort.level === opts.current),
     );
-    const pct = (index / (shown.length - 1)) * 100;
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
+    // Mid-drag the row reads off the thumb rather than off the committed choice, so the label
+    // and the track fill travel with the finger instead of both sitting on the old level
+    // until release. Only what is DRAWN moves; the commit is still once, on release.
+    const position = draggingEffortIndex ?? committed;
+    const pct = (position / (shown.length - 1)) * 100;
+    // At rest the label comes from the value (which can name a level `shown` does not carry
+    // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
+    // because the input's own min/max are its bounds.
+    const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
+    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
-        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(opts.current ?? shown[index].level)),
+        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
         m("span", { class: css.SLIDER_WRAP }, [
-          // Tick marks behind the track: without them the slider is a bare line and the levels
-          // it can land on are guesswork. Not in the mockup; asked for after using it.
+          // A dot at each level: without them the slider is a bare line and the levels it can
+          // land on are guesswork.
           m(
             "span",
             { class: css.SLIDER_TICKS },
@@ -287,7 +296,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             // under the pointer mid-drag on any harness that does not move the chip
             // optimistically -- codex is exactly that. Holding the dragged index locally and
             // clearing it on release keeps the thumb where the finger is.
-            value: draggingEffortIndex ?? index,
+            value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
               `var(--color-fill-active) ${pct}%)`,
@@ -305,7 +314,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     ]);
   }
 
-  /** Fast mode: a switch, ported from the mockup's `Switch.tsx`.
+  /** Fast mode: a switch.
    *
    * A switch rather than a toggling icon, because a switch says on or off by its shape instead
    * of by its fill.
@@ -354,8 +363,8 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     );
   }
 
-  /** The mockup's `above`: the card hangs off the trigger's top-left corner, because the
-   *  composer sits at the bottom of the panel. The width is set here rather than as a class
+  /** The card hangs off the trigger's top-left corner, because the composer sits at the
+   *  bottom of the panel. The width is set here rather than as a class
    *  because the rows are `w-full` -- a card left to size itself to its content gives them a
    *  click target only as wide as their own text. */
   function cardPlacement(anchor: DOMRect): string {
@@ -516,14 +525,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       // BELOW the list, not above it: the flyout is anchored at its base and grows upward, so
       // the bottom is the edge that stays put next to the row you came from.
       //
-      // The wrapper is the styled control; the bare input inside carries `outline: none`.
-      // Putting the wrapper's class straight on an <input> is what left the browser's own
-      // focus ring showing through, which is the orange halo in the report.
+      // The shared input recipe, with the magnifier laid over its left padding: the field owns
+      // its own frame and focus ring, so nothing here re-styles either.
       searchable || all.length > 8
-        ? m("div", { class: "model-selector-search" }, [
-            m("span", { class: "model-selector-search-icon" }, m.trust(icon("search", { size: 13 }))),
+        ? m("div", { class: css.SEARCH_WRAP }, [
+            m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
             m("input", {
-              class: "model-selector-search-input",
+              class: inputClass({ extra: css.SEARCH_INPUT_EXTRA }),
               type: "text",
               placeholder: "Search models",
               value: modelQuery,
@@ -582,8 +590,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         "button",
         {
           type: "button",
-          // A stable hook for the composer's own styles and for tests; the tailwind classes
-          // beside it are the mockup's and may be re-ported at any time.
+          // A stable hook for the composer's own styles and for tests.
           class: `model-selector-trigger ${css.TRIGGER}`,
           [POPOVER_ATTR]: "trigger",
           title: "Model, effort and speed",

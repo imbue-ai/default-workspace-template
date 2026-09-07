@@ -62,7 +62,7 @@ import { TerminalBanner } from "./TerminalBanner";
 import { SubagentView } from "./SubagentView";
 import { DestroyConfirmDialog } from "./DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
-import { serviceIconMarkup } from "./appIcon";
+import { serviceIconMarkup } from "./components/appIcon";
 import { NewTabLauncher, buildLauncherRows } from "./NewTabLauncher";
 import type { LaunchTarget, LauncherRow } from "./NewTabLauncher";
 import { OBJECT_MENU_DIVIDER, isRenameableKind, objectMenuEntries } from "./objectMenu";
@@ -71,13 +71,15 @@ import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
 import { normalizeTabTitle } from "./tab-rename";
-import { attachHoverTooltip } from "./hoverTooltip";
+import { attachHoverTooltip } from "./components/hoverTooltip";
+import { menuCardClass, menuDividerClass, menuRowClass } from "./components/menu";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import { reloadInterface } from "../reload";
 import { reportActivity } from "../models/activityReporter";
-import { icon } from "./icons";
-import type { IconName } from "./icons";
+import { icon } from "./components/icons";
+import type { IconName } from "./components/icons";
+import { buttonClass } from "./components/Button";
 import { apiUrl, getPrimaryAgentId } from "../base-path";
 import { deriveServiceOrigin } from "../origin";
 import {
@@ -589,12 +591,10 @@ function tabIconMarkupForPanel(params: PanelParams | undefined): string {
 // the ObjectMenuActions that module asks for, and the floating-card chrome
 // that renders whatever list comes back.
 
-// Menu chrome, settled in the design (§6) and shared with the sidebar's menus:
-// a floating card on the primary surface with a hairline border, 8px radius and
-// the overlay elevation shadow, holding 32px rows of icon + label.
-const TAB_MENU_CARD_CLASS = "fixed z-50 min-w-[180px] rounded-lg border border-border bg-surface py-1 text-[13px]";
-const TAB_MENU_SHADOW_STYLE = "box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);";
-const TAB_MENU_ROW_CLASS = "flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left hover:bg-bg-hover";
+// Fixed and placed by the sidebar's placeMenu, so every floating menu flips
+// and clamps by one rule.
+const TAB_MENU_CARD_CLASS = menuCardClass("fixed min-w-[180px] text-(length:--font-size-row)");
+const TAB_MENU_ROW_CLASS = menuRowClass();
 
 // The one open tab menu, if any. Only one is ever up: opening another closes
 // this one first, and so does an outside press, Escape, a scroll, a resize, or
@@ -627,7 +627,7 @@ function openTabMenuAt(
   const element = document.createElement("div");
   element.className = TAB_MENU_CARD_CLASS;
   element.setAttribute("role", "menu");
-  element.style.cssText = `left: 0; top: 0; ${TAB_MENU_SHADOW_STYLE}`;
+  element.style.cssText = "left: 0; top: 0;";
 
   const close = (): void => {
     document.removeEventListener("pointerdown", onOutsidePointerDown, true);
@@ -652,12 +652,12 @@ function openTabMenuAt(
   for (const entry of entries) {
     if (entry === OBJECT_MENU_DIVIDER) {
       const divider = document.createElement("div");
-      divider.className = "my-1 border-t border-border";
+      divider.className = menuDividerClass();
       element.appendChild(divider);
       continue;
     }
     const row = document.createElement("div");
-    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-red-600" : "text-text-primary"}`;
+    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-danger" : "text-primary"}`;
     row.setAttribute("role", "menuitem");
     const glyph = document.createElement("span");
     glyph.className = "flex w-4 shrink-0 items-center justify-center";
@@ -1431,10 +1431,11 @@ function createTabActionButton(
   onClick: (ev: MouseEvent) => void,
 ): HTMLButtonElement {
   const button = document.createElement("button");
-  button.className = "dv-custom-tab-action";
+  // The shared ghost icon-Button recipe supplies the box, radius and hover
+  // square; `dv-custom-tab-action` stays as a bare marker for the E2E selectors.
+  button.className = buttonClass("ghost", { icon: true, xs: true, extra: "dv-custom-tab-action shrink-0" });
   button.setAttribute("aria-label", title);
-  // No explicit size: `.dv-custom-tab-action svg` sizes these to 12px in CSS.
-  button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 14) : icon(iconName);
+  button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 12) : icon(iconName, { size: 12 });
   const tooltip = attachHoverTooltip(button);
   tooltip.setText(title);
   disposables.push(tooltip);

@@ -1,6 +1,6 @@
 ---
 name: fetch-process-show
-description: "Fetch data from somewhere (an external service, an API, a third-party source), process it, and show it to the user -- the \"go get all this stuff, do something to it, and put it in front of me\" task. Use when the ask is to retrieve real data, transform/summarize/classify it, and surface the result. Validates auth first, confirms a real sample covering every data shape, then crystallizes the pipeline in the background while building surfaces."
+description: "Fetch data from somewhere (an external service, an API, a third-party source, uploaded data) validating auth, process it, and show it to the user -- the \"go get all this stuff, do something to it, and put it in front of me\" task. Use when the ask is to retrieve real data or process real data the user uploaded, transform/summarize/classify it, and surface the result."
 metadata:
   author: imbue
 ---
