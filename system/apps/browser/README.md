@@ -70,7 +70,13 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   (`data/.apps/browser/instances.json`, the app's instance records; a workspace from
   before the move still has it at `data/.state/browser-fleet.json`, which the daemon
   reads until its first write to the new path) records which browsers existed and
-  their tab URLs. Both the profiles and the manifest live on the workspace volume and are
+  their tab URLs. It is checkpointed every ten seconds and once more when the daemon
+  is stopped: supervisord signals the daemon alone (`stopasgroup=false`), so that
+  final checkpoint runs while every Chromium can still be asked for its tabs, and only
+  then does the daemon close each browser. Each browser also keeps the tab list its
+  last successful query returned, and reports that list whenever Chromium cannot
+  answer (still launching, dying, crashed), so a checkpoint never records a browser
+  as having no tabs because the query failed. Both the profiles and the manifest live on the workspace volume and are
   captured by the restic host backup (`data/` is gitignored, so neither rides GitHub
   sync); a backup restore brings the tab list back (logged out only if the profiles
   themselves were lost). On daemon startup the

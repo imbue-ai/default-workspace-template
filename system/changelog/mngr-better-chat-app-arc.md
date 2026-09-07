@@ -82,3 +82,5 @@ The frontends are one npm workspace rooted at `system/package.json` (with `packa
 `layout.py`'s note on `self` says it resolves to the requester address the script sends and that the shell refuses it when none was sent.
 
 The root `pyproject.toml` keeps `import-linter` in its dev group: the vendored ratchet library imports it at module level, so every project's `test_ratchets.py` needs it even where no import contract is declared.
+
+`system/supervisord.conf`: `[program:browser]` is stopped with `stopasgroup=false` (`killasgroup=true` stays, and `stopwaitsecs` is 30 seconds), so a stop or restart of the browser app signals the daemon alone and it checkpoints every browser's tabs while Chromium can still be asked before closing each browser in order; a group-wide SIGTERM killed every Chromium in the same instant as the daemon and the final checkpoint saved no tabs.
