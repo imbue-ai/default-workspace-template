@@ -27,6 +27,7 @@ from terminal_app.testing import (
 
 _NEW = ActionId("new")
 _ACTIVITY = datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc)
+_LATER_ACTIVITY = datetime(2026, 9, 3, 13, 0, tzinfo=timezone.utc)
 
 
 def _session(name: str, session_id: str) -> TmuxSession:
@@ -104,23 +105,27 @@ def test_list_matches_a_record_to_its_session_by_id_whatever_tmux_calls_it(
     ]
 
 
+@pytest.mark.parametrize("is_impostor_listed_first", [True, False])
 def test_list_skips_a_second_session_under_a_tracked_terminals_name(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
     session_source: TmuxSessionSource,
+    is_impostor_listed_first: bool,
 ) -> None:
-    # terminal-1's session was renamed inside tmux and a hand-made session took its old name.
-    fake_tmux.set_sessions([_session("terminal-1", "$8"), _session("renamed", "$5")])
+    # terminal-1's session was renamed inside tmux and a hand-made session took its old name;
+    # the activities tell the two apart, and tmux may list either first.
+    real = TmuxSession(name="renamed", session_id="$5", last_activity=_ACTIVITY)
+    impostor = TmuxSession(name="terminal-1", session_id="$8", last_activity=_LATER_ACTIVITY)
+    fake_tmux.set_sessions([impostor, real] if is_impostor_listed_first else [real, impostor])
     session_store.save_record(
         make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
     )
 
     listed = session_source.list_instances()
 
-    assert [(record.key, record.status) for record in listed] == [
-        ("terminal-1", InstanceStatus.IDLE)
+    assert [(record.key, record.status, record.last_active) for record in listed] == [
+        ("terminal-1", InstanceStatus.IDLE, _ACTIVITY)
     ]
-    assert listed[0].last_active == _ACTIVITY
 
 
 def test_list_is_empty_without_a_tmux_server_or_a_store(

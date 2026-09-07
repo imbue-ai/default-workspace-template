@@ -103,10 +103,11 @@ def match_live_sessions(
     """Every live user session as ``idle`` (in tmux order), then every remembered terminal tmux no longer has as ``stopped``.
 
     A live session is the terminal whose record holds its id, whatever tmux now calls it; a
-    session no record holds by id falls back to the record of its name (one from before the app
-    kept ids, or a session created on attach), and one with no record at all is a hand-made
-    terminal listed under its own name. A session whose name would repeat a key already listed
-    (a second session under a tracked terminal's old name) is skipped.
+    session no record holds by id falls back to the record of its name when that record's own
+    session is not live (one from before the app kept ids, or a session created on attach), and
+    one with no record at all is a hand-made terminal listed under its own name. A session
+    carrying the old name of a terminal whose own session is live is skipped, whichever tmux
+    lists first.
     """
     # Keyed by plain strings: a live session's id and name arrive from tmux unvalidated.
     record_by_id: dict[str, TerminalSessionRecord] = {
@@ -115,29 +116,26 @@ def match_live_sessions(
     record_by_name: dict[str, TerminalSessionRecord] = {
         str(record.name): record for record in records
     }
+    live_ids = {session.session_id for session in live_sessions}
     matched: set[TmuxSessionName] = set()
-    listed_keys: set[str] = set()
     instances: list[InstanceRecord] = []
     for session in live_sessions:
         record = record_by_id.get(session.session_id)
         if record is None:
             record = record_by_name.get(session.name)
-        if record is not None and record.name in matched:
-            logger.debug(
-                "Skipped tmux session {!r} ({}): terminal {!r} is already listed",
-                session.name,
-                session.session_id,
-                record.name,
-            )
-            continue
-        instance = _live_instance_record(session, record)
-        if instance.key in listed_keys:
-            logger.debug("Skipped tmux session {!r}: its name is already listed", session.name)
-            continue
+            if record is not None and record.session_id in live_ids:
+                # The record's own session is live under another name; this one only reuses its old name.
+                logger.debug(
+                    "Skipped tmux session {!r} ({}): terminal {!r} is backed by session {}",
+                    session.name,
+                    session.session_id,
+                    record.name,
+                    record.session_id,
+                )
+                continue
         if record is not None:
             matched.add(record.name)
-        listed_keys.add(instance.key)
-        instances.append(instance)
+        instances.append(_live_instance_record(session, record))
     instances.extend(
         _stopped_instance_record(record) for record in records if record.name not in matched
     )
