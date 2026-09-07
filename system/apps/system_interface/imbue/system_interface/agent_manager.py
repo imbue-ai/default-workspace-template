@@ -1173,30 +1173,41 @@ class AgentManager:
         name mngr holds for the agent, and ``name`` is its canonical form, so the
         UI can show what the user typed while still addressing the agent by
         ``name``. Null means mngr has no such label and ``name`` is all there is.
+
+        The agent snapshot is copied out under ``_lock``, but ``shoulder_tap_available``
+        is computed AFTER releasing it: that call descends into the harness session's
+        own queue-tracker lock, and a queue tracker's mutating methods publish back into
+        this manager (``update_queued_messages``) while still holding THEIR lock. Calling
+        into the session while still holding ``_lock`` here would let one thread hold
+        ``_lock`` and wait on the queue tracker's lock while another holds that lock and
+        waits on ``_lock`` -- a lock-order-inversion deadlock that once wedged every
+        request needing ``_lock`` (including chat creation) behind a single stuck
+        shoulder-tap check.
         """
         with self._lock:
-            return [
-                {
-                    "id": a.id,
-                    "name": a.name,
-                    "state": a.state,
-                    "labels": a.labels,
-                    "project": a.labels.get("project"),
-                    "display_name": a.labels.get("display_name"),
-                    "work_dir": a.work_dir,
-                    "harness": a.harness,
-                    "activity_state": a.activity_state,
-                    "model_choice": a.model_choice.model_dump() if a.model_choice else None,
-                    "queued_messages": [queued.model_dump() for queued in a.queued_messages],
-                    # Backend-computed shoulder-tap availability (contract Shoulder-tap): available
-                    # iff something is queued AND no send is in flight. Derived here from the
-                    # authoritative live state rather than stored on the item, so it can never go
-                    # stale against it. The frontend renders/greys the button from this alone -- it
-                    # computes nothing and there is no error path.
-                    "shoulder_tap_available": self._shoulder_tap_available(a),
-                }
-                for a in self._agents.values()
-            ]
+            agents = list(self._agents.values())
+        return [
+            {
+                "id": a.id,
+                "name": a.name,
+                "state": a.state,
+                "labels": a.labels,
+                "project": a.labels.get("project"),
+                "display_name": a.labels.get("display_name"),
+                "work_dir": a.work_dir,
+                "harness": a.harness,
+                "activity_state": a.activity_state,
+                "model_choice": a.model_choice.model_dump() if a.model_choice else None,
+                "queued_messages": [queued.model_dump() for queued in a.queued_messages],
+                # Backend-computed shoulder-tap availability (contract Shoulder-tap): available
+                # iff something is queued AND no send is in flight. Derived here from the
+                # authoritative live state rather than stored on the item, so it can never go
+                # stale against it. The frontend renders/greys the button from this alone -- it
+                # computes nothing and there is no error path.
+                "shoulder_tap_available": self._shoulder_tap_available(a),
+            }
+            for a in agents
+        ]
 
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
         """Whether the shoulder-tap button is offered for ``agent_state`` (contract Shoulder-tap).
@@ -1204,8 +1215,10 @@ class AgentManager:
         The agent's session answers: the shared rule is queued AND nothing Sending; a
         live-connection session (codex) reads its own ledger, which also GREYS the button
         through the interrupt+resend of a tap (the re-sent chips are Sending). No session yet
-        (tracking not started) means nothing queued and nothing to tap. Caller holds ``_lock``;
-        the session's reads are leaf-locked/lock-free, so there is no ordering between the two.
+        (tracking not started) means nothing queued and nothing to tap. Called WITHOUT
+        ``_lock`` held (see ``get_agents_serialized``): ``_session_by_agent`` is read via a
+        single ``dict.get``, safe without the lock, and the session's own reads are
+        leaf-locked under its own lock, never this one.
         """
         session = self._session_by_agent.get(agent_state.id)
         if session is None:
