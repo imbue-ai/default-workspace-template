@@ -267,10 +267,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             raise ChatTitleConflictError(str(e)) from e
         except AgentRenameError as e:
             raise ChatRenameFailedError(str(e)) from e
-        renamed = self.manager.get_agent_by_id(key)
-        if renamed is None:
-            raise UnknownInstanceError(f"no instance has the key {key!r}")
-        return instance_record_for_agent(renamed, self.manager.has_pending_permission(key))
+        return self._record_for_agent(key, None)
 
     def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         raise LocationNotTrackedError("the chat app does not track where its pages are")
