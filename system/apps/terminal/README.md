@@ -100,12 +100,12 @@ from `~/.tmux.conf`, which the main create template writes. Its hooks call
 (`hooks.py`) when a client switches sessions or a session is renamed. For a
 switch, the route maps the client's pty to its tab through `commands/clients/`,
 resolves the terminal whose session the client now shows (by the session id
-and creation time; a record without a session adopts the one of its name, which is how the app
-learns the id of a session `session.sh` created on attach), and re-points the
-tab through the shell's `POST /api/tabs/<tab_id>/instance` (contracts section
-5). A rename changes no key and no title (the shell tab's title is the record's)
-and so only nudges. Either event nudges the shell, since the instance list may
-have changed.
+and creation time; a record without a session adopts the one of its name,
+which is how the app learns the id of a session `session.sh` created on
+attach), and re-points the tab through the shell's
+`POST /api/tabs/<tab_id>/instance` (contracts section 5). A rename changes no
+key and no title (the shell tab's title is the record's) and so only nudges.
+Either event nudges the shell, since the instance list may have changed.
 
 `notify_terminal_session.py` at this folder's root is a symlink into `bin/` for
 tmux servers that started before the helper moved (a server keeps the hook
