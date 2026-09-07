@@ -1805,18 +1805,15 @@ class LiveBrowser(MutableModel):
         # manifest records and what a start reopens.
         await self.tab_urls()
         self._broadcast({"type": "stopped", "browser_id": self.browser_id})
+        # Stopped before the teardown's awaits, so an acquire landing in them is answered
+        # ``stopped`` rather than parked, and the control write below carries the new state.
+        self._lifecycle = "stopped"
         async with self._control_lock:
             await self._abandon_queues_locked("stopped")
-            self.controller = "human"
-            self.owner_agent_id = None
-            self.owner_agent_name = None
-            self.human_pinned = False
+            await self._write_control_locked("human", None, None, pinned=False)
         await self._teardown_chrome()
         await self._teardown_display()
         self._active_target_id = ""
-        self._lifecycle = "stopped"
-        self._broadcast(self._control_message())
-        self._nudger.nudge()
 
     async def _teardown_display(self) -> None:
         """Release this browser's audio sink and private Xvfb, after Chromium is gone."""
