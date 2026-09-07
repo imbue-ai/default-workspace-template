@@ -318,21 +318,15 @@ class TmuxSessionSource(InstanceSourceInterface):
                 )
             existing = next((record for record in records if record.name == name), None)
             live_session = self._live_session_of(name, existing, live_sessions)
-            retitled = TerminalSessionRecord(
-                name=name,
-                title=title,
-                workdir=existing.workdir if existing else None,
-                session_id=TmuxSessionId(live_session.session_id)
-                if live_session is not None
-                else (existing.session_id if existing else None),
-                session_created=live_session.created_epoch
-                if live_session is not None
-                else (existing.session_created if existing else None),
-                is_stopped=existing.is_stopped if existing else False,
-            )
-            self.store.save_record(retitled)
-            if live_session is not None and (existing is None or not is_same_session(existing, live_session)):
-                self._write_session_id_file(retitled)
+            if existing is None:
+                existing = TerminalSessionRecord(name=name, title=None, workdir=None)
+            retitled = existing.model_copy_update(to_update(existing.field_ref().title, title))
+            if live_session is not None and not is_same_session(retitled, live_session):
+                # The live session of its name is not the one the record holds (a session the
+                # dispatch created on attach, or one the store never saw): it is the terminal's now.
+                retitled = self._bind(retitled, live_session)
+            else:
+                self.store.save_record(retitled)
         if live_session is None:
             return _stopped_instance_record(retitled)
         return _live_instance_record(live_session, retitled)

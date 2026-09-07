@@ -340,6 +340,28 @@ def test_rename_of_a_stopped_terminal_retitles_the_record_without_touching_tmux(
     ]
 
 
+def test_rename_of_a_stopped_terminal_whose_session_came_back_adopts_it_as_running(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    # The user stopped the terminal, then opened its tab: the dispatch recreated the session by
+    # name, and the hook never reached the app, so the rename is where the app first sees it.
+    fake_tmux.set_sessions([_session("terminal-1", "$4")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir="/srv", is_stopped=True)
+    )
+
+    renamed = session_source.rename_instance(InstanceKey("terminal-1"), InstanceTitle("Build"))
+
+    assert (renamed.key, renamed.title, renamed.status) == ("terminal-1", "Build", InstanceStatus.IDLE)
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$4")
+    ]
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$4")
+
+
 @pytest.mark.parametrize(
     ("title", "expected_problem"),
     [
