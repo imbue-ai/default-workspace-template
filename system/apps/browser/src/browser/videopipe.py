@@ -802,8 +802,7 @@ class PixelfluxVideoPipe:
             capture, self._capture = self._capture, None
             self._rows.clear()          # stale once capture stops; resume forces fresh keyframes
             self._cursor_message = None
-            # An undelivered ``res,`` is dropped with the rows: resume announces the size
-            # afresh. Left pending, it would make every paused wait return at once.
+            # An undelivered ``res,`` is dropped with the rows: resume announces the size afresh.
             self._control_message = None
             self._condition.notify_all()
         if capture is not None:
