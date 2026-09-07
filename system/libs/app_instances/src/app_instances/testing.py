@@ -164,17 +164,19 @@ class StubInstanceSource(InstanceSourceInterface):
             return relocated
 
     def stop_instance(self, key: InstanceKey) -> InstanceRecord:
-        return self._set_status(key, "stop", InstanceStatus.STOPPED)
+        return self._set_status(key, "stop", "stopped", InstanceStatus.STOPPED)
 
     def start_instance(self, key: InstanceKey) -> InstanceRecord:
-        return self._set_status(key, "start", InstanceStatus.IDLE)
+        return self._set_status(key, "start", "started", InstanceStatus.IDLE)
 
-    def _set_status(self, key: InstanceKey, verb: str, status: InstanceStatus) -> InstanceRecord:
+    def _set_status(
+        self, key: InstanceKey, verb: str, participle: str, status: InstanceStatus
+    ) -> InstanceRecord:
         with self._lock:
             self.calls.append(f"{verb}:{key}")
             self._require_ready()
             if not self.is_stoppable:
-                raise NotStoppableError(f"stub instances cannot be {verb}ped on their own")
+                raise NotStoppableError(f"stub instances cannot be {participle} on their own")
             record = self._find(key)
             changed = record.model_copy_update(to_update(record.field_ref().status, status))
             self._replace(changed)
