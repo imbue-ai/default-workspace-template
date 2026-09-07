@@ -77,11 +77,12 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 #                      the dockview tab for live tab-title tracking; may be "")
 #   $3 = working directory to anchor a newly-created session in (may be "")
 #
-# The terminal app records the tmux session id of every terminal it created
-# under the sessions directory, named by key; attaching by that id keeps the
-# tab on its session even after someone renamed the session inside tmux. When
-# there is no id (a record from before the app kept them) or the session is
-# gone (a container restart cleared the tmux server), `tmux new-session -A`
+# The terminal app records the tmux session id and creation time of every
+# terminal it created under the sessions directory, named by key; attaching by
+# that id keeps the tab on its session even after someone renamed the session
+# inside tmux. When there is no id (a record from before the app kept them) or
+# the session is gone (a container restart cleared the tmux server, whose
+# successor hands the same ids out again), `tmux new-session -A`
 # attaches when a session of that name exists and creates it otherwise, so the
 # tab comes back as a fresh shell. A created session runs the login shell
 # through the memory-shedding tag, as the app's own creates do.
@@ -118,11 +119,17 @@ if [ -n "$TAB_ID" ]; then
     fi
 fi
 
+# The id file holds the session id and its creation time: tmux reuses ids across servers, so
+# only a session created when the file says was the terminal's.
 SESSION_ID_FILE="{sessions_dir}/$SESSION_NAME"
 if [ -f "$SESSION_ID_FILE" ]; then
-    SESSION_ID="$(cat "$SESSION_ID_FILE" 2>/dev/null || true)"
-    if [ -n "$SESSION_ID" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
-        exec tmux attach-session -t "$SESSION_ID"
+    SESSION_ID="$(sed -n 1p "$SESSION_ID_FILE" 2>/dev/null || true)"
+    SESSION_CREATED="$(sed -n 2p "$SESSION_ID_FILE" 2>/dev/null || true)"
+    if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
+        LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
+        if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
+            exec tmux attach-session -t "$SESSION_ID"
+        fi
     fi
 fi
 

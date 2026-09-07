@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -17,6 +18,8 @@ from terminal_app.tmux import parse_tmux_sessions
 ENV_FAKE_TMUX_DIR: Final[str] = "FAKE_TMUX_DIR"
 # Where the fake ttyd records the argv it was started with.
 ENV_FAKE_TTYD_DIR: Final[str] = "FAKE_TTYD_DIR"
+# The fake tmux stamps a created session with this plus its id number as its creation time.
+FAKE_CREATED_EPOCH_BASE: Final[int] = 1_700_000_000
 
 # Where a test source starts a terminal created without a workdir.
 DEFAULT_TEST_WORKDIR: Final[Workdir] = Workdir("/home/user/workspace")
@@ -92,11 +95,13 @@ elif command == "new-session":
         error = f"duplicate session: {{name}}"
     else:
         session_id = next_session_id(lines)
+        # Creation times count up from a fixed epoch, so a test can tell sessions apart by them.
+        created = str({FAKE_CREATED_EPOCH_BASE} + int(session_id.removeprefix("$")))
         state.mkdir(parents=True, exist_ok=True)
         with sessions_path.open("a") as sessions_file:
-            sessions_file.write(f"{{name}}\\t{{session_id}}\\t\\n")
+            sessions_file.write(f"{{name}}\\t{{session_id}}\\t\\t{{created}}\\n")
         if "-P" in sys.argv:
-            answer = session_id + "\\n"
+            answer = session_id + "\\t" + created + "\\n"
 else:
     error = f"fake tmux: unknown command {{command}}"
 
@@ -128,7 +133,7 @@ class FakeTmux(MutableModel):
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "sessions.tsv").write_text(
             "".join(
-                f"{session.name}\t{session.session_id}\t{_activity_field(session)}\n"
+                f"{session.name}\t{session.session_id}\t{_activity_field(session)}\t{_created_field(session)}\n"
                 for session in sessions
             )
         )
@@ -181,6 +186,32 @@ def _activity_field(session: TmuxSession) -> str:
     return str(int(session.last_activity.timestamp()))
 
 
+def _created_field(session: TmuxSession) -> str:
+    return "" if session.created_epoch is None else str(session.created_epoch)
+
+
+def fake_created_epoch(session_id: str) -> int:
+    """The creation time the fake tmux stamps on the session it minted under ``session_id``."""
+    return FAKE_CREATED_EPOCH_BASE + int(session_id.removeprefix("$"))
+
+
+def make_tmux_session(
+    name: str, session_id: str, last_activity: datetime | None = None
+) -> TmuxSession:
+    """A live session as the fake tmux would have minted it: created at the time its id implies."""
+    return TmuxSession(
+        name=name,
+        session_id=session_id,
+        created_epoch=fake_created_epoch(session_id),
+        last_activity=last_activity,
+    )
+
+
+def expected_session_id_file(session_id: str) -> str:
+    """The id file the app writes for a session the fake tmux minted (or one built by ``make_tmux_session``)."""
+    return f"{session_id}\n{fake_created_epoch(session_id)}\n"
+
+
 def install_fake_tmux(directory: Path) -> FakeTmux:
     """Write the fake ``tmux`` into ``directory/bin`` (prepend it to PATH and set FAKE_TMUX_DIR to use it)."""
     bin_dir = directory / "bin"
@@ -217,26 +248,50 @@ def make_terminal_record(
     workdir: str | None,
     session_id: str | None = None,
     is_stopped: bool = False,
+    session_created: int | None = None,
+    is_session_created_known: bool = True,
 ) -> TerminalSessionRecord:
-    """A store record from plain strings; None for a title, workdir, or session id the record has none of."""
+    """A store record from plain strings; None for a title, workdir, or session id the record has none of.
+
+    A record with a session id remembers the creation time the fake tmux stamps on that id unless
+    ``session_created`` names another (a stale record from an earlier server) or
+    ``is_session_created_known`` is false (a record from before creation times were kept).
+    """
+    if session_created is None and is_session_created_known and session_id is not None:
+        session_created = fake_created_epoch(session_id)
     return TerminalSessionRecord(
         name=TmuxSessionName(name),
         title=InstanceTitle(title) if title is not None else None,
         workdir=Workdir(workdir) if workdir is not None else None,
         session_id=TmuxSessionId(session_id) if session_id is not None else None,
+        session_created=session_created,
         is_stopped=is_stopped,
     )
 
 
 def expected_new_session_call(name: str, workdir: str) -> list[str]:
     """The argv a test source's create hands the fake tmux for a session of this name in this directory."""
-    return ["new-session", "-d", "-s", name, "-c", workdir, "-P", "-F", "#{session_id}", *TEST_SESSION_COMMAND]
+    return [
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-c",
+        workdir,
+        "-P",
+        "-F",
+        "#{session_id}\t#{session_created}",
+        *TEST_SESSION_COMMAND,
+    ]
 
 
-def write_session_id_file(sessions_dir: Path, name: str, session_id: str) -> None:
-    """Record a session id under ``sessions_dir`` the way the app does, for a terminal it remembers."""
+def write_session_id_file(
+    sessions_dir: Path, name: str, session_id: str, session_created: int | None = None
+) -> None:
+    """Record a session id (and creation time) under ``sessions_dir`` the way the app does, for a terminal it remembers."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    (sessions_dir / name).write_text(f"{session_id}\n")
+    created = "" if session_created is None else str(session_created)
+    (sessions_dir / name).write_text(f"{session_id}\n{created}\n")
 
 
 def read_session_id_file(sessions_dir: Path, name: str) -> str | None:

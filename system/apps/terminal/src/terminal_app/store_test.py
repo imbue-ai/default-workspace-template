@@ -27,8 +27,8 @@ def test_store_starts_empty_and_keeps_records_in_creation_order(
     assert json.loads(session_store.store_path.read_text()) == {
         "version": 1,
         "sessions": [
-            {"name": "terminal-1", "title": None, "workdir": None, "session_id": None, "is_stopped": False},
-            {"name": "terminal-2", "title": None, "workdir": "/home/user", "session_id": None, "is_stopped": False},
+            {"name": "terminal-1", "title": None, "workdir": None, "session_id": None, "session_created": None, "is_stopped": False},
+            {"name": "terminal-2", "title": None, "workdir": "/home/user", "session_id": None, "session_created": None, "is_stopped": False},
         ],
     }
 

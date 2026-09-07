@@ -37,6 +37,11 @@ class TmuxSession(FrozenModel):
 
     name: str = Field(description="The session name")
     session_id: str = Field(description="The immutable tmux id, such as $3")
+    # tmux hands ids out afresh on every server, so the id alone names a session only for one
+    # server's lifetime; with the creation time it names one for good.
+    created_epoch: int | None = Field(
+        description="When the session was created, as tmux's epoch seconds; None when tmux gave none"
+    )
     last_activity: AwareDatetime | None = Field(
         description="When the session last saw activity, in UTC; None when tmux gave none"
     )
@@ -66,6 +71,10 @@ class TerminalSessionRecord(FrozenModel):
     session_id: TmuxSessionId | None = Field(
         default=None,
         description="tmux's immutable id of the session backing this terminal; None when the app never created or adopted one",
+    )
+    session_created: int | None = Field(
+        default=None,
+        description="When that session was created (tmux's epoch seconds), which tells it apart from a later server's session under the same id",
     )
     is_stopped: bool = Field(
         default=False,

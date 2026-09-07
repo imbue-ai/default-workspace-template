@@ -18,28 +18,38 @@ from terminal_app.primitives import ClientTty, TmuxSessionId, TmuxSessionName, W
 TMUX_SLOW_SECONDS: Final[float] = 1.0
 TMUX_TIMEOUT_SECONDS: Final[float] = 5.0
 
-SESSIONS_FORMAT: Final[str] = "#{session_name}\t#{session_id}\t#{session_activity}"
+SESSIONS_FORMAT: Final[str] = "#{session_name}\t#{session_id}\t#{session_activity}\t#{session_created}"
 CLIENTS_FORMAT: Final[str] = "#{client_tty}\t#{session_name}\t#{session_id}"
-SESSION_ID_FORMAT: Final[str] = "#{session_id}"
+CREATED_SESSION_FORMAT: Final[str] = "#{session_id}\t#{session_created}"
 
 
 @pure
 def parse_tmux_sessions(output: str) -> list[TmuxSession]:
-    """Parse ``tmux list-sessions`` lines of ``name\\tid\\tactivity``; a line with fewer fields is skipped."""
+    """Parse ``tmux list-sessions`` lines of ``name\\tid\\tactivity\\tcreated``; a line with fewer than three fields is skipped."""
     sessions: list[TmuxSession] = []
     for line in output.splitlines():
-        fields = line.split("\t", 2)
+        fields = line.split("\t", 3)
         if len(fields) < 3:
             continue
-        name, session_id, raw_activity = fields
+        name, session_id, raw_activity = fields[:3]
+        raw_created = fields[3] if len(fields) > 3 else ""
         sessions.append(
             TmuxSession(
                 name=name,
                 session_id=session_id,
+                created_epoch=_parse_epoch(raw_created),
                 last_activity=_parse_activity(raw_activity),
             )
         )
     return sessions
+
+
+@pure
+def _parse_epoch(raw_epoch: str) -> int | None:
+    """A tmux epoch-seconds field; anything else reads as unknown."""
+    if not raw_epoch.isdigit():
+        return None
+    return int(raw_epoch)
 
 
 @pure
@@ -112,8 +122,8 @@ class SubprocessTmux(TmuxInterface):
 
     def create_session(
         self, name: TmuxSessionName, workdir: Workdir, command: Sequence[str]
-    ) -> TmuxSessionId:
-        # -P -F prints the new session's id; a name already in use is a refusal.
+    ) -> TmuxSession:
+        # -P -F prints the new session's id and creation time; a name already in use is a refusal.
         completed = self._run(
             [
                 "new-session",
@@ -124,7 +134,7 @@ class SubprocessTmux(TmuxInterface):
                 workdir,
                 "-P",
                 "-F",
-                SESSION_ID_FORMAT,
+                CREATED_SESSION_FORMAT,
                 *command,
             ]
         )
@@ -132,12 +142,20 @@ class SubprocessTmux(TmuxInterface):
             raise TmuxCommandError(
                 f"tmux could not create session {name!r}: {completed.stderr.strip()}"
             )
+        printed = completed.stdout.strip()
+        session_id, _separator, raw_created = printed.partition("\t")
         try:
-            return TmuxSessionId(completed.stdout.strip())
+            TmuxSessionId(session_id)
         except InvalidTerminalValueError as e:
             raise TmuxCommandError(
-                f"tmux created session {name!r} but printed no session id: {completed.stdout.strip()!r}"
+                f"tmux created session {name!r} but printed no session id: {printed!r}"
             ) from e
+        return TmuxSession(
+            name=name,
+            session_id=session_id,
+            created_epoch=_parse_epoch(raw_created),
+            last_activity=None,
+        )
 
     def kill_session(self, target: TmuxSessionName | TmuxSessionId) -> None:
         # ``=`` forces an exact name match so tmux's prefix fallback cannot target another
