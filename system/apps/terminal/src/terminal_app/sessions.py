@@ -399,9 +399,10 @@ class TmuxSessionSource(InstanceSourceInterface):
     ) -> TmuxSessionName | None:
         """The key of the session a client now shows, adopting it when a record of that name has no live session yet.
 
-        None for an agent's session or a name that cannot be a key. A record without an id
-        (from before the app kept them) or whose session was recreated on attach takes the
-        live session's id, and is no longer stopped.
+        None for an agent's session, a name that cannot be a key, or a session under the old
+        name of a terminal whose own session is live (no terminal, as the listing has it). A
+        record without an id (from before the app kept them) or whose session was recreated on
+        attach takes the live session's id, and is no longer stopped.
         """
         if is_agent_session(session_name, self.agent_session_prefix):
             return None
@@ -416,6 +417,17 @@ class TmuxSessionSource(InstanceSourceInterface):
             record = next((record for record in records if record.name == name), None)
             if record is None:
                 return name
+            if record.session_id is not None and any(
+                session.session_id == record.session_id for session in self._user_sessions()
+            ):
+                logger.debug(
+                    "Ignored tmux session {!r} ({}): terminal {!r} is backed by session {}",
+                    session_name,
+                    session_id,
+                    name,
+                    record.session_id,
+                )
+                return None
             try:
                 self._adopt(record, TmuxSessionId(session_id))
             except InvalidTerminalValueError:

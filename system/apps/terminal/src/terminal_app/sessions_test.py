@@ -510,6 +510,26 @@ def test_observe_attached_session_keys_by_id_adopts_by_name_and_ignores_agents(
     assert _session_id_file(terminal_paths, "terminal-2") == "$8\n"
 
 
+def test_observe_attached_session_leaves_a_terminal_whose_own_session_is_live(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    # A hand-made session took terminal-1's old name while its own session lives on, renamed.
+    fake_tmux.set_sessions([_session("renamed", "$5"), _session("terminal-1", "$8")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    )
+
+    assert session_source.observe_attached_session("$8", "terminal-1") is None
+
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    ]
+    assert _session_id_file(terminal_paths, "terminal-1") is None
+
+
 def test_every_terminal_is_stoppable(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
