@@ -1,6 +1,6 @@
 ---
 name: manage-layout
-description: Use when you want to rearrange the workspace dock tabs (open, split, move, focus, close, maximize, reload, rename or delete an instance) or inspect the live layout.
+description: Use when you want to rearrange the workspace dock tabs (open, split, move, focus, close, maximize, reload, rename, delete, stop or start an instance) or inspect the live layout.
 metadata:
   author: imbue
   crystallized: true
@@ -132,7 +132,7 @@ a whole app reloads its iframes on every client):
 | Maximize / restore a group | `python3 system/scripts/layout.py maximize <address>` / `python3 system/scripts/layout.py restore` |
 | Reload one tab (or every iframe of an app) | `python3 system/scripts/layout.py refresh <address>` |
 
-And three verbs that go through the app that owns the instance rather than
+And five verbs that go through the app that owns the instance rather than
 the dock (they take an instance address, never a bare app):
 
 | Goal | Command |
@@ -140,12 +140,16 @@ the dock (they take an instance address, never a bare app):
 | Retitle an instance (the title shows in every view) | `python3 system/scripts/layout.py rename <address> "<title>"` |
 | Delete an instance (it leaves every view) | `python3 system/scripts/layout.py delete <address>` |
 | Point an instance at a path under its app, or at a URL for an app that browses to one | `python3 system/scripts/layout.py replace-url <address> </path-or-url>` |
+| Stop what backs an instance while keeping it (a chat's agent, a browser's Chromium, a terminal's session) | `python3 system/scripts/layout.py stop <address>` |
+| Start a stopped instance again | `python3 system/scripts/layout.py start <address>` |
 
 Not every app accepts every verb: a browser is not renameable (its title is
 its name), an app that does not track locations (the terminal, the chat)
-refuses `replace-url`, and each app takes only the location form that fits it
+refuses `replace-url`, each app takes only the location form that fits it
 (a path under the app for the file viewer, an absolute `http(s)` URL for the
-browser). The app's refusal is printed as the error.
+browser), and only an instance the app lists as `stoppable` accepts `stop`
+and `start` (a file viewer has nothing to stop). The app's refusal is
+printed as the error.
 
 ### Directions on `split` and `move`
 
