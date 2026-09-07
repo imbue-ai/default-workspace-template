@@ -71,6 +71,14 @@ uv run pytest
 `--no-register` boots the app without re-pointing the live chat row in the
 registry, for a throwaway boot on another port (`CHAT_PORT`).
 
+`--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
+the app imports, builds, and serves `/api/health` but reconciles no accounts (the
+boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
+session sweep, memory prioritizer, or nudges to the shell), and registers nothing.
+The apply boots the merged chat this way on a free port before restarting the live
+services, since this is the process that imports mngr and the harness plugins, and
+refuses the update when it cannot come up.
+
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm
 workspace both frontends belong to.
