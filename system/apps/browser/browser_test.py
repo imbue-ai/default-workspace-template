@@ -1217,6 +1217,38 @@ def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(monkeypat
     assert saved_again is not None and saved_again.browsers[0].stopped is False
 
 
+def test_start_that_fails_leaves_the_browser_stopped_with_its_tabs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stopped browser is kept for its profile and tabs, so a relaunch that flakes must not
+    # forget it the way a fresh create's failed launch is dropped.
+    calls = _stub_start(monkeypatch, fail_names={"browser-1"})
+    casts: list[dict[str, Any]] = []
+    monkeypatch.setattr(bsession.LiveBrowser, "_broadcast", lambda self, message: casts.append(message))
+    mgr = _manager()
+    browser = _running_browser("browser-1")
+    browser._lifecycle = "stopped"
+    browser._last_known_tabs = ["https://kept.example"]
+    mgr._browsers["browser-1"] = browser
+
+    async def start_and_wait() -> None:
+        await mgr.start_browser("browser-1")
+        task = browser._launch_task
+        assert task is not None
+        await task
+        await asyncio.gather(*list(mgr._bg_save_tasks))
+
+    asyncio.run(start_and_wait())
+    assert calls == [("browser-1", ["https://kept.example"])]
+    assert mgr.has_browser("browser-1") and browser._lifecycle == "stopped"
+    assert asyncio.run(browser.tab_urls()) == (["https://kept.example"], 0)
+    assert not any(message.get("type") == "launch_failed" for message in casts)
+    assert casts[-1]["type"] == "control" and casts[-1]["lifecycle"] == "stopped"
+    saved = manifest.read_manifest()
+    assert saved is not None
+    assert [(entry.id, entry.tabs, entry.stopped) for entry in saved.browsers] == [
+        ("browser-1", ["https://kept.example"], True)
+    ]
+
+
 def test_stop_wakes_a_parked_waiter_as_stopped() -> None:
     browser = _running_browser("browser-1")
     browser.controller = "agent"
