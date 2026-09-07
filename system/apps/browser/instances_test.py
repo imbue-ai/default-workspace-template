@@ -18,6 +18,7 @@ from app_instances.primitives import (
 )
 from app_manifest.primitives import ActionId
 from browser.data_types import BrowserController, BrowserLifecycle, BrowserSnapshot
+from browser.errors import FleetCreateRefusedError
 from browser.instances import (
     NEW_ACTION_ID,
     FleetInstanceSource,
@@ -56,6 +57,7 @@ def test_list_maps_numbered_and_legacy_names_to_the_contracts_browser_row() -> N
             lifetime=InstanceLifetime.EXPLICIT,
             last_active=None,
             renameable=False,
+            stoppable=True,
         ),
         InstanceRecord(
             key=InstanceKey("alex-smith"),
@@ -65,6 +67,7 @@ def test_list_maps_numbered_and_legacy_names_to_the_contracts_browser_row() -> N
             lifetime=InstanceLifetime.EXPLICIT,
             last_active=None,
             renameable=False,
+            stoppable=True,
         ),
     ]
 
@@ -77,6 +80,7 @@ def test_list_maps_numbered_and_legacy_names_to_the_contracts_browser_row() -> N
         (BrowserLifecycle.INIT, BrowserController.HUMAN, InstanceStatus.IDLE),
         (BrowserLifecycle.CRASHED, BrowserController.HUMAN, InstanceStatus.ERROR),
         (BrowserLifecycle.CRASHED, BrowserController.AGENT, InstanceStatus.ERROR),
+        (BrowserLifecycle.STOPPED, BrowserController.HUMAN, InstanceStatus.STOPPED),
     ],
 )
 def test_status_derives_from_ownership_and_lifecycle(
@@ -225,3 +229,40 @@ def test_reads_close_and_navigate_are_refused_until_the_init_gate_opens() -> Non
         source.set_location(InstanceKey("browser-1"), _URL)
     assert fleet.closed_names == []
     assert fleet.navigations == []
+
+
+def test_every_browser_is_stoppable() -> None:
+    source, _fleet = _source(_snapshot("browser-1"), _snapshot("browser-2", BrowserLifecycle.STOPPED))
+
+    assert [record.stoppable for record in source.list_instances()] == [True, True]
+
+
+def test_stop_and_start_delegate_to_the_fleet_and_answer_the_record() -> None:
+    source, fleet = _source(_snapshot("browser-1"))
+
+    stopped = source.stop_instance(InstanceKey("browser-1"))
+    assert stopped.status == InstanceStatus.STOPPED
+    assert fleet.browsers[0].lifecycle == BrowserLifecycle.STOPPED
+
+    started = source.start_instance(InstanceKey("browser-1"))
+    assert started.status == InstanceStatus.IDLE
+    assert fleet.browsers[0].lifecycle == BrowserLifecycle.INIT
+
+
+def test_stop_and_start_map_the_fleets_refusals() -> None:
+    source, fleet = _source(_snapshot("browser-1", BrowserLifecycle.INIT), _snapshot("browser-2", BrowserLifecycle.STOPPED))
+
+    with pytest.raises(InstanceConflictError, match="still launching"):
+        source.stop_instance(InstanceKey("browser-1"))
+    with pytest.raises(UnknownInstanceError):
+        source.stop_instance(InstanceKey("browser-9"))
+    with pytest.raises(UnknownInstanceError):
+        source.start_instance(InstanceKey("Not-A-Browser-Name"))
+    fleet.create_refusal = "2/2 browsers open"
+    with pytest.raises(InstanceConflictError, match="2/2 browsers open"):
+        source.start_instance(InstanceKey("browser-2"))
+    fleet.is_fleet_ready = False
+    with pytest.raises(NotReadyError):
+        source.stop_instance(InstanceKey("browser-1"))
+    with pytest.raises(NotReadyError):
+        source.start_instance(InstanceKey("browser-2"))

@@ -16,11 +16,14 @@ The shell is the only caller of the API, over loopback, at the registry row's
 
 - `app_instances.blueprint`: `build_instances_blueprint(source, nudger)` serves
   exactly `GET /_instances`, `POST /_instances` (201), `DELETE /_instances/<key>`
-  (204, idempotent), `POST /_instances/<key>/rename`, and
-  `POST /_instances/<key>/location`. Every mutating route calls the source, then
+  (204, idempotent), `POST /_instances/<key>/rename`,
+  `POST /_instances/<key>/location`, `POST /_instances/<key>/stop`, and
+  `POST /_instances/<key>/start` (both `200 {"instance": record}`, idempotent).
+  Every mutating route calls the source, then
   `nudger.nudge()`, then answers; reads never nudge. A key that fails the key
   rule, a body that is not the route's shape, `UnknownActionError`,
-  `InvalidParamsError`, `NotRenameableError`, and `LocationNotTrackedError` are
+  `InvalidParamsError`, `NotRenameableError`, `NotStoppableError`, and
+  `LocationNotTrackedError` are
   `400`; `UnknownInstanceError` is `404`; `InstanceConflictError` is `409`;
   `NotReadyError` is `503`; any other library error is `500`. Every error body
   is `{"detail": "<message>"}`. Bodies are read with `force=True`, so a caller
@@ -34,13 +37,19 @@ The shell is the only caller of the API, over loopback, at the registry row's
   nothing but the blueprint, which is what the sidecar and the stub app run.
 - `app_instances.interfaces`: `InstanceSourceInterface` (`list_instances`,
   `create_instance(action, params)`, `delete_instance(key)`,
-  `rename_instance(key, title)`, `set_location(key, path)`; implementations
+  `rename_instance(key, title)`, `set_location(key, path)`, and the
+  non-abstract `stop_instance(key)` and `start_instance(key)`, which default
+  to raising `NotStoppableError` so a source whose instances have nothing to
+  stop need not mention them; a source that lists a `stoppable` record
+  overrides both. Implementations
   must be thread-safe, the API is served threaded) and
   `InstanceNudgerInterface` (`nudge()`).
 - `app_instances.data_types`: `InstanceStatus` (`working`, `idle`,
   `attention`, `stopped`, `error`), `InstanceLifetime` (`explicit`,
   `referenced`), `InstanceRecord` (the wire record; `model_dump(mode="json")`
-  is what the API emits, with `last_active` anchored to UTC), and the request
+  is what the API emits, with `last_active` anchored to UTC; `stoppable`
+  defaults to false so a list from an app built before the stop and start
+  routes still reads), and the request
   bodies `CreateRequest`, `RenameRequest`, `LocationRequest`.
 - `app_instances.primitives`: `InstanceKey` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`),
   `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048

@@ -59,6 +59,7 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
@@ -268,6 +269,11 @@ def _rename_failure_detail(cmd: list[str], result: FinishedProcess) -> str:
     if result.returncode is not None and result.returncode < 0:
         return f"'{cmd[1]}' was stopped by signal {-result.returncode}"
     return f"'{cmd[1]}' exited with code {result.returncode}"
+
+
+def _build_chat_stop_command(mngr_binary: str, agent_name: str) -> list[str]:
+    """Build the ``mngr stop`` argv for one agent. Pure, so the CLI contract is testable without a subprocess."""
+    return [mngr_binary, "stop", agent_name]
 
 
 def _build_chat_destroy_command(mngr_binary: str, agent_name: str) -> list[str]:
@@ -742,6 +748,27 @@ class AgentManager:
             raise AgentDestroyError(f"Failed to destroy agent '{agent_state.name}': {result.stderr.strip()}")
         # Reflect the destruction immediately rather than waiting for mngr observe.
         self.remove_agent(agent_id)
+
+    def stop_chat_agent(self, agent_id: str) -> None:
+        """Run ``mngr stop`` for a tracked agent: the reversible counterpart to a destroy.
+
+        The agent keeps its transcript and name; a message or the start route brings it back.
+        The observe stream reports the STOPPED state on its own. Raises ``AgentStopError`` when
+        mngr refuses or fails; the caller has already refused the primary services agent.
+        """
+        agent_state = self.get_agent_by_id(agent_id)
+        if agent_state is None:
+            raise AgentStopError(f"Agent '{agent_id}' not found")
+        # Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it
+        # shares the destroy's generous bound.
+        result = run_local_command_modern_version(
+            command=_build_chat_stop_command(self._mngr_binary, agent_state.name),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            raise AgentStopError(f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
 
     def _seed_oom_prioritizer(self) -> None:
         """Seed the prioritizer's per-chat message times from the on-disk message stamps.

@@ -68,6 +68,36 @@ class FakeFleet(FleetInterface):
             snapshot for snapshot in self.browsers if snapshot.name != name
         ]
 
+    def stop_browser(self, name: BrowserName) -> None:
+        snapshot = self._find(name)
+        if snapshot.lifecycle == BrowserLifecycle.INIT:
+            raise BrowserNotDrivableError(f"browser {name} is still launching")
+        self._set_lifecycle(name, BrowserLifecycle.STOPPED)
+
+    def start_browser(self, name: BrowserName) -> None:
+        snapshot = self._find(name)
+        if snapshot.lifecycle in (BrowserLifecycle.INIT, BrowserLifecycle.RUNNING):
+            return
+        if self.create_refusal is not None:
+            raise FleetCreateRefusedError(self.create_refusal)
+        self._set_lifecycle(name, BrowserLifecycle.INIT)
+
+    def _find(self, name: BrowserName) -> BrowserSnapshot:
+        snapshot = next(
+            (snapshot for snapshot in self.browsers if snapshot.name == name), None
+        )
+        if snapshot is None:
+            raise UnknownBrowserError(f"no browser named {name!r}")
+        return snapshot
+
+    def _set_lifecycle(self, name: BrowserName, lifecycle: BrowserLifecycle) -> None:
+        self.browsers = [
+            BrowserSnapshot(name=snapshot.name, lifecycle=lifecycle, controller=BrowserController.HUMAN)
+            if snapshot.name == name
+            else snapshot
+            for snapshot in self.browsers
+        ]
+
     def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         snapshot = next(
             (snapshot for snapshot in self.browsers if snapshot.name == name), None

@@ -48,7 +48,16 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   (`POST <shell>/api/apps/browser/changed`) from a daemon thread, so a slow shell
   never stalls the event loop. The existing
   `/browsers` routes stay for the CLI; the shell reaches the daemon only
-  through the instances API.
+  through the instances API. Every browser is `stoppable`: `POST
+  /_instances/<name>/stop` ends its Chromium (refreshing its tab list first)
+  but keeps the browser, its profile, and its tabs, and lists it as `stopped`;
+  `.../start` relaunches it on those tabs from the same profile (409 while it
+  is still launching, or when the fleet is full). A stopped browser does not
+  count toward the fleet cap, is restored as stopped after a daemon restart
+  (the manifest entry's `stopped` flag), refuses the fleet CLI's verbs with
+  status `stopped` and a hint naming `layout.py start`, and shows a "stopped"
+  overlay with a Start button in the viewer (which calls the daemon's own
+  `POST /browsers/<name>/start`; `.../stop` is its counterpart).
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
   name of the browser it started); every other command takes that
@@ -85,7 +94,8 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   "initializing" until restore finishes, while `ls`/`state` stay open. A fresh
   workspace starts with an empty fleet (no default browser); the first `new`
   creates one. `close <name>` retires a browser and forgets its profile; a
-  crashed browser is never restored as healthy.
+  crashed browser is never restored as healthy; a stopped browser comes back
+  stopped, with its tabs, until it is started.
   - The profile dir name contains the literal `browser-use-user-data-dir-` substring
     on purpose -- it makes browser_use's `_copy_profile()` use the dir in place
     instead of copying it to a temp dir (which would silently defeat persistence).

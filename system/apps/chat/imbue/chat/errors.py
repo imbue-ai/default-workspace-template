@@ -20,3 +20,11 @@ class ChatDestroyFailedError(ChatInstancesError):
 
 class ChatRenameFailedError(ChatInstancesError):
     """``mngr rename`` failed for a chat that exists (a 500 with mngr's own words)."""
+
+
+class ChatStopFailedError(ChatInstancesError):
+    """``mngr stop`` refused or failed for a chat (answered 500 with the reason)."""
+
+
+class ChatStartFailedError(ChatInstancesError):
+    """mngr could not start a stopped chat (answered 500 with the reason)."""

@@ -481,3 +481,96 @@ def test_observe_attached_session_keys_by_id_adopts_by_name_and_ignores_agents(
         name="terminal-2", title=None, workdir=None, session_id="$8"
     )
     assert _session_id_file(terminal_paths, "terminal-2") == "$8\n"
+
+
+def test_every_terminal_is_stoppable(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    fake_tmux.set_sessions([_session("terminal-1", "$3")])
+    session_store.save_record(make_terminal_record(name="terminal-2", title=None, workdir=None))
+
+    assert [record.stoppable for record in session_source.list_instances()] == [True, True]
+
+
+def test_stop_kills_the_session_and_remembers_the_terminal_as_stopped(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    fake_tmux.set_sessions([_session("renamed", "$3")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$3")
+    )
+    terminal_paths.sessions_dir.mkdir(parents=True)
+    (terminal_paths.sessions_dir / "terminal-1").write_text("$3\n")
+
+    stopped = session_source.stop_instance(InstanceKey("terminal-1"))
+
+    assert (stopped.key, stopped.title, stopped.status) == ("terminal-1", "Build", InstanceStatus.STOPPED)
+    assert fake_tmux.session_names() == []
+    assert ["kill-session", "-t", "$3"] in fake_tmux.calls()
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+    ]
+    assert _session_id_file(terminal_paths, "terminal-1") is None
+    # Stopping again is a no-op that answers the same record.
+    assert session_source.stop_instance(InstanceKey("terminal-1")) == stopped
+
+
+def test_stop_of_a_hand_made_session_remembers_it_so_it_can_be_started(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    fake_tmux.set_sessions([_session("scratch", "$3")])
+
+    stopped = session_source.stop_instance(InstanceKey("scratch"))
+
+    assert (stopped.key, stopped.status) == ("scratch", InstanceStatus.STOPPED)
+    assert session_store.list_records() == [
+        make_terminal_record(name="scratch", title=None, workdir=None, is_stopped=True)
+    ]
+
+
+def test_start_recreates_a_stopped_terminals_session_in_its_workdir(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", is_stopped=True)
+    )
+
+    started = session_source.start_instance(InstanceKey("terminal-1"))
+
+    assert (started.key, started.title, started.status) == ("terminal-1", "Build", InstanceStatus.IDLE)
+    assert _creates(fake_tmux) == [
+        ["new-session", "-d", "-s", "terminal-1", "-c", "/srv", "-P", "-F", "#{session_id}", *TEST_SESSION_COMMAND]
+    ]
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$1")
+    ]
+    assert _session_id_file(terminal_paths, "terminal-1") == "$1\n"
+    # Starting a running terminal changes nothing.
+    assert session_source.start_instance(InstanceKey("terminal-1")).status == InstanceStatus.IDLE
+    assert len(_creates(fake_tmux)) == 1
+
+
+def test_stop_and_start_refuse_unknown_keys_and_agent_sessions(
+    fake_tmux: FakeTmux, session_source: TmuxSessionSource
+) -> None:
+    fake_tmux.set_sessions([_session("mngr-alice", "$1")])
+
+    with pytest.raises(UnknownInstanceError):
+        session_source.stop_instance(InstanceKey("ghost"))
+    with pytest.raises(UnknownInstanceError):
+        session_source.start_instance(InstanceKey("ghost"))
+    with pytest.raises(InstanceConflictError, match="non-terminal session"):
+        session_source.stop_instance(InstanceKey("mngr-alice"))
+    with pytest.raises(InstanceConflictError, match="non-terminal session"):
+        session_source.start_instance(InstanceKey("mngr-alice"))
+    assert fake_tmux.session_names() == ["mngr-alice"]

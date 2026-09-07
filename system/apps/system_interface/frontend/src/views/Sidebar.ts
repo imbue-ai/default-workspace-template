@@ -19,7 +19,7 @@
  */
 
 import m from "mithril";
-import { findInstance, getApp, getOpenableApps, primaryActionForApp } from "../models/Inventory";
+import { findInstance, getApp, getOpenableApps, isAppStoppable, primaryActionForApp } from "../models/Inventory";
 import { normalizeTabTitle } from "./tab-rename";
 import type {
   AppAction,
@@ -59,12 +59,15 @@ export interface SidebarTabRow {
   address: string;
   appName: string;
   appDisplayName: string;
+  // The instance's key within its app ("" for a single-instance app's one record).
+  instanceKey: string;
   label: string;
   // Whether the instance has a tab in the dock right now. Open rows read as primary text,
   // backgrounded ones (listed, just not docked) as tertiary.
   isOpen: boolean;
   status: InstanceStatus;
   renameable: boolean;
+  stoppable: boolean;
   // Why this row's app is not running, when it is not. A stopped row renders dimmed with
   // this as its tooltip.
   stoppedDetail?: string;
@@ -109,6 +112,7 @@ export interface SidebarAttrs {
   onAddRowToProjects: (row: SidebarTabRow) => void;
   onRemoveFromView: (row: SidebarTabRow) => void;
   onAppLifecycle: (appName: string, action: "stop" | "start") => void;
+  onInstanceLifecycle: (row: SidebarTabRow, action: "stop" | "start") => void;
   onDeleteRow: (row: SidebarTabRow) => void;
 }
 
@@ -430,6 +434,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       rename: () => beginRename(row),
       closeTab: null,
       removeFromProject: isEverythingView(attrs.activeViewId) ? null : () => attrs.onRemoveFromView(row),
+      setInstanceLifecycle: (action) => attrs.onInstanceLifecycle(row, action),
       setAppLifecycle: (action) => attrs.onAppLifecycle(row.appName, action),
       delete: () => attrs.onDeleteRow(row),
     };
@@ -462,6 +467,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             ? `Change shortcut to "${resolved.action.label}"`
             : `Change shortcut to "${resolved.app.display_name}"`,
         run: () => attrs.onSetShortcutMode(resolved.shortcut, resolved.mode === "focus" ? "new" : "focus"),
+      });
+    }
+    // The app's own Stop and Start live here: the rail row is the app's presence in the view
+    // (under Everything every app has one), whereas a tab or a rail row of an instance acts on
+    // that instance alone. Offered only for an app the workspace can honestly stop.
+    if (isAppStoppable(resolved.app)) {
+      const action = resolved.app.is_running ? "stop" : "start";
+      entries.push({
+        label: `${action === "stop" ? "Stop" : "Start"} ${resolved.app.display_name}`,
+        run: () => attrs.onAppLifecycle(resolved.app.name, action),
       });
     }
     return entries;

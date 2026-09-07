@@ -1078,7 +1078,7 @@ def test_snapshot_persists_init_running_and_crashed_topology_only() -> None:
     assert sorted(e.id for e in snap.browsers) == ["alex-smith", "morgan-lee", "riley-jones"]
     riley = next(e for e in snap.browsers if e.id == "riley-jones")
     assert riley.tabs == ["https://example.com"]  # carried forward from the prior checkpoint
-    assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab"}
+    assert set(snap.browsers[0].model_dump().keys()) == {"id", "tabs", "active_tab", "stopped"}
 
 
 class _FailingTargetsCdpClient(NavigatingCdpClient):
@@ -1156,6 +1156,126 @@ def test_shutdown_checkpoints_every_browser_before_closing_any(monkeypatch: pyte
         "browser-1": ["https://one.example"],
         "browser-2": ["https://two.example"],
     }
+
+
+def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stop ends Chromium but the browser stays registered with its last known tabs; the
+    # manifest records it as stopped, and a start launches it again on those tabs.
+    calls = _stub_start(monkeypatch)
+    nudger = RecordingNudger()
+    mgr = _manager()
+    mgr.set_nudger(nudger)
+    browser = _running_browser("browser-1")
+    browser._nudger = nudger
+    browser._cdp = NavigatingCdpClient(
+        [{"targetId": "t1", "url": "https://one.example"}, {"targetId": "t2", "url": "https://two.example"}],
+        navigation_failure=None,
+    )
+    browser._active_target_id = "t2"
+    browser.controller = "agent"
+    browser.owner_agent_id = "A"
+    mgr._browsers["browser-1"] = browser
+    queue_ = asyncio.run(browser.register_cast_queue())
+
+    async def stop_then_read() -> tuple[str, dict[str, Any]]:
+        await mgr.stop_browser("browser-1")
+        await mgr._save_manifest()
+        return browser._lifecycle, await browser.describe()
+
+    lifecycle, described = asyncio.run(stop_then_read())
+    assert lifecycle == "stopped"
+    assert described["controller"] == "human" and described["tabs"] == []
+    assert browser._cdp is None
+    assert asyncio.run(browser.tab_urls()) == (["https://one.example", "https://two.example"], 1)
+    assert asyncio.run(browser.acquire("A")) == "stopped"
+    assert asyncio.run(browser.attach_for("A", "Alice"))["status"] == "stopped"
+    # The viewer was told, then given the control state with the new lifecycle.
+    messages = []
+    while not queue_.empty():
+        messages.append(_pop_json(queue_))
+    assert [message["type"] for message in messages][-2:] == ["stopped", "control"]
+    assert messages[-1]["lifecycle"] == "stopped"
+    assert nudger.nudge_count >= 1
+    saved = manifest.read_manifest()
+    assert saved is not None
+    assert [(entry.id, entry.tabs, entry.active_tab, entry.stopped) for entry in saved.browsers] == [
+        ("browser-1", ["https://one.example", "https://two.example"], 1, True)
+    ]
+
+    async def start_and_wait() -> None:
+        await mgr.start_browser("browser-1")
+        task = browser._launch_task
+        assert task is not None
+        await task
+
+    asyncio.run(start_and_wait())
+    assert calls == [("browser-1", ["https://one.example", "https://two.example"])]
+    assert browser._lifecycle == "running"
+    saved_again = manifest.read_manifest()
+    assert saved_again is not None and saved_again.browsers[0].stopped is False
+
+
+def test_stop_refuses_a_launching_browser_and_start_leaves_a_live_one_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_start(monkeypatch)
+    mgr = _manager()
+    launching = bsession.LiveBrowser(browser_id="browser-1")
+    running = _running_browser("browser-2")
+    mgr._browsers["browser-1"] = launching
+    mgr._browsers["browser-2"] = running
+
+    with pytest.raises(bsession.BrowserNotDrivableError, match="still launching"):
+        asyncio.run(mgr.stop_browser("browser-1"))
+    asyncio.run(mgr.start_browser("browser-2"))
+    asyncio.run(mgr.start_browser("browser-1"))
+    with pytest.raises(bsession.UnknownBrowserError):
+        asyncio.run(mgr.stop_browser("browser-9"))
+
+    assert calls == []
+    assert (launching._lifecycle, running._lifecycle) == ("init", "running")
+
+
+def test_stopped_browsers_do_not_count_toward_the_fleet_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bsession, "_MAX_SESSIONS", 1)
+    _stub_start(monkeypatch)
+    mgr = _manager()
+    stopped = _running_browser("browser-1")
+    stopped._lifecycle = "stopped"
+    mgr._browsers["browser-1"] = stopped
+
+    created = asyncio.run(mgr.create())
+
+    assert created.browser_id == "browser-2"
+    assert mgr.capacity() == (1, 1)
+    # And a start with the cap taken is refused, leaving the browser stopped.
+    with pytest.raises(bsession.FleetFullError):
+        asyncio.run(mgr.start_browser("browser-1"))
+    assert stopped._lifecycle == "stopped"
+
+
+def test_restore_brings_a_stopped_browser_back_as_stopped(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_start(monkeypatch)
+    manifest.write_manifest(
+        manifest.Manifest(
+            browsers=[
+                manifest.ManifestEntry(id="browser-1", tabs=["https://x"], active_tab=0, stopped=True),
+                manifest.ManifestEntry(id="browser-2", tabs=["https://y"]),
+            ]
+        )
+    )
+    (bsession._PROFILE_ROOT / "browser-use-user-data-dir-browser-1").mkdir(parents=True)
+    mgr = _manager()
+
+    asyncio.run(mgr.restore())
+
+    assert calls == [("browser-2", ["https://y"])]
+    restored = mgr.get("browser-1")
+    assert restored._lifecycle == "stopped"
+    assert asyncio.run(restored.tab_urls()) == (["https://x"], 0)
+    reconciled = manifest.read_manifest()
+    assert reconciled is not None
+    assert [(entry.id, entry.stopped) for entry in reconciled.browsers] == [("browser-1", True), ("browser-2", False)]
+    # Its profile is kept for the start.
+    assert (bsession._PROFILE_ROOT / "browser-use-user-data-dir-browser-1").exists()
 
 
 def test_fresh_workspace_restores_to_an_empty_fleet(monkeypatch: pytest.MonkeyPatch) -> None:

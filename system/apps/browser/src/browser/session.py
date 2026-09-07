@@ -92,7 +92,9 @@ ControlOwner = Literal["human", "agent"]
 # ``running`` only once Chromium is up and the active tab is foregrounded. ``crashed`` is
 # terminal (Chromium died -- OOM/segfault). Driving/ownership only applies once
 # ``running``; the viewer renders deterministically off this field.
-Lifecycle = Literal["init", "running", "crashed"]
+# ``stopped``: the user ended this browser's Chromium but kept the browser (its record, profile,
+# and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
+Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
 # Fortress's fixed install path (see the env.d unit
 # system/scripts/env.d/1000-playwright-fortress.sh). A stealth, C++-patched
@@ -1238,6 +1240,17 @@ class LiveBrowser(MutableModel):
     def _crashed_payload(self) -> dict[str, Any]:
         return {"ok": False, "status": "crashed", **self._control_state()}
 
+    def _stopped_payload(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status": "stopped",
+            "hint": (
+                f"browser {self.browser_id} is stopped; start it from its tab, or with "
+                f"`layout.py start app:browser?instance={self.browser_id}`"
+            ),
+            **self._control_state(),
+        }
+
     def _starting_payload(self) -> dict[str, Any]:
         """Non-fatal "the browser is still launching" response for a command that arrives
         while the browser is still ``init`` (Chromium not up yet). The CLI maps this to
@@ -1425,6 +1438,8 @@ class LiveBrowser(MutableModel):
         # acquire, so this is the guard for the task/hold/explicit-acquire paths.
         if self._crashed:
             return "crashed"
+        if self._lifecycle == "stopped":
+            return "stopped"
         if not self._is_running:
             return "starting"
         async with self._control_lock:
@@ -1546,6 +1561,8 @@ class LiveBrowser(MutableModel):
         """
         if self._crashed:
             raise BrowserNotDrivableError(f"browser {self.browser_id} crashed and is gone")
+        if self._lifecycle == "stopped":
+            raise BrowserNotDrivableError(f"browser {self.browser_id} is stopped; start it first")
         if not self._is_running:
             raise BrowserNotDrivableError(f"browser {self.browser_id} is still starting")
         async with self._control_lock:
@@ -1735,6 +1752,8 @@ class LiveBrowser(MutableModel):
         """
         if self._crashed:
             return self._crashed_payload()
+        if self._lifecycle == "stopped":
+            return self._stopped_payload()
         if not self._is_running:
             return self._starting_payload()
         async with self._control_lock:
@@ -1768,6 +1787,39 @@ class LiveBrowser(MutableModel):
         async with self._control_lock:
             await self._abandon_queues_locked("closed")
         await self._teardown_chrome()
+        await self._teardown_display()
+
+    async def stop(self) -> None:
+        """End this browser's Chromium (and its display and audio) while keeping the browser registered.
+
+        The tabs it held stay as its last known list, so a later :meth:`start` relaunches it on
+        them from the same profile. Queued agents are released as on a close; viewers are told
+        ``stopped`` and keep their socket, so a start reaches them as the next ``control``.
+        """
+        if self._lifecycle == "stopped":
+            return
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
+        # Refresh the last known tabs while Chromium can still be asked: they are what the
+        # manifest records and what a start reopens.
+        await self.tab_urls()
+        self._broadcast({"type": "stopped", "browser_id": self.browser_id})
+        async with self._control_lock:
+            await self._abandon_queues_locked("stopped")
+            self.controller = "human"
+            self.owner_agent_id = None
+            self.owner_agent_name = None
+            self.human_pinned = False
+        await self._teardown_chrome()
+        await self._teardown_display()
+        self._active_target_id = ""
+        self._lifecycle = "stopped"
+        self._broadcast(self._control_message())
+        self._nudger.nudge()
+
+    async def _teardown_display(self) -> None:
+        """Release this browser's audio sink and private Xvfb, after Chromium is gone."""
         # Unload this browser's PulseAudio null sink AFTER Chromium is gone (nothing is
         # routing into it anymore), so closing a browser doesn't leak its sink. The shared
         # daemon stays up for the rest of the fleet. Off the loop; best-effort.
@@ -1993,10 +2045,10 @@ class BrowserSessionManager(MutableModel):
         profiles are swept at the next boot, which frees their names.
         """
         async with self._lock:
-            # Crashed browsers are dead shells kept only to report "crashed"; they
-            # don't count toward the cap, so a crash never blocks opening a new one.
-            # init + running both count -- the slot is reserved the moment we register.
-            live = sum(1 for browser in self._browsers.values() if not browser._crashed)
+            # Crashed and stopped browsers hold no Chromium; they don't count toward the cap,
+            # so neither blocks opening a new one. init + running both count -- the slot is
+            # reserved the moment we register.
+            live = self._launched_count()
             if live >= _MAX_SESSIONS:
                 raise FleetFullError(f"{live}/{_MAX_SESSIONS} browsers open -- close one first.")
             persisted_names = self._persisted_names()
@@ -2096,6 +2148,45 @@ class BrowserSessionManager(MutableModel):
                 logger.debug("in-flight launch of {} unwound during close ({})", browser_id, e)
         await session.close()
 
+    async def stop_browser(self, browser_id: str) -> None:
+        """Stop a browser's Chromium while keeping it registered (see :meth:`LiveBrowser.stop`), then checkpoint.
+
+        UnknownBrowserError for a name no browser has; BrowserNotDrivableError while the
+        browser is still launching (its launch owns Chromium until it flips to running)."""
+        session = self.get(browser_id)
+        if session._lifecycle == "init":
+            raise BrowserNotDrivableError(f"browser {browser_id} is still launching; stop it once it is up")
+        await session.stop()
+        self._spawn_save()
+
+    async def start_browser(self, browser_id: str) -> None:
+        """Relaunch a stopped (or crashed) browser on its last known tabs from its profile; a no-op for one launching or running.
+
+        UnknownBrowserError for a name no browser has; FleetFullError when the cap leaves no
+        room for another Chromium."""
+        session = self.get(browser_id)
+        if session._lifecycle in ("init", "running"):
+            return
+        async with self._lock:
+            live = self._launched_count()
+            if live >= _MAX_SESSIONS:
+                raise FleetFullError(f"{live}/{_MAX_SESSIONS} browsers open -- close one first.")
+            session._lifecycle = "init"
+            self._clear_failed_launch(browser_id)
+        tabs, active_tab = session.last_known_tabs()
+        self._broadcast_starting(session)
+        self._spawn_save()
+        self._spawn_launch(session, restore_tabs=tabs or None, active_tab=active_tab)
+
+    def _broadcast_starting(self, session: LiveBrowser) -> None:
+        """Tell the browser's viewers it is launching again, so a stopped overlay gives way to the starting one."""
+        session._broadcast(session._control_message())
+        session._nudger.nudge()
+
+    def _launched_count(self) -> int:
+        """How many browsers hold (or are about to hold) a Chromium: the ones the cap counts."""
+        return sum(1 for browser in self._browsers.values() if browser._lifecycle in ("init", "running"))
+
     async def close_and_forget(self, browser_id: str) -> None:
         """The whole of an explicit close: end the browser, drop it from the manifest, delete its profile.
 
@@ -2158,10 +2249,10 @@ class BrowserSessionManager(MutableModel):
         return [browser for _, browser in snapshot if browser._is_running]
 
     def capacity(self) -> tuple[int, int]:
-        """(non-crashed browser count, cap). Counts init + running, mirroring create()'s
+        """(launched browser count, cap). Counts init + running, mirroring create()'s
         cap check, so the UI gates the 'New browser' button on the same condition
         create() enforces."""
-        return len(self.live_browsers()), _MAX_SESSIONS
+        return self._launched_count(), _MAX_SESSIONS
 
     async def capacity_async(self) -> tuple[int, int]:
         """``capacity()`` for callers on a Flask worker thread to reach via
@@ -2175,7 +2266,9 @@ class BrowserSessionManager(MutableModel):
         ONLY -- never ownership/queues (process-scoped) or profile bytes. Reads
         ``LiveBrowser.tab_urls()`` (async: a light targets query)."""
         urls, active_tab = await browser.tab_urls()
-        return fleet_manifest.ManifestEntry(id=browser.browser_id, tabs=urls, active_tab=active_tab)
+        return fleet_manifest.ManifestEntry(
+            id=browser.browser_id, tabs=urls, active_tab=active_tab, stopped=browser._lifecycle == "stopped"
+        )
 
     async def _snapshot_manifest_locked(self) -> fleet_manifest.Manifest:
         """Build the durable manifest from the LIVE fleet (init + running). Caller holds
@@ -2290,7 +2383,7 @@ class BrowserSessionManager(MutableModel):
         async with self._lock:
             if name in self._browsers:
                 return True  # a concurrent create already brought it up
-            live = sum(1 for b in self._browsers.values() if not b._crashed)
+            live = self._launched_count()
             if live >= _MAX_SESSIONS:
                 logger.warning("restore hit the fleet cap; deferring browser {}", name)
                 return False
@@ -2301,6 +2394,16 @@ class BrowserSessionManager(MutableModel):
         # removes the browser; we report False so the saved entry is preserved for retry.
         await self._launch(session, restore_tabs=restore_tabs, active_tab=active_tab, persist=False)
         return name in self._browsers and self._browsers[name]._is_running
+
+    async def _register_stopped_restore(self, entry: fleet_manifest.ManifestEntry) -> None:
+        """Bring a browser the user had stopped back as stopped: registered with its saved tabs, no Chromium."""
+        async with self._lock:
+            if entry.id in self._browsers:
+                return
+            session = self._register_init_locked(entry.id)
+            session._lifecycle = "stopped"
+            session._last_known_tabs = list(entry.tabs)
+            session._last_known_active_tab = entry.active_tab
 
     async def restore(self) -> None:
         """Bring the fleet back on daemon startup: relaunch saved browsers EAGER-
@@ -2322,6 +2425,9 @@ class BrowserSessionManager(MutableModel):
         if saved is not None:
             for entry in sorted(saved.browsers, key=lambda e: e.id):
                 wanted_names.add(entry.id)
+                if entry.stopped:
+                    await self._register_stopped_restore(entry)
+                    continue
                 await self._launch_one_restore(entry.id, entry.tabs or None, entry.active_tab)
         else:
             # No (current-version) manifest. If name-valid profiles survived on the
@@ -2343,8 +2449,9 @@ class BrowserSessionManager(MutableModel):
         self, saved_by_name: dict[str, fleet_manifest.ManifestEntry], wanted_names: set[str]
     ) -> None:
         async with self._lock:
-            live_names = {b.browser_id for b in self.running_browsers()}
-            entries = [await self._entry_for(b) for b in self.running_browsers()]
+            settled = [b for b in self.live_browsers() if b._lifecycle in ("running", "stopped")]
+            live_names = {b.browser_id for b in settled}
+            entries = [await self._entry_for(b) for b in settled]
             # Preserve saved entries for wanted browsers that didn't relaunch this boot.
             for name in sorted(wanted_names - live_names):
                 if name in saved_by_name:

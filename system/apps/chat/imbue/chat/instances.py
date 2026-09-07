@@ -9,6 +9,7 @@ keyed ``<agent-id>.<session-id>`` that the parent's page creates on demand.
 
 import re
 import threading
+from collections.abc import Callable
 from collections.abc import Mapping
 from typing import Final
 
@@ -19,6 +20,7 @@ from app_instances.errors import InvalidParamsError
 from app_instances.errors import LocationNotTrackedError
 from app_instances.errors import NotReadyError
 from app_instances.errors import NotRenameableError
+from app_instances.errors import NotStoppableError
 from app_instances.errors import UnknownActionError
 from app_instances.errors import UnknownInstanceError
 from app_instances.interfaces import InstanceNudgerInterface
@@ -40,6 +42,8 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.errors import ChatCreateRefusedError
 from imbue.chat.errors import ChatDestroyFailedError
 from imbue.chat.errors import ChatRenameFailedError
+from imbue.chat.errors import ChatStartFailedError
+from imbue.chat.errors import ChatStopFailedError
 from imbue.chat.errors import ChatTitleConflictError
 from imbue.chat.harnesses.binding import has_usable_account
 from imbue.chat.models import AgentCreationError
@@ -47,9 +51,12 @@ from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
+from imbue.mngr.errors import MngrError
 
 # The registered name of the chat app, which names the shell nudge route and the manifest.
 CHAT_APP_NAME: Final[AppName] = AppName("chat")
@@ -113,6 +120,7 @@ def instance_record_for_agent(agent: AgentStateItem, is_permission_pending: bool
         lifetime=InstanceLifetime.EXPLICIT,
         last_active=None,
         renameable=True,
+        stoppable=True,
     )
 
 
@@ -195,6 +203,11 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     model_config = {"arbitrary_types_allowed": True}
 
     manager: AgentManager = Field(frozen=True, description="The agent manager the instances are read from")
+    # Starting rides the in-process mngr path a send uses to revive a stopped agent
+    # (``agent_discovery.start_agent``), so a start and a message succeed or fail together.
+    agent_starter: Callable[[str], None] = Field(
+        frozen=True, description="Ensures the named agent is running; raises MngrError when it cannot"
+    )
     # The subagent views the parent pages asked for, by key. In memory, as the phase file
     # says: a restart forgets them, and the parent's page recreates one on demand. A record
     # whose parent chat is gone is dropped the next time the list is read.
@@ -262,6 +275,49 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         raise LocationNotTrackedError("the chat app does not track where its pages are")
 
+    def stop_instance(self, key: InstanceKey) -> InstanceRecord:
+        """``mngr stop`` for a chat: the process ends, the transcript and name stay, and the record answers ``stopped``."""
+        agent = self._stoppable_agent(key)
+        if not is_lifecycle_dead(agent.state):
+            try:
+                self.manager.stop_chat_agent(key)
+            except AgentStopError as e:
+                raise ChatStopFailedError(str(e)) from e
+        return self._record_for_agent(key, InstanceStatus.STOPPED)
+
+    def start_instance(self, key: InstanceKey) -> InstanceRecord:
+        """Ensure a chat's agent is running, the same in-process path a send takes to revive one; a no-op for a live chat."""
+        agent = self._stoppable_agent(key)
+        if is_lifecycle_dead(agent.state):
+            try:
+                self.agent_starter(agent.name)
+            except MngrError as e:
+                raise ChatStartFailedError(f"Failed to start agent '{agent.name}': {e}") from e
+            # The observe stream sees the revival only minutes later (no pid to watch while the
+            # agent was stopped); reflect it now so the record and the page's liveness follow the start.
+            self.manager.note_agent_alive(key)
+        return self._record_for_agent(key, None)
+
+    def _stoppable_agent(self, key: InstanceKey) -> AgentStateItem:
+        """The chat the verb acts on: a listed agent, never a provisional chat, a subagent view, or the primary agent."""
+        self._require_ready()
+        agent = self.manager.get_agent_by_id(key)
+        if agent is None or is_primary_agent(agent):
+            if self._is_provisional_or_subagent(key):
+                raise NotStoppableError(f"instance {key!r} has no agent process to stop or start")
+            raise UnknownInstanceError(f"no instance has the key {key!r}")
+        return agent
+
+    def _record_for_agent(self, key: InstanceKey, status_override: InstanceStatus | None) -> InstanceRecord:
+        """The agent's record as tracked now; ``status_override`` reports a state the observe stream will only confirm later."""
+        agent = self.manager.get_agent_by_id(key)
+        if agent is None:
+            raise UnknownInstanceError(f"no instance has the key {key!r}")
+        record = instance_record_for_agent(agent, self.manager.has_pending_permission(key))
+        if status_override is None:
+            return record
+        return record.model_copy_update(to_update(record.field_ref().status, status_override))
+
     def _create_chat(self, params: Mapping[str, str]) -> InstanceRecord:
         """``new``: launch a chat on ``account_id`` (the most recently used account when the
         param is absent), or, with nothing signed in, mint one that waits for an account: its
@@ -324,6 +380,8 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             raise NotReadyError("the chat app has not read its agent list from mngr yet")
 
 
-def build_chat_instance_source(manager: AgentManager) -> tuple[InstanceSourceInterface, InstanceNudgerInterface]:
+def build_chat_instance_source(
+    manager: AgentManager, agent_starter: Callable[[str], None]
+) -> tuple[InstanceSourceInterface, InstanceNudgerInterface]:
     """The source and nudger the chat document mounts the instances blueprint with."""
-    return AgentManagerInstanceSource(manager=manager), AgentManagerNudger(manager=manager)
+    return AgentManagerInstanceSource(manager=manager, agent_starter=agent_starter), AgentManagerNudger(manager=manager)

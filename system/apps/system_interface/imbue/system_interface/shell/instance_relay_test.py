@@ -9,6 +9,8 @@ from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.instance_relay import relay_location
 from imbue.system_interface.shell.instance_relay import relay_rename
+from imbue.system_interface.shell.instance_relay import relay_start
+from imbue.system_interface.shell.instance_relay import relay_stop
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
@@ -39,6 +41,14 @@ def test_the_relay_passes_the_apps_answers_through(
         located = relay_location(client, entry, "stub-1", json.dumps({"path": "/deeper"}).encode())
         assert located.status_code == 200 and json.loads(located.body)["instance"]["url"] == "/deeper"
         assert relay_location(client, entry, "stub-1", json.dumps({"path": "no-slash"}).encode()).status_code == 400
+        refused_stop = relay_stop(client, entry, "stub-1")
+        assert refused_stop.status_code == 400 and "cannot be stopped" in json.loads(refused_stop.body)["detail"]
+        stub_source.is_stoppable = True
+        stopped = relay_stop(client, entry, "stub-1")
+        assert stopped.status_code == 200 and json.loads(stopped.body)["instance"]["status"] == "stopped"
+        started = relay_start(client, entry, "stub-1")
+        assert started.status_code == 200 and json.loads(started.body)["instance"]["status"] == "idle"
+        assert relay_start(client, entry, "stub-9").status_code == 404
         assert relay_delete(client, entry, "stub-2").status_code == 204
         # A delete of an unknown key is idempotent under the contract.
         assert relay_delete(client, entry, "stub-9").status_code == 204

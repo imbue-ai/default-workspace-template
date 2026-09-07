@@ -1,4 +1,4 @@
-"""The relay of contracts.md section 6: browsers never reach an app's instances API, the shell forwards every instance verb."""
+"""The relay of contracts.md section 6: browsers never reach an app's instances API, the shell forwards every instance verb (create, delete, rename, location, stop, start)."""
 
 from typing import Final
 
@@ -70,3 +70,11 @@ def relay_rename(client: httpx.Client, entry: AppInventoryEntry, key: str, body:
 
 def relay_location(client: httpx.Client, entry: AppInventoryEntry, key: str, body: bytes) -> RelayOutcome:
     return _relay(client, entry, "POST", f"{_instances_base(entry)}/{key}/location", body)
+
+
+def relay_stop(client: httpx.Client, entry: AppInventoryEntry, key: str) -> RelayOutcome:
+    return _relay(client, entry, "POST", f"{_instances_base(entry)}/{key}/stop", None)
+
+
+def relay_start(client: httpx.Client, entry: AppInventoryEntry, key: str) -> RelayOutcome:
+    return _relay(client, entry, "POST", f"{_instances_base(entry)}/{key}/start", None)

@@ -1,3 +1,4 @@
+import shutil
 from uuid import uuid4
 
 import pytest
@@ -7,6 +8,7 @@ from app_instances.errors import InvalidParamsError
 from app_instances.errors import LocationNotTrackedError
 from app_instances.errors import NotReadyError
 from app_instances.errors import NotRenameableError
+from app_instances.errors import NotStoppableError
 from app_instances.errors import UnknownActionError
 from app_instances.errors import UnknownInstanceError
 from app_instances.primitives import InstanceKey
@@ -20,6 +22,8 @@ from imbue.chat.accounts import index_path
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.errors import ChatCreateRefusedError
+from imbue.chat.errors import ChatStartFailedError
+from imbue.chat.errors import ChatStopFailedError
 from imbue.chat.errors import ChatTitleConflictError
 from imbue.chat.instances import AgentManagerInstanceSource
 from imbue.chat.instances import AgentManagerNudger
@@ -30,6 +34,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.mngr.errors import MngrError
 
 
 def _agent_id() -> str:
@@ -60,9 +65,26 @@ def _creating(
     return ProvisionalChat(agent_id=agent_id, name=name, phase=phase)
 
 
-def _source(agent_manager: AgentManager) -> AgentManagerInstanceSource:
+class _RecordingStarter:
+    """Stands in for ``agent_discovery.start_agent``: records the names started, or refuses with a reason."""
+
+    def __init__(self, refusal: str | None) -> None:
+        self.refusal = refusal
+        self.started: list[str] = []
+
+    def __call__(self, agent_name: str) -> None:
+        if self.refusal is not None:
+            raise MngrError(self.refusal)
+        self.started.append(agent_name)
+
+
+def _source(
+    agent_manager: AgentManager, starter: _RecordingStarter | None = None
+) -> AgentManagerInstanceSource:
     agent_manager.note_agent_list_known()
-    return AgentManagerInstanceSource(manager=agent_manager)
+    return AgentManagerInstanceSource(
+        manager=agent_manager, agent_starter=starter if starter is not None else _RecordingStarter(None)
+    )
 
 
 @pytest.mark.parametrize(
@@ -85,7 +107,7 @@ def test_status_mapping_follows_the_chat_row(
 
 
 def test_list_is_not_ready_before_the_agent_list_is_known(agent_manager: AgentManager) -> None:
-    source = AgentManagerInstanceSource(manager=agent_manager)
+    source = AgentManagerInstanceSource(manager=agent_manager, agent_starter=_RecordingStarter(None))
     with pytest.raises(NotReadyError):
         source.list_instances()
     with pytest.raises(NotReadyError):
@@ -426,3 +448,85 @@ def test_the_manager_nudger_fires_whatever_nudger_the_manager_holds(agent_manage
     agent_manager.set_nudger(recording)
     AgentManagerNudger(manager=agent_manager).nudge()
     assert recording.nudge_count == 1
+
+
+def test_agents_are_stoppable_and_provisional_and_subagent_records_are_not(agent_manager: AgentManager) -> None:
+    agent_id = _agent_id()
+    reserved_id = _agent_id()
+    _seed_agent(agent_manager, agent_id, "Chat-1")
+    with agent_manager._lock:
+        agent_manager._proto_agents[reserved_id] = _creating("Chat 2", reserved_id, ProvisionalChatPhase.AWAITING_ACCOUNT)
+    source = _source(agent_manager)
+    subagent = source.create_instance(ActionId("subagent"), {"parent": agent_id, "session": uuid4().hex})
+
+    stoppable_by_key = {record.key: record.stoppable for record in source.list_instances()}
+
+    assert stoppable_by_key == {agent_id: True, reserved_id: False, subagent.key: False}
+    with pytest.raises(NotStoppableError):
+        source.stop_instance(InstanceKey(reserved_id))
+    with pytest.raises(NotStoppableError):
+        source.start_instance(subagent.key)
+
+
+def test_stop_runs_mngr_stop_and_answers_the_chat_as_stopped(broadcaster: WebSocketBroadcaster) -> None:
+    true_binary = shutil.which("true")
+    assert true_binary is not None
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    agent_id = _agent_id()
+    _seed_agent(agent_manager, agent_id, "Chat-1", activity_state=ActivityState.THINKING)
+    source = _source(agent_manager)
+
+    stopped = source.stop_instance(InstanceKey(agent_id))
+
+    assert (stopped.key, stopped.status) == (agent_id, InstanceStatus.STOPPED)
+    # The tracked state follows the observe stream, so a second stop of a chat still tracked
+    # as running runs mngr again rather than refusing.
+    assert source.stop_instance(InstanceKey(agent_id)).status == InstanceStatus.STOPPED
+
+
+def test_stop_reports_a_refusal_from_mngr(broadcaster: WebSocketBroadcaster, false_binary: str) -> None:
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    agent_id = _agent_id()
+    _seed_agent(agent_manager, agent_id, "Chat-1")
+    source = _source(agent_manager)
+
+    with pytest.raises(ChatStopFailedError, match="Failed to stop agent 'Chat-1'"):
+        source.stop_instance(InstanceKey(agent_id))
+
+
+def test_start_revives_a_stopped_chat_through_the_starter_and_notes_it_alive(agent_manager: AgentManager) -> None:
+    agent_id = _agent_id()
+    seed_agent_state(agent_manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1"}, state="STOPPED")
+    starter = _RecordingStarter(None)
+    source = _source(agent_manager, starter)
+    assert source.list_instances()[0].status == InstanceStatus.STOPPED
+
+    started = source.start_instance(InstanceKey(agent_id))
+
+    assert starter.started == ["Chat-1"]
+    assert started.status == InstanceStatus.IDLE
+    tracked = agent_manager.get_agent_by_id(agent_id)
+    assert tracked is not None and tracked.state == "WAITING"
+    # A live chat is not started again.
+    source.start_instance(InstanceKey(agent_id))
+    assert starter.started == ["Chat-1"]
+
+
+def test_start_reports_a_refusal_from_mngr(agent_manager: AgentManager) -> None:
+    agent_id = _agent_id()
+    seed_agent_state(agent_manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1"}, state="STOPPED")
+    source = _source(agent_manager, _RecordingStarter("no such host"))
+
+    with pytest.raises(ChatStartFailedError, match="no such host"):
+        source.start_instance(InstanceKey(agent_id))
+
+
+def test_stop_and_start_refuse_unknown_keys_and_the_primary_agent(agent_manager: AgentManager) -> None:
+    primary_id = _agent_id()
+    _seed_agent(agent_manager, primary_id, "services", labels={"is_primary": "true"})
+    source = _source(agent_manager)
+
+    with pytest.raises(UnknownInstanceError):
+        source.stop_instance(InstanceKey(primary_id))
+    with pytest.raises(UnknownInstanceError):
+        source.start_instance(InstanceKey(_agent_id()))

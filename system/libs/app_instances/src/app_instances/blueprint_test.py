@@ -22,6 +22,7 @@ from app_instances.errors import (
     MalformedRequestError,
     NotReadyError,
     NotRenameableError,
+    NotStoppableError,
     UnknownActionError,
     UnknownInstanceError,
 )
@@ -40,6 +41,8 @@ def test_the_instances_app_serves_only_the_contract_routes() -> None:
         "/_instances/<key>",
         "/_instances/<key>/rename",
         "/_instances/<key>/location",
+        "/_instances/<key>/stop",
+        "/_instances/<key>/start",
     }
 
 
@@ -286,6 +289,48 @@ class _BrokenSource(StubInstanceSource):
 
     def list_instances(self) -> list[InstanceRecord]:
         raise InstanceStoreError("instances.json is not valid JSON")
+
+
+def test_stop_and_start_answer_200_with_the_record_and_nudge(
+    instances_client: FlaskClient,
+    stub_source: StubInstanceSource,
+    recording_nudger: RecordingNudger,
+) -> None:
+    stub_source.is_stoppable = True
+    created = _create(stub_source, "/one/")
+    assert created.stoppable is True
+
+    stopped = instances_client.post(f"/_instances/{created.key}/stop")
+    started = instances_client.post(f"/_instances/{created.key}/start")
+
+    assert stopped.status_code == 200
+    assert stopped.get_json()["instance"]["status"] == "stopped"
+    assert started.status_code == 200
+    assert started.get_json()["instance"]["status"] == "idle"
+    assert recording_nudger.nudge_count == 2
+    assert stub_source.calls[-2:] == [f"stop:{created.key}", f"start:{created.key}"]
+
+
+def test_stop_and_start_map_unknown_and_not_stoppable(
+    instances_client: FlaskClient, stub_source: StubInstanceSource
+) -> None:
+    created = _create(stub_source, "/one/")
+
+    refused = instances_client.post(f"/_instances/{created.key}/stop")
+    assert refused.status_code == HTTP_BAD_REQUEST
+    assert "cannot be stopped" in refused.get_json()["detail"]
+    assert instances_client.post(f"/_instances/{created.key}/start").status_code == HTTP_BAD_REQUEST
+    stub_source.is_stoppable = True
+    assert instances_client.post("/_instances/stub-9/stop").status_code == HTTP_NOT_FOUND
+    assert instances_client.post("/_instances/stub-9/start").status_code == HTTP_NOT_FOUND
+
+
+def test_the_default_source_refuses_stop_and_start(
+    instances_client: FlaskClient, stub_source: StubInstanceSource
+) -> None:
+    # A source that never mentions the verbs (an app built before them) answers the
+    # interface's default refusal.
+    assert status_code_for_error(NotStoppableError("x")) == HTTP_BAD_REQUEST
 
 
 def test_an_unmapped_library_error_answers_500_with_a_detail_body() -> None:

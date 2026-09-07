@@ -160,6 +160,13 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # stacked template's docker_runtime outranks it.) Mirrors the pytest path in
     # apps/minds/test_snapshot_resume.py.
     _write_to_os_environ("MINDS_DOCKER_RUNTIME_DEFAULT", "RUNC")
+    # The workspace image build is network-bound (apt and pip mirrors, the
+    # pi extension npm installs in setup_system.sh) and a healthy one runs
+    # 8 to 10.5 minutes here, so the docker provider's 600-second default
+    # build timeout would be the tighter of the two deadlines on the create
+    # flow. The runner's create-flow wait sits above this so the boot after
+    # the build still fits.
+    _write_to_os_environ("MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS", "900")
     # The snapshot-resume suite never exercises the browser stack, so the
     # workspace skips its env.d browser unit -- most importantly the
     # hundreds-of-MB Fortress engine download -- making this build faster and
@@ -677,13 +684,14 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
-    # Budget: 1500s. The wrapped runner budgets 900s for the post-submit create
+    # Budget: 1500s. The wrapped runner budgets 1200s for the post-submit create
     # phase alone (its headline cost is the in-sandbox DEFAULT_WORKSPACE_TEMPLATE
-    # container build, legitimately ~8-10.5 minutes in CI), plus the Electron
-    # launch/attach and system-interface phases. Keeping this exec timeout above
-    # any realistic run total means a stall hits the runner's own per-phase
-    # deadline (which names the stuck phase) rather than this generic exec
-    # timeout.
+    # container build, legitimately ~8-10.5 minutes in CI and given 900s by the
+    # MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS set in the program above),
+    # plus the Electron launch/attach and system-interface phases. Keeping this
+    # exec timeout above any realistic run total means a stall hits the runner's
+    # own per-phase deadline (which names the stuck phase) rather than this
+    # generic exec timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,

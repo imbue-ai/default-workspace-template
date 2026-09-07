@@ -46,9 +46,15 @@ class InstanceRecord(FrozenModel):
     last_active: AwareDatetime | None = Field(
         description="When the instance was last active, in UTC; None when unknown"
     )
-    # Named after the wire key rather than with the is_ prefix: the record is the JSON the shell reads.
+    # Named after the wire keys rather than with the is_ prefix: the record is the JSON the shell reads.
     renameable: bool = Field(
         description="Whether the rename route is accepted for this instance"
+    )
+    # Defaulted, unlike the other fields, so a list from an app built before the stop and
+    # start routes existed still reads; such an app's instances are not stoppable.
+    stoppable: bool = Field(
+        default=False,
+        description="Whether the stop and start routes are accepted for this instance",
     )
 
     @field_validator("last_active")

@@ -2,8 +2,8 @@
  * The verb set for one instance, defined ONCE so the tab's kebab menu and the rail's row menu
  * render the identical list off the identical rule.
  *
- * What varies **by instance** (whether it can be renamed, deleted, whether its app can be
- * stopped) is read off the inventory records here. What varies **by caller** -- what running
+ * What varies **by instance** (whether it can be renamed, deleted, stopped and started on its
+ * own, whether its app can be stopped) is read off the inventory records here. What varies **by caller** -- what running
  * a verb actually does -- is not: the tab acts on a live, open panel (Close tab), while the
  * rail can be showing a backgrounded instance with no open panel at all (Remove from project).
  * ``TabMenuActions`` is the seam: every verb's behavior is a callback the caller supplies,
@@ -40,6 +40,7 @@ export interface TabMenuActions {
   rename: () => void;
   closeTab: (() => void) | null;
   removeFromProject: (() => void) | null;
+  setInstanceLifecycle: (action: "stop" | "start") => void;
   setAppLifecycle: (action: "stop" | "start") => void;
   delete: () => void;
 }
@@ -50,12 +51,17 @@ export interface TabMenuActions {
  * The menu reads as two groups. The opening group acts on the instance -- Refresh, Share, Add
  * to project. The closing group removes, in increasing severity: Rename (for the instances
  * their app renames), Close tab drops the panel, Remove from project drops the filing, Stop
- * drops the app's process, Delete drops the instance.
+ * drops what backs the instance (or, for a single-instance app, the app's process), Delete
+ * drops the instance.
  *
  * Delete is offered only for an instance of an app that has instances: a single-instance app
  * IS its one record, and the record goes only when the app is unregistered. Stop and Start
- * are offered only for an app the workspace can honestly stop (supervised, not critical, and
- * not inside a critical app's program), and read from the app's liveness.
+ * of the instance are offered where its app reports it ``stoppable`` (a chat's agent, a
+ * browser's Chromium, a terminal's session), and read from the instance's status. Stop and
+ * Start of the whole app are offered only on a single-instance app's tab, where the two
+ * coincide, and only for an app the workspace can honestly stop (supervised, not critical,
+ * and not inside a critical app's program); a multi-instance app is stopped from the rail's
+ * row menu.
  */
 export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions: TabMenuActions): TabMenuEntry[] {
   const opening: TabMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
@@ -73,7 +79,15 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
-  if (isAppStoppable(app)) {
+  if (instance.stoppable) {
+    const action = instance.status === "stopped" ? "start" : "stop";
+    closing.push({
+      label: `${action === "stop" ? "Stop" : "Start"} ${instance.title}`,
+      iconName: "power",
+      run: () => actions.setInstanceLifecycle(action),
+    });
+  }
+  if (!app.has_instances && isAppStoppable(app)) {
     const action = app.is_running ? "stop" : "start";
     closing.push({
       label: `${action === "stop" ? "Stop" : "Start"} ${app.display_name}`,

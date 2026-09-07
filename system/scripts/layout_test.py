@@ -645,16 +645,22 @@ def test_rename_delete_and_replace_url_ride_the_relay(
         layout.main(["replace-url", "app:browser?instance=b1", "https://example.com"])
         == 0
     )
+    assert layout.main(["stop", "app:chat?instance=agent-1"]) == 0
+    assert layout.main(["start", "app:browser?instance=b1"]) == 0
     assert layout.main(["delete", "app:terminal?instance=terminal-1"]) == 0
     assert fake_shell.posted == [
         ("/api/apps/terminal/instances/terminal-1/rename", {"title": "Build"}),
         ("/api/apps/files/instances/files-1/location", {"path": "/notes"}),
         ("/api/apps/browser/instances/b1/location", {"path": "https://example.com"}),
+        ("/api/apps/chat/instances/agent-1/stop", {}),
+        ("/api/apps/browser/instances/b1/start", {}),
         ("/api/apps/terminal/instances/terminal-1/delete", {}),
     ]
     err = capsys.readouterr().err
     assert (
         "renamed app:terminal?instance=terminal-1 to 'Build'" in err
+        and "stopped app:chat?instance=agent-1" in err
+        and "started app:browser?instance=b1" in err
         and "deleted app:terminal?instance=terminal-1" in err
     )
 

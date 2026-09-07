@@ -51,6 +51,12 @@ export async function reportInstanceLocation(appName: string, key: string, path:
   }
 }
 
+/** Stop or start one instance through its app (a chat's agent, a browser's Chromium, a terminal's
+ *  session). Throws with the app's detail; the ``apps_updated`` push that follows carries the result. */
+export async function setInstanceLifecycle(appName: string, key: string, action: "stop" | "start"): Promise<void> {
+  await postJson<void>(instancesUrl(appName, `/${encodeURIComponent(key)}/${action}`), {});
+}
+
 /** Stop or start an app's supervised program. The ``apps_updated`` push that follows is the
  *  authority on the result; this only reports a refusal. */
 export async function setAppLifecycle(appName: string, action: "stop" | "start"): Promise<void> {

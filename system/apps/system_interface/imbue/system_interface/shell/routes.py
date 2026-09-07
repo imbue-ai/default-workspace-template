@@ -65,6 +65,8 @@ from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
 from imbue.system_interface.shell.instance_relay import relay_location
 from imbue.system_interface.shell.instance_relay import relay_rename
+from imbue.system_interface.shell.instance_relay import relay_start
+from imbue.system_interface.shell.instance_relay import relay_stop
 from imbue.system_interface.shell.inventory import build_inventory_document
 from imbue.system_interface.shell.layout_ops import DocumentOpArguments
 from imbue.system_interface.shell.layout_ops import SELF_ADDRESS
@@ -315,7 +317,25 @@ def relay_location_route(name: str, key: str) -> ResponseReturnValue:
     return _relay_response(outcome)
 
 
-# ---------- section 6: stop and start ----------
+def relay_stop_route(name: str, key: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    _instance_key_or_raise(key)
+    outcome = relay_stop(_shell().http_client, entry, key)
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+def relay_start_route(name: str, key: str) -> ResponseReturnValue:
+    entry = _entry_or_raise(name)
+    _instance_key_or_raise(key)
+    outcome = relay_start(_shell().http_client, entry, key)
+    if outcome.status_code < HTTP_BAD_REQUEST:
+        _shell().inventory.refetch_now(name)
+    return _relay_response(outcome)
+
+
+# ---------- section 6: stop and start of an app ----------
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
@@ -584,6 +604,18 @@ def register_shell_routes(application: Flask) -> None:
         view_func=relay_location_route,
         methods=["POST"],
         endpoint="relay_location_route",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances/<key>/stop",
+        view_func=relay_stop_route,
+        methods=["POST"],
+        endpoint="relay_stop_route",
+    )
+    application.add_url_rule(
+        "/api/apps/<name>/instances/<key>/start",
+        view_func=relay_start_route,
+        methods=["POST"],
+        endpoint="relay_start_route",
     )
     application.add_url_rule(
         "/api/apps/<name>/stop",

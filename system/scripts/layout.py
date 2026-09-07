@@ -16,6 +16,9 @@ Subcommands:
     move <address> --relative-to <address> [...]  Relocate a panel; iframe DOM is preserved.
     rename <address> <title>            Retitle an instance through its app (the title shows in every view).
     delete <address>                    Delete an instance through its app (it leaves every view).
+    stop <address>                      Stop what backs an instance (a chat's agent, a browser's Chromium, a
+                                        terminal's session) through its app; the instance stays, as ``stopped``.
+    start <address>                     Bring a stopped instance back through its app.
     replace-url <address> <path-or-url> Point an instance at a path under its app, or at a URL for an app that browses.
     maximize <address>                  Maximize the panel's group within the dock.
     restore                             Exit a maximized group.
@@ -60,8 +63,9 @@ at once; ``open`` of an app (or a URL) creates the instance through the app insi
 prints the new address to stdout, and an app's refusal is the op's error. ``maximize`` /
 ``restore`` / ``refresh`` change what is on screen without changing the saved arrangement,
 so they are sent to the target client's windows and confirm the send. ``rename`` /
-``delete`` / ``replace-url`` go through the shell's relay to the app that owns the instance
-and echo the app's refusal when it gives one.
+``delete`` / ``replace-url`` / ``stop`` / ``start`` go through the shell's relay to the app
+that owns the instance and echo the app's refusal when it gives one (an instance that cannot
+be stopped on its own, such as a file viewer, refuses ``stop`` with a 400).
 
 All dock ops POST one body ``{op, args, requester}`` to a loopback-only endpoint on the
 shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MNGR_AGENT_ID``, which is
@@ -1096,6 +1100,22 @@ def _cmd_delete(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _cmd_stop(args: argparse.Namespace) -> int:
+    address = _resolve_address(args.address)
+    exit_code = _relay("stop", address, "/stop", None)
+    if exit_code == EXIT_OK:
+        sys.stderr.write(f"stopped {address}\n")
+    return exit_code
+
+
+def _cmd_start(args: argparse.Namespace) -> int:
+    address = _resolve_address(args.address)
+    exit_code = _relay("start", address, "/start", None)
+    if exit_code == EXIT_OK:
+        sys.stderr.write(f"started {address}\n")
+    return exit_code
+
+
 def _cmd_replace_url(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
     if not args.path:
@@ -1485,6 +1505,22 @@ def main(argv: list[str] | None = None) -> int:
         "address", help="Instance address (app:<name>?instance=<key>)"
     )
     p_delete.set_defaults(func=_cmd_delete)
+
+    p_stop = subparsers.add_parser(
+        "stop", help="Stop what backs an instance through its app; the instance stays, as stopped"
+    )
+    p_stop.add_argument(
+        "address", help="Instance address (app:<name>?instance=<key>)"
+    )
+    p_stop.set_defaults(func=_cmd_stop)
+
+    p_start = subparsers.add_parser(
+        "start", help="Bring a stopped instance back through its app"
+    )
+    p_start.add_argument(
+        "address", help="Instance address (app:<name>?instance=<key>)"
+    )
+    p_start.set_defaults(func=_cmd_start)
 
     p_max = subparsers.add_parser(
         "maximize", help="Maximize a panel's group on the target client's screen"

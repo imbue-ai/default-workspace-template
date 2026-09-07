@@ -40,6 +40,8 @@ export interface InstanceRecord {
   /** ISO timestamp, or null when the app reports none. */
   last_active: string | null;
   renameable: boolean;
+  /** Whether the app stops and starts this instance on its own (a chat's agent, a browser's Chromium, a terminal's session). */
+  stoppable: boolean;
 }
 
 export interface AppAction {

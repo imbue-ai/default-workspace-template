@@ -47,7 +47,7 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _build_fast_mode_answered_label_command
-from imbue.chat.server import _build_stop_command
+from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -2349,7 +2349,7 @@ def test_destroy_argv_accepted_by_live_cli() -> None:
 def test_stop_argv_accepted_by_live_cli() -> None:
     """The ``mngr stop`` argv, confronted with the live CLI tree exactly as the
     destroy argv is."""
-    assert_mngr_argv_valid(_build_stop_command("demo"))
+    assert_mngr_argv_valid(_build_chat_stop_command("mngr", "demo"))
 
 
 def test_stop_unknown_agent_returns_404(client: FlaskClient) -> None:
