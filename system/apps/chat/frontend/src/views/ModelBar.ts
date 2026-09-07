@@ -21,7 +21,7 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { accountForAgent, getAccounts, openProviderChooser } from "../models/Providers";
+import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
 import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
@@ -29,15 +29,13 @@ import { Portal } from "@imbue/workspace-ui/src/portal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
  *  scriptable form, so the card cannot drive it -- and says where the user can. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
-
-/** Shown on a provider row this chat cannot switch to. */
-const LOCKED_PROVIDER_TOOLTIP = "Start a new chat to use this provider. In-chat provider switching is coming soon!";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
  *  model declares it, else the model's first shown (or first declared) effort. Null
@@ -98,6 +96,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
+  // The account whose row was pressed and is waiting for "Launch" or "Cancel". A chat's
+  // account is fixed at create time, so pressing another account's row can only mean a new
+  // chat on it -- asked, not done by surprise. Cleared with the rest of the flyout's state.
+  let launchPromptAccountId: string | null = null;
+  const launchDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
@@ -159,6 +162,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       rowState.confirmingRemoval = null;
       rowState.renamingId = null;
       rowState.renameDraft = "";
+      launchPromptAccountId = null;
     }
     flyout = next;
   }
@@ -444,14 +448,41 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     ]);
   }
 
+  /** The confirmation a pressed account row opens: launch a new chat on it, or not. */
+  function launchPrompt(target: ProviderAccount, current: ProviderAccount | null): m.Children {
+    return m(launchDialog, {
+      title: "Launch a new chat?",
+      body: [
+        `A chat's provider is fixed when it starts, so this one stays on ${current?.label ?? "its provider"}. ` +
+          `Start a new chat on ${target.label}?`,
+      ],
+      dismissLabel: "Cancel",
+      actions: [
+        {
+          label: "Launch",
+          run: () => {
+            closeCard();
+            void startChatOnAccount(target.id);
+          },
+        },
+      ],
+      onDismiss: () => {
+        launchPromptAccountId = null;
+      },
+    });
+  }
+
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Every account that is not this chat's is LOCKED. Our chats bind to an account when they
-   * are created and nothing rebinds them, so there is no state in which switching would work
-   * -- clicking one opens a new chat on it instead, which is what the user meant.
+   * Our chats bind to an account when they are created and nothing rebinds them, so pressing
+   * an account that is not this chat's asks to open a new chat on it. Each row also carries
+   * the default toggle: the starred account is the one a new chat opens on when nothing
+   * names one (the New Tab tile, the rail shortcut, an agent's `layout.py open chat`).
    */
   function providerFlyout(current: ProviderAccount | null): m.Vnode {
     const rows = getAccounts();
+    const defaultId = getDefaultAccountId();
+    const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -465,22 +496,20 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               return accountRow({
                 row,
                 isCurrent,
-                rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW_LOCKED,
-                rowAttrs: {
-                  "aria-disabled": isCurrent ? undefined : "true",
-                  ...tooltipAttrs(isCurrent ? null : LOCKED_PROVIDER_TOOLTIP),
-                },
+                isDefault: row.id === defaultId,
+                rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
                 onSelect: () => {
-                  // Locked, and locked means locked: a chat's account is fixed at create
-                  // time. Opening a new chat on it is the reachable version of the wish,
-                  // but it is a different act, so it is the tooltip's offer -- not
-                  // something a click on a disabled-looking row does by surprise.
-                  if (isCurrent) setFlyout(null);
+                  if (isCurrent) {
+                    setFlyout(null);
+                    return;
+                  }
+                  launchPromptAccountId = row.id;
                 },
                 state: rowState,
               });
             }),
       ),
+      prompted !== null ? launchPrompt(prompted, current) : null,
       m(
         "button",
         {

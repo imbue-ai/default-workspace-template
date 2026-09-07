@@ -82,7 +82,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         response = client.get("/api/accounts")
     assert response.status_code == 200
     payload = response.get_json()
-    assert set(payload) == {"accounts", "mru"}
+    assert set(payload) == {"accounts", "mru", "default"}
     (row,) = payload["accounts"]
     # `label` is the composed string for anything showing one; `provider` / `harness_label` /
     # `seq` are its parts, which the combo card renders at different sizes on one row.
@@ -91,6 +91,44 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
     assert row["harness_label"] == "Claude Code"
     assert row["label"] == "Anthropic (Claude Code)"
     assert payload["mru"] == account_id
+    assert payload["default"] is None
+
+
+def test_pinning_and_unpinning_the_default_through_the_row_route() -> None:
+    first_id, _ = mint_account_dir()
+    commit_account(first_id, "anthropic", "Anthropic")
+    second_id, _ = mint_account_dir()
+    commit_account(second_id, "google", "Google")
+    with _client() as client:
+        assert client.patch(f"/api/accounts/{first_id}", json={"is_default": True}).status_code == 200
+        assert client.get("/api/accounts").get_json()["default"] == first_id
+        # The mru is the newest sign-in; the pin stands over it.
+        assert client.get("/api/accounts").get_json()["mru"] == second_id
+        assert client.patch(f"/api/accounts/{first_id}", json={"is_default": False}).status_code == 200
+        assert client.get("/api/accounts").get_json()["default"] is None
+
+
+def test_a_non_boolean_is_default_is_refused() -> None:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        response = client.patch(f"/api/accounts/{account_id}", json={"is_default": "yes"})
+    assert response.status_code == 400
+    assert read_index().default_account is None
+
+
+def test_a_patch_that_says_nothing_is_refused() -> None:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    with _client() as client:
+        response = client.patch(f"/api/accounts/{account_id}", json={})
+    assert response.status_code == 400
+
+
+def test_pinning_an_unknown_account_is_a_404() -> None:
+    with _client() as client:
+        response = client.patch("/api/accounts/nope", json={"is_default": True})
+    assert response.status_code == 404
 
 
 def test_accounts_are_numbered_by_what_the_label_says() -> None:

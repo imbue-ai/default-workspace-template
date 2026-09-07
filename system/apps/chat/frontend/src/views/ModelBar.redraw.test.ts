@@ -41,6 +41,9 @@ const deleted: string[] = [];
 const renamed: [string, string][] = [];
 vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
+  getDefaultAccountId: () => null,
+  setDefaultAccount: () => Promise.resolve(),
+  loadAccounts: () => Promise.resolve(),
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
   openProviderChooser: () => chooserOpens.push(1),
   deleteAccount: (id: string) => {

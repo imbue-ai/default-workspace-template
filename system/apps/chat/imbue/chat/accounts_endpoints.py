@@ -142,7 +142,7 @@ def list_accounts() -> Response:
                 "label": account_label(display, lane.harness, shown[key]),
             }
         )
-    return _json_response({"accounts": rows, "mru": index.mru})
+    return _json_response({"accounts": rows, "mru": index.mru, "default": index.default_account})
 
 
 def start_flow() -> Response:
@@ -222,11 +222,17 @@ def delete_account(account_id: str) -> Response:
     return _json_response({"status": "ok"})
 
 
-def rename_account(account_id: str) -> Response:
-    """Set or clear an account's user-chosen name. Display only -- see `accounts.rename_account`."""
+def update_account(account_id: str) -> Response:
+    """Set or clear an account's user-chosen name (`name`), or pin or unpin it as the account a
+    new chat launches on (`is_default`). Either key alone is a complete request."""
     payload = parse_json_object_body()
     if isinstance(payload, Response):
         return payload
+    if "name" not in payload and "is_default" not in payload:
+        return _error_response("expected a name or is_default")
+    is_default = payload.get("is_default")
+    if is_default is not None and not isinstance(is_default, bool):
+        return _error_response("is_default must be a boolean")
     raw_name = payload.get("name", "")
     # `str(None)` is "None" -- a four-character name the user never typed, under the cap and
     # therefore silently accepted. A null means "clear it", which is the empty string.
@@ -236,7 +242,10 @@ def rename_account(account_id: str) -> Response:
     if len(name) > _MAX_ACCOUNT_NAME:
         return _error_response(f"a name can be at most {_MAX_ACCOUNT_NAME} characters")
     try:
-        accounts.rename_account(account_id, name)
+        if "name" in payload:
+            accounts.rename_account(account_id, name)
+        if is_default is not None:
+            accounts.set_default_account(account_id, is_default)
     except accounts.AccountError as e:
         return _error_response(str(e), status_code=404)
     return _json_response({"status": "ok"})
@@ -255,4 +264,4 @@ def register_routes(application: Flask) -> None:
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=submit_flow, methods=["POST"])
     application.add_url_rule("/api/accounts/flow/<flow_id>", view_func=abort_flow, methods=["DELETE"])
     application.add_url_rule("/api/accounts/<account_id>", view_func=delete_account, methods=["DELETE"])
-    application.add_url_rule("/api/accounts/<account_id>", view_func=rename_account, methods=["PATCH"])
+    application.add_url_rule("/api/accounts/<account_id>", view_func=update_account, methods=["PATCH"])

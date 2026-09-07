@@ -13,6 +13,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import resolve_account
+from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.harnesses.binding import BindingError
 from imbue.chat.harnesses.binding import account_credential_path
@@ -159,6 +160,26 @@ def test_the_most_recently_used_account_wins(tmp_path: Path) -> None:
     assert _bound_id(home=tmp_path) == second
     set_mru(first, tmp_path)
     assert _bound_id(home=tmp_path) == first
+
+
+def test_a_pinned_default_beats_the_most_recently_used_account(tmp_path: Path) -> None:
+    """The pin is what lets the user say which harness an unnamed launch opens on; the mru
+    keeps moving under it with every launch and sign-in."""
+    pinned = _account(tmp_path, "anthropic", "Anthropic")
+    recent = _account(tmp_path, "google", "Google")
+    set_default_account(pinned, True, tmp_path)
+
+    assert _bound_id(home=tmp_path) == pinned
+    set_mru(recent, tmp_path)
+    assert _bound_id(home=tmp_path) == pinned
+
+
+def test_a_pinned_default_on_a_lane_this_build_lacks_falls_back_to_the_mru(tmp_path: Path) -> None:
+    stale = _account(tmp_path, "a-lane-from-the-future", "Mystery")
+    usable = _account(tmp_path, "anthropic", "Anthropic")
+    set_default_account(stale, True, tmp_path)
+
+    assert _bound_id(home=tmp_path) == usable
 
 
 def test_the_account_decides_the_harness(tmp_path: Path) -> None:

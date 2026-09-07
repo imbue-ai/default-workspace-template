@@ -166,9 +166,10 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
 def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     """The account a new agent should run under.
 
-    An explicit id wins; otherwise the most recently used account, which is bumped on every
-    launch -- so signing in and then starting a chat "just works" without the caller having
-    to name what it just created.
+    An explicit id wins; otherwise the account the user pinned as the default; otherwise the
+    most recently used account, which is bumped on every launch -- so signing in and then
+    starting a chat "just works" without the caller having to name what it just created,
+    while a pinned default keeps every unnamed launch on the harness the user chose.
 
     The account decides the harness (see `harness_for`), not the other way round: asking the
     caller for both invites a chat that names codex while running on an agy credential, and
@@ -191,11 +192,14 @@ def resolve_binding(account_id: str = "", home: Path | None = None) -> Account:
     usable = [a for a in index.accounts if harness_for(a) is not None]
     if not usable:
         raise accounts.AccountError("no provider accounts exist yet")
-    # The most recently used account, else the oldest -- which is the same rule the picker
-    # shows (`Providers.ts`: `recent ?? accounts[0]`). It matters that the two agree: every
-    # launch without an explicit account lands here, and a disagreement means two chats
-    # started seconds apart run on different providers with nothing saying so.
-    chosen = next((a for a in usable if a.id == index.mru), usable[0])
+    # The pinned default, else the most recently used account, else the oldest -- which is
+    # the same rule the picker shows (`Providers.ts`, `getSelectedAccount`). It matters that
+    # the two agree: every launch without an explicit account lands here, and a disagreement
+    # means two chats started seconds apart run on different providers with nothing saying so.
+    # A pin on a lane this build lacks is skipped rather than refused: the user can still
+    # chat, and the picker shows the same fallback.
+    pinned = next((a for a in usable if a.id == index.default_account), None)
+    chosen = pinned if pinned is not None else next((a for a in usable if a.id == index.mru), usable[0])
     # Back through `resolve_account` for the folder check. The explicit-id path above has
     # always had it; this one did not, so a row whose folder had gone bound an agent to a
     # directory that is not there -- which surfaces as an empty model bar, not as an error.

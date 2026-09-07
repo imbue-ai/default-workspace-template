@@ -85,6 +85,9 @@ interface FlowStatus {
 let lanes: Lane[] = [];
 let accounts: ProviderAccount[] = [];
 let mru: string | null = null;
+// The account the user pinned as the one a new chat launches on, or null when nothing is
+// pinned and the most recently used one stands in.
+let defaultAccountId: string | null = null;
 let lanesLoaded = false;
 // Whether the account list has been fetched even once. Distinct from "it is empty": both read
 // as zero accounts, and one of them means "ask the user to sign in".
@@ -112,6 +115,16 @@ export function getMruAccountId(): string | null {
   return mru;
 }
 
+export function getDefaultAccountId(): string | null {
+  return defaultAccountId;
+}
+
+/** Pin `accountId` as the account a new chat launches on, or unpin it. */
+export async function setDefaultAccount(accountId: string, isDefault: boolean): Promise<void> {
+  await m.request({ method: "PATCH", url: apiUrl(`/api/accounts/${accountId}`), body: { is_default: isDefault } });
+  await loadAccounts();
+}
+
 export function areLanesLoaded(): boolean {
   return lanesLoaded;
 }
@@ -124,12 +137,13 @@ export async function loadLanes(): Promise<void> {
 }
 
 export async function loadAccounts(): Promise<void> {
-  const body = await m.request<{ accounts: ProviderAccount[]; mru: string | null }>({
+  const body = await m.request<{ accounts: ProviderAccount[]; mru: string | null; default: string | null }>({
     method: "GET",
     url: apiUrl("/api/accounts"),
   });
   accounts = body.accounts;
   mru = body.mru;
+  defaultAccountId = body.default;
   accountsLoaded = true;
 }
 
@@ -316,14 +330,18 @@ export function clearFlow(): void {
 /**
  * Which account the next chat launches on.
  *
- * The account just signed in to wins; otherwise the most recently used, which the server
- * bumps on every launch -- so "start another one like the last" needs no click. Null means
- * there is nothing to launch on yet: a new chat then waits for an account, and its page
- * offers the chooser.
+ * The account the user pinned as the default wins; otherwise the one just signed in to;
+ * otherwise the most recently used, which the server bumps on every launch -- so "start
+ * another one like the last" needs no click. Null means there is nothing to launch on yet: a
+ * new chat then waits for an account, and its page offers the chooser. The server's
+ * `resolve_binding` follows the same order, so a launch the page decides and one it leaves to
+ * the server land on the same account.
  */
 let selectedAccountId: string | null = null;
 
 export function getSelectedAccount(): ProviderAccount | null {
+  const pinned = accounts.find((account) => account.id === defaultAccountId);
+  if (pinned !== undefined) return pinned;
   const chosen = accounts.find((account) => account.id === selectedAccountId);
   if (chosen !== undefined) return chosen;
   const recent = accounts.find((account) => account.id === mru);

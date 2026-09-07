@@ -36,13 +36,21 @@ vi.mock("../models/ModelSettings", () => ({
   setModelChoice: (...args: unknown[]) => picks.push(args),
 }));
 
-const providerState: { accounts: unknown[] } = { accounts: [] };
+const providerState: { accounts: unknown[]; defaultId: string | null } = { accounts: [], defaultId: null };
+// Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
+const pins: [string, boolean][] = [];
 vi.mock("../models/Providers", () => ({
   getAccounts: () => providerState.accounts,
+  getDefaultAccountId: () => providerState.defaultId,
+  setDefaultAccount: (accountId: string, isDefault: boolean) => {
+    pins.push([accountId, isDefault]);
+    return Promise.resolve();
+  },
   accountForAgent: (id?: string) => providerState.accounts.find((a) => (a as { id: string }).id === id) ?? null,
   openProviderChooser: () => undefined,
   deleteAccount: () => Promise.resolve(),
   renameAccount: () => Promise.resolve(),
+  loadAccounts: () => Promise.resolve(),
 }));
 
 // The card's "start a chat on that provider" ask goes to the shell through chat/shell.ts.
@@ -108,6 +116,8 @@ beforeEach(() => {
   document.body.innerHTML = '<div id="root"></div>';
   picks.length = 0;
   started.length = 0;
+  pins.length = 0;
+  providerState.defaultId = null;
   agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
@@ -315,24 +325,58 @@ describe("the combo card", () => {
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
   });
 
-  it("locks every provider that is not this chat's, and says how to reach it", () => {
-    // A chat binds to its account when it is CREATED and nothing rebinds it, so there is no
-    // state in which switching would work. The row states that rather than doing something
-    // else by surprise -- the tooltip is the whole affordance.
+  it("asks before launching a new chat on another provider, and launches only on Launch", () => {
+    // A chat binds to its account when it is CREATED and nothing rebinds it, so pressing
+    // another account's row can only mean a new chat on it -- asked, never done by surprise.
     providerState.accounts = [
       ACCOUNT,
-      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
+      { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", label: "Google (Antigravity CLI)" },
     ];
     render();
     click(".model-selector-trigger");
     click('[data-card-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
+    expect(rows[0].getAttribute("aria-disabled")).toBeNull();
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(screenText()).toContain("Launch a new chat?");
+    expect(screenText()).toContain("Google (Antigravity CLI)");
     expect(started).toEqual([]);
-    // The hint itself is a hover-intent bubble on <body> (hoverTooltip.ts), so it is not in
-    // the tree at render time -- what this pins is that pressing a locked row does NOTHING.
+
+    // Cancel keeps the flyout up and starts nothing.
+    click(".notice-dismiss");
+    expect(screenText()).not.toContain("Launch a new chat?");
+    expect(started).toEqual([]);
     expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+
+    // Launch starts the chat on that account and takes the card down.
+    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    const launch = [...document.querySelectorAll("button")].find((b) => b.textContent === "Launch");
+    if (launch === undefined) throw new Error("no Launch button");
+    launch.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(started).toEqual(["acct-2"]);
+    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+  });
+
+  it("stars the default account and pins another on a press of its star", () => {
+    providerState.accounts = [ACCOUNT, { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity" }];
+    providerState.defaultId = "acct-1";
+    render();
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    const pinned = document.querySelector('[aria-label="Stop opening new chats on Anthropic by default"]');
+    expect(pinned?.getAttribute("aria-pressed")).toBe("true");
+    const other = document.querySelector<HTMLElement>('[aria-label="Open new chats on Google by default"]');
+    expect(other?.getAttribute("aria-pressed")).toBe("false");
+    other?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(pins).toEqual([["acct-2", true]]);
+    // Pressing the star is not pressing the row: no launch prompt, nothing started.
+    render();
+    expect(screenText()).not.toContain("Launch a new chat?");
+    expect(started).toEqual([]);
   });
 
   it("confirms a sign-out in a dialog, and closing the card takes the dialog with it", () => {
