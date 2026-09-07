@@ -264,7 +264,7 @@ def test_post_with_foreign_origin_is_rejected(tmp_path: Path) -> None:
     assert resp.status_code == 403
 
 
-def test_callback_sets_domain_cookie_and_redirects_to_next(tmp_path: Path) -> None:
+def test_callback_sets_both_domain_cookies_and_redirects_to_next(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     nonce = harness.pending_logins.mint()
     token = _mint_handoff(nonce)
