@@ -70,6 +70,10 @@ lack one.
   is a bad title (400); one whose canonical form collides with another
   terminal's title, case-insensitively, is a conflict (409). Allocator-minted
   names keep deriving their title (`Terminal 3` for `terminal-3`) until renamed.
+- Stop kills the session and remembers the terminal as stopped (a hand-made
+  session gains a record so it can be started); start recreates the session in
+  the record's workdir, and is a no-op for a live terminal. Every terminal is
+  `stoppable`.
 - Location is not tracked (400).
 
 The store, `data/.apps/terminal/instances.json` (`store.py`; app data, beside

@@ -47,10 +47,12 @@ START_URL_PARAM: Final[str] = "url"
 
 @pure
 def instance_status_for_browser(snapshot: BrowserSnapshot) -> InstanceStatus:
-    """The contract's status (contracts.md section 4.3): ``working`` while an agent holds the browser, ``error`` once it crashed, else ``idle`` (a launch in progress included)."""
+    """The contract's status (contracts.md section 4.3): ``working`` while an agent holds the browser, ``error`` once it crashed, ``stopped`` while the user has it stopped, else ``idle`` (a launch in progress included)."""
     match snapshot.lifecycle:
         case BrowserLifecycle.CRASHED:
             return InstanceStatus.ERROR
+        case BrowserLifecycle.STOPPED:
+            return InstanceStatus.STOPPED
         case BrowserLifecycle.INIT | BrowserLifecycle.RUNNING:
             match snapshot.controller:
                 case BrowserController.AGENT:
@@ -74,6 +76,7 @@ def instance_record_for_browser(snapshot: BrowserSnapshot) -> InstanceRecord:
         # The fleet clocks agent activity on a monotonic lease timer, not wall time.
         last_active=None,
         renameable=False,
+        stoppable=True,
     )
 
 
@@ -165,6 +168,28 @@ class FleetInstanceSource(InstanceSourceInterface):
             BrowserHeldByAgentError,
             NavigationFailedError,
         ) as e:
+            raise InstanceConflictError(str(e)) from e
+        return self._record_for_name(name)
+
+    def stop_instance(self, key: InstanceKey) -> InstanceRecord:
+        self._require_ready()
+        name = _browser_name_for_key(key)
+        try:
+            self.fleet.stop_browser(name)
+        except UnknownBrowserError as e:
+            raise UnknownInstanceError(f"no browser has the key {key!r}") from e
+        except BrowserNotDrivableError as e:
+            raise InstanceConflictError(str(e)) from e
+        return self._record_for_name(name)
+
+    def start_instance(self, key: InstanceKey) -> InstanceRecord:
+        self._require_ready()
+        name = _browser_name_for_key(key)
+        try:
+            self.fleet.start_browser(name)
+        except UnknownBrowserError as e:
+            raise UnknownInstanceError(f"no browser has the key {key!r}") from e
+        except FleetCreateRefusedError as e:
             raise InstanceConflictError(str(e)) from e
         return self._record_for_name(name)
 

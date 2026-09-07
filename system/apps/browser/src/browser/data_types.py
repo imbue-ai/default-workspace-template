@@ -8,11 +8,12 @@ from browser.primitives import BrowserName
 
 
 class BrowserLifecycle(LowerCaseStrEnum):
-    """Where a browser is in its life: registered but launching, up, or dead (the ``Lifecycle`` strings of ``session.py``)."""
+    """Where a browser is in its life: registered but launching, up, dead, or stopped by the user (the ``Lifecycle`` strings of ``session.py``)."""
 
     INIT = auto()
     RUNNING = auto()
     CRASHED = auto()
+    STOPPED = auto()
 
 
 class BrowserController(LowerCaseStrEnum):

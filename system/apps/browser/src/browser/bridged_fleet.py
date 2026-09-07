@@ -70,6 +70,15 @@ class BridgedFleet(FleetInterface):
     def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         self._run_on_loop(self.manager.navigate_browser(name, url))
 
+    def stop_browser(self, name: BrowserName) -> None:
+        self._run_on_loop(self.manager.stop_browser(name))
+
+    def start_browser(self, name: BrowserName) -> None:
+        try:
+            self._run_on_loop(self.manager.start_browser(name))
+        except FleetFullError as e:
+            raise FleetCreateRefusedError(str(e)) from e
+
     def _run_on_loop(self, coroutine: Coroutine[Any, Any, _Result]) -> _Result:
         """Run one verb on the loop, bounded by the route timeout.
 

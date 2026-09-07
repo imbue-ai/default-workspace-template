@@ -193,6 +193,12 @@ class AgentDestroyError(RuntimeError):
     ...
 
 
+class AgentStopError(RuntimeError):
+    """Raised when ``mngr stop`` refuses or fails for a chat agent."""
+
+    ...
+
+
 class ErrorResponse(FrozenModel):
     """Error response body."""
 

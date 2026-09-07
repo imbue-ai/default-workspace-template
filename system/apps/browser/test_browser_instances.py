@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from app_instances.testing import RecordingNudger
+from app_instances.testing import RecordingNudger, wait_until
 from app_manifest.manifest import load_manifest
 from browser import runner
 from browser import session as bsession
@@ -60,6 +60,7 @@ def test_list_reports_each_browser_with_status_from_its_ownership() -> None:
             "lifetime": "explicit",
             "last_active": None,
             "renameable": False,
+            "stoppable": True,
         }
     ]
     assert runner.bridge.run(fake.acquire("A", "Alice"), timeout=5) == "acquired"
@@ -183,3 +184,39 @@ def test_create_answers_409_with_the_install_reason_while_chromium_is_absent(
     assert response.status_code == 409
     assert response.get_json()["detail"] == reason
     assert _instances() == []
+
+
+def test_stop_and_start_ride_the_instances_api_and_the_daemons_own_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_start(self: bsession.LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0) -> None:
+        calls.append(self.browser_id)
+        self._lifecycle = "running"
+
+    monkeypatch.setattr(bsession.LiveBrowser, "start", fake_start)
+    # The daemon's own start route refuses while Chromium is not installed; the fake start needs none.
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    nudger = RecordingNudger()
+    runner.manager.set_nudger(nudger)
+    fake = _install_running_browser("browser-1")
+    fake._nudger = nudger
+    fake._last_known_tabs = ["https://kept.example"]
+    client = runner.application.test_client()
+
+    stopped = client.post("/_instances/browser-1/stop")
+    assert stopped.status_code == 200
+    assert stopped.get_json()["instance"]["status"] == "stopped"
+    assert _instances()[0]["status"] == "stopped"
+    assert client.post("/_instances/browser-1/stop").status_code == 200
+
+    started = client.post("/_instances/browser-1/start")
+    assert started.status_code == 200
+    assert wait_until(lambda: fake._lifecycle == "running", 5.0)
+    assert _instances()[0]["status"] == "idle"
+    assert calls == ["browser-1"]
+
+    assert client.post("/browsers/browser-1/stop").get_json() == {"stopped": True}
+    assert client.post("/browsers/browser-1/start").get_json() == {"started": True}
+    assert wait_until(lambda: fake._lifecycle == "running", 5.0)
+    assert client.post("/browsers/browser-9/start").status_code == 404
+    assert client.post("/_instances/browser-9/stop").status_code == 404

@@ -19,6 +19,7 @@ function actions(overrides: Partial<TabMenuActions> = {}): TabMenuActions {
     rename: vi.fn(),
     closeTab: vi.fn(),
     removeFromProject: null,
+    setInstanceLifecycle: vi.fn(),
     setAppLifecycle: vi.fn(),
     delete: vi.fn(),
     ...overrides,
@@ -31,22 +32,44 @@ function labels(entries: ReturnType<typeof tabMenuEntries>): string[] {
 
 describe("tabMenuEntries", () => {
   it("offers the acting group, then the removals in increasing severity", () => {
-    expect(labels(tabMenuEntries(app(), instance(), actions()))).toEqual([
+    expect(labels(tabMenuEntries(app(), instance({ stoppable: true }), actions()))).toEqual([
       "Refresh",
       "Share Terminal",
       "Add to project...",
       "---",
       "Rename",
       "Close tab",
-      "Stop Terminal",
+      "Stop Terminal 1",
       "Delete Terminal 1",
     ]);
   });
 
-  it("reads Start off a stopped app and withholds Stop from an app the workspace cannot stop", () => {
-    expect(labels(tabMenuEntries(app({ is_running: false }), instance(), actions()))).toContain("Start Terminal");
-    expect(labels(tabMenuEntries(app({ program: "" }), instance(), actions()))).not.toContain("Stop Terminal");
-    expect(labels(tabMenuEntries(app({ critical: true }), instance(), actions()))).not.toContain("Stop Terminal");
+  it("stops and starts the instance where its app reports it stoppable, reading the verb off its status", () => {
+    const supplied = actions();
+    const stopped = instance({ stoppable: true, status: "stopped" });
+    expect(labels(tabMenuEntries(app(), stopped, supplied))).toContain("Start Terminal 1");
+    const entries = tabMenuEntries(app(), stopped, supplied);
+    for (const entry of entries) {
+      if (entry !== TAB_MENU_DIVIDER && entry.label === "Start Terminal 1") entry.run();
+    }
+    expect(supplied.setInstanceLifecycle).toHaveBeenCalledWith("start");
+    expect(labels(tabMenuEntries(app(), instance({ stoppable: false }), supplied))).not.toContain("Stop Terminal 1");
+  });
+
+  it("offers the app's own Stop and Start only on a single-instance app's tab", () => {
+    // A multi-instance app is stopped from the rail, never from one instance's tab.
+    expect(labels(tabMenuEntries(app(), instance(), actions()))).not.toContain("Stop Terminal");
+    const single = app({ has_instances: false });
+    expect(labels(tabMenuEntries(single, instance({ renameable: false }), actions()))).toContain("Stop Terminal");
+    expect(labels(tabMenuEntries(app({ ...single, is_running: false }), instance(), actions()))).toContain(
+      "Start Terminal",
+    );
+    expect(labels(tabMenuEntries(app({ ...single, program: "" }), instance(), actions()))).not.toContain(
+      "Stop Terminal",
+    );
+    expect(labels(tabMenuEntries(app({ ...single, critical: true }), instance(), actions()))).not.toContain(
+      "Stop Terminal",
+    );
   });
 
   it("withholds Rename from an instance its app does not rename, and Delete from a single-instance app", () => {
@@ -72,12 +95,17 @@ describe("tabMenuEntries", () => {
 
   it("runs the caller's callbacks", () => {
     const supplied = actions();
-    const entries = tabMenuEntries(app(), instance(), supplied);
+    const entries = tabMenuEntries(app(), instance({ stoppable: true }), supplied);
     for (const entry of entries) {
       if (entry !== TAB_MENU_DIVIDER) entry.run();
     }
     expect(supplied.refresh).toHaveBeenCalled();
     expect(supplied.delete).toHaveBeenCalled();
-    expect(supplied.setAppLifecycle).toHaveBeenCalledWith("stop");
+    expect(supplied.setInstanceLifecycle).toHaveBeenCalledWith("stop");
+    const single = actions();
+    for (const entry of tabMenuEntries(app({ has_instances: false }), instance(), single)) {
+      if (entry !== TAB_MENU_DIVIDER) entry.run();
+    }
+    expect(single.setAppLifecycle).toHaveBeenCalledWith("stop");
   });
 });

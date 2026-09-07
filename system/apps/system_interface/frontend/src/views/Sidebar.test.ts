@@ -15,7 +15,7 @@ import { appRecord, instanceRecord, projectRecord } from "../testing/records";
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
   return appRecord(name, {
-    instances: [instanceRecord({ key: "one", title: `${name} one` })],
+    instances: [instanceRecord({ key: "one", title: `${name} one`, stoppable: true })],
     ...overrides,
   });
 }
@@ -98,7 +98,13 @@ describe("Sidebar", () => {
     root = document.createElement("div");
     document.body.appendChild(root);
     resetInventoryForTesting();
-    applyApps([app("chat", { critical: true }), app("terminal")]);
+    applyApps([
+      app("chat", {
+        critical: true,
+        instances: [instanceRecord({ key: "one", title: "chat one", stoppable: true, status: "stopped" })],
+      }),
+      app("terminal"),
+    ]);
   });
 
   afterEach(() => {
@@ -112,19 +118,23 @@ describe("Sidebar", () => {
       address: "app:terminal?instance=one",
       appName: "terminal",
       appDisplayName: "Terminal",
+      instanceKey: "one",
       label: "terminal one",
       isOpen: true,
       status: "idle",
       renameable: true,
+      stoppable: true,
     },
     {
       address: "app:chat?instance=one",
       appName: "chat",
       appDisplayName: "Chat",
+      instanceKey: "one",
       label: "chat one",
       isOpen: false,
-      status: "idle",
+      status: "stopped",
       renameable: true,
+      stoppable: true,
     },
   ];
 
@@ -151,6 +161,7 @@ describe("Sidebar", () => {
       onAddRowToProjects: vi.fn(),
       onRemoveFromView: vi.fn(),
       onAppLifecycle: vi.fn(),
+      onInstanceLifecycle: vi.fn(),
       onDeleteRow: vi.fn(),
       ...overrides,
     };
@@ -204,11 +215,46 @@ describe("Sidebar", () => {
       "Add to project...",
       "Rename",
       "Remove from project",
-      "Stop Terminal",
+      "Stop terminal one",
       "Delete terminal one",
     ]);
     root.querySelector<HTMLElement>('[role="menuitem"]:last-child')!.click();
     expect(attrs.onDeleteRow).toHaveBeenCalledWith(expect.objectContaining({ address: "app:terminal?instance=one" }));
+  });
+
+  it("stops and starts one instance from its row, reading the verb off its status", () => {
+    const attrs = mount({});
+    expand();
+    root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
+    m.redraw.sync();
+    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find((el) => el.textContent?.trim() === "Stop terminal one")!
+      .click();
+    expect(attrs.onInstanceLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ address: "app:terminal?instance=one" }),
+      "stop",
+    );
+    root.querySelector<HTMLElement>('[aria-label="Actions for chat one"]')!.click();
+    m.redraw.sync();
+    const chatItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(chatItems).toContain("Start chat one");
+    expect(chatItems.some((label) => label === "Stop Chat" || label === "Stop Terminal")).toBe(false);
+  });
+
+  it("offers the app's own Stop on the rail's shortcut row menu", () => {
+    const attrs = mount({});
+    root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
+    m.redraw.sync();
+    const items = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(items).toContain("Stop Terminal");
+    Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find((el) => el.textContent?.trim() === "Stop Terminal")!
+      .click();
+    expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
   });
 
   it("switches views from the header menu", () => {

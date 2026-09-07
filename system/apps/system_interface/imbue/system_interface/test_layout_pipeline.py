@@ -388,6 +388,36 @@ def test_rename_and_delete_reach_the_app_through_the_relay(layout_server: Pipeli
     )
 
 
+def test_stop_and_start_reach_the_app_through_the_relay(layout_server: PipelineHarness, tmp_path: Path) -> None:
+    """``stop`` and ``start`` drive the instance through its app, and ``list`` shows the status they set."""
+    sandbox = _sandbox(tmp_path)
+    layout_server.stub_source.is_stoppable = True
+    layout_server.stub_source.records.append(instance_record("stub-1", title="Stub 1"))
+    address = f"app:{_STUB_APP_NAME}?instance=stub-1"
+    _nudge(layout_server, _STUB_APP_NAME)
+    _wait_for_instance_listed(layout_server, sandbox, _STUB_APP_NAME, address)
+
+    stop = _run_layout_script(["stop", address], layout_server, sandbox)
+    assert stop.returncode == 0, f"stderr={stop.stderr!r}"
+    assert [str(record.status) for record in layout_server.stub_source.records] == ["stopped"]
+    wait_for(
+        lambda: {instance["status"] for instance in _listing(layout_server, sandbox)[_STUB_APP_NAME]["instances"]}
+        == {"stopped"},
+        timeout=10.0,
+        poll_interval=0.2,
+        error_message="the listing never showed the instance as stopped",
+    )
+
+    start = _run_layout_script(["start", address], layout_server, sandbox)
+    assert start.returncode == 0, f"stderr={start.stderr!r}"
+    assert [str(record.status) for record in layout_server.stub_source.records] == ["idle"]
+
+    layout_server.stub_source.is_stoppable = False
+    refused = _run_layout_script(["stop", address], layout_server, sandbox)
+    assert refused.returncode != 0
+    assert "HTTP 400" in refused.stderr
+
+
 def test_relay_verbs_need_an_instance_address(layout_server: PipelineHarness, tmp_path: Path) -> None:
     """``rename app:docs`` names the app, not an instance, and says so."""
     result = _run_layout_script(["rename", f"app:{_STUB_APP_NAME}", "Nope"], layout_server, _sandbox(tmp_path))

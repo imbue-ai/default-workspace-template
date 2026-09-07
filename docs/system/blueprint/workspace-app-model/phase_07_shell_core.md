@@ -85,7 +85,7 @@ Phase 8 then replaced this phase's model for agent ops (an op broadcast to a bro
 - Focus mode: the most recently focused open tab of that app in this client; else the app's most recently active instance the view lists, opened; otherwise the action runs.
 - Delete: relay, then the `apps_updated` that follows the shell's refetch prunes the tab everywhere.
 - Close: undock; when the app's record for that address says `referenced` and the shell holds no other reference across every project's tab set and every client's layout, the shell calls the app's delete through the relay (the check runs on every save).
-- Stop and Start: for rows with a `program` that are not `critical` and do not share a critical app's program.
+- Stop and Start: for rows with a `program` that are not `critical` and do not share a critical app's program. Revised on 2026-09-07: this app-level verb pair stays on a single-instance app's tab and moved to the rail's per-app row menu for every other app; an instance's tab and rail row offer "Stop <title>" / "Start <title>" instead when its record reports `stoppable` (contracts sections 4.1 to 4.3), relayed at `POST /api/apps/<name>/instances/<key>/stop|start`.
 - Layouts are per client, with seeds; the cross-client broadcasts land in phase 8, so a second window of the same client sees changes on reload.
 - The shell writes nothing under the mngr host or agent state directories; `MNGR_HOST_DIR` and `MNGR_AGENT_ID` are no longer read by any shell module.
 

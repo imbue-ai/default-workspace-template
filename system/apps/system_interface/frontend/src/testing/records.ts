@@ -41,6 +41,7 @@ export function instanceRecord(overrides: Partial<InstanceRecord> = {}): Instanc
     lifetime: "referenced",
     last_active: null,
     renameable: true,
+    stoppable: false,
     ...overrides,
   };
 }

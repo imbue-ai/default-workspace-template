@@ -321,13 +321,16 @@ the old files or an output that already exists. `plan --json` shows what a run
 would write; `--force run` rewrites the projects file and the seeds.
 
 Verbs go through the shell's **relay** to the app that owns the instance:
-create (`POST /api/apps/<name>/instances`), rename, delete, and the location
-report (`.../instances/<key>/rename|delete|location`), so the tab menu and
-the rail row offer exactly what the record allows (`renameable`, the app's
-`instances`, `program`, and `critical` flags), from one definition
-(`frontend/src/views/tabMenu.ts`). Stop and Start (`POST
-/api/apps/<name>/stop|start`) act on the app's supervisord program and are
-refused for critical apps. A framed page reaches the shell only through the
+create (`POST /api/apps/<name>/instances`), rename, delete, the location
+report, and the instance's own stop and start
+(`.../instances/<key>/rename|delete|location|stop|start`), so the tab menu and
+the rail row offer exactly what the record allows (`renameable`, `stoppable`
+read with the record's status, the app's `instances`, `program`, and
+`critical` flags), from one definition (`frontend/src/views/tabMenu.ts`).
+Stop and Start of the whole app (`POST /api/apps/<name>/stop|start`) act on
+its supervisord program and are refused for critical apps; a single-instance
+app offers them on its tab, and every other app on the rail's per-app row
+menu (`frontend/src/views/Sidebar.ts`), never on an instance's tab. A framed page reaches the shell only through the
 contract module (`shell:open`, `shell:focused`, `shell:location`, ...); an
 app that reports the path it is showing gets it stored on its own record and
 reopens there.

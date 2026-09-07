@@ -29,3 +29,11 @@ class FleetInterface(MutableModel, ABC):
     @abstractmethod
     def navigate_browser(self, name: BrowserName, url: AbsoluteHttpUrl) -> None:
         """Navigate the browser's active tab; raises UnknownBrowserError, BrowserNotDrivableError, BrowserHeldByAgentError, or NavigationFailedError."""
+
+    @abstractmethod
+    def stop_browser(self, name: BrowserName) -> None:
+        """End the browser's Chromium but keep the browser, its profile, and its tabs; raises UnknownBrowserError, or BrowserNotDrivableError while it is still launching."""
+
+    @abstractmethod
+    def start_browser(self, name: BrowserName) -> None:
+        """Relaunch a stopped browser on its saved tabs; a no-op for one launching or running; raises UnknownBrowserError, or FleetCreateRefusedError when the fleet is full."""

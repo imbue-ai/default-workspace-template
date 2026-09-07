@@ -23,6 +23,7 @@ from app_instances.errors import (
     MalformedRequestError,
     NotReadyError,
     NotRenameableError,
+    NotStoppableError,
     UnknownActionError,
     UnknownInstanceError,
 )
@@ -55,6 +56,7 @@ def status_code_for_error(error: AppInstancesError) -> int:
             | UnknownActionError()
             | InvalidParamsError()
             | NotRenameableError()
+            | NotStoppableError()
             | LocationNotTrackedError()
         ):
             return HTTP_BAD_REQUEST
@@ -147,6 +149,18 @@ def build_instances_blueprint(
         instance_key = _parse_key(key)
         location_request = parse_request_body(LocationRequest)
         record = source.set_location(instance_key, location_request.path)
+        nudger.nudge()
+        return jsonify({"instance": _record_json(record)}), HTTP_OK
+
+    @blueprint.post(f"{INSTANCES_PATH}/<key>/stop")
+    def stop_instance(key: str) -> ResponseReturnValue:
+        record = source.stop_instance(_parse_key(key))
+        nudger.nudge()
+        return jsonify({"instance": _record_json(record)}), HTTP_OK
+
+    @blueprint.post(f"{INSTANCES_PATH}/<key>/start")
+    def start_instance(key: str) -> ResponseReturnValue:
+        record = source.start_instance(_parse_key(key))
         nudger.nudge()
         return jsonify({"instance": _record_json(record)}), HTTP_OK
 

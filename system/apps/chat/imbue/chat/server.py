@@ -74,6 +74,7 @@ from imbue.chat.instances import SUBAGENT_KEY_SEPARATOR
 from imbue.chat.instances import build_chat_instance_source
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import AgentListItem
 from imbue.chat.models import AgentListResponse
 from imbue.chat.models import AgentNameConflictError
@@ -1047,17 +1048,8 @@ def _destroy_agent(agent_id: str) -> Response:
     return json_response(DestroyAgentResponse(status="ok").model_dump())
 
 
-def _build_stop_command(agent_name: str) -> list[str]:
-    """Build the ``mngr stop`` argv for one agent. Pure, so the CLI contract is testable without a subprocess."""
-    return ["mngr", "stop", agent_name]
-
-
 def _stop_agent(agent_id: str) -> Response:
-    """Stop an agent's process with ``mngr stop``, the reversible counterpart to a destroy.
-
-    The agent keeps its transcript and name; messaging it (or the start route) brings it back.
-    The agent stays tracked: the observe stream reports the STOPPED state on its own.
-    """
+    """Stop an agent's process with ``mngr stop``, the reversible counterpart to a destroy (the instances API's stop does the same)."""
     agent_manager: AgentManager = get_state().agent_manager
     agent_state = agent_manager.get_agent_by_id(agent_id)
     if agent_state is None:
@@ -1065,17 +1057,10 @@ def _stop_agent(agent_id: str) -> Response:
     refusal = _refuse_primary_agent(agent_state.name, agent_state.labels, "stop")
     if refusal is not None:
         return refusal
-    # Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it shares
-    # the destroy's generous bound.
-    result = run_local_command_modern_version(
-        command=_build_stop_command(agent_state.name),
-        cwd=None,
-        is_checked=False,
-        timeout=DESTROY_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        error = ErrorResponse(detail=f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
-        return json_response(error.model_dump(), status_code=500)
+    try:
+        agent_manager.stop_chat_agent(agent_id)
+    except AgentStopError as e:
+        return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
     return json_response(StopAgentResponse(status="ok").model_dump())
 
 
@@ -1275,7 +1260,7 @@ def create_application(state: ChatState) -> Flask:
     application.register_error_handler(AppInstancesError, answer_typed_error)
     sock = build_sock(application)
 
-    source, nudger = build_chat_instance_source(state.agent_manager)
+    source, nudger = build_chat_instance_source(state.agent_manager, start_agent)
     application.register_blueprint(build_instances_blueprint(source, nudger))
 
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])

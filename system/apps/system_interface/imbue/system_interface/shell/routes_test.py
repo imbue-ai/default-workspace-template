@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from app_instances.data_types import InstanceStatus
 from app_instances.testing import StubInstanceSource
 from flask import Flask
 from flask.testing import FlaskClient
@@ -214,6 +215,16 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     found = inventory.find_instance(Address("app:stub?instance=stub-2"))
     assert found is not None and found[1].title == "Renamed"
     assert client.post("/api/apps/stub/instances/stub-2/location", json={"path": "/deeper"}).status_code == 200
+    # Stop and start pass the app's answer through and refetch on success, like every other verb.
+    assert client.post("/api/apps/stub/instances/stub-2/stop").status_code == 400
+    stub_source.is_stoppable = True
+    assert client.post("/api/apps/stub/instances/stub-2/stop").status_code == 200
+    found_stopped = inventory.find_instance(Address("app:stub?instance=stub-2"))
+    assert found_stopped is not None and found_stopped[1].status == InstanceStatus.STOPPED
+    assert client.post("/api/apps/stub/instances/stub-2/start").status_code == 200
+    found_started = inventory.find_instance(Address("app:stub?instance=stub-2"))
+    assert found_started is not None and found_started[1].status == InstanceStatus.IDLE
+    assert client.post("/api/apps/stub/instances/stub-9/start").status_code == 404
     assert client.post("/api/apps/stub/instances/stub-2/delete").status_code == 204
     assert inventory.find_instance(Address("app:stub?instance=stub-2")) is None
     assert client.post("/api/apps/stub/instances/stub-9/rename", json={"title": "x"}).status_code == 404

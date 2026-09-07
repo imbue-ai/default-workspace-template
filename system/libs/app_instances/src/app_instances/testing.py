@@ -34,6 +34,7 @@ from app_instances.errors import (
     LocationNotTrackedError,
     NotReadyError,
     NotRenameableError,
+    NotStoppableError,
     UnknownActionError,
     UnknownInstanceError,
 )
@@ -82,6 +83,9 @@ class StubInstanceSource(InstanceSourceInterface):
         default=True, description="False makes every call raise NotReadyError"
     )
     is_renameable: bool = Field(default=True, description="Whether rename is accepted")
+    is_stoppable: bool = Field(
+        default=False, description="Whether stop and start are accepted (and listed on every record)"
+    )
     is_location_tracked: bool = Field(
         default=True, description="Whether location reports are accepted"
     )
@@ -118,6 +122,7 @@ class StubInstanceSource(InstanceSourceInterface):
                 lifetime=InstanceLifetime.EXPLICIT,
                 last_active=datetime.now(timezone.utc),
                 renameable=self.is_renameable,
+                stoppable=self.is_stoppable,
             )
             self.records.append(record)
             return record
@@ -157,6 +162,23 @@ class StubInstanceSource(InstanceSourceInterface):
             )
             self._replace(relocated)
             return relocated
+
+    def stop_instance(self, key: InstanceKey) -> InstanceRecord:
+        return self._set_status(key, "stop", InstanceStatus.STOPPED)
+
+    def start_instance(self, key: InstanceKey) -> InstanceRecord:
+        return self._set_status(key, "start", InstanceStatus.IDLE)
+
+    def _set_status(self, key: InstanceKey, verb: str, status: InstanceStatus) -> InstanceRecord:
+        with self._lock:
+            self.calls.append(f"{verb}:{key}")
+            self._require_ready()
+            if not self.is_stoppable:
+                raise NotStoppableError(f"stub instances cannot be {verb}ped on their own")
+            record = self._find(key)
+            changed = record.model_copy_update(to_update(record.field_ref().status, status))
+            self._replace(changed)
+            return changed
 
     def _require_ready(self) -> None:
         if not self.is_ready:

@@ -78,6 +78,7 @@ def _live_instance_record(
         lifetime=InstanceLifetime.EXPLICIT,
         last_active=session.last_activity,
         renameable=True,
+        stoppable=True,
     )
 
 
@@ -91,6 +92,7 @@ def _stopped_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
         lifetime=InstanceLifetime.EXPLICIT,
         last_active=None,
         renameable=True,
+        stoppable=True,
     )
 
 
@@ -309,6 +311,55 @@ class TmuxSessionSource(InstanceSourceInterface):
 
     def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         raise LocationNotTrackedError("the terminal does not track where its pages are")
+
+    def stop_instance(self, key: InstanceKey) -> InstanceRecord:
+        """Kill the terminal's session and remember it as stopped, so neither a startup nor a start brings it back unasked."""
+        name = self._terminal_name_or_raise(key, "stop")
+        with self._lock:
+            live_sessions = self._user_sessions()
+            record = self._record_named(name)
+            live = self._live_session_of(name, record, live_sessions)
+            if record is None and live is None:
+                raise UnknownInstanceError(f"no terminal has the key {key!r}")
+            if live is not None:
+                self.tmux.kill_session(TmuxSessionId(live.session_id))
+            stopped = TerminalSessionRecord(
+                name=name,
+                title=record.title if record else None,
+                workdir=record.workdir if record else None,
+                session_id=None,
+                is_stopped=True,
+            )
+            self.store.save_record(stopped)
+            self._remove_session_id_file(name)
+        return _stopped_instance_record(stopped)
+
+    def start_instance(self, key: InstanceKey) -> InstanceRecord:
+        """Recreate a stopped terminal's session in its workdir; a running terminal is left as it is."""
+        name = self._terminal_name_or_raise(key, "start")
+        with self._lock:
+            live_sessions = self._user_sessions()
+            record = self._record_named(name)
+            live = self._live_session_of(name, record, live_sessions)
+            if live is not None:
+                if record is not None and record.session_id is None:
+                    self._adopt(record, TmuxSessionId(live.session_id))
+                return _live_instance_record(live, record)
+            if record is None:
+                raise UnknownInstanceError(f"no terminal has the key {key!r}")
+            created = self._create_session_for(record)
+        return _live_instance_record(
+            TmuxSession(name=name, session_id=created.session_id or "", last_activity=None),
+            created,
+        )
+
+    def _terminal_name_or_raise(self, key: InstanceKey, verb: str) -> TmuxSessionName:
+        name = _session_name_for_key(key)
+        if is_agent_session(name, self.agent_session_prefix):
+            raise InstanceConflictError(
+                f"Refusing to {verb} a non-terminal session: {name!r}"
+            )
+        return name
 
     def recreate_remembered_sessions(self) -> None:
         """Bring every remembered terminal back at startup: a live session is adopted, a lost one is recreated unless the user stopped it.

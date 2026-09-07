@@ -84,6 +84,7 @@ class InventoryInstance(FrozenModel):
     lifetime: InstanceLifetime = Field(description="Whether it lives until deleted or only while referenced")
     last_active: AwareDatetime | None = Field(description="When it was last active, None when unknown")
     renameable: bool = Field(description="Whether the rename route is accepted")
+    stoppable: bool = Field(description="Whether the stop and start routes are accepted")
 
     @pure
     def address(self, app: AppName) -> Address:
@@ -100,6 +101,7 @@ def inventory_instance_from_record(record: InstanceRecord) -> InventoryInstance:
         lifetime=record.lifetime,
         last_active=record.last_active,
         renameable=record.renameable,
+        stoppable=record.stoppable,
     )
 
 
@@ -113,7 +115,9 @@ def synthesized_single_instance(row: RegistryRow, is_running: bool) -> Inventory
         status=InstanceStatus.IDLE if is_running else InstanceStatus.STOPPED,
         lifetime=InstanceLifetime.EXPLICIT,
         last_active=None,
+        # The app-level Stop and Start are the single-instance app's; its one record has none of its own.
         renameable=False,
+        stoppable=False,
     )
 
 

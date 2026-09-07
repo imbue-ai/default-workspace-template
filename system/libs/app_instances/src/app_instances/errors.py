@@ -26,6 +26,10 @@ class NotRenameableError(AppInstancesError):
     """The instance does not accept a rename (answered 400)."""
 
 
+class NotStoppableError(AppInstancesError):
+    """The instance cannot be stopped or started on its own (answered 400)."""
+
+
 class LocationNotTrackedError(AppInstancesError):
     """The app does not record where an instance's page is (answered 400)."""
 

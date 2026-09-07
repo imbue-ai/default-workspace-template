@@ -41,11 +41,14 @@ _MANIFEST_VERSION = 2
 
 
 class ManifestEntry(MutableModel):
-    """One persisted browser: its name and the tab URLs to reopen (active tab marked)."""
+    """One persisted browser: its name, the tab URLs to reopen (active tab marked), and whether the user stopped it."""
 
     id: str
     tabs: list[str] = []  # ordered tab URLs; blank/about:/chrome: are dropped before saving
     active_tab: int = 0
+    # A stopped browser is restored as stopped (registered with its tabs, no Chromium) rather
+    # than relaunched. Defaulted so a manifest from before the flag still reads.
+    stopped: bool = False
 
 
 class Manifest(MutableModel):

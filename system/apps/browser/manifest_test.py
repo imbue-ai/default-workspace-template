@@ -78,3 +78,17 @@ def test_read_rejects_old_version_manifest() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"version": 1, "next_id": 3, "browsers": [{"id": 0, "tabs": []}]}))
     assert manifest.read_manifest() is None
+
+
+def test_manifest_keeps_a_stopped_flag_and_reads_entries_written_without_one() -> None:
+    manifest.write_manifest(
+        manifest.Manifest(browsers=[manifest.ManifestEntry(id="browser-1", tabs=["https://x"], stopped=True)])
+    )
+    loaded = manifest.read_manifest()
+    assert loaded is not None and loaded.browsers[0].stopped is True
+
+    manifest.manifest_path().write_text(
+        '{"version": 2, "browsers": [{"id": "browser-2", "tabs": [], "active_tab": 0}]}'
+    )
+    older = manifest.read_manifest()
+    assert older is not None and older.browsers[0].stopped is False

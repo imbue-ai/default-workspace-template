@@ -19,6 +19,8 @@ Agents drive the fleet over HTTP (see the ``agentic-browser-fleet`` CLI):
 * ``POST /browsers/{name}/acquire`` -- reserve a browser (and get the exit code an agent
   branches on; see ``fleet._render_action``).
 * ``POST /browsers/{name}/release`` -- give a browser back (only its owner can).
+* ``POST /browsers/{name}/stop`` / ``.../start`` -- end a browser's Chromium while keeping the
+  browser, its profile, and its tabs; relaunch it on them (the viewer's Start button).
 
 The workspace shell reads the same fleet through the instances API of the workspace app
 model (``/_instances``; see ``browser.instances``), mounted on this app because the
@@ -61,7 +63,7 @@ from simple_websocket import ConnectionClosed
 from browser import mediastream, telemetry
 from browser.bridged_fleet import BridgedFleet, ManagerNudger
 from browser.cdp_proxy import ProxyServer
-from browser.errors import UnknownBrowserError
+from browser.errors import BrowserNotDrivableError, UnknownBrowserError
 from browser.instances import FleetInstanceSource
 from browser.loop_bridge import AsyncLoopBridge
 from browser.names import is_valid_browser_name
@@ -333,6 +335,39 @@ def close_browser(browser_id: str) -> Response:
         return jsonify({"error": "invalid browser name"}), 404
     bridge.run(manager.close_and_forget(browser_id), timeout=_ROUTE_TIMEOUT)
     return jsonify({"closed": True})
+
+
+def stop_browser(browser_id: str) -> Response:
+    """Stop a browser's Chromium while keeping the browser (the instances API's stop does the same)."""
+    if (gate := _require_ready()) is not None:
+        return gate
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
+    try:
+        bridge.run(manager.stop_browser(browser_id), timeout=_ROUTE_TIMEOUT)
+    except UnknownBrowserError as e:
+        return _error({"error": str(e)}, 404)
+    except BrowserNotDrivableError as e:
+        return _error({"error": str(e)}, 409)
+    return jsonify({"stopped": True})
+
+
+def start_browser(browser_id: str) -> Response:
+    """Relaunch a stopped browser on its saved tabs (the viewer's Start button and the instances API's start)."""
+    if (gate := _require_ready()) is not None:
+        return gate
+    if not is_valid_browser_name(browser_id):
+        return jsonify({"error": "invalid browser name"}), 404
+    ready, reason = deferred_install_ready()
+    if not ready:
+        return _error({"error": reason}, 503)
+    try:
+        bridge.run(manager.start_browser(browser_id), timeout=_ROUTE_TIMEOUT)
+    except UnknownBrowserError as e:
+        return _error({"error": str(e)}, 404)
+    except FleetFullError as e:
+        return _error({"error": str(e)}, 409)
+    return jsonify({"started": True})
 
 
 def release_browser(browser_id: str) -> Response:
@@ -736,6 +771,8 @@ def _register_routes() -> None:
     application.add_url_rule("/browsers", view_func=list_browsers, methods=["GET"])
     application.add_url_rule("/browsers", view_func=create_browser, methods=["POST"], endpoint="create_browser")
     application.add_url_rule("/browsers/<string:browser_id>", view_func=close_browser, methods=["DELETE"])
+    application.add_url_rule("/browsers/<string:browser_id>/stop", view_func=stop_browser, methods=["POST"])
+    application.add_url_rule("/browsers/<string:browser_id>/start", view_func=start_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/release", view_func=release_browser, methods=["POST"])
     application.add_url_rule("/browsers/<string:browser_id>/attach", view_func=cmd_attach, methods=["GET"])
     application.add_url_rule("/browsers/<string:browser_id>/acquire", view_func=cmd_acquire, methods=["POST"])

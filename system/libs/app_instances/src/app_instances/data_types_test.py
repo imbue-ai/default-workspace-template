@@ -44,6 +44,7 @@ def test_record_json_is_the_contract_shape_with_last_active_in_utc() -> None:
         "lifetime": "explicit",
         "last_active": "2026-09-02T14:11:02.824000Z",
         "renameable": True,
+        "stoppable": False,
     }
 
 

@@ -21,6 +21,7 @@ import {
   shareApp,
   switchToView,
   requestAppLifecycle,
+  requestInstanceLifecycle,
 } from "./DockviewWorkspace";
 import { Sidebar } from "./Sidebar";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
@@ -100,6 +101,9 @@ export function App(): m.Component {
               },
               onAppLifecycle: (appName: string, action: "stop" | "start") => {
                 requestAppLifecycle(appName, action);
+              },
+              onInstanceLifecycle: (row: SidebarTabRow, action: "stop" | "start") => {
+                requestInstanceLifecycle(row.appName, row.instanceKey, action);
               },
               onDeleteRow: (row: SidebarTabRow) => {
                 deleteAddress(row.address);
