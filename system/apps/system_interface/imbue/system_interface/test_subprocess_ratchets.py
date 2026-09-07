@@ -83,11 +83,13 @@ def _called_name(call: ast.Call) -> str | None:
 
 
 def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
-    # The import alternative is anchored to a whole line so it reads code and not prose:
-    # agent_manager.py and subprocess_runner.py both name the runner in comments, which a bare
-    # name pattern would misfire on.
+    # The import alternative is anchored to the start of a line and to the `from ... import`
+    # prefix so it reads code and not prose: agent_manager.py and subprocess_runner.py both name
+    # the runner in comments, which a bare name pattern would misfire on. What follows `import`
+    # is left open (up to a trailing `#`) so an alias spelling -- `... as _run`, which reaches
+    # the attached runner exactly as the sign-in probe's default argument did -- still matches.
     pattern = RegexPattern(
-        r"^from \S+ import run_local_command_modern_version$"
+        r"^from \S+ import [^#\n]*\brun_local_command_modern_version\b"
         r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\(",
         multiline=True,
     )
