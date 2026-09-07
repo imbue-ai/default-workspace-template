@@ -230,7 +230,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             "mngr-alice",
             "terminal-1",
         ]
-        create_call = next(call for call in fake_tmux.calls() if call[0] == "new-session")
+        create_call = fake_tmux.creates()[0]
         assert create_call[:6] == ["new-session", "-d", "-s", "terminal-1", "-c", os.getcwd()]
         assert create_call[-5:] == [
             "python3",

@@ -8,7 +8,7 @@ from terminal_app.data_types import TerminalPaths, TmuxSession
 from terminal_app.hooks import resolve_tab_id_for_tty
 from terminal_app.primitives import ClientTty
 from terminal_app.store import JsonTerminalSessionStore
-from terminal_app.testing import FakeTmux, make_terminal_record
+from terminal_app.testing import FakeTmux, make_terminal_record, read_session_id_file
 
 
 def _record_tab(paths: TerminalPaths, tab_id: str, tty: str) -> None:
@@ -160,7 +160,7 @@ def test_session_changed_adopts_a_session_recreated_on_attach(
     assert session_store.list_records() == [
         make_terminal_record(name="terminal-1", title="Build", workdir="/srv", session_id="$9")
     ]
-    assert (terminal_paths.sessions_dir / "terminal-1").read_text() == "$9\n"
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == "$9\n"
 
 
 def test_session_renamed_changes_no_tab_and_only_nudges(
