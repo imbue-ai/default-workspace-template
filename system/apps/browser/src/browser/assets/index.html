@@ -207,6 +207,8 @@
   const crashOverlay = document.getElementById("crashoverlay");
   const terminatedOverlay = document.getElementById("terminatedoverlay");
   const stoppedOverlay = document.getElementById("stoppedoverlay");
+  const stoppedSub = stoppedOverlay.querySelector(".sub");
+  const stoppedSubText = stoppedSub.textContent;
   const startButton = document.getElementById("startbrowser");
   const initOverlay = document.getElementById("initoverlay");
   const pausedOverlay = document.getElementById("pausedoverlay");
@@ -383,15 +385,28 @@
     initOverlay.classList.remove("show");
     pausedOverlay.classList.remove("show");
     startButton.disabled = false;
+    stoppedSub.textContent = stoppedSubText;
     stoppedOverlay.classList.add("show");
+  }
+
+  // A refused start (the fleet is full, Chromium is still installing, the service did not
+  // answer) is shown in the overlay, with the button back, rather than nothing happening.
+  function showStartRefused(reason) {
+    startButton.disabled = false;
+    stoppedSub.textContent = "Could not start: " + reason;
   }
 
   startButton.addEventListener("click", () => {
     if (browserId === null) return;
     startButton.disabled = true;
     fetch(new URL("browsers/" + browserId + "/start", document.baseURI), { method: "POST" })
-      .then((response) => { if (!response.ok) startButton.disabled = false; })
-      .catch(() => { startButton.disabled = false; });
+      .then(async (response) => {
+        if (response.ok) return;
+        let reason = "";
+        try { reason = (await response.json()).error || ""; } catch (_) {}
+        showStartRefused(reason || ("the browser service answered " + response.status));
+      })
+      .catch(() => showStartRefused("the browser service did not answer"));
   });
 
   // The browser was explicitly closed by an agent (or otherwise retired) -- a terminal
