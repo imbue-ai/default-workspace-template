@@ -1113,15 +1113,18 @@ def test_tab_urls_keeps_the_last_known_tabs_when_the_query_fails() -> None:
     assert after_teardown == live
 
 
-def test_restore_seeds_the_last_known_tabs_before_chromium_answers(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Between a restore's registration and Chromium coming up, the browser reports the tabs
-    # it was asked to reopen, so a checkpoint in that window (or a launch that never
-    # completes) preserves them rather than dropping them.
-    browser = bsession.LiveBrowser(browser_id="browser-1")
-    assert asyncio.run(browser.tab_urls()) == ([], 0)
-    browser._last_known_tabs = ["https://x", "https://y"]
-    browser._last_known_active_tab = 1
-    assert asyncio.run(browser.tab_urls()) == (["https://x", "https://y"], 1)
+def test_restore_registers_a_stopped_browser_with_its_saved_tabs() -> None:
+    # A stopped browser is registered from its manifest entry with no Chromium, and reports
+    # the tabs the entry saved, so a checkpoint before it is started preserves them.
+    mgr = _manager()
+    entry = manifest.ManifestEntry(id="browser-1", tabs=["https://x", "https://y"], active_tab=1, stopped=True)
+
+    async def register_then_read() -> tuple[str, Any, tuple[list[str], int]]:
+        await mgr._register_stopped_restore(entry)
+        browser = mgr.get("browser-1")
+        return browser._lifecycle, browser._cdp, await browser.tab_urls()
+
+    assert asyncio.run(register_then_read()) == ("stopped", None, (["https://x", "https://y"], 1))
 
 
 def test_shutdown_checkpoints_every_browser_before_closing_any(monkeypatch: pytest.MonkeyPatch) -> None:
