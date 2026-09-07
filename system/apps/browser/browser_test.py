@@ -1185,6 +1185,8 @@ def test_stop_keeps_the_browser_and_its_tabs_and_start_relaunches_them(monkeypat
     lifecycle, described = asyncio.run(stop_then_read())
     assert lifecycle == "stopped"
     assert described["controller"] == "human" and described["tabs"] == []
+    # Control went back to the human through the one writer, so the input gate follows it.
+    assert browser._input_gate.is_set()
     assert browser._cdp is None
     assert asyncio.run(browser.tab_urls()) == (["https://one.example", "https://two.example"], 1)
     assert asyncio.run(browser.acquire("A")) == "stopped"
