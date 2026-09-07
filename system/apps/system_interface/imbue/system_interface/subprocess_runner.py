@@ -37,9 +37,9 @@ The cost, which is deliberate: a detached child is out of reach of *any* process
 supervisord's included, and ``[program:system_interface]`` sets ``stopasgroup``/``killasgroup``.
 A ``supervisorctl restart`` therefore no longer takes in-flight children down with the service.
 Each child's own timeout is what bounds it instead: seconds for the ``tmux`` calls, up to the
-two-minute budget of a ``mngr destroy`` for the rest of the request path, and up to the
-ten-minute budget of a ``mngr start --restart`` on the auth restart thread, which can outlive
-the restart meant to end it while holding host locks. ``mngr observe`` and ``mngr create`` pass
+two-minute budget of a ``mngr destroy`` for the rest of the request path, and a minute per agent
+for the ``mngr start --restart`` runs on the re-auth restart thread, which can outlive the
+restart meant to end them while holding host locks. ``mngr observe`` and ``mngr create`` pass
 no timeout at all, so their bound is the service's own teardown: ``main.py`` turns SIGTERM into
 a clean exit and the ``atexit`` handler terminates them, but a service that never gets there --
 SIGKILLed for overrunning ``stopwaitsecs``, or OOM-killed -- now leaves them running for good,
