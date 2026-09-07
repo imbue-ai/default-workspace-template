@@ -235,6 +235,7 @@ def run_background(
     process_class_kwargs: Mapping[str, object] | None = None,
     name: str | None = None,
     is_output_accumulated: bool = True,
+    stdin_bytes: bytes | None = None,
 ) -> ProcessClassType:
     """
     Run a subprocess command in a non-blocking manner with output handling.
@@ -258,6 +259,9 @@ def run_background(
 
     ``is_detached_from_terminal=True`` runs the child in its own session; see
     :func:`run_local_command_modern_version` for why a background service needs that.
+
+    ``stdin_bytes`` is written to the child's standard input, which is then closed; see
+    ``run_local_command_modern_version`` for the size limit that applies to it.
     """
     true_shutdown_event = shutdown_event if shutdown_event is not None else Event()
     process = process_class(
@@ -284,6 +288,7 @@ def run_background(
             is_detached_from_terminal=is_detached_from_terminal,
             name=name,
             is_output_accumulated=is_output_accumulated,
+            stdin_bytes=stdin_bytes,
         )
     )
     return process

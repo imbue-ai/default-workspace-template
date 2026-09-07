@@ -57,7 +57,8 @@ from imbue.minds_admin.bake.pool_bake import ephemeral_bake_namespace
 from imbue.minds_admin.bake.pool_bake import finalize_baked_pool_host
 from imbue.minds_admin.bake.pool_bake import sweep_stale_bake_namespaces
 from imbue.minds_admin.bake.pool_bake import sync_mngr_into_template
-from imbue.minds_admin.bake.pool_bake import wait_for_deferred_install
+from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
+from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import resolve_boxes_collector_install_config_or_none
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
@@ -102,6 +103,7 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
 from imbue.mngr.utils.polling import poll_for_value
+from imbue.mngr.utils.ssh import quote_ssh_option_value
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
@@ -246,7 +248,12 @@ def _box_ssh_host_key_options(server_address: str, box_host_public_key: str) -> 
     os.close(known_hosts_fd)
     try:
         add_host_to_known_hosts(Path(known_hosts_path), server_address, 22, box_host_public_key)
-        yield ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known_hosts_path}"]
+        yield [
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={quote_ssh_option_value(known_hosts_path)}",
+        ]
     finally:
         Path(known_hosts_path).unlink(missing_ok=True)
 
@@ -1017,7 +1024,7 @@ def _slice_run_in_container(
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
-            f"UserKnownHostsFile={known_hosts_path}",
+            f"UserKnownHostsFile={quote_ssh_option_value(known_hosts_path)}",
             "-o",
             "ConnectTimeout=20",
             "-o",
@@ -1048,7 +1055,7 @@ def _bake_one_slice(
     database_url: str,
     port_range_start: int,
     port_range_end: int,
-    is_deferred_install_wait_skipped: bool,
+    is_env_converge_wait_skipped: bool,
     default_workspace_template_cache_tag: str | None,
     # The invocation's ephemeral bake namespace overrides (MNGR_HOST_DIR / MNGR_PREFIX),
     # so the inner ``mngr create`` never touches the operator's own mngr data root.
@@ -1059,7 +1066,7 @@ def _bake_one_slice(
     Returns an outcome (never raises). ``bake_pool_host`` carves the VM (over
     SSH on the box, inside the slice provider) and bakes the shared container; the
     shared :func:`finalize_baked_pool_host` then hardens the container sshd and
-    tears down the bootstrap chat agent over the slice (direct-SSH) transport. Any
+    clears the baked git identity over the slice (direct-SSH) transport. Any
     failure once the VM exists rolls the VM back so it does not leak its box
     slot/ports (a ``mngr create`` failure is already rolled back by the provider).
     """
@@ -1100,25 +1107,26 @@ def _bake_one_slice(
                     f"container={baked.ssh_port})"
                 )
             finalize_baked_pool_host(_slice_run_in_container, baked, host_name=host_name)
-            # Let the DEFAULT_WORKSPACE_TEMPLATE deferred-install (heavy apt + browser download) finish before we stop the
-            # services agent: stopping mid-apt corrupts dpkg (see wait_for_deferred_install). Dev
-            # bakes may skip this wait to save the few minutes; the tradeoff is the baked container's
-            # deferred-install can be left incomplete/corrupt (acceptable for slow-path dev bakes,
-            # whose container is rebuilt on lease anyway).
-            if is_deferred_install_wait_skipped:
+            # Let the DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase (heavy apt + browser
+            # download, record capture, rootfs stamp) finish before we stop the services agent:
+            # the stop kills it mid-run, shipping an image without apt.json / the rootfs stamp,
+            # and stopping mid-apt corrupts dpkg (see wait_for_env_converge). Dev bakes may skip
+            # this wait to save the few minutes; the tradeoff is the baked container's converge
+            # can be left incomplete/corrupt (acceptable for slow-path dev bakes, whose container
+            # is rebuilt on lease anyway).
+            if is_env_converge_wait_skipped:
                 logger.warning(
-                    "Skipping deferred-install wait for slice {} (dev bake); its baked deferred-install may be incomplete",
+                    "Skipping env-converge wait for slice {} (dev bake); its baked converge may be incomplete",
                     host_name,
                 )
             else:
-                wait_for_deferred_install(_slice_run_in_container, baked, host_name=host_name)
+                wait_for_env_converge(_slice_run_in_container, baked, host_name=host_name)
             # Stop the services agent so it lands in the pool STOPPED.
             # The fast-path lease then *starts* the adopted agent, which re-runs the
-            # DEFAULT_WORKSPACE_TEMPLATE bootstrap -- and because finalize removed the initial-chat sentinel,
-            # the bootstrap re-creates the chat agent under the leasing user's
-            # workspace name. Without this stop the agent stays running from bake
-            # through lease, the one-shot bootstrap never re-runs, and the workspace
-            # hangs at "Waiting for initial chat agent...". We stop it inside the
+            # DEFAULT_WORKSPACE_TEMPLATE bootstrap (it runs on every start, e.g.
+            # re-supplying the neutral git identity finalize unset above). Without
+            # this stop the agent stays running from bake through lease and the
+            # adopting user's boot-time setup never re-runs. We stop it inside the
             # container (the operator's mngr can't resolve the slice's in-memory
             # forwarded ports, so the OVH local-stop approach can't be reused here).
             stop_rc, _stop_out, stop_err = _slice_run_in_container(
@@ -1131,6 +1139,12 @@ def _bake_one_slice(
                 raise BareMetalProvisioningError(
                     f"stopping the services agent on slice {host_name} failed (exit {stop_rc}): {stop_err.strip()}"
                 )
+            # Last gate before the pool-row insert: the parked container must hold only the
+            # primary services agent. Runs after the stop so nothing (the bootstrap included)
+            # can create an agent once the check has passed; a failure here rolls the VM back
+            # instead of shipping a host with a leaked agent (and thereby refuses old
+            # default-workspace-template tags whose bootstrap creates a boot chat).
+            verify_only_primary_agents_baked(_slice_run_in_container, baked, host_name=host_name)
             host_id_obj = HostId(baked.host_id)
             if not baked.outer_host_public_key or not baked.container_host_public_key:
                 raise BareMetalProvisioningError(
@@ -1801,7 +1815,7 @@ def assert_box_is_exclusive_to_tier(
 ) -> None:
     """Refuse to bake unless this box belongs solely to the activated env's tier.
 
-    Tier isolation is a stated invariant (``apps/minds/docs/deploy/environments.md``:
+    Tier isolation is a stated invariant (``apps/minds/docs/deploy/reference/environments.md``:
     "There is zero cross-tier reach"), but nothing used to enforce it at the moment
     it matters. Two independent ways a box drifts across tiers, both caught here
     before a single slice is carved:
@@ -1841,7 +1855,7 @@ def assert_box_is_exclusive_to_tier(
                 "`minds-admin server prep` writes that file with a single-key overwrite, so the extra key(s) were "
                 "added out of band and give another tier SSH access to this box. Inspect them with "
                 "`ssh-keygen -lf ~/.ssh/authorized_keys` on the box. Do NOT re-prep before checking the box "
-                "for another tier's slices (`just audit-boxes`): prep overwrites authorized_keys, which would "
+                "for another tier's slices (`just server-audit`): prep overwrites authorized_keys, which would "
                 "cut the other key's owner off from slices that are still running here."
             )
         raise click.UsageError(
@@ -1863,7 +1877,7 @@ def assert_box_is_exclusive_to_tier(
         "Tiers are isolated by construction -- each has its own pool keypair, and there is meant to be zero "
         "cross-tier reach -- so a box serving both is a box each tier's operators can SSH (and via limactl "
         "control) the other's workspaces on, and neither tier's reap will ever reclaim the other's slices. "
-        "Retire the foreign slices from their OWN env (`just destroy-pool-hosts <row-id>` with that env "
+        "Retire the foreign slices from their OWN env (`just pool-destroy <row-id>` with that env "
         "activated) or bake onto a box belonging to this tier."
     )
 
@@ -1906,7 +1920,7 @@ def allocate_slices(
     database_url: str,
     pool_private_key_pem: str,
     is_dry_run: bool,
-    is_deferred_install_wait_skipped: bool,
+    is_env_converge_wait_skipped: bool,
     max_concurrency: int,
 ) -> None:
     """Bake ``count`` slices onto the explicitly chosen bare-metal server and insert their pool rows.
@@ -2084,7 +2098,7 @@ def allocate_slices(
                 database_url=database_url,
                 port_range_start=DEFAULT_SLICE_PORT_RANGE_START,
                 port_range_end=DEFAULT_SLICE_PORT_RANGE_END,
-                is_deferred_install_wait_skipped=is_deferred_install_wait_skipped,
+                is_env_converge_wait_skipped=is_env_converge_wait_skipped,
                 default_workspace_template_cache_tag=default_workspace_template_cache_tag,
                 extra_create_env=bake_namespace.to_subprocess_env(),
             )

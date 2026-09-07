@@ -14,6 +14,13 @@ from imbue.observability.primitives import ObservabilityTierName
 from imbue.observability.primitives import TelemetryHostname
 
 
+class DashboardSummary(FrozenModel):
+    """One dashboard's identity as the OpenObserve listing reports it."""
+
+    dashboard_id: str = Field(description="Server-assigned dashboard id")
+    title: str = Field(description="Dashboard title (the import flow's match key)")
+
+
 class ObservabilityInstanceConfig(FrozenModel):
     """Everything needed to render one tier's OpenObserve instance host config.
 

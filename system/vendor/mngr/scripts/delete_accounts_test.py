@@ -1,29 +1,18 @@
 """Unit tests for the local ``delete_accounts.py`` operator tool.
 
-The script is not an importable package module (it lives under ``scripts/``), so
-it is loaded from its path. Only the pure, side-effect-free helpers are covered
-here; the live SuperTokens / Neon / LiteLLM I/O is exercised operationally via
-the tool's ``--dry-run`` default, not in unit tests.
+``bulk_delete_accounts`` is imported too, for the invariant that both tools
+target the same connector tables. Only the pure, side-effect-free helpers are
+covered here; the live SuperTokens / Neon / LiteLLM I/O is exercised
+operationally via the tool's ``--dry-run`` default, not in unit tests.
 """
 
-import importlib.util
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
 
-
-def _load_delete_accounts_module() -> ModuleType:
-    module_path = Path(__file__).parent / "delete_accounts.py"
-    spec = importlib.util.spec_from_file_location("delete_accounts_under_test", module_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-delete_accounts_module = _load_delete_accounts_module()
+from scripts import bulk_delete_accounts
+from scripts import delete_accounts
 
 
 class _RecordingCursor:
@@ -57,7 +46,7 @@ class _RecordingConnection:
 
 
 def test_share_label_strips_hyphens_and_lowercases() -> None:
-    label = delete_accounts_module._share_label_for_user_id("E055EFDA-494D-4B0D-90E6-2EB4E0D4949B")
+    label = delete_accounts._share_label_for_user_id("E055EFDA-494D-4B0D-90E6-2EB4E0D4949B")
     assert label == "e055efda494d4b0d90e62eb4e0d4949b"
     assert "-" not in label
 
@@ -69,7 +58,7 @@ def test_load_accounts_reads_email_and_user_id_columns(tmp_path: Path) -> None:
         "a@imbue.com,11111111-1111-1111-1111-111111111111,1111\n"
         "b@imbue.com,22222222-2222-2222-2222-222222222222,2222\n"
     )
-    accounts = delete_accounts_module._load_accounts(accounts_file)
+    accounts = delete_accounts._load_accounts(accounts_file)
     assert accounts == [
         ("a@imbue.com", "11111111-1111-1111-1111-111111111111"),
         ("b@imbue.com", "22222222-2222-2222-2222-222222222222"),
@@ -79,31 +68,30 @@ def test_load_accounts_reads_email_and_user_id_columns(tmp_path: Path) -> None:
 def test_load_accounts_skips_blank_user_id_rows(tmp_path: Path) -> None:
     accounts_file = tmp_path / "accounts.csv"
     accounts_file.write_text("email,user_id\nkeep@imbue.com,33333333-3333-3333-3333-333333333333\n,\n")
-    accounts = delete_accounts_module._load_accounts(accounts_file)
+    accounts = delete_accounts._load_accounts(accounts_file)
     assert accounts == [("keep@imbue.com", "33333333-3333-3333-3333-333333333333")]
 
 
 def test_load_accounts_requires_user_id_column(tmp_path: Path) -> None:
     accounts_file = tmp_path / "accounts.csv"
     accounts_file.write_text("email\nonly@imbue.com\n")
-    with pytest.raises(delete_accounts_module.AccountDeletionError):
-        delete_accounts_module._load_accounts(accounts_file)
+    with pytest.raises(delete_accounts.AccountDeletionError):
+        delete_accounts._load_accounts(accounts_file)
 
 
 def test_resolve_secret_prefers_explicit_then_env_then_local_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOME_SECRET_ENV", "from-env")
     local_values = {"SOME_SECRET_ENV": "from-local"}
     assert (
-        delete_accounts_module._resolve_secret("explicit", "SOME_SECRET_ENV", "production", "svc", "K", local_values)
+        delete_accounts._resolve_secret("explicit", "SOME_SECRET_ENV", "production", "svc", "K", local_values)
         == "explicit"
     )
     assert (
-        delete_accounts_module._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values)
-        == "from-env"
+        delete_accounts._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values) == "from-env"
     )
     monkeypatch.delenv("SOME_SECRET_ENV")
     assert (
-        delete_accounts_module._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values)
+        delete_accounts._resolve_secret(None, "SOME_SECRET_ENV", "production", "svc", "K", local_values)
         == "from-local"
     )
 
@@ -114,11 +102,11 @@ def test_load_env_local_secrets_reads_the_secrets_table(monkeypatch: pytest.Monk
     env_dir.mkdir()
     (env_dir / "secrets.toml").write_text('[secrets]\nNEON_HOST_POOL_DSN = "postgresql://local/host_pool"\n')
 
-    values = delete_accounts_module._load_env_local_secrets("dev-alice")
+    values = delete_accounts._load_env_local_secrets("dev-alice")
 
     assert values == {"NEON_HOST_POOL_DSN": "postgresql://local/host_pool"}
     # No env named: nothing to read, no error.
-    assert delete_accounts_module._load_env_local_secrets(None) == {}
+    assert delete_accounts._load_env_local_secrets(None) == {}
 
 
 def test_load_env_local_secrets_fails_loudly_on_missing_or_malformed_state(
@@ -126,31 +114,31 @@ def test_load_env_local_secrets_fails_loudly_on_missing_or_malformed_state(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    with pytest.raises(delete_accounts_module.AccountDeletionError, match="does not exist"):
-        delete_accounts_module._load_env_local_secrets("dev-alice")
+    with pytest.raises(delete_accounts.AccountDeletionError, match="does not exist"):
+        delete_accounts._load_env_local_secrets("dev-alice")
 
     env_dir = tmp_path / ".minds-dev-alice"
     env_dir.mkdir()
     (env_dir / "secrets.toml").write_text('secrets = "not-a-table"\n')
-    with pytest.raises(delete_accounts_module.AccountDeletionError, match="not a table"):
-        delete_accounts_module._load_env_local_secrets("dev-alice")
+    with pytest.raises(delete_accounts.AccountDeletionError, match="not a table"):
+        delete_accounts._load_env_local_secrets("dev-alice")
 
 
 def test_resolve_optional_secret_returns_env_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPTIONAL_SECRET_ENV", "opt-value")
     assert (
-        delete_accounts_module._resolve_optional_secret(None, "OPTIONAL_SECRET_ENV", "production", "svc", "K", {})
+        delete_accounts._resolve_optional_secret(None, "OPTIONAL_SECRET_ENV", "production", "svc", "K", {})
         == "opt-value"
     )
 
 
 def test_resolve_analytics_secret_values_skips_only_a_fully_absent_entry() -> None:
     """No analytics keys at all means 'not provisioned' (skip); all keys means proceed."""
-    assert delete_accounts_module._resolve_analytics_secret_values("production", lambda key: None) is None
+    assert delete_accounts._resolve_analytics_secret_values("production", lambda key: None) is None
 
-    values = delete_accounts_module._resolve_analytics_secret_values("production", lambda key: f"value-for-{key}")
+    values = delete_accounts._resolve_analytics_secret_values("production", lambda key: f"value-for-{key}")
     assert values is not None
-    assert set(values) == set(delete_accounts_module._ANALYTICS_SECRET_KEYS)
+    assert set(values) == set(delete_accounts._ANALYTICS_SECRET_KEYS)
     assert values["ANALYTICS_OPS_DATABASE_URL"] == "value-for-ANALYTICS_OPS_DATABASE_URL"
 
 
@@ -160,8 +148,8 @@ def test_resolve_analytics_secret_values_refuses_a_partially_populated_entry() -
     def resolve_all_but_ops(key: str) -> str | None:
         return None if key == "ANALYTICS_OPS_DATABASE_URL" else f"value-for-{key}"
 
-    with pytest.raises(delete_accounts_module.AccountDeletionError, match="ANALYTICS_OPS_DATABASE_URL"):
-        delete_accounts_module._resolve_analytics_secret_values("production", resolve_all_but_ops)
+    with pytest.raises(delete_accounts.AccountDeletionError, match="ANALYTICS_OPS_DATABASE_URL"):
+        delete_accounts._resolve_analytics_secret_values("production", resolve_all_but_ops)
 
 
 def test_delete_db_rows_keys_each_table_by_the_correct_identifier() -> None:
@@ -174,6 +162,7 @@ def test_delete_db_rows_keys_each_table_by_the_correct_identifier() -> None:
             "workspace_records": 3,
             "account_key_bundles": 0,
             "r2_cleanup_grants": 0,
+            "account_attribution": 1,
             "shares": 0,
             "relay_tokens": 0,
         }
@@ -183,16 +172,18 @@ def test_delete_db_rows_keys_each_table_by_the_correct_identifier() -> None:
         "workspace_records",
         "account_key_bundles",
         "r2_cleanup_grants",
+        "account_attribution",
         "shares",
         "relay_tokens",
     }
-    counts = delete_accounts_module._delete_db_rows_for_user(_RecordingConnection(cursor), user_id, all_tables)
+    counts = delete_accounts._delete_db_rows_for_user(_RecordingConnection(cursor), user_id, all_tables)
 
     key_by_table = {sql.split("FROM ")[1].split(" ")[0]: params[0] for sql, params in cursor.executed}
     assert key_by_table["account_entitlements"] == user_id
     assert key_by_table["workspace_records"] == user_id
     assert key_by_table["account_key_bundles"] == user_id
     assert key_by_table["r2_cleanup_grants"] == user_id
+    assert key_by_table["account_attribution"] == user_id
     assert key_by_table["shares"] == expected_label
     assert key_by_table["relay_tokens"] == expected_label
     assert counts == {
@@ -200,17 +191,38 @@ def test_delete_db_rows_keys_each_table_by_the_correct_identifier() -> None:
         "workspace_records": 3,
         "account_key_bundles": 0,
         "r2_cleanup_grants": 0,
+        "account_attribution": 1,
         "shares": 0,
         "relay_tokens": 0,
     }
+
+
+def test_both_deletion_tools_target_the_same_connector_tables() -> None:
+    """The single- and bulk-account tools must clear the same connector-DB rows.
+
+    Any divergence lets the tool an operator happens to reach for decide which
+    of a deleted account's rows survive. (Outside the connector DB the two
+    diverge on purpose: only delete_accounts.py touches LiteLLM users and
+    analytics transcripts.) The share-label tables are compared in order as
+    well: relay_tokens cascades off shares, so a tool that deleted the parent
+    first would report a count of 0 for the child.
+    """
+    assert set(delete_accounts._TABLES_KEYED_BY_USER_ID) == set(bulk_delete_accounts._TABLES_KEYED_BY_USER_ID)
+    assert delete_accounts._TABLES_KEYED_BY_SHARE_LABEL == bulk_delete_accounts._TABLES_KEYED_BY_SHARE_LABEL
 
 
 def test_delete_db_rows_skips_tables_absent_from_the_database() -> None:
     """A table missing from this DB (e.g. sharing not provisioned) is skipped, not queried."""
     user_id = "e055efda-494d-4b0d-90e6-2eb4e0d4949b"
     cursor = _RecordingCursor(rowcount_by_table={"account_entitlements": 1, "workspace_records": 2})
-    existing_tables = {"account_entitlements", "workspace_records", "account_key_bundles", "r2_cleanup_grants"}
-    counts = delete_accounts_module._delete_db_rows_for_user(_RecordingConnection(cursor), user_id, existing_tables)
+    existing_tables = {
+        "account_entitlements",
+        "workspace_records",
+        "account_key_bundles",
+        "r2_cleanup_grants",
+        "account_attribution",
+    }
+    counts = delete_accounts._delete_db_rows_for_user(_RecordingConnection(cursor), user_id, existing_tables)
 
     queried_tables = {sql.split("FROM ")[1].split(" ")[0] for sql, _ in cursor.executed}
     assert "shares" not in queried_tables
@@ -254,7 +266,7 @@ class _CountingConnection:
 def test_count_leased_hosts_matches_on_prefix_alone_with_no_status_filter() -> None:
     """The lease guard must match every row naming the user, in any status (fail-safe)."""
     cursor = _CountingCursor(count=3)
-    held = delete_accounts_module._count_leased_hosts_for_user(
+    held = delete_accounts._count_leased_hosts_for_user(
         _CountingConnection(cursor), "e055efda-494d-4b0d-90e6-2eb4e0d4949b"
     )
     assert held == 3

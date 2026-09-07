@@ -41,11 +41,11 @@ from imbue.mngr_imbue_cloud.wire import WireModel
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _LEASE_TIMEOUT_SECONDS = 300.0
-# The plugin's `auth login` enforces its own 300s listen deadline
+# The plugin's `auth login` enforces its own listen deadline
 # (_LOGIN_LISTEN_TIMEOUT_SECONDS in the plugin's cli/auth.py) with a proper
 # timeout error; this outer kill deadline needs headroom over it (spawn, code
 # exchange, session persist) so the plugin's message is the one that surfaces.
-_WEB_LOGIN_TIMEOUT_SECONDS = 330.0
+_WEB_LOGIN_TIMEOUT_SECONDS = 630.0
 _KEY_OP_TIMEOUT_SECONDS = 90.0
 # Force-destroy empties the bucket over S3 before deleting it, so it can run
 # far longer than the other bucket ops (many objects, plus credential
@@ -239,6 +239,10 @@ class ShareCliInfo(WireModel):
     relay_token: SecretStr | None = None
     last_tunnel_login_at: str | None = None
     cert_not_after: str | None = None
+    # The tier's hosted web-chrome origin, stamped into share.env as
+    # SHARE_CHROME_ORIGIN; None against a connector that predates the field or
+    # a tier with none configured (callers fall back to the connector origin).
+    chrome_origin: str | None = None
 
 
 # How long a readiness poll may reuse a cached connector share lookup. The

@@ -82,6 +82,7 @@ from imbue.mngr.interfaces.data_types import CleanupFailure
 from imbue.mngr.interfaces.data_types import CleanupFailureCategory
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.interfaces.data_types import FileTransferSpec
+from imbue.mngr.interfaces.data_types import HostBootInfo
 from imbue.mngr.interfaces.data_types import HostResources
 from imbue.mngr.interfaces.host import AgentTmuxOptions
 from imbue.mngr.interfaces.host import CreateAgentOptions
@@ -106,6 +107,7 @@ from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr.utils.git_utils import GIT_MIRROR_PUSH_REFSPECS
 from imbue.mngr.utils.name_generator import GENERIC_AGENT_NAME_HINT
 from imbue.mngr.utils.polling import wait_for
+from imbue.mngr.utils.read_deadline import remaining_read_timeout
 
 
 @pure
@@ -205,8 +207,9 @@ _HOST_LOCK_FILENAME: Final[str] = "host_lock"
 # every acquire and so cannot hold durable state.
 _HOST_LOCK_GENERATION_FILENAME: Final[str] = "host_lock.generation"
 
-# Default timeout for callers that want a bounded wait (e.g. gc). ``create`` and
-# ``start`` pass ``None`` to block indefinitely until the lock is acquired.
+# Default timeout for callers that want a bounded wait (e.g. gc). ``create`` passes
+# ``None`` to block indefinitely until the lock is acquired; ``start`` uses its own,
+# longer bound (see ``api.find.start_agents_locked``).
 _DEFAULT_HOST_LOCK_TIMEOUT_SECONDS: Final[float] = 300.0
 
 # Env var that retains a failed host (and keeps its lock held) for debugging.
@@ -450,6 +453,20 @@ _TMUX_SET_TITLES_STRING: Final[str] = "#S  #T"
 # before declaring a command wedged.
 _STOP_AGENT_COMMAND_TIMEOUT_SECONDS: Final[float] = 10.0
 
+# Per-attempt bound on the single shell batch that launches one agent (tmux session
+# creation, the launch-script write and send-keys, activity recording, and the
+# backgrounded monitor). Every step is a tmux client call or a small file write, so a
+# healthy host finishes in well under a second; the bound is headroom for a slow remote
+# host before declaring the tmux server or client wedged. Without it a hung tmux client
+# blocks `mngr start` forever -- and, because the start runs under the host lock,
+# everything queued behind it as well. Over SSH a timed-out command is retried as
+# transient (``outer_host.SSH_TRANSIENT_RETRY_MAX_ATTEMPTS`` attempts, with
+# ``SSH_TRANSIENT_RETRY_BACKOFFS_SECONDS`` between them), so the worst case is that many
+# times this value plus the backoff; it is sized so that worst case still ends before
+# the start path's own host-lock wait (``api.find._START_HOST_LOCK_TIMEOUT_SECONDS``)
+# gives up.
+_START_AGENT_LAUNCH_TIMEOUT_SECONDS: Final[float] = 90.0
+
 # Lowercased stderr substrings that mark a *benign* stop-command failure: the target
 # resource was already gone, so nothing is left behind. A non-empty stderr line that
 # matches none of the relevant set is treated as a real failure (see
@@ -604,9 +621,11 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         Prefer using execute_command() instead whenever possible.
 
         When ``_raise_on_timeout`` is set, a local timeout raises
-        ``ProcessTimeoutError`` (the remote SSH path already raises
-        ``socket.timeout`` on its own), so opt-in callers see a timeout as a hard
-        failure on both backends rather than an ordinary failed result.
+        ``ProcessTimeoutError`` and a remote one propagates as the raw
+        ``socket.timeout`` (instead of being folded into ``HostConnectionError``
+        with the other post-retry SSH failures), so opt-in callers see a timeout
+        as a distinguishable hard failure on both backends rather than an
+        ordinary failed result or a generic connection error.
         """
         if self.is_local:
             # Bypass pyinfra's LocalConnector, which spawns local processes via
@@ -652,7 +671,7 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         with (
             self._notify_on_connection_error(),
             self._translate_ssh_errors(
-                timed_out="SSH command timed out reading output",
+                timed_out=None if _raise_on_timeout else "SSH command timed out reading output",
                 closed="Connection was closed while running command",
                 failed="Could not execute command due to connection error",
             ),
@@ -682,12 +701,14 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         so commands passed here are assumed to be idempotent.
 
         By default a timeout is reported like any other failed command
-        (``success=False`` on local; the remote SSH layer's ``socket.timeout``
-        propagates as-is, preserving prior behavior). When ``raise_on_timeout``
-        is set, a timeout on either backend is normalized into a single loud
-        ``CommandTimeoutError`` (a ``MngrError``) instead -- for callers that must
-        not silently treat a wedged command as "no output".
+        (``success=False`` on local; on remote the post-retry ``socket.timeout``
+        surfaces as a ``HostConnectionError`` like every other SSH failure). When
+        ``raise_on_timeout`` is set, a timeout on either backend is normalized into
+        a single loud ``CommandTimeoutError`` (a ``MngrError``) instead -- for
+        callers that must not silently treat a wedged command as "no output".
         """
+        # Clamp to any active per-host read budget so a wedged command self-terminates within it.
+        timeout_seconds = remaining_read_timeout(timeout_seconds)
         logger.trace("Executing command on host {}: {}", self.id, command)
         logger.trace(
             "Resolved command parameters: user={}, cwd={}, env={}, timeout={}", user, cwd, env, timeout_seconds
@@ -702,12 +723,10 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                 _raise_on_timeout=raise_on_timeout,
             )
         except (ProcessTimeoutError, TimeoutError) as e:
-            # ProcessTimeoutError: local backend (only when raise_on_timeout).
-            # TimeoutError: remote SSH socket.timeout (raised regardless of the
-            # flag). Re-raise unchanged unless the caller opted into the loud,
-            # typed CommandTimeoutError.
-            if not raise_on_timeout:
-                raise
+            # Only reached when raise_on_timeout is set: ProcessTimeoutError from the
+            # local backend, the raw socket.timeout from the SSH backend. Without the
+            # flag each backend reports the timeout itself (a failed result locally, a
+            # HostConnectionError over SSH).
             raise CommandTimeoutError(f"Command timed out after {timeout_seconds}s: {command}") from e
         return CommandResult(
             stdout=output.stdout,
@@ -855,8 +874,8 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         the fd closes, and the lock releases.
 
         ``timeout_seconds=None`` blocks indefinitely until the lock is acquired
-        (used by ``create`` and ``start``); a finite value raises
-        ``LockNotHeldError`` if the lock cannot be acquired in time.
+        (used by ``create``); a finite value raises ``LockNotHeldError`` if the
+        lock cannot be acquired in time.
 
         On error, if ``MNGR_DEBUG_RETAIN_LOCK_FOR_FAILED_HOSTS_DURING_CREATE=1``,
         a detached on-host process re-holds the lock so the failed (remote) host
@@ -1401,41 +1420,29 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         """Return the host last stop time as a datetime, or None if unknown."""
         return None
 
-    def get_uptime_seconds(self) -> float:
-        """Get host uptime in seconds."""
-        # Single command that detects the platform on the host and dispatches accordingly,
-        # so it works for both local and remote hosts regardless of OS
-        result = self.execute_idempotent_command(
-            'if [ "$(uname -s)" = "Darwin" ]; then '
-            "sysctl -n kern.boottime 2>/dev/null | awk -F'[ ,=]+' '{for(i=1;i<=NF;i++) if($i==\"sec\") print $(i+1)}' && date +%s; "
-            "else "
-            "cat /proc/uptime 2>/dev/null; "
-            "fi"
-        )
-        if result.success:
-            return _parse_uptime_output(result.stdout)
+    def read_boot_info(self) -> HostBootInfo:
+        """Read the host's boot time and uptime in a single host-side probe.
 
-        return 0.0
-
-    def get_boot_time(self) -> datetime | None:
-        """Get the host boot time as a datetime.
-
-        Returns the actual boot time from the OS, not computed from uptime,
-        to avoid timing inconsistencies.
+        A single platform-dispatching command emits two lines -- the boot time (epoch
+        seconds) then the uptime (seconds) -- so it works for local and remote hosts
+        regardless of OS. Uptime is computed on the host (Darwin: now - boottime;
+        Linux: /proc/uptime), so it is not skewed by clock drift between here and the host.
         """
-        # Single command that detects the platform on the host and dispatches accordingly,
-        # so it works for both local and remote hosts regardless of OS
         result = self.execute_idempotent_command(
             'if [ "$(uname -s)" = "Darwin" ]; then '
-            "sysctl -n kern.boottime 2>/dev/null | awk -F'[ ,=]+' '{for(i=1;i<=NF;i++) if($i==\"sec\") print $(i+1)}'; "
+            "boot=$(sysctl -n kern.boottime 2>/dev/null | awk -F'[ ,=]+' '{for(i=1;i<=NF;i++) if($i==\"sec\") print $(i+1)}'); "
+            'if [ -n "$boot" ]; then uptime=$(( $(date +%s) - $boot )); else uptime=; fi; '
+            'echo "$boot"; echo "$uptime"; '
             "else "
-            "grep '^btime ' /proc/stat 2>/dev/null | awk '{print $2}'; "
+            "boot=$(grep '^btime ' /proc/stat 2>/dev/null | awk '{print $2}'); "
+            "uptime=$(awk '{print $1}' /proc/uptime 2>/dev/null); "
+            'echo "$boot"; echo "$uptime"; '
             "fi"
         )
         if result.success:
-            return _parse_boot_time_output(result.stdout)
+            return _parse_boot_info_output(result.stdout)
 
-        return None
+        return HostBootInfo()
 
     def get_provider_resources(self) -> HostResources:
         """Get resources from the provider."""
@@ -3281,11 +3288,12 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                     raise AgentNotFoundOnHostError(agent_id, self.id)
 
                 # Before launching, reap any stale process tree from a prior incarnation
-                # of this agent id -- but only when it isn't already running, so an
-                # idempotent start never tears down a live agent. This clears orphans an
-                # earlier abrupt teardown left behind (e.g. a bootstrap supervisord and
-                # its ttyd reparented to PID 1) so the relaunch can't collide with the
-                # survivors (e.g. EADDRINUSE on a fixed service port).
+                # of this agent id -- but only on a definitive "no session" answer, so an
+                # idempotent start never tears down a live agent (the probe raises on a
+                # timeout instead of guessing). This clears orphans an earlier abrupt teardown left
+                # behind (e.g. a bootstrap supervisord and its ttyd reparented to PID 1)
+                # so the relaunch can't collide with the survivors (e.g. EADDRINUSE on a
+                # fixed service port).
                 if not self._does_agent_session_exist(agent):
                     for reap_failure in self.reap_agent_process_tree(agent):
                         logger.warning(
@@ -3324,7 +3332,23 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
                         tmux_options=self.get_agent_tmux_options(agent),
                         onboarding_text=onboarding_text,
                     )
-                    result = self.execute_stateful_command(combined_command, cwd=agent.work_dir)
+                    # The batch is idempotent by construction (its has-session guard exits
+                    # early on a re-run), so it takes the retrying idempotent path -- which is
+                    # also the one that can bound the launch and report a timeout loudly
+                    # instead of hanging on a wedged tmux client.
+                    try:
+                        result = self.execute_idempotent_command(
+                            combined_command,
+                            cwd=agent.work_dir,
+                            timeout_seconds=_START_AGENT_LAUNCH_TIMEOUT_SECONDS,
+                            raise_on_timeout=True,
+                        )
+                    except CommandTimeoutError as e:
+                        raise AgentStartError(
+                            str(agent.name),
+                            f"the launch did not complete within {_START_AGENT_LAUNCH_TIMEOUT_SECONDS:.0f}s "
+                            "(is the tmux server on the host wedged?)",
+                        ) from e
                     if not result.success:
                         raise AgentStartError(str(agent.name), result.stderr)
 
@@ -3657,13 +3681,20 @@ class Host(OuterHost, BaseHost, OnlineHostInterface):
         return failures
 
     def _does_agent_session_exist(self, agent: AgentInterface) -> bool:
-        """Return True iff the agent's tmux session already exists (it is likely running)."""
+        """Return True iff the agent's tmux session already exists (it is likely running).
+
+        Raises ``CommandTimeoutError`` when the probe times out (a tmux server wedged or
+        slow under load) rather than answering: callers gate destructive actions (the
+        pre-launch process-tree reap) on a "no" answer, so an unknown must never be
+        reported as absence -- otherwise one slow probe would make an idempotent start
+        kill a live agent's entire tree.
+        """
         session_name = self.mngr_ctx.config.agent_session_name(agent.name)
         target = TmuxSessionTarget(session_name=session_name).as_shell_arg()
         result = self.execute_idempotent_command(
             f"tmux has-session -t {target} 2>/dev/null",
             timeout_seconds=_STOP_AGENT_COMMAND_TIMEOUT_SECONDS,
-            raise_on_timeout=False,
+            raise_on_timeout=True,
         )
         return result.success
 
@@ -4211,42 +4242,27 @@ def _build_start_agent_shell_command(
 
 
 @pure
-def _parse_uptime_output(stdout: str) -> float:
-    """Parse the output of the cross-platform uptime command.
+def _parse_boot_info_output(stdout: str) -> HostBootInfo:
+    """Parse the cross-platform boot-info command's two lines: boot epoch, then uptime seconds.
 
-    Handles two formats:
-    - macOS: two lines (boot timestamp, current timestamp) from sysctl + date
-    - Linux: single line from /proc/uptime (uptime_seconds idle_seconds)
+    Either line may be empty (that value is left unknown / None). Lines are read
+    positionally rather than filtered, so a missing boot time does not shift the
+    uptime into its place.
     """
-    output = stdout.strip()
-    output_lines = output.split("\n")
-    try:
-        if len(output_lines) == 2:
-            # macOS: two lines -- boot time and current time
-            boot_time = int(output_lines[0])
-            current_time = int(output_lines[1])
-            return float(current_time - boot_time)
-        elif len(output_lines) == 1 and output:
-            # Linux: single line from /proc/uptime
-            uptime_str = output.split()[0]
-            return float(uptime_str)
-        else:
-            return 0.0
-    except (ValueError, OSError):
-        return 0.0
-
-
-@pure
-def _parse_boot_time_output(stdout: str) -> datetime | None:
-    """Parse the output of the cross-platform boot time command.
-
-    Both macOS (sysctl) and Linux (btime) produce a single Unix timestamp.
-    """
-    try:
-        boot_timestamp = int(stdout.strip())
-        return datetime.fromtimestamp(boot_timestamp, tz=timezone.utc)
-    except (ValueError, OSError):
-        return None
+    lines = stdout.rstrip("\n").split("\n")
+    boot_time: datetime | None = None
+    if lines and lines[0].strip():
+        try:
+            boot_time = datetime.fromtimestamp(int(lines[0].strip()), tz=timezone.utc)
+        except (ValueError, OSError):
+            boot_time = None
+    uptime_seconds: float | None = None
+    if len(lines) >= 2 and lines[1].strip():
+        try:
+            uptime_seconds = float(lines[1].strip())
+        except (ValueError, OSError):
+            uptime_seconds = None
+    return HostBootInfo(boot_time=boot_time, uptime_seconds=uptime_seconds)
 
 
 @pure

@@ -55,24 +55,24 @@ required only for `minds-admin env deploy/destroy/recover`.
 ## Current minds-relevant recipes (run `just --list` for the live set)
 
 Environments / deploy:
-- `just deploy [args]` -- `minds-admin env deploy` for the activated env (tier
+- `just services-deploy [args]` -- `minds-admin env deploy` for the activated env (tier
   deploys need `--yes-i-mean-<tier>`).
 
 Pool hosts (leased mode):
 Pool hosts are baked as bare-metal **slices** (lima/QEMU VMs carved on a
 pre-registered + prepped bare-metal box). Baking new OVH classic VPS pool hosts
 is DEPRECATED and no longer supported; existing OVH VPS rows stay listable and
-destroyable. First order + set up a box with `just order-server` (pass
-`--dry-run` first for the no-charge price preview), `just await-delivery
-<server-id>`, and `just setup-server <server-id>` (or `minds-admin server
+destroyable. First order + set up a box with `just server-order` (pass
+`--dry-run` first for the no-charge price preview), `just server-await-delivery
+<server-id>`, and `just server-setup <server-id>` (or `minds-admin server
 register` for an already-provisioned box); the box must be `ready` with a
 free slot. These are env-aware: OVH creds, pool DSN, and pool SSH key resolve
 from the activated tier.
-- `just bake-slice-dev <region> [workspace_dir] [count] [extra flags]` -- DEV
+- `just pool-bake-from-worktree <region> [workspace_dir] [count] [extra flags]` -- DEV
   bake from a working tree; the stamped identity (`repo_url` + `repo_branch_or_tag`)
   is DERIVED from the folder's `origin` remote + current branch (best-effort label,
   uncommitted changes included). Pass `--server-id <id>` for the box to bake onto.
-- `just bake-slice-prod <region> <tag> [count] [extra flags]` -- PRODUCTION
+- `just pool-bake <region> <tag> [count] [extra flags]` -- PRODUCTION
   bake: clones the DEFAULT_WORKSPACE_TEMPLATE remote at an exact `<tag>` and bakes from that (content
   provably equals the tag); identity = canonical remote + tag. Pass `--server-id`.
   - Identity is never hand-typed in `--attributes` (those are non-identity only,
@@ -80,26 +80,26 @@ from the activated tier.
     the ACTUAL git remote + the baked branch -- a local clone path resolves to the
     same canonical remote, but the form value the client sends must match. Extra
     flags forward to `minds-admin pool create` (e.g. `--mngr-source`).
-- `just list-pool-hosts` -- list `pool_hosts` rows for the activated env.
-- `just list-servers` -- list bare-metal servers with slot accounting for the
+- `just pool-list` -- list `pool_hosts` rows for the activated env.
+- `just server-list` -- list bare-metal servers with slot accounting for the
   activated env (no manual DSN export needed). The slot columns come from THIS
   env's `pool_hosts` rows only, so a box shared with another env reads as emptier
-  than it is -- use `just audit-boxes` before concluding you have free slots.
-- `just audit-boxes` -- SSH every bare-metal box for the activated env and report
+  than it is -- use `just server-audit` before concluding you have free slots.
+- `just server-audit` -- SSH every bare-metal box for the activated env and report
   its real occupancy (all envs' slices) plus any cross-tier contamination: a slice
   stamped for another tier, or an extra key in the lima user's `authorized_keys`.
   A bake onto such a box refuses; this finds one without a failed bake. Read-only.
-- `just prep-server <server-id>` -- (re-)prep a bare-metal box for slice baking;
+- `just server-prep <server-id>` -- (re-)prep a bare-metal box for slice baking;
   pool SSH key + DSN resolved from the activated tier automatically. Installs +
   verifies the observability collector when the tier has a boxes ingest
   credential in Vault (fail-closed; clean skip otherwise). Idempotent;
   also how pre-2026-06-27 boxes get the DEFAULT_WORKSPACE_TEMPLATE image cache dir that production
   `--from-tag` bakes require.
-- `just setup-server <server-id>` -- provision a delivered box to `ready`:
+- `just server-setup <server-id>` -- provision a delivered box to `ready`:
   destructive OS reinstall (injects our host key), then the same composed prep
-  as `prep-server`. `just order-server [flags]` / `just await-delivery
+  as `server-prep`. `just server-order [flags]` / `just server-await-delivery
   <server-id>` cover the ordering steps before it.
-- `just destroy-pool-hosts <pool-host-id> [<pool-host-id> ...]` -- tear down the
+- `just pool-destroy <pool-host-id> [<pool-host-id> ...]` -- tear down the
   named hosts in parallel: atomically claim each row (a user cannot lease it
   mid-destroy), destroy its slice lima VM, and drop the row (manual teardown, e.g.
   retiring old rows after baking a new pool generation; steady-state release is

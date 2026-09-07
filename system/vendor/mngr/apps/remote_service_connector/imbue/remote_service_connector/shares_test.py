@@ -375,6 +375,35 @@ def test_share_status_reports_state_endpoint_and_login_stamp(monkeypatch: pytest
     assert backend.find_share(_SHARE_STUB_HOST_ID, _SHARE_STUB_USER_LABEL) is not None
 
 
+def test_create_share_and_status_report_the_configured_chrome_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Desktop clients stamp this value into the workspace's share.env, so the
+    # share endpoints report the same SHARE_CHROME_ORIGIN the server-side
+    # enable-sharing path uses -- normalized to a bare origin (no trailing
+    # slash; frame-ancestors sources are compared byte-exactly).
+    client, _backend = _make_share_test_client(monkeypatch)
+    monkeypatch.setenv("SHARE_CHROME_ORIGIN", "https://minds.shares.example/")
+
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    status = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
+
+    assert created["chrome_origin"] == "https://minds.shares.example"
+    assert status["chrome_origin"] == "https://minds.shares.example"
+
+
+def test_share_responses_report_a_null_chrome_origin_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tiers without a hosted chrome (no [origins] / [web_workspaces] deploy
+    # blocks) leave the env var unset; clients then fall back to the connector
+    # origin, so the response must say "none" rather than an empty string.
+    client, _backend = _make_share_test_client(monkeypatch)
+    monkeypatch.delenv("SHARE_CHROME_ORIGIN", raising=False)
+
+    created = client.post("/shares", json={"host_id": _SHARE_STUB_HOST_ID}, headers=_share_headers()).json()
+    status = client.get(f"/shares/{_SHARE_STUB_HOST_ID}/status", headers=_share_headers()).json()
+
+    assert created["chrome_origin"] is None
+    assert status["chrome_origin"] is None
+
+
 def test_create_share_records_and_status_reports_the_entry_label(monkeypatch: pytest.MonkeyPatch) -> None:
     # The desktop's client-side flow supplies the shell label with the create;
     # the status read is where the chrome learns its routable entry origin. A

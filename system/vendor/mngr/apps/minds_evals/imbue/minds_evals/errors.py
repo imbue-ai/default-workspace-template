@@ -35,6 +35,18 @@ class InstructionParseError(MindsEvalsError, ValueError):
     ...
 
 
+class TrajectoryDocumentError(MindsEvalsError, ValueError):
+    """Raised when a trajectory document captured from the workspace is not valid ATIF."""
+
+    ...
+
+
+class CapturedFileError(MindsEvalsError, ValueError):
+    """Raised when a CapturedFile claims to be both captured and failed, or neither."""
+
+    ...
+
+
 class AgentKwargError(MindsEvalsError, ValueError):
     """Raised when an `--ak key=value` agent kwarg cannot be read as the type it selects.
 

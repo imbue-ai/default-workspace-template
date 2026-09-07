@@ -24,6 +24,18 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+# BEGIN-INTERNAL
+# The behavior-corpus tooling (imbue-mngr-behaviors) is internal-only and absent
+# from the public mirror, so copybara strips this whole dev-group from the
+# mirrored tree; the guard test that needs it (test_behavior_corpus.py) is
+# excluded in mirror/copy.bara.sky. Test-only: runtime deps may not point at
+# unpublished workspace packages.
+[dependency-groups]
+dev = [
+    "imbue-mngr-behaviors",
+]
+# END-INTERNAL
+
 [project.entry-points.mngr]
 forward = "imbue.mngr_forward.plugin"
 
@@ -39,6 +51,9 @@ exclude = ["*_test.py", "test_*.py", "**/conftest.py", "**/testing.py"]
 imbue-mngr = { workspace = true }
 imbue-common = { workspace = true }
 concurrency-group = { workspace = true }
+# BEGIN-INTERNAL
+imbue-mngr-behaviors = { workspace = true }
+# END-INTERNAL
 
 [tool.pytest.ini_options]
 timeout_func_only = true

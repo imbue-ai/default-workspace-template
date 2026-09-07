@@ -4,6 +4,7 @@ import pytest
 
 from imbue.observability.mock_openobserve_api_test import MockOpenObserveApi
 from imbue.observability.openobserve_api import OpenObserveApiError
+from imbue.observability.openobserve_api import _dashboard_summary_from_listing_entry
 from imbue.observability.openobserve_api import apply_log_stream_retention
 from imbue.observability.openobserve_api import build_basic_authorization_header
 from imbue.observability.openobserve_api import ensure_sender_credentials
@@ -88,3 +89,19 @@ def test_apply_log_stream_retention_reports_missing_streams_as_skipped() -> None
     assert is_applied_by_stream["relay_logs"] is False
     # Every override targets the logs stream type with the requested days.
     assert all(stream_type == "logs" and days == 90 for _name, stream_type, days in api.retention_updates)
+
+
+def test_dashboard_summary_reads_the_schema_version_nested_document() -> None:
+    summary = _dashboard_summary_from_listing_entry(
+        {"version": 5, "hash": "abc", "v5": {"dashboardId": "dash-1", "title": "Fleet version mix"}}
+    )
+
+    assert summary.dashboard_id == "dash-1"
+    assert summary.title == "Fleet version mix"
+
+
+def test_dashboard_summary_falls_back_to_a_flat_document() -> None:
+    summary = _dashboard_summary_from_listing_entry({"dashboardId": "dash-2", "title": "Legacy flat"})
+
+    assert summary.dashboard_id == "dash-2"
+    assert summary.title == "Legacy flat"

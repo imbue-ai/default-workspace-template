@@ -90,16 +90,14 @@ export function notificationEntry(
   };
 }
 
-/** The `/ui/api/settings` payload, with every permission surface empty. */
+/** The `/ui/api/settings` payload. */
 export function settingsOverview(overrides: Partial<SettingsOverview> = {}): SettingsOverview {
   return {
-    services_overview: [],
-    file_sharing_grants: [],
-    workspace_delegation_grants: [],
-    permissions_unavailable: false,
     is_master_password_set: false,
     report_unexpected_errors: true,
     version: "v-one",
+    update_window_start_hour: 2,
+    update_window_end_hour: 5,
     ...overrides,
   };
 }

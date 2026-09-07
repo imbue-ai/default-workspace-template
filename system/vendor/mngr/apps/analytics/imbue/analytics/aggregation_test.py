@@ -15,9 +15,10 @@ def test_activity_aggregates_every_signal_source_per_account_and_day() -> None:
     session = build_fixture_analytics_session()
     session.execute(
         "INSERT INTO logs.http_requests VALUES"
-        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/account', 200, 10.0),"
-        " ('2026-08-12 09:05:00+00', 'user-a', 'PUT', '/sync/records/h1', 200, 15.0),"
-        " ('2026-08-12 09:10:00+00', '', 'GET', '/version', 200, 1.0)"
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/account', 200, 10.0, 'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:05:00+00', 'user-a', 'PUT', '/sync/records/h1', 200, 15.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:10:00+00', '', 'GET', '/version', 200, 1.0, '')"
     )
     session.execute(
         "INSERT INTO logs.share_visits VALUES"
@@ -45,7 +46,9 @@ def test_activity_aggregates_every_signal_source_per_account_and_day() -> None:
 
 def test_activity_recompute_preserves_rows_older_than_the_window_and_is_idempotent() -> None:
     session = build_fixture_analytics_session()
-    session.execute("INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0)")
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, '')"
+    )
     run_aggregation(session, _WINDOW_START)
     # Simulate an aggregate written by an earlier run over a window that has
     # since aged out: the recompute must never touch it.
@@ -61,6 +64,73 @@ def test_activity_recompute_preserves_rows_older_than_the_window_and_is_idempote
         [
             ("user-old", "2026-07-01", "app_open", 5),
             ("user-a", "2026-08-12", "app_open", 1),
+        ]
+    )
+
+
+def test_client_versions_hourly_buckets_by_hour_and_keeps_the_raw_identifier() -> None:
+    session = build_fixture_analytics_session()
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES"
+        # user-a polls twice in one hour, then once in the next, on 0.4.2.
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 09:59:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        " ('2026-08-12 10:01:00+00', 'user-a', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.2 imbue-cloud-plugin/0.1.6'),"
+        # user-b runs a newer build in the same hour.
+        " ('2026-08-12 09:30:00+00', 'user-b', 'GET', '/sync/records', 200, 5.0,"
+        "  'minds/0.4.3 imbue-cloud-plugin/0.1.7'),"
+        # A pre-header line (NULL) and a pre-0.4.1 client ('') both land in the
+        # '' bucket instead of being dropped.
+        " ('2026-08-12 09:40:00+00', 'user-c', 'GET', '/sync/records', 200, 5.0, NULL),"
+        " ('2026-08-12 09:45:00+00', 'user-c', 'GET', '/sync/records', 200, 5.0, ''),"
+        # Unauthenticated requests carry no account and are excluded.
+        " ('2026-08-12 09:50:00+00', '', 'GET', '/version', 200, 1.0, 'minds/0.4.3 imbue-cloud-plugin/0.1.7')"
+    )
+
+    run_aggregation(session, _WINDOW_START)
+    version_rows = session.execute(
+        "SELECT account_id, CAST(hour AS VARCHAR), imbue_client, request_count"
+        " FROM metrics.gold.client_versions_hourly ORDER BY account_id, hour"
+    ).fetchall()
+
+    assert version_rows == snapshot(
+        [
+            ("user-a", "2026-08-12 09:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 2),
+            ("user-a", "2026-08-12 10:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 1),
+            ("user-b", "2026-08-12 09:00:00+00", "minds/0.4.3 imbue-cloud-plugin/0.1.7", 1),
+            ("user-c", "2026-08-12 09:00:00+00", "", 2),
+        ]
+    )
+
+
+def test_client_versions_hourly_recompute_preserves_rows_older_than_the_window_and_is_idempotent() -> None:
+    session = build_fixture_analytics_session()
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES"
+        " ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, 'minds/0.4.2 imbue-cloud-plugin/0.1.6')"
+    )
+    run_aggregation(session, _WINDOW_START)
+    # Simulate an aggregate written by an earlier run over a window that has
+    # since aged out: the recompute must never touch it.
+    session.execute(
+        "INSERT INTO metrics.gold.client_versions_hourly VALUES"
+        " ('user-old', TIMESTAMPTZ '2026-07-01 08:00:00+00', 'minds/0.3.16 imbue-cloud-plugin/0.1.2', 5)"
+    )
+
+    run_aggregation(session, _WINDOW_START)
+    run_aggregation(session, _WINDOW_START)
+    all_rows = session.execute(
+        "SELECT account_id, CAST(hour AS VARCHAR), imbue_client, request_count"
+        " FROM metrics.gold.client_versions_hourly ORDER BY hour"
+    ).fetchall()
+
+    assert all_rows == snapshot(
+        [
+            ("user-old", "2026-07-01 08:00:00+00", "minds/0.3.16 imbue-cloud-plugin/0.1.2", 5),
+            ("user-a", "2026-08-12 09:00:00+00", "minds/0.4.2 imbue-cloud-plugin/0.1.6", 1),
         ]
     )
 
@@ -221,7 +291,9 @@ def test_pipeline_health_counts_failures_since_the_last_success() -> None:
 
 def test_run_aggregation_returns_row_counters() -> None:
     session = build_fixture_analytics_session()
-    session.execute("INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0)")
+    session.execute(
+        "INSERT INTO logs.http_requests VALUES ('2026-08-12 09:00:00+00', 'user-a', 'GET', '/', 200, 1.0, '')"
+    )
     session.execute(
         "INSERT INTO rsc.account_entitlements (user_id, plan_name, created_at, updated_at)"
         " VALUES ('user-a', 'explorer', now(), now())"
@@ -230,6 +302,7 @@ def test_run_aggregation_returns_row_counters() -> None:
     counters = run_aggregation(session, _WINDOW_START)
 
     assert counters.activity_rows == 1
+    assert counters.client_version_rows == 1
     assert counters.account_rows == 1
     assert counters.funnel_rows == 0
     assert counters.pipeline_health_rows == 0
@@ -449,6 +522,102 @@ def test_transcript_daily_derives_turns_tool_mix_and_errors_deduped() -> None:
         " ORDER BY tool_name"
     ).fetchall()
     assert tool_rows == snapshot([("Bash", 1, 1), ("Read", 1, 0)])
+
+
+def test_transcript_daily_counts_the_atif_record_shapes_alongside_the_legacy_ones() -> None:
+    """A workspace can hold agents of either stream vintage, so both must reach the same counters."""
+    session = build_fixture_analytics_session()
+    # One pre-cutover agent: a legacy user message and its tool result.
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:00:00+00",
+        "evt-legacy-u1",
+        "user_message",
+        "transcripts",
+        "user-a",
+        '{"content": "[redacted]", "agent_id": "agent-legacy"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:01:00+00",
+        "evt-legacy-r1",
+        "tool_result",
+        "transcripts",
+        "user-a",
+        '{"tool_name": "Bash", "is_error": false, "agent_id": "agent-legacy"}',
+    )
+    # One post-cutover agent: a user step, an agent step, and one observation
+    # record carrying two results (where the legacy stream had two records).
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:02:00+00",
+        "evt-step-u1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "user", "message": "[redacted]", "agent_id": "agent-atif"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:03:00+00",
+        "evt-step-a1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "agent", "message": "on it", "agent_id": "agent-atif"}',
+    )
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:04:00+00",
+        "evt-obs-1",
+        "observation",
+        "transcripts",
+        "user-a",
+        '{"results": ['
+        '{"source_call_id": "c1", "content_byte_count": 3, "extra": {"is_error": true, "tool_name": "Read"}},'
+        '{"source_call_id": "c2", "content_byte_count": 4, "extra": {"is_error": false, "tool_name": "Bash"}}'
+        '], "agent_id": "agent-atif"}',
+    )
+    # A system step's inline observation is not a tool result and must not be counted.
+    _insert_raw_event(
+        session,
+        "transcripts.raw.transcript_events",
+        "2026-08-12 09:05:00+00",
+        "evt-step-s1",
+        "step",
+        "transcripts",
+        "user-a",
+        '{"source": "system", "message": "", "agent_id": "agent-atif",'
+        ' "observation": {"results": [{"source_call_id": "", "content_byte_count": 9,'
+        ' "extra": {"is_error": false, "tool_name": "compact"}}]}}',
+    )
+
+    run_aggregation(session, _WINDOW_START)
+
+    daily_rows = session.execute(
+        "SELECT user_message_count, assistant_message_count, tool_result_count,"
+        " tool_error_count, distinct_tool_count, active_agent_count"
+        " FROM metrics.gold.transcript_daily"
+    ).fetchall()
+    # Two user turns (one per vintage), one agent turn, three tool results
+    # (one legacy record plus the observation's two), one of them failing.
+    assert daily_rows == snapshot([(2, 1, 3, 1, 2, 2)])
+
+    tool_rows = session.execute(
+        "SELECT tool_name, tool_result_count, tool_error_count FROM metrics.gold.transcript_tools_daily"
+        " ORDER BY tool_name"
+    ).fetchall()
+    assert tool_rows == snapshot([("Bash", 2, 0), ("Read", 1, 1)])
+
+    activity_rows = session.execute(
+        "SELECT signal_count FROM metrics.gold.activity WHERE signal_type = 'workspace_user_message'"
+    ).fetchall()
+    assert activity_rows == snapshot([(2,)])
 
 
 def test_collection_health_tracks_staleness_and_consecutive_failures() -> None:

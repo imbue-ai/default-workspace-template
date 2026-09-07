@@ -39,6 +39,11 @@ installed alongside `duckdb`.
   is its own `signal_type` row, so redefine actives by changing the WHERE.
   Explorer in-workspace signals (`workspace_chat_message`,
   `workspace_git_commit`, `workspace_user_message`) live in the same table.
+- `client_versions.sql` -- the fleet version mix: distinct accounts per
+  client version per hour (from `gold.client_versions_hourly`), for
+  watching a release roll out. The raw `X-Imbue-Client` identifier is
+  stored verbatim; the example parses the `minds/<version>` half out at
+  query time.
 - `pipeline_health.sql` -- is the pipeline itself alive: per-cron staleness,
   consecutive failures, and last duration vs. its warning threshold.
 - `funnel.sql` -- downloads -> signups -> first workspace, daily.
@@ -54,6 +59,10 @@ floors means "not instrumented yet", never "no usage":
 - `app_open` and `share_visit` derive from structured connector log lines
   that began with the 0.4.2 deploy, **2026-08-25 ~17:15 UTC**. Requests
   before that were logged without user attribution.
+- `gold.client_versions_hourly` shares the same **2026-08-25** floor (it
+  needs the same attributed log lines), and its `imbue_client` value is
+  `''` for clients older than minds 0.4.1 (which sent no `X-Imbue-Client`
+  header) -- the unversioned bucket, not missing data.
 - `funnel_daily.downloads` begins **2026-08-21**, when the `/download`
   redirect started recording `download_events`.
 - `signup` coalesces the static SuperTokens backfill

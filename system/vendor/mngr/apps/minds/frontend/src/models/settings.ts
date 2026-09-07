@@ -1,6 +1,6 @@
 // Settings page model: loads the app-level settings payload from
-// /ui/api/settings, tracks the active section + revoke dialog, and performs
-// the page's writes (legacy POST routes for revokes/connectors/master
+// /ui/api/settings, tracks the active section, and performs
+// the page's writes (legacy POST routes for the master
 // password; the If-Match-guarded /ui/api endpoints for the error-reporting
 // toggle and the notification prefs).
 //
@@ -23,78 +23,7 @@ import {
   postNotificationPrefsWrite,
 } from "./notificationsUi";
 
-export interface GrantedPermission {
-  label: string;
-  description: string;
-}
-
-export interface WorkspaceServiceGrant {
-  workspace_agent_id: string;
-  workspace_name: string;
-  color: string;
-  permissions: GrantedPermission[];
-}
-
-export interface ServiceAccountOverview {
-  account: string;
-  label: string;
-  is_connected: boolean;
-  workspace_grants: WorkspaceServiceGrant[];
-}
-
-export interface ServicePermissionOverview {
-  service_name: string;
-  display_name: string;
-  accounts: ServiceAccountOverview[];
-  /** Whether latchkey can sign in to this service through a browser, which is
-   * what "+ Add account" does. */
-  is_browser_sign_in_supported: boolean;
-}
-
-/** Why "+ Add account" is unavailable for a service, or null when it works.
- *
- * The action is latchkey's browser sign-in, so a service without one (AWS,
- * Coolify, ...) has nothing for it to do; the dialog says so on hover instead
- * of failing after the click. */
-export function addAccountBlockedReason(
-  service: ServicePermissionOverview,
-): string | null {
-  if (service.is_browser_sign_in_supported) return null;
-  return `${service.display_name} does not support signing in through a browser.`;
-}
-
-export interface SharedPath {
-  path: string;
-  access_label: string;
-}
-
-export interface WorkspaceFileSharingGrant {
-  workspace_agent_id: string;
-  workspace_name: string;
-  color: string;
-  paths: SharedPath[];
-}
-
-export interface WorkspaceDelegationVerb {
-  verb_permission: string;
-  label: string;
-  description: string;
-  is_all_workspaces: boolean;
-  target_names: string[];
-}
-
-export interface WorkspaceDelegationGrant {
-  workspace_agent_id: string;
-  workspace_name: string;
-  color: string;
-  verbs: WorkspaceDelegationVerb[];
-}
-
 export interface SettingsOverview {
-  services_overview: ServicePermissionOverview[];
-  file_sharing_grants: WorkspaceFileSharingGrant[];
-  workspace_delegation_grants: WorkspaceDelegationGrant[];
-  permissions_unavailable: boolean;
   is_master_password_set: boolean;
   report_unexpected_errors: boolean;
   /** Optional only for version skew: an already-running backend from before
@@ -106,12 +35,11 @@ export interface SettingsOverview {
    * can still be running. */
   notification_prefs?: NotificationPrefs;
   version: string;
+  update_window_start_hour: number;
+  update_window_end_hour: number;
 }
 
 export type SettingsSection =
-  | "connectors"
-  | "file-sharing"
-  | "workspace-delegation"
   | "notifications"
   | "error-reporting"
   | "updates"
@@ -120,11 +48,8 @@ export type SettingsSection =
 export const SETTINGS_SECTIONS: {
   name: SettingsSection;
   label: string;
-  group: "Permissions" | "Other";
+  group: "Other";
 }[] = [
-  { name: "connectors", label: "Connectors", group: "Permissions" },
-  { name: "file-sharing", label: "Local files", group: "Permissions" },
-  { name: "workspace-delegation", label: "Machines", group: "Permissions" },
   { name: "notifications", label: "Notifications", group: "Other" },
   { name: "error-reporting", label: "Error reporting", group: "Other" },
   { name: "updates", label: "Updates", group: "Other" },
@@ -172,14 +97,6 @@ function ensureUpdateStatusRegistered(): void {
   electronBridge.onUpdateStatus((status) => activeUpdateStatusForwarder?.(status));
 }
 
-export interface PendingRevoke {
-  title: string;
-  body: string;
-  confirmLabel: string;
-  url: string;
-  payload: Record<string, unknown>;
-}
-
 export interface MasterPasswordResult {
   account: string;
   is_ok: boolean;
@@ -191,11 +108,7 @@ type FetchLike = typeof fetch;
 export class SettingsModel {
   overview: SettingsOverview | null = null;
   isLoadFailed = false;
-  activeSection: SettingsSection = "connectors";
-  pendingRevoke: PendingRevoke | null = null;
-  revokeError = "";
-  isRevokeBusy = false;
-  addAccountBusyService = "";
+  activeSection: SettingsSection = "notifications";
 
   // -- Release channels (desktop only) --
   updateState: UpdateState | null = null;
@@ -205,6 +118,7 @@ export class SettingsModel {
   isUpdateBusy = false;
   updateError = "";
   errorReportingError = "";
+  updateWindowError = "";
   notificationPrefsError = "";
   /** Set after a failed openNotificationOsSettings() call (e.g. no known
    * settings command found on this Linux desktop environment), so the panel
@@ -255,78 +169,6 @@ export class SettingsModel {
 
   selectSection(name: SettingsSection): void {
     this.activeSection = name;
-  }
-
-  openRevoke(pending: PendingRevoke): void {
-    this.pendingRevoke = pending;
-    this.revokeError = "";
-    this.isRevokeBusy = false;
-  }
-
-  closeRevoke(): void {
-    this.pendingRevoke = null;
-  }
-
-  /** Confirm the pending revoke against its legacy POST route, then reload. */
-  async confirmRevoke(): Promise<void> {
-    const pending = this.pendingRevoke;
-    if (pending === null || this.isRevokeBusy) return;
-    this.isRevokeBusy = true;
-    try {
-      const response = await this.fetchImpl(pending.url, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pending.payload),
-      });
-      if (!response.ok) {
-        this.revokeError = `Could not revoke (HTTP ${response.status})`;
-        this.isRevokeBusy = false;
-        this.redraw();
-        return;
-      }
-      this.pendingRevoke = null;
-      this.isRevokeBusy = false;
-      await this.load();
-    } catch {
-      this.revokeError = "Could not revoke (network error)";
-      this.isRevokeBusy = false;
-      this.redraw();
-    }
-  }
-
-  /** Run the blocking connector sign-in flow for a service, then reload. */
-  async addConnectorAccount(serviceName: string): Promise<string | null> {
-    this.addAccountBusyService = serviceName;
-    this.redraw();
-    try {
-      const response = await this.fetchImpl(
-        "/settings/connectors/add-account",
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ service_name: serviceName }),
-        },
-      );
-      if (!response.ok) {
-        let message = `Could not add the account (HTTP ${response.status}).`;
-        try {
-          const data = (await response.json()) as { error?: string };
-          if (data.error) message = data.error;
-        } catch {
-          // Non-JSON error body: keep the status-based message.
-        }
-        return message;
-      }
-      await this.load();
-      return null;
-    } catch {
-      return "Could not add the account (network error).";
-    } finally {
-      this.addAccountBusyService = "";
-      this.redraw();
-    }
   }
 
   /** Flip the error-reporting flag through the If-Match-guarded endpoint.
@@ -385,6 +227,44 @@ export class SettingsModel {
       // snapping the checkbox back silently.
       this.errorReportingError =
         "Could not update error reporting (network error).";
+    }
+    this.redraw();
+  }
+
+  /** Persist the local-clock window scheduled machine updates run in. No
+   * If-Match: a plain preference, so two windows racing costs nothing. */
+  async setUpdateWindow(startHour: number, endHour: number): Promise<void> {
+    const overview = this.overview;
+    if (overview === null) return;
+    this.updateWindowError = "";
+    try {
+      const response = await this.fetchImpl("/ui/api/settings/update-window", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_hour: startHour, end_hour: endHour }),
+      });
+      if (response.ok) {
+        // Merge onto the current overview, not the pre-await snapshot: a
+        // concurrent write may have landed while this request was in flight.
+        const latest = this.overview;
+        if (latest === null) return;
+        this.overview = {
+          ...latest,
+          update_window_start_hour: startHour,
+          update_window_end_hour: endHour,
+        };
+      } else {
+        const data = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        this.updateWindowError =
+          data.error ??
+          `Could not change the update window (HTTP ${response.status}).`;
+      }
+    } catch {
+      this.updateWindowError =
+        "Could not change the update window (network error).";
     }
     this.redraw();
   }
@@ -506,9 +386,7 @@ export class SettingsModel {
 
   /** The nav entries this build can actually service. */
   get visibleSections(): typeof SETTINGS_SECTIONS {
-    return SETTINGS_SECTIONS.filter(
-      (section) => section.name !== "updates" || electronBridge.isDesktop,
-    );
+    return SETTINGS_SECTIONS;
   }
 
   async loadUpdateState(): Promise<void> {

@@ -27,10 +27,7 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
-import anthropic
 from anthropic.types import ToolParam
-from anthropic.types import ToolUseBlock
-from loguru import logger
 from pydantic import Field
 from pydantic import SecretStr
 from pydantic import ValidationError
@@ -40,6 +37,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import minds_bridge
+from imbue.minds_evals import model_calls
 from imbue.minds_evals.forward_instance import SESSION_COOKIE_NAME
 from imbue.minds_evals.resources import flow_step_protocol
 from imbue.minds_evals.resources.flow_step_protocol import StepAction
@@ -294,15 +292,6 @@ def parse_action(tool_input: dict[str, Any]) -> FlowAction | None:
     )
 
 
-def _tool_input(message: anthropic.types.Message, tool_name: str) -> dict[str, Any] | None:
-    for block in message.content:
-        if isinstance(block, ToolUseBlock) and block.name == tool_name:
-            # Tool inputs arrive as parsed JSON already; the isinstance guard is for a model that
-            # answered with something other than an object.
-            return block.input if isinstance(block.input, dict) else None
-    return None
-
-
 class VerifierCall(FrozenModel):
     """One verification-agent model call: the parsed tool payload plus its usage."""
 
@@ -314,29 +303,23 @@ class VerifierCall(FrozenModel):
 def _call_tool(
     system_prompt: str, prompt: str, tool: ToolParam, model: str, api_key: str, timeout_seconds: float
 ) -> VerifierCall:
-    """One forced-tool call. A failure yields no payload rather than raising: a flaky API call must
-    end the flow with a recorded reason, never take the whole evidence phase down."""
-    try:
-        client = anthropic.Anthropic(api_key=api_key, timeout=timeout_seconds)
-        message = client.messages.create(
-            model=model,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            tools=[tool],
-            tool_choice={"type": "tool", "name": tool["name"]},
-            messages=[{"role": "user", "content": prompt}],
-        )
-    # Every failure mode the SDK raises -- transport, timeout, rate limit, a bad status -- shares
-    # this base, and all of them mean the same thing here: no answer. The flow records that as an
-    # instrument failure rather than stalling the whole evidence phase. Anything NOT from the SDK
-    # is a bug in this module and is deliberately left to propagate.
-    except anthropic.AnthropicError as exc:
-        logger.warning("The verification agent's {} call failed: {}", tool["name"], exc)
-        return VerifierCall(tool_input=None, input_token_count=0, output_token_count=0)
+    """One forced-tool call, with its usage kept for the harness spend account. A call that comes
+    back with no payload ends the flow with a recorded instrument failure rather than raising, so a
+    flaky API never takes the whole evidence phase down."""
+    call = model_calls.call_forced_tool(
+        system_prompt=system_prompt,
+        prompt=prompt,
+        tools=[tool],
+        model=model,
+        api_key=api_key,
+        timeout_seconds=timeout_seconds,
+        max_tokens=MAX_TOKENS,
+        caller_label="verification agent's {}".format(tool["name"]),
+    )
     return VerifierCall(
-        tool_input=_tool_input(message, tool["name"]),
-        input_token_count=message.usage.input_tokens,
-        output_token_count=message.usage.output_tokens,
+        tool_input=call.tool_input,
+        input_token_count=call.input_token_count,
+        output_token_count=call.output_token_count,
     )
 
 

@@ -96,7 +96,6 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
-from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.host_key_store import has_host_key_store
 from imbue.mngr.providers.host_key_store import remove_host_key_record
@@ -112,6 +111,7 @@ from imbue.mngr.providers.ssh_host_setup import build_start_activity_watcher_com
 from imbue.mngr.providers.ssh_host_setup import build_start_volume_sync_command
 from imbue.mngr.providers.ssh_host_setup import parse_warnings_from_output
 from imbue.mngr.providers.ssh_host_setup import resolve_host_log_dir
+from imbue.mngr.utils.ssh import build_ssh_connect_command
 from imbue.mngr_modal.config import ModalProviderConfig
 from imbue.mngr_modal.errors import ModalMngrError
 from imbue.mngr_modal.errors import ModalSandboxTimeoutMngrError
@@ -2055,9 +2055,14 @@ log "=== Shutdown script completed ==="
         """
         host_id = host.id if isinstance(host, HostInterface) else host
 
-        # If sandbox is still running, return it
+        # If the sandbox is still running, return it. A just-terminated sandbox
+        # can linger in Sandbox.list under Modal's V2 Sandbox backend, so confirm it is
+        # actually alive (poll() reports the authoritative state) rather than
+        # trusting list-presence -- otherwise a stopped or hard-killed host is
+        # mistaken for running and this returns early, skipping the snapshot
+        # restore below (its stop_reason clear and its no-snapshot check).
         sandbox = self._find_sandbox_by_host_id(host_id)
-        if sandbox is not None:
+        if sandbox is not None and sandbox.poll() is None:
             host_obj = self._create_host_from_sandbox(sandbox)
             if host_obj is not None:
                 if snapshot_id is not None:

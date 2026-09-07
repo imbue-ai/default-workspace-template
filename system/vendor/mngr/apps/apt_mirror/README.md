@@ -33,7 +33,7 @@ uv run apt-mirror verify
 
 `warm` and `verify` default to the timestamp in `current-timestamp` and to every list in `package_lists/`; override with `--timestamp` and repeated `--list` flags.
 
-- `current-timestamp` is the committed source of truth for the latest cut `T`. The dwt repo's `.mngr/apt-snapshot-timestamp` must hold the same value when a `T` bump lands there (the release runbook enforces this ordering; see `apps/minds/docs/deploy/release.md`, step 0).
+- `current-timestamp` is the committed source of truth for the latest cut `T`. The dwt repo's `.mngr/apt-snapshot-timestamp` must hold the same value when a `T` bump lands there (the release runbook enforces this ordering; see `apps/minds/docs/deploy/ops/app-release.md`, step 0).
 - `package_lists/*.txt` are committed lists of package names (one per line, `#` comments) that warming covers -- what dwt workspaces actually install, not the whole Debian universe. Names are top-level only; dependencies are not resolved, and read-through covers anything a list misses (slower first fetch, never a missing package). After changing what dwt installs, create a fresh workspace, note any slow first-installs, and extend the list.
 
 ## Credentials

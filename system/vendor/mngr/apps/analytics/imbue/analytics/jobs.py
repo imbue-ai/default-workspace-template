@@ -247,6 +247,7 @@ def _aggregation_body(settings: AnalyticsSettings) -> dict[str, int]:
         connection.close()
     return {
         "activity_rows": counters.activity_rows,
+        "client_version_rows": counters.client_version_rows,
         "account_rows": counters.account_rows,
         "funnel_rows": counters.funnel_rows,
         "pipeline_health_rows": counters.pipeline_health_rows,

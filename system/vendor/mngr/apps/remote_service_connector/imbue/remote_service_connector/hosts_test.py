@@ -1091,3 +1091,60 @@ def test_admin_release_workspace_of_a_missing_row_is_already_released(monkeypatc
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "already_released"
+
+
+@pytest.mark.parametrize(
+    ("is_leased", "is_pool_exhausted", "is_missing_host_keys", "expected_outcome"),
+    [
+        (True, False, False, "leased"),
+        # A lease beats every failure flag (the flags describe earlier attempts).
+        (True, True, True, "leased"),
+        (False, False, True, "no_host_keys"),
+        (False, True, True, "no_host_keys"),
+        (False, True, False, "pool_exhausted"),
+        (False, False, False, "injection_failed"),
+    ],
+)
+def test_build_lease_request_metric_tags_outcome_precedence(
+    is_leased: bool, is_pool_exhausted: bool, is_missing_host_keys: bool, expected_outcome: str
+) -> None:
+    tags = hosts_mod.build_lease_request_metric_tags(
+        is_leased=is_leased,
+        is_pool_exhausted=is_pool_exhausted,
+        is_missing_host_keys=is_missing_host_keys,
+        requested_region="US-EAST-VA",
+        requested_branch="minds-v0.4.3",
+    )
+
+    assert tags == {"outcome": expected_outcome, "region": "US-EAST-VA", "branch": "minds-v0.4.3"}
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected_tag"),
+    [
+        (None, ""),
+        ("", ""),
+        ("minds-v0.4.3", "minds-v0.4.3"),
+        ("release/minds_v0.4.3", "release/minds_v0.4.3"),
+        # Hostile or free-form values collapse into one bucket so a client
+        # cannot mint arbitrary metric series.
+        ("has spaces", "other"),
+        ("x" * 65, "other"),
+        ('quote"and\nnewline', "other"),
+        # A trailing newline alone must not slip past the shape check (a
+        # $-anchored match would accept it).
+        ("minds-v0.4.3\n", "other"),
+        (123, "other"),
+    ],
+)
+def test_build_lease_request_metric_tags_clamps_client_supplied_values(raw_value: object, expected_tag: str) -> None:
+    tags = hosts_mod.build_lease_request_metric_tags(
+        is_leased=True,
+        is_pool_exhausted=False,
+        is_missing_host_keys=False,
+        requested_region=None,
+        requested_branch=raw_value,
+    )
+
+    assert tags["branch"] == expected_tag
+    assert tags["region"] == ""

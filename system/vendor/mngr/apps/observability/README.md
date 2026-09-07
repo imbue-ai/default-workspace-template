@@ -69,6 +69,25 @@ Secrets always arrive via environment variables or files (never argv); the
 Vault schema lives at `.minds/template/observability.sh` ->
 `secrets/minds/<tier>/observability`.
 
+## Dashboards
+
+Committed dashboard definitions (`imbue/observability/dashboards/*.dashboard.json`)
+are the source of truth for the instances' OpenObserve dashboards; the copy on
+an instance is disposable. Import them with:
+
+```bash
+uv run observability import-dashboards --ssh-host <ip>
+```
+
+The import is replace-by-title (an existing dashboard with a committed
+definition's title is deleted and recreated), so re-running converges on
+exactly what the repo holds. To change a dashboard, iterate on it in the UI
+(SSH tunnel, like all human access), export the JSON, commit it back into
+`imbue/observability/dashboards/`, and re-import on each tier. The
+`fleet-version-mix` dashboard charts active clients per `X-Imbue-Client`
+version, lease demand/outcomes, and the connector's `pool_gauge_sweep`
+pool-composition and slot-capacity gauges.
+
 ## Bugsink (error tracking)
 
 The `observability bugsink` command group drives the Bugsink instances the
@@ -97,7 +116,7 @@ canonical REST API through an SSH tunnel; the resulting per-service project
 DSNs land in the tier's `sentry` Vault entry (written by the glue script),
 which `minds-admin env deploy` stamps into the reporting services' Modal secret.
 Vault schema: `.minds/template/bugsink.sh` -> `secrets/minds/<tier>/bugsink`.
-The operator runbook is `apps/minds/docs/deploy/bugsink-bringup.md`.
+The operator runbook is `apps/minds/docs/deploy/setup/bugsink.md`.
 
 ## Retention
 

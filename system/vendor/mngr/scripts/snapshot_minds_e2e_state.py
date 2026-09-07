@@ -142,6 +142,12 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # Snapshot builds are test infrastructure, not a real install, so they
     # must not count toward Latchkey's usage.
     _write_to_os_environ("LATCHKEY_DISABLE_COUNTING", "1")
+    # Opt into Modal's V2 Sandbox backend, matching the mngr-wide default. Uses
+    # setdefault (not _write_to_os_environ) so an explicit MODAL_SANDBOX_V2=0
+    # still wins: this sandbox pairs vm_runtime with snapshot_filesystem, and if
+    # that combination is ever unsupported on V2 the workflow can fall back to
+    # V1 without a code change.
+    os.environ.setdefault("MODAL_SANDBOX_V2", "1")
     # Force the local-docker workspace to runc: the dockerd inside this Modal
     # vm_runtime sandbox only has the default runc registered (no gVisor), so a
     # runsc container fails with "unknown or invalid runtime name: runsc". The

@@ -37,6 +37,7 @@ from imbue.mngr_imbue_cloud.errors import ImbueCloudQuotaExceededError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudRecordFormatTooNewError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudShareError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
 from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyInfo
 from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyMaterial
@@ -113,6 +114,63 @@ def test_lease_host_success_parses_response(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.agent_id == "agent-abc"
     assert result.host_name == "my-host"
     assert result.attributes == {"cpus": 2}
+
+
+def test_lease_host_retries_connect_error_then_succeeds() -> None:
+    # ConnectError is a connect-phase failure (e.g. DNS EAI_NONAME); it is retried.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("simulated DNS failure", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "host_db_id": "00000000-0000-0000-0000-000000000001",
+                "vps_address": "10.0.0.1",
+                "ssh_port": 22,
+                "ssh_user": "root",
+                "container_ssh_port": 2222,
+                "agent_id": "agent-abc",
+                "host_id": "host-xyz",
+                "host_name": "my-host",
+                "attributes": {"cpus": 2},
+            },
+        )
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    result = client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+    assert result.vps_address == "10.0.0.1"
+    assert calls["n"] == 2
+
+
+def test_lease_host_does_not_retry_post_send_error() -> None:
+    # ReadError is a post-send failure, so a non-idempotent lease must not retry it.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadError("simulated post-send failure", request=request)
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudUnreachableError):
+        client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+    assert calls["n"] == 1
+
+
+def test_auth_signin_transport_error_raises_typed_auth_error() -> None:
+    # A transport failure surfaces as a typed ImbueCloudAuthError, not a raw httpx error.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadError("simulated post-send failure", request=request)
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError):
+        client.auth_signin("alice@imbue.com", "hunter2")
+    assert calls["n"] == 1
 
 
 def test_rename_host_success_posts_new_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -813,6 +871,71 @@ def test_get_workspace_retries_transient_transport_error(monkeypatch: pytest.Mon
     assert state["calls"] == 2
 
 
+def test_list_hosts_retries_transient_transport_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The discovery read behind `mngr list`/`mngr create` must ride out a
+    transport blip instead of surfacing "could not reach Imbue Cloud"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/hosts"
+        return httpx.Response(200, json={"hosts": []})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
+    assert client.list_hosts(SecretStr("tok")) == []
+    assert state["calls"] == 2
+
+
+def test_list_workspaces_retries_transient_transport_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces"
+        return httpx.Response(200, json=[_workspace_entry("running")])
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
+    workspaces = client.list_workspaces(SecretStr("tok"))
+    assert [workspace.status for workspace in workspaces] == [WorkspaceStatus.RUNNING]
+    assert state["calls"] == 2
+
+
+def test_list_hosts_exhausted_retries_raise_the_typed_unreachable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Terminal transport failure on the listings surfaces as ImbueCloudUnreachableError,
+    the type the provider maps back to ProviderUnavailableError (the user-facing
+    "could not reach Imbue Cloud" card)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"hosts": []})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=99, handler=handler)
+    with pytest.raises(ImbueCloudUnreachableError) as exc_info:
+        client.list_hosts(SecretStr("tok"))
+    assert state["calls"] == 3
+    assert "could not reach the imbue_cloud connector" in str(exc_info.value)
+
+
+def test_list_hosts_does_not_retry_auth_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 401 is a response, not a transport failure: fail fast with the auth type,
+    exactly one request on the wire."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "no token"})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
+    with pytest.raises(ImbueCloudAuthError):
+        client.list_hosts(SecretStr("tok"))
+    assert state["calls"] == 1
+
+
+def test_list_workspaces_does_not_retry_the_old_connector_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old-connector fallback signal is status-based, so it must keep failing
+    fast (one request) and keep its type -- callers use it to fall back to /hosts."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
+    with pytest.raises(WorkspacesEndpointUnavailableError):
+        client.list_workspaces(SecretStr("tok"))
+    assert state["calls"] == 1
+
+
 # -- Modal 303 long-request redirects --
 #
 # The connector is a Modal web function: a synchronous request that runs long
@@ -1237,6 +1360,7 @@ def test_create_share_parses_token_and_domain(monkeypatch: pytest.MonkeyPatch) -
                 "region": "us1",
                 "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
                 "relay_token": "secret-relay-token",
+                "chrome_origin": "https://minds.example.com",
             },
         )
 
@@ -1251,6 +1375,30 @@ def test_create_share_parses_token_and_domain(monkeypatch: pytest.MonkeyPatch) -
     assert info.relay_endpoints[0].relay_id == "relay-" + "1" * 16
     assert info.relay_token is not None
     assert info.relay_token.get_secret_value() == "secret-relay-token"
+    assert info.chrome_origin == "https://minds.example.com"
+
+
+def test_create_share_defaults_chrome_origin_to_none_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A connector that predates the field (or a tier with no hosted chrome)
+    # sends nothing; callers use None to fall back to the connector origin.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "relay_endpoints": [],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+    assert info.chrome_origin is None
 
 
 def test_create_share_sends_preferred_region(monkeypatch: pytest.MonkeyPatch) -> None:

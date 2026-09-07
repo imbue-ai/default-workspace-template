@@ -13,7 +13,7 @@ import {
 } from "../../../models/settings";
 import { SettingsSections } from "./SettingsSections";
 import { Button } from "../../components/Button";
-import { jsonResponse } from "../../../testing";
+import { jsonResponse, settingsOverview } from "../../../testing";
 import type { AnyVnode } from "../../../testing";
 import {
   allText,
@@ -102,10 +102,10 @@ describe("the Updates panel", () => {
     await withMindsNative({}, async () => {
       const text = panelText(updatesModel({ updateState: { ...ON_STABLE, status: PARKED } }));
 
-      expect(text).toContain("Stable is at 0.4.12, so you will stay on 0.4.30 until it catches up.");
+      expect(text).toContain("You're ahead of Stable and will get updates when it catches up.");
       expect(text).not.toContain("not receiving updates");
       expect(text).not.toContain("Switch to alpha");
-      expect(text).toContain("You are running Minds 0.4.30.");
+      expect(text).toContain("You're on Minds 0.4.30.");
     });
   });
 
@@ -142,9 +142,9 @@ describe("the Updates panel", () => {
         "Downloading 0.5.0",
       ],
       [
-        "a dev run, where there is no bundle to swap",
-        { type: "disabled", reason: "not-packaged" },
-        "Updates are only available in installed builds.",
+        "a dev run, which has nothing to update",
+        { type: "disabled" },
+        "Updates are disabled in dev builds.",
       ],
     ];
     await withMindsNative({}, async () => {
@@ -246,6 +246,46 @@ describe("the Updates panel", () => {
       expect(details[0].attrs?.open).toBe(true);
       expect(radios).toHaveLength(3);
       expect(radios[2].checked).toBe(true);
+    });
+  });
+
+  it("says you are up to date with your own channel, naming no version", async () => {
+    // Line 2 is about standing, not versions: every channel row already states
+    // what it serves.
+    await withMindsNative({}, async () => {
+      const text = panelText(updatesModel({}));
+
+      expect(text).toContain("You're on Minds 0.4.30.");
+      expect(text).toContain("You're up to date with Stable.");
+    });
+  });
+
+  it("never claims up to date when the check failed", async () => {
+    // The one thing this line must not assert on no evidence: an unreachable
+    // feed is not the same as having nothing to install.
+    await withMindsNative({}, async () => {
+      const text = panelText(
+        updatesModel({ updateState: { ...ON_STABLE, status: { type: "error", message: "ENOTFOUND" } } }),
+      );
+
+      expect(text).toContain("Couldn't check for updates.");
+      expect(text).not.toContain("up to date");
+    });
+  });
+
+  it("separates a channel mid-rollout from one that has landed", async () => {
+    // Mid-canary a channel serves two versions at once, so the row says which
+    // side of the rollout this install is on rather than a bare number.
+    const rolling = {
+      ...PEEKED,
+      beta: { version: "0.5.0", wouldPark: false, isOutsideRollout: true },
+    };
+    await withMindsNative({}, async () => {
+      const text = panelText(updatesModel({ peekedChannels: rolling }));
+
+      expect(text).toContain("Currently rolling out 0.5.0.");
+      expect(text).toContain("Currently on 0.4.30.");
+      expect(text).not.toContain("Beta (0.5.0)");
     });
   });
 
@@ -423,36 +463,24 @@ describe("SettingsSections layout", () => {
     });
   });
 
-  it("keeps the group headings and every section in the nav", async () => {
+  it("keeps the group heading and every section in the nav", async () => {
     await withMindsNative({}, async () => {
       const [nav] = columns();
       const navText = collectText(nav).join(" ");
-      for (const heading of ["Permissions", "Other"]) {
-        expect(navText, heading).toContain(heading);
-      }
+      expect(navText).toContain("Other");
       for (const section of SETTINGS_SECTIONS) {
         expect(navText, section.label).toContain(section.label);
       }
     });
   });
 
-  it("leaves Updates out of the nav in the browser build", async () => {
-    // There is no binary to update in a browser, so the entry would open a
-    // panel whose whole content is that it is not for you.
+  it("keeps Updates in the nav in the browser build, for the machine-update window", async () => {
+    // There is no binary to update in a browser, but machines update the same
+    // way everywhere, and their window is configured on this panel.
     await withMindsNative(null, async () => {
       const navText = collectText(columns()[0]).join(" ");
-      expect(navText).not.toContain("Updates");
+      expect(navText).toContain("Updates");
       expect(navText).toContain("Error reporting");
-    });
-  });
-
-  it("keeps the revoke dialog beside the pane, not inside it as a third column", async () => {
-    // The pane's contract is two columns; a fixed-position dialog parked in the
-    // row would be a real bug the moment it stopped being fixed-position.
-    await withMindsNative({}, async () => {
-      const [, ...siblings] = renderSections();
-      expect(siblings).toHaveLength(1);
-      expect(columns()).toHaveLength(2);
     });
   });
 
@@ -472,21 +500,14 @@ describe("SettingsSections layout", () => {
   });
 });
 
-const NOTIFICATIONS_OVERVIEW: SettingsOverview = {
-  services_overview: [],
-  file_sharing_grants: [],
-  workspace_delegation_grants: [],
-  permissions_unavailable: false,
-  is_master_password_set: false,
-  report_unexpected_errors: true,
+const NOTIFICATIONS_OVERVIEW: SettingsOverview = settingsOverview({
   notification_prefs: {
     is_enabled: true,
     style: "cards",
     is_os_hint_dismissed: false,
     version: "np-1",
   },
-  version: "v-one",
-};
+});
 
 /** A model on the Notifications section with the given overview loaded. */
 async function notificationsModel(

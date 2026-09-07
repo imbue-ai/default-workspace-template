@@ -22,7 +22,7 @@ Every service here is a plain Modal app deployed **by file path**:
 MNGR_DEPLOY_ENV=<tier> MINDS_DEPLOY_ID=<id> uv run modal deploy --name <app> --env <modal-env> path/to/app.py
 ```
 
-(normally driven by `minds-admin env deploy`, which threads the env vars and picks the Modal environment; see `apps/minds/docs/deploy/environments.md`).
+(normally driven by `minds-admin env deploy`, which threads the env vars and picks the Modal environment; see `apps/minds/docs/deploy/reference/environments.md`).
 
 What ends up in the container is exactly three things:
 

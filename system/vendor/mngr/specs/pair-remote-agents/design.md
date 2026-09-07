@@ -273,7 +273,7 @@ its body (quoting intact, because a shell now interprets it), and ends in
 #!/bin/sh
 exec ssh -i '/Users/Jane Doe/.mngr/keys/agent' -p 2222 \
     -o IdentitiesOnly=yes -o IdentityAgent=none \
-    -o UserKnownHostsFile='/Users/Jane Doe/.mngr/known_hosts' \
+    -o UserKnownHostsFile='"/Users/Jane Doe/.mngr/known_hosts"' \
     -o StrictHostKeyChecking=yes "$@"
 ```
 

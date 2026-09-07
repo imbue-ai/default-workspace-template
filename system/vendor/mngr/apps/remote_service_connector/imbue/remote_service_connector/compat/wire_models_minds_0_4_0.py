@@ -47,7 +47,7 @@ RELEASE_DATE = date(2026, 8, 18)
 # this date deliberately). Set to the release date + the ~1 month support
 # window; later releases that share this strictly-parsed surface extend this
 # date instead of adding a new snapshot (see docs:
-# apps/minds/docs/deploy/release.md).
+# apps/minds/docs/deploy/ops/app-release.md).
 # Also covers minds 0.4.1 (released 2026-08-18): its strictly-parsed connector
 # surface is identical to 0.4.0's (no wire_types or connector response changes
 # between the two tags), and its support window ends the same date.
@@ -55,7 +55,21 @@ RELEASE_DATE = date(2026, 8, 18)
 # still identical -- the only wire_types changes between the two tags are
 # docstrings, field descriptions, and the additive operator-only
 # AdminAccountInfo, which no strictly-parsed endpoint maps to.
-SUPPORT_ENDS = date(2026, 9, 24)
+# Also covers minds 0.4.3 (released 2026-08-29): the strictly-parsed surface is
+# still identical -- the only wire_types changes between the two tags are field
+# descriptions and the additive optional SyncWorkspaceRecord.backup_bucket
+# field (default None), which adds no required field; no new strict-parse call
+# sites were added client-side.
+# Also covers minds 0.4.4 (released 2026-08-31): the strictly-parsed surface is
+# still identical -- the only wire_types change between the two tags is the
+# additive optional ShareInfo.chrome_origin field (default None), which adds no
+# required field; no new strict-parse call sites were added client-side.
+# Also covers minds 0.5.0 (released 2026-09-02): the strictly-parsed surface is
+# still identical -- wire_types.py is byte-unchanged between minds-v0.4.4 and
+# this tag, and no new strict-parse call sites were added client-side. The
+# release is a minor bump for the workspace-side sign-in and chat rewrite, none
+# of which crosses the connector wire.
+SUPPORT_ENDS = date(2026, 10, 2)
 
 
 class _TolerantModel(BaseModel):

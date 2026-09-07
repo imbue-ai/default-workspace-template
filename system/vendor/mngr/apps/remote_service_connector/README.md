@@ -278,6 +278,10 @@ A pool lease (`pool_hosts`) and a synced workspace record (`workspace_records`, 
 
 The release chain itself holds no DB connection across its SSH/S3 work (intent flip + record retirement in one short transaction, then teardown, then the row delete on a fresh connection), and a `limactl delete` that finds its instance or disk already absent counts as done, so a release interrupted between the teardown and the row delete converges on retry instead of wedging in `removing`.
 
+### Pool gauges (the fleet-version dashboards' source)
+
+The **pool-gauge sweep** (`pool_gauge_sweep`, every 5 minutes; `POST /admin/sweep/pool-gauges` on demand, admin-key authenticated) reads the pool and emits it as `metric` log records for the OpenObserve dashboards (`apps/observability`): `pool_hosts_count` per (status, template branch, region) -- zero-filled over the known-status x observed-branch x known-region cross-product so a drained series reports 0 instead of going stale -- plus per-region `pool_slots_total` / `pool_slots_used` over ready boxes (occupancy = pool rows with a `bare_metal_server_id`; the bake's on-box check remains the real capacity guard) and a `pool_gauge_sweep_ok` heartbeat. Pure observation (two SQL reads, no external APIs), deliberately separate from the control-loop sweeps. Each `/hosts/lease` / `/hosts/claim` attempt that reaches host selection also emits one `host_lease_request` metric record tagged with its outcome (`leased` / `pool_exhausted` / `no_host_keys` / `injection_failed`) and the requested region and branch (client-supplied values are clamped to a conservative shape so they cannot mint arbitrary metric series).
+
 ### Account (signed-in user only)
 
 - `GET /account` -- The caller's plan, entitlement values, live usage, and the available plan names. Lazily creates the entitlements row on first touch.
@@ -300,7 +304,7 @@ There is deliberately **no account-deletion endpoint** here: fully removing a us
 
 ### Fully deleting accounts (`scripts/delete_accounts.py`)
 
-`scripts/delete_accounts.py` is a **local** operator tool (private -- not in the public-mirror allowlist, and it lives at the repo root, not in this app) that fully deletes accounts by talking directly to a tier's live backends, so it needs **no connector deploy**. For each account in a CSV it removes the connector-DB rows keyed to the user (`account_entitlements`, `workspace_records`, `account_key_bundles`, `r2_cleanup_grants`, and `shares` / `relay_tokens` keyed by the account's 32-hex share label), best-effort-deletes the LiteLLM internal user, and deletes the SuperTokens identity itself last (so a partial run is safe to re-run).
+`scripts/delete_accounts.py` is a **local** operator tool (private -- not in the public-mirror allowlist, and it lives at the repo root, not in this app) that fully deletes accounts by talking directly to a tier's live backends, so it needs **no connector deploy**. For each account in a CSV it removes the connector-DB rows keyed to the user (`account_entitlements`, `workspace_records`, `account_key_bundles`, `r2_cleanup_grants`, `account_attribution`, and `shares` / `relay_tokens` keyed by the account's 32-hex share label), best-effort-deletes the LiteLLM internal user, and deletes the SuperTokens identity itself last (so a partial run is safe to re-run).
 
 It is **dry-run by default** (prints the plan, changes nothing until `--execute`), refuses any account still holding a leased pool host (release those via `mngr pool destroy` first), tolerates target tables absent from a tier's DB, and leaves each account's `host-<hex>` R2 backup buckets to the backup-retention reaper (deleting the workspace records orphans them). Credentials resolve per value from an explicit flag, else an environment variable, else the tier's HCP Vault entries.
 

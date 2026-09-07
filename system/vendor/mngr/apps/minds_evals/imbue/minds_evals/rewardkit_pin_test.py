@@ -1,7 +1,7 @@
 """The verifier container's rewardkit and this project's dev-group rewardkit are one pin.
 
 ``templates/`` runs inside the verifier container, which resolves rewardkit itself
-through uvx: the criteria under ``templates/tests/`` and the ones under
+through uvx: the criteria under ``templates/tests/verifier/`` and the ones under
 ``templates/outcome/`` (copied in beside them for cases that declare expectations)
 both import it. The dev group installs it here too -- nothing this project runs
 imports it, it is there so the type checker can resolve those criteria. Two separate
@@ -31,11 +31,11 @@ def test_rewardkit_pin_matches_the_verifier_container() -> None:
         "templates/ cannot be type-checked and its criteria fail to resolve `rewardkit`"
     )
 
-    test_sh = (_PROJECT_DIR / "imbue" / "minds_evals" / "templates" / "tests" / "test.sh").read_text()
+    test_sh = (_PROJECT_DIR / "imbue" / "minds_evals" / "templates" / "tests" / "verifier" / "test.sh").read_text()
     match = re.search(r"uvx --from '(harbor-rewardkit[^']*)'", test_sh)
-    assert match is not None, "could not find the uvx rewardkit invocation in templates/tests/test.sh"
+    assert match is not None, "could not find the uvx rewardkit invocation in templates/tests/verifier/test.sh"
 
     assert declared[0] == match.group(1), (
-        f"dev group pins {declared[0]!r} but templates/tests/test.sh runs {match.group(1)!r}; "
+        f"dev group pins {declared[0]!r} but templates/tests/verifier/test.sh runs {match.group(1)!r}; "
         "the type check would not be against the version that grades trials"
     )

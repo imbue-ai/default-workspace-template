@@ -30,6 +30,30 @@ def _build_fixture_workspace(tmp_path: Path) -> tuple[Path, Path]:
         host_dir / "agents/agent-abc/events/claude/common_transcript/events.jsonl",
         [_event("evt-t1", "user_message", "claude", content="hello there")],
     )
+    # A post-cutover agent alongside the legacy one: both vintages are in the fleet.
+    _write_jsonl(
+        host_dir / "agents/agent-atif/events/claude/common_transcript/events.jsonl",
+        [
+            {
+                "type": "step",
+                "event_id": "evt-t2",
+                "emitter": "claude/common_transcript",
+                "timestamp": "2026-08-18T12:00:00.000000000Z",
+                "source": "agent",
+                "message": "hello back",
+                "tool_calls": [{"tool_call_id": "call-1", "function_name": "Bash", "arguments": {"command": "ls"}}],
+            },
+            {
+                "type": "observation",
+                "event_id": "evt-t3",
+                "emitter": "claude/common_transcript",
+                "timestamp": "2026-08-18T12:00:01.000000000Z",
+                "results": [
+                    {"source_call_id": "call-1", "content": "a b c", "extra": {"is_error": False, "tool_name": "Bash"}}
+                ],
+            },
+        ],
+    )
     _write_jsonl(
         host_dir / "agents/agent-abc/workspace_layout/events/client_activity/events.jsonl",
         [_event("evt-c1", "message", "client_activity", client_id="c1", message_text="hi")],
@@ -68,19 +92,26 @@ def test_run_collection_emits_a_stream_the_runner_parser_accepts(tmp_path: Path)
 
     parsed = parse_collection_output("\n".join(emitted_lines))
     assert parsed.dropped_line_count == 0
-    assert [record.event_id for record in parsed.transcript_records] == ["evt-t1"]
+    assert [record.event_id for record in parsed.transcript_records] == ["evt-t1", "evt-t2", "evt-t3"]
+    atif_payloads = {
+        record.event_id: json.loads(record.payload)
+        for record in parsed.transcript_records
+        if record.event_id != "evt-t1"
+    }
+    assert atif_payloads["evt-t2"]["tool_calls"] == [{"tool_call_id": "call-1", "function_name": "Bash"}]
+    assert atif_payloads["evt-t3"]["results"][0]["content_byte_count"] == 5
     assert {record.event_id for record in parsed.metrics_records} >= {"evt-c1", "evt-s1"}
     assert any(record.feed_source == "workspace_state" for record in parsed.metrics_records)
     assert parsed.run_summary is not None
     assert "workspace_layout" not in parsed.run_summary.error_by_source
     assert parsed.run_summary.script_version == "abc123"
     assert parsed.run_summary.is_budget_exhausted is False
-    assert parsed.run_summary.record_count_by_source["transcripts"] == 1
+    assert parsed.run_summary.record_count_by_source["transcripts"] == 3
     assert state.read_bytes > 0
     # Cursors round-trip as JSON strings the runner persists verbatim.
     transcripts_cursor = json.loads(parsed.run_summary.cursor_by_source["transcripts"])
-    (transcript_offset,) = transcripts_cursor.values()
-    assert transcript_offset > 0
+    assert len(transcripts_cursor) == 2
+    assert all(offset > 0 for offset in transcripts_cursor.values())
 
 
 def test_run_collection_fails_the_transcript_feed_closed_when_scanning_breaks(tmp_path: Path) -> None:

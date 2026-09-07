@@ -48,6 +48,7 @@ from imbue.mngr.hosts.host import ONBOARDING_TEXT
 from imbue.mngr.hosts.host import ONBOARDING_TEXT_TMUX_USER
 from imbue.mngr.hosts.host import _LOCK_ACQUIRED_MARKER
 from imbue.mngr.hosts.host import _LOCK_TIMED_OUT_MARKER
+from imbue.mngr.hosts.host import _START_AGENT_LAUNCH_TIMEOUT_SECONDS
 from imbue.mngr.hosts.host import _TMUX_SET_TITLES_STRING
 from imbue.mngr.hosts.host import _TMUX_STATUS_LEFT_LENGTH
 from imbue.mngr.hosts.host import _build_agent_launch_steps
@@ -58,14 +59,14 @@ from imbue.mngr.hosts.host import _format_env_file
 from imbue.mngr.hosts.host import _increment_local_generation_counter
 from imbue.mngr.hosts.host import _merge_agent_type_provisioning
 from imbue.mngr.hosts.host import _parse_acquired_generation_token
-from imbue.mngr.hosts.host import _parse_boot_time_output
-from imbue.mngr.hosts.host import _parse_uptime_output
+from imbue.mngr.hosts.host import _parse_boot_info_output
 from imbue.mngr.hosts.outer_host import ActiveRemoteLock
 from imbue.mngr.hosts.outer_host import SSH_CHANNEL_OPEN_TIMEOUT_SECONDS
 from imbue.mngr.hosts.outer_host import SSH_KEEPALIVE_INTERVAL_SECONDS
 from imbue.mngr.interfaces.agent import AgentInterface
 from imbue.mngr.interfaces.data_types import CleanupFailureCategory
 from imbue.mngr.interfaces.data_types import CommandResult
+from imbue.mngr.interfaces.data_types import HostBootInfo
 from imbue.mngr.interfaces.data_types import PyinfraConnector
 from imbue.mngr.interfaces.host import AgentEnvironmentOptions
 from imbue.mngr.interfaces.host import AgentLabelOptions
@@ -88,8 +89,10 @@ from imbue.mngr.primitives import TmuxWidth
 from imbue.mngr.primitives import TmuxWindowSize
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
+from imbue.mngr.utils.testing import HostSubclassT
 from imbue.mngr.utils.testing import get_cleanup_failures
 from imbue.mngr.utils.testing import get_short_random_string
+from imbue.mngr.utils.testing import make_local_host_of_class
 from imbue.mngr.utils.testing import make_mngr_ctx
 from imbue.mngr.utils.testing import make_test_agent_details
 
@@ -1265,69 +1268,47 @@ def test_build_agent_launch_steps_writes_command_verbatim(tmp_path: Path) -> Non
 
 
 # =========================================================================
-# Tests for _parse_uptime_output
+# Tests for _parse_boot_info_output
 # =========================================================================
 
 
-def test_parse_uptime_output_macos_format() -> None:
-    """Test parsing macOS-style uptime output (boot timestamp + current timestamp)."""
-    # macOS sysctl gives boot time, date gives current time
-    stdout = "1700000000\n1700003600\n"
-    result = _parse_uptime_output(stdout)
-    assert result == 3600.0
+def test_parse_boot_info_output_both_values() -> None:
+    """Line 1 is the boot epoch, line 2 the host-measured uptime (integer or float)."""
+    result = _parse_boot_info_output("1700000000\n3600\n")
+    assert result.boot_time == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
+    assert result.uptime_seconds == 3600.0
+
+    linux = _parse_boot_info_output("1700000000\n12345.67\n")
+    assert linux.boot_time == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
+    assert linux.uptime_seconds == 12345.67
 
 
-def test_parse_uptime_output_linux_format() -> None:
-    """Test parsing Linux-style /proc/uptime output."""
-    stdout = "12345.67 98765.43\n"
-    result = _parse_uptime_output(stdout)
-    assert result == 12345.67
+def test_parse_boot_info_output_empty() -> None:
+    """Empty output leaves both fields unknown."""
+    assert _parse_boot_info_output("") == HostBootInfo()
+    assert _parse_boot_info_output("\n\n") == HostBootInfo()
 
 
-def test_parse_uptime_output_empty() -> None:
-    """Test parsing empty output returns 0."""
-    assert _parse_uptime_output("") == 0.0
-    assert _parse_uptime_output("  \n") == 0.0
+def test_parse_boot_info_output_boot_only() -> None:
+    """A boot line with an empty uptime line leaves uptime unknown."""
+    result = _parse_boot_info_output("1700000000\n\n")
+    assert result.boot_time == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
+    assert result.uptime_seconds is None
 
 
-def test_parse_uptime_output_unexpected_lines() -> None:
-    """Test parsing output with unexpected number of lines returns 0."""
-    stdout = "line1\nline2\nline3\n"
-    assert _parse_uptime_output(stdout) == 0.0
+def test_parse_boot_info_output_uptime_only_is_positional() -> None:
+    """An empty boot line does not shift the uptime into the boot slot (positional read)."""
+    result = _parse_boot_info_output("\n12345.67\n")
+    assert result.boot_time is None
+    assert result.uptime_seconds == 12345.67
 
 
-def test_parse_uptime_output_non_numeric_two_lines() -> None:
-    """Test parsing non-numeric macOS-style output returns 0."""
-    assert _parse_uptime_output("error\nmessage\n") == 0.0
-
-
-def test_parse_uptime_output_non_numeric_single_line() -> None:
-    """Test parsing non-numeric Linux-style output returns 0."""
-    assert _parse_uptime_output("not_a_number\n") == 0.0
-
-
-# =========================================================================
-# Tests for _parse_boot_time_output
-# =========================================================================
-
-
-def test_parse_boot_time_output_valid_timestamp() -> None:
-    """Test parsing a valid Unix timestamp returns the correct datetime."""
-    # Both macOS sysctl and Linux btime produce a single Unix timestamp
-    result = _parse_boot_time_output("1700000000\n")
-    assert result is not None
-    assert result == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
-
-
-def test_parse_boot_time_output_empty() -> None:
-    """Test parsing empty output returns None."""
-    assert _parse_boot_time_output("") is None
-    assert _parse_boot_time_output("  \n") is None
-
-
-def test_parse_boot_time_output_non_numeric() -> None:
-    """Test parsing non-numeric output returns None."""
-    assert _parse_boot_time_output("not_a_number\n") is None
+def test_parse_boot_info_output_non_numeric() -> None:
+    """Non-numeric values leave the corresponding field unknown."""
+    assert _parse_boot_info_output("not_a_number\nalso_bad\n") == HostBootInfo()
+    partial = _parse_boot_info_output("1700000000\nnot_a_number\n")
+    assert partial.boot_time == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
+    assert partial.uptime_seconds is None
 
 
 # =========================================================================
@@ -1408,13 +1389,14 @@ class _FakePyinfraHost:
         return True, CommandOutput([])
 
 
-def _create_host_with_fake_connector(
+def _create_host_of_class_with_fake_connector(
     local_provider: LocalProviderInstance,
     fake_host: _FakePyinfraHost,
-) -> Host:
-    """Create a Host with a fake pyinfra connector for testing retry behavior."""
+    host_class: type[HostSubclassT],
+) -> HostSubclassT:
+    """Create a ``Host`` subclass instance on a fake (remote-looking) pyinfra connector."""
     connector = PyinfraConnector(cast(PyinfraHost, fake_host))
-    return Host(
+    return host_class(
         id=HostId.generate(),
         host_name=HostName("test"),
         connector=connector,
@@ -1423,24 +1405,41 @@ def _create_host_with_fake_connector(
     )
 
 
-def _make_stop_agents_test_host(
+def _create_host_with_fake_connector(
     local_provider: LocalProviderInstance,
+    fake_host: _FakePyinfraHost,
+) -> Host:
+    """Create a Host with a fake pyinfra connector for testing retry behavior."""
+    return _create_host_of_class_with_fake_connector(local_provider, fake_host, Host)
+
+
+class _HostWithImmediateTimeout(Host):
+    """Host whose command runner reports an exhausted-retries read timeout on every command."""
+
+    def _run_shell_command_with_transient_retry(
+        self,
+        command: StringCommand,
+        pyinfra_kwargs: dict[str, Any],
+    ) -> tuple[bool, CommandOutput]:
+        raise TimeoutError("Timed out reading output")
+
+
+def _make_command_intercepting_host_class(
     agent: AgentInterface,
     command_handler: Callable[[str], CommandResult],
-) -> tuple[Host, list[tuple[str, float | None]]]:
-    """Build a Host whose stop-path shell commands are served by ``command_handler``.
+    recorded_timeouts_out: list[tuple[str, float | None]],
+) -> type[Host]:
+    """Build a Host subclass whose shell commands are served by ``command_handler``.
 
-    The returned Host's ``execute_idempotent_command`` records every
-    ``(command, timeout_seconds)`` pair into the returned list (so callers can
-    assert on the bounds passed) and delegates the actual result to
-    ``command_handler``, which is free to return canned output or raise to
-    simulate a wedged command. ``_get_agent_by_id`` is stubbed to return
-    ``agent`` so ``stop_agents`` walks its full collect-then-kill sequence
-    without touching real tmux or processes.
+    The class's ``execute_idempotent_command`` records every ``(command,
+    timeout_seconds)`` pair into ``recorded_timeouts_out`` (so callers can assert on
+    the bounds passed) and delegates the actual result to ``command_handler``, which
+    is free to return canned output or raise to simulate a wedged command.
+    ``_get_agent_by_id`` is stubbed to return ``agent`` so the start/stop paths walk
+    their full sequence without touching real tmux or processes.
     """
-    recorded_timeouts: list[tuple[str, float | None]] = []
 
-    class _StopAgentsTestHost(Host):
+    class _CommandInterceptingHost(Host):
         def execute_idempotent_command(
             self,
             command: str,
@@ -1450,19 +1449,27 @@ def _make_stop_agents_test_host(
             timeout_seconds: float | None = None,
             raise_on_timeout: bool = False,
         ) -> CommandResult:
-            recorded_timeouts.append((command, timeout_seconds))
+            recorded_timeouts_out.append((command, timeout_seconds))
             return command_handler(command)
 
         def _get_agent_by_id(self, agent_id: AgentId) -> AgentInterface | None:
             return agent
 
-    host = _StopAgentsTestHost(
-        id=HostId.generate(),
-        host_name=HostName("test"),
-        connector=PyinfraConnector(cast(PyinfraHost, _FakePyinfraHost())),
-        provider_instance=local_provider,
-        mngr_ctx=local_provider.mngr_ctx,
-    )
+    return _CommandInterceptingHost
+
+
+def _make_stop_agents_test_host(
+    local_provider: LocalProviderInstance,
+    agent: AgentInterface,
+    command_handler: Callable[[str], CommandResult],
+) -> tuple[Host, list[tuple[str, float | None]]]:
+    """Build a Host (on a fake remote connector) whose stop-path shell commands are served by ``command_handler``.
+
+    See ``_make_command_intercepting_host_class`` for what is intercepted and recorded.
+    """
+    recorded_timeouts: list[tuple[str, float | None]] = []
+    host_class = _make_command_intercepting_host_class(agent, command_handler, recorded_timeouts)
+    host = _create_host_of_class_with_fake_connector(local_provider, _FakePyinfraHost(), host_class)
     return host, recorded_timeouts
 
 
@@ -1632,6 +1639,114 @@ def test_reap_agent_process_tree_kills_pane_and_env_marked_orphans_but_not_the_s
     assert pane_pid in kill_commands and orphan_pid in kill_commands
     # It must NOT kill the tmux session -- that's stop_agents' job, not the reap's.
     assert not any("kill-session" in command for command in commands)
+
+
+def _make_local_command_intercepting_host(
+    local_provider: LocalProviderInstance,
+    agent: AgentInterface,
+    command_handler: Callable[[str], CommandResult],
+) -> tuple[Host, list[tuple[str, float | None]]]:
+    """Build a *local* Host whose shell commands are served by ``command_handler``.
+
+    Unlike ``_make_stop_agents_test_host`` (a fake remote connector), this host keeps the
+    real local connector, so the start path's file reads and writes (the agent's data.json,
+    the host tmux config) hit the real temp host dir. Only ``execute_idempotent_command``
+    is intercepted, recording every ``(command, timeout_seconds)`` pair, and
+    ``_get_agent_by_id`` returns ``agent``.
+    """
+    recorded_timeouts: list[tuple[str, float | None]] = []
+    host_class = _make_command_intercepting_host_class(agent, command_handler, recorded_timeouts)
+    return make_local_host_of_class(local_provider, host_class), recorded_timeouts
+
+
+def _is_session_probe(command: str) -> bool:
+    """Whether ``command`` is the pre-launch ``tmux has-session`` probe (not the launch batch, which starts with the same guard)."""
+    return command.startswith("tmux has-session") and "tmux new-session" not in command
+
+
+def _is_reap_step(command: str) -> bool:
+    """Whether ``command`` belongs to the process-tree reap (pid collection or the kill loop)."""
+    return "tmux list-windows" in command or "/proc/[0-9]*/environ" in command or "kill -TERM" in command
+
+
+def test_start_agents_raises_and_reaps_nothing_when_the_session_probe_times_out(
+    local_provider: LocalProviderInstance,
+    temp_host_dir: Path,
+    temp_work_dir: Path,
+) -> None:
+    """A timed-out session probe aborts the start; it must never be read as "no session".
+
+    Regression guard: the probe used to report a timeout as ``success=False``, which is
+    indistinguishable from "no session", and start_agents then reaped the LIVE agent's
+    whole process tree (for a minds services agent: supervisord and every service under it).
+    """
+    agent = _create_test_agent(local_provider, temp_host_dir, temp_work_dir)
+
+    def handle(command: str) -> CommandResult:
+        if _is_session_probe(command):
+            raise CommandTimeoutError(f"Command timed out after 10.0s: {command}")
+        return CommandResult(stdout="", stderr="", success=True)
+
+    host, recorded = _make_local_command_intercepting_host(local_provider, agent, handle)
+
+    with pytest.raises(CommandTimeoutError):
+        host.start_agents([agent.id])
+
+    commands = [command for command, _ in recorded]
+    assert any(_is_session_probe(command) for command in commands)
+    assert [command for command in commands if _is_reap_step(command)] == []
+    assert not any("tmux new-session" in command for command in commands)
+
+
+def test_start_agents_reaps_then_launches_on_a_definitive_no_session_answer(
+    local_provider: LocalProviderInstance,
+    temp_host_dir: Path,
+    temp_work_dir: Path,
+) -> None:
+    """A definitive "no session" probe answer still triggers the stale-tree reap before the launch."""
+    agent = _create_test_agent(local_provider, temp_host_dir, temp_work_dir)
+
+    def handle(command: str) -> CommandResult:
+        if _is_session_probe(command):
+            return CommandResult(stdout="", stderr="", success=False)
+        return CommandResult(stdout="", stderr="", success=True)
+
+    host, recorded = _make_local_command_intercepting_host(local_provider, agent, handle)
+
+    host.start_agents([agent.id])
+
+    commands = [command for command, _ in recorded]
+    reap_idx = next(idx for idx, command in enumerate(commands) if _is_reap_step(command))
+    launch_idx = next(idx for idx, command in enumerate(commands) if "tmux new-session" in command)
+    assert reap_idx < launch_idx
+
+
+def test_start_agents_bounds_the_launch_batch_and_fails_loudly_when_it_times_out(
+    local_provider: LocalProviderInstance,
+    temp_host_dir: Path,
+    temp_work_dir: Path,
+) -> None:
+    """The launch batch carries a timeout, and a timeout is an AgentStartError, not a hang or a bare failure.
+
+    Regression guard: the batch used to run unbounded, so a wedged tmux client blocked
+    ``mngr start`` forever -- and, under the host lock, every start queued behind it.
+    """
+    agent = _create_test_agent(local_provider, temp_host_dir, temp_work_dir)
+
+    def handle(command: str) -> CommandResult:
+        if _is_session_probe(command):
+            return CommandResult(stdout="", stderr="", success=False)
+        if "tmux new-session" in command:
+            raise CommandTimeoutError(f"Command timed out after {_START_AGENT_LAUNCH_TIMEOUT_SECONDS}s: {command}")
+        return CommandResult(stdout="", stderr="", success=True)
+
+    host, recorded = _make_local_command_intercepting_host(local_provider, agent, handle)
+
+    with pytest.raises(AgentStartError, match=rf"did not complete within {_START_AGENT_LAUNCH_TIMEOUT_SECONDS:.0f}s"):
+        host.start_agents([agent.id])
+
+    launch_timeouts = [timeout for command, timeout in recorded if "tmux new-session" in command]
+    assert launch_timeouts == [_START_AGENT_LAUNCH_TIMEOUT_SECONDS]
 
 
 def test_execute_idempotent_command_raises_command_timeout_error_on_local_timeout(
@@ -2710,27 +2825,30 @@ def test_run_shell_command_wraps_timeout_error_in_host_connection_error(
     leak to callers as raw ``OSError`` rather than the structured
     ``HostConnectionError`` wrapper.
     """
-
-    class _HostWithImmediateTimeout(Host):
-        def _run_shell_command_with_transient_retry(
-            self,
-            command: StringCommand,
-            pyinfra_kwargs: dict[str, Any],
-        ) -> tuple[bool, CommandOutput]:
-            raise TimeoutError("Timed out reading output")
-
-    fake = _FakePyinfraHost()
-    connector = PyinfraConnector(cast(PyinfraHost, fake))
-    host = _HostWithImmediateTimeout(
-        id=HostId.generate(),
-        host_name=HostName("test"),
-        connector=connector,
-        provider_instance=local_provider,
-        mngr_ctx=local_provider.mngr_ctx,
-    )
+    host = _create_host_of_class_with_fake_connector(local_provider, _FakePyinfraHost(), _HostWithImmediateTimeout)
 
     with pytest.raises(HostConnectionError, match="timed out reading output"):
         host._run_shell_command(StringCommand("echo hello"))
+
+
+def test_execute_idempotent_command_raises_command_timeout_error_on_remote_timeout(
+    local_provider: LocalProviderInstance,
+) -> None:
+    """raise_on_timeout normalizes a post-retry remote (SSH) timeout into CommandTimeoutError.
+
+    Regression guard: the SSH path folds a post-retry ``TimeoutError`` into
+    ``HostConnectionError`` with the other connection failures, which used to happen
+    even for opt-in callers -- so the start path's "launch timed out" and "session
+    probe timed out" handlers never fired on remote hosts. The default path must keep
+    reporting the timeout as a ``HostConnectionError``.
+    """
+    host = _create_host_of_class_with_fake_connector(local_provider, _FakePyinfraHost(), _HostWithImmediateTimeout)
+
+    with pytest.raises(CommandTimeoutError, match="Command timed out after 5.0s: echo hello"):
+        host.execute_idempotent_command("echo hello", timeout_seconds=5.0, raise_on_timeout=True)
+
+    with pytest.raises(HostConnectionError, match="timed out reading output"):
+        host.execute_idempotent_command("echo hello", timeout_seconds=5.0)
 
 
 # =========================================================================
