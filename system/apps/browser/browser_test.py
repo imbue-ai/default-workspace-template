@@ -1249,6 +1249,31 @@ def test_start_that_fails_leaves_the_browser_stopped_with_its_tabs(monkeypatch: 
     ]
 
 
+def test_start_of_a_crashed_browser_ends_its_leftovers_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A crash only flips the lifecycle; the keepalive loop (and the display) are still up,
+    # and a relaunch over them would run two keepalive loops and leak the display.
+    calls = _stub_start(monkeypatch)
+    mgr = _manager()
+    browser = _running_browser("browser-1")
+    browser._last_known_tabs = ["https://kept.example"]
+    mgr._browsers["browser-1"] = browser
+
+    async def crash_then_start() -> "asyncio.Task[None]":
+        keepalive = asyncio.create_task(asyncio.sleep(3600))
+        browser._keepalive_task = keepalive
+        browser._crashed = True
+        await mgr.start_browser("browser-1")
+        task = browser._launch_task
+        assert task is not None
+        await task
+        return keepalive
+
+    keepalive = asyncio.run(crash_then_start())
+    assert keepalive.cancelled()
+    assert calls == [("browser-1", ["https://kept.example"])]
+    assert browser._lifecycle == "running"
+
+
 def test_stop_wakes_a_parked_waiter_as_stopped() -> None:
     browser = _running_browser("browser-1")
     browser.controller = "agent"

@@ -2198,6 +2198,10 @@ class BrowserSessionManager(MutableModel):
         session = self.get(browser_id)
         if session._lifecycle in ("init", "running"):
             return
+        if session._crashed:
+            # A crash only flips the lifecycle: the keepalive loop, the display, and the proxy
+            # registration are still up. End them (keeping the tabs) before launching over them.
+            await session.stop()
         async with self._lock:
             live = self._launched_count()
             if live >= _MAX_SESSIONS:

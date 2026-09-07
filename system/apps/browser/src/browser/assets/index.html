@@ -1036,6 +1036,13 @@ registerProcessor('pb', PB);`;
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.type === "crashed") showCrashed();
       else if (m.type === "closed") showTerminated();  // agent closed this browser -> terminal overlay
+      else if (crashed && m.type === "control" && m.lifecycle !== "crashed") {
+        // A start after a crash: the daemon ends the dead browser's leftovers (stopped) and
+        // launches it again (init), so the crash state is over for this viewer too.
+        crashed = false;
+        crashOverlay.classList.remove("show");
+        setLifecycle(m.lifecycle); setControl(m);
+      }
       else if (crashed || closedForGood) return;
       else if (m.type === "stopped") showStopped();
       else if (m.type === "launch_failed") showLaunchFailed();
