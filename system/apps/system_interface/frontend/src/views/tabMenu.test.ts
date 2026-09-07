@@ -56,6 +56,16 @@ describe("tabMenuEntries", () => {
     expect(labels(tabMenuEntries(app(), instance({ stoppable: false }), supplied))).not.toContain("Stop Terminal 1");
   });
 
+  it("offers neither Stop nor Start of an instance while its app is down", () => {
+    // The inventory reads every instance of a stopped app as stopped; a start would only reach an
+    // unreachable app, and the app itself is started from the rail.
+    const entries = labels(
+      tabMenuEntries(app({ is_running: false }), instance({ stoppable: true, status: "stopped" }), actions()),
+    );
+    expect(entries).not.toContain("Start Terminal 1");
+    expect(entries).not.toContain("Stop Terminal 1");
+  });
+
   it("offers the app's own Stop and Start only on a single-instance app's tab", () => {
     // A multi-instance app is stopped from the rail, never from one instance's tab.
     expect(labels(tabMenuEntries(app(), instance(), actions()))).not.toContain("Stop Terminal");
