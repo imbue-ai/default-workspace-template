@@ -5,6 +5,7 @@ from flask.testing import FlaskClient
 from app_instances.blueprint import (
     HTTP_BAD_REQUEST,
     HTTP_CONFLICT,
+    HTTP_CREATED,
     HTTP_INTERNAL_ERROR,
     HTTP_NOT_FOUND,
     HTTP_SERVICE_UNAVAILABLE,
@@ -26,6 +27,7 @@ from app_instances.errors import (
     UnknownActionError,
     UnknownInstanceError,
 )
+from app_instances.json_store import JsonStoreInstanceSource
 from app_instances.testing import RecordingNudger, StubInstanceSource
 
 
@@ -326,11 +328,22 @@ def test_stop_and_start_map_unknown_and_not_stoppable(
 
 
 def test_the_default_source_refuses_stop_and_start(
-    instances_client: FlaskClient, stub_source: StubInstanceSource
+    renameable_store: JsonStoreInstanceSource, recording_nudger: RecordingNudger
 ) -> None:
     # A source that never mentions the verbs (an app built before them) answers the
     # interface's default refusal.
-    assert status_code_for_error(NotStoppableError("x")) == HTTP_BAD_REQUEST
+    client = build_instances_app(renameable_store, recording_nudger).test_client()
+    created = client.post("/_instances", json={"action": "new", "params": {}})
+    assert created.status_code == HTTP_CREATED
+    key = created.get_json()["instance"]["key"]
+
+    stopped = client.post(f"/_instances/{key}/stop")
+    started = client.post(f"/_instances/{key}/start")
+
+    assert stopped.status_code == HTTP_BAD_REQUEST
+    assert stopped.get_json()["detail"] == "this app's instances cannot be stopped on their own"
+    assert started.status_code == HTTP_BAD_REQUEST
+    assert started.get_json()["detail"] == "this app's instances cannot be started on their own"
 
 
 def test_an_unmapped_library_error_answers_500_with_a_detail_body() -> None:
@@ -349,6 +362,7 @@ def test_an_unmapped_library_error_answers_500_with_a_detail_body() -> None:
         (UnknownActionError("x"), HTTP_BAD_REQUEST),
         (InvalidParamsError("x"), HTTP_BAD_REQUEST),
         (NotRenameableError("x"), HTTP_BAD_REQUEST),
+        (NotStoppableError("x"), HTTP_BAD_REQUEST),
         (LocationNotTrackedError("x"), HTTP_BAD_REQUEST),
         (MalformedRequestError("x"), HTTP_BAD_REQUEST),
         (UnknownInstanceError("x"), HTTP_NOT_FOUND),
