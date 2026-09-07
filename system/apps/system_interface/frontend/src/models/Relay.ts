@@ -1,8 +1,9 @@
 /**
  * The instance verbs and the app lifecycle, through the shell's relay (contracts.md section 6).
  *
- * A browser never reaches an app's instances API: every create, delete, rename and location
- * report goes to the shell, which forwards it to the app and refetches the app's list. The
+ * A browser never reaches an app's instances API: every create, delete, rename, location
+ * report, stop and start goes to the shell, which forwards it to the app and refetches the
+ * app's list. The
  * shell's answer is the app's, status and body alike, so a refusal reads here exactly as the
  * app spelled it.
  */

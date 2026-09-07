@@ -20,8 +20,9 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the terminal app's origin label in meta tags.
 - `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
-  manager (`instances.py`): every non-primary agent is an explicit, renameable
-  instance keyed by its agent id; a chat still being created is a referenced
+  manager (`instances.py`): every non-primary agent is an explicit, renameable,
+  stoppable instance keyed by its agent id (stop is `mngr stop`, start the same
+  ensure-started path a send takes); a chat still being created is a referenced
   provisional instance under the id mngr will give it; a subagent view is a
   referenced instance keyed `<agent-id>.<session-id>`. Status comes from the
   activity state, a pending permission request, and the lifecycle. The API

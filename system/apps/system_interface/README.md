@@ -395,8 +395,8 @@ app with instances creates the instance through the relay inside the op
 (`--action`, `--param`; a bare URL is the browser's `new` with `url`) and
 answers with the address. Only `maximize`, `restore`, `refresh`, and the
 interface reload still reach the browser as `layout_op` messages, to the target
-client's windows. `rename`, `delete`, and `replace-url` call the relay routes
-under `/api/apps/<name>/instances/<key>/`; `list` and `views` read
+client's windows. `rename`, `delete`, `stop`, `start`, and `replace-url` call the
+relay routes under `/api/apps/<name>/instances/<key>/`; `list` and `views` read
 `GET /api/inventory`; the `shortcut` subcommands use the project routes. A bare
 word is `app:<word>`; the old spellings (`chat:`, `terminal:`, `service:`,
 `url:`, `subagent:`) are refused with an error naming the new form. See the
