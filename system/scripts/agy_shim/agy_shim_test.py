@@ -8,6 +8,7 @@ a guard that never fires.
 
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -27,14 +28,19 @@ def _run(
     full_env.pop("MNGR_AGY_SHIM_OFF", None)
     if env:
         full_env.update(env)
-    return subprocess.run(
-        [str(_SHIM), *args],
-        input=stdin,
-        capture_output=True,
-        text=True,
-        env=full_env,
-        timeout=60,
-    )
+    # Never the repo root. The kill-switch test genuinely EXECUTES `git rebase -i HEAD~2`, and
+    # the workspace sets GIT_EDITOR=true, so an inherited cwd rewrites the checkout the suite is
+    # running from -- silently, since a clean rebase exits 0 and a conflicted one exits 1.
+    with tempfile.TemporaryDirectory() as scratch:
+        return subprocess.run(
+            [str(_SHIM), *args],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            env=full_env,
+            cwd=scratch,
+            timeout=60,
+        )
 
 
 # --- the shebang, which is a fork bomb if it is wrong -------------------------------------
@@ -148,6 +154,8 @@ def test_a_nested_invocation_is_not_guarded_again() -> None:
 def test_the_kill_switch_disables_every_guard() -> None:
     result = _run("-c", "git rebase -i HEAD~2", env={"MNGR_AGY_SHIM_OFF": "1"})
     assert result.returncode != 2, "the kill switch must work without a redeploy"
+    # Prove the guard stayed silent, not merely that some other exit code came back.
+    assert "git rebase" not in result.stderr
 
 
 # --- fail open ------------------------------------------------------------------------------

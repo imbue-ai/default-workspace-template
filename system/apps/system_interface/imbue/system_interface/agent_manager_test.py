@@ -8,6 +8,7 @@ import signal
 import tomllib
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -42,8 +43,11 @@ from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface import projects
 from imbue.system_interface.activity_state import ActivityState
+from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.agent_manager import _LogQueueCallback
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import _build_chat_create_command
 from imbue.system_interface.agent_manager import _build_chat_display_label_command
 from imbue.system_interface.agent_manager import _build_chat_rename_command
@@ -51,6 +55,7 @@ from imbue.system_interface.agent_manager import _build_observe_command_argv
 from imbue.system_interface.agent_manager import _chat_project_label
 from imbue.system_interface.agent_manager import _make_apps_file_handler
 from imbue.system_interface.agent_manager import _rename_failure_detail
+from imbue.system_interface.auto_open import AutoOpenLedger
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.model import codex_models_to_options
 from imbue.system_interface.harnesses.codex.model import get_codex_model_options_path
@@ -148,6 +153,19 @@ def _last_agents_updated(messages: list[dict[str, Any]]) -> dict[str, Any] | Non
         if message.get("type") == "agents_updated":
             return message
     return None
+
+
+@pytest.fixture(autouse=True)
+def _signed_in_account() -> None:
+    """One account, because creating a chat now requires one.
+
+    There is no shared login to fall back to: `resolve_binding` raises rather than returning
+    None, so a chat create with no account is refused. Autouse because every create in this
+    module wants the ordinary case; the two that care about a SPECIFIC account mint their own
+    and pass its id, and this one is simply not chosen.
+    """
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
 
 
 def test_get_agents_initially_empty(agent_manager: AgentManager) -> None:
@@ -307,11 +325,11 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    probed_targets: list[tuple[str, str]] = []
+    probed_targets: list[tuple[str, str, str]] = []
 
-    def fake_prober(program: str, url: str) -> bool:
-        probed_targets.append((program, url))
-        return program == "files"
+    def fake_prober(targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
+        probed_targets.extend(targets)
+        return {name: program == "files" for name, program, _url in targets}
 
     manager = AgentManager.build(broadcaster, liveness_prober=fake_prober)
     with manager._lock:
@@ -333,8 +351,8 @@ def test_refresh_app_liveness_updates_entries_and_broadcasts_once(
     serialized_by_name = {app["name"]: app for app in apps_updated_events[0]["apps"]}
     assert serialized_by_name["files"]["is_running"] is True
     assert serialized_by_name["web"]["is_running"] is False
-    assert ("files", "http://localhost:8300") in probed_targets
-    assert ("", "http://localhost:8000") in probed_targets
+    assert ("files", "files", "http://localhost:8300") in probed_targets
+    assert ("web", "", "http://localhost:8000") in probed_targets
 
     # A second pass with the same answers changes nothing, so nothing is broadcast.
     manager.refresh_app_liveness()
@@ -515,9 +533,6 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Both menu entries make a chat, so creation_type is the role -- never the harness."""
-    # Stub the sign-in preflight to always report signed in, so the create does not depend
-    # on a real (possibly signed-out) codex CLI in the test env.
-    agent_manager._auth_gate = lambda check: None
     q = broadcaster.register()
 
     with agent_manager._lock:
@@ -529,7 +544,9 @@ def test_create_codex_agent_broadcasts_proto_created_with_the_chat_creation_type
             work_dir=str(git_work_dir),
         )
 
-    created = agent_manager.create_chat_agent("test-codex", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    created = agent_manager.create_chat_agent("test-codex", account_id=codex_account_id)
     agent_manager.stop()
 
     assert isinstance(created.agent_id, str)
@@ -593,11 +610,18 @@ def _layout_ops(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [message for message in messages if message.get("type") == "layout_op"]
 
 
+def _register_client(broadcaster: WebSocketBroadcaster) -> queue.Queue[str | None]:
+    """A connected client that has reported its ``client_state``, so it can take layout ops."""
+    q = broadcaster.register()
+    broadcaster.set_client_info(q, "client-1", "everything", "desktop")
+    return q
+
+
 def test_assist_labeled_agent_auto_opens_its_tab(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A chat spawned by the get-help flow (carrying the ``assist`` label) auto-opens its tab."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _agent_details("assist-abc123", labels={"assist": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
@@ -614,7 +638,7 @@ def test_assist_labeled_agent_auto_opens_its_tab(
 
 def test_non_assist_agent_does_not_auto_open(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
     """An ordinary discovered agent (no ``assist`` label) does not trigger an auto-open."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _agent_details("plain-agent", labels={"user_created": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
@@ -625,10 +649,12 @@ def test_assist_agent_rediscovery_does_not_reopen(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """A re-emitted AGENT_STATE event for an already-seen assist chat does not reopen its tab."""
+    first_client = _register_client(broadcaster)
     agent = _agent_details("assist-xyz", labels={"assist": "true"})
     agent_manager._handle_observe_event(make_agent_state_event(agent))
-    # Register only after the first event so the queue captures just the re-delivery.
-    q = broadcaster.register()
+    assert len(_layout_ops(_drain(first_client))) == 1
+    # A second client captures just the re-delivery.
+    q = _register_client(broadcaster)
     agent_manager._handle_observe_event(make_agent_state_event(agent))
 
     assert _layout_ops(_drain(q)) == []
@@ -643,7 +669,7 @@ def test_snapshot_auto_opens_a_newly_appeared_assist_chat(
 ) -> None:
     """A freshly-created chat usually surfaces in a full snapshot (not a per-agent delta),
     so the snapshot path must auto-open assist chats too."""
-    q = broadcaster.register()
+    q = _register_client(broadcaster)
     agent = _assist_agent_details("assist-snap")
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
 
@@ -661,27 +687,109 @@ def test_snapshot_auto_opens_a_newly_appeared_assist_chat(
 def test_snapshot_does_not_reopen_assist_chat_on_later_snapshots(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
+    first_client = _register_client(broadcaster)
     agent = _assist_agent_details("assist-snap2")
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
-    # Register after the first snapshot so the queue captures only the second.
-    q = broadcaster.register()
+    assert len(_layout_ops(_drain(first_client))) == 1
+    # A second client captures only the second snapshot.
+    q = _register_client(broadcaster)
     agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
 
     assert _layout_ops(_drain(q)) == []
 
 
-def test_assist_chat_present_at_startup_is_not_auto_opened(
+def _startup_agent_info(agent: AgentDetails, tmp_path: Path, created_ago: timedelta) -> AgentInfo:
+    """What ``_initial_discover`` learns about a chat that already exists when the server starts."""
+    return AgentInfo(
+        id=str(agent.id),
+        name=str(agent.name),
+        state=agent.state.value,
+        agent_state_dir=tmp_path / "agents" / str(agent.id),
+        claude_config_dir=tmp_path / "claude",
+        labels=dict(agent.labels),
+        work_dir=str(agent.work_dir),
+        create_time=datetime.now(timezone.utc) - created_ago,
+    )
+
+
+def test_stale_assist_chat_present_at_startup_is_not_auto_opened(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A chat that has been around for a while when the server starts is left as the saved
+    layout has it, so a restart never pops old tabs."""
+    agent = _assist_agent_details("assist-existing")
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(days=2))])
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_fresh_undelivered_chat_present_at_startup_is_owed_its_open(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A recent labeled chat nobody has been shown yet -- an unattended run whose apply
+    restarted this interface -- gets its tab the first time a client registers."""
+    agent = _assist_agent_details("update-3am")
+    agent_manager._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(hours=6))])
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+
+    opens = _layout_ops(_drain(q))
+    assert [op["args"] for op in opens] == [{"ref": "chat:update-3am"}]
+    # Owed once: the next registration finds nothing pending.
+    agent_manager.flush_pending_auto_opens()
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_auto_open_is_held_until_a_client_registers(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """Assist chats seeded as already-handled (what ``_initial_discover`` does for chats that
-    exist at startup) are not auto-opened, so a restart restores the saved layout."""
-    agent = _assist_agent_details("assist-existing")
-    with agent_manager._lock:
-        agent_manager._auto_opened_assist_ids.add(str(agent.id))
-    q = broadcaster.register()
-    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+    """A labeled chat appearing while no client has registered is not broadcast into the
+    void: its open waits for the first registration, then goes out exactly once."""
+    unregistered = broadcaster.register()
+    agent = _agent_details("update-a1b2c3", labels={"auto_open": "true", "update": "true"})
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    assert _layout_ops(_drain(unregistered)) == []
 
+    q = _register_client(broadcaster)
+    agent_manager.flush_pending_auto_opens()
+    opens = _layout_ops(_drain(q))
+    assert [op["args"] for op in opens] == [{"ref": "chat:update-a1b2c3"}]
+
+    # Neither a later snapshot nor a later registration repeats it.
+    agent_manager._handle_observe_event(make_full_agent_state_event([agent]))
+    agent_manager.flush_pending_auto_opens()
     assert _layout_ops(_drain(q)) == []
+
+
+def test_delivered_auto_open_survives_a_restart(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """The delivered set is on disk, so the interface that comes up after an update's
+    restart does not re-pop a tab the previous one already surfaced."""
+    ledger_path = tmp_path / "workspace_layout" / "auto_opened_chats.json"
+    before = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
+    q = _register_client(broadcaster)
+    agent = _assist_agent_details("assist-once")
+    before._handle_observe_event(make_agent_state_event(agent))
+    assert len(_layout_ops(_drain(q))) == 1
+
+    after = AgentManager.build(broadcaster, auto_open_ledger=AutoOpenLedger(path=ledger_path))
+    after._seed_auto_opens_at_startup([_startup_agent_info(agent, tmp_path, timedelta(minutes=5))])
+    after.flush_pending_auto_opens()
+    after._handle_observe_event(make_full_agent_state_event([agent]))
+    assert _layout_ops(_drain(q)) == []
+
+
+def test_a_ledger_of_the_wrong_shape_is_logged_and_starts_empty(tmp_path: Path, loguru_records: list[str]) -> None:
+    # Valid JSON that is not the ledger's shape (a hand edit, a file from some
+    # other tool) must not read as "nothing delivered" in silence: that is the
+    # one path that re-pops every tab, and it should be findable in the log.
+    ledger_path = tmp_path / "auto_opened_chats.json"
+    ledger_path.write_text('["assist-once"]')
+    ledger = AutoOpenLedger(path=ledger_path)
+    assert ledger.is_delivered("assist-once") is False
+    assert any("wrong shape" in record for record in loguru_records)
 
 
 def test_agent_removed_event_removes_agent(agent_manager: AgentManager, broadcaster: WebSocketBroadcaster) -> None:
@@ -1535,11 +1643,22 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
 
 def test_create_chat_agent_numbers_each_harness_under_its_own_word(
     agent_manager: AgentManager,
+    tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently."""
-    agent_manager._auth_gate = lambda check: None
+    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+
+    The harness comes from the bound account, so the codex one is named by signing in
+    rather than by asking for it -- which is the point: a caller cannot name a harness
+    that disagrees with the credential the chat will actually run on.
+    """
+    # The plain chat is created first, while there is nothing signed in, so it lands on
+    # the workspace login as claude. Signing in afterwards is what makes the second one
+    # codex -- and note it would also make an unbound THIRD chat codex, since the most
+    # recently used account is the default.
     chat = agent_manager.create_chat_agent("")
-    codex = agent_manager.create_chat_agent("", HarnessType.CODEX)
+    codex_account_id, _ = mint_account_dir()
+    commit_account(codex_account_id, "openai", "OpenAI")
+    codex = agent_manager.create_chat_agent("", account_id=codex_account_id)
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"
@@ -2870,3 +2989,77 @@ def test_stop_activity_tracking_keeps_the_sending_records(agent_manager: AgentMa
     agent_manager._stop_activity_tracking("agent-1")
     assert agent_manager._session_by_agent["agent-1"] is session
     assert session.in_flight_block() == "caught mid-send"
+
+
+# --- Watcher eviction (the chat-memory lifecycle) ---
+
+
+def test_remove_agent_evicts_the_watcher(agent_manager: AgentManager) -> None:
+    """A destroyed agent's watcher is evicted along with its tracking state."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("doomed-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+
+    agent_manager.remove_agent(str(agent.id))
+    assert evicted == [str(agent.id)]
+
+
+def test_lifecycle_transition_into_dead_evicts_the_watcher_once(agent_manager: AgentManager) -> None:
+    """Eviction is edge-triggered on the transition into a positively-dead lifecycle: a
+    stop (from the UI, mngr, an OOM shed, idle shutdown) drops the resident transcript,
+    while further observe ticks of the already-stopped agent do NOT re-evict -- a user
+    viewing a stopped chat's history rebuilds the watcher on read, and a level-triggered
+    evict would tear that rebuild down again every tick."""
+    evicted: list[str] = []
+    agent_manager.set_watcher_eviction_callback(evicted.append)
+    agent = _agent_details("stoppable-agent")
+    agent_manager._handle_observe_event(make_agent_state_event(agent))
+    assert evicted == []
+
+    stopped = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.STOPPED))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # Another tick of the same dead state: no edge, no eviction.
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id)]
+
+    # A restart followed by another stop evicts again.
+    running = agent.model_copy_update(to_update(agent.field_ref().state, AgentLifecycleState.RUNNING))
+    agent_manager._handle_observe_event(make_agent_state_event(running))
+    agent_manager._handle_observe_event(make_agent_state_event(stopped))
+    assert evicted == [str(agent.id), str(agent.id)]
+
+
+def test_note_agent_alive_flips_a_dead_state_to_waiting(agent_manager: AgentManager) -> None:
+    """After this server starts an agent itself, the tracked state reflects the revival
+    immediately: the observe stream only notices a revival on its five-minute full
+    snapshot (a stopped agent has no pid to watch), which left the chat reading dead
+    for minutes while the agent was demonstrably up."""
+    _seed_agent(agent_manager, "revived", state="DONE")
+    agent_manager.note_agent_alive("revived")
+    revived = agent_manager.get_agent_by_id("revived")
+    assert revived is not None
+    assert revived.state == "WAITING"
+    assert agent_manager.is_agent_alive("revived")
+
+
+def test_note_agent_alive_leaves_live_and_unknown_states_alone(agent_manager: AgentManager) -> None:
+    """Only a positively-dead state is corrected: RUNNING must not be demoted to WAITING
+    (the fold would lose a turn in flight), UNKNOWN is non-evidence, and an untracked id
+    is not something to invent a record for."""
+    _seed_agent(agent_manager, "busy", state="RUNNING")
+    agent_manager.note_agent_alive("busy")
+    busy = agent_manager.get_agent_by_id("busy")
+    assert busy is not None
+    assert busy.state == "RUNNING"
+
+    _seed_agent(agent_manager, "unseen", state="UNKNOWN")
+    agent_manager.note_agent_alive("unseen")
+    unseen = agent_manager.get_agent_by_id("unseen")
+    assert unseen is not None
+    assert unseen.state == "UNKNOWN"
+
+    agent_manager.note_agent_alive("never-tracked")
+    assert agent_manager.get_agent_by_id("never-tracked") is None

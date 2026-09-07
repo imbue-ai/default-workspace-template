@@ -31,6 +31,7 @@ class EnvConvergeEventType(UpperCaseStrEnum):
     """All event types env-converge may emit."""
 
     STATE_CAPTURED = auto()
+    CAPTURE_SKIPPED_FRESH_ROOTFS = auto()
     OVERLAY_APPLIED = auto()
     UNIT_RUN = auto()
     UNIT_FAILED = auto()

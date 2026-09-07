@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger as _loguru_logger
@@ -60,14 +61,22 @@ class AgentInfo(FrozenModel):
         default=DEFAULT_HARNESS,
         description="The agent's harness, narrowed from mngr's AgentDetails.type. Resolved here and nowhere else.",
     )
+    create_time: datetime | None = Field(default=None, description="When the agent was created, if known")
 
 
 def _get_mngr_context() -> tuple[MngrContext, ConcurrencyGroup]:
+    # strict=False: a settings file written for a newer mngr than the one this
+    # process imported must degrade to a logged warning, not a parse error. This
+    # server re-reads `.mngr/settings.toml` through long-lived in-memory code, so
+    # during an update the file can briefly be newer than the code -- and a strict
+    # parse would turn every agent listing and message send into a 500, taking
+    # down the very chat channel needed to finish the update. `mngr config set`
+    # and the CLI keep strict parsing; only this live read degrades.
     cg = ConcurrencyGroup(name="system-interface")
     cg.__enter__()
     try:
         pm = get_or_create_plugin_manager()
-        mngr_ctx = load_config(pm, cg, is_interactive=False)
+        mngr_ctx = load_config(pm, cg, is_interactive=False, strict=False)
     except BaseException:
         cg.__exit__(None, None, None)
         raise
@@ -168,6 +177,7 @@ def discover_agents(
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),
                 harness=parse_harness(str(agent_details.type)),
+                create_time=agent_details.create_time,
             )
         )
 

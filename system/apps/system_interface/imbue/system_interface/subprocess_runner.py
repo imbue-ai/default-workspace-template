@@ -66,6 +66,7 @@ def run_detached_command(
     trace_output: bool = False,
     trace_on_line_callback: Callable[[str, bool], None] | None = None,
     shutdown_event: MutableEvent | None = None,
+    shutdown_timeout_sec: float = 30.0,
     name: str | None = None,
 ) -> FinishedProcess:
     """Run ``command`` to completion in its own session, returning how it went.
@@ -84,6 +85,7 @@ def run_detached_command(
         trace_output=trace_output,
         trace_on_line_callback=trace_on_line_callback,
         shutdown_event=shutdown_event,
+        shutdown_timeout_sec=shutdown_timeout_sec,
         name=name,
         is_detached_from_terminal=True,
     )

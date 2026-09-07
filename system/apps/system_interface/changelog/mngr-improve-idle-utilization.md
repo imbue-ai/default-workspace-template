@@ -1,0 +1,3 @@
+The app liveness sweep now derives every registered app's `is_running` with at most one supervisord `getAllProcessInfo` RPC per pass (instead of one unix-socket round trip per supervised app; none at all when no registered row is supervised) and runs every 10 seconds instead of every 3.
+
+Idle wake-up cost drops roughly 10x while keeping the same semantics: rows supervisord cannot answer for (unknown program, unreachable supervisord, unsupervised rows) still fall back to their TCP probe, and stop/start through the UI still nudges the sweep so those transitions land immediately. Part of the workspace idle-CPU work in imbue-ai/mngr-internal#700 (polling costs ~3x under gVisor).

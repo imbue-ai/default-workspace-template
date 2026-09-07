@@ -25,30 +25,77 @@ import {
   switchToView,
   toggleAppLifecycle,
 } from "./DockviewWorkspace";
-import { ClaudeLoginModal } from "./ClaudeLoginModal";
-import { AgentAuthInstructionsModal } from "./AgentAuthInstructionsModal";
+import { ProviderChooserModal } from "./ProviderChooserModal";
 import { FastModeModal } from "./FastModeModal";
 import { Sidebar } from "./Sidebar";
+import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
 import type { QuickAddTabType, SidebarTabRow } from "./Sidebar";
 import type { AppEntry } from "../models/AgentManager";
-import { checkAuthStatusOnLoad, isLoginModalOpen, closeLoginModal } from "../models/ClaudeAuth";
-import { getAuthInstructionsAgentId } from "../models/AgentAuth";
+import {
+  closeProviderChooser,
+  getAccounts,
+  isProviderChooserOpen,
+  loadAccountsWithRetry,
+  openProviderChooser,
+} from "../models/Providers";
 import { getFastModePromptAgentId } from "../models/FastModePrompt";
+import { startChatOnAccount } from "./DockviewWorkspace";
+
+/** Marks that the workspace has already greeted this user. Local storage rather than a server
+ *  flag on purpose: it is a fact about a person having seen a screen, and it has to survive a
+ *  reload and a reboot without a round trip that could race the boot render. */
+const GREETED_KEY = "minds.provider-chooser.greeted";
+
+/** Open the provider chooser the FIRST time a workspace is opened with nothing signed in.
+ *
+ * A workspace with no provider cannot start a chat, so the new tab's every affordance is a dead
+ * end until one is added -- this is the one moment where popping a modal is telling the user
+ * something rather than interrupting them. It fires once, ever: not on reload, not on reboot,
+ * and not the next time the account list happens to be empty (someone who removed their last
+ * provider has already met this screen and knows where it lives).
+ */
+function greetFirstRun(): void {
+  if (getAccounts().length > 0) return;
+  try {
+    if (window.localStorage.getItem(GREETED_KEY) !== null) return;
+    window.localStorage.setItem(GREETED_KEY, "1");
+  } catch {
+    // Storage disabled or full. Greeting every boot would be worse than never greeting, so
+    // this errs toward silence.
+    return;
+  }
+  // Signing in from the greeting STARTS the chat, rather than closing onto an empty new tab.
+  // The greeting fires only when there is no provider, which is the one state where the new tab
+  // has nothing it can do -- so leaving the user there having just signed in makes them go find
+  // the button that was always the only thing to press.
+  openProviderChooser({ onSignedIn: (accountId) => void startChatOnAccount(accountId) });
+  m.redraw();
+}
 
 export function App(): m.Component {
   return {
     oninit() {
-      // One-shot page-load auth check: a freshly created mind has no
-      // credentials at all (the create flow injects none), so the sign-in
-      // modal is the designed first-boot step rather than an error path.
-      checkAuthStatusOnLoad();
+      // The new-tab picker and the rail's Chat shortcut both read the account list,
+      // and both can be the first thing a user clicks, so load it once at boot
+      // rather than on the chooser's own oninit. Retried until it succeeds: the boot
+      // render can race the backend coming up, and the first-run greeting decides off
+      // this one load -- a swallowed failure would leave a provider-less workspace
+      // with the chooser closed for the whole page load.
+      void loadAccountsWithRetry().then(greetFirstRun);
     },
     view() {
       return m(
         "div",
-        { class: "app-layout flex flex-col", style: "height: calc(100vh - var(--minds-titlebar-height, 0px))" },
+        // h-screen is the full viewport: inside the minds desktop shell this
+        // app renders in a sandboxed iframe the shell already places below its
+        // title bar, so there is no title-bar height to subtract here.
+        { class: "app-layout flex h-screen flex-col" },
         [
-          m("div", { class: "minds-titlebar-spacer" }),
+          // Present only when the workspace's code has moved under this
+          // interface: a failed update's rollback could not restore it, an
+          // update apply was interrupted, or the tree advanced without a
+          // restart into it; see the component.
+          m(UpdateStalenessBanner),
           // The whole content area is one grey surface with the rail sitting on
           // it, directly left of the dock. Which view you are in is said by the
           // rail's own header now, so there is no bar above this row.
@@ -61,7 +108,12 @@ export function App(): m.Component {
           // composer's model bar clipped off the bottom. The minds shell
           // shrinking this window for its recovery band is how that happens
           // without the user touching the window.
-          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80" }, [
+          // pt/pl-1: the canvas runs edge to edge, with the padding as the
+          // outermost pane gap -- the top against the title bar, the left so
+          // the rail has a few pixels of canvas to hover into. Right and
+          // bottom stay flush against the viewport. The --si-* theme vars the
+          // canvas colour comes from live on .app-main in style.css.
+          m("div", { class: "app-main flex min-h-0 flex-1 min-w-80 bg-(--si-canvas) pt-1 pl-1" }, [
             // Every attr is read straight off the workspace on each draw rather
             // than cached: the registry loads asynchronously, and a rename, a
             // new tab or another client's change all arrive as a redraw, so the
@@ -143,15 +195,10 @@ export function App(): m.Component {
             // overlays this dock rather than squeezing it.
             m("div", { class: "min-w-0 flex-1" }, m(DockviewWorkspace)),
           ]),
-          // Claude auth is mind-global, so the login modal is a single
-          // app-level instance driven by global auth state -- not one per
-          // ChatPanel. It opens on the load-time check, when any agent
-          // surfaces an auth-error, or from the chat footer's "Agent auth"
-          // entry.
-          isLoginModalOpen() ? m(ClaudeLoginModal, { onDismiss: closeLoginModal }) : null,
-          // The terminal-auth counterpart: harnesses whose sign-in runs in their
-          // own TUI raise this shared instructions notice instead (see AgentAuth.ts).
-          getAuthInstructionsAgentId() !== null ? m(AgentAuthInstructionsModal) : null,
+          // The provider chooser: one app-level instance rather than one per ChatPanel,
+          // because accounts are mind-global -- there is nothing per-chat about picking
+          // one. It is the only sign-in surface; nothing opens it but the user.
+          isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
           // One chat reaching the end of its fast-mode grace period raises a single
           // shared prompt here (see fast-mode-prompt.ts for when that happens).
           getFastModePromptAgentId() !== null ? m(FastModeModal) : null,

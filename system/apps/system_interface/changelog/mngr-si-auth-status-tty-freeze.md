@@ -6,4 +6,4 @@ Now every subprocess the system interface spawns itself runs in its own session,
 
 The sign-in check also got a more realistic budget. It reads a local credentials file, so a warm run takes a fraction of a second, but the first run after the workspace has been idle spends seconds paging the 256MB `claude` binary back in -- measured at 3-8s in a real workspace, and over the old 10s limit three times in sixty checks. The budget is now 25s.
 
-Finally, a check that does run out of time no longer reports "signed out". It says it could not tell, and every endpoint that would otherwise have passed that on as an answer now returns 503 instead of guessing. So a slow check can no longer pop the sign-in dialog over a workspace that is signed in, nor tell you your credentials were rejected when they were saved and applied.
+Finally, a check that does run out of time no longer reports "signed out". It says it could not tell, and the sign-in status endpoint returns 503 instead of guessing, so a slow check can no longer pop the sign-in dialog over a workspace that is signed in.

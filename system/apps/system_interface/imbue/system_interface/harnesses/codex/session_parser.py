@@ -52,21 +52,25 @@ import hashlib
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Final
 
 from loguru import logger as _loguru_logger
 
+from imbue.system_interface.harnesses.auth_errors import is_auth_error_text
 from imbue.system_interface.harnesses.codex.tool_labels import is_single_delegated_call
-from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
-from imbue.system_interface.harnesses.events import MAX_TOOL_INPUT_PREVIEW_LENGTH
+from imbue.system_interface.harnesses.error_patterns import classify_api_error
+from imbue.system_interface.harnesses.error_patterns import is_provider_fault
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 from imbue.system_interface.harnesses.message_display import stamp_user_message_display
 from imbue.system_interface.harnesses.tool_output import classify_tool_call_display
+from imbue.system_interface.harnesses.tool_output import error_snippet
 from imbue.system_interface.harnesses.tool_output import find_permission_request
 from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
-from imbue.system_interface.harnesses.tool_output import truncate_tool_output
+from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
+from imbue.system_interface.harnesses.tool_output import tk_stamp
 
 logger = _loguru_logger
 
@@ -80,6 +84,19 @@ SOURCE = "codex/common_transcript"
 # placeholder ``claude_session_parser`` uses when the model is absent, keeping the
 # frontend's non-optional ``model`` field populated.
 _UNKNOWN_MODEL = "unknown"
+
+# codex's own `codex_error_info.type` tags, mapped to the shared kind vocabulary. Preferred over
+# reading the prose: the tag is the part that survives codex rewording its messages. Quota
+# exhaustion is deliberately absent -- `usage_limit_exceeded` belongs to the auth family, whose
+# recovery is different credentials, and `auth_errors` claims it before this table is consulted.
+_CODEX_ERROR_KINDS: Final[dict[str, str]] = {
+    "server_error": "api_error",
+    "internal_server_error": "api_error",
+    "rate_limit_exceeded": "rate_limit",
+    "rate_limit": "rate_limit",
+    "overloaded": "overloaded",
+    "context_window_exceeded": "request_too_large",
+}
 
 
 def _join_output_text(content: Any) -> str:
@@ -123,25 +140,20 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
-def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, str]:
+def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, Any]:
     """A tool call carrying its own human labels.
 
     Labelled here, where the harness is known, so the frontend renders a string
     rather than having to understand that a codex ``exec`` hides its real operation
-    in a JavaScript argument.
-
-    Labels come from the RAW input, not the truncated preview: the operation often
-    lives past the 200-char cap (an apply_patch that front-loads its body into a
-    variable, a long exec_command), so labelling the clipped string would read off
-    the wrong part -- see the same problem noted in ``codex/tool_labels``. The stored
-    ``input_preview`` is still truncated for display, EXCEPT for the tk and patch
-    bodies the timeline/diff view need whole (see :func:`_input_preview`).
+    in a JavaScript argument. Labels come from the FULL input; the input itself stays
+    off the event (the payload-free wire contract) and is served whole by the detail
+    endpoint on expand.
     """
     header_label, caption_label = tool_labels(tool_name, raw_input)
-    tool_call = {
+    tool_call: dict[str, Any] = {
         "tool_call_id": call_id,
         "tool_name": tool_name,
-        "input_preview": _input_preview(tool_name, raw_input),
+        "input_chars": len(raw_input),
         "header_label": header_label,
         "caption_label": caption_label,
     }
@@ -161,23 +173,15 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
         display = None
     if display is not None:
         tool_call["display"] = display.value
+    # The step progress view reads step titles/summaries out of a tk lifecycle command
+    # itself, so that one command is stamped resident.
+    if command is not None and is_tk_lifecycle_anywhere(command):
+        tool_call["tk_command"] = command
     return tool_call
 
 
-def _input_preview(tool_name: str, raw_input: str) -> str:
-    """The stored ``input_preview``: the raw input, truncated to the shared cap -- but
-    left whole for a tk command or a patch body, which the step timeline and the diff
-    view render in full (a mid-body cut would truncate the plan or the diff). Matches
-    the claude parser's tk exemption; ``keeps_full_tool_input`` owns the recognition."""
-    if keeps_full_tool_input(tool_name, raw_input):
-        return raw_input
-    if len(raw_input) > MAX_TOOL_INPUT_PREVIEW_LENGTH:
-        return raw_input[:MAX_TOOL_INPUT_PREVIEW_LENGTH] + "..."
-    return raw_input
-
-
 def _assistant_event(
-    timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, str]], model: str = _UNKNOWN_MODEL
+    timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, Any]], model: str = _UNKNOWN_MODEL
 ) -> dict[str, Any]:
     return {
         "timestamp": timestamp,
@@ -196,13 +200,53 @@ def _assistant_event(
         # deferred (token_count -> Phase 2)
         "usage": None,
         "message_uuid": event_id,
-        # deferred (codex auth errors live in logs_2.sqlite)
+        # A codex failure never arrives as an assistant message -- it arrives on the turn's
+        # `task_complete`, which `_turn_error_event` turns into its own message. So an ordinary
+        # assistant message is never an error, and these are facts rather than deferrals.
         "is_auth_error": False,
-        # Required by the shared contract (Response.ts). Detection deferred: codex's
-        # provider-error record shape is undocumented; False/None is the honest fill.
         "is_api_error": False,
         "api_error_kind": None,
         "is_provider_fault": False,
+    }
+
+
+def _turn_error_event(
+    marker_event_id: str,
+    timestamp: str,
+    detail: str,
+    payload: dict[str, Any],
+    turn_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The failure that ended a turn, as a message the transcript can show.
+
+    Classified off ``codex_error_info`` where codex tells us the kind outright, and off the
+    prose otherwise -- the structured tag is the part that survives codex rewording its
+    messages. Auth wins either way: `classify_api_error` yields to the auth vocabulary, so a
+    message never carries both subtexts.
+    """
+    error = payload.get("error")
+    info = error.get("codex_error_info") if isinstance(error, dict) else None
+    tag = info.get("type", "") if isinstance(info, dict) else ""
+    is_auth = is_auth_error_text(detail) or is_auth_error_text(str(tag))
+    api_error_kind = None if is_auth else (_CODEX_ERROR_KINDS.get(str(tag)) or classify_api_error(detail))
+    return {
+        "timestamp": timestamp,
+        "type": "assistant_message",
+        # Distinct from the marker's id, which the marker still uses: two events from one
+        # record need two ids or the frontend dedupes one of them away.
+        "event_id": f"{marker_event_id}:error",
+        "source": SOURCE,
+        "role": "assistant",
+        "model": (turn_state or {}).get("model") or _UNKNOWN_MODEL,
+        "text": detail,
+        "tool_calls": [],
+        "stop_reason": "error",
+        "usage": None,
+        "message_uuid": f"{marker_event_id}:error",
+        "is_auth_error": is_auth,
+        "is_api_error": api_error_kind is not None,
+        "api_error_kind": api_error_kind,
+        "is_provider_fault": is_provider_fault(api_error_kind),
     }
 
 
@@ -421,28 +465,50 @@ def parse_lines(
         # Turn-lifecycle markers (task == turn). Codex writes these to the rollout in
         # real time -- ``task_started`` the instant the turn begins, ``task_complete``
         # when it ends -- so the activity layer can bracket "the agent is working"
-        # (see ``codex_activity_state.turn_open``). Verified against real
-        # rollouts: ``task_complete`` lands just after the final assistant message, so
-        # the dot clears only once the text is already on screen.
+        # (the codex tracker's folded turn latch). ``task_complete`` lands just after
+        # the final assistant message, so the dot clears only once the text is already
+        # on screen.
         if payload_type in ("task_started", "task_complete"):
             kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
             event_id = _marker_event_id(payload, payload_type, line_index)
-            return [
-                {
-                    "timestamp": timestamp,
-                    "type": SPECIAL_EVENT_TYPE,
-                    "kind": kind.value,
-                    "event_id": event_id,
-                    "turn_id": _marker_turn_id(payload),
-                    "source": SOURCE,
-                    "message_uuid": event_id,
-                }
-            ]
+            marker: dict[str, Any] = {
+                "timestamp": timestamp,
+                "type": SPECIAL_EVENT_TYPE,
+                "kind": kind.value,
+                "event_id": event_id,
+                "turn_id": _marker_turn_id(payload),
+                "source": SOURCE,
+                "message_uuid": event_id,
+            }
+            # A turn that ended on a failure carries the reason here, and this is the ONLY
+            # durable copy of it: codex classes its live ``EventMsg::Error`` non-persistent, so
+            # it never reaches the rollout. Keeping it on the marker alone meant the reason
+            # existed but was never shown, and once the turn ended it was unrecoverable.
+            #
+            # Measured: a bogus key ends the turn with `error.message = "unexpected status 401
+            # Unauthorized: Incorrect API key provided: ... auth error code: invalid_api_key"`.
+            error = payload.get("error")
+            detail = error.get("message", "") if isinstance(error, dict) else ""
+            if not detail:
+                return [marker]
+            marker["error_text"] = detail
+            marker["is_auth_error"] = is_auth_error_text(detail)
+            # Surfaced as an assistant message ordered BEFORE the marker, so the transcript
+            # reads in the order things happened: the failure, then the turn ending.
+            return [_turn_error_event(event_id, timestamp, detail, payload, turn_state), marker]
         return []
 
     if outer != "response_item":
         # session_meta / other non-content records -> drop (turn_context handled above).
         return []
+
+    # --- reasoning: codex's readable thinking summaries ---
+    # A reasoning item precedes the assistant output it belongs to. It is not itself a
+    # transcript event; the watcher consumes this internal marker to remember the line as
+    # the NEXT assistant event's thinking source (has_thinking + the detail endpoint).
+    # Only a summary with readable text counts -- the encrypted content is useless.
+    if payload_type == "reasoning":
+        return [{"type": THINKING_SOURCE_MARKER_TYPE, "readable": bool(_reasoning_summary_text(payload))}]
 
     # The effective model to stamp on this response's assistant events -- the latest turn_context's
     # model (the model the turn ran on), or the placeholder until one is seen (§4b).
@@ -489,12 +555,12 @@ def parse_lines(
         call_id = str(payload.get("call_id", ""))
         event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
         raw_output = _output_text(payload.get("output"))
-        # Lift the permission-request object and preserve tk step decoration BEFORE
-        # truncation (shared with the claude/pi parsers): both routinely land past the
-        # output cap, and a mid-object/mid-decoration cut loses data the chat cannot
-        # recover frontend-side.
+        # The structured facts lifted from the full output, which itself stays off the
+        # event (the payload-free wire contract): the permission-request object the card
+        # renders from, the tk stamp the step view reads, and the error snippet.
         permission_request = find_permission_request(raw_output)
-        output = truncate_tool_output(raw_output, permission_request)
+        # A failed code-mode script writes output starting with "Script failed".
+        is_error = raw_output.startswith("Script failed")
         event: dict[str, Any] = {
             "timestamp": timestamp,
             "type": "tool_result",
@@ -502,15 +568,77 @@ def parse_lines(
             "source": SOURCE,
             "tool_call_id": call_id,
             "tool_name": tool_name_by_call_id.get(call_id, ""),
-            "output": output,
-            # A failed code-mode script writes output starting with "Script failed"; probe
-            # the UNTRUNCATED head (the permission-request rebuild replaces the head, so
-            # the truncated string can no longer carry the marker).
-            "is_error": raw_output.startswith("Script failed"),
+            "output_chars": len(raw_output),
+            "is_error": is_error,
             "message_uuid": event_id,
         }
         if permission_request is not None:
             event["permission_request"] = permission_request.details
+        snippet = error_snippet(raw_output) if is_error else ""
+        if snippet:
+            event["error_snippet"] = snippet
+        stamped_tk = tk_stamp(raw_output)
+        if stamped_tk:
+            event["tk_stamp"] = stamped_tk
         return [event]
 
     return []
+
+
+# Internal marker (never ingested into the store, never on the wire): tells the watcher
+# that this rollout line carries readable reasoning for the next assistant event.
+THINKING_SOURCE_MARKER_TYPE: Final[str] = "_codex_thinking_source"
+
+
+def _reasoning_summary_text(payload: dict[str, Any]) -> str:
+    """The readable text of a reasoning item's ``summary`` blocks ('' = none)."""
+    summary = payload.get("summary")
+    if not isinstance(summary, list):
+        return ""
+    parts = [
+        block.get("text", "")
+        for block in summary
+        if isinstance(block, dict) and isinstance(block.get("text"), str) and block.get("text")
+    ]
+    return "\n\n".join(parts)
+
+
+def parse_line_detail(record: dict[str, Any], line_index: int) -> dict[str, dict[str, Any]]:
+    """Full deferred payloads by event_id for one raw codex rollout line.
+
+    The read half of the payload-free wire contract: tool inputs and outputs are re-read
+    whole from the rollout on expand. Thinking is handled separately (the reasoning item is
+    a DIFFERENT line than the assistant event; see :func:`parse_reasoning_detail`).
+    """
+    payload = record.get("payload")
+    if record.get("type") != "response_item" or not isinstance(payload, dict):
+        return {}
+    payload_type = payload.get("type")
+    if payload_type in ("function_call", "custom_tool_call"):
+        call_id = str(payload.get("call_id", ""))
+        event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
+        return {
+            event_id: {
+                "inputs_by_tool_call_id": {call_id: _tool_call_raw_input(payload)},
+                "output": None,
+                "thinking": None,
+            }
+        }
+    if payload_type in ("function_call_output", "custom_tool_call_output"):
+        call_id = str(payload.get("call_id", ""))
+        event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
+        return {
+            event_id: {"inputs_by_tool_call_id": {}, "output": _output_text(payload.get("output")), "thinking": None}
+        }
+    return {}
+
+
+def parse_reasoning_detail(record: dict[str, Any]) -> str | None:
+    """The readable reasoning text of one rollout reasoning line, or None."""
+    payload = record.get("payload")
+    if record.get("type") != "response_item" or not isinstance(payload, dict):
+        return None
+    if payload.get("type") != "reasoning":
+        return None
+    text = _reasoning_summary_text(payload)
+    return text or None

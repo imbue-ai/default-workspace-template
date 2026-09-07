@@ -24,6 +24,8 @@ import pytest
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.agent_discovery import AgentInfo
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
@@ -246,6 +248,7 @@ def _running_e2e_server(
                 "MNGR_HOST_DIR": str(tmp_path),
                 "MNGR_AGENT_ID": primary_agent_id,
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
+                "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
             },
         ),
         patch("imbue.system_interface.server.discover_agents", return_value=agents),
@@ -255,6 +258,12 @@ def _running_e2e_server(
         # message sends succeed without contacting mngr. The UI renders its agent
         # list from the WebSocket agents_updated snapshot, which the server sends
         # from this manager on connect.
+        # A signed-in provider. Creating a chat -- including the starter chat a new project
+        # gets -- opens the chooser instead when there is none, which is correct behaviour and
+        # would leave a modal over the rail these tests click through.
+        account_id, _ = mint_account_dir()
+        commit_account(account_id, "anthropic", "Anthropic")
+
         broadcaster = WebSocketBroadcaster()
         manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
         with manager._lock:
@@ -474,6 +483,13 @@ def test_send_button_appears_on_input(e2e_server: tuple[str, list[AgentInfo], Pa
     # Type some text -- the send button now appears.
     textarea.fill("test message")
     expect(send_button).to_be_visible()
+
+    # The module-wide tmux mark (see pytestmark) requires every test here to
+    # actually reach tmux, but this test is short enough that the rail's
+    # machine fetch can still be in flight when it ends. Ask the server
+    # directly -- the same ``tmux ls`` the rail's table is built from.
+    with urllib.request.urlopen(f"{base_url}/api/terminals", timeout=5) as response:
+        assert response.status == 200
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1584,7 +1600,7 @@ def _create_terminal_from_launcher(page: Page, known_titles: set[str]) -> str:
         page.locator(".dockview-add-tab-button").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     page.locator(".new-tab-launcher-tile:visible", has_text="Terminal").click()
-    expect(page.locator(".custom-url-dialog")).to_have_count(0)
+    expect(page.locator(".modal-card")).to_have_count(0)
 
     found: dict[str, str] = {}
 
@@ -2673,7 +2689,7 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
         expect(flush_button).to_be_visible()
         expect(flush_button).to_contain_text("Shoulder tap")
         expect(flush_button).to_have_attribute(
-            "data-tooltip", "Gently interrupt your agent to send queued messages early"
+            "aria-label", "Gently interrupt your agent to send queued messages early"
         )
         expect(page.locator(".queued-action--interrupt")).to_have_count(0)
 

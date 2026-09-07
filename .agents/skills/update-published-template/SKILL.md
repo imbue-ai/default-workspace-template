@@ -79,7 +79,8 @@ format) and a template's own publish count. See
 
 - **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Templates` section is
   where a publish/revise is recorded (the same format `publish-template` §8
-  step 4 and `update-self` §5b write); §1 reads it and §8 appends to it.
+  step 4 and the update apply, `update-self`'s `scripts/update_self.py`,
+  write); §1 reads it and §8 appends to it.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
   `/home/user/worktrees/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
   the worker's `done` report per §3. Everything after re-assembly runs with cwd =

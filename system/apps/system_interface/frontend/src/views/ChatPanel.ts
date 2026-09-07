@@ -10,7 +10,10 @@
 import m from "mithril";
 import { isSlotClaimed } from "../slots";
 import {
+  addMessageSentListener,
+  evictEvents,
   fetchBackfillEvents,
+  fetchEvents,
   fetchForwardEvents,
   fetchWindowAtOffset,
   getConversationLoadState,
@@ -19,17 +22,12 @@ import {
   getFirstOffset,
   getRenderVersion,
   getTotalEventCount,
-  evictOldEvents,
-  hasMoreBefore,
-  hasMoreAfter,
   isConversationNotFound,
-  MAX_HELD_EVENTS,
+  removeMessageSentListener,
 } from "../models/Response";
-import { computeTranscriptSlices } from "../models/virtualWindow";
-import { isSelectionActiveWithin } from "../models/scrollFollow";
-import { OVERSCAN_PX } from "./row-measurement";
-import { resolveSelectionRowRange, selectionStateWithin } from "./scroll-selection";
-import { createTranscriptScroll } from "./transcript-scroll";
+import type { FillAction } from "../models/transcriptScroll/fillPlanner";
+import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
+import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
   addAgentsUpdatedListener,
@@ -37,19 +35,27 @@ import {
   getProtoAgents,
   removeAgentsUpdatedListener,
 } from "../models/AgentManager";
-import { openAgentAuth } from "../models/AgentAuth";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
 import { apiUrl } from "../base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { PoweredByCredit } from "./PoweredByCredit";
 import { ModelBar } from "./ModelBar";
-import { buildAgentTerminalUrl, getTerminalUrl, openIframeTabForAgent } from "./DockviewWorkspace";
-import { buildConversationRows, renderTranscriptSegments, type RowDescriptor } from "./conversation-rows";
+import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { chatFlipCard } from "./chat-flip";
+import { TerminalViewToggle } from "./TerminalViewToggle";
+import { buildAgentTerminalUrl, getTerminalUrl } from "./DockviewWorkspace";
+import {
+  buildConversationRows,
+  MESSAGE_LIST_CLASS,
+  renderTranscriptSegments,
+  type RowDescriptor,
+} from "./conversation-rows";
 import { ActivityIndicator } from "./ActivityIndicator";
+import { requestTerminalFocus } from "./terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { Button } from "./components/Button";
 
 function getAgentTerminalUrl(agentId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -67,39 +73,20 @@ function getAgentTerminalUrl(agentId: string): string {
   return buildAgentTerminalUrl(agent.name);
 }
 
-function openAgentTerminalTab(agentId: string): void {
-  const agent = getAgentById(agentId);
-  const title = agent?.name ? `${agent.name} terminal` : "agent terminal";
-  openIframeTabForAgent(agentId, getAgentTerminalUrl(agentId), title);
-}
-
-// Layout for the centered message column. Shared between the normal transcript
-// render and the empty-state branch that shows an optimistic first message, so
-// the two stay visually identical.
-const MESSAGE_LIST_CLASS = "message-list mx-auto w-full max-w-(--width-message-column) flex flex-col py-6";
-// Backfill fires when the viewport is within this many pixels of the top or
-// bottom edge of the loaded rows (and the server reports more history there).
-const BACKFILL_TRIGGER_PX = 600;
-// When the scroll position maps to an event more than this many events beyond the
-// loaded window, jump (replace the window around the target) instead of paging
-// there incrementally. Small enough that ordinary scrolling keeps paging; large
-// enough that a couple of pages' overshoot doesn't trigger a disruptive reload.
-const JUMP_GAP_EVENTS = 120;
-// Stable per-event height used to size the reserved (phantom) regions for history
-// that exists on the server but isn't loaded yet. It is deliberately a constant
-// rather than the measured average of the loaded window: the loaded window is a
-// tiny fraction of a long transcript (e.g. 50 of 5000+ events), so its measured
-// average -- which shifts every frame as rows measure -- would be amplified by the
-// large unloaded count into wild scrollbar jumps. A constant keeps the total
-// scroll height (~ total * this) stable, so the scrollbar thumb doesn't churn and
-// an offset jump lands at a fixed position. Its exact value isn't UX-critical:
-// the drag fraction -> event index mapping and the post-jump thumb position both
-// scale with it and so are independent of it; only the loaded window's small
-// residual (measured height vs count * this) is affected.
-const ESTIMATED_EVENT_HEIGHT_PX = 160;
-
 function isProtoAgent(agentId: string): boolean {
   return getProtoAgents().some((p) => p.agent_id === agentId);
+}
+
+/** Whether creation is genuinely still in flight, as opposed to merely having a proto entry.
+ *
+ *  The proto list is rebuilt from broadcasts and can still name an agent that has since been
+ *  registered -- a `proto_agent_created` for a finished creation, delivered late. Asking
+ *  `isProtoAgent` alone is therefore not the same question, and the two can disagree: the build
+ *  log stops as soon as the agent registers, while the proto entry clears later. A branch
+ *  keying on the proto entry alone shows a chat with an empty transcript and no composer in
+ *  between. Every branch asks THIS instead, so they cannot drift apart. */
+function isStillBeingCreated(agentId: string): boolean {
+  return isProtoAgent(agentId) && getAgentById(agentId) === undefined;
 }
 
 export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
@@ -114,45 +101,56 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // createMithrilRenderer); the scroll hooks below skip while it is false.
   // Defaults to true so the panel works before the first render sets it.
   let panelVisible = true;
-  // Shared scroll controller: owns the scroll position, follow state, drag flag and
-  // row measurer, plus the tail-follow / native-anchoring / pointer / resize
-  // machinery. Everything specific to the main chat -- the phantom regions, paging,
-  // eviction and the offset-jump pin below -- stays here; the controller is fed this
-  // panel's visibility, whether newer history exists below the window, and the
-  // after-scroll paging hook.
-  const scroll = createTranscriptScroll({
-    isVisible: () => panelVisible,
-    getHasMoreAfter: () => hasMoreAfter(currentAgentId ?? ""),
-    onUserScroll: (element) => {
-      if (currentAgentId !== null) {
-        maybePage(currentAgentId, element);
-      }
-    },
-  });
   // Memoized turn-grouping output. buildSections walks the whole held
   // transcript, so it is recomputed only when the data actually changes (keyed
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
-  // Row key -> index in cachedRows, memoized alongside it. Used to resolve a live
-  // selection's DOM rows to virtualization indices so they can be pinned into the
-  // window (see renderMessages).
-  let cachedKeyToIndex = new Map<string, number>();
-  // Heights reserved above/below the loaded window for history that exists on the
-  // server but isn't loaded yet (see renderMessages). Shared so the scroll handler
-  // can tell when the viewport is over a reserved region and page/jump/overlay
-  // accordingly.
-  let phantomTopHeight = 0;
-  let phantomBottomHeight = 0;
-  // Paging (scroll-driven fetch) in-flight guard. Covers older/newer pages and
-  // offset jumps -- only one is outstanding at a time.
-  let backfillInFlight = false;
-  // After an offset jump replaces the window, pin the viewport once to the top of
-  // the freshly loaded rows (just below the top reserved spacer) so the user lands
-  // on the jumped-to content rather than in the reserved region above it. With the
-  // reserved heights now sized by a stable constant, the top of the loaded window
-  // doesn't drift as rows measure, so a single pin suffices -- no timed settle.
-  let pendingPinToWindowTop = false;
+
+  // The scroll engine owns everything about scrolling: the FOLLOW /
+  // USER_CONTROLLED state machine, anchor positioning, spacer sizing, the
+  // custom scrollbar mapping, progressive fill (paging, jumps, eviction),
+  // persistence, and the ?debug=scroll trace. This panel only feeds it data
+  // (via the data source below) and renders the rows/spacers it asks for.
+  const engine = createTranscriptScrollEngine({
+    isVisible: () => panelVisible,
+    dataSource: {
+      getRows: () => cachedRows,
+      getWindowEventIds: () => getEventsForAgent(currentAgentId ?? "").map((event) => event.event_id),
+      getFirstOffset: () => getFirstOffset(currentAgentId ?? ""),
+      // Null until the first window has been placed (renderVersion bumps on
+      // placement, including for an empty transcript), so the engine's fill
+      // planner never races the initial snapshot+stream load.
+      getTotalEvents: () => {
+        const agentId = currentAgentId ?? "";
+        return getRenderVersion(agentId) > 0 ? getTotalEventCount(agentId) : null;
+      },
+      getRenderVersion: () => getRenderVersion(currentAgentId ?? ""),
+      executeFill: (action: FillAction): Promise<void> => {
+        const agentId = currentAgentId;
+        if (agentId === null) {
+          return Promise.resolve();
+        }
+        switch (action.kind) {
+          case "fetch-tail":
+            return fetchEvents(agentId).then(() => {});
+          case "fetch-before":
+            return fetchBackfillEvents(agentId, action.limit);
+          case "fetch-after":
+            return fetchForwardEvents(agentId, action.limit);
+          case "fetch-at-offset":
+            return fetchWindowAtOffset(agentId, action.offset, action.limit);
+          case "evict":
+            evictEvents(agentId, action.side, action.count);
+            return Promise.resolve();
+          case "idle":
+            return Promise.resolve();
+          default:
+            return action satisfies never;
+        }
+      },
+    },
+  });
 
   // File drag-and-drop: dropping a file anywhere over the chat stages it as a
   // composer attachment. ``dragDepth`` counts dragenter minus dragleave across
@@ -160,6 +158,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // transcript rows; the overlay is shown while the depth is positive.
   let dragDepth = 0;
   let isFileDragActive = false;
+  // Which face of the card is showing, and whether the back one has ever been built. Per-panel
+  // rather than global: two chats open side by side turn over independently.
+  let isFlipped = false;
+  let hasEverFlipped = false;
 
   function isFileDrag(event: DragEvent): boolean {
     const types = event.dataTransfer?.types;
@@ -211,28 +213,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     event.preventDefault();
     uploadFilesToComposer(agentId, event.dataTransfer?.files);
     m.redraw();
-  }
-
-  // Snapshot-load path: SSE only carries events emitted after subscription,
-  // so an auth-error that happened before the user opened the panel (e.g.
-  // the auto-`/welcome` failing during fresh mind creation) wouldn't open
-  // the modal otherwise. Walking back to the last assistant_message means
-  // an already-recovered agent (whose history contains old auth errors
-  // but has since produced healthy replies) does not open it on reload --
-  // only an agent whose current state is broken does. The modal itself is
-  // a single app-level instance driven by global auth state (see
-  // models/ClaudeAuth.ts), so this just flips that shared flag.
-  function checkLatestAssistantForAuthError(agentId: string): void {
-    const events = getEventsForAgent(agentId);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const event = events[i];
-      if (event.type === "assistant_message") {
-        if (event.is_auth_error === true) {
-          openAgentAuth(agentId);
-        }
-        return;
-      }
-    }
   }
 
   // Screen capture state (shown when agent has no conversation)
@@ -305,7 +285,8 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
     logWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data as string) as
-        { line: string } | { done: true; success: boolean; error: string | null };
+        | { line: string }
+        | { done: true; success: boolean; error: string | null };
 
       if ("line" in data) {
         logLines.push(data.line);
@@ -366,9 +347,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
       await loadSnapshotWithStream(agentId);
-      if (agentId === currentAgentId) {
-        checkLatestAssistantForAuthError(agentId);
-      }
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -405,10 +383,6 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
   }
 
-  const RELOAD_BUTTON_CLASS =
-    "message-list-reload cursor-pointer rounded-md border border-border px-3 py-1 text-sm " +
-    "text-text-primary hover:bg-bg-hover";
-
   function manageStreamConnection(agentId: string): void {
     if (!isConversationNotFound(agentId)) {
       connectToStream(agentId);
@@ -423,8 +397,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
 
     currentAgentId = agentId;
-    scroll.reset();
-    backfillInFlight = false;
+    // Resets all scroll state and loads this agent's persisted position (which
+    // then steers the engine's fill toward it once the snapshot lands).
+    engine.setAgent(agentId);
     loadAgent(agentId);
   }
 
@@ -465,118 +440,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     });
   }
 
-  /**
-   * Keep the loaded window in step with the scroll position. Three cases, all
-   * bounded to a single fetch:
-   *   - viewport far from the loaded window (e.g. a scrollbar drag deep into
-   *     history): JUMP -- replace the window with a page around the target offset,
-   *     so reaching a distant point costs one request, not a walk through
-   *     everything between.
-   *   - viewport near the top edge of the loaded rows, with older history left:
-   *     page one older window-worth.
-   *   - viewport near the bottom edge, with newer history left (only possible
-   *     after a jump moved the window off the live tail): page one newer worth.
-   */
-  function maybePage(agentId: string, element: HTMLElement): void {
-    // While the panel is hidden (an inactive dockview tab) the element is
-    // zero-sized: scrollTop/scrollHeight read 0, which would map the viewport to
-    // event 0 and fire a spurious jump to the start of the conversation. Skip.
-    if (!panelVisible) {
-      return;
-    }
-    // A fetch is already outstanding (only one at a time), or a just-completed jump
-    // still needs its one-shot pin applied -- in both cases the window is about to
-    // change, so don't act on the current (transient) scroll position.
-    if (backfillInFlight || pendingPinToWindowTop) {
-      return;
-    }
-    const held = getEventCount(agentId);
-    const firstOffset = getFirstOffset(agentId);
-    const windowEnd = firstOffset + held;
-
-    // Map the viewport to a target event index using the SAME phantom-region
-    // geometry the renderer uses to size the reserved spacers, so it is the exact
-    // inverse. Only the reserved regions above/below the loaded window can imply a
-    // jump; over the loaded rows the edge-paging branches below handle it. The old
-    // global-fraction mapping assumed scrollHeight ~= total * ESTIMATED_EVENT_HEIGHT_PX,
-    // so measured-height divergence in the loaded window could push the estimate
-    // across the jump threshold and fire a spurious window reset (which unmounts
-    // every row -- the most violent scroll jolt, and a guaranteed selection kill).
-    const loadedBottom = element.scrollHeight - phantomBottomHeight;
-    let targetIndex: number | null = null;
-    if (phantomTopHeight > 0 && element.scrollTop < phantomTopHeight) {
-      targetIndex = Math.round(element.scrollTop / ESTIMATED_EVENT_HEIGHT_PX);
-    } else if (phantomBottomHeight > 0 && element.scrollTop + element.clientHeight > loadedBottom) {
-      const intoBottomRegion = element.scrollTop + element.clientHeight - loadedBottom;
-      targetIndex = windowEnd + Math.round(intoBottomRegion / ESTIMATED_EVENT_HEIGHT_PX);
-    }
-
-    // Far from the loaded window in either direction -> jump.
-    if (
-      targetIndex !== null &&
-      (targetIndex < firstOffset - JUMP_GAP_EVENTS || targetIndex > windowEnd + JUMP_GAP_EVENTS)
-    ) {
-      backfillInFlight = true;
-      fetchWindowAtOffset(agentId, targetIndex - Math.floor(JUMP_GAP_EVENTS / 2)).finally(() => {
-        backfillInFlight = false;
-        // The window now sits off the live tail, so stop following it, and pin the
-        // viewport once to the new window's top on the next redraw (applyScrollPosition).
-        scroll.userScrolledUp = true;
-        pendingPinToWindowTop = true;
-        m.redraw();
-      });
-      return;
-    }
-
-    // Near the top of the loaded rows -> page older. Native scroll anchoring keeps
-    // the viewport fixed on the content being read when the older page lands above.
-    if (hasMoreBefore(agentId) && element.scrollTop - phantomTopHeight < BACKFILL_TRIGGER_PX) {
-      backfillInFlight = true;
-      fetchBackfillEvents(agentId).finally(() => {
-        backfillInFlight = false;
-        m.redraw();
-      });
-      return;
-    }
-
-    // Near the bottom of the loaded rows with newer history left -> page newer.
-    // Appending below shifts nothing above it, so no scroll compensation is due.
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (hasMoreAfter(agentId) && distanceFromBottom - phantomBottomHeight < BACKFILL_TRIGGER_PX) {
-      backfillInFlight = true;
-      fetchForwardEvents(agentId).finally(() => {
-        backfillInFlight = false;
-        m.redraw();
-      });
-    }
-  }
-
-  function applyScrollPosition(element: HTMLElement): void {
-    // Hidden panels and the tail-follow pin are handled by the shared controller;
-    // this wrapper only adds the offset-jump pin that is specific to the main chat.
-    if (!panelVisible) {
-      return;
-    }
-    // After an offset jump, pin the viewport once to the top of the freshly loaded
-    // rows (just below the top reserved spacer) so the user lands on the jumped-to
-    // content rather than in the reserved (blank) region above it. The reserved
-    // top height is a stable constant * offset, so it doesn't drift as the loaded
-    // rows measure -- a single pin lands correctly without a timed settle.
-    if (pendingPinToWindowTop) {
-      pendingPinToWindowTop = false;
-      scroll.pinTo(element, phantomTopHeight);
-      return;
-    }
-    scroll.applyScrollPosition(element);
-  }
-
   function renderMessages(agentId: string): m.Vnode {
-    // Reset here so the loading overlay (keyed on a positive value) stays hidden
-    // for every path that doesn't render the windowed list; the windowed path
-    // below sets the real reserved heights.
-    phantomTopHeight = 0;
-    phantomBottomHeight = 0;
-
     // The build log covers creation, so it only applies while the agent is not
     // yet a real one. Both branches below are gated on that: the proto-agent
     // list is rebuilt from broadcasts and can name an agent that has since been
@@ -587,7 +451,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const isRegisteredAgent = getAgentById(agentId) !== undefined;
 
     // If this agent is still being created, show the build log
-    if (isProtoAgent(agentId) && !isRegisteredAgent) {
+    if (isStillBeingCreated(agentId)) {
       return renderBuildLog(agentId);
     }
 
@@ -614,10 +478,10 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (isConversationNotFound(agentId)) {
       fetchScreenCapture(agentId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "text-lg font-semibold text-text-primary" }, "No conversation data"),
-        m("p", { class: "text-text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
+        m("p", { class: "type-heading text-primary" }, "No conversation data"),
+        m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
         screenLoading
-          ? m("p", { class: "text-text-secondary" }, "Loading terminal output...")
+          ? m("p", { class: "text-secondary" }, "Loading terminal output...")
           : screenContent
             ? m(
                 "pre",
@@ -628,7 +492,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 screenContent,
               )
             : screenError
-              ? m("p", { class: "text-text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
+              ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
               : null,
       ]);
     }
@@ -646,22 +510,21 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // Read per-render rather than latched at load time, so the panel leaves the
     // error state as soon as any reload succeeds -- the tab's Refresh or the
     // stream's background reconnect, neither of which goes through loadAgent.
-    // Reading the phase (not just the error) is what keeps those two from
-    // falling through to "No events yet for this agent." while they are in
-    // flight, which is a lie the panel used to tell for the whole of a retry.
+    // The phase, not just the error: a load that is in flight -- including a retry -- must not
+    // fall through to "No events yet for this agent.", which claims an answer it does not have.
     const load = getConversationLoadState(agentId);
     if (hasNothingToShow && load.phase === "loading") {
       return m(
         "div",
         { class: "message-list-loading flex items-center justify-center h-full" },
-        m("p", { class: "text-text-secondary" }, "Loading events..."),
+        m("p", { class: "text-secondary" }, "Loading events..."),
       );
     }
 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-red-500" }, `Error: ${load.error}`),
-        m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+        m("p", { class: "text-danger" }, `Error: ${load.error}`),
+        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
       ]);
     }
 
@@ -674,28 +537,18 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     const failedReloadNotice =
       load.error === null
         ? null
-        : m("div", { class: "message-list-stale-notice flex items-center gap-3 border-b border-border px-3 py-1.5" }, [
-            m("span", { class: "text-sm text-red-500" }, `Couldn't refresh this conversation: ${load.error}`),
-            m("button", { class: RELOAD_BUTTON_CLASS, onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
-          ]);
-
-    // Whether a live text selection is anchored in this panel's transcript. Gates
-    // both eviction (below) and the tail-follow pin's effect on the window (via the
-    // selection pin further down): a selection must survive scrolling and streaming.
-    const selectionActive = isSelectionActiveWithin(selectionStateWithin(scroll.scrollEl));
-
-    // Bound client memory while following the live tail: trim the oldest held
-    // events once well over the cap. Only when at the bottom, so a scrolled-up
-    // reader's rendered history is never yanked out from under them; the dropped
-    // history is re-fetched via backfill on scroll-up (evictOldEvents advances the
-    // window start so it reads as older history above). Re-pinned to the bottom by
-    // applyScrollPosition afterwards. Also skipped while a selection is active:
-    // eviction deletes the underlying events, which no amount of DOM pinning can
-    // survive. This temporarily lifts the MAX_HELD_EVENTS bound while a selection
-    // is held; it is restored on the first redraw after the selection is dropped.
-    if (!scroll.userScrolledUp && !selectionActive && getEventCount(agentId) > MAX_HELD_EVENTS) {
-      evictOldEvents(agentId);
-    }
+        : m(
+            "div",
+            { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
+            [
+              m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
+              m(
+                Button,
+                { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) },
+                "Refresh",
+              ),
+            ],
+          );
 
     const events = getEventsForAgent(agentId);
 
@@ -706,7 +559,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
         return m(
           "div",
           { class: "message-list-empty flex items-center justify-center h-full" },
-          m("p", { class: "text-text-secondary" }, "No events yet for this agent."),
+          m("p", { class: "text-secondary" }, "No events yet for this agent."),
         );
       }
       return m("div", { class: "message-list-wrapper" }, [
@@ -743,59 +596,26 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       cachedRows = buildConversationRows(agentId, events, agentIsIdle);
-      cachedKeyToIndex = new Map(cachedRows.map((row, index) => [row.key, index]));
-      scroll.rowMeasurer.prune(new Set(cachedRows.map((row) => row.key)));
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
 
-    const getHeight = (index: number): number => scroll.rowMeasurer.getHeight(rows[index].key) ?? rows[index].estimate;
-
-    // Reserve space above and below the loaded window for history that exists on
-    // the server but isn't loaded yet, so the scrollbar reflects the whole
-    // conversation rather than just the loaded window -- and so paging more in
-    // doesn't make it jump. Each reserve is the count of not-yet-loaded events on
-    // that side times a stable per-event constant (see ESTIMATED_EVENT_HEIGHT_PX).
-    // Using a constant (not the loaded window's measured average) is what keeps the
-    // total scroll height stable: deriving it from the small loaded window would
-    // make every row measurement, amplified by the large unloaded count, jolt the
-    // scrollbar. As events page in, the reserve shrinks by ~the height they add, so
-    // existing content stays put.
-    const total = getTotalEventCount(agentId);
-    const firstOffset = getFirstOffset(agentId);
-    const olderUnloaded = Math.max(0, firstOffset);
-    const newerUnloaded = Math.max(0, total - (firstOffset + events.length));
-    phantomTopHeight = Math.round(olderUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
-    phantomBottomHeight = Math.round(newerUnloaded * ESTIMATED_EVENT_HEIGHT_PX);
-
-    // Before the first measure viewportHeight is 0; fall back to the live
-    // clientHeight (or a large value) so the initial render is not a 1-row sliver
-    // that the post-mount measure then has to expand.
-    const effectiveViewportHeight =
-      scroll.viewportHeight > 0 ? scroll.viewportHeight : (scroll.scrollEl?.clientHeight ?? 2000);
-    // Windowed slice for the viewport, plus a (possibly disjoint) run holding the
-    // rows a live selection touches so scrolling/streaming past them doesn't
-    // unmount their DOM and collapse the selection. A disjoint run mounts only the
-    // selected rows -- not the arbitrarily many between them and the viewport -- so
-    // there is no gap cap: the selection survives at any scroll distance.
-    const { segments } = computeTranscriptSlices({
-      count: rows.length,
-      getHeight,
-      scrollTop: scroll.scrollTop,
-      viewportHeight: effectiveViewportHeight,
-      overscanPx: OVERSCAN_PX,
-      phantomTopHeight,
-      phantomBottomHeight,
-      pinnedRange: selectionActive ? resolveSelectionRowRange(scroll.scrollEl, cachedKeyToIndex) : null,
-    });
-
+    // The engine decides everything about what mounts: the virtual end spacers,
+    // the visible row window (viewport + overscan, grown while a selection is
+    // live), and -- in afterRender -- where the viewport sits. Rendered as
+    // spacer / row-run / spacer via the shared segment renderer.
+    const plan = engine.computeRenderPlan();
     return m("div", { class: "message-list-wrapper" }, [
       failedReloadNotice,
       // The queued-message group renders after the virtualized rows so it sits at
       // the live tail, below the last committed turn. It is a full snapshot from
       // the harness, replaced wholesale on each push.
       m("div", { class: MESSAGE_LIST_CLASS }, [
-        ...renderTranscriptSegments(rows, segments),
+        ...renderTranscriptSegments(rows, [
+          { kind: "spacer", height: plan.topPadPx },
+          { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
+          { kind: "spacer", height: plan.bottomPadPx },
+        ]),
         ...renderQueuedMessages(agentId),
         ...renderOutgoingMessages(agentId),
       ]),
@@ -804,15 +624,23 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
 
   const handleAgentsUpdated = (): void => retryAfterAgentResolved();
 
+  const handleMessageSent = (agentId: string): void => {
+    if (agentId === currentAgentId) {
+      engine.noteMessageSent();
+    }
+  };
+
   return {
     oninit() {
       addAgentsUpdatedListener(handleAgentsUpdated);
+      addMessageSentListener(handleMessageSent);
     },
 
     onremove() {
       removeAgentsUpdatedListener(handleAgentsUpdated);
+      removeMessageSentListener(handleMessageSent);
       disconnectLogWs();
-      scroll.detach();
+      engine.detach();
       if (currentAgentId !== null) {
         disconnectFromStream(currentAgentId);
       }
@@ -826,21 +654,16 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // mount without a panel api -- treat that as visible.
       panelVisible = vnode.attrs.isVisible ?? true;
 
-      // renderMessages sets the reserved heights, so build the content first, then
-      // decide whether the viewport currently sits over a reserved region (above
-      // all loaded rows, or below them) and so should show a loading overlay
-      // instead of a blank spacer while the fetch for that region lands.
       const content = isSlotClaimed("conversation-content") ? null : renderMessages(agentId);
-      const scrollEl = scroll.scrollEl;
-      const currentScrollTop = scroll.scrollTop;
-      const viewportPx = scroll.viewportHeight > 0 ? scroll.viewportHeight : (scrollEl?.clientHeight ?? 0);
-      const loadedTop = phantomTopHeight;
-      const loadedBottom = scrollEl !== null ? scrollEl.scrollHeight - phantomBottomHeight : Number.MAX_SAFE_INTEGER;
-      const inReservedRegion =
-        (phantomTopHeight > 0 && currentScrollTop < loadedTop) ||
-        (phantomBottomHeight > 0 && currentScrollTop + viewportPx > loadedBottom);
 
-      const acceptsFileDrops = !isProtoAgent(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = !isStillBeingCreated(agentId) && !isConversationNotFound(agentId);
+
+      // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
+      // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
+      // back face takes its iframe out of the document -- which ends the ttyd session rather
+      // than hiding it. So the back face mounts on the first flip and stays mounted forever;
+      // only the transform changes after that.
+      if (isFlipped) hasEverFlipped = true;
 
       return m(
         "div",
@@ -855,99 +678,131 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           isFileDragActive && acceptsFileDrops
             ? m(
                 "div",
-                { class: "chat-drop-overlay absolute inset-0 flex items-center justify-center pointer-events-none" },
-                m("div", { class: "chat-drop-overlay-label" }, "Drop files to attach"),
-              )
-            : null,
-          m(
-            "main",
-            {
-              class: "app-content flex-1 overflow-y-auto px-8 py-6",
-              onscroll: (event: Event) => scroll.onScroll(event),
-              // Mark the start of a drag (likely a selection) so the tail-follow pin
-              // defers while the button is held (see the controller's applyTailFollow).
-              onpointerdown: () => scroll.onPointerDown(),
-              oncreate: (mainVnode: m.VnodeDOM) => {
-                const element = mainVnode.dom as HTMLElement;
-                scroll.attach(element);
-                applyScrollPosition(element);
-                scroll.scheduleMeasure();
-                if (currentAgentId !== null) {
-                  maybePage(currentAgentId, element);
-                }
-              },
-              onupdate: (mainVnode: m.VnodeDOM) => {
-                const element = mainVnode.dom as HTMLElement;
-                scroll.attach(element);
-                applyScrollPosition(element);
-                scroll.scheduleMeasure();
-                // Drive paging from the render loop, not only from scroll events, so
-                // the viewport sitting over a reserved region always triggers (or
-                // already has in flight) the fetch to cover it. Without this a drag
-                // that ends in a reserved region -- with the triggering scroll event
-                // suppressed by an in-flight fetch -- could strand the loading overlay
-                // with nothing actually loading.
-                if (currentAgentId !== null) {
-                  maybePage(currentAgentId, element);
-                }
-              },
-            },
-            content,
-          ),
-          // While the viewport is over reserved space for not-yet-loaded history
-          // (e.g. the scrollbar was dragged into a region the loaded window doesn't
-          // cover yet), overlay a loading indicator centered in the viewport so the
-          // user never sees a blank area. pointer-events:none so it never blocks scroll.
-          inReservedRegion
-            ? m(
-                "div",
                 {
+                  // z-50: design-system-exception -- a mid-layer overlay above
+                  // chat content but below the modal stack; the z scale has no
+                  // name for it.
                   class:
-                    "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
+                    "chat-drop-overlay absolute inset-0 z-50 m-2 flex items-center justify-center rounded-lg " +
+                    "border-2 border-dashed border-accent bg-accent-light/70 pointer-events-none",
                 },
-                m("p", { class: "text-text-secondary" }, "Loading messages..."),
+                m(
+                  "div",
+                  {
+                    class:
+                      "chat-drop-overlay-label rounded-full border border-accent bg-surface px-4.5 py-2.5 " +
+                      "text-(length:--font-size-body) font-medium text-accent shadow-overlay",
+                  },
+                  "Drop files to attach",
+                ),
               )
             : null,
-          // Only show message input when not in proto-agent mode
-          isProtoAgent(agentId)
-            ? null
-            : m("footer", { class: "app-footer" }, [
-                m(EmptySlot, { name: "conversation-before-input" }),
-                isConversationNotFound(agentId)
-                  ? null
-                  : m(ActivityIndicator, {
-                      agentId,
-                      events: getEventsForAgent(agentId),
-                    }),
-                m(MessageInput, { agentId }),
-                // Below the chat input: the original flex row -- model bar on the left, the
-                // agent-terminal + harness-auth actions right-aligned. The "Powered by" credit is
-                // rendered last as a centered overlay (absolute, pointer-events:none) so it sits
-                // in the middle without reshaping the row. Shared font, no background of its own.
-                m("div", { class: "composer-under-bar" }, [
-                  m(ModelBar, { agentId }),
-                  m("div", { class: "composer-under-bar-actions" }, [
-                    m(
-                      "button",
+          chatFlipCard({
+            flipped: isFlipped,
+            everFlipped: hasEverFlipped,
+            back: () =>
+              m(AgentTerminalPanel, {
+                agentId,
+                url: getAgentTerminalUrl(agentId),
+                title: `${getAgentById(agentId)?.name ?? "agent"} terminal`,
+              }),
+            front: [
+              // The transcript area: the scroll container (native scrolling, native
+              // scrollbar hidden), the custom overlay scrollbar, and the
+              // loading-overlay for when the viewport sits over a virtual end spacer.
+              m("div", { class: "chat-transcript-area relative flex-1 min-h-0 flex flex-col" }, [
+                m(
+                  "main",
+                  {
+                    class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
+                    // Focusable so native keyboard scrolling (PageUp/Down, Home/End)
+                    // works; the engine's listeners classify the input source.
+                    tabindex: 0,
+                    oncreate: (mainVnode: m.VnodeDOM) => {
+                      engine.afterRender(mainVnode.dom as HTMLElement);
+                    },
+                    onupdate: (mainVnode: m.VnodeDOM) => {
+                      engine.afterRender(mainVnode.dom as HTMLElement);
+                    },
+                  },
+                  content,
+                ),
+                m(TranscriptScrollbar, { engine }),
+                // While the viewport is over a virtual end spacer (e.g. the scrollbar
+                // was dragged into not-yet-loaded history), overlay a loading indicator
+                // so the user never sees a blank area. pointer-events:none so it never
+                // blocks scroll.
+                engine.isViewportInSpacer()
+                  ? m(
+                      "div",
                       {
-                        type: "button",
-                        class: "composer-under-bar-action",
-                        onclick: () => openAgentTerminalTab(agentId),
+                        class:
+                          "message-list-window-loading absolute inset-0 flex items-center justify-center p-6 pointer-events-none",
                       },
-                      "Open agent terminal",
-                    ),
-                    // Persistent entry to the sign-in modal so the user can switch
-                    // auth modes without waiting for an auth error.
-                    m(
-                      "button",
-                      { type: "button", class: "composer-under-bar-action", onclick: () => openAgentAuth(agentId) },
-                      "Agent auth",
-                    ),
-                  ]),
-                  // The centered harness credit (may render nothing), overlaid on the bar.
-                  m(PoweredByCredit, { agentId }),
-                ]),
+                      m("p", { class: "text-secondary" }, "Loading messages..."),
+                    )
+                  : null,
               ]),
+              // Only while the agent is genuinely still being created -- the same condition the
+              // build log uses, so the composer arrives with the transcript rather than after it.
+              isStillBeingCreated(agentId)
+                ? null
+                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+                    m(EmptySlot, { name: "conversation-before-input" }),
+                    isConversationNotFound(agentId)
+                      ? null
+                      : m(ActivityIndicator, {
+                          agentId,
+                          events: getEventsForAgent(agentId),
+                        }),
+                    m(MessageInput, { agentId }),
+                    // The under-bar is a sibling of the whole flip card, not part of this face: on
+                    // a face it would rotate away with the face its own switch turns, and the flip
+                    // would be one-way.
+                  ]),
+            ],
+          }),
+          // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
+          // the flip would be one-way. Everything here describes the conversation rather than
+          // either rendering of it, which is the same reason it belongs to neither face.
+          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
+          // under-bar rather than between the composer and it.
+          isStillBeingCreated(agentId)
+            ? null
+            : m(
+                "div",
+                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
+                m(
+                  "div",
+                  {
+                    // Same max-width as the composer card above it; relative as
+                    // the containing block for centered overlays.
+                    class:
+                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
+                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+                  },
+                  [
+                    m(ModelBar, { agentId }),
+                    m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
+                      m(TerminalViewToggle, {
+                        on: isFlipped,
+                        onToggle: (event: Event) => {
+                          isFlipped = !isFlipped;
+                          // Turning the card over is the user navigating TO the terminal,
+                          // so the host grants it focus -- the embedded ttyd client never
+                          // takes focus on its own (see terminalFocus.ts). Redraw first so
+                          // a first flip has mounted the back face before the ask.
+                          if (isFlipped) {
+                            const panel = (event.currentTarget as HTMLElement | null)?.closest?.(".chat-panel");
+                            m.redraw.sync();
+                            requestTerminalFocus(panel?.querySelector?.(".chat-flip-back") ?? null);
+                          }
+                        },
+                      }),
+                    ]),
+                  ],
+                ),
+              ),
         ],
       );
     },

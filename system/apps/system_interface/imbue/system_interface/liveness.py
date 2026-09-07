@@ -12,6 +12,7 @@ import os
 import socket
 import urllib.parse
 import xmlrpc.client
+from collections.abc import Sequence
 from http.client import HTTPConnection
 from pathlib import Path
 from typing import Final
@@ -113,34 +114,70 @@ def stop_supervisor_program(program: str, socket_path: Path) -> None:
         raise SupervisorProgramActionError(f"could not reach supervisord to stop {program!r}: {e}") from e
 
 
-def probe_supervisor_program(program: str, socket_path: Path) -> bool | None:
-    """Whether supervisord reports ``program`` as up, or None when it cannot say.
+def fetch_supervisor_program_states(socket_path: Path) -> dict[str, bool] | None:
+    """Every supervised program's up/down state in one getAllProcessInfo RPC.
 
-    None covers both an unreachable supervisord (no socket -- a dev setup, a
-    test) and a program name supervisord does not know (a hand-edited registry,
-    or a block removed since registration); the caller falls back to the TCP
-    probe rather than presenting a guess as supervisord's answer.
+    Returns None when supervisord cannot be reached (or answers with something
+    unmarshallable), so the caller falls back to per-row TCP probes rather than
+    presenting a guess as supervisord's answer. Keys are bare program names --
+    the same names ``forward_port.py --program`` registers and the per-program
+    RPCs use (this config defines no supervisord groups).
     """
     try:
         # ``object`` collapses the marshallable union the proxy stub infers, so
-        # the isinstance below is the one narrowing the read relies on.
-        process_info: object = _supervisor_proxy(socket_path).supervisor.getProcessInfo(program)
+        # the isinstance checks below are the narrowing the reads rely on.
+        process_infos: object = _supervisor_proxy(socket_path).supervisor.getAllProcessInfo()
     except xmlrpc.client.Fault as e:
-        _loguru_logger.debug("Supervisord has no program {!r}: {}", program, e.faultString)
+        _loguru_logger.debug("Supervisord refused getAllProcessInfo: {}", e.faultString)
         return None
     except (OSError, xmlrpc.client.ProtocolError, xmlrpc.client.ResponseError) as e:
-        _loguru_logger.debug("Failed to reach supervisord for {!r}: {}", program, e)
+        _loguru_logger.debug("Failed to reach supervisord for getAllProcessInfo: {}", e)
         return None
-    if not isinstance(process_info, dict):
+    if not isinstance(process_infos, list):
         return None
-    # Read the one key by iteration: the proxy stub's inferred dict variants
-    # make every keyed access (``get``, ``in``, subscript) an overload mismatch,
-    # while an argument-free ``items()`` walk types cleanly on all of them.
-    statename = ""
-    for key, value in process_info.items():
-        if key == "statename":
-            statename = str(value)
-    return statename in _RUNNING_STATE_NAMES
+    is_running_by_program: dict[str, bool] = {}
+    for process_info in process_infos:
+        if not isinstance(process_info, dict):
+            continue
+        # Read the two keys by iteration: the proxy stub's inferred dict
+        # variants make every keyed access an overload mismatch, while an
+        # argument-free ``items()`` walk types cleanly on all of them.
+        program_name = ""
+        statename = ""
+        for key, value in process_info.items():
+            if key == "name":
+                program_name = str(value)
+            elif key == "statename":
+                statename = str(value)
+            else:
+                pass
+        if program_name:
+            is_running_by_program[program_name] = statename in _RUNNING_STATE_NAMES
+    return is_running_by_program
+
+
+def probe_all_app_liveness(probe_targets: Sequence[tuple[str, str, str]]) -> dict[str, bool]:
+    """Derive ``is_running`` for every registry row in one sweep.
+
+    At most one batched supervisord RPC answers for all supervised rows,
+    instead of one unix-socket round trip per row per sweep (and none at all
+    when no row is supervised -- the sweep runs on a timer regardless of
+    registry contents, so an idle registry must not cost an RPC per pass).
+    A row falls back to the TCP probe when supervisord cannot answer at all,
+    does not know the row's program, or the row is unsupervised (no program).
+    """
+    is_any_row_supervised = any(program for _name, program, _url in probe_targets)
+    is_running_by_program = (
+        fetch_supervisor_program_states(supervisor_socket_path()) if is_any_row_supervised else None
+    )
+    is_running_by_name: dict[str, bool] = {}
+    for name, program, url in probe_targets:
+        supervised_state = is_running_by_program.get(program) if is_running_by_program is not None else None
+        if program and supervised_state is not None:
+            is_running_by_name[name] = supervised_state
+        else:
+            is_running_by_name[name] = probe_tcp_url(url)
+    return is_running_by_name
 
 
 def probe_tcp_url(url: str) -> bool:
@@ -157,17 +194,3 @@ def probe_tcp_url(url: str) -> bool:
             return True
     except OSError:
         return False
-
-
-def probe_app_liveness(program: str, url: str) -> bool:
-    """The ``is_running`` derivation for one registry row.
-
-    Supervisord's process state for a supervised row, with the TCP probe as the
-    fallback whenever supervisord cannot answer (and the whole story for an
-    unsupervised row).
-    """
-    if program:
-        supervised_state = probe_supervisor_program(program, supervisor_socket_path())
-        if supervised_state is not None:
-            return supervised_state
-    return probe_tcp_url(url)

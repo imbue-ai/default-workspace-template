@@ -17,9 +17,20 @@ _REPO_ROOT = _BIN_DIR.parents[3]
 _SCANNED_DIRS = (
     _BIN_DIR,
     _REPO_ROOT / "system" / "scripts",
-    # Skill scripts run under a bare python3 for the same reason, and the reveal
-    # one bands itself out of the agent-subprocess range before it starts.
-    _REPO_ROOT / ".agents" / "skills" / "update-system-interface" / "scripts",
+)
+# The update-self apply (``.agents/skills/update-self/scripts/update_banding.py``)
+# also bands itself under a bare python3, but its insert is computed from the
+# repo root it is applied to (it is staged and run against other trees), so
+# the literal pattern below cannot see it; it guards its own target with an
+# ``is_file`` check at runtime. The target it expects is pinned here instead.
+_UPDATE_SELF_BANDS_TARGET = (
+    _REPO_ROOT
+    / "system"
+    / "services"
+    / "oom_priority"
+    / "src"
+    / "oom_priority"
+    / "bands.py"
 )
 
 # Matches the argument of the conventional insert:
@@ -33,6 +44,10 @@ _PATH_INSERT_RE = re.compile(
     r"((?:\s*/\s*\"[^\"]+\")+)\s*\)\s*,?\s*\)"
 )
 _COMPONENT_RE = re.compile(r"\"([^\"]+)\"")
+
+
+def test_the_update_apply_bands_target_exists() -> None:
+    assert _UPDATE_SELF_BANDS_TARGET.is_file()
 
 
 def test_every_script_sys_path_insert_points_at_an_existing_directory() -> None:

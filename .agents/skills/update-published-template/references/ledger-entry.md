@@ -17,9 +17,10 @@ from `$WT`).
 
 - The slug's `### <slug>  --  <repo-url>` heading already exists (this mind
   published v1 through `publish-template`). In the unlikely event
-  `docs/VERSION_HISTORY.md` is missing, recreate the shipped three-section
-  starter (`## Workspace`, `## Templates`, `## Adopted templates`; the exact
-  heredoc lives in `update-self` §5b) and re-add the heading before appending.
+  `docs/VERSION_HISTORY.md` is missing, recreate the shipped four-section
+  starter (`## Workspace`, `## Migrations`, `## Templates`, `## Adopted
+  templates`; the exact block is `_VERSION_HISTORY_STARTER` in `update-self`'s
+  `scripts/update_self.py`) and re-add the heading before appending.
 - Append one line under that heading:
 
   ```

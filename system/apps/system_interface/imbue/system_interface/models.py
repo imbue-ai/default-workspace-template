@@ -331,17 +331,16 @@ class TerminalSessionInfo(FrozenModel):
 
 
 class CreateChatRequest(FrozenModel):
-    """Request body for creating a chat agent (any harness; claude is the default)."""
+    """Request body for creating a chat agent. The account decides which harness it runs on."""
 
     name: str = Field(
         default="",
         description="Display name for the new chat agent; empty mints the first free "
-        '"<word> N" for the harness server-side ("Chat 1", "Codex 2", ...)',
+        '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
     )
-    harness: HarnessType = Field(default=HarnessType.CLAUDE, description="Harness to run the agent on")
-    first: bool = Field(
-        default=False,
-        description="Stack the `first` create template: /welcome, the first=true label, and a fast-mode launch",
+    account_id: str = Field(
+        default="",
+        description="Signed-in account to bind the chat to; empty picks the most recently used one",
     )
 
 
@@ -405,15 +404,6 @@ class ClaudeAuthStatusResponse(FrozenModel):
             "This workspace's id (its services agent id; the machine's host id as a fallback), "
             "for the desktop app's key-mint page link"
         ),
-    )
-    restart_phase: str | None = Field(
-        default=None, description="Phase of the post-auth agent restart: 'restarting', 'finishing', 'done', 'failed'"
-    )
-    restart_detail: str | None = Field(default=None, description="Human-readable detail for the current restart phase")
-    restart_error: str | None = Field(default=None, description="Error message when restart_phase is 'failed'")
-    restart_reason: str | None = Field(
-        default=None,
-        description="Why the restart is running: 'credentials_saved', 'subscription_switch', 'console_switch'",
     )
 
 

@@ -28,7 +28,9 @@ export interface ScopeInfo {
 }
 
 type CacheEntry =
-  { state: "loading" } | { state: "ready"; info: ScopeInfo | null } | { state: "failed"; retryAtMs: number };
+  | { state: "loading" }
+  | { state: "ready"; info: ScopeInfo | null }
+  | { state: "failed"; retryAtMs: number };
 
 const cache = new Map<string, CacheEntry>();
 
@@ -74,7 +76,7 @@ async function fetchCacheEntry(scope: string): Promise<CacheEntry> {
   return { state: "failed", retryAtMs: Date.now() + SCOPE_INFO_RETRY_DELAY_MS };
 }
 
-/** Seed the cache directly. Only for the dev-only visual mockup, which has no
+/** Seed the cache directly. Only for the dev-only visual preview, which has no
  *  backend to fetch from. */
 export function seedScopeInfo(info: ScopeInfo): void {
   cache.set(info.scope, { state: "ready", info });

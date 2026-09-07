@@ -50,24 +50,42 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# Signal file gating exactly-once creation of the initial chat agent. Lives
-# under data/.state/, which persists with the container volume.
-INITIAL_CHAT_SIGNAL = STATE_DIR / "initial_chat_created"
-# Basename (under $MNGR_HOST_DIR) of the file holding the initial chat agent's id,
-# read by system_interface's welcome_resend to address the resend by id.
-INITIAL_CHAT_AGENT_ID_FILENAME = "initial_chat_agent_id"
-# The human-readable name the workspace's first chat is created under, carried
-# as the agent's `display_name` label. The system interface reads the label as
-# the chat's display name and numbers later chats against it ("Chat 2", ...).
-_INITIAL_CHAT_DISPLAY_NAME = "Chat 1"
-# The agent name that display name canonicalizes to. Passed literally rather
-# than letting mngr derive it: a workspace's vendored mngr may predate
-# canonicalization, and a name it rejects would fail the first-boot chat create
-# outright. Both names are sent -- the canonical one as the agent name, the
-# human one as the ``display_name`` label -- which every mngr version accepts
-# and which satisfies newer mngr's rule that the true name is the canonical
-# form of the display name.
-_INITIAL_CHAT_AGENT_NAME = "Chat-1"
+# The in-flight update-apply marker and the script that rolls a stale one
+# back (see the update-self skill's apply/recover). The marker persists with
+# the container volume, so an apply the previous container run left mid-motion
+# is visible here at the next boot.
+UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
+UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
+# The fixed workspace root every supervised service assumes. Needed in absolute
+# form only for the recovery cron line below, which runs with cron's cwd rather
+# than this process's.
+WORKSPACE_ROOT_DIR = Path("/home/user/workspace")
+UPDATE_RECOVER_CRON_NAME = "update-apply-recover"
+# `recover`'s exit code for "the tree is rolled back, but the pre-apply state
+# could not be put back" (the script's own emergency code; it has recorded an
+# emergency.json beside the marker). Distinct from the exit 1 of a rollback
+# that could not even restore the tree, which keeps the marker for a retry.
+UPDATE_RECOVER_EXIT_EMERGENCY = 3
+# Bound on the boot-time rollback: git restores, plain file copies of the
+# pre-apply snapshots (the venv copy is the big one), and -- when the apply had
+# reached its provisioner step -- a re-run of setup_system.sh, which does reach
+# the network for the pinned toolchain.
+_UPDATE_RECOVER_TIMEOUT_SECONDS = 900.0
+# Bound on each of the two `mngr` calls that re-engage the DRI agent after a
+# boot-time rollback. Nothing downstream depends on the wake, so a wake that
+# takes longer than this is one that is already failing.
+_DRI_WAKE_TIMEOUT_SECONDS = 120.0
+
+# Its own signal, separate from the chat's. `git add -A` + commit is a once-per-workspace
+# operation: running it on a later boot would commit whatever the user had in flight.
+MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
+# The signal this one replaced. A workspace that booted under the old build has THIS and not
+# the one above, and the work it gates is destructive to repeat: `git add -A`, a commit of
+# whatever is in flight, then `git branch -D main` -- which on a work_dir sitting on any other
+# branch force-deletes the user's main and renames their branch over it. So the old signal
+# still counts as done. Kept as a bare path rather than a re-exported constant because nothing
+# writes it any more; it exists only to be recognised.
+_LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -127,168 +145,49 @@ def _read_host_name() -> str | None:
     return name
 
 
-def _read_main_agent_labels() -> dict[str, str]:
-    """Read this agent's labels dict from $MNGR_HOST_DIR/agents/$MNGR_AGENT_ID/data.json.
 
-    Returns an empty dict on any failure -- callers should treat missing
-    labels as "skip --label flags rather than fail the create call".
+
+
+
+
+
+
+
+
+
+def _touch(signal: Path) -> None:
+    """Create a signal file (and its parent), marking a once-per-workspace step done."""
+    signal.parent.mkdir(parents=True, exist_ok=True)
+    signal.touch()
+
+
+
+
+def _ensure_git_identity() -> None:
+    """Give the workspace repo a committer identity if it has none. Every boot.
+
+    Only-if-unset, so it costs two `git config` reads and never overwrites the user's own.
+
+    Unconditional rather than gated by a signal, because it is the workspace's ONLY committer
+    identity (nothing else in the repo sets `user.email` outside tests and vendored code) and
+    `pool_bake` deliberately unsets it on finalize, expecting the adopted workspace's bootstrap
+    to supply it again. Without an identity every non-agent commit fails -- the user's own
+    terminal, github-sync, any script. Agent tool calls survive only because the bash wrapper
+    exports GIT_AUTHOR_*/GIT_COMMITTER_*, which covers claude and codex and nothing else.
     """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    agent_id = os.environ.get(_AGENT_ID_ENV_VAR, "")
-    if not host_dir or not agent_id:
-        return {}
-    data_path = Path(host_dir) / "agents" / agent_id / "data.json"
-    if not data_path.exists():
-        return {}
-    try:
-        data = json.loads(data_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Failed to read {}: {}", data_path, e)
-        return {}
-    labels = data.get("labels")
-    if not isinstance(labels, dict):
-        return {}
-    # Pydantic-serialized dicts can carry non-string values; coerce defensively.
-    return {str(k): str(v) for k, v in labels.items()}
-
-
-def _build_create_chat_command(labels: dict[str, str]) -> list[str]:
-    """Build the `mngr create` argv for the initial chat agent.
-
-    Mirrors the New Agent button's create path (see
-    system/apps/system_interface/.../agent_manager.py:create_chat_agent): the
-    harness chosen via `--type claude`, the `first` + `chat` role templates,
-    no-connect, and the inherited `project` label when present on the services
-    agent. The `first` template carries everything unique to the workspace's
-    opening chat -- the `/welcome` message, the `first=true` label, and the
-    fast-mode launch settings (see `[create_templates.first]` in
-    .mngr/settings.toml). The chat agent belongs to its workspace by virtue of
-    sharing the host; it carries no `workspace` label.
-
-    The positional is the new agent's NAME, and the host is implicit: this
-    runs inside the workspace, so mngr creates on the local host. (Passing
-    `host_name` here is what used to name the first chat after its workspace,
-    e.g. `p7` -- it was never targeting a host, and writing `NAME@<host_name>`
-    would ask mngr for a host by that name and fail with "Could not find
-    host".)
-
-    Both halves of the chat's name are sent explicitly: the canonical
-    `Chat-1` as the agent name and `Chat 1` as the `display_name` label.
-    Passing the canonical form rather than letting mngr derive it from
-    "Chat 1" is deliberate -- a workspace's vendored mngr may predate
-    free-form names and would reject the spaced form outright, failing the
-    first-boot chat create. The pair is what newer mngr produces for itself,
-    so its rule that the true name is the canonical form of the display name
-    holds either way.
-    """
-    cmd: list[str] = [
-        "mngr",
-        "create",
-        _INITIAL_CHAT_AGENT_NAME,
-        # `--transfer none` matches what `AgentManager.create_chat_agent`
-        # uses for the "New Chat" button (system/apps/system_interface/.../
-        # agent_manager.py). Without it, mngr defaults to creating a
-        # per-agent git worktree on branch `mngr/<agent_name>` -- which
-        # collides with the services agent's own worktree branch (set up
-        # by the desktop client's `--branch :mngr/<host_name>` at host
-        # create) and aborts with "fatal: a branch named 'mngr/<host>'
-        # already exists". With --transfer none the chat agent reuses
-        # the services agent's /home/user/workspace/ as its work_dir, which is what we
-        # want (one workspace == one work_dir, shared across all chats).
-        "--type",
-        "claude",
-        "--template",
-        "first",
-        "--template",
-        "chat",
-        # Tags the initial chat as a user-created agent so the OOM agent-tagging
-        # hook puts it in the protected user-agent band (matching the New Chat /
-        # New Agent paths in system/apps/system_interface).
-        "--label",
-        "user_created=true",
-        "--label",
-        f"display_name={_INITIAL_CHAT_DISPLAY_NAME}",
-        "--no-connect",
-        "--format",
-        "json",
-    ]
-    # The view this chat starts out filed in. The workspace's starter project is
-    # where the first chat lives, and naming it explicitly matters: the services
-    # agent's own ``project`` label is mngr's -- the repo it works on, e.g.
-    # ``default-workspace-template`` -- and inheriting that gave the first chat
-    # a label that names no view at all, so work it started landed in whatever
-    # view the user was looking at instead of its own.
-    cmd.extend(["--label", f"project={_STARTER_PROJECT_ID}"])
-    return cmd
-
-
-def _parse_created_agent_id(stdout: str) -> str | None:
-    """Pull ``agent_id`` from `mngr create --format json` stdout, or None if absent.
-
-    `--format json` writes a single JSON object to stdout (logs go to stderr).
-    None on any malformed/missing case keeps the caller non-fatal.
-    """
-    try:
-        data = json.loads(stdout)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(data, dict) and isinstance(data.get("agent_id"), str):
-        return data["agent_id"]
-    return None
-
-
-def _persist_initial_chat_agent_id(agent_id: str) -> None:
-    """Record the initial chat agent's id at `$MNGR_HOST_DIR/initial_chat_agent_id`.
-
-    The welcome-resend target is read from here (system_interface's
-    `welcome_resend`), so the resend addresses the agent by its stable id rather
-    than re-resolving it by name. Best-effort: a missing host dir or a failed
-    write is logged but not raised, so it never aborts the create/signal flow
-    (the welcome-resend simply skips when the file is absent).
-    """
-    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
-    if not host_dir:
-        logger.warning(
-            "{} unset; cannot persist initial chat agent id", _HOST_DIR_ENV_VAR
-        )
+    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
+    if not work_dir:
         return
-    try:
-        (Path(host_dir) / INITIAL_CHAT_AGENT_ID_FILENAME).write_text(agent_id)
-    except OSError as e:
-        logger.error("Failed to persist initial chat agent id {}: {}", agent_id, e)
-        return
-    logger.info("Persisted initial chat agent id {} for welcome resend", agent_id)
 
-
-def _create_initial_chat_agent(labels: dict[str, str]) -> bool:
-    """Invoke `mngr create` for the initial chat agent; persist its id. Returns success."""
-    cmd = _build_create_chat_command(labels)
-    logger.info("Creating initial chat agent: {}", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        logger.error(
-            "Initial chat-agent create failed (rc={}): stdout={!r} stderr={!r}",
-            result.returncode,
-            result.stdout.strip(),
-            result.stderr.strip(),
+    def _git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=work_dir, capture_output=True, text=True, check=False
         )
-        return False
-    agent_id = _parse_created_agent_id(result.stdout)
-    if agent_id is not None:
-        _persist_initial_chat_agent_id(agent_id)
-    else:
-        logger.error(
-            "Initial chat agent created but could not parse agent_id from output: {!r}",
-            result.stdout.strip(),
-        )
-    logger.info("Initial chat agent created")
-    return True
 
-
-def _touch_signal() -> None:
-    """Write the data/.state/initial_chat_created signal file."""
-    INITIAL_CHAT_SIGNAL.parent.mkdir(parents=True, exist_ok=True)
-    INITIAL_CHAT_SIGNAL.write_text("")
+    if _git("config", "user.email").returncode != 0:
+        _git("config", "user.email", "bootstrap@minds.local")
+    if _git("config", "user.name").returncode != 0:
+        _git("config", "user.name", "minds-bootstrap")
 
 
 def _initialize_workspace_main_branch() -> None:
@@ -305,10 +204,15 @@ def _initialize_workspace_main_branch() -> None:
     `main` branch the user can git-log / push from without having to
     reason about the per-host mngr/* branch. So before the chat agent
     is created, we:
-      1. set a minds-bootstrap committer identity if none is configured
-      2. `git add -A` + `git commit` everything currently uncommitted
-      3. `git branch -D main` (drop the stale shallow-clone main, if any)
-      4. `git checkout -b main` (rename the working tree's branch to main)
+      1. `git add -A` + `git commit` everything currently uncommitted
+      2. `git branch -D main` (drop the stale shallow-clone main, if any)
+      3. `git checkout -b main` (rename the working tree's branch to main)
+
+    The committer identity is NOT set here -- see `_ensure_git_identity`, which runs on every
+    boot. It used to live in this function, which meant it was gated behind the same one-shot
+    signal, and `pool_bake` unsets identity on finalize expecting the adopted workspace's
+    bootstrap to put it back. Anything that made this function run less often would have left
+    an adopted workspace unable to commit at all.
 
     Each step is best-effort: a failure here should not prevent the
     chat-agent create from running. We log a warning and continue. Hooks
@@ -316,6 +220,9 @@ def _initialize_workspace_main_branch() -> None:
     workspace yet and a misbehaving pre-commit hook on the rsynced
     template shouldn't gate boot.
     """
+    if MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists():
+        logger.debug("Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL)
+        return
     work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
     if not work_dir:
         logger.warning(
@@ -331,14 +238,6 @@ def _initialize_workspace_main_branch() -> None:
             text=True,
             check=False,
         )
-
-    # Set a committer identity scoped to this repo so the commit doesn't
-    # fail on a container with no global git identity. We don't overwrite
-    # an existing config -- only set if unset.
-    if _git("config", "user.email").returncode != 0:
-        _git("config", "user.email", "bootstrap@minds.local")
-    if _git("config", "user.name").returncode != 0:
-        _git("config", "user.name", "minds-bootstrap")
 
     _git("add", "-A")
     # --allow-empty so we end up with a commit even when the work_dir is
@@ -372,41 +271,13 @@ def _initialize_workspace_main_branch() -> None:
         )
     else:
         logger.info("work_dir {} is now on branch main", work_dir)
+    # Written whichever way the rename went: a failed rename is not worth re-committing the
+    # user's working tree over on every subsequent boot.
+    _touch(MAIN_BRANCH_SIGNAL)
 
 
-def _maybe_create_initial_chat() -> None:
-    """Create the initial chat agent on first boot, gated by a signal file.
 
-    Also runs `_initialize_workspace_main_branch` immediately before the
-    chat-agent create so the chat agent inherits a clean `main` branch.
-    Both steps are gated by the same signal file, so they run exactly
-    once per workspace.
 
-    Touches the signal file only on a successful create -- a failed create
-    leaves the signal file absent so the next bootstrap run retries. The
-    user's manually-destroyed initial chat agent is *not* recreated,
-    because the signal file persists in data/.state/.
-    """
-    if INITIAL_CHAT_SIGNAL.exists():
-        logger.debug(
-            "Signal file {} present; skipping initial chat create", INITIAL_CHAT_SIGNAL
-        )
-        return
-    # Readiness check rather than a create input: the create names only the
-    # agent (the host is implicit -- this runs inside it), but an unreadable
-    # host data.json means mngr state is not set up yet, so creating now would
-    # fail anyway.
-    if not _read_host_name():
-        logger.warning(
-            "Could not resolve host_name; skipping initial chat agent create"
-        )
-        return
-    _initialize_workspace_main_branch()
-    labels = _read_main_agent_labels()
-    if not _create_initial_chat_agent(labels):
-        return
-    _touch_signal()
-    logger.info("Wrote signal file {}", INITIAL_CHAT_SIGNAL)
 
 
 def _configure_git_global() -> None:
@@ -553,6 +424,66 @@ def _apply_container_timezone(
     return True
 
 
+def _write_update_recovery_cron_entry(target_dir: Path = Path("/etc/cron.d")) -> None:
+    """Install the permanent update-apply recovery guard into /etc/cron.d.
+
+    Written here, at every boot, rather than once by ``setup_system.sh``:
+    /etc/cron.d lives on the container rootfs, so an entry laid down at
+    provision time is gone the moment the container is recreated -- and this
+    guard is the only thing that recovers an apply killed hard WITHOUT a
+    restart, whose driving agent is also gone. Writing it from the one place
+    that already knows where the script lives also keeps the path from being
+    spelled out a second time.
+
+    Code-owned, so it goes straight to ``target_dir`` rather than into the
+    user-editable ``RUNTIME_CRON_DIR``. It is written before those entries are
+    installed, so a deliberate same-named entry there still wins.
+
+    Two details are load-bearing rather than boilerplate. cron does NOT inherit
+    the image's PATH; a drop-in gets cron's compiled-in ``/usr/bin:/bin``, and
+    when this guard acts it takes ``recover``'s live path, which shells out to
+    ``mngr`` and ``uv`` (/root/.local/bin) and ``npm`` (/usr/local/bin) -- a
+    FileNotFoundError there is swallowed, so without the PATH line the tree
+    would be rolled back and the live workspace silently left broken. And
+    ``flock -n`` keeps two ticks off one git index: an acting tick rebuilds
+    environments, re-runs the provisioner and waits out health probes,
+    routinely longer than the five minutes until the next one, and ``--if-stale``
+    reads the dead apply's pid from a marker ``recover`` never restamps, so
+    nothing else would stop them overlapping.
+
+    This is also the one cron entry that deliberately does NOT go through
+    ``system/libs/automations/with_agent_env.sh`` (which every other job,
+    built-in or user-added, is required to use, and which would supply that
+    PATH and cwd for free). The wrapper reconstructs the agent environment by
+    sourcing ``/home/user/.mngr/env`` and parsing the host dir with ``jq``, and
+    exits non-zero when either is missing -- and a workspace left mid-apply is
+    exactly where that assumption is least safe. The guard needs no agent
+    environment beyond PATH: everything it shells out to resolves from ``$HOME``
+    (which is ``/home/user`` for root here, so mngr finds its host dir), so it
+    carries its own two lines instead and keeps working when the wrapper would
+    not.
+    """
+    command = (
+        f"cd {WORKSPACE_ROOT_DIR} && python3 {UPDATE_APPLY_SCRIPT} recover --if-stale"
+    )
+    entry = (
+        "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        f"*/5 * * * * root flock -n /var/lock/{UPDATE_RECOVER_CRON_NAME}.lock "
+        f"-c '{command}' "
+        f">> {SUPERVISOR_LOG_DIR}/{UPDATE_RECOVER_CRON_NAME}.log 2>&1\n"
+    )
+    target = target_dir / UPDATE_RECOVER_CRON_NAME
+    try:
+        target.write_text(entry)
+        target.chmod(0o644)
+    except OSError as e:
+        # Never fatal: this runs on the path to supervisord, and a boot that
+        # reaches the services is worth more than the recovery guard.
+        logger.warning("Failed to install the update-recovery cron entry: {}", e)
+        return
+    logger.info("Installed the update-recovery cron entry at {}", target)
+
+
 def _install_runtime_cron_entries(target_dir: Path = Path("/etc/cron.d")) -> None:
     """Install data/.state/cron.d/* into /etc/cron.d (mode 0644).
 
@@ -658,57 +589,6 @@ def _exec_supervisord() -> None:
     os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
 
 
-# Bound on the boot-time venv converge. A venv that already matches the
-# lockfile no-ops in well under a second; a genuinely drifted one (image bake
-# older than the landed branch tip) reinstalls from uv's baked warm cache,
-# which stays comfortably inside this bound.
-_UV_SYNC_TIMEOUT_SECONDS = 600.0
-
-
-def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
-
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
-    sync reconciles them lazily: mid-boot, concurrent with the services and
-    the initial chat agent, and with root-closure scope rather than
-    --all-packages. Whatever imports from the venv during that rewrite window
-    fails intermittently (ModuleNotFoundError for imbue_common and friends).
-
-    Converging here -- once, up front, before the chat agent exists and before
-    supervisord starts anything -- removes both the race window and the scope
-    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
-    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
-    """
-    try:
-        result = subprocess.run(
-            ["uv", "sync", "--all-packages", "--frozen"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_UV_SYNC_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error(
-            "uv sync --all-packages timed out after {}s; continuing boot",
-            _UV_SYNC_TIMEOUT_SECONDS,
-        )
-        return
-    if result.returncode != 0:
-        logger.error(
-            "uv sync --all-packages failed (rc={}): {}",
-            result.returncode,
-            (result.stderr or result.stdout).strip()[-500:],
-        )
-        return
-    logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
-
-
 def _run_env_converge_fast_phase() -> None:
     """Apply the overlay symlinks BEFORE any service starts.
 
@@ -730,6 +610,182 @@ def _run_env_converge_fast_phase() -> None:
             result.returncode,
             result.stderr.strip()[-500:],
         )
+
+
+def _read_update_marker_dri_agent() -> str:
+    """The DRI agent recorded in the update-apply marker, or "" when unreadable.
+
+    ``ValueError`` rather than ``json.JSONDecodeError`` alone: a torn write is
+    the failure mode being defended against here (an interrupted apply is why
+    the marker is read at all), and a file flushed mid-multibyte makes
+    ``read_text`` raise ``UnicodeDecodeError``, which is a ``ValueError``.
+    """
+    try:
+        raw = json.loads(UPDATE_APPLY_MARKER.read_text())
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "The update-apply marker at {} could not be read ({}); the rollback still "
+            "runs, but nobody will be re-engaged afterwards",
+            UPDATE_APPLY_MARKER,
+            e,
+        )
+        return ""
+    dri_agent = raw.get("dri_agent") if isinstance(raw, dict) else None
+    if isinstance(dri_agent, str):
+        # "" is ordinary, not corruption: an apply driven outside an agent
+        # records no name. _recover_interrupted_update reports that case.
+        return dri_agent
+    logger.warning(
+        "The update-apply marker at {} carries no usable dri_agent ({!r}); the "
+        "rollback still runs, but nobody will be re-engaged afterwards",
+        UPDATE_APPLY_MARKER,
+        dri_agent,
+    )
+    return ""
+
+
+def _wake_update_dri_agent(agent_name: str) -> None:
+    """Re-engage the agent that was driving the rolled-back update. Best-effort.
+
+    The recovered workspace is back on its pre-update revision, but only an
+    agent can verify state and talk to the user about retrying -- so start the
+    DRI agent the marker named and hand it the finding. Failures are logged and
+    swallowed: the rollback already restored the workspace, so the cost of a
+    failed wake is that nobody tells the user about it. There is no other
+    channel on this path -- the system interface's interrupted-update banner
+    keys off the marker, which a successful rollback has already cleared -- so
+    the warning below is what a human has to find in the boot log.
+    """
+    message = (
+        "A workspace update you were applying was interrupted (the container "
+        "restarted mid-apply), and the boot-time recovery rolled it back to the "
+        "pre-update state. Verify the workspace is healthy, then follow the "
+        "update-self skill's post-rollback guidance to tell the user and offer "
+        "the retry (the worker branch and report are kept)."
+    )
+    for argv in (
+        ["mngr", "start", agent_name],
+        ["mngr", "message", agent_name, "-m", message],
+    ):
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_DRI_WAKE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            # `mngr` missing is a live possibility here -- an apply interrupted
+            # mid `uv tool install` of the vendored mngr is exactly why this
+            # runs -- and boot must survive it.
+            logger.warning("{} could not run ({})", " ".join(argv[:2]), e)
+            return
+        if result.returncode != 0:
+            logger.warning(
+                "{} failed (rc={}): {}",
+                " ".join(argv[:2]),
+                result.returncode,
+                (result.stderr or result.stdout).strip()[-300:],
+            )
+            return
+    logger.info("Re-engaged update DRI agent {}", agent_name)
+
+
+def _recover_interrupted_update() -> str:
+    """Roll back an update apply the previous container run left mid-motion.
+
+    Returns the DRI agent to re-engage afterwards, or ``""`` when there is
+    nobody to wake (no marker, the guard declined, the rollback failed, or the
+    marker named no agent). A rollback that restored the tree but not the
+    pre-apply state (exit ``UPDATE_RECOVER_EXIT_EMERGENCY``) still names the
+    agent: the marker is gone and the workspace is booting over that mismatch,
+    which is precisely the state that wants a person. Waking is the caller's
+    job and deliberately not done here: it starts a live agent, which must not
+    happen until the workspace venv has been converged.
+
+    The apply's marker persisting across a boot means the container stopped (or
+    died) between the merge landing and the apply finishing -- the half-applied
+    state the update flow exists to prevent. The rollback itself needs no
+    network, no package manager and no working ``mngr`` (git restores plus
+    plain copies of the pre-apply snapshots) -- with one exception: an apply
+    that had reached its provisioner step is rolled back by re-running
+    ``setup_system.sh``, which does reach the network. The script forces that
+    re-run past the content-addressed provision guard (``PROVISION_FORCE=1``):
+    the restored tree is the very tree the guard's marker was written for, so
+    an unforced run would skip and leave the global toolchain at the
+    rolled-back-away versions. It runs right here,
+    before the venv converge (which must converge against the *restored* tree,
+    not the half-applied one) and before any service or agent starts.
+    ``--no-restart`` because nothing is running yet -- services boot fresh from
+    the restored state -- and ``--if-stale --grace-seconds 0`` so the script's
+    own dead-process guard still applies. Best-effort: a failure is logged
+    loudly but never blocks boot.
+    """
+    if not UPDATE_APPLY_MARKER.exists():
+        return ""
+    dri_agent = _read_update_marker_dri_agent()
+    logger.warning(
+        "An interrupted update apply left a marker at {}; asking the recovery "
+        "guard to roll it back",
+        UPDATE_APPLY_MARKER,
+    )
+    try:
+        result = subprocess.run(
+            [
+                "python3",
+                str(UPDATE_APPLY_SCRIPT),
+                "recover",
+                "--if-stale",
+                "--grace-seconds",
+                "0",
+                "--no-restart",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_UPDATE_RECOVER_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error("update-apply recovery could not run ({}); continuing boot", e)
+        return ""
+    recovery_output = result.stderr.strip()[-1000:]
+    if result.returncode == UPDATE_RECOVER_EXIT_EMERGENCY:
+        logger.error(
+            "update-apply recovery rolled the tree back but could not put the "
+            "pre-apply state back; the services are booting over that mismatch and "
+            "the emergency record beside {} names what is left to repair: {}",
+            UPDATE_APPLY_MARKER,
+            recovery_output,
+        )
+        return dri_agent
+    if result.returncode != 0:
+        logger.error(
+            "update-apply recovery failed (rc={}); continuing boot with the "
+            "workspace as the rollback left it: {}",
+            result.returncode,
+            recovery_output,
+        )
+        return ""
+    # A cleared marker is what distinguishes "rolled back" from the guard's
+    # silent no-op; only a real rollback warrants re-engaging the DRI agent.
+    if UPDATE_APPLY_MARKER.exists():
+        logger.warning(
+            "The recovery guard declined to roll the apply back (the marker at {} is "
+            "still there); continuing boot with the workspace as it was left",
+            UPDATE_APPLY_MARKER,
+        )
+        return ""
+    # A rollback really happened, so the whole of what it did belongs in the boot
+    # log at a level someone scanning for trouble will see: a partial restore is
+    # reported in that output and nowhere else.
+    logger.warning("Rolled back an interrupted update apply: {}", recovery_output)
+    if not dri_agent:
+        logger.warning(
+            "That apply's marker named no agent to re-engage, so nothing will tell "
+            "the user the update was undone"
+        )
+    return dri_agent
 
 
 def _migrate_legacy_claude_state_best_effort() -> None:
@@ -760,6 +816,21 @@ def main() -> None:
     # agent runs git.
     _configure_git_global()
 
+    # Roll back any update apply the previous container run left mid-motion,
+    # BEFORE the venv converge (which must run against the restored tree) and
+    # before any service or agent starts from half-applied state. The agent to
+    # re-engage afterwards is woken further down, once the venv is converged.
+    update_dri_agent = _recover_interrupted_update()
+
+    # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
+    # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
+    _ensure_git_identity()
+
+    # Commit the rsynced template and put the work_dir on `main`. Its OWN one-shot signal:
+    # "does this workspace have a main branch" and "does it have a chat" are different
+    # questions with different answers, so they cannot share one.
+    _initialize_workspace_main_branch()
+
     # Converge the workspace venv BEFORE the initial chat agent is created
     # (below) and before supervisord's `uv run` services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
@@ -772,14 +843,21 @@ def main() -> None:
     if tz_name:
         _apply_container_timezone(tz_name)
 
-    _maybe_create_initial_chat()
-
     # Overlay symlinks must exist before services start writing.
     _run_env_converge_fast_phase()
 
-    # Reinstall any cron entries persisted under data/.state/cron.d (e.g.
-    # the Caretaker's schedule) so they survive container recreation. Must
-    # precede _exec_supervisord so entries exist before cron starts.
+    # Re-engage the agent whose update the boot-time rollback undid. Held until
+    # here on purpose: waking it starts a live agent running `uv run`, which
+    # must not race _sync_workspace_venv's rewrite of the venv above.
+    if update_dri_agent:
+        _wake_update_dri_agent(update_dri_agent)
+
+    # Lay down the update-recovery guard, then reinstall any cron entries
+    # persisted under data/.state/cron.d (e.g. the Caretaker's schedule) so
+    # they survive container recreation. Both must precede _exec_supervisord so
+    # the entries exist before cron starts; the guard goes first so a
+    # deliberate same-named runtime entry still overrides it.
+    _write_update_recovery_cron_entry()
     _install_runtime_cron_entries()
 
     # Make sure supervisord's log directory exists, then hand off: replace this

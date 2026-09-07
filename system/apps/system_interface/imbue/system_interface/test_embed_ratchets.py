@@ -1,16 +1,19 @@
 """Project-specific ratchets confining postMessage to the sanctioned boundaries.
 
-Cross-frame messaging flows through exactly two files, each owning one
+Cross-frame messaging flows through exactly three files, each owning one
 boundary: messaging with the embedding minds chrome goes through the
 vendored embed contract (imported via ``src/embed.ts``; see minds'
-``docs/embed-contract.md``), and the location beacons the workspace's own
+``docs/embed-contract.md``), the location beacons the workspace's own
 framed apps post go through ``src/locationBeacon.ts`` (origin-validated
-against the workspace's own service origins; see that module's docstring).
-These ratchets are allowlist-by-file: any NEW file that touches
-``postMessage`` or registers a ``message`` listener fails immediately,
-keeping the whole message surface greppable and auditable file by file.
-Lives outside ``test_ratchets.py`` because that file must define the same
-test set across every project (enforced by ``test_meta_ratchets.py``).
+against the workspace's own service origins; see that module's docstring),
+and the focus grant the host sends its embedded ttyd terminals goes through
+``src/views/terminalFocus.ts`` (outbound-only, one fixed payload-free
+message, no listener; see its docstring). These ratchets are
+allowlist-by-file: any NEW file that touches ``postMessage`` or registers a
+``message`` listener fails immediately, keeping the whole message surface
+greppable and auditable file by file. Lives outside ``test_ratchets.py``
+because that file must define the same test set across every project
+(enforced by ``test_meta_ratchets.py``).
 """
 
 from pathlib import Path
@@ -40,13 +43,14 @@ _RAW_POST_MESSAGE_RULE = RatchetRuleInfo(
     ),
 )
 
-# Files sanctioned to touch the raw primitives: the two boundary modules
-# (each owning one documented, origin-checked channel) and the test suites,
-# which stand in windows/listeners to exercise the boundaries themselves.
+# Files sanctioned to touch the raw primitives: the boundary modules (each
+# owning one documented channel) and the test suites, which stand in
+# windows/listeners to exercise the boundaries themselves.
 _ALLOWED_FILES = (
     "*.test.ts",
     "embed-contract.d.ts",
     "locationBeacon.ts",
+    "terminalFocus.ts",
 )
 
 

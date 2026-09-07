@@ -97,7 +97,7 @@ def test_scans_a_settled_conversation(tmp_path: Path) -> None:
     assert kinds == ["user_message", "assistant_message", "tool_result", "assistant_message"]
     assert events[0]["content"] == "hi"
     assert events[1]["tool_calls"][0]["caption_label"] == "Running ls"
-    assert events[2]["output"] == "hello output"
+    assert events[2]["output_chars"] == len("hello output")
     assert events[3]["text"] == "all done"
 
 
@@ -124,7 +124,7 @@ def test_running_tool_emits_call_then_result_on_settle(tmp_path: Path) -> None:
     second = watcher._collect_new_events()
     # The call is not re-emitted; only the result is added.
     assert [e["type"] for e in second] == ["tool_result"]
-    assert second[0]["output"] == "final output"
+    assert second[0]["output_chars"] == len("final output")
     # call and result share the id
     assert second[0]["tool_call_id"] == first[0]["tool_calls"][0]["tool_call_id"]
 
@@ -560,3 +560,27 @@ def test_the_embargo_is_released_when_a_flush_never_witnesses_its_block(tmp_path
     append_step(_conv_db_path(tmp_path, conv), (200, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("later")))
     watcher._poll_once()
     assert emitted == ["transcript"], "the transcript must not stay muted after a failed flush"
+
+
+def test_scans_hold_one_connection_and_stop_closes_it(tmp_path: Path) -> None:
+    """The read path must be side-effect-free: a per-scan open/close writes to the
+    watched conversations dir (wal-index build, WAL reset), so every scan would wake the
+    next one -- a self-sustaining poll loop that pegs a core. The watcher instead holds
+    one read-only connection per db, still sees rows agy commits later through it, and
+    closes it on stop."""
+    conv = "77777777-7777-7777-7777-777777777777"
+    watcher = _make_watcher(tmp_path, [conv])
+    db_path = _conv_db_path(tmp_path, conv)
+    build_steps_db(db_path, [(0, _TYPE_USER, _STATUS_DONE, _user_payload("first"))])
+
+    assert len(watcher._collect_new_events()) == 1
+    assert list(watcher._connections) == [db_path]
+    held = watcher._connections[db_path]
+
+    # A later commit from agy's own connection is visible through the held one.
+    append_step(db_path, (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("later")))
+    assert len(watcher._collect_new_events()) == 1
+    assert watcher._connections[db_path] is held
+
+    watcher.stop()
+    assert watcher._connections == {}

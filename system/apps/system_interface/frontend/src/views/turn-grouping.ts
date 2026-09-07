@@ -174,10 +174,6 @@ const TK_STEP_SUMMARY_RE = /^tk-step (\S+) summary: (.*)$/gm;
 const CREATE_TITLE_RE = /\b(?:tk|ticket)\s+(?:super\s+)?create\b[^"']*?(?:"([^"]*)"|'([^']*)')/g;
 const CLOSE_SUMMARY_RE = /\b(?:tk|ticket)\s+(?:super\s+)?close\s+(\S+)\s+(?:"([^"]*)"|'([^']*)')/g;
 
-/** Cheap gate: skip the JSON.parse + fallback for a Bash input that cannot be a
- *  tk create/close at all. Tested against the raw input_preview. */
-const TK_CREATE_OR_CLOSE_RAW = /(?:tk|ticket)\s+(?:super\s+)?(?:create|close)\b/;
-
 function isStepId(id: string): boolean {
   return STEP_ID_RE.test(id);
 }
@@ -198,27 +194,12 @@ function hasPermissionRequest(e: AssistantMessageEvent, toolResults: Map<string,
   return e.tool_calls.some((tc) => isFiledPermissionRequest(tc, toolResults.get(tc.tool_call_id) ?? null));
 }
 
-/** The shell command string for a tool call, or null if its input carries none. tk
- *  lifecycle inputs are exempt from input truncation, so they parse cleanly.
- *
- *  Deliberately NOT gated on tool name. It used to accept only claude's `Bash` and pi's
- *  `bash`, which was the single piece of harness knowledge left in this file -- and it meant
- *  agy (`run_command`) was the one harness with no input fallback at all when output
- *  decoration was missing. The decoration regexes below are already tk-anchored and
- *  TK_CREATE_OR_CLOSE_RAW pre-filters, so any tool whose input happens to carry a "command"
- *  key is safe to read here. */
+/** The tk lifecycle command a tool call ran, or null. The backend stamps `tk_command`
+ *  (recognised off the FULL input, per harness -- claude/pi's "command", agy's
+ *  "CommandLine", codex's exec program) exactly when the call carries a tk lifecycle verb,
+ *  so nothing here parses tool input. */
 function tkCommand(tc: ToolCall): string | null {
-  try {
-    const obj = JSON.parse(tc.input_preview) as Record<string, unknown>;
-    // claude and pi spell it "command"; agy spells it "CommandLine". Both are read, so this
-    // stays a property of the INPUT rather than of which harness produced it.
-    for (const key of ["command", "CommandLine"]) {
-      if (typeof obj[key] === "string") return obj[key] as string;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return tc.tk_command ?? null;
 }
 
 interface Decoration {
@@ -259,7 +240,9 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
   for (const e of events) {
     if (e.type !== "assistant_message") continue;
     for (const tc of e.tool_calls) {
-      const output = toolResults.get(tc.tool_call_id)?.output ?? "";
+      // The backend stamps the tk-relevant output lines resident (`tk_stamp`); the raw
+      // output never rides the event.
+      const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
 
       // Authoritative new-format output lines.
       for (const m of output.matchAll(CREATED_RE)) {
@@ -276,7 +259,6 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
       }
 
       // Historical input fallback (fills only what the output lines did not).
-      if (!TK_CREATE_OR_CLOSE_RAW.test(tc.input_preview)) continue;
       const command = tkCommand(tc);
       if (command === null) continue;
       applyInputFallback(command, output, ensure, registerCreated, knownSteps);
@@ -335,7 +317,7 @@ function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolRes
   // tk lifecycle call (so e.g. `cd x && tk close s1` still closes the step).
   const transitions: { id: string; status: "in_progress" | "closed" }[] = [];
   for (const tc of e.tool_calls) {
-    const output = toolResults.get(tc.tool_call_id)?.output ?? "";
+    const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
     TK_UPDATED_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = TK_UPDATED_RE.exec(output)) !== null) {

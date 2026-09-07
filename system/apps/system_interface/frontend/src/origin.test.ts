@@ -56,6 +56,23 @@ describe("deriveServiceOrigin", () => {
       ),
     ).toBe("https://terminal-x7k9q2w1.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.us-east.imbueminds.com/");
   });
+
+  it("strips the shell's leading label on a workspace-keyed share hostname", () => {
+    // The workspace-keyed share-domain shape has no host-<hex> label: its
+    // coordinate leads with the bare 32-hex share label. Deriving relative to
+    // the shell's host verbatim would nest the service under the shell's own
+    // label -- a hostname the relay has no tunnel claim for, so every panel
+    // died with an unrecognized_name TLS alert.
+    expect(
+      deriveServiceOrigin(
+        "terminal-x7k9q2w1",
+        "system_interface-729saevh.5f13881abca599b0e91695294922fd15.103de49d5bad06cb6892f8c9e68c0cf6.us1.imbueminds.com",
+        "https:",
+      ),
+    ).toBe(
+      "https://terminal-x7k9q2w1.5f13881abca599b0e91695294922fd15.103de49d5bad06cb6892f8c9e68c0cf6.us1.imbueminds.com/",
+    );
+  });
 });
 
 describe("workspaceHostCoordinate", () => {
@@ -71,6 +88,22 @@ describe("workspaceHostCoordinate", () => {
     );
     expect(workspaceHostCoordinate("a.b.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.region.example.com")).toBe(
       "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.user.region.example.com",
+    );
+  });
+
+  it("strips leading service labels back to a workspace-keyed share coordinate", () => {
+    expect(
+      workspaceHostCoordinate(
+        "system_interface-729saevh.5f13881abca599b0e91695294922fd15.103de49d5bad06cb6892f8c9e68c0cf6.us1.imbueminds.com",
+      ),
+    ).toBe("5f13881abca599b0e91695294922fd15.103de49d5bad06cb6892f8c9e68c0cf6.us1.imbueminds.com");
+  });
+
+  it("does not mistake a service label for a coordinate label", () => {
+    // Minted labels are always <name>-<rand>: the hyphen and non-hex name keep
+    // them out of both the host-/agent- and the bare-32-hex coordinate shapes.
+    expect(workspaceHostCoordinate("files-t1gi0k13.5f13881abca599b0e91695294922fd15.user.us1.imbueminds.com")).toBe(
+      "5f13881abca599b0e91695294922fd15.user.us1.imbueminds.com",
     );
   });
 
