@@ -696,6 +696,30 @@ def test_a_session_id_from_an_earlier_server_binds_nothing(
     assert fake_tmux.session_names() == ["scratch"]
 
 
+def test_startup_gives_a_record_without_a_creation_time_its_live_sessions_time(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+    terminal_paths: TerminalPaths,
+) -> None:
+    # A store from before creation times were kept: the record matches its session by id alone,
+    # and the dispatch attaches only by id and creation time together.
+    fake_tmux.set_sessions([_session("renamed", "$3")])
+    session_store.save_record(
+        make_terminal_record(
+            name="terminal-1", title=None, workdir=None, session_id="$3", is_session_created_known=False
+        )
+    )
+
+    session_source.recreate_remembered_sessions()
+
+    assert fake_tmux.creates() == []
+    assert session_store.list_records() == [
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$3")
+    ]
+    assert read_session_id_file(terminal_paths.sessions_dir, "terminal-1") == expected_session_id_file("$3")
+
+
 def test_a_record_without_a_creation_time_still_matches_its_session_by_id(
     fake_tmux: FakeTmux,
     session_store: JsonTerminalSessionStore,
