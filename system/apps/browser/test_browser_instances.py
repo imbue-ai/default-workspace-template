@@ -186,6 +186,25 @@ def test_create_answers_409_with_the_install_reason_while_chromium_is_absent(
     assert _instances() == []
 
 
+def test_start_answers_409_with_the_install_reason_while_chromium_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
+    is_installed, reason = bsession.deferred_install_ready()
+    if is_installed:
+        pytest.skip(
+            "Chromium is installed here, so the fleet would launch a real browser"
+        )
+    fake = _install_running_browser("browser-1")
+    fake._lifecycle = "stopped"
+
+    response = runner.application.test_client().post("/_instances/browser-1/start")
+
+    assert response.status_code == 409
+    assert response.get_json()["detail"] == reason
+    assert fake._lifecycle == "stopped"
+
+
 def test_stop_and_start_ride_the_instances_api_and_the_daemons_own_routes(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

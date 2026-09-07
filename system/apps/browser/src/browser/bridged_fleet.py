@@ -74,6 +74,9 @@ class BridgedFleet(FleetInterface):
         self._run_on_loop(self.manager.stop_browser(name))
 
     def start_browser(self, name: BrowserName) -> None:
+        is_installed, reason = deferred_install_ready()
+        if not is_installed:
+            raise FleetCreateRefusedError(reason)
         try:
             self._run_on_loop(self.manager.start_browser(name))
         except FleetFullError as e:
