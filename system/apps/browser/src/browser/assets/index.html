@@ -1039,14 +1039,18 @@ registerProcessor('pb', PB);`;
       else if (crashed || closedForGood) return;
       else if (m.type === "stopped") showStopped();
       else if (m.type === "launch_failed") showLaunchFailed();
-      else if (m.type === "initializing") { if (lifecycle !== "running") setLifecycle("init"); }
+      else if (m.type === "initializing") { if (lifecycle !== "running" && lifecycle !== "stopped") setLifecycle("init"); }
       else if (m.type === "control") {
         setLifecycle(m.lifecycle); setControl(m);
         // A cast RECONNECT onto an already-running, already-painted browser: setLifecycle
         // no-ops (same value) and the reconnect's onclose re-showed the init cover, so it
         // would sit opaque over the live page forever. Take it down here since pixels are
-        // already flowing. (First-ever load still reveals via revealOnFirstFrame.)
+        // already flowing. (First-ever load still reveals via revealOnFirstFrame.) A
+        // reconnect onto a stopped browser is the same: re-show the stopped overlay, which
+        // takes the init cover down, since nothing else will (a stopped browser broadcasts
+        // nothing).
         if (m.lifecycle === "running" && firstFramePainted) initOverlay.classList.remove("show");
+        if (m.lifecycle === "stopped") showStopped();
       }
       else if (m.type === "handoff_request") {
         handoffReason = m.reason || "human verification needed";
