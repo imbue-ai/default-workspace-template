@@ -1,0 +1,5 @@
+Added `specs/per-machine-latchkey-credentials/spec.md`: the design for moving from one shared latchkey credential store (synced to every remote workspace) to one store per machine, with each VPS owning and refreshing its own credentials and the desktop keeping a re-encrypted local mirror. Records the decisions taken, the upstream latchkey findings that constrain them, and the phase order.
+
+Dropped `watchdog` from the workspace lockfile and from the public mirror's overlay lockfile (`mirror/overlay/uv.lock`): `mngr_latchkey` no longer watches the local credentials / per-host permissions files, because a change to a remote machine is now applied synchronously when the user acts instead of being queued for a background sync loop.
+
+Updated `blueprint/inner-workspace-updates/open-threads.md`: the legacy permissions-override symlink shim it named as pinned forever by the un-updatable latchkey env is gone, so that thread now records only what remains -- a workspace's latchkey env is whatever its creation-time flags said, for as long as the workspace lives.

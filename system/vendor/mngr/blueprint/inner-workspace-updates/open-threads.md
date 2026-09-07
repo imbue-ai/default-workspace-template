@@ -37,10 +37,10 @@ Why it is the update flow's problem: `_write_host_env_vars`
 (`libs/mngr/imbue/mngr/api/create.py`) is called only from host creation; the
 values are `--host-env` flags the desktop app builds from
 `prepare_agent_latchkey`'s `latchkey_env` (`agent_creator.py`), so nothing in
-the template's tree names them and update-self cannot see them. It also pins
-`_materialize_legacy_override_targets` in `mngr_latchkey/remote_gateway.py`
-("delete once no workspace predates the one-gateway rollout") forever.
-`Host.set_env_vars` exists on both ends; what does not exist is a caller.
+the template's tree names them and update-self cannot see them. A workspace's
+latchkey env is therefore whatever its creation-time flags said, for as long as
+the workspace lives. `Host.set_env_vars` exists on both ends; what does not
+exist is a caller.
 
 Decided shape: the updating agent asks the app to reconcile it, over the
 latchkey gateway's `minds-api-proxy` that `update-self` already uses for
