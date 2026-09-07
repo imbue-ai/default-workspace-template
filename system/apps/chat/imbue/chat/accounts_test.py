@@ -3,6 +3,7 @@
 Every test passes an explicit `home` so nothing touches the real `~/.minds`.
 """
 
+import json
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import rename_account
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import save_reauth_backup
+from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.imbue_common.model_update import to_update
 
@@ -456,3 +458,73 @@ def test_a_kept_reauth_backup_does_not_make_a_deleted_account_look_like_debris(t
     (folder / REAUTH_BACKUP_DIRNAME).mkdir()
     reconcile(tmp_path)
     assert not folder.exists()
+
+
+def test_pinning_a_default_survives_later_launches_and_sign_ins(tmp_path: Path) -> None:
+    """The pin is the user's; the mru moves under it without touching it."""
+    pinned = _add(tmp_path, "anthropic", "Anthropic")
+    set_default_account(pinned.id, True, tmp_path)
+    later = _add(tmp_path, "google", "Google")
+    set_mru(later.id, tmp_path)
+
+    index = read_index(tmp_path)
+    assert index.default_account == pinned.id
+    assert index.mru == later.id
+
+
+def test_unpinning_clears_the_default_only_when_it_is_the_pinned_one(tmp_path: Path) -> None:
+    pinned = _add(tmp_path, "anthropic", "Anthropic")
+    other = _add(tmp_path, "google", "Google")
+    set_default_account(pinned.id, True, tmp_path)
+
+    set_default_account(other.id, False, tmp_path)
+    assert read_index(tmp_path).default_account == pinned.id
+
+    set_default_account(pinned.id, False, tmp_path)
+    assert read_index(tmp_path).default_account is None
+
+
+def test_pinning_an_unknown_account_raises(tmp_path: Path) -> None:
+    with pytest.raises(AccountError):
+        set_default_account("nope", True, tmp_path)
+
+
+def test_delete_clears_a_default_pointing_at_the_deleted_account(tmp_path: Path) -> None:
+    keeper = _add(tmp_path, "anthropic", "Anthropic")
+    doomed = _add(tmp_path, "google", "Google")
+    set_default_account(doomed.id, True, tmp_path)
+
+    delete_account(doomed.id, tmp_path)
+    assert read_index(tmp_path).default_account is None
+
+    set_default_account(keeper.id, True, tmp_path)
+    delete_account(_add(tmp_path, "openai", "OpenAI").id, tmp_path)
+    assert read_index(tmp_path).default_account == keeper.id
+
+
+def test_reconcile_clears_a_default_pointing_at_a_dropped_row(tmp_path: Path) -> None:
+    broken = _add(tmp_path, "openai", "OpenAI")
+    set_default_account(broken.id, True, tmp_path)
+    shutil.rmtree(account_dir(broken.id, tmp_path))
+
+    reconcile(tmp_path)
+
+    assert read_index(tmp_path).default_account is None
+
+
+def test_an_index_from_the_previous_version_reads_and_is_rewritten_at_the_current_one(tmp_path: Path) -> None:
+    """A workspace updating into this build carries a version-1 index with no default; it must
+    read as an index with no pin, and the next write must stamp the version an older build
+    would refuse by, rather than leave a field that build cannot parse under a version it trusts."""
+    account = _add(tmp_path, "anthropic", "Anthropic")
+    payload = json.loads(index_path(tmp_path).read_text())
+    del payload["default_account"]
+    payload["version"] = INDEX_VERSION - 1
+    index_path(tmp_path).write_text(json.dumps(payload))
+
+    assert read_index(tmp_path).default_account is None
+    set_default_account(account.id, True, tmp_path)
+
+    rewritten = json.loads(index_path(tmp_path).read_text())
+    assert rewritten["version"] == INDEX_VERSION
+    assert rewritten["default_account"] == account.id

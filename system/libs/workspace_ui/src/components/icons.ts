@@ -57,6 +57,9 @@ const STROKE_PATHS = {
   // The back affordance in the provider chooser -- the mirror of chevron-right.
   "chevron-left": '<path d="M15 6l-6 6 6 6"/>',
   zap: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>',
+  // The default marker on a provider account row: filled on the pinned one, outlined on the
+  // others as the toggle that would pin them.
+  star: '<path d="M12 2.5l2.94 6.26 6.86.83-5.06 4.73 1.32 6.79L12 17.77l-6.06 3.34 1.32-6.79-5.06-4.73 6.86-.83z"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   "external-link":
     '<path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/>',

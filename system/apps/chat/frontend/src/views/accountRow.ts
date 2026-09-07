@@ -1,9 +1,9 @@
 /**
  * One account row in a provider flyout: the chat's model card lists its accounts with it.
  *
- * What a row CLICK does is the caller's (the card's rows are locked); the trailing controls
- * are always the same three: a rename pencil, a sign-out bin,
- * and the tick marking the current account. Those controls carry the only fiddly logic here
+ * What a row CLICK does is the caller's; the trailing controls are always the same four: the
+ * default star, a rename pencil, a sign-out bin, and the tick marking the current account.
+ * Those controls carry the only fiddly logic here
  * (arming, an inline field, three ways out of an edit), so they live in one place rather than
  * being typed out twice and drifting.
  *
@@ -14,7 +14,7 @@
  */
 
 import m from "mithril";
-import { deleteAccount, loadAccounts, renameAccount } from "../models/Providers";
+import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import * as css from "./modelCardStyles";
@@ -39,6 +39,8 @@ export interface AccountRowOptions {
   row: ProviderAccount;
   /** The account this menu marks with a tick. */
   isCurrent: boolean;
+  /** The account a new chat launches on; its star is filled and always shown. */
+  isDefault: boolean;
   /** Classes for the row button -- the two menus style a non-current row differently. */
   rowClass: string;
   /** Anything else the row button needs: a tooltip, `aria-disabled`, and so on. */
@@ -171,6 +173,32 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
     isCurrent
       ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
       : null,
+    m(
+      "button",
+      {
+        type: "button",
+        class: opts.isDefault ? css.ROW_STAR_PINNED : css.ROW_STAR,
+        "aria-label": opts.isDefault
+          ? `Stop opening new chats on ${row.provider} by default`
+          : `Open new chats on ${row.provider} by default`,
+        "aria-pressed": opts.isDefault ? "true" : "false",
+        onclick: (event: MouseEvent) => {
+          event.stopPropagation();
+          // Same shape as the rename: a failure is reloaded over rather than left on screen as
+          // a star the server does not agree with.
+          void setDefaultAccount(row.id, !opts.isDefault)
+            .then(() => opts.onChanged?.())
+            .catch((error: unknown) => {
+              console.warn(`Could not change the default account ${row.id}`, error);
+              void loadAccounts();
+            })
+            .finally(() => {
+              m.redraw();
+            });
+        },
+      },
+      m.trust(icon("star", { size: 13, filled: opts.isDefault })),
+    ),
     m(
       "button",
       {

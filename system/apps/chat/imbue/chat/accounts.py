@@ -15,7 +15,7 @@ into it, and only then commits a row. That ordering means an interrupted sign-in
 folder with no row -- which `reconcile` removes at boot -- rather than a row
 pointing at a half-authenticated folder the UI would offer as usable.
 
-Concurrency: three operations mutate the index (commit, delete, set-mru) and they are served
+Concurrency: four operations mutate the index (commit, delete, set-mru, set-default) and they are served
 concurrently by Flask. An atomic rename prevents a *torn* file, not a *lost update*, so every
 mutation takes `_index_lock` across the whole read-modify-write -- an flock, because the
 server is not the only process that writes here.
@@ -46,7 +46,8 @@ logger = _loguru_logger
 # Bumped when the on-disk shape changes. Code that finds a higher version than it knows
 # should refuse rather than guess -- without this there is no way for an older build (a
 # revert, a rolled-back workspace) to tell "no accounts yet" from "accounts it cannot read".
-INDEX_VERSION: Final = 1
+# Version 2 added `default_account`.
+INDEX_VERSION: Final = 2
 
 _INDEX_FILENAME: Final = "index.json"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
@@ -116,8 +117,12 @@ class Account(FrozenModel):
 class AccountIndex(FrozenModel):
     version: int = INDEX_VERSION
     accounts: tuple[Account, ...] = ()
-    # The account a new chat uses when none is named. Updated on every chat create.
+    # The account a new chat uses when none is named and nothing is pinned. Updated on every
+    # chat create.
     mru: str | None = None
+    # The account the user pinned as the one a new chat launches on; None falls back to the
+    # mru. Set only by the user, so a sign-in or a launch elsewhere never moves it.
+    default_account: str | None = None
 
 
 def accounts_root(home: Path | None = None) -> Path:
@@ -217,7 +222,10 @@ def _write_index(index: AccountIndex, home: Path | None = None) -> None:
     path = index_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(index.model_dump(), indent=2, sort_keys=True) + "\n")
+    # Written at this build's version whatever version was read, so an older build that later
+    # opens the file refuses it by its version rather than by a field it does not know.
+    current = index.model_copy_update(to_update(index.field_ref().version, INDEX_VERSION))
+    tmp.write_text(json.dumps(current.model_dump(), indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)
 
 
@@ -347,7 +355,7 @@ def discard_account_dir(account_id: str, home: Path | None = None) -> None:
 
 
 def delete_account(account_id: str, home: Path | None = None) -> None:
-    """Drop the row, remove the folder, and clear the mru if it pointed here.
+    """Drop the row, remove the folder, and clear the mru and the default if they pointed here.
 
     This takes the credential off DISK. It does not reach into a process that already read it:
     a running agent holds what it loaded at startup, so a chat bound to this account can keep
@@ -365,10 +373,12 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
         if len(remaining) == len(index.accounts):
             raise AccountError(f"no such account: {account_id}")
         mru = None if index.mru == account_id else index.mru
+        default_account = None if index.default_account == account_id else index.default_account
         _write_index(
             index.model_copy_update(
                 to_update(index.field_ref().accounts, remaining),
                 to_update(index.field_ref().mru, mru),
+                to_update(index.field_ref().default_account, default_account),
             ),
             home,
         )
@@ -404,6 +414,25 @@ def set_mru(account_id: str, home: Path | None = None) -> None:
         if not any(a.id == account_id for a in index.accounts):
             raise AccountError(f"no such account: {account_id}")
         _write_index(index.model_copy_update(to_update(index.field_ref().mru, account_id)), home)
+
+
+def set_default_account(account_id: str, is_default: bool, home: Path | None = None) -> None:
+    """Pin `account_id` as the account a new chat launches on, or unpin it.
+
+    Unpinning an account that is not the pinned one changes nothing: the user's pin stands
+    until the user moves it, so a stale toggle from another page cannot clear it.
+    """
+    with _index_lock(home):
+        index = read_index(home)
+        if not any(a.id == account_id for a in index.accounts):
+            raise AccountError(f"no such account: {account_id}")
+        if is_default:
+            default_account: str | None = account_id
+        elif index.default_account == account_id:
+            default_account = None
+        else:
+            return
+        _write_index(index.model_copy_update(to_update(index.field_ref().default_account, default_account)), home)
 
 
 def account_exists(account_id: str, home: Path | None = None) -> bool:
@@ -551,11 +580,14 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
         kept = tuple(a for a in index.accounts if account_dir(a.id, home).is_dir())
         dropped = tuple(a.id for a in index.accounts if a not in kept)
         if dropped:
-            mru = index.mru if index.mru in {a.id for a in kept} else None
+            kept_ids = {a.id for a in kept}
+            mru = index.mru if index.mru in kept_ids else None
+            default_account = index.default_account if index.default_account in kept_ids else None
             _write_index(
                 index.model_copy_update(
                     to_update(index.field_ref().accounts, kept),
                     to_update(index.field_ref().mru, mru),
+                    to_update(index.field_ref().default_account, default_account),
                 ),
                 home,
             )

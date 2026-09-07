@@ -132,17 +132,15 @@ const FLYOUT_ROW_SHAPE =
 /** `pr-14` reserves the right edge for the tick and the removal control beside it, so the row's
  *  text never reflows when the bin appears. */
 const FLYOUT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-14`;
-/** An ACCOUNT row reserves one slot more, for the rename pencil. Its own base rather than a
- *  wider shared one: model rows carry no pencil, and widening what they share would truncate
- *  every model name by 24px to make room for a control that is never drawn on them. */
-const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-20`;
+/** An ACCOUNT row reserves two slots more, for the rename pencil and the default star. Its
+ *  own base rather than a wider shared one: model rows carry neither, and widening what they
+ *  share would truncate every model name to make room for controls that are never drawn on
+ *  them. */
+const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-26`;
 export const FLYOUT_ROW = `${FLYOUT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
-/** A provider on a harness this chat cannot switch to. Keeps the hover highlight so the row
- *  still feels live enough that the user waits for the tooltip that explains it. */
-export const ACCOUNT_ROW_LOCKED = `${ACCOUNT_ROW_BASE} text-faint hover:bg-fill-hover cursor-default`;
 export const FLYOUT_ROW_NAME = "truncate";
 export const FLYOUT_ROW_SUB = "type-helper text-faint";
 /** Pinned to the row's right edge and never moved. A SIBLING of the row button rather than a
@@ -179,6 +177,16 @@ export const ROW_PENCIL =
 /** The row mid-rename: the field takes the whole row, since every control is hidden while it
  *  is up. The wrapper insets the bordered field from the card's full-bleed edges; the field
  *  keeps the row's height, so nothing shifts on the way in or out. */
+/** The default toggle: the outermost lane at `right-21`, shown on hover like the pencil and
+ *  the bin. The pinned account's star stays visible (and filled) whether or not the row is
+ *  hovered: it is a fact about which account a new chat opens on, not a control that only
+ *  matters while the pointer is there. */
+export const ROW_STAR =
+  "absolute right-21 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
+export const ROW_STAR_PINNED =
+  "absolute right-21 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "justify-center rounded text-accent transition-colors hover:text-primary";
 export const ROW_RENAME_WRAP = `${ROW_WRAP} px-1.5`;
 export const ROW_RENAME_INPUT =
   "h-8 w-full rounded-md border border-default bg-surface px-2 text-primary outline-none";
