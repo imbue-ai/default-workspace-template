@@ -18,7 +18,6 @@ calls.
 from __future__ import annotations
 
 import json
-from typing import Final
 
 from flask import Flask
 from flask import Response
@@ -55,10 +54,6 @@ def _status_to_response(status: auth.AuthStatus) -> ClaudeAuthStatusResponse:
     return ClaudeAuthStatusResponse.model_validate(status.model_dump())
 
 
-# 503 rather than 500: the check may well answer on the next try.
-_UNAVAILABLE_STATUS_CODE: Final[int] = 503
-
-
 def _error_response(detail: str, status_code: int = 400) -> Response:
     # Every auth-flow failure funnels through here; without this log the
     # container's service log shows only the access line for the 4xx/5xx,
@@ -74,8 +69,9 @@ def get_status() -> Response:
         status = service.get_auth_status()
     except auth.AuthStatusUnavailableError as e:
         # A check that ran out of time is not a signed-out answer, and reporting one states as
-        # fact something the check never established.
-        return _error_response(str(e), status_code=_UNAVAILABLE_STATUS_CODE)
+        # fact something the check never established. 503 rather than 500: the check may well
+        # answer on the next try.
+        return _error_response(str(e), status_code=503)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
