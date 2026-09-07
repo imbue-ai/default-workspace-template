@@ -228,9 +228,12 @@ def _ensure_pulse_daemon() -> bool:
         if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
             return True
         os.makedirs("/var/run/pulse", exist_ok=True)
-        # Foreground daemon as a detached background process (supervisord's killasgroup
-        # still reaps it on service stop). --daemonize=yes double-forks and trips over a
-        # stale PID file in this container; a plain Popen does not.
+        # Foreground daemon as a detached background process. A clean service stop signals
+        # the browser daemon alone (stopasgroup=false, so it can checkpoint first), so this
+        # one outlives it and the next daemon adopts it through the ``pactl info`` probe
+        # above; only a stop that overruns stopwaitsecs reaps it with the group.
+        # --daemonize=yes double-forks and trips over a stale PID file in this container; a
+        # plain Popen does not.
         subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
