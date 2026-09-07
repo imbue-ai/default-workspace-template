@@ -59,11 +59,10 @@ export interface TabMenuActions {
  * of the instance are offered where its app reports it ``stoppable`` (a chat's agent, a
  * browser's Chromium, a terminal's session) and the app is running to take the verb (while
  * it is down, every instance reads ``stopped`` and only the app itself can be started), and
- * read from the instance's status. Stop and
- * Start of the whole app are offered only on a single-instance app's tab, where the two
- * coincide, and only for an app the workspace can honestly stop (supervised, not critical,
- * and not inside a critical app's program); a multi-instance app is stopped from the rail's
- * row menu.
+ * read from the instance's status. Stop and Start of the whole app are offered only on a
+ * single-instance app's tab, where the two coincide, and only for an app the workspace can
+ * honestly stop (supervised, not critical, and not inside a critical app's program); a
+ * multi-instance app is stopped from the rail's row menu.
  */
 export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions: TabMenuActions): TabMenuEntry[] {
   const opening: TabMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];

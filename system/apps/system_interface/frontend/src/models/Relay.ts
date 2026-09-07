@@ -3,9 +3,8 @@
  *
  * A browser never reaches an app's instances API: every create, delete, rename, location
  * report, stop and start goes to the shell, which forwards it to the app and refetches the
- * app's list. The
- * shell's answer is the app's, status and body alike, so a refusal reads here exactly as the
- * app spelled it.
+ * app's list. The shell's answer is the app's, status and body alike, so a refusal reads here
+ * exactly as the app spelled it.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
