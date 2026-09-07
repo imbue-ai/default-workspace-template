@@ -12,7 +12,7 @@ scripts, references, or assets. The SKILL.md reads like a recipe: "do X,
 then Y, then Z." Each step of that process is one of three kinds:
 
 - **`[script]`** -- deterministic. Runs the same code every time, only the
-  data varies. Lives in `system/scripts/`.
+  data varies. Lives in `.agents/skills/<name>/scripts/`.
 - **`[ai-script]`** -- needs a model's judgement, but is a *fixed part of
   the flow* (the same prompt/criteria every run, only the data varies).
   Script it as an AI call following the `use-ai-integration` skill (see
@@ -72,12 +72,16 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
-  system/scripts/
+  scripts/
     run.py                  # optional; include when there are deterministic steps
     *.py                    # optional helpers
   references/*.md           # optional long-form docs; load on demand
   assets/...                # optional static resources (templates, samples)
 ```
+
+A skill's scripts live in the skill's own `scripts/` directory, i.e.
+`.agents/skills/<name>/scripts/`. The repo-root `system/scripts/` is an
+unrelated place, for workspace provisioning and utility scripts.
 
 The `name` used in `.agents/skills/<name>/` must match the `name` field in
 SKILL.md frontmatter (1-64 chars, lowercase letters/digits + single hyphens,
@@ -99,7 +103,7 @@ metadata:
 Omit `allowed-tools`, `license`, and `compatibility` unless you have a
 specific reason to constrain or declare them -- the defaults are fine.
 
-## system/scripts/run.py (optional)
+## .agents/skills/<name>/scripts/run.py (optional)
 
 Include `run.py` when the skill has `[script]` or `[ai-script]` steps that
 benefit from automation. A skill can be pure SKILL.md prose with no scripts
@@ -156,13 +160,13 @@ add appropriate dependencies to your PEP 723 header.
 frontmatter, the kebab-case name rules, directory-name match, description
 length, 500-line body limit, and that any `run.py` begins with a PEP 723
 header. When those static checks pass and a `run.py` exists, it also runs
-`uv run system/scripts/run.py --help`, which forces `uv` to resolve the script's PEP
-723 dependencies and import the module -- so a broken import or unresolvable
-dependency fails validation here rather than only at scenario time. (This is a
-shallow import check: `--help` exercises top-level imports and the argparse
-wiring, not imports done lazily inside subcommand bodies -- those are left to
-scenario testing.) Prints `ok` and exits 0 on success; exits 1 with a clear
-error on failure.
+`uv run .agents/skills/<name>/scripts/run.py --help`, which forces `uv` to
+resolve the script's PEP 723 dependencies and import the module -- so a broken
+import or unresolvable dependency fails validation here rather than only at
+scenario time. (This is a shallow import check: `--help` exercises top-level
+imports and the argparse wiring, not imports done lazily inside subcommand
+bodies -- those are left to scenario testing.) Prints `ok` and exits 0 on
+success; exits 1 with a clear error on failure.
 
 ## Scenario template
 

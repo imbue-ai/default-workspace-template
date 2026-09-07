@@ -28,6 +28,7 @@ from oom_priority import bands
 
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.errors import AgentStartError
+from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface import client_activity
 from imbue.system_interface.activity_state import ActivityState
@@ -50,10 +51,12 @@ from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToCompos
 from imbue.system_interface.harnesses.registry import build_interrupt_to_composer
 from imbue.system_interface.harnesses.registry import build_shoulder_tap
 from imbue.system_interface.harnesses.session import FileHarnessSession
+from imbue.system_interface.harnesses.session import SendOutcome
 from imbue.system_interface.harnesses.session import SessionDeps
 from imbue.system_interface.layout_ops import LayoutMutex
 from imbue.system_interface.member_titles import MAX_MEMBER_TITLE_LENGTH
 from imbue.system_interface.models import AgentStateItem
+from imbue.system_interface.models import SendMessageRequest
 from imbue.system_interface.models import AppEntry
 from imbue.system_interface.oom_prioritizer import ChatOomPrioritizer
 from imbue.system_interface.projects import EVERYTHING_VIEW_ID
@@ -67,13 +70,15 @@ from imbue.system_interface.server import _FORWARD_PORT_SCRIPT
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
-from imbue.system_interface.server import _WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.server import _agent_switch_options
 from imbue.system_interface.server import _build_destroy_command
 from imbue.system_interface.server import _build_fast_mode_answered_label_command
 from imbue.system_interface.server import _build_stop_command
 from imbue.system_interface.server import _handle_client_state_message
+from imbue.system_interface.server import _revive_and_retry_send
 from imbue.system_interface.server import _stream_filtered_events
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.testing import FakeSupervisorServer
@@ -82,6 +87,7 @@ from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Generous: the first receive occasionally exceeded the previous 5.0s cap on a
@@ -97,7 +103,20 @@ def config() -> Config:
 
 
 @pytest.fixture
-def app(config: Config) -> Flask:
+def signed_in_account() -> str:
+    """One provider account, because creating a chat now requires one.
+
+    There is no shared login to fall back to -- `resolve_binding` raises rather than binding an
+    agent to nothing -- so a create with no account is refused with a 400. Tests about naming,
+    conflicts and projects all create chats and none of them are about that.
+    """
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
+    return account_id
+
+
+@pytest.fixture
+def app(config: Config, signed_in_account: str) -> Flask:
     return create_application(build_test_state(config=config))
 
 
@@ -112,14 +131,15 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert "test" in response.text
-        # Both the app and the placeholder are HTTP 200 HTML, so the header is
-        # the only thing that distinguishes them to a health check.
-        assert response.headers[FRONTEND_BUILT_HEADER] == "true"
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert "test" in response.text
+    # Both the app and the placeholder are HTTP 200 HTML, so the header is
+    # the only thing that distinguishes them to a health check.
+    assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
@@ -136,11 +156,12 @@ def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> Non
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert response.headers["Cache-Control"] == "no-store"
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
 
 
 def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
@@ -153,9 +174,10 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
@@ -178,9 +200,10 @@ def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_p
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     scriptless_only = re.sub(r"<noscript>.*?</noscript>", "", response.text, flags=re.DOTALL)
     assert 'http-equiv="refresh"' not in scriptless_only
@@ -205,9 +228,10 @@ def test_not_built_placeholder_offers_the_registered_terminal(tmp_path: Path, mo
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert '"terminal-x7k9q2w1"' in response.text
     assert 'id="terminal"' in response.text
@@ -230,9 +254,10 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
@@ -250,7 +275,7 @@ def _chat_create_template() -> dict[str, object]:
     the loader would fold in user and local layers that a workspace being repaired
     may not have. ``server.py`` resolves the workspace root the same way.
     """
-    settings = tomllib.loads((_WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
+    settings = tomllib.loads((WORKSPACE_ROOT_DIRECTORY / ".mngr" / "settings.toml").read_text())
     return settings["create_templates"]["chat"]
 
 
@@ -429,9 +454,10 @@ def test_assets_404_rather_than_falling_through_to_the_spa_shell(tmp_path: Path)
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/assets/index-abc123.js")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/assets/index-abc123.js")
 
     assert response.status_code == 404
     # The app-shell marker is absent, proving the request did not reach the
@@ -451,11 +477,12 @@ def test_assets_do_not_reveal_whether_files_outside_the_directory_exist(tmp_path
     (static_dir / "assets").mkdir(parents=True)
     (static_dir / "index.html").write_text("<html>app</html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        # index.html exists one level above assets/; a file two levels up does not.
-        exists_outside = test_client.get("/assets/../index.html")
-        missing_outside = test_client.get("/assets/../../no-such-file")
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    # index.html exists one level above assets/; a file two levels up does not.
+    exists_outside = test_client.get("/assets/../index.html")
+    missing_outside = test_client.get("/assets/../../no-such-file")
 
     for response in (exists_outside, missing_outside):
         assert response.status_code == 404
@@ -471,13 +498,14 @@ def test_assets_serve_a_bundle_that_appeared_after_startup(tmp_path: Path) -> No
     static_dir = tmp_path / "static"
     static_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        # App built while there is no bundle at all, as it is on a cold start
-        # into a wiped tree.
-        test_client = create_application(build_test_state()).test_client()
-        (static_dir / "assets").mkdir()
-        (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
-        response = test_client.get("/assets/index-abc123.js")
+    state = build_test_state()
+    state.static_directory = static_dir
+    # App built while there is no bundle at all, as it is on a cold start
+    # into a wiped tree.
+    test_client = create_application(state).test_client()
+    (static_dir / "assets").mkdir()
+    (static_dir / "assets" / "index-abc123.js").write_text("console.log('app');")
+    response = test_client.get("/assets/index-abc123.js")
 
     assert response.status_code == 200
     assert "javascript" in response.headers["Content-Type"]
@@ -665,6 +693,97 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     assert data["events"][0]["content"] == "Hello"
     assert data["events"][1]["type"] == "assistant_message"
     assert data["events"][1]["text"] == "Hi!"
+
+
+def test_get_event_detail_serves_and_404s(client: FlaskClient, tmp_path: Path) -> None:
+    """The detail endpoint reconstructs one event's full payloads from disk, and answers a
+    clean 404 (the frontend's quiet placeholder) for an unknown event."""
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir(parents=True)
+    claude_config_dir = tmp_path / "claude_config"
+    projects_dir = claude_config_dir / "projects" / "hash123"
+    projects_dir.mkdir(parents=True)
+    session_id = "detail-session"
+    session_file = projects_dir / f"{session_id}.jsonl"
+    session_file.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "uuid-r",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "z" * 9000}],
+                },
+            }
+        )
+        + "\n"
+    )
+    (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
+
+    agent_info = AgentInfo(
+        id="agent-123",
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+    with patch("imbue.system_interface.server._find_agent", return_value=agent_info):
+        events = client.get("/api/agents/agent-123/events").get_json()["events"]
+        result_event = next(e for e in events if e["type"] == "tool_result")
+        # Payload-free wire: the output is not on the event.
+        assert "output" not in result_event
+        assert result_event["output_chars"] == 9000
+
+        detail = client.get(f"/api/agents/agent-123/events/{result_event['event_id']}/detail")
+        assert detail.status_code == 200
+        assert detail.get_json()["output"] == "z" * 9000
+
+        missing = client.get("/api/agents/agent-123/events/not-a-real-event/detail")
+        assert missing.status_code == 404
+
+
+def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
+    """Eviction releases the watcher (resident transcript, watch thread); a later read
+    rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
+    state = build_test_state()
+    agent_state_dir = tmp_path / "agent_state"
+    agent_state_dir.mkdir(parents=True)
+    claude_config_dir = tmp_path / "claude_config"
+    (claude_config_dir / "projects" / "hash123").mkdir(parents=True)
+    (claude_config_dir / "projects" / "hash123" / "s1.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"role": "user", "content": "hello"},
+            }
+        )
+        + "\n"
+    )
+    (agent_state_dir / "claude_session_id_history").write_text("s1\n")
+    agent_info = AgentInfo(
+        id="evictable-agent",
+        name="evictable-agent",
+        state="RUNNING",
+        agent_state_dir=agent_state_dir,
+        claude_config_dir=claude_config_dir,
+    )
+
+    first = state.get_or_create_watcher(agent_info)
+    assert state.watchers == {"evictable-agent": first}
+    assert len(first.get_all_events()) == 1
+
+    state.stop_and_remove_watcher("evictable-agent")
+    assert state.watchers == {}
+    # Idempotent for an unknown/already-evicted agent.
+    state.stop_and_remove_watcher("evictable-agent")
+
+    rebuilt = state.get_or_create_watcher(agent_info)
+    assert rebuilt is not first
+    assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
+    state.shutdown()
 
 
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Path) -> None:
@@ -869,16 +988,74 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
 
 
 def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: Path) -> None:
-    """No live ledger (daemon starting) surfaces an explicit, retryable not-ready error."""
+    """No live ledger and a failed revive surface an explicit, retryable not-ready error.
+
+    A NOT_READY send first tries to revive the agent through the same start path the
+    start endpoint uses; when even that fails (here: mngr cannot start it), the honest
+    503 stands."""
     agent_id = "codex-agent-2"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     client = _codex_client(agent_info)
+    started: list[str] = []
+
+    def failing_start(agent_name: str) -> None:
+        started.append(agent_name)
+        raise MngrError("no such agent")
+
     with (
         patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.start_agent", failing_start),
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi"})
     assert response.status_code == 503
+    assert started == [agent_info.name]
+
+
+def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -> None:
+    """A NOT_READY codex send starts the agent and retries, giving codex the same
+    "sending the agent a message revives it" invariant the file-session harnesses get
+    from mngr's own auto-start."""
+    agent_id = "codex-agent-9"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    ledger = _FakeCodexLedger()
+
+    # The daemon is down until the revive starts the agent; the retry then finds the ledger.
+    session = CodexHarnessSession.__new__(CodexHarnessSession)
+    session.ensure_live = lambda: None
+    live: list[_FakeCodexLedger] = []
+    session._live_ledger = lambda: live[0] if live else None
+
+    def fake_start(agent_name: str) -> None:
+        live.append(ledger)
+
+    with (
+        patch("imbue.system_interface.server._find_agent", return_value=agent_info),
+        patch("imbue.system_interface.server.start_agent", fake_start),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+    ):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hi", "message_id": "m9"})
+    assert response.status_code == 200
+    assert ledger.sent == [("hi", "m9")]
+
+
+def test_revive_and_retry_send_gives_up_after_the_budget(
+    tmp_path: Path, agent_manager: AgentManager
+) -> None:
+    """A daemon that never comes up keeps the honest NOT_READY after the retry budget --
+    the retries are paced by the injected sleep, never a spin."""
+    agent_info = _model_agent_info("codex-agent-10", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    sleeps: list[float] = []
+    request_body = SendMessageRequest(message="hi", message_id="m10")
+
+    with patch("imbue.system_interface.server.start_agent", lambda name: None):
+        outcome = _revive_and_retry_send(
+            agent_info, agent_manager, session, request_body, "m10", sleep=sleeps.append, budget_seconds=0.0
+        )
+    assert outcome is SendOutcome.NOT_READY
+    assert sleeps == []
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
@@ -1016,23 +1193,17 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     assert claude["powered_by_text"] == ""
 
 
-def test_get_harnesses_includes_every_harness_regardless_of_the_flag(
-    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The catalogs are never gated: the flag hides launchers, not harness support.
+def test_get_harnesses_includes_every_harness(client: FlaskClient) -> None:
+    """Every harness is in the catalog, whatever the user has signed in to.
 
-    A codex or pi agent can exist without the launchers ever being shown (``mngr
-    create``, or a host that turned the flag off after the agent was made), and its
-    model bar resolves against this catalog -- so gating it here would strand that
-    agent's chip on an unrecognized model.
+    A codex or pi agent can exist without any account for it (made by ``mngr create``,
+    or left behind after its account was removed), and its model bar resolves against
+    this catalog -- so narrowing it to the signed-in harnesses would strand that agent's
+    chip on an unrecognized model.
     """
-    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
-    without_flag = client.get("/api/harnesses").get_json()
-    assert "claude" in without_flag
-    assert "codex" in without_flag
-
-    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
-    assert client.get("/api/harnesses").get_json() == without_flag
+    catalog = client.get("/api/harnesses").get_json()
+    assert "claude" in catalog
+    assert "codex" in catalog
 
 
 def test_powered_by_is_empty_for_a_harness_that_declares_no_credit(client: FlaskClient, tmp_path: Path) -> None:
@@ -2377,39 +2548,12 @@ def test_index_injects_hostname_meta_tag(tmp_path: Path) -> None:
     static_dir.mkdir()
     (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        test_client = create_application(build_test_state()).test_client()
-        response = test_client.get("/")
-        assert response.status_code == 200
-        assert "system-interface-hostname" in response.text
-
-
-def test_index_enable_other_harnesses_meta_tag_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The alt-harness feature flag is injected and defaults to off (buttons hidden)."""
-    monkeypatch.delenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", raising=False)
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="false">' in response.text
-
-
-def test_index_enable_other_harnesses_meta_tag_on_when_flag_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Setting FEATURE_FLAG_ENABLE_OTHER_HARNESSES to a truthy value flips the injected flag on."""
-    monkeypatch.setenv("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "1")
-    static_dir = tmp_path / "static"
-    static_dir.mkdir()
-    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
-
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", static_dir):
-        response = create_application(build_test_state()).test_client().get("/")
-        assert response.status_code == 200
-        assert '<meta name="system-interface-enable-other-harnesses" content="true">' in response.text
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+    response = test_client.get("/")
+    assert response.status_code == 200
+    assert "system-interface-hostname" in response.text
 
 
 def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5154,7 +5298,7 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     assert canonical is not None, f"the canonical regex is no longer declared in {origin_ts}"
 
     page = render_frontend_not_built_page("terminal-x7k9q2w1")
-    in_page = re.findall(r"(/\^\(\?:host\|agent\).+?/i)\.test\(", page)
+    in_page = re.findall(r"(/\^\(\?:.+?/i)\.test\(", page)
     assert in_page == [canonical.group(1)], (
         f"the placeholder's coordinate regex has drifted from {origin_ts}: "
         f"page has {in_page}, origin.ts has {canonical.group(1)!r}"
@@ -5173,10 +5317,11 @@ def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> N
     empty_dir = tmp_path / "static"
     empty_dir.mkdir()
 
-    with patch("imbue.system_interface.server.STATIC_DIRECTORY", empty_dir):
-        test_client = create_application(build_test_state()).test_client()
-        head = test_client.head("/")
-        get = test_client.get("/")
+    state = build_test_state()
+    state.static_directory = empty_dir
+    test_client = create_application(state).test_client()
+    head = test_client.head("/")
+    get = test_client.get("/")
 
     assert head.headers[FRONTEND_BUILT_HEADER] == "false"
     assert get.headers[FRONTEND_BUILT_HEADER] == "false"

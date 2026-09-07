@@ -17,6 +17,7 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
 from imbue.system_interface.agent_discovery import _first_failure
+from imbue.system_interface.agent_discovery import discover_agents
 from imbue.system_interface.agent_discovery import read_claude_config_dir_from_env_file
 
 
@@ -283,3 +284,31 @@ def test_nothing_matched_is_still_the_unreachable_catch_all() -> None:
     failure = _first_failure(MessageResult())
     assert failure.kind == "agent_unreachable"
     assert failure.reason == "The agent could not be reached."
+
+
+def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """A settings file written for a newer mngr must not lock this server out.
+
+    During an update the on-disk `.mngr/settings.toml` can briefly be newer than
+    the mngr this long-lived process imported. Under strict parsing every read
+    path through `_get_mngr_context` -- listing agents, sending a message --
+    became a 500, which took down the very chat channel needed to finish the
+    update. The live read is therefore non-strict: the unknown field is dropped
+    with a logged warning and agents still list.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    (config_dir / "settings.toml").write_text('is_allowed_in_pytest = true\nfield_from_a_newer_mngr = "surprise"\n')
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
+
+    # Local provider only: the point is the config-parse path every listing
+    # goes through, not remote-provider discovery.
+    agents = discover_agents(provider_names=("local",))
+
+    # The listing survived (a fresh empty host dir simply has no agents), and
+    # the unknown field was reported rather than swallowed silently.
+    assert agents == []
+    assert any("field_from_a_newer_mngr" in record for record in loguru_records)

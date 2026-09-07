@@ -19,7 +19,7 @@ request is already delivered.
 `type` is `skill` (the default), `app`, or `service`. The worker reads it and loads
 `type-<TYPE>.md`. (A system-interface regression is a heal *operation*
 too, but it is driven through `update-system-interface`, which owns the
-`safe-reveal` preview/reveal/rollback go-live -- do not drive a system-interface
+preview and the apply-or-roll-back go-live -- do not drive a system-interface
 heal from here.)
 
 ## When NOT to heal

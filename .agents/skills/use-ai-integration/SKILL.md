@@ -17,11 +17,16 @@ Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
 directly; without one, use the `claude -p` helper in `system/scripts/claude_p.py`.
 
-Credentials live in the `env` block of the shared `~/.claude/settings.json`
-(written by the in-UI Claude sign-in modal), NOT in the process environment --
-services inherit a frozen env from supervisord, so an env-var check goes stale
-when the user changes auth. Check which path applies with the resolver in
-`system/scripts/claude_p.py`:
+Credentials live in a provider account under `~/.minds/accounts/<id>/`, written
+by the provider chooser and pointed at by `CLAUDE_CONFIG_DIR`. NOT in the
+process environment -- services inherit a frozen env from supervisord, so an
+env-var check goes stale when the user changes auth.
+
+Inside an agent the variable is always set, so a skill script, a worker and the
+agent itself all use the account that chat is bound to. Outside one -- a
+supervisord service, a cron job -- nothing sets it and `claude_p.py` falls back
+to the workspace's most recently used account. Either way, use its resolver
+rather than reading a path yourself:
 
 ```bash
 uv run python -c "from claude_p import read_workspace_ai_credentials; print('keyed' if read_workspace_ai_credentials().api_key else 'keyless')"

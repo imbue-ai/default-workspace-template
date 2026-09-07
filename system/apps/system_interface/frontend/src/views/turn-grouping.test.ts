@@ -42,7 +42,7 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     source: "test",
     model: "m",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: `{"path":"x"}` }],
+    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_chars: 12 }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -52,8 +52,8 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
   };
 }
 
-/** A tk lifecycle command as it appears in the transcript: a Bash tool call whose
- *  input_preview is the JSON-encoded command, carrying the backend's hidden decision. */
+/** A tk lifecycle command as it appears in the transcript: a Bash tool call carrying the
+ *  backend's hidden decision and the resident `tk_command` stamp. */
 function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
   return bashMsg(ts, command, callId, id, "hidden");
 }
@@ -78,8 +78,10 @@ function bashMsg(
       {
         tool_call_id: callId,
         tool_name: "Bash",
-        input_preview: JSON.stringify({ command }),
-        ...(display ? { display } : {}),
+        input_chars: JSON.stringify({ command }).length,
+        // The backend stamps the command resident exactly when it carries a tk lifecycle
+        // verb -- which is also when it stamps the hidden decision these fixtures model.
+        ...(display ? { display, tk_command: command } : {}),
       },
     ],
     stop_reason: null,
@@ -91,8 +93,8 @@ function bashMsg(
   };
 }
 
-/** The codex form of a tk lifecycle command: a code-mode `exec` call whose
- *  input_preview is the JS program invoking `tools.exec_command({cmd})`. */
+/** The codex form of a tk lifecycle command: a code-mode `exec` call whose stamped
+ *  tk_command is the inner shell command the backend unwrapped from the JS program. */
 function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
   return {
     ...tkMsg(ts, command, callId, id),
@@ -100,7 +102,8 @@ function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callI
       {
         tool_call_id: callId,
         tool_name: "exec",
-        input_preview: `await tools.exec_command(${JSON.stringify({ cmd: command })});`,
+        input_chars: 64,
+        tk_command: command,
         display: "hidden",
       },
     ],
@@ -121,9 +124,7 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
       {
         tool_call_id: callId,
         tool_name: "Bash",
-        input_preview: JSON.stringify({
-          command: "latchkey curl -XPOST http://latchkey-self.invalid/permission-requests -d '{}'",
-        }),
+        input_chars: 96,
         display: "permission_request",
       },
     ],
@@ -156,7 +157,10 @@ function result(ts: string, callId: string, output: string): ToolResultEvent {
     source: "test",
     tool_call_id: callId,
     tool_name: "test",
-    output,
+    output_chars: output.length,
+    // These fixtures' outputs are tk decoration / step-id echoes, which the backend
+    // stamps resident verbatim.
+    tk_stamp: output,
     is_error: false,
     ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
   };
@@ -298,7 +302,7 @@ describe("decoration from the transcript", () => {
     const piTk = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
       ...tkMsg(ts, command, callId),
       tool_calls: [
-        { tool_call_id: callId, tool_name: "bash", input_preview: JSON.stringify({ command }), display: "hidden" },
+        { tool_call_id: callId, tool_name: "bash", input_chars: 24, tk_command: command, display: "hidden" },
       ],
     });
     const events = [
@@ -407,7 +411,8 @@ describe("historical input fallback", () => {
         {
           tool_call_id: callId,
           tool_name: "run_command",
-          input_preview: JSON.stringify({ CommandLine: command, Cwd: "/work" }),
+          input_chars: 48,
+          tk_command: command,
           display: "hidden" as const,
         },
       ],
@@ -755,11 +760,12 @@ describe("audit regressions", () => {
       model: "m",
       text: "",
       tool_calls: [
-        { tool_call_id: "real1", tool_name: "Edit", input_preview: `{"path":"x"}` },
+        { tool_call_id: "real1", tool_name: "Edit", input_chars: 12 },
         {
           tool_call_id: "tkc",
           tool_name: "Bash",
-          input_preview: JSON.stringify({ command: "tk close s1" }),
+          input_chars: 26,
+          tk_command: "tk close s1",
           display: "hidden",
         },
       ],

@@ -399,9 +399,10 @@ def find_template_base(first_parent_log: Sequence[str]) -> str | None:
     newest first. The newest marker is the template state the source last
     updated itself to, so diffing the working tree against it yields what the
     user authored *since* that state -- and excludes template-version drift by
-    construction. (``update-self`` §5b walks the same markers but takes the
-    OLDEST, because it wants where the mind started; the difference is
-    load-bearing.) Returns ``None`` when no marker exists, which means the source
+    construction. (The update apply's origin seed -- ``_origin_line`` in
+    ``update-self``'s ``scripts/update_self.py`` -- walks the same markers but
+    takes the OLDEST, because it wants where the mind started; the difference
+    is load-bearing.) Returns ``None`` when no marker exists, which means the source
     cannot be migrated automatically.
     """
     for line in first_parent_log:
@@ -555,10 +556,10 @@ def resolve_agent_sessions(
 
     ``history_text`` is that file's contents -- an append-only log of
     ``"<session_id> <source>"`` lines, oldest first. ``session_paths`` is the
-    flat listing of ``<session_id>.jsonl`` files in the shared ``projects/``
-    tree; this file is what makes the mapping possible at all, since every minds
-    chat agent shares one ``CLAUDE_CONFIG_DIR`` and so all of their sessions sit
-    in that one tree with nothing but the id to tell them apart.
+    flat listing of ``<session_id>.jsonl`` files in a ``projects/`` tree; this
+    file is what makes the mapping possible at all, since every chat created on
+    the same provider account shares that account's ``CLAUDE_CONFIG_DIR`` and so
+    their sessions sit in one tree with nothing but the id to tell them apart.
 
     Returns ``(session_files, unresolved_ids)`` with the files in history order
     and duplicates dropped, so passing them to ``--adopt`` in order resumes the

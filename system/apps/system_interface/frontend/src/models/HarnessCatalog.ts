@@ -6,8 +6,8 @@
  * efforts each declares, which are shown) and the switch mode. The per-agent live
  * selection arrives separately, on the agents WebSocket as each agent's
  * `model_choice` (see AgentManager.ts). The backend already computes which catalog
- * option a live choice matched, so the frontend never re-matches. The harness's
- * "Powered by" credit is fetched per agent (see PoweredByCredit.ts), not from here.
+ * option a live choice matched, so the frontend never re-matches. The provider a chat runs on
+ * is not here either -- the combo card reads it from the chat's own account label.
  */
 
 import m from "mithril";
@@ -61,8 +61,6 @@ export interface HarnessCatalog {
   // payload from the backend HarnessSpec. Optional so a stale backend without
   // them degrades to "no popups" rather than a parse failure.
   popups?: HarnessPopup[];
-  auth_modal?: "managed" | "terminal";
-  auth_instructions?: string | null;
 }
 
 const catalogByHarness = new Map<string, HarnessCatalog>();

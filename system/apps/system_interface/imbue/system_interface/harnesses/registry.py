@@ -31,10 +31,6 @@ from imbue.system_interface.harnesses.antigravity.session import AntigravityHarn
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
 from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
-from imbue.system_interface.harnesses.auth_check import ANTIGRAVITY_AUTH_CHECK
-from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
-from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -87,20 +83,11 @@ class PopupAction(StrEnum):
 
     # The can't-send-from-chat notice.
     NOTICE = "notice"
-    # Open the harness's agent-auth surface (see ``HarnessSpec.auth_modal``).
+    # Open the provider chooser. Every harness signs in the same way now, so this needs
+    # nothing per-harness beyond the commands that trigger it.
     OPEN_AUTH = "open_auth"
     # The keep-fast-mode prompt flow.
     FAST_MODE_PROMPT = "fast_mode_prompt"
-
-
-class AuthModalKind(StrEnum):
-    """Which agent-auth surface a harness's ``open_auth`` popups open. Wire strings."""
-
-    # The in-app login modal (claude -- its auth is mind-global).
-    MANAGED = "managed"
-    # A notice showing the harness's ``auth_instructions``, for harnesses whose
-    # sign-in runs in their own TUI.
-    TERMINAL = "terminal"
 
 
 class HarnessPopup(FrozenModel):
@@ -300,17 +287,10 @@ class HarnessSpec(FrozenModel):
     # that taps through its live connection (codex) registers none and overrides
     # ``shoulder_tap`` on its session directly.
     shoulder_tap_class: type[AtomicShoulderTap] | None = None
-    # How to tell whether this harness's CLI is signed in before creating an agent on it.
-    # ``None`` = no auth gate (claude's auth lives in the shared ``~/.claude``).
-    auth_check: HarnessAuthCheck | None = None
     # The popups this harness declares for the chat UI, shipped on the wire with the
     # catalog. An empty tuple is the honest statement that a harness has none (pi's
     # composer sends everything as-is and it never launches fast).
     popups: tuple[HarnessPopup, ...] = ()
-    # The user-facing agent-auth surface the ``open_auth`` popup action (and the stream
-    # auth-error hook) opens; ``terminal`` surfaces show ``auth_instructions``.
-    auth_modal: AuthModalKind = AuthModalKind.TERMINAL
-    auth_instructions: str | None = None
     # The tmux key the cancel/tap actions deliver to end a live turn. Claude binds its own
     # ``meta+q`` chord (scoped to its chat context so a stray press cannot be reinterpreted);
     # antigravity uses a single native ``ctrl+c``, which needs no provisioning -- NOT escape,
@@ -345,7 +325,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_modal=AuthModalKind.MANAGED,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -372,7 +351,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # ``turn/interrupt`` + a per-id settle / the combined early resend), so the registered
         # interrupter default is inert and no shoulder_tap_class is needed.
         session_class=CodexHarnessSession,
-        auth_check=CODEX_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(
@@ -381,7 +359,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_instructions=("Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."),
     ),
     HarnessType.PI_CODING: HarnessSpec(
         name=HarnessType.PI_CODING,
@@ -399,7 +376,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # it overrides the base restart-drain rather than SIGKILL-relaunching.
         interrupt_to_composer_class=PiInterruptToComposer,
         shoulder_tap_class=PiAtomicShoulderTap,
-        auth_check=PI_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=("/login",), action=PopupAction.OPEN_AUTH),
             HarnessPopup(
@@ -407,7 +383,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             ),
             _MODEL_BAR_POPUP,
         ),
-        auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
     ),
     # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
     # transcript watcher, activity tracker, model resolver or catalog of its own. It is
@@ -415,12 +390,6 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     # would fall it back to claude and point claude's watcher at another harness's state dir.
     # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
     # implementation lands. antigravity has since landed all four and no longer uses them.
-    #
-    # ``auth_check`` is deliberately None for both. ``find_unauthenticated_harness_reason`` is
-    # FAIL-CLOSED: an auth probe whose command or output pattern is wrong refuses every create
-    # on that harness. Neither CLI's sign-in probe has been verified here, so a guessed one
-    # would block the very thing this registration exists to enable. Each harness adds its own
-    # (to ``auth_check.py``, with its popups) alongside its real implementation.
     HarnessType.OPENCODE: HarnessSpec(
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
@@ -472,10 +441,8 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         shoulder_tap_class=AntigravityAtomicShoulderTap,
         cancel_chord="C-c",
         popups=(_MODEL_BAR_POPUP,),
-        auth_check=ANTIGRAVITY_AUTH_CHECK,
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
-        auth_instructions="Open the agent's terminal and run `agy` (no arguments) to sign in.",
     ),
 }
 

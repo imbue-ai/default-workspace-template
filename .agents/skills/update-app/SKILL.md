@@ -29,7 +29,7 @@ If you're doing something *other* than editing an existing app or service:
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
   dockview shell, chat panels, progress view) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
-  reveals only when known-good).
+  applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
 
 ## Match the flow to the scope of the change
@@ -328,8 +328,8 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
-  owns its own preview-before-merge and safe-reveal go-live; use it rather
-  than this flow.
+  owns its own preview-before-merge and its go-live through the atomic update
+  apply; use it rather than this flow.
 
 `update-creation` and `heal-creation` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into

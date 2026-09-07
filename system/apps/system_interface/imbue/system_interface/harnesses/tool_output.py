@@ -1,17 +1,18 @@
-"""What survives tool-output truncation, and the structured facts lifted out first.
+"""The structured facts stamped out of a tool result at parse time.
 
-Harness-neutral, shared by every parser (moved out of the claude parser once codex and pi
-needed the identical behavior):
+Tool outputs are not resident and never cross the wire (the payload-free event contract in
+:mod:`harnesses.events`); whatever the default chat render needs from an output is lifted
+out here, whole, while the parser still holds the raw text. Harness-neutral, shared by
+every parser:
 
 - **Latchkey permission requests.** An agent asks the user for permission by POSTing to
   the reserved ``latchkey-self.invalid/permission-requests`` host (see the latchkey
   skill); the gateway echoes the created request back on stdout as a JSON object. The
   mechanism is harness-agnostic -- the agent just runs curl -- so every parser detects the
-  call from its (untruncated) input (:func:`is_permission_request_call` ->
+  call from its input (:func:`is_permission_request_call` ->
   ``tool_call.display = "permission_request"``) and lifts the echoed object out of the
-  result BEFORE truncation (:func:`find_permission_request` -> the event's
-  ``permission_request`` field), because the object routinely runs past the output cap and
-  a mid-object cut would leave the card nothing to read.
+  result (:func:`find_permission_request` -> the event's ``permission_request`` field), so
+  the card renders from structured data without fetching the output.
 
   Both readers assume one filing per tool call, with the echo in that call's own
   result. ``system/scripts/agent_latchkey_request_standalone.sh`` and its checker
@@ -21,11 +22,15 @@ needed the identical behavior):
   revisiting that gate too.
 
 - **tk step decoration.** tk lifecycle commands print machine-readable decoration on
-  stdout (``Updated <id> -> <status>``, ``tk-step <id> title|summary: ...``) that the chat
-  progress view reads back from the transcript. Those lines must survive truncation (a tk
-  command batched after a verbose one can land past the cap), so
-  :func:`truncate_tool_output` re-appends any that fall past the cut. The format is
-  defined in ``system/vendor/tk/ticket``; keep the two in sync.
+  stdout (``Created <id>: <title>``, ``Updated <id> -> <status>``,
+  ``tk-step <id> title|summary: ...``) that the chat progress view reads back from the
+  transcript. :func:`tk_stamp` lifts exactly those lines (plus any line carrying a step-id
+  token, which the historical input fallback's positional id-title zipping needs) into the
+  resident ``tk_stamp`` field. The format is defined in ``system/vendor/tk/ticket``; keep
+  the two in sync.
+
+- **Error snippets.** A failed call must stay glanceable without a fetch, so
+  :func:`error_snippet` keeps its first line resident.
 """
 
 import json
@@ -39,7 +44,8 @@ from tk_command_parsing.parser import parse_command
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.harnesses.events import DisplayKind
-from imbue.system_interface.harnesses.events import MAX_TOOL_OUTPUT_LENGTH
+from imbue.system_interface.harnesses.events import MAX_ERROR_SNIPPET_LENGTH
+from imbue.system_interface.harnesses.events import MAX_TK_STAMP_LENGTH
 
 # The reserved latchkey host an agent POSTs to when asking the user to approve an action.
 # Deliberately short enough to survive even a truncated input preview.
@@ -76,10 +82,10 @@ def is_pure_tk_lifecycle_command(command: str) -> bool:
 def is_tk_lifecycle_anywhere(command: str) -> bool:
     """True when a tk lifecycle verb appears ANYWHERE in ``command``.
 
-    This is the TRUNCATION-EXEMPTION rule, and it is deliberately broader than the hide rule:
-    a batched ``cd x && tk create --step ...`` still renders as work, but its input must
-    survive display truncation whole so the step progress view can read the plan out of it.
-    Over-preserving input is harmless; over-hiding work is not.
+    This is the TK-COMMAND-STAMP rule, deliberately broader than the hide rule: a batched
+    ``cd x && tk create --step ...`` still renders as work, but its command is stamped
+    resident (``tk_command``) so the step progress view can read the plan out of it without
+    fetching the input. Over-stamping is harmless; over-hiding work is not.
 
     Uses the shared shlex parser rather than a regex, so a ``tk close`` merely mentioned inside
     another command's quoted argument is not mistaken for a real lifecycle call.
@@ -181,34 +187,42 @@ def find_permission_request(content: str) -> PermissionRequest | None:
     return None
 
 
-def tk_decoration_after(content: str, cut: int) -> list[str]:
-    """The tk decoration lines in ``content`` that end past ``cut``."""
-    return [m.group(0) for m in _TK_OUTPUT_DECORATION_PATTERN.finditer(content) if m.end() > cut]
+# A token that looks like a tk step id (``cod-step-f1zl``). Lines carrying one are kept in
+# the tk stamp even without the decoration shapes: the progress view's historical input
+# fallback zips create titles positionally onto the step ids echoed anywhere in the
+# output, so bare id echoes (a shell-var capture printing the id) must survive.
+_STEP_ID_TOKEN_RE = re.compile(r"\S*-step-[a-z0-9]+")
 
 
-def _rebuild_around_permission_request(content: str, request: PermissionRequest) -> str:
-    """Replace an over-long tool output with only what the chat reads out of it: every tk
-    decoration line, then the permission-request object, whole and last.
+def tk_stamp(content: str) -> str:
+    """The tk-relevant lines of a tool output, as one resident string ('' = none).
 
-    The object has to be the LAST JSON object in the result -- and the only one -- because
-    the card's raw-output fallback reads from the first `{` to the end of the string. That
-    rules out the tk-style append (the head's own chopped copy of the object would be
-    found first), so the head is replaced rather than kept, and the tk lines sit ahead of
-    the object so both guarantees hold at once."""
-    return "...\n" + "\n".join([*tk_decoration_after(content, 0), request.body])
+    Exactly the lines the chat progress view reads back from the transcript: tk's
+    decoration output plus any line carrying a step-id token. Stamped at parse time so the
+    view never needs the raw output; capped as a guard against pathological output that
+    happens to be full of step-id tokens.
+    """
+    if "-step-" not in content:
+        return ""
+    kept = [
+        line
+        for line in content.splitlines()
+        if _TK_OUTPUT_DECORATION_PATTERN.search(line) or _STEP_ID_TOKEN_RE.search(line)
+    ]
+    if not kept:
+        return ""
+    joined = "\n".join(kept)
+    return joined[:MAX_TK_STAMP_LENGTH]
 
 
-def truncate_tool_output(content: str, permission_request: PermissionRequest | None = None) -> str:
-    """Truncate a tool result to the head limit, keeping what the chat reads out of the
-    part past the cut: the tk decoration lines (appended after the truncation marker so a
-    step's structure is never lost) and a permission-request object (preserved whole in
-    place of the head -- see :func:`_rebuild_around_permission_request`)."""
-    if len(content) <= MAX_TOOL_OUTPUT_LENGTH:
-        return content
-    if permission_request is not None:
-        return _rebuild_around_permission_request(content, permission_request)
-    head = content[:MAX_TOOL_OUTPUT_LENGTH]
-    preserved = tk_decoration_after(content, MAX_TOOL_OUTPUT_LENGTH)
-    if preserved:
-        return head + "...\n" + "\n".join(preserved)
-    return head + "..."
+def error_snippet(content: str) -> str:
+    """The first non-empty line of a failed call's output, capped -- the resident glance.
+
+    The full error text still loads on expand like any other output; this just keeps a
+    failure recognisable in the collapsed row without a fetch.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:MAX_ERROR_SNIPPET_LENGTH]
+    return ""

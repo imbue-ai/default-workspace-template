@@ -1,6 +1,5 @@
 import pytest
 
-from imbue.system_interface.harnesses.claude.tool_labels import keeps_full_tool_input
 from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 
@@ -84,11 +83,3 @@ def test_shell_command_reads_claudes_command_key_and_ignores_other_tools() -> No
     assert shell_command("Bash", '{"command":"ls -la"}') == "ls -la"
     assert shell_command("Read", '{"file_path":"/x"}') is None
     assert shell_command("Bash", '{"command":123}') is None
-
-
-def test_keeps_full_tool_input_exempts_a_batched_tk_plan() -> None:
-    """Moved out of session_parser, which no longer knows claude's tool names. A batched
-    create must survive truncation even though it renders as work rather than hiding."""
-    assert keeps_full_tool_input("Bash", '{"command":"cd /code && tk create --step \\"a\\""}') is True
-    assert keeps_full_tool_input("Bash", '{"command":"ls -la"}') is False
-    assert keeps_full_tool_input("Read", '{"file_path":"/x"}') is False

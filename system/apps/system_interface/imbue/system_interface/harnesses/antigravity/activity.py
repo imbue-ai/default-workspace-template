@@ -6,7 +6,6 @@ harnesses do not -- see :func:`_tail_is_final_answer`. The pure derivation lives
 in ``activity_state``. Registered in ``harnesses.registry``.
 """
 
-from collections.abc import Sequence
 from typing import Any
 from typing import ClassVar
 
@@ -15,18 +14,8 @@ from imbue.system_interface.activity_state import is_lifecycle_dead
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
 from imbue.system_interface.harnesses.antigravity.activity_state import derive
 
-
-def _tail_is_final_answer(events: Sequence[dict[str, Any]]) -> bool:
-    """True when the newest message event is an ``assistant_message`` carrying real answer
-    text -- the signal that the turn is over. An empty planner step (agy's between-tool
-    "thinking" step) returns False, so the indicator does not flicker IDLE mid-turn."""
-    for event in reversed(events):
-        event_type = event.get("type")
-        if event_type == "assistant_message":
-            return bool(event.get("text"))
-        if event_type in ("user_message", "tool_result"):
-            return False
-    return False
+# The event types that count as "message" events for the tail-is-final-answer signal.
+_MESSAGE_EVENT_TYPES = ("assistant_message", "user_message", "tool_result")
 
 
 class AntigravityActivityTracker(HarnessActivityTracker):
@@ -41,9 +30,32 @@ class AntigravityActivityTracker(HarnessActivityTracker):
     # indicator latches on that dead tool call and never clears.
     marker_filename: ClassVar[str] = "antigravity_process_started"
 
-    def _observe_extra(self, events: Sequence[dict[str, Any]]) -> tuple[Any, ...]:
-        """agy's one extra signal: whether the tail is a REAL answer or an empty planner step."""
-        return (_tail_is_final_answer(events),)
+    # agy's one extra signal, folded from the stream: whether the newest MESSAGE event is
+    # an ``assistant_message`` carrying real answer text -- the signal that the turn is
+    # over. An empty planner step (agy's between-tool "thinking" step) reads as
+    # still-working, so the indicator does not flicker IDLE mid-turn. Timestamp-guarded so
+    # a re-delivered old event cannot regress the tail.
+    _tail_message_type: str | None
+    _tail_has_answer_text: bool
+    _tail_message_at: float | None
+
+    def _reset_extra(self) -> None:
+        self._tail_message_type = None
+        self._tail_has_answer_text = False
+        self._tail_message_at = None
+
+    def _fold_extra_event(self, event: dict[str, Any], event_at: float | None) -> None:
+        event_type = event.get("type")
+        if event_type not in _MESSAGE_EVENT_TYPES:
+            return
+        if not self._advances(event_at, self._tail_message_at):
+            return
+        self._tail_message_type = str(event_type)
+        self._tail_has_answer_text = event_type == "assistant_message" and bool(event.get("text"))
+        self._tail_message_at = event_at if event_at is not None else self._tail_message_at
+
+    def _current_extra(self) -> tuple[Any, ...]:
+        return (self._tail_message_type == "assistant_message" and self._tail_has_answer_text,)
 
     def _derive_working(
         self, *, lifecycle_state: str, is_active_marker_present: bool, process_started_at: float | None

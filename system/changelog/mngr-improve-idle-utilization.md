@@ -1,0 +1,3 @@
+The in-container local provider's discovery reconciliation sweep now runs every 60 seconds instead of every 30 (`[providers.local] discovery_poll_interval_seconds` in `.mngr/settings.toml`).
+
+Creates, destroys, and renames still surface immediately through the incremental discovery log, and a local agent process dying is caught by `mngr observe`'s PID watchers; the sweep only catches out-of-band changes (e.g. a tmux session killed by hand), so the longer cadence halves its idle cost (file reads plus tmux forks, ~3x as expensive under gVisor) without touching any interactive-latency path. Part of imbue-ai/mngr-internal#700.

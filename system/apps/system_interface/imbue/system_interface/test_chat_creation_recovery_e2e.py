@@ -36,6 +36,8 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.models import AgentStateItem
 from imbue.system_interface.server import create_application
 from imbue.system_interface.testing import RecordingMngrMessenger
+from imbue.system_interface.accounts import commit_account
+from imbue.system_interface.accounts import mint_account_dir
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -158,6 +160,12 @@ def _serving_workspace(
     monkeypatch.setenv("MNGR_AGENT_ID", _PRIMARY_AGENT_ID)
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(work_dir))
     monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ.get('PATH', '')}")
+    # A signed-in provider, because the New chat tile opens the chooser instead of
+    # creating anything when there is none -- which is the point of the picker, and
+    # would make this fixture unable to reach the code it is testing.
+    monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", "Anthropic")
 
     manager = AgentManager.build(
         broadcaster,
@@ -216,10 +224,11 @@ def _create_chat_through_ui(page: Page, base_url: str) -> None:
     page.wait_for_selector(".dockview-add-tab-button", timeout=_RECOVERY_TIMEOUT_MS)
     page.locator(".dockview-add-tab-button").first.click()
     page.wait_for_selector(".new-tab-launcher", timeout=_RECOVERY_TIMEOUT_MS)
-    # Anchored: ``has_text`` is a case-insensitive substring match, and the
-    # flag-gated harness tiles are called "Codex chat" / "Pi chat", so a bare
-    # "Chat" would match three tiles (and fail strict mode) the moment this
-    # fixture turns those flags on.
+    # Anchored, and it has to stay anchored: ``has_text`` is a case-insensitive SUBSTRING match,
+    # so an unanchored "Chat" would also match whatever the provider picker beside the tile says.
+    # Anchoring on the label's exact text is also what makes this break loudly when the label
+    # changes -- it once cost a suite three 30-second action timeouts, which read as the whole
+    # run being slow rather than as a stale selector.
     page.locator(".new-tab-launcher-tile:visible", has_text=re.compile(r"^Chat$")).click()
 
 

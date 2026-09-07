@@ -15,7 +15,6 @@ from imbue.system_interface.harnesses.tool_labels import mcp_caption
 from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
-from imbue.system_interface.harnesses.tool_output import is_tk_lifecycle_anywhere
 
 _BASH_TOOL_NAME = "Bash"
 
@@ -105,20 +104,10 @@ def shell_command(tool_name: str, raw_input: str) -> str | None:
 
     The ONE question each harness answers for itself. Whether that command is a tk lifecycle
     invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
-    rule, ``is_tk_lifecycle_anywhere`` for the truncation exemption), so the rules live in one
+    rule, ``is_tk_lifecycle_anywhere`` for the resident tk_command stamp), so the rules live in one
     place and cannot drift between harnesses.
     """
     if tool_name != _BASH_TOOL_NAME:
         return None
     command = parse_input_preview(raw_input).get("command")
     return command if isinstance(command, str) else None
-
-
-@pure
-def keeps_full_tool_input(tool_name: str, raw_input: str) -> bool:
-    """True when a tool call's stored input must NOT be truncated for display: a tk lifecycle
-    command, whose ``--step`` titles and close summaries the step progress view reads out of
-    the command itself. Moved here from ``session_parser``, which no longer knows claude's
-    tool names."""
-    command = shell_command(tool_name, raw_input)
-    return command is not None and is_tk_lifecycle_anywhere(command)

@@ -304,40 +304,37 @@ def test_open_new_group_flag_sets_payload(
     ]
 
 
-def test_open_chat_terminal_ref_skips_registration_and_posts_through(
+def test_open_chat_terminal_ref_is_refused_by_name(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``chat-terminal:<name>`` is a stable agent-bound ref, not a service.
+    """``chat-terminal:<name>`` is retired, and has to say so.
 
-    The script must accept it as a valid prefix (no service registration
-    poll, no bare-name fallback to ``service:``) and post the ref through
-    to the broadcast endpoint unchanged so the frontend can resolve it
-    to the per-agent terminal URL.
+    An agent's terminal is the back face of its chat now, so there is no panel for the ref to
+    address. What matters is HOW it fails: the prefix stays in ``_REF_PREFIXES`` so this branch
+    can name it. Delisting it instead would send it to the bare-service-name fallback, and the
+    caller would wait five seconds to be told that a service nobody mentioned is unregistered.
     """
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    # No apps.toml is set up: if the script misclassified the ref
-    # as ``service:chat-terminal:alice`` the registration poll would fire.
 
-    rc = layout.main(["open", "chat-terminal:alice", "--layout", "desktop"])
-    assert rc == 0
-    assert posted == [
-        (
-            "open",
-            {"ref": "chat-terminal:alice", "new_group": False, "layout": "desktop"},
-        )
-    ]
+    with pytest.raises(SystemExit):
+        layout.main(["open", "chat-terminal:alice", "--layout", "desktop"])
+    assert posted == []
+    message = capsys.readouterr().err
+    # Names the retired ref, and points at what replaced it.
+    assert "chat-terminal:alice" in message
+    assert "chat:alice" in message
+    assert "Terminal toggle" in message
 
 
-def test_normalize_ref_preserves_chat_terminal_prefix() -> None:
-    """``chat-terminal:`` must round-trip through ``_normalize_ref`` unchanged.
+def test_normalize_ref_still_matches_the_longer_prefix_first() -> None:
+    """``chat-terminal:`` must keep winning the prefix scan over ``chat:``.
 
-    The prefix scan in ``_normalize_ref`` walks ``_REF_PREFIXES`` in
-    order; if ``chat:`` came before ``chat-terminal:`` the longer form
-    would never be recognized, and ``chat-terminal:alice`` would be
-    accepted via the ``chat:`` branch -- silently producing a
-    miscategorized ref. Ordering ``chat-terminal:`` first in the prefix
-    table is the fix; this test catches a regression in that ordering.
+    ``_normalize_ref`` walks ``_REF_PREFIXES`` in order and returns on the first match. If
+    ``chat:`` came first, ``chat-terminal:alice`` would be accepted through the ``chat:`` branch
+    and the rejection above would never fire -- the retired ref would silently become a request
+    for a chat named ``terminal:alice``.
     """
     assert layout._normalize_ref("chat-terminal:alice") == "chat-terminal:alice"
     # Sanity: the ordinary ``chat:`` form is still recognized.

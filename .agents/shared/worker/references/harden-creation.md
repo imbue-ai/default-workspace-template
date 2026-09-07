@@ -13,6 +13,13 @@ The user has already signed off on work in the foreground; the thorough pass has
 The task now is to prove the creation actually works under test, harden it, and pass the review
 gates. The bar is that the creation is **genuinely well-tested and clean** -- not "it ran once."
 
+When another skill the flow follows sets its own economy rules -- e.g.
+`data-pipeline-builder`'s per-step minute caps -- this contract wins wherever they conflict:
+an expired budget never justifies skipping tests, and never report `done` on a
+creation whose tests were skipped because time ran out. Rules that do not
+conflict with the bar (such as that skill's ban on benchmarks, timings, and
+parameter sweeps) still hold during hardening.
+
 ## Isolation
 
 Do all of this on an **isolated branch / worktree**. Nothing should the

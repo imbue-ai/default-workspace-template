@@ -2,6 +2,7 @@ import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
 import { openImageLightbox } from "./lightbox";
+import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 
 const marked = new Marked({
   breaks: true,
@@ -60,7 +61,8 @@ function hasToolCallLine(textContent: string): boolean {
  * the debug output in the stream. For each tool call, the debug
  * output starts with a line that starts with "Tool call: ".
  */
-function wrapToolCallBlocks(container: HTMLElement): void {
+function wrapToolCallBlocks(container: HTMLElement, expansionKeyPrefix: string | undefined): void {
+  let blockIndex = 0;
   for (const preElement of Array.from(container.querySelectorAll("pre"))) {
     if (preElement.parentElement?.classList.contains("tool-call-block")) {
       continue;
@@ -77,8 +79,20 @@ function wrapToolCallBlocks(container: HTMLElement): void {
 
     const wrapper = document.createElement("div");
     wrapper.className = "tool-call-block";
+    // Keyed store keeps the expansion across full innerHTML rewrites and row
+    // remounts; the index within the message is stable because the source
+    // markdown is. Without a prefix (no stable message identity) the DOM
+    // toggle still works, it just cannot survive a remount.
+    const expansionKey = expansionKeyPrefix !== undefined ? `md:${expansionKeyPrefix}#${blockIndex}` : null;
+    blockIndex += 1;
+    if (expansionKey !== null && isBlockExpanded(expansionKey)) {
+      wrapper.classList.add("tool-call-block--expanded");
+    }
     wrapper.addEventListener("click", () => {
-      wrapper.classList.toggle("tool-call-block--expanded");
+      const isNowExpanded = wrapper.classList.toggle("tool-call-block--expanded");
+      if (expansionKey !== null) {
+        setBlockExpanded(expansionKey, isNowExpanded);
+      }
     });
 
     preElement.replaceWith(wrapper);
@@ -114,11 +128,11 @@ function handleMarkdownImageClick(event: MouseEvent): void {
   }
 }
 
-export const MarkdownContent: m.Component<{ content: string; requestedAt?: string }> = {
+export const MarkdownContent: m.Component<{ content: string; requestedAt?: string; expansionKeyPrefix?: string }> = {
   oncreate(vnode) {
     const element = vnode.dom as HTMLElement;
     element.innerHTML = renderMarkdown(vnode.attrs.content);
-    wrapToolCallBlocks(element);
+    wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
     if (vnode.attrs.requestedAt) {
       appendRequestedAt(element, vnode.attrs.requestedAt);
     }
@@ -142,7 +156,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const element = vnode.dom as HTMLElement;
     const expanded = saveExpandedState(element);
     element.innerHTML = renderMarkdown(vnode.attrs.content);
-    wrapToolCallBlocks(element);
+    wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
     if (vnode.attrs.requestedAt) {
       appendRequestedAt(element, vnode.attrs.requestedAt);
     }

@@ -3,7 +3,6 @@
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.activity import CodexActivityTracker
 from imbue.system_interface.harnesses.codex.activity_state import derive
-from imbue.system_interface.harnesses.codex.activity_state import turn_open
 from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.events import SpecialEventKind
 
@@ -12,19 +11,27 @@ def _turn_marker(kind: SpecialEventKind) -> dict[str, object]:
     return {"type": SPECIAL_EVENT_TYPE, "kind": kind.value}
 
 
-def test_turn_open_latches_on_the_latest_marker() -> None:
-    assert turn_open([]) is False
-    assert turn_open([_turn_marker(SpecialEventKind.TURN_STARTED)]) is True
+def _folded_turn_open(events: list[dict[str, object]]) -> bool:
+    """The tracker's folded turn latch after observing ``events``."""
+    tracker = CodexActivityTracker.build()
+    tracker.observe(events)
+    return bool(tracker._current_extra()[0])
+
+
+def test_the_folded_turn_latch_follows_the_latest_marker() -> None:
+    assert _folded_turn_open([]) is False
+    assert _folded_turn_open([_turn_marker(SpecialEventKind.TURN_STARTED)]) is True
     # A completed/aborted marker after the start closes the turn.
     assert (
-        turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), _turn_marker(SpecialEventKind.TURN_COMPLETED)])
+        _folded_turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), _turn_marker(SpecialEventKind.TURN_COMPLETED)])
         is False
     )
     assert (
-        turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), _turn_marker(SpecialEventKind.TURN_ABORTED)]) is False
+        _folded_turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), _turn_marker(SpecialEventKind.TURN_ABORTED)])
+        is False
     )
     # Non-marker events between start and now don't close the turn (still mid-tool -> open).
-    assert turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), {"type": "assistant_message"}]) is True
+    assert _folded_turn_open([_turn_marker(SpecialEventKind.TURN_STARTED), {"type": "assistant_message"}]) is True
 
 
 def test_derive_is_a_turn_latch_not_a_lifecycle() -> None:

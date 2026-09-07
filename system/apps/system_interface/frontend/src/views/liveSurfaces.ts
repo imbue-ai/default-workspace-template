@@ -219,6 +219,13 @@ export function liveSurfaceParams(key: LiveKey): PanelParams | null {
   return surfacesByKey.get(key)?.params ?? null;
 }
 
+/** The live page's DOM element for ``key``, or null when it has none. For callers that
+ *  address the page's content (e.g. granting a just-activated terminal focus) without
+ *  owning the surface. */
+export function liveSurfaceElement(key: LiveKey): HTMLElement | null {
+  return surfacesByKey.get(key)?.element ?? null;
+}
+
 /**
  * The page for ``key``, creating it on first open.
  *

@@ -59,8 +59,8 @@ in that app's folder and is named `<app>-<role>`.
   `browser/`, and every user-built app; registered in the uv workspace via the
   `system/apps/*` member glob
 - `system/services/` - Standalone background services (`app_watcher/`,
-  `caretaker/`, `eval_worker/`, `share_gateway/`, `host_backup/`,
-  `env_converge/`, `oom_priority/`)
+  `caretaker/`, `share_gateway/`, `host_backup/`, `env_converge/`,
+  `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
   setup, then launches supervisord to supervise the apps and services) and
   `automations/` (the machinery that runs skills on a schedule)
@@ -89,6 +89,6 @@ The main agent can promote ad-hoc work into reusable creations, fix creations th
 - `heal-creation` - Fix a skill, app, or service that errored or produced wrong results.
 - `update-creation` - Extend / refactor / verify a skill, app, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
 
-Each lead spawns a `worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and type from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and one `type-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-creation` with `type=system-interface` and adds its preview / safe-reveal go-live.)
+Each lead spawns a `worker` sub-agent that runs the single generic `harden-worker` sub-skill. The worker reads the operation and type from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and one `type-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs the `update-system-interface` flow, which wraps `update-creation` with `type=system-interface` and adds its preview and its go-live through the atomic update apply.)
 
 Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).

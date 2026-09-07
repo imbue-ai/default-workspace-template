@@ -23,7 +23,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
+from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.system_interface.activity_state import ActivityState
 from imbue.system_interface.harnesses.codex.ledger import CodexMessageLedger
@@ -73,6 +76,9 @@ class ScriptedTransport:
         self._responders[method] = lambda request: self.push(
             {"jsonrpc": "2.0", "id": request["id"], "error": {"code": code, "message": message}}
         )
+
+    def respond_scripted(self, method: str, responder: Callable[[Mapping[str, Any]], None]) -> None:
+        self._responders[method] = responder
 
 
 def _handshaken_client(transport: ScriptedTransport, *, status_type: str = "idle") -> CodexAppServerClient:
@@ -212,15 +218,47 @@ def test_send_when_busy_is_queued_then_delivered_at_boundary() -> None:
     assert ledger.queued_snapshot() == []
 
 
-def test_send_failure_returns_to_composer() -> None:
+def test_send_failure_raises_and_leaves_no_entry() -> None:
+    """A failed ``submit`` was never accepted by the daemon, so the ledger re-raises and drops
+    the phantom entry: the caller's error response is what restores the text to the composer,
+    and no ghost lingers for a later Stop to hand back a second copy of."""
     transport = ScriptedTransport()
     ledger, _client, _sink = _build_ledger(transport)
     transport.respond_error("turn/start", -32000, "boom")
-    cid = ledger.send("doomed")
-    assert ledger.state_of(cid) == MessageState.RETURNED
-    assert ledger.reconcile_returned() == "doomed"
+    with pytest.raises(CodexAppServerError, match="boom"):
+        ledger.send("doomed")
+    assert ledger.state_of("cid-1") is None
+    assert ledger.reconcile_returned() == ""
     assert ledger.queued_snapshot() == []
     assert ledger.is_sending() is False
+    # A later stop hands back nothing -- the text already went back via the caller's error path.
+    assert ledger.interrupt() == ""
+
+
+def test_send_keeps_a_delivery_observed_mid_submit_when_the_submit_then_fails() -> None:
+    """A commit notification interleaved into the blocking ``submit`` RPC settles the entry to
+    Delivered before the RPC's own failure lands: the delivery is definitive (A4), so the send
+    reports the id normally instead of raising over a message that actually committed."""
+    transport = ScriptedTransport()
+    ledger, _client, sink = _build_ledger(transport)
+
+    def commit_then_fail(request: Mapping[str, Any]) -> None:
+        cid = request["params"]["clientUserMessageId"]
+        transport.push(
+            {
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {"item": {"type": "userMessage", "id": f"item-{cid}", "clientId": cid}},
+            }
+        )
+        transport.push({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32000, "message": "boom"}})
+
+    transport.respond_scripted("turn/start", commit_then_fail)
+    cid = ledger.send("hello")
+    assert ledger.state_of(cid) == MessageState.DELIVERED
+    assert ledger.is_sending() is False
+    assert ledger.reconcile_returned() == ""
+    assert len(sink.user_turns) == 1
 
 
 # =============================================================================
@@ -764,11 +802,15 @@ def test_interrupt_optimistically_returns_then_a_late_commit_corrects_to_deliver
 
 def test_interrupt_with_no_active_turn_hands_back_without_an_rpc() -> None:
     """With nothing running, interrupt issues no turn/interrupt and returns whatever is already
-    non-committed (here a send that failed straight to the composer)."""
+    non-committed (here a send whose turn ended without committing it)."""
     transport = ScriptedTransport()
-    ledger, _client, _sink = _build_ledger(transport)
-    transport.respond_error("turn/start", -32000, "boom")
+    ledger, client, _sink = _build_ledger(transport)
+    transport.respond_result("turn/start", {"turn": {"id": "turn-1", "status": "inProgress"}})
     ledger.send("doomed")
+    # The turn completes without committing the send: the reconcile's thread/read guard shows
+    # no commit, so the entry Returns (not yet handed to the composer) and the turn is over.
+    transport.respond_result("thread/read", {"thread": {"id": "thread-1", "turns": []}})
+    _push_turn_completed(transport, client, "turn-1")
     assert ledger.state_of("cid-1") == MessageState.RETURNED
 
     block = ledger.interrupt()

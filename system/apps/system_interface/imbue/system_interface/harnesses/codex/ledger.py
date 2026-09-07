@@ -304,9 +304,12 @@ class CodexMessageLedger(MutableModel):
 
         Idle -> the daemon opens a turn (Disposition ``STARTED``); the entry stays Sending until
         its ``userMessage`` commits (A4). Busy -> the daemon parks a steer (``STEERED``); the entry
-        is Queued (a chip) at once. A transport/protocol failure returns the entry (contract Send:
-        "Returned (send failed)"). Returns the minted ``client_id`` so the caller (and the browser)
-        agree on the id the chip and the delivery reconcile key on.
+        is Queued (a chip) at once. A failed ``submit`` means the daemon never ACCEPTED the
+        message, so there is no entry to keep: the phantom entry is removed and the failure
+        propagates to the caller, whose error response is what puts the text back in the
+        composer (a swallowed "Returned" here would be surfaced by nothing and leave the
+        frontend's "Sending..." bubble stuck forever). Returns the minted ``client_id`` so the
+        caller (and the browser) agree on the id the chip and the delivery reconcile key on.
         """
         cid = client_id if client_id is not None else self.mint_client_id()
         entry = LedgerEntry(client_id=cid, send_seq=self._next_seq(), text=text, state=MessageState.SENDING)
@@ -315,9 +318,15 @@ class CodexMessageLedger(MutableModel):
         try:
             disposition = self.client.submit(text, cid)
         except CodexAppServerError as exc:
-            logger.opt(exception=exc).info("codex ledger: submit failed for {}, returning to composer", cid)
-            entry.state = MessageState.RETURNED
-            self._emit_queue_if_changed()
+            # The entry exists BEFORE the submit so notifications interleaved into the blocking
+            # RPC can find it -- which means one of those frames may have settled it already. A
+            # settled entry owns its fate: a commit is definitive delivery (A4), and a racing
+            # interrupt's Returned rides that interrupt's own composer hand-off. Only a
+            # still-Sending entry was truly never accepted.
+            if entry.state == MessageState.SENDING:
+                del self.entries[cid]
+                raise
+            logger.debug("codex ledger: submit for {} failed after the entry settled to {} ({})", cid, entry.state, exc)
             return cid
         entry.bound_turn_id = disposition.turn_id
         if disposition.kind == DispositionKind.STEERED:

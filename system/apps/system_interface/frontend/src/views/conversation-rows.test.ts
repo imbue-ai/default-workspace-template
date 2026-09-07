@@ -35,7 +35,14 @@ function tkMsg(ts: string, command: string, callId: string): AssistantMessageEve
     source: "test",
     model: "m",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_preview: JSON.stringify({ command }) }],
+    tool_calls: [
+      {
+        tool_call_id: callId,
+        tool_name: "Bash",
+        input_chars: JSON.stringify({ command }).length,
+        tk_command: command,
+      },
+    ],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -53,7 +60,10 @@ function result(callId: string, output: string): ToolResultEvent {
     source: "test",
     tool_call_id: callId,
     tool_name: "Bash",
-    output,
+    output_chars: output.length,
+    // The backend stamps the tk-relevant lines resident; these fixtures' outputs ARE
+    // decoration lines, so the stamp carries them verbatim.
+    tk_stamp: output,
     is_error: false,
   };
 }

@@ -16,7 +16,6 @@ dependencies = [
     "playwright==1.58.0",
     "litellm>=1.88.1",
     "browser",
-    "eval-worker",
 ]
 
 [dependency-groups]
@@ -82,7 +81,6 @@ github-sync = { workspace = true }
 env-converge = { workspace = true }
 host-backup = { workspace = true }
 share-gateway = { workspace = true }
-eval-worker = { workspace = true }
 mngr-cli-contract = { workspace = true }
 tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
@@ -105,6 +103,12 @@ testpaths = ["."]
 # enumerate the dot-directories to skip explicitly, so .agents is still recursed into.
 norecursedirs = [
     "*.egg",
+    # Runtime scratch, never part of the suite. Flow-internal state under
+    # data/.tasks/ can stage copies of skill test files (update-self stages
+    # update_self_test.py under data/.tasks/update-self/skill-at-target/), and
+    # collecting one alongside the in-tree copy kills a bare `uv run pytest`
+    # with an import-file basename collision.
+    "data",
     ".git",
     ".claude",
     ".github",

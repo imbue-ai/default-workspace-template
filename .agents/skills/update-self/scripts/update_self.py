@@ -4,9 +4,10 @@
 # ///
 """Deterministic helpers for the safe, background-worker-driven update-self flow.
 
-The update-self orchestration is mostly agent judgement (triage conflicts, decide
-validation depth, reveal by change class). This script owns the parts that are
-*deterministic* and therefore belong in tested code rather than agent prose:
+The update-self orchestration is mostly agent judgement (triage conflicts,
+decide validation depth, work the report's impact analysis). This script owns
+the parts that are *deterministic* and therefore belong in tested code rather
+than agent prose:
 
 ``resolve-target``
     Resolve the ref to update to. Default is the latest **stable** ``minds-v*``
@@ -39,8 +40,9 @@ validation depth, reveal by change class). This script owns the parts that are
     Split the files upstream changed into the reconciled **merged** set (local
     also diverged there -- validate) vs the clean **pulled-in** set (local left
     it untouched, so the merge just took upstream -- trust as upstream-tested),
-    and map each file onto its reveal class and its test project. This drives
-    both validation depth (merged set) and reveal-by-class. ``has_merge_work``
+    and map each file onto its change class and its test project. This drives
+    both validation depth (merged set) and what ``apply`` must do to make the
+    live workspace consistent with the merge. ``has_merge_work``
     is the mechanical half of the review-gate rule: true whenever the merged
     set is non-empty (any merge work at all happened). A false value is
     necessary but not sufficient to skip the gates -- the worker's impact
@@ -51,6 +53,14 @@ validation depth, reveal by change class). This script owns the parts that are
 ``changelog-entries``
     List ``changelog/`` entries newly added between two refs -- the raw input for
     the worker's "what's new" report.
+
+``surface-chat-tab``
+    Open this run's own chat tab in the workspace UI, so a user sent into the
+    workspace by the minds app lands on the conversation performing the update.
+    The interface can only place a tab in front of a client that is connected,
+    and the user may still be on their way in, so the command detaches a helper
+    that retries ``layout.py open`` until one takes it (or a deadline passes)
+    and returns at once; the open is a no-op on a tab that is already there.
 
 ``bootstrap-skill``
     Stage the copy of the update-self skill (SKILL.md, references, scripts) that
@@ -66,17 +76,48 @@ validation depth, reveal by change class). This script owns the parts that are
     possibly-stale local copy. ``differs`` gates only which SKILL.md prose the
     lead follows, not the path.
 
+``apply``
+    Land a prepared merge and make the live workspace consistent with it, as
+    one atomic, idempotent, rollback-on-failure motion inside a single
+    near-OOM-exempt process: merge (fast-forward for update-self, ordinary for
+    update-system-interface), pre-apply state snapshots, dependency refresh,
+    provisioner run, frontend build (or the worker's already-built bundle),
+    pre-flight, restart, health probes, the VERSION_HISTORY.md ledger entry,
+    and ``env-converge upgrade``. On any failure it reverts the entire merge
+    as a forward revert commit and restores the pre-apply snapshots -- plain
+    file copies needing no network, no package manager, and no working
+    ``mngr``. A full-information marker under ``data/.state/update-apply/``
+    makes an interruption detectable: written before the merge, updated per
+    phase, cleared on every exit path. Exit codes: 0 applied / 2 rolled back /
+    3 emergency / 1 precondition (nothing changed).
+
+``recover``
+    Roll an interrupted apply back from its marker. ``--if-stale`` is the
+    unattended guard (bootstrap at boot, the recovery cron every ~5 minutes):
+    it acts only when the marker's recorded process is dead and the marker has
+    gone a grace period without an update, and silently exits 0 in every
+    normal state. ``--no-restart`` is the boot path (nothing is running yet,
+    so disk state is the whole job). Bare ``recover`` is the explicit
+    agent-driven rollback. Exit codes: 0 rolled back (or nothing to do) /
+    1 the tree restore failed, marker kept for the next pass / 3 the tree is
+    rolled back but the pre-apply state or health could not be put back
+    (emergency recorded, marker cleared).
+
 Impact analysis -- which services and skills depend on a changed file -- is
 deliberately NOT scripted here: it requires open-ended exploration (imports,
 shelled-out scripts, API-surface coupling) that a deterministic helper would
 only pretend to cover. The worker reference owns that recipe.
 
-The git-touching subcommands are thin wrappers over the pure functions below
-(``pick_latest_stable_tag``, ``resolve_target``, ``classify_path``,
-``classify_merge``), which carry all the logic and are covered by
-``update_self_test.py``. ``fetch_app_template_ref`` is the one impure helper, kept
-to the narrow job of turning a ``latchkey curl`` result into either a ref string or
-a ``CeilingUnavailableError``.
+This file is the command line: argument parsing and the git-touching wrappers.
+The logic lives in the sibling modules, imported by name from this directory
+(the whole ``scripts/`` directory is staged and run as one unit):
+``update_target`` (which ref to update to), ``update_classification`` (change
+classes and the apply plan), ``update_apply_contract`` (every path, phase,
+verdict and record the Minds app, bootstrap and the system interface read),
+``update_layout``, ``update_banding``, ``update_runtime``,
+``update_environment``, ``update_probes``, ``update_ledger``, and
+``update_apply`` (the apply and recover orchestration). All of it is covered
+by ``update_self_test.py``.
 """
 
 from __future__ import annotations
@@ -84,578 +125,42 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import re
+import os
 import shutil
 import subprocess
 import sys
 import tarfile
-import tempfile
+import time
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Callable, Sequence
+
+from update_apply import apply_update, recover
+from update_apply_contract import (
+    DEFAULT_RECOVER_GRACE_SECONDS,
+    ENV_DRI_AGENT,
+    RUN_VERDICTS,
+    RunStatus,
+    read_run_status,
+    run_status_path,
+    write_run_status,
+)
+from update_banding import protect_from_memory_shed
+from update_classification import classify_merge
+from update_runtime import ApplyPreconditionError, HttpClient, Runner, Spawner
+from update_target import (
+    CeilingUnavailableError,
+    NoUpdateTargetError,
+    already_current_message,
+    fetch_app_template_ref,
+    is_held_back_by_ceiling,
+    pick_latest_stable_tag,
+    resolve_target,
+)
 
 # The repo-relative directory holding the update-self skill (SKILL.md,
-# references/, system/scripts/). Used by ``bootstrap-skill`` to extract the target
+# references/, scripts/). Used by ``bootstrap-skill`` to extract the target
 # ref's own copy of the flow.
 SKILL_DIR_REL = ".agents/skills/update-self"
-
-# --- Target resolution -----------------------------------------------------
-
-# A released minds version tag, e.g. ``minds-v0.3.7`` (stable) or
-# ``minds-v0.3.7-rc1`` (a release candidate -- a prerelease we never default to).
-_TAG_RE = re.compile(r"^minds-v(\d+)\.(\d+)\.(\d+)(?:-(?P<pre>.+))?$")
-
-
-class NoUpdateTargetError(ValueError):
-    """Raised when no ref to update to could be chosen.
-
-    A refusal, not a fault: the workspace is fine, there is simply nothing it may
-    update to right now. Distinct from a plain ``ValueError`` so the CLI can render
-    this case as a one-line explanation and let a genuine bug keep its traceback.
-    """
-
-
-class ResolvedTarget(NamedTuple):
-    """The ref the update merges in, plus a coarse ``kind`` for the caller's log.
-
-    ``kind`` is ``tag`` (a resolved ``minds-v*`` release), ``branch`` (``main``),
-    or ``ref`` (any other override passed straight through for git to validate).
-
-    ``ceiling`` is the template ref the app reported, passed through as given --
-    it caps only insofar as it parses as a release, so a dev build's branch name
-    is carried here and caps nothing. ``None`` means no ceiling was supplied at
-    all, which only a direct caller does. ``exceeds_ceiling`` marks an override the
-    ceiling could not vouch for: newer than the app, or a branch/commit carrying no
-    version to compare; the default (no-override) path never sets it.
-    """
-
-    ref: str
-    kind: str
-    ceiling: str | None = None
-    exceeds_ceiling: bool = False
-
-
-class Version(NamedTuple):
-    """A ``minds-v*`` tag's version, ordered by plain ``<`` the way semver orders.
-
-    **Field order is the precedence order** -- comparison is tuple comparison, so
-    reordering these silently changes which release outranks which.
-
-    ``release_rank`` is 0 for a prerelease and 1 for the release it precedes, so
-    ``0.4.0-rc1 < 0.4.0``; ``prerelease`` then breaks ties among prereleases of
-    the same version. It has to be a *field* rather than a property derived from an
-    empty ``prerelease``: only a field participates in the comparison.
-    """
-
-    major: int
-    minor: int
-    patch: int
-    release_rank: int
-    prerelease: tuple[tuple[int, int, str], ...]
-
-    @property
-    def is_stable(self) -> bool:
-        """Whether this is a released version rather than a prerelease of one."""
-        return not self.prerelease
-
-
-def _prerelease_sort_key(pre: str) -> tuple[tuple[int, int, str], ...]:
-    """Order a prerelease's dot-separated identifiers the way semver does.
-
-    Numeric identifiers compare numerically and rank below alphanumeric ones, so
-    ``rc.2`` follows ``rc.1`` rather than sorting lexically (where ``rc.10`` would
-    land before ``rc.2``). Each identifier becomes ``(is_alphanumeric, number,
-    text)`` so a single tuple comparison covers both kinds.
-
-    "Numeric" is ``isdecimal``, semver's ``[0-9]+``, and not ``isdigit``, which
-    also admits superscripts and other digits ``int()`` refuses to convert.
-    """
-    identifiers: list[tuple[int, int, str]] = []
-    for identifier in pre.split("."):
-        if identifier.isdecimal():
-            identifiers.append((0, int(identifier), ""))
-        else:
-            identifiers.append((1, 0, identifier))
-    return tuple(identifiers)
-
-
-def parse_version(tag: str) -> Version | None:
-    """Return the :class:`Version` of any ``minds-v*`` tag, prerelease included.
-
-    Prereleases parse because a *ceiling* is a different question from a
-    *candidate*: an app on ``minds-v0.4.0-rc1`` has a real version and should cap
-    its workspaces. Candidate selection asks the separate question via
-    :attr:`Version.is_stable`, so a prerelease still never wins the default
-    "latest stable" pick.
-
-    Ordering follows semver: a prerelease sorts below its own release, so a ceiling
-    of ``minds-v0.4.0-rc1`` admits ``minds-v0.3.9`` but not ``minds-v0.4.0``.
-
-    Returns ``None`` only for something that is not a release tag at all (a
-    branch name, a bare commit) -- there is genuinely no version to compare.
-    """
-    match = _TAG_RE.match(tag.strip())
-    if match is None:
-        return None
-    pre = match.group("pre")
-    return Version(
-        major=int(match.group(1)),
-        minor=int(match.group(2)),
-        patch=int(match.group(3)),
-        release_rank=0 if pre is not None else 1,
-        prerelease=_prerelease_sort_key(pre) if pre is not None else (),
-    )
-
-
-def pick_latest_stable_tag(
-    tags: Sequence[str], ceiling: str | None = None
-) -> str | None:
-    """Return the highest-versioned stable ``minds-v*`` tag, or ``None`` if none.
-
-    Prereleases (``minds-v*-rc*``) and non-matching tags are ignored. Selection is
-    by semantic version, not lexical order, so ``minds-v0.3.10`` beats
-    ``minds-v0.3.9``.
-
-    ``ceiling`` bounds the selection to tags at or below it, so a workspace never
-    picks a template newer than the app driving it. It is parsed with
-    :func:`parse_version`, so an app on a *prerelease* caps just as well as one on
-    a stable release; only a ceiling that is not a release tag at all (a dev app
-    reporting a branch) means no ceiling.
-
-    Candidates are still filtered to *stable* tags: capping by a prerelease does
-    not make one selectable.
-    """
-    ceiling_version = parse_version(ceiling) if ceiling is not None else None
-    stable = [
-        (version, tag)
-        for tag in tags
-        if (version := parse_version(tag)) is not None
-        and version.is_stable
-        and (ceiling_version is None or version <= ceiling_version)
-    ]
-    if not stable:
-        return None
-    return max(stable, key=lambda item: item[0])[1]
-
-
-def is_held_back_by_ceiling(
-    *,
-    resolved_ref: str,
-    latest_available: str | None,
-    ceiling: str | None,
-    has_override: bool,
-) -> bool:
-    """Whether the ceiling -- and not the user -- is why a newer release was not taken.
-
-    Only true when the flow chose the target itself. With an explicit override the
-    user picked the ref, so a gap between it and ``latest_available`` is their own
-    doing; reporting "your app held this back" there blames the app for the user's
-    choice (an ``--override`` to an *older* tag would otherwise trip it every time).
-    """
-    if has_override or ceiling is None or latest_available is None:
-        return False
-    return latest_available != resolved_ref
-
-
-def _is_within_ceiling(ref: str, ceiling: str | None) -> bool:
-    """Whether ``ref`` is provably a release at or below ``ceiling``.
-
-    Both sides go through :func:`parse_version`, so a prerelease on either side
-    compares properly rather than being written off. False for something with no
-    version at all -- a branch or a bare commit -- where the ceiling genuinely
-    cannot vouch for the ref. True when there is no ceiling to enforce.
-    """
-    ceiling_version = parse_version(ceiling) if ceiling is not None else None
-    if ceiling_version is None:
-        return True
-    ref_version = parse_version(ref)
-    return ref_version is not None and ref_version <= ceiling_version
-
-
-def resolve_target(
-    override: str | None,
-    tags: Sequence[str],
-    remote: str = "upstream",
-    ceiling: str | None = None,
-) -> ResolvedTarget:
-    """Resolve the update target ref.
-
-    With no override, pick the latest stable ``minds-v*`` tag at or below
-    ``ceiling`` (raising if the upstream exposes none). An override of ``main``
-    selects the template's default branch, **remote-qualified** to
-    ``<remote>/main`` -- a bare ``main`` would resolve to the *local* branch, which
-    ``git fetch upstream`` never advances, so the pull would merge stale local
-    code. A tag, by contrast, lands in the local tag namespace on fetch and
-    resolves by its bare name, so a known-tag override is returned as-is. Any
-    other override is passed through verbatim as a ``ref`` for git to validate at
-    fetch time (so a user can pin an arbitrary commit or a ref they've already
-    qualified themselves).
-
-    An override is never silently blocked -- the user asked for it by name -- but
-    one that is not provably at or below ``ceiling`` comes back with
-    ``exceeds_ceiling`` set, which the skill turns into an explicit user
-    confirmation before anything is merged.
-    """
-    if override is None:
-        latest = pick_latest_stable_tag(tags, ceiling=ceiling)
-        if latest is None:
-            raise NoUpdateTargetError(_no_target_message(tags, ceiling))
-        return ResolvedTarget(latest, "tag", ceiling, False)
-    exceeds = not _is_within_ceiling(override, ceiling)
-    if override == "main":
-        return ResolvedTarget(f"{remote}/{override}", "branch", ceiling, exceeds)
-    if override in set(tags):
-        return ResolvedTarget(override, "tag", ceiling, exceeds)
-    return ResolvedTarget(override, "ref", ceiling, exceeds)
-
-
-def _no_target_message(tags: Sequence[str], ceiling: str | None) -> str:
-    """Explain why no default target could be picked, distinguishing the two causes."""
-    if ceiling is not None and pick_latest_stable_tag(tags) is not None:
-        return (
-            f"every stable minds-v* tag upstream is newer than this workspace's minds "
-            f"app ({ceiling}); update the app first, or pass an explicit --override "
-            f"to update past it anyway"
-        )
-    return (
-        "no stable minds-v* tag found upstream; pass an explicit "
-        "--override (a tag, 'main', or a ref) to update anyway"
-    )
-
-
-def already_current_message(
-    ref: str, latest_available: str | None, ceiling: str | None, is_held_back: bool
-) -> str:
-    """Explain that the default target is already merged, naming the ceiling when it is why.
-
-    The two cases read very differently to a user and need different next steps.
-    Held back: a newer release exists and the app is the only thing standing
-    between them and it, so the message has to say so -- updating the app is the
-    action that unblocks them. Not held back: the workspace is simply current,
-    and there is nothing to do.
-    """
-    if is_held_back:
-        return (
-            f"this workspace is already on {ref}, the newest release your minds app "
-            f"({ceiling}) supports; {latest_available} is available upstream but needs a "
-            f"newer app -- update the app first, or pass an explicit --override to update "
-            f"past it anyway"
-        )
-    return f"this workspace is already on {ref}, the newest release upstream; nothing to update"
-
-
-# --- The app's update ceiling ----------------------------------------------
-
-# The minds app's version route, addressed through the latchkey gateway's
-# ``minds-api-proxy`` on the reserved gateway-self host. Allowed by the agent
-# permissions baseline (``minds-app-version-read``), so this needs no grant and
-# never raises a permission dialog -- which matters because update-self resolves
-# its target from a background worker, with nobody watching to approve one.
-_MINDS_APP_VERSION_URL = "http://latchkey-self.invalid/minds-api-proxy/api/v1/app/version"
-
-# Bounds the gateway round-trip, at the house network default (the style guide's
-# 60s, matching this repo's other ``latchkey curl``, ``github_sync``'s
-# ``_LATCHKEY_CURL_TIMEOUT_SECONDS``).
-_APP_VERSION_TIMEOUT_SECONDS = 60
-
-# Statuses that mean "this app predates the version route", not "something went
-# wrong". 404 is the obvious one; 403 is in fact the *likelier* of the two, since
-# the route and the gateway permission that reaches it (``minds-app-version-read``)
-# ship in the same release, so an app old enough to lack the route also lacks the
-# grant -- and the gateway denies an ungranted request before the app ever sees it.
-_APP_TOO_OLD_STATUSES = frozenset({"403", "404"})
-
-
-class CeilingUnavailableError(Exception):
-    """Raised when the minds app's update ceiling could not be read.
-
-    Never downgraded to "no ceiling": an app that cannot answer is very often an
-    app too old to *have* this route, which is exactly the case the ceiling
-    protects against.
-    """
-
-
-def fetch_app_template_ref(url: str = _MINDS_APP_VERSION_URL) -> str:
-    """Return the newest workspace-template ref the running minds app supports.
-
-    Goes through ``latchkey curl``, which injects the gateway credentials and
-    passes every other argument (and curl's exit code) straight through. Each
-    failure mode is reported distinctly, because the user's next action differs:
-    a transport failure is worth retrying, an :data:`_APP_TOO_OLD_STATUSES`
-    answer (403 or 404) means the app must be updated first, and any other bad
-    status or malformed body is a bug worth reporting.
-    """
-    with tempfile.NamedTemporaryFile(suffix=".json") as body_file:
-        try:
-            result = subprocess.run(
-                [
-                    "latchkey",
-                    "curl",
-                    "--silent",
-                    "--show-error",
-                    "--output",
-                    body_file.name,
-                    "--write-out",
-                    "%{http_code}",
-                    url,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=_APP_VERSION_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise CeilingUnavailableError(
-                f"could not reach the minds app to read its version ({e}). The app may be "
-                f"closed or the gateway down; retry once it is running."
-            ) from e
-        if result.returncode != 0:
-            raise CeilingUnavailableError(
-                f"could not reach the minds app to read its version (latchkey curl exited "
-                f"{result.returncode}: {result.stderr.strip()}). The app may be closed or the "
-                f"gateway down; retry once it is running."
-            )
-        status = result.stdout.strip()
-        body = Path(body_file.name).read_text()
-
-    if status in _APP_TOO_OLD_STATUSES:
-        raise CeilingUnavailableError(
-            "this workspace's minds app is too old to report its version (it answered "
-            f"HTTP {status} for {url}), so there is no way to tell how far this workspace "
-            "may safely update. Update the minds app itself first."
-        )
-    if status != "200":
-        raise CeilingUnavailableError(
-            f"the minds app returned HTTP {status} for its version ({body.strip()[:200]})."
-        )
-    try:
-        template_ref = json.loads(body)["workspace_template_ref"]
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        raise CeilingUnavailableError(
-            f"the minds app's version response could not be parsed ({e}): {body.strip()[:200]}"
-        ) from e
-    if not isinstance(template_ref, str) or not template_ref:
-        raise CeilingUnavailableError(
-            f"the minds app reported an empty workspace_template_ref: {body.strip()[:200]}"
-        )
-    return template_ref
-
-
-# --- Change classification -------------------------------------------------
-
-CLASS_SYSTEM_INTERFACE = "system_interface"
-CLASS_SERVICE = "service"
-CLASS_EDITABLE_TOOL = "editable_tool"
-CLASS_SHARED_RUNTIME = "shared_runtime"
-CLASS_PROVISIONER = "provisioner"
-CLASS_DOCKERFILE = "dockerfile"
-CLASS_DOCS = "docs"
-CLASS_OTHER = "other"
-
-# Files whose effects land at image-build / workspace-create / first-boot
-# provisioning time -- the pinned global toolchain and the create/agent config --
-# rather than at runtime. A change to one never reaches a *live* workspace by
-# restarting a service (nothing running imports it): it needs the provisioning
-# step re-run live (these scripts are idempotent) or a workspace rebuild. Split
-# out of ``shared_runtime``/``other`` so the reveal can flag that downstream
-# impact instead of concluding "nothing to reveal". See the skill's
-# ``provisioner`` reveal class.
-_PROVISIONER_SCRIPTS = frozenset(
-    {
-        "system/scripts/setup_system.sh",  # pinned global toolchain (latchkey, uv, claude, ...)
-        "system/scripts/install_secret_scanners.sh",  # pinned global scanner binaries
-        "system/scripts/_provision_guard.sh",  # the guard that gates the above
-    }
-)
-
-
-def _is_provisioner(path: str) -> bool:
-    """Whether ``path`` shapes how the workspace/agent is *provisioned*.
-
-    The pinned-toolchain scripts (:data:`_PROVISIONER_SCRIPTS`) plus everything
-    under ``.mngr/`` -- the ``mngr create`` defaults, provider blocks, and the
-    agent Claude-version pin that provisioning applies to every new workspace.
-    """
-    return path in _PROVISIONER_SCRIPTS or path.startswith(".mngr/")
-
-
-# Basenames whose change means a dependency manifest moved, so the editable
-# install / build needs its env refreshed rather than just picking up new source.
-_MANIFEST_BASENAMES = frozenset(
-    {"pyproject.toml", "uv.lock", "package.json", "package-lock.json"}
-)
-
-
-class PathClass(NamedTuple):
-    """How one changed path should be revealed and validated.
-
-    ``reveal_class`` selects the go-live action; ``project`` is the pytest
-    project whose suite covers the path (``.`` = the root workspace,
-    ``system/apps/system_interface`` and ``system/vendor/mngr`` run their own suites);
-    ``is_manifest`` flags a dependency-manifest change that needs an env refresh.
-    """
-
-    reveal_class: str
-    project: str
-    is_manifest: bool
-
-
-def _project_for_path(path: str) -> str:
-    """Return the pytest project root that owns ``path``.
-
-    Only ``system/apps/system_interface`` and ``system/vendor/mngr`` carry their own pytest
-    config (the root config ignores them); everything else -- libs, scripts,
-    ``.agents`` -- is covered by the root suite, reported as ``.``.
-    """
-    if path.startswith("system/apps/system_interface/"):
-        return "system/apps/system_interface"
-    if path.startswith("system/vendor/mngr/"):
-        return "system/vendor/mngr"
-    return "."
-
-
-def classify_path(path: str) -> PathClass:
-    """Map a repo-relative path to its reveal class, test project, and manifest flag.
-
-    The classes drive reveal-by-class in the skill:
-
-    - ``system_interface`` -- ``system/apps/system_interface/**``; revealed via
-      ``reveal_system_interface.py`` (which owns its own manifest refresh).
-    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``; applied by
-      restarting the services agent (``mngr start --restart system-services``,
-      then ``system/scripts/refresh_workspace_view.py`` to rebuild the user's
-      view, which the restart alone leaves showing the previous build).
-    - ``editable_tool`` -- ``system/vendor/mngr/**``; ``.py`` picked up live, a manifest
-      change needs ``uv sync --all-packages`` / an editable reinstall.
-    - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
-      ``system/services/**``, ``system/apps/**``, and ``.agents/**``: may be a live runtime dependency of
-      a service or a workspace-added skill or app, so it needs the worker's
-      impact analysis before it can be called a silent merge.
-    - ``provisioner`` -- the pinned-toolchain scripts and the ``.mngr/`` create
-      config (see :func:`_is_provisioner`); shapes image-build / create-time
-      provisioning, so a change is re-run live (idempotent scripts) or flagged
-      for a workspace rebuild, never revealed by a service restart.
-    - ``dockerfile`` -- ``system/Dockerfile``; split by hunk into live-applicable
-      vs rebuild-only by worker judgement.
-    - ``docs`` -- a ``README.md`` or a ``changelog/*.md`` entry wherever it lives,
-      ``CLAUDE.md``, and any other ``*.md`` outside the prefixes above. A
-      ``SKILL.md`` under ``.agents/`` is *not* docs: a skill's prose is what an
-      agent runs, so it stays ``shared_runtime``.
-    - ``other`` -- anything else.
-    """
-    is_manifest = Path(path).name in _MANIFEST_BASENAMES
-    project = _project_for_path(path)
-
-    # A README or a per-PR changelog entry is documentation wherever it lives --
-    # without this, one under a service prefix (e.g. ``system/libs/bootstrap/``)
-    # would inherit that prefix's reveal class and trigger a pointless restart.
-    # Every release ships entries under ``.agents/changelog/``, so this is the
-    # common case rather than a corner. Matched one level deep and on ``.md``
-    # only (the bucket glob ``**/changelog/*``), so an *app* named ``changelog``
-    # keeps its own class.
-    is_changelog_entry = Path(path).parent.name == "changelog" and path.endswith(".md")
-    if Path(path).name == "README.md" or is_changelog_entry:
-        return PathClass(CLASS_DOCS, project, is_manifest)
-    # Provisioning files are matched before the generic ``system/scripts/`` and
-    # catch-all rules below: a toolchain script lives under ``system/scripts/`` (would
-    # otherwise read as ``shared_runtime``) and ``.mngr/settings.toml`` would
-    # otherwise fall through to ``other`` -- either way the reveal would miss its
-    # build/create-time impact.
-    if _is_provisioner(path):
-        return PathClass(CLASS_PROVISIONER, project, is_manifest)
-    if path.startswith("system/apps/system_interface/"):
-        return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
-    if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
-        return PathClass(CLASS_SERVICE, project, is_manifest)
-    if path.startswith("system/vendor/mngr/"):
-        return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)
-    if path == "system/Dockerfile":
-        return PathClass(CLASS_DOCKERFILE, project, is_manifest)
-    if (
-        path.startswith("system/scripts/")
-        or path.startswith(".agents/")
-        or path.startswith("system/libs/")
-        or path.startswith("system/services/")
-        or path.startswith("system/apps/")
-    ):
-        return PathClass(CLASS_SHARED_RUNTIME, project, is_manifest)
-    if path == "CLAUDE.md" or "/changelog/" in path or path.endswith(".md"):
-        return PathClass(CLASS_DOCS, project, is_manifest)
-    return PathClass(CLASS_OTHER, project, is_manifest)
-
-
-class MergeClassification(NamedTuple):
-    """The upstream-changed files split by disposition, with per-file class info.
-
-    ``merged`` are files where local also diverged (reconcile + validate);
-    ``pulled_in`` are clean upstream arrivals local left untouched (trust, but
-    still apply). Each entry is a dict with ``path``, ``reveal_class``,
-    ``project``, ``is_manifest``, ``disposition``. The summary fields collect the
-    distinct reveal classes and the projects whose suites the merged set implies.
-
-    ``has_merge_work`` is true whenever the merged set is non-empty: any file
-    that diverged on both sides means real merge work happened (a conflict, or
-    git silently auto-merging both sides' edits), so the review gates must run.
-    An empty merged set makes this false, which permits -- but does not by
-    itself license -- skipping the gates: the worker must also establish that
-    no user-created code depends on anything the update changed, and that it
-    added no commits of its own on top of the merge. That last condition is
-    invisible here by construction -- the caller passes the *pre-merge* local
-    ref, so nothing the worker committed afterwards is in either diff.
-    """
-
-    merged: list[dict[str, object]]
-    pulled_in: list[dict[str, object]]
-    reveal_classes_merged: list[str]
-    reveal_classes_pulled_in: list[str]
-    projects_to_validate: list[str]
-    has_merge_work: bool
-
-
-def _entry(path: str, disposition: str) -> dict[str, object]:
-    info = classify_path(path)
-    return {
-        "path": path,
-        "reveal_class": info.reveal_class,
-        "project": info.project,
-        "is_manifest": info.is_manifest,
-        "disposition": disposition,
-    }
-
-
-def classify_merge(
-    upstream_changed: Sequence[str], local_changed: Sequence[str]
-) -> MergeClassification:
-    """Split the upstream-changed files into the merged vs pulled-in sets.
-
-    ``upstream_changed`` is the set of files upstream changed relative to the
-    merge base; ``local_changed`` the set the local branch changed relative to
-    the same base. A file in both diverged on both sides -> **merged** (validate);
-    a file only upstream changed is a clean **pulled-in** arrival (trust). Files
-    only *local* changed are not upstream updates at all and are ignored here.
-    """
-    local = set(local_changed)
-    merged: list[dict[str, object]] = []
-    pulled_in: list[dict[str, object]] = []
-    for path in sorted(set(upstream_changed)):
-        if path in local:
-            merged.append(_entry(path, "merged"))
-        else:
-            pulled_in.append(_entry(path, "pulled_in"))
-
-    def _distinct_classes(entries: list[dict[str, object]]) -> list[str]:
-        return sorted({str(entry["reveal_class"]) for entry in entries})
-
-    projects = sorted({str(entry["project"]) for entry in merged})
-    return MergeClassification(
-        merged=merged,
-        pulled_in=pulled_in,
-        reveal_classes_merged=_distinct_classes(merged),
-        reveal_classes_pulled_in=_distinct_classes(pulled_in),
-        projects_to_validate=projects,
-        has_merge_work=bool(merged),
-    )
-
-
-# --- git-touching CLI wrappers ---------------------------------------------
 
 
 def _git(args: Sequence[str], repo_root: Path) -> str:
@@ -746,6 +251,32 @@ def _cmd_resolve_target(args: argparse.Namespace) -> int:
 
 def _cmd_classify_merge(args: argparse.Namespace) -> int:
     repo_root = _repo_root(args)
+    # A --local that already contains --target is a degenerate invocation: the
+    # merge base collapses to the target itself, the "upstream changed" diff is
+    # empty, and an 800-file merge silently classifies as nothing at all. This
+    # happens when the guide's post-merge `--local HEAD^1` is re-run after any
+    # commit was added on top of the merge (HEAD^1 is then the merge commit,
+    # not the pre-merge local). Refuse loudly instead of printing the empty
+    # classification.
+    contains = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.target, args.local],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if contains.returncode not in (0, 1):
+        contains.check_returncode()
+    if contains.returncode == 0:
+        print(
+            f"error: --local ({args.local}) already contains --target "
+            f"({args.target}), so the merge base collapses to the target and "
+            "every upstream change would classify as empty. Did you mean the "
+            "merge commit's first parent? While HEAD is the merge commit that "
+            "is --local HEAD^1; after further commits on top, name the merge "
+            "commit itself (--local <merge-sha>^1).",
+            file=sys.stderr,
+        )
+        return 1
     base = args.base or _git(["merge-base", args.local, args.target], repo_root)
     upstream_changed = _list_names(
         _git(["diff", "--name-only", base, args.target], repo_root)
@@ -780,7 +311,10 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
     # Match every one of them at any depth with a single glob rather than one
     # dir alone, or the "what's new" digest silently drops everything landed
     # under the bucketed layout. Exclude the vendored subtree, which carries
-    # its own separate changelog system.
+    # its own separate changelog system. ``top`` anchors both pathspecs at the
+    # repository root: a git pathspec is otherwise relative to the cwd, so run
+    # from a subdirectory the glob matched nothing and the digest came back
+    # empty with no error.
     added = _list_names(
         _git(
             [
@@ -790,13 +324,86 @@ def _cmd_changelog_entries(args: argparse.Namespace) -> int:
                 args.base,
                 args.target,
                 "--",
-                ":(glob)**/changelog/*",
-                ":(exclude)system/vendor",
+                ":(top,glob)**/changelog/*",
+                ":(top,exclude)system/vendor",
             ],
             repo_root,
         )
     )
     print(json.dumps({"added": added}))
+    return 0
+
+
+# How long the detached helper keeps trying to place the tab. Generous enough
+# to cover a user arriving after a stopped machine's cold boot; past it the
+# app's own copy naming the tab is the fallback.
+SURFACE_CHAT_TAB_DEADLINE_SECONDS = 600.0
+
+SURFACE_CHAT_TAB_RETRY_SECONDS = 5.0
+
+
+def wait_and_open_chat_tab(
+    try_open: Callable[[], bool],
+    deadline_seconds: float,
+    retry_seconds: float,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Call ``try_open`` until it succeeds or the deadline passes; whether it did.
+
+    Stops on the first success: a tab is surfaced once, and re-opening it later
+    would yank a user who has since moved on back to it.
+    """
+    started_at = monotonic()
+    while True:
+        if try_open():
+            return True
+        if monotonic() - started_at >= deadline_seconds:
+            return False
+        sleep(retry_seconds)
+
+
+def _try_open_chat_tab(repo_root: Path, chat_name: str) -> bool:
+    result = subprocess.run(
+        [sys.executable, "system/scripts/layout.py", "open", f"chat:{chat_name}"],
+        cwd=repo_root,
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _cmd_surface_chat_tab(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    if args.wait:
+        return (
+            0
+            if wait_and_open_chat_tab(
+                lambda: _try_open_chat_tab(repo_root, args.name),
+                deadline_seconds=SURFACE_CHAT_TAB_DEADLINE_SECONDS,
+                retry_seconds=SURFACE_CHAT_TAB_RETRY_SECONDS,
+            )
+            else 1
+        )
+    # Detached so the lead's tool call returns now rather than after the user
+    # arrives: its own session, and no inherited stdio for the caller's shell
+    # to wait on.
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "surface-chat-tab",
+            "--name",
+            args.name,
+            "--repo-root",
+            str(repo_root),
+            "--wait",
+        ],
+        cwd=repo_root,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
     return 0
 
 
@@ -852,7 +459,7 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
 
     # Whether the ref's skill differs from the local working-tree copy. Let git
     # do the compare: ``git diff`` ignores untracked files, so the ``__pycache__/
-    # *.pyc`` that importing the script drops into ``system/scripts/`` never registers as
+    # *.pyc`` that importing the script drops into ``scripts/`` never registers as
     # a spurious difference. ``--quiet`` exits 0 if identical, 1 on any
     # difference; ``check_returncode`` surfaces any other code as a real git error.
     diff = subprocess.run(
@@ -869,6 +476,135 @@ def _cmd_bootstrap_skill(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _cmd_apply(args: argparse.Namespace) -> int:
+    return apply_update(
+        args.merge_ref,
+        _repo_root(args).resolve(),
+        ff_only=args.ff_only,
+        worker_bundle=args.worker_bundle,
+        target_ref=args.target_ref,
+        runner=Runner(),
+        http=HttpClient(),
+        spawner=Spawner(),
+    )
+
+
+def _cmd_run_status_start(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    chat_agent_name = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    if not chat_agent_name:
+        print(
+            f"error: no chat agent name: pass --chat or run with {ENV_DRI_AGENT} set.",
+            file=sys.stderr,
+        )
+        return 1
+    now = time.time
+    write_run_status(
+        RunStatus(
+            chat_agent_name=chat_agent_name,
+            started_at=now(),
+            updated_at=0.0,
+        ),
+        repo_root,
+        now,
+    )
+    print(f"Recorded the run's start for {chat_agent_name}.")
+    return 0
+
+
+def _cmd_run_status_verdict(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    # A verdict with no record of its own start still deserves one: the app
+    # can at least report how the run ended, and the env names the agent.
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.verdict = args.verdict
+    status.detail = args.detail
+    status.resulting_ref = args.resulting_ref
+    status.in_place_compatible_ref = args.in_place_compatible_ref
+    status.verdict_at = now()
+    # A verdict ends the run, so a hold it was recorded under ends with it,
+    # and so does the worker it had delegated to.
+    status.is_holding = False
+    status.hold_detail = ""
+    status.worker_agent_name = None
+    write_run_status(status, repo_root, now)
+    print(f"Recorded the {args.verdict} verdict.")
+    return 0
+
+
+def _run_status_for_recorder(
+    repo_root: Path, recorder: str, now: Callable[[], float]
+) -> RunStatus:
+    """The current run record if it is ``recorder``'s, else a fresh one under that name.
+
+    The app matches a record to a workspace's row by chat name, so writing
+    this pass's facts onto another pass's record would file them under a run
+    the app is not watching.
+    """
+    status = read_run_status(repo_root)
+    if status is not None and recorder and status.chat_agent_name != recorder:
+        sys.stderr.write(
+            f"warning: {run_status_path(repo_root)} records {status.chat_agent_name or '<unnamed>'}, "
+            f"not {recorder}; recording under {recorder} instead.\n"
+        )
+        status = None
+    if status is None:
+        status = RunStatus(
+            chat_agent_name=recorder,
+            started_at=now(),
+            updated_at=0.0,
+        )
+    return status
+
+
+def _cmd_run_status_delegate(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.worker_agent_name = args.worker
+    write_run_status(status, repo_root, now)
+    print(f"Recorded the hand-off to worker {args.worker}.")
+    return 0
+
+
+def _cmd_run_status_hold(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.is_holding = True
+    status.hold_detail = args.detail
+    write_run_status(status, repo_root, now)
+    print("Recorded the hold.")
+    return 0
+
+
+def _cmd_run_status_resume(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    status.is_holding = False
+    status.hold_detail = ""
+    write_run_status(status, repo_root, now)
+    print("Cleared the hold.")
+    return 0
+
+
+def _cmd_recover(args: argparse.Namespace) -> int:
+    return recover(
+        _repo_root(args).resolve(),
+        if_stale=args.if_stale,
+        grace_seconds=args.grace_seconds,
+        no_restart=args.no_restart,
+        runner=Runner(),
+        http=HttpClient(),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -946,6 +682,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     changelog_parser.add_argument("--target", required=True, help="Target ref.")
     changelog_parser.set_defaults(func=_cmd_changelog_entries)
 
+    surface_parser = sub.add_parser(
+        "surface-chat-tab",
+        help="Open this run's own chat tab once a workspace client can show it.",
+        parents=[common],
+    )
+    surface_parser.add_argument(
+        "--name", required=True, help="This run's chat agent name ($MNGR_AGENT_NAME)."
+    )
+    surface_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Run the retry loop in this process (what the detached helper does) instead of detaching one.",
+    )
+    surface_parser.set_defaults(func=_cmd_surface_chat_tab)
+
     bootstrap_parser = sub.add_parser(
         "bootstrap-skill",
         help="Extract the target ref's own update-self skill into a staging dir "
@@ -965,16 +716,210 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     bootstrap_parser.set_defaults(func=_cmd_bootstrap_skill)
 
+    apply_parser = sub.add_parser(
+        "apply",
+        help="Land a prepared merge and make the live workspace consistent with "
+        "it: one atomic, idempotent, rollback-on-failure motion (merge, "
+        "snapshots, env refresh, provisioner, build, pre-flight, restart, "
+        "probes, ledger, env-converge).",
+        parents=[common],
+    )
+    apply_parser.add_argument(
+        "--merge-ref",
+        required=True,
+        help="The worker branch / prepared merge commit to land.",
+    )
+    apply_parser.add_argument(
+        "--ff-only",
+        action="store_true",
+        help="Require a fast-forward landing (the update-self flow; the worker "
+        "branched off this HEAD). Default is an ordinary merge "
+        "(update-system-interface).",
+    )
+    apply_parser.add_argument(
+        "--worker-bundle",
+        default=None,
+        help="Path to the worker's already-built static/ bundle (the artifact "
+        "the worker validated); a live build is the fallback.",
+    )
+    apply_parser.add_argument(
+        "--target-ref",
+        default=None,
+        help="The release this update lands (update-self mode): enables the "
+        "VERSION_HISTORY.md ledger entry and the post-success "
+        "`env-converge upgrade`.",
+    )
+    apply_parser.set_defaults(func=_cmd_apply)
+
+    recover_parser = sub.add_parser(
+        "recover",
+        help="Roll back an interrupted apply from its marker (dependency-free: "
+        "git restore + snapshot copies).",
+        parents=[common],
+    )
+    recover_parser.add_argument(
+        "--if-stale",
+        action="store_true",
+        help="Unattended guard (boot/cron): act only when the marker's process "
+        "is dead and the marker is older than the grace period; silently "
+        "exit 0 in every normal state.",
+    )
+    recover_parser.add_argument(
+        "--grace-seconds",
+        type=float,
+        default=DEFAULT_RECOVER_GRACE_SECONDS,
+        help="How long a marker must have gone without an update before "
+        "--if-stale acts (default: %(default)s).",
+    )
+    recover_parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="Boot path: restore disk state only, without service restarts or "
+        "health probes (services boot fresh from the restored state).",
+    )
+    recover_parser.set_defaults(func=_cmd_recover)
+
+    run_status_parser = sub.add_parser(
+        "run-status",
+        help="Record this run for the Minds app (data/.state/update-apply/run.json).",
+        parents=[common],
+    )
+    run_status_sub = run_status_parser.add_subparsers(
+        dest="run_status_command", required=True
+    )
+    start_parser = run_status_sub.add_parser(
+        "start",
+        help="Record that a run has begun, overwriting the previous run's record.",
+        parents=[common],
+    )
+    start_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    start_parser.set_defaults(func=_cmd_run_status_start)
+    verdict_parser = run_status_sub.add_parser(
+        "verdict",
+        help="Record the run's one terminal verdict onto the current record.",
+        parents=[common],
+    )
+    verdict_parser.add_argument(
+        "verdict",
+        choices=RUN_VERDICTS,
+        help="How the run ended.",
+    )
+    verdict_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    verdict_parser.add_argument(
+        "--detail",
+        default="",
+        help="One plain-language line for the Minds app's modal.",
+    )
+    verdict_parser.add_argument(
+        "--resulting-ref",
+        default="",
+        help="The ref the workspace is on now (success verdicts).",
+    )
+    verdict_parser.add_argument(
+        "--in-place-compatible-ref",
+        default="",
+        help="On REFUSED/NEEDS_RECREATION: the newest ref that could still be "
+        "applied in place, when one exists.",
+    )
+    verdict_parser.set_defaults(func=_cmd_run_status_verdict)
+    delegate_parser = run_status_sub.add_parser(
+        "delegate",
+        help="Record the background worker this run has handed its work to, so "
+        "the app reads the worker's liveness while this chat waits on it.",
+        parents=[common],
+    )
+    delegate_parser.add_argument(
+        "worker",
+        help="The worker agent's name (as `mngr list` shows it).",
+    )
+    delegate_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    delegate_parser.set_defaults(func=_cmd_run_status_delegate)
+    hold_parser = run_status_sub.add_parser(
+        "hold",
+        help="Record that the run has stopped to ask the user something, and what.",
+        parents=[common],
+    )
+    hold_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    hold_parser.add_argument(
+        "--detail",
+        default="",
+        help="One plain-language line naming what the run is waiting on.",
+    )
+    hold_parser.set_defaults(func=_cmd_run_status_hold)
+    resume_parser = run_status_sub.add_parser(
+        "resume",
+        help="Clear the hold: the user answered and the run is moving again.",
+        parents=[common],
+    )
+    resume_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    resume_parser.set_defaults(func=_cmd_run_status_resume)
+
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (CeilingUnavailableError, NoUpdateTargetError) as e:
+    except (CeilingUnavailableError, NoUpdateTargetError, ApplyPreconditionError) as e:
         # These carry the "why you cannot update right now" explanation the lead
         # relays to the user, so print the message alone: a traceback would bury it
         # and read as a crash rather than a refusal.
         print(f"error: {e}", file=sys.stderr)
         return 1
+    except subprocess.CalledProcessError as e:
+        print(f"error: git command failed: {e}", file=sys.stderr)
+        return 1
+
+
+def _shed_protection_target(argv: Sequence[str]) -> Path | None:
+    """The repo root to band for when ``argv`` names apply/recover, else None.
+
+    Only those two band themselves: they are the motions that can be
+    interrupted half-way through replacing what the workspace runs, and the
+    ones holding the only copies of what it ran before. A crude parse rather
+    than argparse, because banding must happen before ``main`` does anything.
+    """
+    tokens = list(argv)
+    repo_root = Path.cwd()
+    subcommand: str | None = None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--repo-root" and index + 1 < len(tokens):
+            repo_root = Path(tokens[index + 1])
+            index += 2
+            continue
+        if token.startswith("--repo-root="):
+            repo_root = Path(token.split("=", 1)[1])
+            index += 1
+            continue
+        if subcommand is None and not token.startswith("-"):
+            subcommand = token
+        index += 1
+    if subcommand in ("apply", "recover"):
+        return repo_root
+    return None
 
 
 if __name__ == "__main__":
+    _banding_root = _shed_protection_target(sys.argv[1:])
+    if _banding_root is not None:
+        protect_from_memory_shed(_banding_root.resolve())
     sys.exit(main())

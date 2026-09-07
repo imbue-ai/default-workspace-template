@@ -9,7 +9,11 @@ from __future__ import annotations
 from typing import Any
 
 from imbue.system_interface.harnesses.codex.session_parser import _labelled_tool_call
+from imbue.system_interface.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
+from imbue.system_interface.harnesses.codex.session_parser import parse_line_detail
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines
+from imbue.system_interface.harnesses.codex.session_parser import parse_reasoning_detail
+from imbue.system_interface.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.system_interface.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
 
 
@@ -232,11 +236,9 @@ def test_failed_script_output_sets_is_error() -> None:
     assert parse_lines(ok, 2, name_map)[0]["is_error"] is False
 
 
-def test_labels_read_untruncated_input() -> None:
-    """A patch whose apply_patch call sits past the 200-char preview still labels as the
-    edit it is (labelled off the raw input, not the clipped preview), and its body is
-    kept whole for the diff view."""
-    # A comment prefix that pushes the apply_patch call + header past the 200-char preview.
+def test_labels_read_the_full_input() -> None:
+    """A patch whose apply_patch call sits deep in a long program still labels as the edit
+    it is: labels always derive from the FULL input (which itself never rides the event)."""
     prefix = "// " + "x" * 250 + "\n"
     js = f"{prefix}await tools.apply_patch(`*** Begin Patch\n*** Add File: newfile.py\n+print(1)\n*** End Patch`);"
     call = {
@@ -245,15 +247,15 @@ def test_labels_read_untruncated_input() -> None:
         "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
     }
     tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
-    # Labelled off the raw body: Add File -> Write/Creating (a truncated preview would
-    # have shown neither call nor header, falling to the generic "Tool: Code").
     assert tc["header_label"] == "Tool: Write"
-    # Patch body kept whole.
-    assert tc["input_preview"] == js
+    # Payload-free wire: the input never rides the event; its size drives the expand.
+    assert "input_preview" not in tc
+    assert tc["input_chars"] == len(js)
 
 
-def test_tk_command_preview_is_kept_whole() -> None:
-    """A tk lifecycle command survives truncation so the step timeline reads the whole plan."""
+def test_tk_command_is_stamped_resident() -> None:
+    """A tk lifecycle command is stamped whole so the step timeline reads the whole plan
+    without fetching the input."""
     js = 'await tools.exec_command({"cmd":"tk start wor-step-abc"})' + "x" * 300
     call = {
         "timestamp": "t",
@@ -261,11 +263,11 @@ def test_tk_command_preview_is_kept_whole() -> None:
         "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
     }
     tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
-    assert tc["input_preview"] == js
+    assert tc["tk_command"] == "tk start wor-step-abc"
 
 
-def test_ordinary_input_is_still_truncated() -> None:
-    """A normal (non-tk, non-patch) exec input_preview is still capped."""
+def test_detail_reconstructs_the_full_input_and_output() -> None:
+    """The detail parser hands back the whole payloads the resident events omit."""
     js = 'await tools.exec_command({"cmd":"echo ' + "a" * 500 + '"})'
     call = {
         "timestamp": "t",
@@ -273,8 +275,37 @@ def test_ordinary_input_is_still_truncated() -> None:
         "payload": {"type": "function_call", "call_id": "c1", "name": "exec", "arguments": js},
     }
     tc = parse_lines(call, 1, {})[0]["tool_calls"][0]
-    assert tc["input_preview"].endswith("...")
-    assert len(tc["input_preview"]) == 203
+    assert "input_preview" not in tc
+    detail = parse_line_detail(call, 1)["codex-call-c1"]
+    assert detail["inputs_by_tool_call_id"]["c1"] == js
+
+    result = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "function_call_output", "call_id": "c1", "output": "big " * 999},
+    }
+    detail = parse_line_detail(result, 2)["codex-result-c1"]
+    assert detail["output"] == "big " * 999
+
+
+def test_reasoning_line_marks_the_next_assistant_event_thinking_source() -> None:
+    """A reasoning item with readable summaries yields the internal thinking-source marker
+    (never a transcript event); one with no readable text yields an unreadable marker."""
+    readable = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "thought"}], "content": []},
+    }
+    assert parse_lines(readable, 1, {}) == [{"type": THINKING_SOURCE_MARKER_TYPE, "readable": True}]
+    assert parse_reasoning_detail(readable) == "thought"
+
+    unreadable = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "reasoning", "summary": [], "content": [{"type": "encrypted", "data": "x"}]},
+    }
+    assert parse_lines(unreadable, 1, {}) == [{"type": THINKING_SOURCE_MARKER_TYPE, "readable": False}]
+    assert parse_reasoning_detail(unreadable) is None
 
 
 def test_non_conversation_lines_are_dropped() -> None:
@@ -359,3 +390,62 @@ def test_two_permission_requests_in_one_program_render_no_card() -> None:
 def test_ordinary_work_is_unaffected() -> None:
     assert _display(_exec("pytest -q")) is None
     assert _display(_exec("pytest -q") + "\n" + _exec("ruff check .")) is None
+
+
+_CODEX_401 = (
+    "unexpected status 401 Unauthorized: Incorrect API key provided: sk-bogus000., "
+    "auth error: 401, auth error code: invalid_api_key"
+)
+
+
+def _task_complete(error: dict[str, Any] | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"type": "task_complete", "turn_id": "tid1"}
+    if error is not None:
+        payload["error"] = error
+    return {"timestamp": "2026-07-19T10:00:02Z", "type": "event_msg", "payload": payload}
+
+
+def test_a_failed_turn_surfaces_its_reason_as_a_message() -> None:
+    """`task_complete.error` is the ONLY durable copy of why a turn died.
+
+    codex classes its live `EventMsg::Error` non-persistent, so it never reaches the rollout.
+    Keeping the reason on the marker alone meant it existed and was never shown, and once the
+    turn ended it was unrecoverable.
+    """
+    events = parse_lines(_task_complete({"message": _CODEX_401}), 2, {})
+    # The failure is ordered BEFORE the marker: it happened first.
+    assert [event["type"] for event in events] == ["assistant_message", SPECIAL_EVENT_TYPE]
+    failure = events[0]
+    assert failure["text"] == _CODEX_401
+    assert failure["is_auth_error"] is True
+    assert failure["is_api_error"] is False
+    # Two events out of one record need two ids, or the frontend dedupes one away.
+    assert failure["event_id"] != events[1]["event_id"]
+
+
+def test_a_failed_turn_classifies_off_the_structured_tag() -> None:
+    """The tag survives codex rewording its prose; the prose does not."""
+    events = parse_lines(
+        _task_complete({"message": "the model is busy", "codex_error_info": {"type": "server_error"}}), 2, {}
+    )
+    failure = events[0]
+    assert failure["api_error_kind"] == "api_error"
+    assert failure["is_provider_fault"] is True
+
+
+def test_a_spent_quota_is_an_auth_failure_not_a_provider_fault() -> None:
+    """Not an authentication failure in the HTTP sense, but the only way forward is different
+    credentials -- which is exactly what the auth subtext offers."""
+    events = parse_lines(
+        _task_complete({"message": "you have hit your usage_limit_exceeded", "codex_error_info": {"type": "quota"}}),
+        2,
+        {},
+    )
+    failure = events[0]
+    assert failure["is_auth_error"] is True
+    assert failure["is_api_error"] is False
+
+
+def test_a_clean_turn_still_yields_only_its_marker() -> None:
+    events = parse_lines(_task_complete(None), 2, {})
+    assert [event["type"] for event in events] == [SPECIAL_EVENT_TYPE]

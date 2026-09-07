@@ -1,9 +1,9 @@
 """A shared "watch these paths -> call this callback" utility.
 
-The model tracking needs to re-derive an agent's choice whenever its live
-``model_state.json`` changes, without inventing a fourth bespoke
-watchdog-Observer-plus-poll-loop block (the claude and codex session watchers each
-hand-roll their own; those are candidate future adopters of this util). This wraps
+The one "watch these paths, wake this loop" block shared by everything that tails
+files: the model tracking (re-deriving an agent's choice whenever its live
+``model_state.json`` changes) and every store-backed session watcher
+(claude/codex/pi, via ``StoreBackedWatcher``). This wraps
 the one shared primitive that already exists --
 :class:`~imbue.system_interface.watcher_common.WakeOnChangeHandler` plus
 ``POLL_INTERVAL_SECONDS`` -- into a small object that watches a set of paths and
