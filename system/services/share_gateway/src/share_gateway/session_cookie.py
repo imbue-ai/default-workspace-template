@@ -104,11 +104,7 @@ def verify_session_from_cookies(
 
 
 def set_session_cookie(response: Response, cookie_value: str, workspace_domain: str) -> None:
-    """Attach both copies of the workspace session cookie (see the module docstring).
-
-    Werkzeug's ``set_cookie`` cannot emit ``Partitioned``, so the attribute is
-    appended to the partitioned copy's rendered Set-Cookie header.
-    """
+    """Attach both copies of the workspace session cookie (see the module docstring)."""
     for cookie_name in _SESSION_COOKIE_NAMES:
         response.set_cookie(
             cookie_name,
@@ -119,27 +115,8 @@ def set_session_cookie(response: Response, cookie_value: str, workspace_domain: 
             secure=True,
             httponly=True,
             samesite="None",
+            partitioned=cookie_name == PARTITIONED_SESSION_COOKIE_NAME,
         )
-    _append_partitioned_attribute(response)
-
-
-def _append_partitioned_attribute(response: Response) -> None:
-    """Append ``; Partitioned`` to the partitioned copy's Set-Cookie header Werkzeug just wrote."""
-    rewritten_headers: list[tuple[str, str]] = []
-    for header_name, header_value in response.headers.items():
-        is_partitioned_cookie = header_name.lower() == "set-cookie" and header_value.startswith(
-            f"{PARTITIONED_SESSION_COOKIE_NAME}="
-        )
-        # The attribute list excludes the leading name=value pair (the name
-        # itself contains "partitioned").
-        attributes = {part.strip().lower() for part in header_value.split(";")[1:]}
-        if is_partitioned_cookie and "partitioned" not in attributes:
-            rewritten_headers.append((header_name, f"{header_value}; Partitioned"))
-        else:
-            rewritten_headers.append((header_name, header_value))
-    response.headers.clear()
-    for header_name, header_value in rewritten_headers:
-        response.headers.add(header_name, header_value)
 
 
 def strip_session_cookie(cookie_header: str) -> str:
