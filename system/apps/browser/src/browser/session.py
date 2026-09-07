@@ -1971,7 +1971,12 @@ class BrowserSessionManager(MutableModel):
         return name in self._closed_names
 
     async def _launch(
-        self, session: LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0, persist: bool = True
+        self,
+        session: LiveBrowser,
+        restore_tabs: list[str] | None = None,
+        active_tab: int = 0,
+        persist: bool = True,
+        keep_stopped_on_failure: bool = False,
     ) -> None:
         """Serialized background Chromium launch for an already-registered ``init``
         browser. Holds :attr:`_startup_lock` across the WHOLE launch, so at most one
@@ -1984,6 +1989,10 @@ class BrowserSessionManager(MutableModel):
         closes) there is nothing for the user to look at. Runs entirely on the loop, so the
         registry mutation needs no extra lock.
 
+        ``keep_stopped_on_failure`` (a start of a stopped browser): a failure puts the
+        browser back to ``stopped`` with its tabs instead, since the user chose to keep it
+        and a relaunch that flakes must not cost them its profile and tabs.
+
         ``persist`` (default True for ``create``): checkpoint the manifest once the browser
         is running, since a new running browser is a topology change. Restore passes
         ``persist=False`` -- the post-restore reconcile owns the manifest there, and a
@@ -1995,6 +2004,11 @@ class BrowserSessionManager(MutableModel):
             try:
                 await session.start(restore_tabs=restore_tabs, active_tab=active_tab)
             except (BrowserStartupError, *_BROWSER_ERRORS) as e:
+                if keep_stopped_on_failure:
+                    logger.warning("browser {} failed to relaunch ({}); leaving it stopped", session.browser_id, e)
+                    await session.stop()
+                    self._spawn_save()
+                    return
                 logger.warning("browser {} failed to launch ({}); removing it", session.browser_id, e)
                 self._browsers.pop(session.browser_id, None)
                 self._nudger.nudge()
@@ -2016,13 +2030,24 @@ class BrowserSessionManager(MutableModel):
             self._spawn_save()
 
     def _spawn_launch(
-        self, session: LiveBrowser, restore_tabs: list[str] | None = None, active_tab: int = 0
+        self,
+        session: LiveBrowser,
+        restore_tabs: list[str] | None = None,
+        active_tab: int = 0,
+        keep_stopped_on_failure: bool = False,
     ) -> "asyncio.Task[None]":
         """Kick a serialized launch off as a background task, holding a strong ref so
         asyncio doesn't GC it before it runs. Records the task on the session so
         :meth:`close` can await it (serializing teardown against an in-flight launch).
         Returns the task (tests await it)."""
-        task = asyncio.create_task(self._launch(session, restore_tabs=restore_tabs, active_tab=active_tab))
+        task = asyncio.create_task(
+            self._launch(
+                session,
+                restore_tabs=restore_tabs,
+                active_tab=active_tab,
+                keep_stopped_on_failure=keep_stopped_on_failure,
+            )
+        )
         session._launch_task = task
         self._launch_tasks.add(task)
         task.add_done_callback(self._launch_tasks.discard)
@@ -2168,7 +2193,8 @@ class BrowserSessionManager(MutableModel):
         """Relaunch a stopped (or crashed) browser on its last known tabs from its profile; a no-op for one launching or running.
 
         UnknownBrowserError for a name no browser has; FleetFullError when the cap leaves no
-        room for another Chromium."""
+        room for another Chromium. A relaunch that fails leaves the browser stopped, with its
+        tabs, rather than forgetting it."""
         session = self.get(browser_id)
         if session._lifecycle in ("init", "running"):
             return
@@ -2181,7 +2207,7 @@ class BrowserSessionManager(MutableModel):
         tabs, active_tab = session.last_known_tabs()
         self._broadcast_starting(session)
         self._spawn_save()
-        self._spawn_launch(session, restore_tabs=tabs or None, active_tab=active_tab)
+        self._spawn_launch(session, restore_tabs=tabs or None, active_tab=active_tab, keep_stopped_on_failure=True)
 
     def _broadcast_starting(self, session: LiveBrowser) -> None:
         """Tell the browser's viewers it is launching again, so a stopped overlay gives way to the starting one."""
