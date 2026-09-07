@@ -42,7 +42,6 @@ from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import start_agent
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
@@ -74,11 +73,11 @@ from imbue.chat.instances import SUBAGENT_KEY_SEPARATOR
 from imbue.chat.instances import build_chat_instance_source
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
-from imbue.chat.models import AgentStopError
 from imbue.chat.models import AgentListItem
 from imbue.chat.models import AgentListResponse
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRestartError
+from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
 from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import CreateAgentResponse
