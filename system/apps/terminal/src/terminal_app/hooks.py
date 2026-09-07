@@ -81,7 +81,8 @@ def build_tmux_hook_blueprint(
     """``POST /tmux-hook``, which the tmux hooks call when a client switches sessions or a session is renamed.
 
     A session switch re-points the switching client's tab at the terminal whose session it now
-    shows (by the session's id, so a session renamed inside tmux is still its terminal). A
+    shows (by the session's id and creation time, so a session renamed inside tmux is still its
+    terminal). A
     rename changes no key and no title, since the shell title is the record's, so it only
     nudges. Either way the shell is nudged, because the instance list may have changed: a
     switch may be the attach that recreated a session.
