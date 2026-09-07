@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
 from imbue.minds_evals.data_types import WorkerLaunch
@@ -48,6 +49,126 @@ _SHELL_ASSIGNMENT_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|[\s;&|])(?:export\s+)?(?P<variable>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s;&|]+)"
 )
 _SHELL_QUOTES: Final[str] = "'\""
+
+
+# The `extra` tag every harness-written step carries, so a reader can tell the eval's own annotations
+# apart from the agent's steps without matching on the prose.
+STEP_BOUNDARY_KIND: Final[str] = "step_boundary"
+# The first line of every boundary marker. The workspace's own transcript contributes `system`
+# steps of its own -- skill bodies, tens of thousands of characters each -- and `harbor view`
+# renders every system step as the same card, labelled only by a small "system" chip. The banner
+# is what makes a harness boundary findable while scrolling a two-hundred-step trajectory.
+STEP_BOUNDARY_BANNER: Final[str] = (
+    "===================================== MINDS EVALS ======================================"
+)
+
+
+@pure
+def _step_boundary_message(boundary: StepBoundary) -> str:
+    """What a boundary marker says. The prose carries the disclaimer as well as the name: a reader who
+    meets the step in `harbor view` sees only the message, never the `extra` tag beside it."""
+    return "{}\n\nStep: {}\n\n(Written by the minds-evals. Not part of the conversation, and not graded.)".format(
+        STEP_BOUNDARY_BANNER, boundary.name
+    )
+
+
+@pure
+def _step_boundary_step(boundary: StepBoundary, step_id: int) -> Step:
+    """One boundary as the ATIF step it becomes: `system`, which is the source every verifier reader
+    skips, so the marker cannot reach a judge."""
+    return Step(
+        step_id=step_id,
+        timestamp=boundary.started_at,
+        source="system",
+        message=_step_boundary_message(boundary),
+        extra={"minds_evals": {"kind": STEP_BOUNDARY_KIND, "step_name": boundary.name}},
+    )
+
+
+@pure
+def _document_boundary_position(
+    raw_steps: Sequence[Mapping[str, Any]], boundary: StepBoundary, search_from: int
+) -> int | None:
+    """Where a boundary belongs in the workspace's own document, or None when it cannot be placed.
+
+    The step's opening client message is the exact join: the driver sent that text verbatim, so it
+    appears as a `user` step. Timestamps are the fallback, since the document is written inside the
+    box while the boundary is stamped on the host, and the two clocks agree only to within their
+    drift. A boundary that resolves to neither is dropped rather than guessed at: a marker in the
+    wrong place misreads the conversation, while a missing one only leaves it undivided.
+    """
+    if boundary.opening_message:
+        for index in range(search_from, len(raw_steps)):
+            step = raw_steps[index]
+            if step.get("source") == "user" and step.get("message") == boundary.opening_message:
+                return index
+    for index in range(search_from, len(raw_steps)):
+        timestamp = raw_steps[index].get("timestamp")
+        if isinstance(timestamp, str) and timestamp >= boundary.started_at:
+            return index
+    return None
+
+
+@pure
+def with_document_step_boundaries(
+    raw_steps: Sequence[Mapping[str, Any]], boundaries: Sequence[StepBoundary]
+) -> list[dict[str, Any]]:
+    """The document's steps with a boundary marker spliced in ahead of each step's first turn.
+
+    ATIF numbers steps sequentially from 1, so every step after an insertion is renumbered. Nothing
+    else in the document refers to a step by its number -- a tool call is joined to its result by
+    `source_call_id`, and an embedded worker to its launch by `tool_call_id` -- so renumbering moves
+    no other reference.
+    """
+    if not boundaries:
+        return [dict(step) for step in raw_steps]
+    positions: list[tuple[int, StepBoundary]] = []
+    search_from = 0
+    for boundary in boundaries:
+        position = _document_boundary_position(raw_steps, boundary, search_from)
+        if position is None:
+            logger.warning("Could not place the boundary for step {} in the workspace document", boundary.name)
+            continue
+        positions.append((position, boundary))
+        search_from = position + 1
+    marked: list[dict[str, Any]] = []
+    boundaries_by_position: dict[int, list[StepBoundary]] = {}
+    for position, boundary in positions:
+        boundaries_by_position.setdefault(position, []).append(boundary)
+    for index, step in enumerate(raw_steps):
+        for boundary in boundaries_by_position.get(index, []):
+            marked.append(_step_boundary_step(boundary, len(marked) + 1).model_dump(exclude_none=True, mode="json"))
+        marked.append({**step, "step_id": len(marked) + 1})
+    return marked
+
+
+@pure
+def conversation_steps_with_boundaries(
+    conversation: Sequence[Mapping[str, str]], boundaries: Sequence[StepBoundary], timestamp: str
+) -> list[Step]:
+    """The hand-built shape's steps: one per non-empty conversation entry, with a boundary marker
+    ahead of each step's first turn.
+
+    Here the join is exact -- a boundary records how many kept entries preceded it -- so the steps are
+    numbered once, as they are built. A boundary past the last entry belongs to a step that ended
+    before the client said anything, and lands last.
+    """
+    steps: list[Step] = []
+    pending = list(boundaries)
+    for index, entry in enumerate(entry for entry in conversation if entry["text"].strip()):
+        while pending and pending[0].conversation_index <= index:
+            steps.append(_step_boundary_step(pending.pop(0), len(steps) + 1))
+        steps.append(
+            Step(
+                step_id=len(steps) + 1,
+                timestamp=timestamp,
+                source="user" if entry["role"] == "user" else "agent",
+                message=entry["text"],
+            )
+        )
+    for boundary in pending:
+        steps.append(_step_boundary_step(boundary, len(steps) + 1))
+    return steps
 
 
 @pure
@@ -149,6 +270,7 @@ def build_workspace_trajectory(
     provenance: TrajectoryProvenance,
     workspace_usage: TrialUsage,
     workers: Sequence[EmbeddedWorker],
+    boundaries: Sequence[StepBoundary],
 ) -> Trajectory:
     """The workspace's own ATIF document with the eval's reconciliations applied.
 
@@ -164,10 +286,14 @@ def build_workspace_trajectory(
     raw_document = _document_object(document_json)
     raw_steps = raw_document.get("steps")
     step_count = len(raw_steps) if isinstance(raw_steps, list) else 0
+    # The agent's own steps, not the harness's markers: `total_steps` describes the work the
+    # trajectory records, and a cosmetic step is none of it.
     resolved_metrics = _resolved_final_metrics(workspace_usage, step_count)
     raw_extra = raw_document.get("extra")
+    grafted_document = graft_worker_trajectories(raw_document, workers)
     reconciled_document = {
-        **graft_worker_trajectories(raw_document, workers),
+        **grafted_document,
+        "steps": with_document_step_boundaries(grafted_document.get("steps") or [], boundaries),
         "final_metrics": resolved_metrics.model_dump(exclude_none=True)
         if resolved_metrics is not None
         else raw_document.get("final_metrics"),
@@ -363,27 +489,22 @@ def build_hand_built_trajectory(
     provenance: TrajectoryProvenance,
     workspace_usage: TrialUsage,
     timestamp: str,
+    boundaries: Sequence[StepBoundary],
 ) -> Trajectory | None:
     """The fallback trajectory when the workspace could not provide its document: one step per clean
     conversation turn, carrying the same reconciled fields. None when there was no exchange at all,
     since ATIF requires at least one step."""
-    steps = [
-        Step(
-            step_id=index + 1,
-            timestamp=timestamp,
-            source="user" if entry["role"] == "user" else "agent",
-            message=entry["text"],
-        )
-        for index, entry in enumerate(entry for entry in conversation if entry["text"].strip())
-    ]
-    if not steps:
+    conversation_step_count = sum(1 for entry in conversation if entry["text"].strip())
+    if not conversation_step_count:
         return None
+    # The conversation's own turns, not the harness's markers.
+    final_metrics = _resolved_final_metrics(workspace_usage, conversation_step_count)
     return Trajectory(
         schema_version="ATIF-v1.7",
         session_id=provenance.harbor_session_id,
         agent=TrajectoryAgent(name=provenance.driver_name, version=provenance.driver_version),
-        steps=steps,
+        steps=conversation_steps_with_boundaries(conversation, boundaries, timestamp),
         # total_steps counts conversation turns, not LLM calls, on this shape.
-        final_metrics=_resolved_final_metrics(workspace_usage, len(steps)),
+        final_metrics=final_metrics,
         extra=_provenance_extra(provenance, TrajectorySource.HAND_BUILT),
     )

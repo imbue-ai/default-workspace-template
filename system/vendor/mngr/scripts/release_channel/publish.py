@@ -143,7 +143,7 @@ def assert_fallback_branch_matches_build(entry: ChannelEntry, manifest_version: 
     if entry.fallback_branch != expected:
         raise PromotionError(
             f"[channels.{entry.channel}] says fallback_branch {entry.fallback_branch}, but a build at "
-            f"{manifest_version} clones {expected} (apps/minds/docs/deploy/release.md step 1 moves the version and "
+            f"{manifest_version} clones {expected} (apps/minds/docs/deploy/ops/app-release.md step 1 moves the version and "
             f"FALLBACK_BRANCH together). The Lima image gate would check the wrong tag's image."
         )
 

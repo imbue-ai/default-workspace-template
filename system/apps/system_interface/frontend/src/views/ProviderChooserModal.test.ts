@@ -8,7 +8,7 @@
  * long as anyone cared to wait. No build error, no lint error, no type error.
  *
  * So the assertions here are mostly "this renders at all". That is the bug class; anything
- * fancier would be testing the mockup's copy rather than the failure mode.
+ * fancier would be testing the dialog's copy rather than the failure mode.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

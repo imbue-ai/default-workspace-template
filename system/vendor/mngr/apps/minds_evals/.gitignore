@@ -7,5 +7,9 @@ datasets/
 !configs/datasets/
 # Local harbor job results (the run recipe points -o here).
 jobs/
+# Single-trial regrades (`harbor trial regrade -o` points here). Its output is a bare trial
+# directory with no job config.json, so it does not belong under jobs/, which `harbor view` reads
+# as a folder of jobs.
+regrades/
 # Per-user local secrets (ANTHROPIC_API_KEY etc.), sourced by dev runs only.
 .env.local

@@ -37,6 +37,7 @@ from pydantic import SecretStr
 
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import decider
@@ -57,6 +58,7 @@ from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import EvidenceManifest
 from imbue.minds_evals.data_types import GoalEntry
 from imbue.minds_evals.data_types import PromptEntry
+from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TrajectorySource
 from imbue.minds_evals.data_types import Transcript
@@ -142,6 +144,14 @@ PROXY_TUNNEL_READY_TIMEOUT_SECONDS: Final[float] = 120.0
 PROXY_TUNNEL_GRACE_SECONDS: Final[float] = 600.0
 # The proxy's per-request metering record, written host-side beside usage.json.
 PROXY_USAGE_FILENAME: Final[str] = "usage_proxy.jsonl"
+# The driver's own view of the trial: the workspace feed it polled and the decider calls it made,
+# beside the other operational artifacts (mngr_forward.jsonl, driver.log). Written host-side only
+# and never mirrored into the box: nothing grades it, and it exists to explain a trial that went
+# wrong -- an eval/workspace-template mismatch above all -- from the harness's side of the wire.
+DRIVER_EVENTS_FILENAME: Final[str] = "driver_events.jsonl"
+# The instruction this run was handed, kept beside the results it produced. Host-side only, like
+# the driver's view above.
+INSTRUCTION_FILENAME: Final[str] = "instruction.md"
 
 # Each bridge poll is a Modal exec round trip; a run of consecutive failures
 # means the bridge is broken, not just a transient blip. Log every few and give
@@ -899,6 +909,9 @@ class MindsPersonaDriver(BaseAgent):
         # the whole run's.
         self._decider_results: list[DeciderResult] = []
         self._decider_turns: list[DeciderTurn] = []
+        # Where each step of a multi-step task began, in order, so the trajectory can mark the
+        # boundaries in a conversation every step replays from its first turn.
+        self._step_boundaries: list[StepBoundary] = []
         # How each prompts entry played out: its kind, the exchanges it actually sent, and why it
         # stopped. The structural gates are founded on these.
         self._entry_records: list[EntryRecord] = []
@@ -1028,8 +1041,11 @@ class MindsPersonaDriver(BaseAgent):
         return bool(record["extra"].get(_DRIVER_LOG_TRIAL_KEY) == self._salt)
 
     async def _run_step(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        # Before the parse, so an instruction that cannot be parsed is still on disk to look at.
+        self._write_instruction(instruction)
         case = parse_case_config(instruction)
         self._case = case
+        self._record_step_boundary(case)
         self._configured_entry_count += len(case.prompts)
         # A step reopens the conversation, so the trial is not finished until its last step is.
         # Left at "finished" this step would write a state.json contradicting its own entry records,
@@ -1069,6 +1085,9 @@ class MindsPersonaDriver(BaseAgent):
                 # steps share, and the hand-built one describes the driver's accumulated
                 # conversation.
                 trajectory_source = await self._publish_trajectory(case, environment)
+                # After the evidence phase, so the driver's view covers the whole step rather than
+                # the last state the conversation loop happened to leave behind.
+                self._write_driver_events()
                 # Written here rather than in populate_context_post_run: harbor only calls that
                 # hook when the agent context is still empty, and this driver always fills it.
                 self._populate_context_metadata(context, trajectory_source)
@@ -1648,6 +1667,74 @@ class MindsPersonaDriver(BaseAgent):
                 )
             )
 
+    def _record_step_boundary(self, case: CaseConfig) -> None:
+        """Mark where this step's turns begin, for a task that declares steps.
+
+        A stepped task drives one workspace across several instructions against this same driver, and
+        both trajectory shapes are cumulative -- so the boundary is the only thing separating the
+        step being graded from the ones before it. A task without steps has one run and nothing to
+        divide, and records no boundary.
+        """
+        if case.step is None:
+            return
+        self._step_boundaries.append(
+            StepBoundary(
+                name=case.step.name,
+                started_at=_utc_now_iso(),
+                # Counted over the entries the trajectory keeps, which is what the hand-built shape
+                # turns into steps.
+                conversation_index=sum(1 for entry in self._conversation if entry["text"].strip()),
+                opening_message="",
+            )
+        )
+
+    def _resolved_step_boundaries(self) -> tuple[StepBoundary, ...]:
+        """The recorded boundaries with each step's opening client message filled in -- which only the
+        conversation that followed the boundary can supply. A step whose client never spoke keeps an
+        empty one, and is placed by its timestamp instead."""
+        kept = [entry for entry in self._conversation if entry["text"].strip()]
+        resolved: list[StepBoundary] = []
+        for position, boundary in enumerate(self._step_boundaries):
+            next_index = (
+                self._step_boundaries[position + 1].conversation_index
+                if position + 1 < len(self._step_boundaries)
+                else len(kept)
+            )
+            opening = next(
+                (entry["text"] for entry in kept[boundary.conversation_index : next_index] if entry["role"] == "user"),
+                "",
+            )
+            resolved.append(boundary.model_copy_update(to_update(boundary.field_ref().opening_message, opening)))
+        return tuple(resolved)
+
+    def _write_instruction(self, instruction: str) -> None:
+        """Keep the instruction this run was handed beside the results it produced.
+
+        `harbor view` browses a trial's files under `agent/`, `artifacts/` and `verifier/` only, so
+        the agent directory is the one place a reader meets the instruction next to the trajectory it
+        drove -- for a task with steps that is the step's own instruction, since harbor gives each
+        step its own agent directory. Written host-side and never mirrored into the box: the
+        expectations it carries have no business on the machine the agent under test runs on.
+        """
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / INSTRUCTION_FILENAME).write_text(instruction)
+
+    def _decider_call_events(self) -> list[dict[str, Any]]:
+        """Every decider-model call as one audit record: the turn the trajectory's provenance already
+        carries, plus the message text it produced, which that provenance deliberately leaves out."""
+        return [
+            {"type": "decider_message", "text": result.message, **turn.model_dump(mode="json")}
+            for result, turn in zip(self._decider_results, self._decider_turns, strict=True)
+        ]
+
+    def _write_driver_events(self) -> None:
+        """Write the driver's own view of the trial: the workspace feed it polled, then the decider
+        calls it made. Host-side only, and read by nothing in the grading path."""
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        records = [*self._latest_events, *self._decider_call_events()]
+        contents = "".join("{}\n".format(json.dumps(record)) for record in records)
+        (self.logs_dir / DRIVER_EVENTS_FILENAME).write_text(contents)
+
     async def _probe_reverse_tunnel(self, environment: BaseEnvironment) -> None:
         """Check that a box-local port is reachable from inside the workspace.
 
@@ -2173,6 +2260,7 @@ class MindsPersonaDriver(BaseAgent):
             await environment.upload_file(self.logs_dir / filename, _box_trial_file_path(filename))
         if TRAJECTORY_FILENAME in file_contents:
             self._box_trajectory_json = file_contents[TRAJECTORY_FILENAME]
+        self._write_driver_events()
 
     def _resolve_workspace_usage(self) -> usage_accounting.ResolvedWorkspaceUsage:
         """The one resolution of the workspace agent's spend that every usage writer in this driver
@@ -2349,7 +2437,11 @@ class MindsPersonaDriver(BaseAgent):
             return None
         try:
             return trajectory_building.build_workspace_trajectory(
-                document_json, provenance, workspace_usage, _embedded_workers(self._worker_captures, self.logs_dir)
+                document_json,
+                provenance,
+                workspace_usage,
+                _embedded_workers(self._worker_captures, self.logs_dir),
+                self._resolved_step_boundaries(),
             )
         except TrajectoryDocumentError as exc:
             logger.warning("The captured trajectory document is unusable; writing the hand-built one: {}", exc)
@@ -2373,6 +2465,7 @@ class MindsPersonaDriver(BaseAgent):
             provenance=self._trajectory_provenance(case, _usage_source(resolved_usage)),
             workspace_usage=resolved_usage.reported,
             timestamp=_utc_now_iso(),
+            boundaries=self._resolved_step_boundaries(),
         )
 
     async def _publish_trajectory(self, case: CaseConfig, environment: BaseEnvironment) -> TrajectorySource:

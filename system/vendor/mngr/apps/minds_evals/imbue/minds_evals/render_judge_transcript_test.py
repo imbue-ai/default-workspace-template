@@ -6,8 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from imbue.minds_evals.data_types import StepBoundary
+from imbue.minds_evals.data_types import TrajectoryProvenance
+from imbue.minds_evals.data_types import UsageSource
 from imbue.minds_evals.template_loading import load_template_module
 from imbue.minds_evals.testing import atif_document
+from imbue.minds_evals.trajectory import build_hand_built_trajectory
+from imbue.minds_evals.usage import summarize_workspace_usage
 
 _RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_judge_renderer")
 
@@ -96,3 +101,39 @@ def test_load_trajectory_steps_of_a_missing_or_malformed_file_is_empty(tmp_path:
     assert _RENDERER.load_trajectory_steps(tmp_path / "not-json.json") == []
     (tmp_path / "not-a-document.json").write_text("[1, 2]")
     assert _RENDERER.load_trajectory_steps(tmp_path / "not-a-document.json") == []
+
+
+def test_a_harness_step_boundary_never_reaches_the_judge() -> None:
+    """The boundary markers the driver writes into a stepped task's trajectory are cosmetic, and the
+    renderer's system-step rule is what keeps them out of what a judge scores."""
+    built = build_hand_built_trajectory(
+        [{"role": "user", "text": "Now change it"}, {"role": "agent", "text": "Changed."}],
+        TrajectoryProvenance(
+            driver_name="minds-persona-driver",
+            driver_version="0.1.0",
+            decider_model="claude-opus-4-8",
+            decider_turns=(),
+            harbor_session_id="session-1",
+            case_id="todo-app",
+            usage_source=UsageSource.TRANSCRIPT,
+        ),
+        summarize_workspace_usage(()),
+        timestamp="2026-09-01T00:00:00Z",
+        boundaries=(
+            StepBoundary(
+                name="adjust-requirements",
+                started_at="2026-09-01T00:00:00Z",
+                conversation_index=0,
+                opening_message="Now change it",
+            ),
+        ),
+    )
+
+    assert built is not None
+    steps = built.to_json_dict()["steps"]
+    assert steps[0]["source"] == "system"
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "adjust-requirements" not in rendered
+    assert rendered == "[USER]\nNow change it\n\n[AGENT \u00b7 message 1]\nChanged.\n"

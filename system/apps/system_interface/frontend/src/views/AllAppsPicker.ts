@@ -47,9 +47,9 @@ import { displayNameForMember } from "../models/MemberTitles";
 import { memberRef } from "../models/Projects";
 import type { ShortcutName } from "../models/Projects";
 import { appServiceDisplayName } from "./derived-names";
-import { appIconMarkup } from "./appIcon";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
+import { appIconMarkup } from "./components/appIcon";
+import { hoverTooltipAttrs } from "./components/hoverTooltip";
+import { icon } from "./components/icons";
 
 // Show the filter box only once scanning the list by eye stops being faster
 // than typing.
@@ -202,12 +202,12 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         key: `shortcut:${row.shortcut}`,
         class:
           "project-rail-app project-rail-app-shortcut group flex h-8 w-full items-center gap-2 px-3 text-left " +
-          "transition-all duration-150 " +
-          (row.isOpenable ? "cursor-pointer text-text-primary hover:bg-bg-hover" : "text-text-faint"),
+          "transition-all duration-(--dur-base) " +
+          (row.isOpenable ? "cursor-pointer text-primary hover:bg-fill-hover" : "text-faint"),
         onclick: row.isOpenable ? () => attrs.onOpenShortcut(row.shortcut) : undefined,
       },
       [
-        m("span", { class: "flex shrink-0 items-center text-text-faint" }, m.trust(row.iconMarkup)),
+        m("span", { class: "flex shrink-0 items-center text-faint" }, m.trust(row.iconMarkup)),
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
         m(
           "button",
@@ -215,7 +215,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
             type: "button",
             class:
               "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-              "text-text-faint opacity-0 hover:text-text-primary focus-visible:opacity-100 " +
+              "text-faint opacity-0 hover:text-primary focus-visible:opacity-100 " +
               "group-hover:opacity-100",
             "aria-label": `Pin ${row.label}`,
             ...hoverTooltipAttrs("Pin it back to this project's rail. What it opens does not change."),
@@ -251,16 +251,16 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
         key: app.name,
         class:
           "project-rail-app group flex w-full items-center gap-2 px-3 text-left " +
-          (isStopped ? "project-rail-app-stopped text-text-faint " : "text-text-primary ") +
-          "transition-all duration-150 " +
-          (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-bg-hover"),
+          (isStopped ? "project-rail-app-stopped text-faint " : "text-primary ") +
+          "transition-all duration-(--dur-base) " +
+          (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
         ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(app)}`) : {}),
         onclick: isFadingOut ? undefined : () => attrs.onOpenApp(app),
       },
       [
         m(
           "span",
-          { class: "flex shrink-0 items-center text-text-faint" },
+          { class: "flex shrink-0 items-center text-faint" },
           // An app that registered an icon wears it here too; one that did not
           // keeps the generic "opens somewhere" glyph this list has always used.
           m.trust(appIconMarkup(app.icon, ROW_GLYPH_SIZE, icon("external-link", { size: ROW_GLYPH_SIZE }), app.name)),
@@ -274,7 +274,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
                 type: "button",
                 class:
                   "project-rail-pin flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded " +
-                  "text-text-faint opacity-0 hover:text-text-primary focus-visible:opacity-100 " +
+                  "text-faint opacity-0 hover:text-primary focus-visible:opacity-100 " +
                   "group-hover:opacity-100",
                 "aria-label": `Pin ${label}`,
                 ...hoverTooltipAttrs("Pin it to this project. It joins this project's tabs and its rail shortcuts."),
@@ -353,8 +353,8 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           ? m("input", {
               type: "text",
               class:
-                "mx-3 my-1 h-7 shrink-0 rounded-md bg-bg-sidebar px-2 text-[13px] text-text-primary outline-none " +
-                "placeholder:text-text-faint",
+                "mx-3 my-1 h-7 shrink-0 rounded-md bg-sidebar px-2 text-(length:--font-size-row) text-primary outline-none " +
+                "placeholder:text-faint",
               value: filterText,
               placeholder: "Filter apps",
               autofocus: true,
@@ -380,7 +380,7 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
             })
           : null,
         rows.length === 0 && shortcutRows.length === 0
-          ? m("div", { class: "px-3 py-2 text-[13px] text-text-faint" }, emptyMessage)
+          ? m("div", { class: "px-3 py-2 text-(length:--font-size-row) text-faint" }, emptyMessage)
           : m("div", { class: "min-h-0 flex-1 overflow-y-auto" }, [
               ...shortcutRows.map((row) => shortcutRow(row, attrs)),
               ...rows.map((app) => appRow(app, projectName !== null, fadingNames.has(app.name), attrs)),

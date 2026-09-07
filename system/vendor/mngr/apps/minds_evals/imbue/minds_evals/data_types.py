@@ -439,6 +439,26 @@ class DeciderTurn(FrozenModel):
     detail: str = Field(description="Why the entry ended, in the client's own words; empty for a call that spoke")
 
 
+class StepBoundary(FrozenModel):
+    """Where one step of a multi-step task begins, so the trajectory can mark it.
+
+    A stepped task drives one workspace across several instructions, and every step's trajectory
+    replays the conversation from its first turn -- so without a marker the later steps read as one
+    undivided conversation. The marker is cosmetic: it becomes a ``system`` step, which the verifier's
+    readers (the judge transcript, the structural gates, the wordiness guard) all skip.
+    """
+
+    name: str = Field(description="The step's name, as harbor knows it")
+    started_at: str = Field(description="ISO 8601 time the driver began the step")
+    conversation_index: int = Field(
+        description="How many clean-conversation entries preceded the step; the join for the hand-built shape"
+    )
+    opening_message: str = Field(
+        description="The client's first message of the step; the join for the workspace's own document. "
+        "Empty when the step ended before the client said anything"
+    )
+
+
 class TrajectoryProvenance(FrozenModel):
     """What the eval knows about a trial's trajectory that the workspace document cannot: who drove it,
     which decider spoke for the client, and whose account its usage figures come from."""
