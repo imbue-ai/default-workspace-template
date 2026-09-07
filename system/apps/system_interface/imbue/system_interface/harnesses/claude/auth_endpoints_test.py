@@ -129,8 +129,8 @@ def _timed_out_runner(_cmd: list[str], _timeout: float, _env: object = None) -> 
 def test_status_endpoint_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
     """503, not `logged_in: false`.
 
-    The frontend's load check stays quiet on a failed request, where a false would have popped
-    the login modal over a signed-in workspace.
+    A caller that reads a failed request as a failed request cannot mistake it for an answer;
+    one handed `logged_in: false` has no way to tell it apart from a real signed-out verdict.
     """
     service = ClaudeAuthService(command_runner=_timed_out_runner)
     with _client(claude_auth_service=service) as client:

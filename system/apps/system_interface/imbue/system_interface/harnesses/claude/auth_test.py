@@ -84,9 +84,8 @@ def test_get_auth_status_refuses_to_answer_when_the_check_times_out(isolated_cla
     """A check that ran out of time says nothing about this workspace's auth.
 
     `claude auth status` is killed with SIGTERM on timeout, so it prints nothing, and the parse
-    path would otherwise read that silence as "signed out" and pop the login modal over a
-    workspace that is signed in. Raising rather than returning a defaulted status is what stops
-    a caller from passing that silence along as an answer.
+    path would otherwise read that silence as "signed out". Raising rather than returning a
+    defaulted status is what stops a caller from passing that silence along as an answer.
     """
 
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
