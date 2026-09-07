@@ -16,12 +16,16 @@ in both places a visitor reaches a shared workspace from:
   only send a third-party cookie from an iframe when it is partitioned by the
   embedding site.
 
-Safari builds between 18.5 and 26.1 reject a cookie carrying ``Partitioned``
-outright instead of storing it unpartitioned, and browsers that do implement
-CHIPS key a cookie set during the broker's login redirect by the broker's
-site rather than the workspace's, so a lone partitioned cookie leaves a
-phone visitor with no session at all. Verification accepts whichever copy
-the browser sends.
+Safari 18.5 through 26.1 rejects a cookie carrying ``Partitioned`` outright
+instead of storing it unpartitioned (WebKit bug 292975), so a lone
+partitioned cookie leaves an iOS visitor with no session at all. Verification
+accepts whichever copy the browser sends.
+
+The plain copy is an ordinary ``SameSite=None`` cookie, so browsers that still
+allow third-party cookies attach it to cross-site GET subresources too. That
+is bounded by the existing controls: ``frame-ancestors`` limits embedding to
+the workspace's own origins and the chrome, the Origin policy rejects non-GETs
+with a foreign Origin, and nothing but ``/_health`` answers cross-origin reads.
 
 The payload carries an ``owner`` flag (the visitor is the workspace owner, per
 the broker's handoff), which rides along for the owner-only in-workspace exec
