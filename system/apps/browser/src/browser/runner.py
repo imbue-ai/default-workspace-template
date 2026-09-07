@@ -558,12 +558,14 @@ def cast_socket(ws: Any, browser_id: str) -> None:
         # is captured in the same on-loop step so the initializing banner below is consistent
         # with the seed.
         client_queue, lifecycle = bridge.run(session.register_cast_queue_with_lifecycle(), timeout=_ROUTE_TIMEOUT)
-        if not _init_done.is_set() and lifecycle != "running":
+        if not _init_done.is_set() and lifecycle not in ("running", "stopped"):
             # The fleet is still restoring AND this browser isn't up yet: tell the viewer, so
             # it shows a banner and clears it on the first live frame/control once this browser
             # is up. A viewer joining an already-running browser is NOT told initializing
             # (finding [3-runner]) -- its seed already carries lifecycle=running and the live
             # page is streaming, so an initializing banner would be a false "still starting".
+            # Nor is one joining a stopped browser: its seed shows the stopped overlay, and
+            # nothing would clear a starting banner, since a stopped browser broadcasts nothing.
             # put_nowait is safe: the queue is fresh with at most a few seed messages and its
             # maxsize is far larger (finding [8]).
             client_queue.put_nowait(json.dumps({"type": "initializing"}))
