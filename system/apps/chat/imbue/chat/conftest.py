@@ -260,6 +260,14 @@ def false_binary() -> str:
 
 
 @pytest.fixture
+def true_binary() -> str:
+    """Cross-platform path to a binary that exits immediately with success: a stand-in for an mngr verb that succeeds."""
+    path = shutil.which("true")
+    assert path is not None, "Could not find 'true' binary on this system"
+    return path
+
+
+@pytest.fixture
 def loguru_records() -> Iterator[list[str]]:
     """Capture loguru log messages as plain strings for test assertions.
 
