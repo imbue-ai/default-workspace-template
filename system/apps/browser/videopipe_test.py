@@ -3,7 +3,6 @@ import time
 from collections.abc import Callable
 
 import pytest
-
 from browser import videopipe
 from browser.videopipe import PixelfluxVideoPipe, target_capture_fps
 from mock_capture_backend_test import FakeCaptureBackend
