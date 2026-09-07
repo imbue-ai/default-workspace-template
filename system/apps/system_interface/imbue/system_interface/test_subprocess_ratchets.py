@@ -42,7 +42,9 @@ _RAW_SPAWN_RULE = RatchetRuleInfo(
         "mode change from a background process group with SIGTTIN / SIGTTOU addressed to the whole "
         "group), which wedges the workspace: the socket keeps accepting and nothing answers. Do "
         "not call run_local_command_modern_version, subprocess.Popen/run, or os.system directly "
-        "-- extend run_detached_command instead."
+        "-- extend run_detached_command instead. Importing the attached runner counts as much as "
+        "calling it: handing it to something else as a value (a default argument, a callback) "
+        "spawns just as attached, and is how the sign-in probe slipped past a call-only rule."
     ),
 )
 
@@ -81,9 +83,13 @@ def _called_name(call: ast.Call) -> str | None:
 
 
 def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
+    # The import alternative is anchored to a whole line so it reads code and not prose:
+    # agent_manager.py and subprocess_runner.py both name the runner in comments, which a bare
+    # name pattern would misfire on.
     pattern = RegexPattern(
-        r"run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\(",
-        multiline=False,
+        r"^from \S+ import run_local_command_modern_version$"
+        r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\(",
+        multiline=True,
     )
     chunks = check_regex_ratchet(_SOURCE, FileExtension(".py"), pattern, _ALLOWED_RAW_SPAWN_FILES)
     assert len(chunks) <= snapshot(0), _RAW_SPAWN_RULE.format_failure(chunks)
