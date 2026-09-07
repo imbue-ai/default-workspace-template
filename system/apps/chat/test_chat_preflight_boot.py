@@ -64,8 +64,15 @@ def test_a_preflight_boot_serves_health_without_running_mngr_or_registering(tmp_
         assert _is_serving(base_url)
     finally:
         process.send_signal(signal.SIGTERM)
-        output, _ = process.communicate(timeout=15)
+        try:
+            output, _ = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output, _ = process.communicate(timeout=15)
 
+    # SIGTERM is turned into a clean exit, and the teardown it runs is the one only a
+    # pre-flight boot takes (a shutdown over an agent manager that never started).
+    assert process.returncode == 0, f"the pre-flight boot did not exit cleanly on SIGTERM:\n{output}"
     assert not mngr_log.exists(), f"the pre-flight boot ran mngr: {mngr_log.read_text()}"
     # No registration: the registry lives under data/.state of the working directory.
     assert not (workspace / "data").exists()
