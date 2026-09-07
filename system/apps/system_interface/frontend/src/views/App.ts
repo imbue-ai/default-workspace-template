@@ -103,7 +103,7 @@ export function App(): m.Component {
                 requestAppLifecycle(appName, action);
               },
               onInstanceLifecycle: (row: SidebarTabRow, action: "stop" | "start") => {
-                requestInstanceLifecycle(row.appName, row.instanceKey, action);
+                requestInstanceLifecycle(row.appName, row.instanceKey, row.label, action);
               },
               onDeleteRow: (row: SidebarTabRow) => {
                 deleteAddress(row.address);

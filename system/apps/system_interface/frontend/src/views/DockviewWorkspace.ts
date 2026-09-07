@@ -435,7 +435,8 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
     // The tab never offers this: unfiling is what you want while looking at the project's list
     // of what it shows; the rail's row menu carries it.
     removeFromProject: null,
-    setInstanceLifecycle: (action) => requestInstanceLifecycle(resolved.app.name, resolved.instance.key, action),
+    setInstanceLifecycle: (action) =>
+      requestInstanceLifecycle(resolved.app.name, resolved.instance.key, resolved.instance.title, action),
     setAppLifecycle: (action) => requestAppLifecycle(resolved.app.name, action),
     delete: () => openDeleteDialog(resolved.address, resolved.instance.title),
   };
@@ -444,9 +445,9 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
 
 /** Fire one stop/start of an instance at its app through the relay, surfacing a refusal. The
  *  ``apps_updated`` push after the shell's refetch is what repaints every surface. */
-export function requestInstanceLifecycle(appName: string, key: string, action: "stop" | "start"): void {
+export function requestInstanceLifecycle(appName: string, key: string, title: string, action: "stop" | "start"): void {
   void setInstanceLifecycle(appName, key, action).catch((e: Error) => {
-    alert(`Failed to ${action} ${key}: ${e.message}`);
+    alert(`Failed to ${action} ${title}: ${e.message}`);
   });
 }
 
