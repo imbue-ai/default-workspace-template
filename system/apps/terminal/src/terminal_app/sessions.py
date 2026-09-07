@@ -87,6 +87,18 @@ def _stopped_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
 
 
 @pure
+def _fresh_instance_record(record: TerminalSessionRecord) -> InstanceRecord:
+    """The idle record of a terminal whose session was just created, so has seen no activity."""
+    if record.session_id is None:
+        raise InvalidTerminalValueError(
+            f"terminal {record.name!r} has no session id although its session was just created"
+        )
+    return _live_instance_record(
+        TmuxSession(name=record.name, session_id=record.session_id, last_activity=None), record
+    )
+
+
+@pure
 def match_live_sessions(
     live_sessions: Sequence[TmuxSession], records: Sequence[TerminalSessionRecord]
 ) -> list[InstanceRecord]:
@@ -232,10 +244,7 @@ class TmuxSessionSource(InstanceSourceInterface):
             record = self._create_session_for(
                 TerminalSessionRecord(name=name, title=None, workdir=workdir)
             )
-        return _live_instance_record(
-            TmuxSession(name=name, session_id=record.session_id or "", last_activity=None),
-            record,
-        )
+        return _fresh_instance_record(record)
 
     def delete_instance(self, key: InstanceKey) -> None:
         try:
@@ -332,10 +341,7 @@ class TmuxSessionSource(InstanceSourceInterface):
             if record is None:
                 raise UnknownInstanceError(f"no terminal has the key {key!r}")
             created = self._create_session_for(record)
-        return _live_instance_record(
-            TmuxSession(name=name, session_id=created.session_id or "", last_activity=None),
-            created,
-        )
+        return _fresh_instance_record(created)
 
     def _terminal_name_or_raise(self, key: InstanceKey, verb: str) -> TmuxSessionName:
         name = _session_name_for_key(key)
