@@ -315,7 +315,7 @@ The terminal is a small Python package, `system/apps/terminal`, that runs ttyd a
 Instances are tmux sessions named `terminal-<N>`; create allocates the lowest free number and makes the session at once, delete kills the session, rename changes the title alone (the key and the session name never change; the app matches a terminal to its session by tmux's session id and the session's creation time), and tmux hooks notify the terminal app of session switches and renames.
 An instance's URL is `/?arg=_&arg=session&arg=<name>&arg={tab}[&arg=<workdir>]`, so the app maps each ttyd client's pty to the tab it serves; when a client switches sessions inside tmux, the app re-points that client's tab through the shell's tab route, and a rename changes no tab and only refreshes the list.
 Status is `idle`, or `stopped` for a terminal whose session tmux lost and the app did not recreate (the user stopped it); a running foreground command is not distinguished (section 11). A session's shell runs in the `terminal-session` memory band, the user-service level.
-The ttyd dispatch directory is `data/.state/terminal/commands/`; the terminal app installs `session.sh` there, and `agent.sh`, the dispatch behind a chat's terminal back face, which it installs on the chat app's behalf.
+The ttyd dispatch directory is `data/.state/terminal/commands/`; the terminal app installs `session.sh` and `workdir.sh` there, and `agent.sh`, the dispatch behind a chat's terminal back face, which it installs on the chat app's behalf.
 Taking the minimum size across viewers of a session is deferred (section 11), and the `shell:shown` and `shell:hidden` signals are what it will read.
 
 ### 7.2 Browser
