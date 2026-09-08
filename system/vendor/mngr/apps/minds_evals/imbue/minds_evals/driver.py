@@ -568,7 +568,7 @@ def _agent_reply_text(event: Mapping[str, Any]) -> str:
 
     Reads both common-transcript vintages: the ATIF-shaped ``step`` record with ``source: "agent"``
     (whose text is ``message``) that mngr's emitters write, and the legacy ``assistant_message``
-    record the workspace's chat app still produces."""
+    record the workspace's chat app produces."""
     if event.get("type") == "step" and event.get("source") == "agent":
         return str(event.get("message") or "").strip()
     if event.get("type") == "assistant_message":

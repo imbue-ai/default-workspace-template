@@ -33,6 +33,10 @@ SCREENSHOTS_DIR = Path("/logs/agent/judge_screenshots")
 
 MANIFEST_FILENAME = "manifest.json"
 READING_ACTION = "read the final state"
+# The opening record a flow writes before it acts, which is not rendered as a step: its declarations
+# are the header's, and the page it opened onto is the state the first action record carries, since
+# a step records the state its action was chosen from.
+INIT_KIND = "init"
 FLOWS_DIRNAME = "flows"
 FLOW_LOG_FILENAME = "log.jsonl"
 UI_FLOWS_CLASS = "ui_flows"
@@ -171,10 +175,23 @@ def select_screenshots(
 
 
 def _render_step(step: dict[str, Any], max_state_chars: int) -> list[str]:
+    """One step: what the agent did, what it predicted, and what the page did with it.
+
+    A log written before the agent recorded predictions carries neither prediction nor observation,
+    and simply has those lines left off.
+    """
     lines = [
         "  step {}: {}".format(step.get("step_index"), step.get("action") or "(no action)"),
         "    agent reasoning: {}".format(step.get("reasoning") or "(none recorded)"),
     ]
+    expected = str(step.get("expected") or "")
+    if expected:
+        lines.append("    and expected: {}".format(expected))
+    observed = str(step.get("observed") or "")
+    if observed:
+        # What the page did against what was predicted of it, which is where an app that ignores a
+        # gesture, or answers it with something else entirely, shows up.
+        lines.append("    the page then: {}".format(observed))
     state = str(step.get("state") or "")
     if len(state) > max_state_chars:
         state = state[:max_state_chars] + "\n[...page state truncated...]"
@@ -230,8 +247,9 @@ def _render_detail(
         steps = steps_by_flow.get(flow_dir.name, [])
         detail_lines += ["## flow: {}".format(flow_dir.name), ""]
         detail_lines += _flow_header(entry, check, steps)
-        for index, step in enumerate(steps):
-            is_last = index == len(steps) - 1
+        rendered = [step for step in steps if step.get("kind") != INIT_KIND]
+        for index, step in enumerate(rendered):
+            is_last = index == len(rendered) - 1
             detail_lines.extend(_render_step(step, MAX_STEP_STATE_CHARS if is_last else earlier_state_chars))
         detail_lines.append("")
     return "\n".join(detail_lines) + "\n"

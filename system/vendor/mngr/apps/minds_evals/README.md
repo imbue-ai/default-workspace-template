@@ -28,7 +28,7 @@ only.
    of an account. A create whose answer is lost is retried, and the collision that retry hits is
    resolved back to the chat the first attempt left behind.
    Being the workspace's first chat, it is the one that gets `/welcome`. The greeting it draws is
-   the trajectory's first agent message, before any client turn: the gates and the wordiness check
+   the trajectory's first agent message, before any client turn: the gates and the message-length check
    count only agent messages after the client's first turn, so it answers nothing there, while the
    judged transcript keeps it as the first agent message. Either way the driver waits for that
    welcome to be *answered* before turn 1. A
@@ -250,7 +250,7 @@ sign in with.
 
 `trajectory.json` is the trial's only conversation record and the one every grade-time reader takes
 the conversation from, exactly as for any other harbor eval: the judge-transcript renderer, the
-structural gates, and the wordiness guard read its ATIF steps, and the judges read the rendering.
+structural gates, and the message-length guard read its ATIF steps, and the judges read the rendering.
 Nothing at grade time knows the workspace UI feed exists.
 
 Two transcripts of the workspace agent exist: the workspace UI feed (`/api/agents/<id>/events`),
@@ -332,7 +332,6 @@ branch is worth keeping only while that branch is.
 {
   "mngr_branch": "main",
   "timeout_seconds": 3600,
-  "avg_word_count_baseline": 120,
   "personas": [
     {"id": "todo-app", "persona": "...", "prompts": ["Build me ...", "Sounds good.", "DECIDE_FROM_PERSONA"]}
   ]
@@ -382,12 +381,11 @@ branch is worth keeping only while that branch is.
   An entry only earns a record once it has stopped, so a timed-out trial's `entries` ends at the
   entry it died in: that entry and any after it are absent, and `waits_done` can then exceed the
   exchanges the records account for.
-- `avg_word_count_baseline` feeds the verifier's wordiness guard (pass unless the average words per
-  agent turn exceeds baseline * 1.1). The guard takes its counts from `trajectory.json`: a "turn"
-  is the agent messages between one client turn and the next, merged. The driver separately
-  records its own `average_words_per_turn` and the finer `average_words_per_message` (words per
-  individual agent message, before the per-turn merge) in the trial metadata, for observability
-  only; neither figure is read at grade time.
+- `avg_word_count_baseline` is accepted so older configs still load, and nothing reads it: the
+  message-length guard scores per-message limits rather than an average against a baseline. What it
+  measures and why is in `quality/message_lengths.py`'s module docstring. The driver separately
+  records its own `average_words_per_turn` and the finer `average_words_per_message` in the trial
+  metadata, for observability only; neither is read at grade time either.
 - `verification_timeout_seconds` (default 1800) is the evidence-collection phase's own budget. It is
   *added* to the task's `[agent].timeout_sec` (case timeout + verification budget + grace), so
   verification never competes with the conversation for time. It is a deadline, not a reservation:
@@ -807,13 +805,22 @@ and it drops `--embedder-origin` and `--reverse`, which shape only how minds *em
 
 All judging happens inside rewardkit, in the verifier container, over the recorded transcript and
 evidence; `finalize.py` composes the trial's final reward from rewardkit's dimension scores
-afterwards. Every trial is scored on two dimensions, and cases that declare
-`expectations` gain a third.
+afterwards. `gates`, `quality` and `harness_quality` are scored on every trial; cases that declare
+`expectations` add `outcome`.
 
 - **`gates`** -- structural: the trajectory parses, the agent engaged with distinct non-stub
   replies, all turns completed, the run did not time out. These zero the reward when they fail.
-- **`quality`** -- three 1-10 likert judge criteria (`conciseness`, `nontechnical_language`,
-  `proactive`) plus the binary wordiness guard.
+- **`quality`** -- the 1-10 likert judge criteria (`conciseness`, `nontechnical_language`,
+  `nontechnical_status_language`, `proactive`) plus the programmatic message-length guard. The client
+  reads the agent on two surfaces and the criteria are split along them: the first two judge the chat
+  messages, `nontechnical_status_language` judges the progress timeline. `quality/prompt.md` holds the
+  split the judge is given.
+- **`harness_quality`** -- whether the workspace let the agent work at all, scored per scope: a 1-5
+  likert judge (`main_harness_success` over the lead agent, `worker_harness_success` over every
+  launched worker) and a programmatic criterion over the counted failure signatures
+  (`main_harness_soundness`, `worker_harness_soundness`). `render_harness_report.py` holds what
+  counts as a failure and why the dimension is separate. Every criterion in every dimension is framed
+  so a higher number is a better outcome.
 - **`outcome`** (expectation cases only; the generator omits the verifier's `outcome/` directory
   otherwise, so rewardkit never emits a partial score for it) -- one criterion per declared check
   class (`app_registered`, `http_expectations_met`, `files_expectations_met`,
@@ -833,7 +840,15 @@ verifies.
 A stepped case is scored the same way, once per step, against that step's own expectations; the
 trial's reward is then the last step's or the mean, per `reward_strategy`.
 
-`quality = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
+`harness_quality` then takes a fixed `HARNESS_SHARE` (0.2) of whatever the trial earned on quality and
+outcome, leaving the parity between those two untouched: `reward = gates_all_passed ? (0.8 * earned +
+0.2 * harness_quality) : 0`. Every dimension is read the same way, absent meaning 0.0. The rewards
+composed here are the ones rewardkit just produced, not the ones stored when the trial was captured,
+so regrading a trial older than a dimension grades it on that dimension and restates its reward --
+which is what makes a regrade comparable to a fresh run rather than a reconstruction of an old one.
+
+`quality = weighted mean(conciseness, nontechnical_language, nontechnical_status_language,
+proactive, message-length guard)` -- likert
 criteria normalized as `(raw - 1) / 9`, so raw judge scores stay recoverable (`raw = 9 * normalized
 + 1`; raw values are in `reward-details.json`). `reward` is that score, zeroed unless every
 structural gate passed. For expectation cases it is an even split, `reward = gates_all_passed ?
@@ -864,11 +879,14 @@ Grade-time pre-steps rebuild the judges' inputs from the captured evidence on ev
 `harbor trial regrade` re-scores captured trials under the current rendering with no conversation
 re-run:
 
-- `judge_transcript.txt` (from `trajectory.json`): one `[USER]` block per `user` step and one
+- `judge_transcript.txt` (from `trajectory.json`): one `[USER]` block per `user` step, one
   `[AGENT · message N]` block per `agent` step with a message, so conciseness is judged per
-  individual message rather than over a per-turn merge. On the workspace's own document that is one
-  block per inference; on the hand-built fallback (see [The trajectory](#the-trajectory)) it is one
-  per turn. Both the quality judge and the outcome judge read it.
+  individual message rather than over a per-turn merge, and one `[PROGRESS · ...]` block per
+  progress-timeline record, which is the second surface the client reads and appears in no `message`
+  field (`render_judge_transcript.py` holds how those records are recovered). On the workspace's
+  own document a message block is one inference; on the hand-built fallback (see
+  [The trajectory](#the-trajectory)) it is one per turn, and that fallback carries no tool calls, so
+  it renders no progress blocks. Both the quality judge and the outcome judge read it.
 - `judge_flows_digest.txt` and a flat `judge_screenshots/` (from the flow evidence, which rewardkit
   cannot reach because it expands a listed directory exactly one level and never recurses). The
   digest carries, per flow: the declared steps, the `expect` the judge is to rule on, the completion
@@ -878,6 +896,12 @@ re-run:
   renders a listed path it cannot find as a visible `[not found]` block, while an empty listed
   directory renders *nothing at all*, which is why the digest states the screenshot count instead of
   leaving the judge to infer it.
+- `harness_main.txt`, `harness_workers.txt` and `harness_failures.json` (from `trajectory.json` and
+  each `verification/workers/<name>/trajectory.json`): the processed harness reports the
+  `harness_quality` judges read, and the per-scope signature counts its programmatic criteria score.
+  A raw trajectory runs to hundreds of KB and is mostly ordinary work, so each report keeps only the
+  steps that bear on whether the harness held. `render_harness_report.py` holds the signature list
+  and the rules for what is kept and what is counted.
 
 ### Error versus zero
 

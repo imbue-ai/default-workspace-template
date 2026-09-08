@@ -25,7 +25,7 @@ first-boot setup and then execs `supervisord -n -c system/supervisord.conf`:
 
 ```ini
 [program:system_interface]
-command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:8000 --name system_interface && system-interface"
+command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/system_interface/app.toml --url http://localhost:8000 && system-interface"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
