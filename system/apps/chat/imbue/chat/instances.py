@@ -66,10 +66,11 @@ SUBAGENT_ACTION_ID: Final[ActionId] = ActionId("subagent")
 
 # The params each action accepts (contracts.md section 2, the chat manifest row).
 ACCOUNT_ID_PARAM: Final[str] = "account_id"
+MESSAGE_PARAM: Final[str] = "message"
 PARENT_PARAM: Final[str] = "parent"
 SESSION_PARAM: Final[str] = "session"
 DESCRIPTION_PARAM: Final[str] = "description"
-_NEW_PARAMS: Final[frozenset[str]] = frozenset({ACCOUNT_ID_PARAM})
+_NEW_PARAMS: Final[frozenset[str]] = frozenset({ACCOUNT_ID_PARAM, MESSAGE_PARAM})
 _SUBAGENT_PARAMS: Final[frozenset[str]] = frozenset({PARENT_PARAM, SESSION_PARAM, DESCRIPTION_PARAM})
 
 # An agent id: ``agent-<32 hex>`` as mngr mints it, with the instance-key alphabet so a test
@@ -318,9 +319,11 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     def _create_chat(self, params: Mapping[str, str]) -> InstanceRecord:
         """``new``: launch a chat on ``account_id`` (the most recently used account when the
         param is absent), or, with nothing signed in, mint one that waits for an account: its
-        page shows the provider chooser, so the tab opens either way."""
+        page shows the provider chooser, so the tab opens either way. ``message`` is the first
+        message the chat sends once it runs; a waiting chat keeps it for its launch."""
         _require_params(NEW_ACTION_ID, params, _NEW_PARAMS)
         account_id = params.get(ACCOUNT_ID_PARAM, "")
+        message = params.get(MESSAGE_PARAM, "")
         try:
             is_reserved = not account_id and not has_usable_account()
         except AccountError as e:
@@ -328,7 +331,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             # cannot resolve a binding, so the shell shows the reason rather than a 500.
             raise ChatCreateRefusedError(str(e)) from e
         if is_reserved:
-            created = self.manager.reserve_chat()
+            created = self.manager.reserve_chat(message=message)
         else:
             try:
                 created = self.manager.create_chat_agent(
@@ -336,6 +339,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
                     extra_role_templates=(),
                     project_id="",
                     account_id=account_id,
+                    message=message,
                 )
             except AgentCreationError as e:
                 raise ChatCreateRefusedError(str(e)) from e
@@ -381,4 +385,6 @@ def build_chat_instance_source(
     manager: AgentManager, agent_starter: Callable[[str], None]
 ) -> tuple[InstanceSourceInterface, InstanceNudgerInterface]:
     """The source and nudger the chat document mounts the instances blueprint with."""
-    return AgentManagerInstanceSource(manager=manager, agent_starter=agent_starter), AgentManagerNudger(manager=manager)
+    return AgentManagerInstanceSource(manager=manager, agent_starter=agent_starter), AgentManagerNudger(
+        manager=manager
+    )
