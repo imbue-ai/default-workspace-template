@@ -2,7 +2,7 @@
 
 Paired branches: `gabriel/critical-app-editing` in this repo and in the mngr repo. The mngr side is specified in the mngr repo at `blueprint/critical-app-editing/plan-critical-app-editing.md` and lands first; this repo vendors it.
 
-This plan replaces the unmerged `system-interface-live-editing` branch and its spec. That branch was written against a system interface that still contained the chat; the workspace app model (`../workspace-app-model/`) has since split the chat into its own app, which changes what "editing the workspace UI safely" means. The parts of that branch that still apply are carried here and named in the Implementation plan.
+This plan replaces an unmerged pair of branches and their spec: `submit/system-interface-live-editing-plan` in this repo (spec `docs/system/blueprint/system-interface-live-editing/`) and `gabriel/denim-pigeon` in the mngr repo. Those branches were written against a system interface that still contained the chat; the workspace app model (`../workspace-app-model/`) has since split the chat into its own app, which changes what "editing the workspace UI safely" means. The parts of that branch that still apply are carried here and named in the Implementation plan.
 
 ## Refined prompt
 
@@ -19,7 +19,7 @@ Fresh paired branches in mngr and default-workspace-template, replacing the syst
 * mngr side: the observe read side including the follower, the `initial_branch` widening, and notify's probe, merged from the old mngr branch.
 * Done means the automated suites plus a scripted manual scenario in a real workspace, with findings recorded in this folder.
 * The deferred items live in this plan's Open questions only.
-* The template branch re-applies the surviving diffs by hand as new commits grouped by topic; the mngr branch merges or cherry-picks the old one.
+* The template branch re-applies the surviving diffs from `submit/system-interface-live-editing-plan` by hand as new commits grouped by topic; the mngr branch merges or cherry-picks `gabriel/denim-pigeon`.
 * Lands as one unit; phasing is for build order.
 
 ## Overview
