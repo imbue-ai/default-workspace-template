@@ -34,7 +34,7 @@ Kept for the release after this one, with their `# CLEANUP:` comments saying so:
 
 ## Tests
 
-- Apply tests for the reread step, the per-app probes, and the per-app snapshot and restore.
+- Apply tests for the per-app probes (`update_self_test.py`: which apps are read off the tree, the manifest's URL over the registry row's, a poll that follows a re-registration, a stale row's HTML refused, the findings when a poll gives up, the rollback path holding the restored tree's apps) and the per-app snapshot and restore; there is no reread step to test.
 - A repo-wide ratchet in `system/test_meta_ratchets.py` (`test_prevent_service_identifiers_in_the_shell`) counting identifier tokens containing `service` in the shell package, its frontend, and the shared library, excluding tests, the vendored embed contract, and the tokens listed above, pinned at the residue.
 
 ## Changelog entries
