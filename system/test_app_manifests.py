@@ -4,6 +4,7 @@ that program's registration line passes, and declares a memory band that exists.
 
 import ast
 import configparser
+import glob
 import re
 import tomllib
 from pathlib import Path
@@ -32,8 +33,20 @@ def _built_in_manifest_paths() -> list[Path]:
 
 
 def _command_by_program() -> dict[str, str]:
+    """Every program the config declares: the main file, plus the drop-ins its globs pull in.
+
+    ``configparser`` does not follow supervisord's ``[include]`` directive, and the template
+    declares its programs one per file under ``system/supervisord.conf.d/``, so a bare read of
+    the main config finds almost none of them. The globs are expanded the way supervisord
+    expands them -- against the directory of the config declaring them, with ``%(here)s``
+    substituted -- and read after the main config, which reproduces supervisord's precedence.
+    """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)
+    conf_dir = _SUPERVISORD_CONF.parent
+    for pattern in (parser.get("include", "files", fallback="") or "").split():
+        expanded = str(conf_dir / pattern.replace("%(here)s", str(conf_dir)))
+        parser.read(sorted(glob.glob(expanded)))
     return {
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()
