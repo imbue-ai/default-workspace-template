@@ -8,6 +8,7 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import socketserver
@@ -17,9 +18,12 @@ import threading
 import time
 import xmlrpc.client
 from collections.abc import Iterator
+from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
@@ -172,6 +176,34 @@ class FakeTemplateCatalogFetcher(TemplateCatalogFetcherInterface):
     def fetch(self, url: str) -> bytes | None:
         self.fetched_urls.append(url)
         return self.body_by_url.get(url)
+
+
+def catalog_template_document(slug: str, **overrides: Any) -> dict[str, Any]:
+    """One template as a catalog lists it: the four required fields and a relative drawing, derived
+    from the slug, with ``overrides`` laid over them."""
+    document: dict[str, Any] = {
+        "slug": slug,
+        "title": slug.title(),
+        "description": f"What {slug} does.",
+        "repository_url": f"https://github.com/someone/{slug}",
+        "thumbnail": f"thumbnails/someone--{slug}.svg",
+    }
+    document.update(overrides)
+    return document
+
+
+def catalog_document(
+    *templates: Mapping[str, Any], shelves: Sequence[Mapping[str, Any]] = (), **overrides: Any
+) -> bytes:
+    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``."""
+    document: dict[str, Any] = {
+        "format": 1,
+        "generated_at": "2026-09-07T00:00:00Z",
+        "templates": list(templates),
+        "shelves": list(shelves),
+    }
+    document.update(overrides)
+    return json.dumps(document).encode("utf-8")
 
 
 def build_test_state(

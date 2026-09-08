@@ -43,6 +43,8 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import catalog_document
+from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -106,22 +108,18 @@ _TRIGGER_TIMEOUT_MS = 20000
 _CATALOG_TEMPLATE_SLUG = "inbox-digest"
 _CATALOG_TEMPLATE_TITLE = "Inbox Digest"
 _CATALOG_TEMPLATE_REPOSITORY_URL = "https://github.com/someone/inbox-digest"
-_CATALOG_DOCUMENT = json.dumps(
-    {
-        "format": 1,
-        "templates": [
-            {
-                "slug": _CATALOG_TEMPLATE_SLUG,
-                "title": _CATALOG_TEMPLATE_TITLE,
-                "description": "A digest of your inbox.",
-                "what_it_is": "Turns a noisy inbox into a scannable digest.",
-                "author": "someone",
-                "repository_url": _CATALOG_TEMPLATE_REPOSITORY_URL,
-            }
-        ],
-        "shelves": [{"key": "popular", "title": "Most popular", "slugs": [_CATALOG_TEMPLATE_SLUG]}],
-    }
-).encode()
+_CATALOG_DOCUMENT = catalog_document(
+    catalog_template_document(
+        _CATALOG_TEMPLATE_SLUG,
+        title=_CATALOG_TEMPLATE_TITLE,
+        description="A digest of your inbox.",
+        what_it_is="Turns a noisy inbox into a scannable digest.",
+        author="someone",
+        repository_url=_CATALOG_TEMPLATE_REPOSITORY_URL,
+        thumbnail="",
+    ),
+    shelves=[{"key": "popular", "title": "Most popular", "slugs": [_CATALOG_TEMPLATE_SLUG]}],
+)
 
 
 class E2EServer(FrozenModel):
