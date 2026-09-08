@@ -37,7 +37,8 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. |
-| `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation and `layout.py --param` validation only. Forbidden when `instances = false`. |
+| `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
+| `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.
@@ -47,7 +48,7 @@ Built-in manifests:
 | App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
 |---|---|---|---|---|---|---|
 | `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
+| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
 | `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
 | `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
 | `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
@@ -57,7 +58,7 @@ Every built-in except the shell points `icon` at an `icon.svg` beside its manife
 ## 3. The registry (`data/.state/apps.toml`)
 
 Written only by `system/scripts/forward_port.py`, which is stdlib-only: `tomllib` to read and a private writer that emits the flat shape below.
-The writer supports exactly the value types the registry uses: strings (emitted as basic strings with `\\`, `"`, and control characters escaped), booleans, and arrays of inline tables whose values are strings or booleans.
+The writer supports exactly the value types the registry uses: strings (emitted as basic strings with `\\`, `"`, and control characters escaped), booleans, integers, and arrays of inline tables whose values are strings, booleans, or arrays of strings.
 
 Each `[[apps]]` row:
 
@@ -70,7 +71,8 @@ Each `[[apps]]` row:
 | `critical` | manifest | Absent reads as `false`. |
 | `priority` | manifest | Absent reads as `user`. |
 | `default_shortcut` | manifest | Inline table `{action, mode}`. |
-| `actions` | manifest | Array of inline tables `{id, label}`; `params` is not copied. |
+| `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
+| `launcher_rank` | manifest | Integer; absent reads as none. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
 `--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way.
@@ -189,6 +191,7 @@ Projects and views:
 | `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `200 {"updated_at"}`, the stamp written (the window's next `base_updated_at`), `null` when the body equalled the stored arrangement and nothing was written or broadcast; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one) |
 | `GET /api/clients` | | `{"clients": [client, ...]}`; a window reads its own record here on boot to learn its active view |
 | `GET /api/inventory` | | the inventory document (section 9) |
+| `GET /api/templates-catalog` | | the New Tab page's template catalog: `200 {"catalog": {"generated_at", "templates": [template with "thumbnail_url" resolved to an absolute URL, ...], "shelves": [{"key", "title", "slugs"}]}, "is_stale": bool}` (`is_stale` when the shell is answering its last good copy because the fetch failed); `200 {"catalog": null, "is_stale": false}` when no catalog URL is configured; `503 {"detail"}` when nothing could be loaded. The document, its URL, and its cache are described in `catalog/README.md` and `docs/system/blueprint/new-tab-page/plan-new-tab-page.md` |
 
 `project` is `{"id", "name", "color", "glyph", "tabs": [address], "shortcuts": [{"app", "action", "mode"}]}`.
 `layout` is `{"dockview": <dockview JSON>, "tabs": {"<panel_id>": {"address", "tab_id", "last_focused_ms"}}, "device_kind", "updated_at"}`.
@@ -233,7 +236,7 @@ Outbound (shell to browser):
 | `tab_rebound` | `{"client_id", "view_id", "tab_id", "address"}` | after `POST /api/tabs/<tab_id>/instance`; the owning client re-addresses that tab, adds the address to the view's tab set through the projects route, and saves |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the four transient verbs of section 12 (`maximize`, `restore`, `refresh`, `reload_system_interface`); `requester` is the address of the instance that posted the op (its own chat), `""` when unknown, and is what `self` resolves to; `target_client_id` names the client whose windows apply it, `null` for the two machine-wide forms |
 
-`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label"}], "default_shortcut", "is_running", "is_listed", "instances": [record, ...]}`.
+`app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label", "params": [name, ...]}], "default_shortcut", "launcher_rank", "is_running", "is_listed", "instances": [record, ...]}`.
 `is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed.
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`, stoppable `false` (the app-level Stop and Start are its verbs).
 

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Minds Pulse">
+  <!-- Bespoke thumbnail: a heartbeat/pulse line crossing a cost stat tile, in Minds green on an off-white card. Mock data only. -->
+  <rect width="240" height="160" rx="14" fill="#fafaf8"/>
+  <rect x="0.75" y="0.75" width="238.5" height="158.5" rx="13.25" fill="none" stroke="#e4e6e1" stroke-width="1.5"/>
+
+  <!-- radiating pulse mark -->
+  <circle cx="34" cy="30" r="15" fill="none" stroke="#2f6b4f" stroke-width="1.5" opacity="0.28"/>
+  <circle cx="34" cy="30" r="10" fill="none" stroke="#2f6b4f" stroke-width="1.5" opacity="0.5"/>
+  <circle cx="34" cy="30" r="4.5" fill="#2f6b4f"/>
+
+  <!-- title -->
+  <text x="56" y="27" font-family="Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#20372c">Minds Pulse</text>
+  <text x="56" y="41" font-family="Helvetica, Arial, sans-serif" font-size="9" fill="#6b7a72">host-wide AI cost + system activity</text>
+
+  <!-- stat tile -->
+  <rect x="20" y="58" width="200" height="82" rx="10" fill="#ffffff" stroke="#e4e6e1" stroke-width="1.5"/>
+
+  <!-- gridlines -->
+  <line x1="32" y1="78" x2="208" y2="78" stroke="#eef0ec" stroke-width="1"/>
+  <line x1="32" y1="98" x2="208" y2="98" stroke="#eef0ec" stroke-width="1"/>
+  <line x1="32" y1="118" x2="208" y2="118" stroke="#eef0ec" stroke-width="1"/>
+
+  <!-- heartbeat / pulse line over the tile -->
+  <polyline points="32,108 58,108 68,108 76,86 86,124 96,72 106,108 132,108 148,108 158,94 168,116 178,108 208,108"
+            fill="none" stroke="#2f6b4f" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="96" cy="72" r="3" fill="#2f6b4f"/>
+
+  <!-- cost readout -->
+  <text x="32" y="76" font-family="Helvetica, Arial, sans-serif" font-size="8" fill="#6b7a72">TODAY</text>
+  <text x="150" y="134" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#2f6b4f">$12.40</text>
+</svg>

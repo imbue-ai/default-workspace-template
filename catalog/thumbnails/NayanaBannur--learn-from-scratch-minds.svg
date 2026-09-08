@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Learn from Scratch">
+  <!-- Bespoke thumbnail: a miniature of the app - topic sidebar, the vertical
+       detail slider, one slide, and a small interactive diagram. Mock data only. -->
+  <rect x="0.75" y="0.75" width="238.5" height="158.5" rx="12" fill="#ffffff" stroke="#e4e4e7" stroke-width="1.5"/>
+
+  <!-- Sidebar: topic list -->
+  <rect x="1" y="1" width="74" height="158" rx="11" fill="#f6f7f9"/>
+  <circle cx="14" cy="15" r="3.5" fill="#2f9e6e"/>
+  <rect x="22" y="12" width="40" height="6" rx="3" fill="#c2c7cf"/>
+  <!-- search box -->
+  <rect x="11" y="27" width="53" height="9" rx="4" fill="#ffffff" stroke="#dfe2e7"/>
+  <!-- topic rows (one selected) -->
+  <rect x="11" y="45" width="53" height="9" rx="3" fill="#dde1e6"/>
+  <rect x="11" y="59" width="53" height="9" rx="3" fill="#2f9e6e"/>
+  <rect x="11" y="73" width="45" height="9" rx="3" fill="#dde1e6"/>
+  <rect x="11" y="87" width="53" height="9" rx="3" fill="#dde1e6"/>
+  <rect x="11" y="101" width="38" height="9" rx="3" fill="#dde1e6"/>
+  <rect x="11" y="115" width="48" height="9" rx="3" fill="#dde1e6"/>
+  <rect x="11" y="129" width="41" height="9" rx="3" fill="#dde1e6"/>
+
+  <!-- Vertical detail slider -->
+  <line x1="92" y1="26" x2="92" y2="134" stroke="#d6d9de" stroke-width="2"/>
+  <circle cx="92" cy="30" r="3" fill="#2f9e6e"/>
+  <circle cx="92" cy="46" r="3" fill="#2f9e6e"/>
+  <circle cx="92" cy="64" r="5" fill="#ffffff" stroke="#2f9e6e" stroke-width="2.5"/>
+  <circle cx="92" cy="84" r="3" fill="#ffffff" stroke="#c3c7cd" stroke-width="1.5"/>
+  <circle cx="92" cy="102" r="3" fill="#ffffff" stroke="#c3c7cd" stroke-width="1.5"/>
+  <circle cx="92" cy="120" r="3" fill="#ffffff" stroke="#c3c7cd" stroke-width="1.5"/>
+  <circle cx="92" cy="134" r="3" fill="#ffffff" stroke="#c3c7cd" stroke-width="1.5"/>
+
+  <!-- The current slide: heading, text lines, and a mini diagram -->
+  <rect x="106" y="26" width="104" height="10" rx="3" fill="#2f9e6e"/>
+  <rect x="106" y="46" width="118" height="5.5" rx="2.5" fill="#d9dde2"/>
+  <rect x="106" y="57" width="112" height="5.5" rx="2.5" fill="#d9dde2"/>
+  <rect x="106" y="68" width="96" height="5.5" rx="2.5" fill="#d9dde2"/>
+
+  <!-- mini interactive diagram (bar chart) -->
+  <rect x="106" y="84" width="118" height="50" rx="5" fill="#eef7f2" stroke="#cfe6db"/>
+  <line x1="114" y1="124" x2="216" y2="124" stroke="#bcd9cb" stroke-width="1.5"/>
+  <rect x="120" y="108" width="12" height="16" rx="1.5" fill="#7ec6a4"/>
+  <rect x="139" y="99" width="12" height="25" rx="1.5" fill="#57b98c"/>
+  <rect x="158" y="104" width="12" height="20" rx="1.5" fill="#2f9e6e"/>
+  <rect x="177" y="93" width="12" height="31" rx="1.5" fill="#238a63"/>
+  <rect x="196" y="112" width="12" height="12" rx="1.5" fill="#7ec6a4"/>
+</svg>
