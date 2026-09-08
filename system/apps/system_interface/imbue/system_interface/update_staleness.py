@@ -105,9 +105,13 @@ _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 # scaffolding an app appends the new package to the root's
 # ``[project].dependencies`` and ``[tool.uv.sources]`` and relocks, which moves
 # nothing this process resolved but would raise the banner on every app a user
-# builds. The residue is a re-point of a root ``[tool.uv.sources]`` entry with
-# no matching package-manifest edit -- rare enough not to pay for a
-# near-permanent false banner.
+# builds. The residue is a root ``[tool.uv.sources]`` re-point, or a
+# ``[tool.uv.workspace]`` members/exclude edit, that no per-package manifest
+# accompanies -- rare enough not to pay for a near-permanent false banner. That
+# is a deliberate narrowing away from the apply's ``_is_backend_manifest`` in
+# ``.agents/skills/update-self/scripts/update_classification.py``, which this
+# list otherwise mirrors: over-counting costs the apply one extra reinstall, and
+# costs this banner the trust it only gets to spend once.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
