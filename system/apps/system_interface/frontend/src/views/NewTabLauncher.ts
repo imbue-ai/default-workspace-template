@@ -506,7 +506,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     nowMs: number,
     actionTiles: readonly LaunchTile[],
   ): m.Vnode {
-    const visible = sortRowsByRecency(filterRowsByApp(section.rows, hiddenAppsBySection[section.key]));
+    const hiddenApps = hiddenAppsBySection[section.key];
+    const visible = sortRowsByRecency(filterRowsByApp(section.rows, hiddenApps));
+    // The action rows follow the same filter: an unchecked app hides what it could open too.
+    const visibleActions = actionTiles.filter((tile) => !hiddenApps.has(tile.app.name));
     const nothingHere =
       section.key === "on-machine" ? "Nothing else is running on this machine." : "Nothing is in this project yet.";
     const emptyMessage = section.rows.length === 0 ? nothingHere : "No tabs match this filter.";
@@ -530,8 +533,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         ),
         openFilterFor === section.key ? filterMenu(section) : null,
       ]),
-      actionTiles.map((tile) => actionRow(tile, attrs)),
-      visible.length === 0 && actionTiles.length === 0
+      visibleActions.map((tile) => actionRow(tile, attrs)),
+      visible.length === 0 && visibleActions.length === 0
         ? m("p", { class: "text-faint px-2 py-1 text-(length:--font-size-row)" }, emptyMessage)
         : visible.map((row) => memberRow(row, nowMs, attrs.onOpenRow)),
     ]);
