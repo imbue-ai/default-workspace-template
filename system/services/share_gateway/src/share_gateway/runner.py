@@ -25,8 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from detached_subprocess.runner import run_detached_command, spawn_detached_process
-from imbue.concurrency_group.errors import ProcessSetupError
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from share_gateway import materials as materials_module
@@ -129,12 +128,9 @@ def _reload_caddy(caddyfile_text: str) -> bool:
 def _reload_frpc(config_path: Path) -> bool:
     """Hot-reload one frpc's proxies from its on-disk config via its admin API; False on failure."""
     try:
-        result = run_detached_command(["frpc", "reload", "-c", str(config_path)], timeout=15)
-    except ProcessSetupError as exc:
+        result = run_detached_subprocess(["frpc", "reload", "-c", str(config_path)], timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
         _log(f"frpc reload failed: {exc}")
-        return False
-    if result.is_timed_out:
-        _log("frpc reload failed: did not finish within 15s")
         return False
     if result.returncode != 0:
         _log(f"frpc reload rejected ({result.returncode}): {(result.stdout + result.stderr)[:300]}")

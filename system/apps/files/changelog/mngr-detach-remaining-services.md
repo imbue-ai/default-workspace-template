@@ -1,0 +1,1 @@
+No behaviour change. The file browser's dufs server was already detached from the workspace's terminal by the shared sidecar it runs under; this adds the check that keeps it that way, so a subprocess started directly by this app later cannot quietly reintroduce the freeze the sidecar already prevents.

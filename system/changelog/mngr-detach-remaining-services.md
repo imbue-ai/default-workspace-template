@@ -1,0 +1,1 @@
+Every background service in the workspace now starts its child programs in their own session, so a child that touches the workspace's terminal can no longer suspend the service that started it. The library index describes the shared helper they all use.

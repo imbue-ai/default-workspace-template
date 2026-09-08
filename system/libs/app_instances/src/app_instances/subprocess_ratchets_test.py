@@ -9,9 +9,9 @@ The rules themselves live in ``detached_subprocess.ratchets``; every supervisord
 repo applies the same two to its own tree. This file supplies only what is specific here: the
 source tree to scan and the allowlist.
 
-Named ``*_test.py`` rather than ``test_*_ratchets.py`` because the latter is the per-project
-standard set, and ``system/test_meta_ratchets.py`` requires exactly one of those per project,
-defining exactly the same tests as every other.
+Named ``*_test.py`` because that is this repo's convention for a unit test, which a static scan
+is. (``test_*_ratchets.py`` is the per-project standard set, which ``system/test_meta_ratchets.py``
+requires to be exactly one per project defining identical tests.)
 """
 
 from pathlib import Path

@@ -14,11 +14,7 @@ from typing import Final
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import AppManifest, load_manifest
 from app_manifest.primitives import AppUrl, InstancesUrl
-from detached_subprocess.runner import (
-    DetachedSpawnError,
-    run_detached_command,
-    spawn_detached_process,
-)
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
 from flask import Flask
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
@@ -94,11 +90,12 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
             f"registration script {FORWARD_PORT_SCRIPT} not found; the sidecar must run from the repo root"
         )
     started_at = time.monotonic()
-    completed = run_detached_command(command, timeout=REGISTRATION_TIMEOUT_SECONDS)
-    if completed.is_timed_out:
+    try:
+        completed = run_detached_subprocess(command, timeout=REGISTRATION_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as e:
         raise SidecarError(
             f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"
-        )
+        ) from e
     elapsed = time.monotonic() - started_at
     if completed.returncode != 0:
         raise SidecarError(
@@ -256,7 +253,7 @@ def _spawn_child(child_argv: Sequence[str]) -> subprocess.Popen[bytes]:
     """
     try:
         return spawn_detached_process(child_argv)
-    except DetachedSpawnError as e:
+    except OSError as e:
         raise SidecarError(
             f"cannot start the wrapped server {list(child_argv)}: {e}"
         ) from e
