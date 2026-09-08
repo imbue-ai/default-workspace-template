@@ -26,6 +26,7 @@ from app_instances.nudge import shell_base_url
 from app_manifest.errors import RegistryReadError
 from app_manifest.registry import read_registry
 from app_manifest.registry import registry_path
+from detached_subprocess.runner import run_detached_command
 from flask import Flask
 from flask import Response
 from flask import request
@@ -104,7 +105,6 @@ from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
 from imbue.chat.ws_broadcaster import proto_agent_created_message
 from imbue.chat.wsgi import build_sock
-from detached_subprocess.runner import run_detached_command
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId

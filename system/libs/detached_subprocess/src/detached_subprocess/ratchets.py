@@ -18,11 +18,13 @@ import ast
 from pathlib import Path
 
 from imbue.imbue_common.ratchet_testing.common_ratchets import RatchetRuleInfo
-from imbue.imbue_common.ratchet_testing.core import FileExtension
-from imbue.imbue_common.ratchet_testing.core import RatchetMatchChunk
-from imbue.imbue_common.ratchet_testing.core import RegexPattern
-from imbue.imbue_common.ratchet_testing.core import check_regex_ratchet
-from imbue.imbue_common.ratchet_testing.core import get_ast_nodes_of_type
+from imbue.imbue_common.ratchet_testing.core import (
+    FileExtension,
+    RatchetMatchChunk,
+    RegexPattern,
+    check_regex_ratchet,
+    get_ast_nodes_of_type,
+)
 
 RAW_SPAWN_RULE = RatchetRuleInfo(
     rule_name="subprocess spawns outside the detached runner",

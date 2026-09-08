@@ -10,6 +10,7 @@ from typing import Final
 
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import SilentNudger
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
@@ -94,7 +95,6 @@ from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostName
-from detached_subprocess.runner import run_detached_command
 
 # The role template every UI-created agent gets. The harness is chosen separately via
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
