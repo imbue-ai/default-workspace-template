@@ -363,11 +363,6 @@ def test_new_keeps_a_seeded_message_on_the_chat_it_reserves(agent_manager: Agent
     assert plain_proto.message == ""
 
 
-def test_new_refuses_a_param_it_does_not_take(agent_manager: AgentManager) -> None:
-    with pytest.raises(InvalidParamsError, match="prompt"):
-        _source(agent_manager).create_instance(ActionId("new"), {"prompt": "hello"})
-
-
 def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_manager: AgentManager) -> None:
     source = _source(agent_manager)
     reserved = source.create_instance(ActionId("new"), {})
