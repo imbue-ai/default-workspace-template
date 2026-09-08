@@ -152,7 +152,7 @@ const XMLNS = "http://www.w3.org/2000/svg";
  * The glyph's two tones on a white tile, mixed from the tile's hue: the hue darkened enough to read
  * against the page for the stroke, and a wash of it for the fill. The duotone comes from the
  * glyph's own geometry: its closed shapes take the fill, its open lines enclose nothing and stay
- * pure stroke. A browser without color-mix falls back to the plain outline.
+ * pure stroke. Both tones are color-mix() values, written straight into the svg's fill and stroke.
  */
 export function glyphTones(option: StartOption): { stroke: string; fill: string } {
   return {
