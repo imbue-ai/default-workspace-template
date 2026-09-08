@@ -12,6 +12,14 @@
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
+ *
+ * The card opens on a CLICK of the chip and its side flyouts open on HOVER, which is the
+ * division every desktop menu makes: getting into a menu is a decision, moving around inside
+ * one is not. Inside the card the pointer therefore decides what is showing -- every row takes
+ * the hover, including the rows that open nothing and so close what is open -- and the safe
+ * triangle (`isInSafeTriangle`) is what keeps the rows lying between the pointer and an open
+ * flyout from stealing it on the way across. Outside the card nothing changes: only a click
+ * takes the stack down.
  */
 
 import m from "mithril";
@@ -24,7 +32,8 @@ import type { ModelIdentity } from "../models/ModelSettings";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
-import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
+import { isInSafeTriangle, placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
+import type { FlyoutPoint } from "@imbue/workspace-ui/src/flyout-position";
 import { Portal } from "@imbue/workspace-ui/src/portal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -66,6 +75,21 @@ const CARD_MARGIN = 8;
  *  is a `closest` call rather than three element references that can go stale. */
 const POPOVER_ATTR = "data-model-popover";
 
+/** How long the pointer rests on a row before that row's flyout opens.
+ *
+ *  Shorter than the tooltip's 250ms on purpose: a tooltip is an aside nobody asked for, so it
+ *  waits until it is clearly wanted, while a submenu IS what the pointer came across the card
+ *  for. Long enough that a sweep to a row further along opens nothing on the way. */
+const SUBMENU_HOVER_DELAY_MS = 150;
+
+/** How long the safe triangle survives once the pointer is inside it.
+ *
+ *  Crossing the card is a flick and is over well inside this. A pointer still in the wedge
+ *  after it has stopped to read the row it is parked on, so the wedge lets go and that row
+ *  gets to open its own flyout -- otherwise a row reached diagonally could never be opened by
+ *  hover at all. */
+const SAFE_TRIANGLE_GRACE_MS = 400;
+
 /** The slider's filled portion, deepening with effort. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
@@ -92,6 +116,26 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   let cardAnchor: DOMRect | null = null;
   let flyout: "model" | "providers" | null = null;
   let flyoutRowBottom = 0;
+  // The open flyout's measured box, remeasured on every redraw it survives, because its
+  // height follows its content (a filtered model list is shorter). It is the safe triangle's
+  // base, so a stale one would protect the wrong wedge.
+  let flyoutRect: DOMRect | null = null;
+  // The safe triangle's apex: the last point the pointer occupied on the row that opened the
+  // flyout, i.e. where it set off from. Null when there is nothing to travel to, or once the
+  // pointer has arrived -- or once it has spent `SAFE_TRIANGLE_GRACE_MS` in the wedge without
+  // arriving, which the timer beside it decides.
+  let safeApex: FlyoutPoint | null = null;
+  let safeApexTimer: number | null = null;
+  // The row a hover is waiting on, held as the ELEMENT rather than as which-flyout-it-opens so
+  // that "already waiting on this row" is one identity test -- the rows that open nothing all
+  // answer `null` to that question and would collide.
+  let hoverIntentRow: HTMLElement | null = null;
+  let hoverIntentTimer: number | null = null;
+  // Whether this card has already fetched its offerable models. The card's own open warms them
+  // (see the trigger), and with hover-opened flyouts a pointer crossing the Model row would
+  // otherwise re-run a `pi --list-models` that takes up to 15s. Fresh per card-open is what
+  // matters -- a /login between two opens still shows up -- so this resets with the card.
+  let offeredFetchedForCard = false;
   // The provider rows' own transient state -- an armed "Remove?", an open rename field.
   // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
@@ -137,10 +181,18 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
+  /** Load this agent's offerable models once per card-open. See `offeredFetchedForCard`. */
+  function warmOfferedModels(agentId: string): void {
+    if (offeredFetchedForCard) return;
+    offeredFetchedForCard = true;
+    void fetchOfferedModels(agentId);
+  }
+
   function openCard(trigger: HTMLElement): void {
     cardAnchor = trigger.getBoundingClientRect();
     setFlyout(null);
     modelQuery = "";
+    offeredFetchedForCard = false;
   }
 
   function closeCard(): void {
@@ -148,6 +200,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // A drag that never released (the card can be torn down mid-gesture) would otherwise
     // still be driving the label and the thumb the next time the card opens.
     draggingEffortIndex = null;
+    cancelHoverIntent();
     setFlyout(null);
   }
 
@@ -163,8 +216,123 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       rowState.renamingId = null;
       rowState.renameDraft = "";
       launchPromptAccountId = null;
+      // A new flyout is a new box in a new place: nothing has travelled towards it yet, and
+      // the old one's measurements describe a box that is gone.
+      clearSafeApex();
+      flyoutRect = null;
     }
     flyout = next;
+  }
+
+  /** Drop a hover that has not opened anything yet. */
+  function cancelHoverIntent(): void {
+    if (hoverIntentTimer !== null) {
+      window.clearTimeout(hoverIntentTimer);
+      hoverIntentTimer = null;
+    }
+    hoverIntentRow = null;
+  }
+
+  /** Forget the trip: no wedge, and no clock counting one down. */
+  function clearSafeApex(): void {
+    if (safeApexTimer !== null) {
+      window.clearTimeout(safeApexTimer);
+      safeApexTimer = null;
+    }
+    safeApex = null;
+  }
+
+  /** Whether the pointer is on its way to the flyout that is already open, rather than
+   *  changing its mind about which row it wants.
+   *
+   *  Only ever true while a flyout is up AND the pointer has been on the row that opened it,
+   *  so the wedge cannot outlive the trip it was measured for. */
+  function isTravellingToFlyout(point: FlyoutPoint): boolean {
+    if (flyout === null || safeApex === null || flyoutRect === null || cardAnchor === null) return false;
+    // Which of the flyout's edges faces the card -- `placeFlyout` puts it on either side. Read
+    // off the two boxes' centers rather than off the near edges, which overlap by design.
+    const trailing = flyoutRect.left + flyoutRect.width / 2 > cardLeft(cardAnchor) + css.CARD_WIDTH / 2;
+    return isInSafeTriangle(point, safeApex, {
+      edgeX: trailing ? flyoutRect.left : flyoutRect.right,
+      top: flyoutRect.top,
+      bottom: flyoutRect.bottom,
+    });
+  }
+
+  /** Show `next` (or nothing) because the pointer or the keyboard settled on its row. */
+  function openFlyoutFromRow(next: "model" | "providers" | null, row: HTMLElement, onOpen?: () => void): void {
+    if (next === flyout) return;
+    if (next !== null) {
+      flyoutRowBottom = row.getBoundingClientRect().bottom;
+    }
+    setFlyout(next);
+    if (next !== null) {
+      modelQuery = "";
+      onOpen?.();
+    }
+  }
+
+  /** Every card row's pointer and keyboard handling, in one recipe.
+   *
+   *  `which` is the flyout the row opens, or null for a row that opens nothing -- and a row
+   *  that opens nothing still takes the hover, closing whatever is open. Within the card the
+   *  pointer decides what is showing; only outside it does a click still have to.
+   *
+   *  `mousemove` rather than `mouseenter`, for two reasons. It keeps the safe triangle's apex
+   *  on the pointer's actual last position over the owning row instead of on wherever it first
+   *  crossed the edge. And a row entered THROUGH the triangle -- protected, so it opened
+   *  nothing -- gets another chance as soon as the pointer moves off the wedge, which a single
+   *  enter event cannot give it. */
+  function hoverRowAttrs(opts: { which: "model" | "providers" | null; onOpen?: () => void }): m.Attributes {
+    return {
+      onmousemove: (event: MouseEvent) => {
+        const row = event.currentTarget as HTMLElement;
+        const point: FlyoutPoint = { x: event.clientX, y: event.clientY };
+        // On the row whose flyout is up: this is the trip's starting point, right up until the
+        // pointer leaves. Every move here restarts it, so the apex is the true exit point and
+        // the grace clock only ever runs on a trip that has actually set off.
+        if (opts.which !== null && opts.which === flyout) {
+          clearSafeApex();
+          safeApex = point;
+          cancelHoverIntent();
+          return;
+        }
+        if (opts.which === null && flyout === null) return;
+        if (isTravellingToFlyout(point)) {
+          // Started across. Arriving cancels this (the flyout's own `mouseenter`); parking in
+          // the wedge instead lets it run out, and the row underneath gets its turn.
+          if (safeApexTimer === null) {
+            safeApexTimer = window.setTimeout(() => {
+              safeApexTimer = null;
+              safeApex = null;
+            }, SAFE_TRIANGLE_GRACE_MS);
+          }
+          return;
+        }
+        // Already counting down on this very row; restarting the clock would mean a pointer
+        // that keeps twitching never opens anything.
+        if (hoverIntentRow === row) return;
+        cancelHoverIntent();
+        hoverIntentRow = row;
+        hoverIntentTimer = window.setTimeout(() => {
+          hoverIntentTimer = null;
+          hoverIntentRow = null;
+          openFlyoutFromRow(opts.which, row, opts.onOpen);
+          m.redraw();
+        }, SUBMENU_HOVER_DELAY_MS);
+      },
+      // Keyboard focus opens immediately -- there is no aiming to wait for, and a tab that has
+      // landed on a row is as deliberate as an intent delay could ever prove. `focusin`, which
+      // bubbles, so a row whose focusable part is a child (the effort slider) is covered too.
+      // `:focus-visible` keeps a mouse click out of this path: it focuses the row as well, and
+      // opening from here would race the click's own toggle.
+      onfocusin: (event: FocusEvent) => {
+        const focused = event.target as HTMLElement | null;
+        if (focused === null || !focused.matches(":focus-visible")) return;
+        cancelHoverIntent();
+        openFlyoutFromRow(opts.which, event.currentTarget as HTMLElement, opts.onOpen);
+      },
+    };
   }
 
   /** A click outside the card, its flyout and its trigger closes the whole stack -- and only
@@ -207,20 +375,28 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         class: opts.openable ? css.ROW : css.ROW_INERT,
         // A stable hook so a test can address a row by what it is rather than by its classes.
         "data-card-row": opts.which,
+        // The row is a disclosure, and a hover menu has to say so out loud: the chevron is the
+        // only other clue, and it is decoration to a screen reader.
+        "aria-haspopup": opts.openable ? "true" : undefined,
+        "aria-expanded": opts.openable ? (flyout === opts.which ? "true" : "false") : undefined,
         ...tooltipAttrs(opts.tooltip),
-        // CLICK, not hover. Opening the model flyout fetches this agent's offerable models,
-        // which for pi shells out to `pi --list-models` (up to 15s) and for codex connects to
-        // its daemon -- on hover that would fire on every pointer sweep across the card.
-        // Clicking also spares us the safe-triangle hover-aim machinery a hover menu needs.
+        // HOVER opens these, after `SUBMENU_HOVER_DELAY_MS`, with the safe triangle covering
+        // the trip across the card -- see `hoverRowAttrs`.
+        //
+        // What used to make that too expensive was the fetch behind the Model row: pi shells
+        // out to `pi --list-models` (up to 15s) and codex connects to its daemon, and on hover
+        // that fired on every pointer sweep. It no longer can -- `warmOfferedModels` runs at
+        // most once per card-open, and the card's own open already warms it.
+        ...(opts.openable
+          ? hoverRowAttrs({ which: opts.which, onOpen: opts.onOpen })
+          : hoverRowAttrs({ which: null })),
+        // Click still toggles, and is the only way in on a touch screen, where there is no
+        // hover to intend anything with.
         onclick: (event: MouseEvent) => {
           if (!opts.openable) return;
-          flyoutRowBottom = (event.currentTarget as HTMLElement).getBoundingClientRect().bottom;
+          cancelHoverIntent();
           const opening = flyout !== opts.which;
-          setFlyout(opening ? opts.which : null);
-          if (opening) {
-            modelQuery = "";
-            opts.onOpen?.();
-          }
+          openFlyoutFromRow(opening ? opts.which : null, event.currentTarget as HTMLElement, opts.onOpen);
         },
       },
       [
@@ -276,46 +452,57 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
-      m("span", { class: css.ROW_LABEL }, "Effort"),
-      m("span", { class: css.ROW_VALUE_STATIC }, [
-        m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
-        m("span", { class: css.SLIDER_WRAP }, [
-          // A dot at each level: without them the slider is a bare line and the levels it can
-          // land on are guesswork.
-          m(
-            "span",
-            { class: css.SLIDER_TICKS },
-            shown.map((effort) => m("span", { key: effort.level, class: css.SLIDER_TICK })),
-          ),
-          m("input", {
-            type: "range",
-            "aria-label": "Reasoning effort",
-            class: css.SLIDER,
-            min: 0,
-            max: shown.length - 1,
-            step: 1,
-            disabled: !opts.interactive,
-            // Mithril re-asserts `value` on every redraw, which would snap the thumb back
-            // under the pointer mid-drag on any harness that does not move the chip
-            // optimistically -- codex is exactly that. Holding the dragged index locally and
-            // clearing it on release keeps the thumb where the finger is.
-            value: position,
-            style:
-              `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
-              `var(--color-fill-active) ${pct}%)`,
-            oninput: (event: Event) => {
-              draggingEffortIndex = Number((event.target as HTMLInputElement).value);
-            },
-            onchange: (event: Event) => {
-              const picked = shown[Number((event.target as HTMLInputElement).value)];
-              draggingEffortIndex = null;
-              if (picked !== undefined) opts.onPick(picked.level);
-            },
-          }),
+    return m(
+      "div",
+      {
+        class: css.ROW_STATIC,
+        "data-card-row": "effort",
+        ...tooltipAttrs(opts.tooltip),
+        // Reaching for the slider is leaving the flyout behind, so it goes away -- the same
+        // rule every row in the card follows.
+        ...hoverRowAttrs({ which: null }),
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, "Effort"),
+        m("span", { class: css.ROW_VALUE_STATIC }, [
+          m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
+          m("span", { class: css.SLIDER_WRAP }, [
+            // A dot at each level: without them the slider is a bare line and the levels it can
+            // land on are guesswork.
+            m(
+              "span",
+              { class: css.SLIDER_TICKS },
+              shown.map((effort) => m("span", { key: effort.level, class: css.SLIDER_TICK })),
+            ),
+            m("input", {
+              type: "range",
+              "aria-label": "Reasoning effort",
+              class: css.SLIDER,
+              min: 0,
+              max: shown.length - 1,
+              step: 1,
+              disabled: !opts.interactive,
+              // Mithril re-asserts `value` on every redraw, which would snap the thumb back
+              // under the pointer mid-drag on any harness that does not move the chip
+              // optimistically -- codex is exactly that. Holding the dragged index locally and
+              // clearing it on release keeps the thumb where the finger is.
+              value: position,
+              style:
+                `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
+                `var(--color-fill-active) ${pct}%)`,
+              oninput: (event: Event) => {
+                draggingEffortIndex = Number((event.target as HTMLInputElement).value);
+              },
+              onchange: (event: Event) => {
+                const picked = shown[Number((event.target as HTMLInputElement).value)];
+                draggingEffortIndex = null;
+                if (picked !== undefined) opts.onPick(picked.level);
+              },
+            }),
+          ]),
         ]),
-      ]),
-    ]);
+      ],
+    );
   }
 
   /** Fast mode: a switch.
@@ -329,34 +516,43 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     tooltip: string | null;
     onToggle: () => void;
   }): m.Vnode {
-    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
-      m("span", { class: css.ROW_LABEL }, "Fast Mode"),
-      m(
-        "span",
-        { class: css.ROW_VALUE_STATIC },
+    return m(
+      "div",
+      {
+        class: css.ROW_STATIC,
+        "data-card-row": "fast",
+        ...tooltipAttrs(opts.tooltip),
+        ...hoverRowAttrs({ which: null }),
+      },
+      [
+        m("span", { class: css.ROW_LABEL }, "Fast Mode"),
         m(
-          "button",
-          {
-            type: "button",
-            role: "switch",
-            class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
-            "aria-label": "Fast Mode",
-            "aria-checked": opts.on ? "true" : "false",
-            disabled: !opts.interactive,
-            onclick: () => {
-              if (opts.interactive) opts.onToggle();
-            },
-          },
+          "span",
+          { class: css.ROW_VALUE_STATIC },
           m(
-            "span",
-            { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
-            opts.on
-              ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
-              : null,
+            "button",
+            {
+              type: "button",
+              role: "switch",
+              class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              "aria-label": "Fast Mode",
+              "aria-checked": opts.on ? "true" : "false",
+              disabled: !opts.interactive,
+              onclick: () => {
+                if (opts.interactive) opts.onToggle();
+              },
+            },
+            m(
+              "span",
+              { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
+              opts.on
+                ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
+                : null,
+            ),
           ),
         ),
-      ),
-    ]);
+      ],
+    );
   }
 
   /** The card's viewport left, clamped so it cannot hang off either edge. */
@@ -400,12 +596,26 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** The shell every flyout renders into, so both register the same outside-click element. */
   function flyoutShell(children: m.Children): m.Vnode {
+    // The safe triangle's base is this box, and its height follows its contents -- so measure
+    // on arrival AND on every redraw that changes them (a filtered list is shorter, and a
+    // triangle pointing at the box's old bottom would guard rows nobody is heading through).
+    const measure = (flyoutVnode: m.VnodeDOM): void => {
+      flyoutRect = (flyoutVnode.dom as HTMLElement).getBoundingClientRect();
+    };
     return m(
       "div",
       {
         class: css.FLYOUT,
         [POPOVER_ATTR]: "flyout",
         style: flyoutPlacement(),
+        oncreate: measure,
+        onupdate: measure,
+        // Arrived. The trip is over, so the wedge that protected it closes and the card's rows
+        // answer the pointer normally again the moment it goes back.
+        onmouseenter: () => {
+          cancelHoverIntent();
+          clearSafeApex();
+        },
       },
       children,
     );
@@ -421,6 +631,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         type: "button",
         class: css.ROW,
         "data-card-row": "stop-agent",
+        ...hoverRowAttrs({ which: null }),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           closeCard();
@@ -611,6 +822,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
     onremove() {
       document.removeEventListener("mousedown", handleOutsideMousedown);
+      // A pending hover would otherwise fire into a torn-down component and redraw it.
+      cancelHoverIntent();
+      clearSafeApex();
     },
 
     view(vnode) {
@@ -661,9 +875,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             openCard(event.currentTarget as HTMLElement);
             // Warm the model list the moment the CARD opens, not when the flyout does: the
             // fetch is the slow part (pi shells out to `pi --list-models`), and by the time a
-            // pointer has crossed the card it is usually already back.
+            // pointer has crossed the card it is usually already back. With hover-opened
+            // flyouts this is what makes the Model row cheap to pass over -- by the time the
+            // hover lands, the list is warm and its own request is a no-op.
             if (catalog?.picker_mode === "search" || catalog?.picker_mode === "dynamic") {
-              void fetchOfferedModels(agentId);
+              warmOfferedModels(agentId);
             }
           },
         },
@@ -721,7 +937,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 openable: interactive,
                 tooltip: readOnlyTooltip,
                 onOpen: () => {
-                  if (searchable || dynamic) void fetchOfferedModels(agentId);
+                  if (searchable || dynamic) warmOfferedModels(agentId);
                 },
               })
             : null,
