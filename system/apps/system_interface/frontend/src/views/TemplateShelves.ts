@@ -12,7 +12,7 @@
 import m from "mithril";
 import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 const CARD_FALLBACK_GLYPH_SIZE = 20;
@@ -125,19 +125,17 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   function railArrow(shelf: ResolvedShelf, direction: -1 | 1): m.Vnode {
     const isRight = direction === 1;
     return m(
-      "button",
+      Button,
       {
-        type: "button",
+        variant: "secondary",
+        icon: true,
+        sm: true,
+        round: true,
+        extra:
+          "new-tab-template-rail-arrow absolute top-1/2 z-(--z-content) -translate-y-1/2 shadow-overlay " +
+          (isRight ? "right-1" : "left-1"),
         "aria-label": isRight ? "Show more templates" : "Show previous templates",
         "data-rail-page": isRight ? "next" : "previous",
-        class: buttonClass("secondary", {
-          icon: true,
-          sm: true,
-          round: true,
-          extra:
-            "new-tab-template-rail-arrow absolute top-1/2 z-(--z-content) -translate-y-1/2 shadow-overlay " +
-            (isRight ? "right-1" : "left-1"),
-        }),
         onclick: (event: MouseEvent) => {
           const rail = (event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(
             ".new-tab-template-rail",
