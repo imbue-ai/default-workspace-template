@@ -2,14 +2,16 @@
  * Pure geometry for the combo card's side flyout: where it sits (`placeFlyout`), and the
  * wedge a pointer on its way to it is allowed to cross (`isInSafeTriangle`).
  *
- * The flyout's BASE sits level with the row that opened it and the list grows UPWARD. That is
- * not the ordinary top-align-and-cap-downward rule, and the reason is that this card
- * opens from the composer at the BOTTOM of the panel: a list capped by the space below its row
- * would have roughly three rows to work with, far too few for a thousand-model catalog.
- * Growing up gives it the whole window instead.
+ * The flyout's FIRST ROW lines up with the row that opened it, so the row you pointed at and
+ * the list it produced read as one line continuing sideways. That alignment is the default and
+ * the flyout keeps it whenever it can.
  *
- * The search field belongs at the bottom of that column for the same reason -- it stays put,
- * next to the row you came from, while the list extends away from your hand.
+ * When it cannot -- the card opens from the composer at the BOTTOM of the panel, so a long
+ * model list starting level with a low row would run off the screen -- the flyout SLIDES UP,
+ * by exactly as much as it takes to fit, and no further. It never gives up height to hold the
+ * alignment: a list squeezed into the space below its own row would have about three rows to
+ * work with, far too few for a thousand-model catalog, so the slide is what buys it the whole
+ * window. Only a list too tall for the window at all is capped, and then it scrolls.
  *
  * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
  */
@@ -18,9 +20,16 @@ export interface FlyoutPlacementInput {
   /** Viewport left of the card, and its width. */
   cardLeft: number;
   cardWidth: number;
-  /** Viewport y of the BOTTOM edge of the row that opened the flyout: the base to sit on. */
-  rowBottom: number;
+  /** Viewport y of the TOP edge of the row that opened the flyout: what the flyout's first
+   *  row lines up with. */
+  rowTop: number;
   flyoutWidth: number;
+  /** The distance from the flyout's outer top edge to the top of its first row -- its border
+   *  and its padding -- so `rowTop` aligns the ROW rather than the box that carries it. */
+  flyoutPadding: number;
+  /** How tall the flyout wants to be, from what it is about to hold. Decides whether it has
+   *  to slide, and by how much. */
+  contentHeight: number;
   /** The tallest the flyout may be before the viewport caps it. */
   maxFlyoutHeight: number;
   viewportWidth: number;
@@ -33,12 +42,14 @@ export interface FlyoutPlacementInput {
 
 export interface FlyoutPlacement {
   left: number;
-  /** Distance from the viewport's BOTTOM to the flyout's base -- it is anchored there and
-   *  grows upward, so this is what stays fixed as the content changes. */
-  bottom: number;
+  /** Viewport y of the flyout's TOP edge. */
+  top: number;
   /** A cap, not a height: the content decides, up to this. */
   maxHeight: number;
   side: "trailing" | "leading";
+  /** Whether the alignment had to give way to fit the box on screen. Nothing positions off
+   *  this; it is here so a test can say which of the two rules it is exercising. */
+  isSlid: boolean;
 }
 
 /** A viewport point -- where the pointer is, or where it was. */
@@ -89,8 +100,8 @@ export function isInSafeTriangle(point: FlyoutPoint, apex: FlyoutPoint, base: Sa
 }
 
 export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
-  const { cardLeft, cardWidth, rowBottom, flyoutWidth, maxFlyoutHeight } = input;
-  const { viewportWidth, viewportHeight, margin, overlap } = input;
+  const { cardLeft, cardWidth, rowTop, flyoutPadding, flyoutWidth } = input;
+  const { contentHeight, maxFlyoutHeight, viewportWidth, viewportHeight, margin, overlap } = input;
 
   const trailing = cardLeft + cardWidth - overlap;
   const leading = cardLeft + overlap - flyoutWidth;
@@ -103,13 +114,22 @@ export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
   // characters stay readable.
   const left = Math.min(Math.max(wanted, margin), Math.max(margin, viewportWidth - margin - flyoutWidth));
 
-  // The base never leaves the viewport, and never sits so low the flyout has nowhere to grow.
-  const base = Math.min(Math.max(rowBottom, margin), viewportHeight - margin);
+  // The height the box will actually occupy: what it wants, capped by its own ten-row limit
+  // and by the window. The slide is measured against THIS rather than against the content,
+  // so a list already capped to a scroller does not slide for height it will never use.
+  const cap = Math.max(0, Math.min(maxFlyoutHeight, viewportHeight - 2 * margin));
+  const height = Math.min(contentHeight, cap);
+  // Aligned: the box sits `flyoutPadding` above the row, which puts its first row ON the row.
+  const aligned = rowTop - flyoutPadding;
+  // The lowest top that still leaves the whole box on screen. Sliding UP to reach it is what
+  // a low row gets instead of a squeezed list.
+  const lowestFitting = viewportHeight - margin - height;
+  const top = Math.max(margin, Math.min(aligned, lowestFitting));
   return {
     left,
-    bottom: viewportHeight - base,
-    // Everything between the base and the top margin is available to grow into.
-    maxHeight: Math.max(0, Math.min(maxFlyoutHeight, base - margin)),
+    top,
+    maxHeight: cap,
     side,
+    isSlid: top !== aligned,
   };
 }

@@ -28,8 +28,28 @@ export const FLYOUT_OVERLAP = 4;
  *  guessed so it stays true if the row height changes. */
 const FLYOUT_ROW_HEIGHT = 32;
 const FLYOUT_VISIBLE_ROWS = 10;
-/** Rows, plus the search field standing under them, plus the shell's own padding. */
-export const FLYOUT_MAX_HEIGHT = FLYOUT_ROW_HEIGHT * FLYOUT_VISIBLE_ROWS + 44;
+/** The distance from a flyout's outer top edge to the top of its first row: `menuCardClass`
+ *  gives it a 1px border AND `py-1`, and both sit above the row. The flyout is placed by that
+ *  first ROW rather than by the box around it, so the placement backs off by exactly this --
+ *  miss the border and every flyout lands a pixel low. */
+const FLYOUT_BORDER = 1;
+const FLYOUT_INNER_PADDING = 4;
+export const FLYOUT_PADDING = FLYOUT_BORDER + FLYOUT_INNER_PADDING;
+/** `SEARCH_WRAP`'s `mt-1.5` plus `SEARCH_INPUT_EXTRA`'s `h-8`. */
+const SEARCH_FIELD_HEIGHT = 6 + 32;
+
+/** How tall a flyout of `rowCount` rows wants to be, measured the way the browser measures a
+ *  bordered box: both borders and both paddings, which is what `2 * FLYOUT_PADDING` is.
+ *
+ *  The placement slides the box up when this will not fit below the row it belongs to, so the
+ *  arithmetic has to match what the DOM actually lays out -- it is the same row height and the
+ *  same chrome the cap below is built from, and both move together if either changes. */
+export function flyoutContentHeight(rowCount: number, hasSearchField: boolean): number {
+  return 2 * FLYOUT_PADDING + rowCount * FLYOUT_ROW_HEIGHT + (hasSearchField ? SEARCH_FIELD_HEIGHT : 0);
+}
+
+/** Ten rows, plus the search field standing under them, plus the box's own padding. */
+export const FLYOUT_MAX_HEIGHT = flyoutContentHeight(FLYOUT_VISIBLE_ROWS, true);
 
 // --- the composer trigger ------------------------------------------------------------------
 export const TRIGGER =

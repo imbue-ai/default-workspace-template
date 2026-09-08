@@ -15,11 +15,15 @@
  *
  * The card opens on a CLICK of the chip and its side flyouts open on HOVER, which is the
  * division every desktop menu makes: getting into a menu is a decision, moving around inside
- * one is not. Inside the card the pointer therefore decides what is showing -- every row takes
- * the hover, including the rows that open nothing and so close what is open -- and the safe
- * triangle (`isInSafeTriangle`) is what keeps the rows lying between the pointer and an open
- * flyout from stealing it on the way across. Outside the card nothing changes: only a click
- * takes the stack down.
+ * one is not. Each half is then dismissed the way it was summoned, and that is the whole rule:
+ *
+ * - The FLYOUTS follow the pointer. Every row takes the hover, including the rows that open
+ *   nothing and so close what is open; the safe triangle (`isInSafeTriangle`) keeps the rows
+ *   lying between the pointer and an open flyout from stealing it on the way across; and a
+ *   pointer that leaves the card-and-flyout stack altogether closes the flyout behind it.
+ * - The CARD follows the click. Drifting off it leaves it standing, because nothing about
+ *   where the pointer went says the choice it was opened to make has been abandoned. A click
+ *   outside takes the whole stack down.
  */
 
 import m from "mithril";
@@ -90,6 +94,13 @@ const SUBMENU_HOVER_DELAY_MS = 150;
  *  hover at all. */
 const SAFE_TRIANGLE_GRACE_MS = 400;
 
+/** How long an open flyout survives the pointer leaving the card-and-flyout stack.
+ *
+ *  Long enough to forgive the seam between the two boxes and a corner clipped on the way
+ *  across, short enough that a flyout does not sit over the transcript once the pointer has
+ *  gone somewhere else entirely. */
+const SUBMENU_LEAVE_DELAY_MS = 220;
+
 /** The slider's filled portion, deepening with effort. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
@@ -115,7 +126,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // laid out by their parent -- see `openCard`.
   let cardAnchor: DOMRect | null = null;
   let flyout: "model" | "providers" | null = null;
-  let flyoutRowBottom = 0;
+  // Viewport y of the TOP of the row the open flyout belongs to: the line its first row is
+  // drawn against.
+  let flyoutRowTop = 0;
   // The open flyout's measured box, remeasured on every redraw it survives, because its
   // height follows its content (a filtered model list is shorter). It is the safe triangle's
   // base, so a stale one would protect the wrong wedge.
@@ -131,6 +144,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // answer `null` to that question and would collide.
   let hoverIntentRow: HTMLElement | null = null;
   let hoverIntentTimer: number | null = null;
+  // Counting down to closing the flyout because the pointer has left the stack. The card and
+  // the flyout are two separate boxes, so crossing between them fires a leave before the
+  // matching enter -- the delay is what stops that seam reading as a departure.
+  let stackLeaveTimer: number | null = null;
   // Whether this card has already fetched its offerable models. The card's own open warms them
   // (see the trigger), and with hover-opened flyouts a pointer crossing the Model row would
   // otherwise re-run a `pi --list-models` that takes up to 15s. Fresh per card-open is what
@@ -201,6 +218,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // still be driving the label and the thumb the next time the card opens.
     draggingEffortIndex = null;
     cancelHoverIntent();
+    cancelStackLeave();
     setFlyout(null);
   }
 
@@ -233,6 +251,31 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     hoverIntentRow = null;
   }
 
+  /** The pointer is back inside the stack (or the stack is gone): nothing to close. */
+  function cancelStackLeave(): void {
+    if (stackLeaveTimer !== null) {
+      window.clearTimeout(stackLeaveTimer);
+      stackLeaveTimer = null;
+    }
+  }
+
+  /** The pointer has left the card or the flyout.
+   *
+   *  A flyout opened by hover has to close when the hover ends -- otherwise it hangs over the
+   *  transcript until something is clicked, which is exactly what a hover menu is supposed to
+   *  spare the user. The CARD is a different matter: it was opened by a click, so it takes a
+   *  click to dismiss, and the pointer wandering off does not count. */
+  function scheduleStackLeave(): void {
+    if (flyout === null) return;
+    cancelStackLeave();
+    stackLeaveTimer = window.setTimeout(() => {
+      stackLeaveTimer = null;
+      cancelHoverIntent();
+      setFlyout(null);
+      m.redraw();
+    }, SUBMENU_LEAVE_DELAY_MS);
+  }
+
   /** Forget the trip: no wedge, and no clock counting one down. */
   function clearSafeApex(): void {
     if (safeApexTimer !== null) {
@@ -263,7 +306,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   function openFlyoutFromRow(next: "model" | "providers" | null, row: HTMLElement, onOpen?: () => void): void {
     if (next === flyout) return;
     if (next !== null) {
-      flyoutRowBottom = row.getBoundingClientRect().bottom;
+      flyoutRowTop = row.getBoundingClientRect().top;
     }
     setFlyout(next);
     if (next !== null) {
@@ -573,14 +616,17 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     );
   }
 
-  /** Where a flyout sits: beside the card, standing on the row that opened it. */
-  function flyoutPlacement(): string {
+  /** Where a flyout sits: beside the card, its first row level with the row that opened it --
+   *  unless holding that line would push it off the bottom, in which case it slides up. */
+  function flyoutPlacement(rowCount: number, hasSearchField: boolean): string {
     const anchor = cardAnchor;
     if (anchor === null) return "";
     const placed = placeFlyout({
       cardLeft: cardLeft(anchor),
       cardWidth: css.CARD_WIDTH,
-      rowBottom: flyoutRowBottom,
+      rowTop: flyoutRowTop,
+      flyoutPadding: css.FLYOUT_PADDING,
+      contentHeight: css.flyoutContentHeight(rowCount, hasSearchField),
       flyoutWidth: css.FLYOUT_WIDTH,
       maxFlyoutHeight: css.FLYOUT_MAX_HEIGHT,
       viewportWidth: window.innerWidth,
@@ -589,13 +635,16 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       overlap: css.FLYOUT_OVERLAP,
     });
     return (
-      `left: ${placed.left}px; bottom: ${placed.bottom}px; ` +
+      `left: ${placed.left}px; top: ${placed.top}px; ` +
       `width: ${css.FLYOUT_WIDTH}px; max-height: ${placed.maxHeight}px;`
     );
   }
 
-  /** The shell every flyout renders into, so both register the same outside-click element. */
-  function flyoutShell(children: m.Children): m.Vnode {
+  /** The shell every flyout renders into, so both register the same outside-click element.
+   *
+   *  `rowCount` and `hasSearchField` are what the placement needs to know whether the box can
+   *  hold its alignment -- the caller counts, because only it knows what it is about to draw. */
+  function flyoutShell(rowCount: number, hasSearchField: boolean, children: m.Children): m.Vnode {
     // The safe triangle's base is this box, and its height follows its contents -- so measure
     // on arrival AND on every redraw that changes them (a filtered list is shorter, and a
     // triangle pointing at the box's old bottom would guard rows nobody is heading through).
@@ -607,15 +656,17 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       {
         class: css.FLYOUT,
         [POPOVER_ATTR]: "flyout",
-        style: flyoutPlacement(),
+        style: flyoutPlacement(rowCount, hasSearchField),
         oncreate: measure,
         onupdate: measure,
         // Arrived. The trip is over, so the wedge that protected it closes and the card's rows
         // answer the pointer normally again the moment it goes back.
         onmouseenter: () => {
+          cancelStackLeave();
           cancelHoverIntent();
           clearSafeApex();
         },
+        onmouseleave: scheduleStackLeave,
       },
       children,
     );
@@ -693,7 +744,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
     const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
-    return flyoutShell([
+    // The account rows (or the one line standing in for them when there are none), plus the
+    // "+ Add a provider" row under them. The launch prompt is a dialog on top, not a row.
+    return flyoutShell(Math.max(1, rows.length) + 1, false, [
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
       m(
@@ -753,7 +806,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
     const visible = filtered.slice(0, MODEL_SEARCH_CAP);
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
-    return flyoutShell([
+    const hasSearchField = searchable || all.length > 8;
+    // Loading and empty each draw a single line where the list would be.
+    const rowCount = loading || visible.length === 0 ? 1 : visible.length;
+    return flyoutShell(rowCount, hasSearchField, [
       // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
       // that mixes the two, and it throws during the DOM diff rather than at build time.
       m(
@@ -790,12 +846,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 );
               }),
       ),
-      // BELOW the list, not above it: the flyout is anchored at its base and grows upward, so
-      // the bottom is the edge that stays put next to the row you came from.
+      // BELOW the list. A long catalog's flyout is the one that slides down to the bottom of
+      // the window, so its foot is the edge nearest the composer the pointer came from -- and
+      // the field stays put there while the list scrolls above it.
       //
       // The shared input recipe, with the magnifier laid over its left padding: the field owns
       // its own frame and focus ring, so nothing here re-styles either.
-      searchable || all.length > 8
+      hasSearchField
         ? m("div", { class: css.SEARCH_WRAP }, [
             m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
             m("input", {
@@ -824,6 +881,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       document.removeEventListener("mousedown", handleOutsideMousedown);
       // A pending hover would otherwise fire into a torn-down component and redraw it.
       cancelHoverIntent();
+      cancelStackLeave();
       clearSafeApex();
     },
 
@@ -916,6 +974,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           class: css.CARD,
           [POPOVER_ATTR]: "card",
           style: cardPlacement(cardAnchor),
+          // The other half of the stack, for the same leave rule: moving between the card and
+          // its flyout is not leaving, but moving off both of them is.
+          onmouseenter: cancelStackLeave,
+          onmouseleave: scheduleStackLeave,
         },
         m("div", { class: css.CARD_INNER }, [
           menuRow({
