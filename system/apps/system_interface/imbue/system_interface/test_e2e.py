@@ -1146,7 +1146,7 @@ def test_new_tab_lists_the_template_catalog_and_adopts_one_into_a_seeded_chat(tm
     action takes a message, which is all the page goes by, so the create it receives is what the
     page sent: the ``new`` action with the message."""
     with _running_e2e_server(
-        tmp_path, _PORT + 19, is_stub_taking_message=True, is_catalog_offered=True, catalog_body=_CATALOG_DOCUMENT
+        tmp_path, _PORT + 23, is_stub_taking_message=True, is_catalog_offered=True, catalog_body=_CATALOG_DOCUMENT
     ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
@@ -1179,7 +1179,7 @@ def test_new_tab_lists_the_template_catalog_and_adopts_one_into_a_seeded_chat(tm
 def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Path, page: Page) -> None:
     """A "Start something" tile creates a chat carrying its prompt as the first message; "See more"
     reveals the tiles past the first page."""
-    with _running_e2e_server(tmp_path, _PORT + 20, is_stub_taking_message=True) as server:
+    with _running_e2e_server(tmp_path, _PORT + 24, is_stub_taking_message=True) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
@@ -1202,7 +1202,7 @@ def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Pa
 
 @pytest.mark.timeout(60, func_only=False)
 def test_new_tab_says_when_the_template_catalog_could_not_be_loaded(tmp_path: Path, page: Page) -> None:
-    with _running_e2e_server(tmp_path, _PORT + 21, is_catalog_offered=True) as server:
+    with _running_e2e_server(tmp_path, _PORT + 25, is_catalog_offered=True) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
         expect(page.locator(".new-tab-templates-status")).to_have_text("Failed to load templates.", timeout=15000)
