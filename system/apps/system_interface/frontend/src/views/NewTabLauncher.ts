@@ -660,28 +660,38 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  function startSomethingSection(attrs: NewTabLauncherAttrs): m.Vnode {
-    const shown = visibleStartOptions(START_OPTIONS, startShownCount);
+  /** The section around a grid of intent tiles, with ``footer`` (the "See more" control) under the grid. */
+  function startSomethingSection(
+    options: readonly StartOption[],
+    attrs: NewTabLauncherAttrs,
+    footer: m.Vnode | null,
+  ): m.Vnode {
     return m("section", { class: "new-tab-start-something mt-6" }, [
       m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, START_SOMETHING_TITLE),
-      startGrid(shown, attrs),
-      hasMoreStartOptions(startShownCount, START_OPTIONS.length)
-        ? m("div", { class: "mt-2 flex justify-end px-2" }, [
-            m(
-              Button,
-              {
-                variant: "ghost",
-                sm: true,
-                extra: "new-tab-start-more",
-                onclick: () => {
-                  startShownCount = nextStartCount(startShownCount, START_OPTIONS.length);
-                },
-              },
-              SEE_MORE_LABEL,
-            ),
-          ])
-        : null,
+      startGrid(options, attrs),
+      footer,
     ]);
+  }
+
+  /** The resting page's intents: a page at a time, with "See more" until every tile is shown. */
+  function pagedStartSomethingSection(attrs: NewTabLauncherAttrs): m.Vnode {
+    const seeMore = hasMoreStartOptions(startShownCount, START_OPTIONS.length)
+      ? m("div", { class: "mt-2 flex justify-end px-2" }, [
+          m(
+            Button,
+            {
+              variant: "ghost",
+              sm: true,
+              extra: "new-tab-start-more",
+              onclick: () => {
+                startShownCount = nextStartCount(startShownCount, START_OPTIONS.length);
+              },
+            },
+            SEE_MORE_LABEL,
+          ),
+        ])
+      : null;
+    return startSomethingSection(visibleStartOptions(START_OPTIONS, startShownCount), attrs, seeMore);
   }
 
   // ---------- "Start from a template" ----------
@@ -746,12 +756,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       actionTiles.length === 0 && rows.length === 0
         ? null
         : sectionView({ key: "on-machine", title: ON_MACHINE_TITLE, rows }, attrs, nowMs, actionTiles),
-      starts.length === 0
-        ? null
-        : m("section", { class: "new-tab-start-something mt-6" }, [
-            m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, START_SOMETHING_TITLE),
-            startGrid(starts, attrs),
-          ]),
+      starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
       templates.length === 0
         ? null
         : m("section", { class: "new-tab-templates mt-6" }, [
@@ -777,7 +782,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       ),
       // The page's one real break: above it is what you already have, below it is what you could start.
       m("div", { class: "new-tab-launcher-rule mt-6 border-t border-dashed border-default" }),
-      startSomethingSection(attrs),
+      pagedStartSomethingSection(attrs),
       templatesSection(attrs.catalog),
     ];
   }
