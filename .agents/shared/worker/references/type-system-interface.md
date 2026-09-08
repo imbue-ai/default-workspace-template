@@ -16,6 +16,18 @@ It is what the user is looking at *right now*, so you always work against an
   + mithril/dockview). Build output goes to the gitignored
   `system/apps/system_interface/imbue/system_interface/static/`.
 
+## Design system: an optional convention for the default UI
+
+The shipped **default** UI is built from a small design system — Tailwind
+utilities in the markup over a token layer in `src/style.css`. When extending
+the default look, follow
+`system/apps/system_interface/frontend/style_guide.md`.
+
+It is a convention, **not** a rule, and it defers to the user: if the user asks
+for their interface restyled to their own taste — including something bold and
+unlike the default — build exactly that; don't hold back or steer it back
+toward tokens. Nothing enforces the system.
+
 ## Running and testing
 
 The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.

@@ -46,6 +46,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.baseline_permissions import ADDITIONAL_SERVICE_SCHEMAS
 from imbue.mngr_latchkey.baseline_permissions import AGENT_BASELINE_PERMISSIONS
 from imbue.mngr_latchkey.baseline_permissions import MINDS_API_PROXY_PER_AGENT_PATH_PREFIX
 from imbue.mngr_latchkey.baseline_permissions import SCOPE_LATCHKEY_SELF
@@ -68,42 +69,42 @@ from imbue.mngr_latchkey.store import save_permissions
 ENV_LATCHKEY_GATEWAY: Final[str] = "LATCHKEY_GATEWAY"
 ENV_LATCHKEY_GATEWAY_PASSWORD: Final[str] = "LATCHKEY_GATEWAY_PASSWORD"
 ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE: Final[str] = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
-# Suppresses the per-workspace daily ping latchkey emits otherwise; we
+# Suppresses the per-host daily ping latchkey emits otherwise; we
 # always set it so each agent does not get counted as a separate user.
 ENV_LATCHKEY_DISABLE_COUNTING: Final[str] = "LATCHKEY_DISABLE_COUNTING"
 
-# What in-workspace tooling prepends to a target URL when that request must
-# leave from the user's own machine rather than from the workspace's own egress
+# What in-host tooling prepends to a target URL when that request must
+# leave from the user's own machine rather than from the host's own egress
 # -- e.g. a destination that blocks datacenter IPs. It is a *prefix*, not a
 # flag, because latchkey's gateway routes on the request path alone: a header
 # cannot divert a request that already looks like ``/gateway/<url>``.
 #
 # Its value differs by topology, and the empty string is the meaningful default:
 #
-# * VPS-gateway workspaces get ``https://latchkey-self.invalid/via-desktop``.
+# * VPS-gateway hosts get ``https://latchkey-self.invalid/via-desktop``.
 #   Prepending it produces a URL the latchkey CLI rewrites onto the VPS
 #   gateway's own ``/via-desktop/<url>`` path, which the forwarding extension
 #   hands to the desktop gateway's native outbound proxy.
-# * Desktop-gateway workspaces get ``""``. Their gateway already runs on the
+# * Desktop-gateway hosts get ``""``. Their gateway already runs on the
 #   user's machine, so a plain request is already desktop egress and prepending
 #   anything would only add a hop.
 #
 # Callers therefore never branch on topology: they concatenate whatever this
 # holds and get the right behavior in both. It is always set (empty for
-# desktop-gateway workspaces) so tooling can tell "minds configured no prefix"
-# apart from "this workspace predates the feature".
+# desktop-gateway hosts) so tooling can tell "the desktop app configured no
+# prefix" apart from "this host predates the feature".
 #
 # It is namespaced ``MINDS_`` rather than ``LATCHKEY_`` even though its value is
-# a latchkey URL. A workspace's env names each var after the tool that *reads*
+# a latchkey URL. A host's env names each var after the tool that *reads*
 # it -- ``LATCHKEY_GATEWAY`` for latchkey, ``MNGR_HOST_DIR`` for the inner mngr
 # -- and latchkey never reads this one: it only ever receives the concatenated
 # result as a URL argument. There is no single reader to name it after (datalib
-# today, any in-workspace tooling later), so it is named for the authority that
-# decides the value, which is minds: the answer follows from workspace topology,
-# something only minds knows.
+# today, any in-host tooling later), so it is named for the authority that
+# decides the value, the desktop app: the answer follows from the gateway
+# topology, something only that app knows.
 ENV_MINDS_VIA_DESKTOP_URL_PREFIX: Final[str] = "MINDS_VIA_DESKTOP_URL_PREFIX"
 
-# The prefix handed to VPS-gateway workspaces. ``latchkey-self.invalid`` is
+# The prefix handed to VPS-gateway hosts. ``latchkey-self.invalid`` is
 # upstream latchkey's reserved "this gateway" host: the CLI recognizes it and
 # rewrites such URLs onto the gateway's own origin instead of proxying them out.
 VIA_DESKTOP_URL_PREFIX: Final[str] = "https://latchkey-self.invalid/via-desktop"
@@ -119,7 +120,7 @@ SECRET_LATCHKEY_ENV_VAR_NAMES: Final[frozenset[str]] = frozenset(
 
 
 class LatchkeyGatewayLocation(UpperCaseStrEnum):
-    """Gateway location selected for a workspace before its host is created."""
+    """Gateway location selected for an agent before its host is created."""
 
     DESKTOP = auto()
     VPS = auto()
@@ -163,7 +164,7 @@ def _extract_agent_id_from_anyof_entry(entry: JsonValue) -> str:
 
 
 def reconcile_baseline_permissions(config: LatchkeyPermissionsConfig) -> LatchkeyPermissionsConfig:
-    """Bring ``config``'s ``latchkey-self`` grants and its ``include`` up to the current baseline.
+    """Bring ``config``'s ``latchkey-self`` grants and additional-service schemas up to the current baseline.
 
     The agent baseline is only written when a host's permissions file is first
     created, so a file written by an older build keeps whatever set of
@@ -177,9 +178,12 @@ def reconcile_baseline_permissions(config: LatchkeyPermissionsConfig) -> Latchke
     ``latchkey-self`` are left exactly as found -- notably the ``not.anyOf``
     allowlist, which is per-host state rather than baseline.
 
-    The baseline's ``include`` is healed on *every* path, including the one with
-    no grant to add, so this function owns the include for both of
-    :func:`register_agent_for_host`'s write paths.
+    The additional-service schemas are refreshed on *every* path, including the
+    one with no grant to add, so this function owns them for both of
+    :func:`register_agent_for_host`'s write paths. They are overwritten rather
+    than merely filled in: the bundled definitions are the source of truth, so a
+    package update to a custom service's schema wins over the stale copy an
+    older build inlined.
     """
     baseline_permissions = tuple(
         permission for rule in AGENT_BASELINE_PERMISSIONS.rules for permission in rule.get(SCOPE_LATCHKEY_SELF, [])
@@ -189,8 +193,11 @@ def reconcile_baseline_permissions(config: LatchkeyPermissionsConfig) -> Latchke
     if not missing or not any(SCOPE_LATCHKEY_SELF in rule for rule in config.rules):
         # No gateway-self rule at all means a file predating the baseline entirely
         # (or a hand-written one), where inventing the rule would grant far more
-        # than reconciliation is about. The include still needs healing either way.
-        return config.model_copy_update(to_update(config.field_ref().include, _merged_include(config)))
+        # than reconciliation is about. The custom-service schemas still need
+        # refreshing either way.
+        return config.model_copy_update(
+            to_update(config.field_ref().schemas, _with_additional_service_schemas(config.schemas))
+        )
 
     rebuilt_rules = tuple(
         {**rule, SCOPE_LATCHKEY_SELF: [*rule[SCOPE_LATCHKEY_SELF], *missing]}
@@ -201,27 +208,24 @@ def reconcile_baseline_permissions(config: LatchkeyPermissionsConfig) -> Latchke
     rebuilt_schemas: dict[str, JsonValue] = dict(config.schemas)
     for permission in missing:
         rebuilt_schemas[permission] = AGENT_BASELINE_PERMISSIONS.schemas[permission]
-    # Copy-with-update, never a fresh construction: rebuilding from rules+schemas
-    # alone silently drops ``include``, which would leave a granted custom scope
-    # pointing at an unresolvable schema -- and detent then fails the *whole*
-    # permission check for that host, not just the one rule.
     return config.model_copy_update(
         to_update(config.field_ref().rules, rebuilt_rules),
-        to_update(config.field_ref().schemas, rebuilt_schemas),
-        to_update(config.field_ref().include, _merged_include(config)),
+        to_update(config.field_ref().schemas, _with_additional_service_schemas(rebuilt_schemas)),
     )
 
 
-def _merged_include(config: LatchkeyPermissionsConfig) -> tuple[str, ...]:
-    """Return ``config``'s includes plus any the baseline has and it lacks."""
-    return config.include + tuple(name for name in AGENT_BASELINE_PERMISSIONS.include if name not in config.include)
+def _with_additional_service_schemas(schemas: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    """Return ``schemas`` with the current additional-service schemas overlaid by name."""
+    return {**schemas, **ADDITIONAL_SERVICE_SCHEMAS}
 
 
 def register_agent_for_host(
     plugin_data_dir: Path,
     host_id: HostId,
     agent_id: AgentId,
-) -> None:
+    # whether the canonical file was (re)written -- the caller's cue to push it to a
+    # host whose gateway enforces its own copy
+) -> bool:
     """Register ``agent_id`` for the given host, granting it access to the Minds API proxy.
 
     Reads the host's ``latchkey_permissions.json`` (writing a fresh
@@ -238,6 +242,11 @@ def register_agent_for_host(
     register-agent --host-id ID --agent-id ID``; the desktop client and
     any other Python caller goes through this function directly.
 
+    Only this computer's canonical copy is written here. A remote host's
+    gateway enforces its own ``permissions.json``, and the baseline this brings
+    up to date (``latchkey-self`` grants, additional-service schemas) is checked
+    *there*, so a caller that has a way to reach the machine pushes the file
+    over when this returns ``True``.
     """
     path = permissions_path_for_host(plugin_data_dir, host_id)
     if path.is_file():
@@ -294,7 +303,7 @@ def register_agent_for_host(
         # persisted: this is the common path for a host that already exists.
         if is_baseline_changed:
             save_permissions(path, config)
-        return
+        return is_baseline_changed
     new_any_of: list[JsonValue] = list(any_of) + [_build_allowed_agent_anyof_entry(str(agent_id))]
 
     schemas[SCOPE_MINDS_API_PROXY_PER_AGENT_UNAUTHORIZED] = {
@@ -314,6 +323,7 @@ def register_agent_for_host(
     # rebuilding by hand silently drops every other field.
     new_config = config.model_copy_update(to_update(config.field_ref().schemas, schemas))
     save_permissions(path, new_config)
+    return True
 
 
 class AgentLatchkeySetup(FrozenModel):
@@ -334,11 +344,11 @@ class AgentLatchkeySetup(FrozenModel):
         description=(
             "Environment variables to inject into the agent. Contains "
             f"``{ENV_LATCHKEY_GATEWAY}``, ``{ENV_LATCHKEY_DISABLE_COUNTING}`` and "
-            f"``{ENV_MINDS_VIA_DESKTOP_URL_PREFIX}`` (empty for desktop-gateway workspaces) "
+            f"``{ENV_MINDS_VIA_DESKTOP_URL_PREFIX}`` (empty for desktop-gateway hosts) "
             "whenever a gateway URL is available, plus "
             f"``{ENV_LATCHKEY_GATEWAY_PASSWORD}`` whenever a real ``Latchkey`` is supplied. "
-            f"Desktop-gateway workspaces also contain ``{ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE}``; "
-            "VPS-gateway workspaces rely on the gateway's synchronized default permissions file. "
+            f"Desktop-gateway hosts also contain ``{ENV_LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE}``; "
+            "VPS-gateway hosts rely on the gateway's synchronized default permissions file. "
             "Empty only in the on-host degraded "
             "mode (``latchkey=None`` with ``is_tunneled=False``) where no "
             "live gateway port is knowable."
@@ -385,14 +395,14 @@ def prepare_agent_latchkey(
       ``latchkey is not None``.
 
     ``gateway_location`` controls per-request authorization. Desktop-gateway
-    workspaces receive a permissions-override JWT targeting their desktop-side
-    host permissions file. VPS-gateway workspaces omit it and use the remote
+    hosts receive a permissions-override JWT targeting their desktop-side
+    host permissions file. VPS-gateway hosts omit it and use the remote
     gateway's synchronized default ``permissions.json``; its forwarding
     extension adds a separate desktop-target JWT only on the desktop hop.
 
-    It also decides ``MINDS_VIA_DESKTOP_URL_PREFIX``: VPS-gateway workspaces get a
+    It also decides ``MINDS_VIA_DESKTOP_URL_PREFIX``: VPS-gateway hosts get a
     real prefix to route an outbound request back through the user's machine,
-    desktop-gateway workspaces get the empty string because they already egress
+    desktop-gateway hosts get the empty string because they already egress
     there (see :data:`ENV_MINDS_VIA_DESKTOP_URL_PREFIX`).
 
     ``latchkey=None`` is a degraded mode for tests / no-password-gateway
@@ -416,7 +426,7 @@ def prepare_agent_latchkey(
             own the spawned gateway subprocess).
     """
     if not is_tunneled and gateway_location is LatchkeyGatewayLocation.VPS:
-        raise LatchkeyError("A VPS latchkey gateway requires a tunneled workspace")
+        raise LatchkeyError("A VPS latchkey gateway requires a tunneled host")
     if is_tunneled:
         gateway_url = f"http://127.0.0.1:{AGENT_SIDE_LATCHKEY_PORT}"
     elif latchkey is None:
@@ -435,7 +445,7 @@ def prepare_agent_latchkey(
     opaque_path: Path | None = None
 
     # Only a VPS gateway needs the desktop-egress detour; a desktop gateway is
-    # already on the user's machine, so its workspaces get the empty prefix.
+    # already on the user's machine, so its hosts get the empty prefix.
     env[ENV_MINDS_VIA_DESKTOP_URL_PREFIX] = (
         VIA_DESKTOP_URL_PREFIX if gateway_location is LatchkeyGatewayLocation.VPS else ""
     )
@@ -475,6 +485,15 @@ def finalize_host_permissions(
     UI-driven permission grants will not take effect because the UI
     writes to the canonical host-keyed path that this function would
     have linked.
+
+    Deliberately does **not** push the result to the host's machine,
+    unlike every other writer of the canonical file (see
+    :func:`~imbue.mngr_latchkey.remote.credentials.read_host_permissions`).
+    What it promotes is a deny-all baseline, never a grant, so pushing it
+    would overwrite whatever policy the machine is already enforcing --
+    including grants another of the user's computers made. Seeding a
+    machine that has no policy of its own is provisioning's job
+    (:func:`~imbue.mngr_latchkey.remote.provisioning.sync_permissions`).
     """
     if opaque_permissions_path is None:
         return

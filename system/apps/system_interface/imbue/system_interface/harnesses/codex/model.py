@@ -17,7 +17,7 @@ This resolver owns only the WRITE (switch) side: it applies a selection via
 NOT by typing ``/model`` / ``/fast`` into the pane (the stock binary has no such
 commands over the app-server drive). When no ``thread/settings/updated`` has been
 mirrored yet the file is absent, the reader returns ``None``, and the bar shows
-logo-only.
+no slots at all.
 """
 
 import json
@@ -68,7 +68,7 @@ CODEX_CATALOG: HarnessCatalog = HarnessCatalog(
     switch_mode=SwitchMode.ON_CHANGE,
     # DYNAMIC: the picker's options are per-agent (from model/list), re-fetched on every open.
     picker_mode=PickerMode.DYNAMIC,
-    powered_by_label="Codex",
+    powered_by_text="Powered by Codex",
     # Codex's patched binary watches shoulder_tap_atomic.jsonl and merges parked steer
     # messages into the live turn (ABA-gated on the turn id), so the "Shoulder tap" button
     # can flush atomically without a restart. Only codex supports this today.
@@ -140,7 +140,7 @@ def read_codex_model_options(model_options_path: Path) -> tuple[CodexModel, ...]
     The lazy-load fallback SOURCE: when the in-memory per-agent option set is empty (post-restart,
     before the daemon reconnects), the chip-match reads here and maps via
     :func:`codex_models_to_options`. A missing/unparseable file yields ``()`` (the chip then falls
-    back to logo-only), and any single entry that no longer matches the ``CodexModel`` shape is
+    back to rendering no slots), and any single entry that no longer matches the ``CodexModel`` shape is
     skipped rather than sinking the whole file -- so a daemon schema drift degrades gracefully."""
     raw_models = read_json_dict(model_options_path).get("models")
     if not isinstance(raw_models, list):

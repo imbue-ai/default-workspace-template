@@ -1,0 +1,1 @@
+Updated the root `uv.lock` and the public-mirror overlay lock (`mirror/overlay/uv.lock`) for the new direct `tenacity>=8.0` dependency of `imbue-mngr-imbue-cloud` (which now implements its connector transport retry with tenacity; see the `mngr_imbue_cloud` changelog entry for this branch).

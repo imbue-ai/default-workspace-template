@@ -1,9 +1,9 @@
 """Unit tests for the detached destroy lifecycle.
 
-We avoid actually invoking ``mngr destroy`` -- the bash command the spawn
-helper builds is exercised by replacing the binary at the call boundary
-with a tiny shell script that writes to stdout/stderr and exits 0 or 1.
-That gives us deterministic coverage of the pid + log + host_id capture and
+We avoid actually invoking ``mngr destroy`` -- the argv the spawn helper
+builds is exercised by replacing the binary at the call boundary with a
+tiny shell script that writes to stdout/stderr and exits 0 or 1. That
+gives us deterministic coverage of the pid + log + host_id capture and
 the status table without any live mngr state.
 """
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.destroying import DestroyingStatus
@@ -56,8 +56,9 @@ def _wait_for_pid_exit(pid: int, timeout: float = 5.0, poll: float = 0.05) -> bo
 def _make_fake_mngr(tmp_path: Path, exit_code: int, stdout: str = "", stderr: str = "") -> Path:
     """Write a tiny bash script that pretends to be ``mngr`` and exits with ``exit_code``.
 
-    The destroy command (``mngr list ... | mngr destroy -f -``) ends up running
-    this binary, which is enough for the destroy helper's contract.
+    The destroy command (``mngr destroy @<host_id>.<provider> --force``, or
+    the bare host id without a provider) ends up running this binary, which is
+    enough for the destroy helper's contract.
 
     stdout/stderr are passed through ``printf '%b'`` so that ``\\n`` in the
     Python string is interpreted as a real newline by bash (rather than a
@@ -86,20 +87,30 @@ def _path_with_fake_mngr(fake_bin: Path) -> dict[str, str]:
     return env
 
 
-def test_build_destroy_command_fans_out_over_the_whole_host() -> None:
+def test_build_destroy_command_targets_the_whole_host_via_its_provider() -> None:
     host_id = HostId.generate()
-    command = _build_destroy_command(host_id)
-    assert command[0] == "bash"
-    assert command[1] == "-c"
-    # Pipe-fanout shape: list every agent on the host | destroy -f -. There is
-    # deliberately no single-agent path, so destroying a minds workspace tears
-    # down the whole host (workspace agent + system-services).
-    assert f'host.id == "{host_id}"' in command[2]
-    assert "destroy -f -" in command[2]
+    command = _build_destroy_command(host_id, provider_name="imbue_cloud")
+    # Whole-host shape: the host itself is the destroy target, so teardown
+    # completeness does not depend on an agent-listing snapshot being complete
+    # at that moment. There is deliberately no single-agent path, so destroying
+    # a minds workspace tears down the whole host (workspace agent +
+    # system-services). The @id.provider address (the startup reconcile's
+    # shape) scopes resolution to the owning provider; --force keeps a retry
+    # idempotent when the host is already gone.
+    assert command == ["mngr", "destroy", f"@{host_id}.imbue_cloud", "--force"]
+
+
+def test_build_destroy_command_falls_back_to_bare_host_id_without_provider() -> None:
+    host_id = HostId.generate()
+    command = _build_destroy_command(host_id, provider_name=None)
+    # Without a recorded provider (discovery did not report one), the bare
+    # host-<hex> address still targets the whole host, resolving across all
+    # providers.
+    assert command == ["mngr", "destroy", str(host_id), "--force"]
 
 
 def test_start_destroy_writes_pid_log_and_host_id(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     host_id = HostId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=0, stdout="destroyed host\n")
@@ -115,12 +126,12 @@ def test_start_destroy_writes_pid_log_and_host_id(tmp_path: Path) -> None:
 
 
 def test_read_host_id_returns_none_when_absent(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     assert read_host_id(AgentId.generate(), paths) is None
 
 
 def _start_finished_destroy(
-    tmp_path: Path, paths: WorkspacePaths, host_id: HostId, provider_name: str | None
+    tmp_path: Path, paths: InstallationPaths, host_id: HostId, provider_name: str | None
 ) -> AgentId:
     """Write a destroy marker whose subprocess has already exited, returning its agent id."""
     agent_id = AgentId.generate()
@@ -138,13 +149,13 @@ def _start_finished_destroy(
 
 
 def test_start_destroy_records_the_owning_provider_when_known(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = _start_finished_destroy(tmp_path, paths, HostId.generate(), provider_name="imbue_cloud_user")
     assert read_provider_name(agent_id, paths) == "imbue_cloud_user"
 
 
 def test_start_destroy_writes_no_provider_file_when_unknown(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = _start_finished_destroy(tmp_path, paths, HostId.generate(), provider_name=None)
     assert read_provider_name(agent_id, paths) is None
 
@@ -154,7 +165,7 @@ def test_is_host_still_active_true_while_owning_provider_has_not_reported(tmp_pa
     provider has not produced a snapshot yet. Without positive absence evidence the
     host must read as still active, so the destroy stays FAILED instead of being
     falsely finalized as DONE (which tombstoned records for still-leased hosts)."""
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     host_id = HostId.generate()
     agent_id = _start_finished_destroy(tmp_path, paths, host_id, provider_name="imbue_cloud_user")
     resolver = MngrCliBackendResolver()
@@ -175,7 +186,7 @@ def test_is_host_still_active_true_while_owning_provider_has_not_reported(tmp_pa
 def test_is_host_still_active_true_when_clean_snapshot_still_lists_the_host(tmp_path: Path) -> None:
     """A clean snapshot that still reports the host (even with unknown state) proves
     the destroy did not finish tearing it down."""
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     host_id = HostId.generate()
     agent_id = _start_finished_destroy(tmp_path, paths, host_id, provider_name="imbue_cloud_user")
     resolver = MngrCliBackendResolver()
@@ -191,7 +202,7 @@ def test_is_host_still_active_true_when_clean_snapshot_still_lists_the_host(tmp_
 
 
 def test_is_host_still_active_false_when_host_state_is_destroyed(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     host_id = HostId.generate()
     agent_id = _start_finished_destroy(tmp_path, paths, host_id, provider_name="imbue_cloud_user")
     resolver = MngrCliBackendResolver()
@@ -201,7 +212,7 @@ def test_is_host_still_active_false_when_host_state_is_destroyed(tmp_path: Path)
 
 
 def test_is_host_still_active_true_when_host_state_is_known_and_not_destroyed(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     host_id = HostId.generate()
     agent_id = _start_finished_destroy(tmp_path, paths, host_id, provider_name="imbue_cloud_user")
     resolver = MngrCliBackendResolver()
@@ -213,7 +224,7 @@ def test_is_host_still_active_true_when_host_state_is_known_and_not_destroyed(tm
 def test_is_host_still_active_legacy_marker_without_provider_keeps_old_absence_behavior(tmp_path: Path) -> None:
     """A marker written before provider attribution has no provider file; those
     destroys must still converge, so absence from discovery keeps counting as gone."""
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = _start_finished_destroy(tmp_path, paths, HostId.generate(), provider_name=None)
     resolver = MngrCliBackendResolver()
 
@@ -221,7 +232,7 @@ def test_is_host_still_active_legacy_marker_without_provider_keeps_old_absence_b
 
 
 def test_read_destroying_status_running_when_pid_alive(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     # Sleep long enough for the next read but not so long that the test gets slow.
     sleeper = tmp_path / "bin" / "mngr"
@@ -246,7 +257,7 @@ def test_read_destroying_status_running_when_pid_alive(tmp_path: Path) -> None:
 
 
 def test_read_destroying_status_done_when_pid_dead_and_host_gone(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=0)
     record = start_destroy(
@@ -260,13 +271,13 @@ def test_read_destroying_status_done_when_pid_dead_and_host_gone(tmp_path: Path)
 
 
 def test_read_destroying_status_failed_when_pid_dead_but_host_still_active(tmp_path: Path) -> None:
-    """The exact silent-orphan bug: the wrapper exited but the host is still up.
+    """The exact silent-orphan bug: the destroy process exited but the host is still up.
 
     Models a destroy that tore down only the machine agent (or otherwise
     failed) while the host kept running -- it must read as FAILED, not DONE, so
     the machine stays visible instead of leaking a still-running host.
     """
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=1, stderr="boom\n")
     record = start_destroy(
@@ -279,12 +290,12 @@ def test_read_destroying_status_failed_when_pid_dead_but_host_still_active(tmp_p
 
 
 def test_read_destroying_returns_none_when_no_directory(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     assert read_destroying(AgentId.generate(), paths, is_host_still_active=False) is None
 
 
 def test_start_destroy_is_idempotent_while_running(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     host_id = HostId.generate()
     sleeper = tmp_path / "bin" / "mngr"
@@ -305,7 +316,7 @@ def test_start_destroy_is_idempotent_while_running(tmp_path: Path) -> None:
 
 
 def test_list_destroying_walks_dir_and_picks_up_each_agent(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_a = AgentId.generate()
     agent_b = AgentId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=0)
@@ -326,7 +337,7 @@ def test_list_destroying_walks_dir_and_picks_up_each_agent(tmp_path: Path) -> No
 
 
 def test_delete_destroying_is_idempotent(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=0)
     record = start_destroy(
@@ -339,7 +350,7 @@ def test_delete_destroying_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_read_log_chunk_returns_tail_from_offset(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     fake = _make_fake_mngr(tmp_path, exit_code=0, stdout="hello world\n")
     record = start_destroy(
@@ -356,14 +367,14 @@ def test_read_log_chunk_returns_tail_from_offset(tmp_path: Path) -> None:
 
 
 def test_read_log_chunk_raises_filenotfound_when_no_record(tmp_path: Path) -> None:
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     with pytest.raises(FileNotFoundError):
         read_log_chunk(AgentId.generate(), paths, offset=0)
 
 
 def test_idempotent_after_failure_overwrites_log(tmp_path: Path) -> None:
     """A Retry overwrites the previous run's log so the user sees the new attempt fresh."""
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     agent_id = AgentId.generate()
     host_id = HostId.generate()
     failing = _make_fake_mngr(tmp_path, exit_code=1, stderr="first run boom\n")

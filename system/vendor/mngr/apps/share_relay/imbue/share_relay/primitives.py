@@ -46,7 +46,7 @@ class RelayId(NonEmptyStr):
     """Opaque relay identity (``relay-<hex>``) minted at registration.
 
     Embedded in the relay's rendered frps plugin-auth path
-    (``/frps/auth/<secret>/<relay-id>``) so the connector can attribute
+    (``/frps/auth/<relay-id>``) so the connector can attribute
     Login/NewProxy callbacks to one relay, and used as the primary key of the
     connector's ``relays`` inventory row.
     """

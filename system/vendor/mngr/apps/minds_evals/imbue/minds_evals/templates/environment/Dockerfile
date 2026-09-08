@@ -1,12 +1,13 @@
-# Minds box: a full Minds computer for an exact mngr SHA, adapted from the old
-# apps/mngr_minds_eval box image. One image per mngr SHA; harbor's Modal
-# provider builds it on Modal's builders and layer-caches it, so every task in
-# a dataset (byte-identical environment/) reuses the same build.
+# Minds box: a full Minds computer for an exact mngr SHA. One image per mngr
+# SHA; harbor's Modal provider builds it on Modal's builders and layer-caches
+# it, so every task in a dataset (byte-identical environment/) reuses the same
+# build.
 #
-# Differences from the old box image:
-#   - no eval-app overlay (the driver is host-side; no harness code runs in-box)
-#   - no ENTRYPOINT: harbor supplies its own keepalive, and the driver's
-#     setup() starts entrypoint.sh explicitly with the per-trial env
+# The image carries no eval application: the conversation driver runs host-side
+# and reaches into the box over the system interface, so the only harness code
+# baked in is the entrypoint and the port probe the driver invokes. There is
+# deliberately no ENTRYPOINT either -- harbor supplies its own keepalive, and
+# the driver's setup() starts entrypoint.sh explicitly with the per-trial env.
 FROM node:24.15.0-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.5 /uv /usr/local/bin/uv
@@ -43,6 +44,24 @@ RUN cd apps/minds \
  && pnpm install \
  && (pnpm run build:css || echo "build:css failed (non-fatal)") \
  && (node scripts/ensure-binaries.js || echo "ensure-binaries failed (non-fatal)")
+
+# Chromium for the UI-flow executor, which drives the delivered app's forwarded origin from inside
+# the box. The playwright PYTHON package is already in the synced venv (apps/minds depends on it),
+# so only the browser binary is missing, and the browser this installs is the revision that
+# version pins. Both halves of the executor -- this install and the step script that drives it --
+# run against that same venv, so they cannot drift apart: nothing outside the box has a say in
+# which playwright either of them sees.
+#
+# Placed last on purpose: it invalidates nothing above it, so the expensive uv/pnpm layers stay
+# cached when this line changes. Roughly +300 MB.
+#
+# `python -m playwright`, never the `playwright` console script: uv writes an absolute venv path
+# into console-script shebangs, which breaks as soon as the workspace moves (see
+# libs/mngr_imbue_cloud's changelog). PLAYWRIGHT_BROWSERS_PATH is absolute for the same class of
+# reason -- the default lives under $HOME, and the box runs as root with $HOME not guaranteed.
+# --with-deps is belt-and-braces: every library Chromium needs is already installed above.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN uv run python -m playwright install --with-deps chromium
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY probe_minds_port.py /usr/local/bin/probe_minds_port.py

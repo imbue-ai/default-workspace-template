@@ -14,15 +14,17 @@
 import m from "mithril";
 import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
-import { PERMISSION_REQUEST_RESOLVED, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
+import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "../embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
+import { getEventDetailState, requestEventDetail } from "../models/Response";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
 import { isPermissionRequestCall } from "./message-classification";
-import { icon } from "./icons";
-import type { IconName } from "./icons";
+import { icon } from "./components/icons";
+import type { IconName } from "./components/icons";
 import { serviceMarkUrl } from "./service-marks";
+import { Button } from "./components/Button";
 
 /** The rich fields a created permission request echoes back on stdout, parsed
  *  from the tool result. `requestId` is always present (it's what the modal
@@ -42,87 +44,8 @@ export interface PermissionRequestDetails {
   access: string | null;
 }
 
-/** The gateway generates every request_id as a dash-stripped UUIDv4 (see
- *  `generateRequestId` in the latchkey extension's permission_requests.mjs). The
- *  strict parse doesn't need this -- JSON structure already proves the value is
- *  the response's request_id -- but the truncation recovery below reconstructs
- *  its text, so it demands the id also *look* gateway-minted before the modal is
- *  opened with it. */
-const GENERATED_REQUEST_ID_PATTERN = /^[0-9a-f]{32}$/;
-
 function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-}
-
-/**
- * The longest prefix of `body` that is a complete JSON object, re-closed, or
- * null if not even its first member completed.
- *
- * Truncation cuts the response mid-object so `JSON.parse` throws on the whole
- * thing. But the gateway writes the fields this card needs first and the bulk
- * that overflows the limit (`target`, `effect`) last -- see handleCreateRequest
- * in the latchkey extension -- so every member up to the last completed one is
- * intact. Cut at that boundary (the last `,` at nesting depth 1, outside any
- * string) and close the object.
- *
- * The walk only ever DISCARDS a trailing member and appends `}`: it never
- * invents a key nor lifts a value out of its context, so the repaired object is
- * always a subset of what the sender wrote.
- */
-function completeTopLevelPrefix(body: string): string | null {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let lastComplete = -1;
-  for (let i = 0; i < body.length; i++) {
-    const c = body[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === "\\") escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') inString = true;
-    else if (c === "{" || c === "[") depth++;
-    else if (c === "}" || c === "]") depth--;
-    else if (c === "," && depth === 1) lastComplete = i;
-  }
-  return lastComplete < 0 ? null : `${body.slice(0, lastComplete)}}`;
-}
-
-/** The response object the creation POST echoed, parsed strictly if the output
- *  survived intact and otherwise recovered from its truncated head. */
-function parseResponseObject(output: string): Record<string, unknown> | null {
-  // curl writes a progress meter before the response body; the JSON object
-  // starts at the first `{`.
-  const start = output.indexOf("{");
-  if (start < 0) {
-    return null;
-  }
-  const body = output.slice(start);
-  try {
-    return asObject(JSON.parse(body));
-  } catch {
-    // Truncated mid-object. The backend now preserves the whole object past its
-    // output limit, so this is the path for a transcript parsed by an older
-    // backend: recover the head rather than dropping the whole card.
-  }
-  const repaired = completeTopLevelPrefix(body);
-  if (repaired === null) {
-    return null;
-  }
-  let recovered: Record<string, unknown> | null;
-  try {
-    recovered = asObject(JSON.parse(repaired));
-  } catch {
-    return null;
-  }
-  if (recovered === null) {
-    return null;
-  }
-  return typeof recovered.request_id === "string" && GENERATED_REQUEST_ID_PATTERN.test(recovered.request_id)
-    ? recovered
-    : null;
 }
 
 /** Map the gateway's response object onto the fields the card renders. The one
@@ -155,22 +78,12 @@ function detailsFromResponseObject(obj: Record<string, unknown>): PermissionRequ
  * An agent asks the user for permission by POSTing to the reserved
  * `latchkey-self.invalid/permission-requests` host (see the latchkey skill).
  * The created request's JSON -- request_id, rationale, request_type, and a
- * type-specific payload -- is echoed back on stdout, after curl's progress
- * meter.
- *
- * That response routinely runs past the transcript's per-result output limit,
- * so it is read from the `permission_request` field the backend parsed off the
- * untruncated output. The output scan below is the fallback for the one case
- * the backend deliberately refuses to preserve: a response past its
- * preservation ceiling (an agent's rationale has no length limit), which
- * arrives with no structured field and a head-truncated body. The scan then
- * repairs what it can of that body rather than abandoning a request the user
- * still has to answer.
- *
- * Returns the parsed details when the call is such a creation POST that
- * succeeded and carries a request_id; otherwise null (the request is still
- * pending, errored, or nothing could be read -- the caller then shows a
- * pending card and keeps the raw output available).
+ * type-specific payload -- routinely runs past the transcript's per-result
+ * output limit, so it is read from the `permission_request` field the backend
+ * parsed off the untruncated output; there is no output-scanning fallback.
+ * Returns null when the call is not such a creation POST, errored, or carries
+ * no structured field (a transcript from an older backend) -- the caller then
+ * shows the honest can't-read state pointing at the Permissions tab.
  */
 export function parsePermissionRequest(
   toolCall: ToolCall,
@@ -185,14 +98,25 @@ export function parsePermissionRequest(
     return null;
   }
   const structured = asObject(toolResult.permission_request);
-  if (structured !== null) {
-    const details = detailsFromResponseObject(structured);
-    if (details !== null) {
-      return details;
-    }
-  }
-  const parsed = parseResponseObject(toolResult.output || "");
-  return parsed === null ? null : detailsFromResponseObject(parsed);
+  return structured === null ? null : detailsFromResponseObject(structured);
+}
+
+/** Whether this tool call is a permission request the gateway actually FILED.
+ *
+ *  The card renders for a request the user can act on (or has acted on). A
+ *  call the harness refused, one whose curl failed outright, or one the
+ *  gateway rejected (`curl` exits 0 on a 4xx, so the call does not even read
+ *  as failed) produced no pending request -- rendering those as a permission
+ *  card sends the user to a Permissions tab that has nothing in it, so they
+ *  render as the ordinary tool calls they are.
+ *
+ *  A call with no result YET does count: that is the request in flight, which
+ *  is exactly when it most needs to be visible.
+ */
+export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolResultEvent | null): boolean {
+  if (!isPermissionRequestCall(toolCall)) return false;
+  if (toolResult === null) return true;
+  return parsePermissionRequest(toolCall, toolResult) !== null;
 }
 
 /**
@@ -204,26 +128,34 @@ export function openPermissionRequest(requestId: string): void {
   sendToEmbedder(OPEN_REQUEST_MODAL, { requestId });
 }
 
-// -- Shell-resolved requests --------------------------------------------------
+// -- Shell-reported verdicts --------------------------------------------------
 //
-// When the Minds app's review popup resolves a request, the shell sends
-// `minds:permission-request-resolved` over the embed contract, which admits it
-// only from this page's own embedder and only with a well-shaped payload. The
-// matching card flips to its verdict immediately instead of waiting for the
-// resolution message's round trip through the agent transcript; once that
-// message lands, the classified resolution takes over (and agrees with the
-// verdict recorded here).
+// Verdicts learned over `minds:permission-resolutions`, which arrives two ways
+// with one meaning: unsolicited with a single entry the moment the user
+// resolves a request in the review popup (the card flips ahead of the
+// resolution message's transcript round trip), and as the recent-verdicts
+// snapshot the chrome pushes whenever this page (re)loads -- this in-memory
+// cache dies with the page, and without the snapshot a rebuilt page would
+// offer Approve/Deny for a request decided while it was not live. The
+// endpoint admits the message only from this page's embedder with a
+// well-shaped payload; the transcript's classified resolution takes over once
+// it lands. Sends need no vendored-contract support but a stale vendored
+// endpoint drops the message until the sync lands, leaving cards
+// transcript-driven (also the direct-share behavior, where no embedder
+// exists).
 const shellResolutions = new Map<string, PermissionResolution>();
 
-/** Record the verdict a resolution message carries. Returns whether one was
- *  (so the caller knows to redraw). */
-function noteShellPermissionResolution(message: ContractMessage): boolean {
-  const { requestId, resolution } = message;
-  if (typeof requestId !== "string" || requestId === "") return false;
-  if (resolution !== "granted" && resolution !== "denied") return false;
-  shellResolutions.set(requestId, resolution);
-  return true;
-}
+// When THIS page first learned each verdict. The shell's verdict lands well
+// before the agent does -- the desktop client flips the card from its own
+// record and only then starts trying to deliver the resolution message into
+// the agent's session, which is a multi-step, retried delivery (see
+// `MngrMessageSender` in the mngr repo). The gap is the window in which the
+// user has decided and nothing is visibly happening, so the activity strip
+// spins a bare dot through it (see `wakeUpSpinnerDeadline`). Recorded only on
+// first sight of a request id, so the load-time snapshot's idempotent re-push
+// cannot restart the clock. Times are page-local: this map dies with the page,
+// exactly like `shellResolutions` above.
+const shellResolutionArrivals = new Map<string, number>();
 
 /** The shell-reported verdict for a request, or null if the shell hasn't
  *  reported one. */
@@ -231,17 +163,81 @@ export function shellPermissionResolutionFor(requestId: string): PermissionResol
   return shellResolutions.get(requestId) ?? null;
 }
 
+/** When this page first learned a shell-reported verdict for `requestId`
+ *  (`Date.now()` at the time), or null if it never has. */
+export function shellResolutionArrivalFor(requestId: string): number | null {
+  return shellResolutionArrivals.get(requestId) ?? null;
+}
+
+/** Whether any shell-reported verdict landed after `since`. A cheap pre-check
+ *  (the map holds one entry per request this page has seen resolved) so the
+ *  activity strip can skip its transcript scan on the overwhelmingly common
+ *  redraw where nothing was just resolved. */
+export function hasShellResolutionSince(since: number): boolean {
+  for (const arrival of shellResolutionArrivals.values()) {
+    if (arrival > since) return true;
+  }
+  return false;
+}
+
+/** Record every verdict a `minds:permission-resolutions` message carries --
+ *  a query answer or the shell's unsolicited single-entry push. */
+export function notePermissionResolutions(message: ContractMessage): void {
+  const { resolutions } = message;
+  if (!Array.isArray(resolutions)) return;
+  let isAnyRecorded = false;
+  for (const entry of resolutions) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { requestId, resolution } = entry as ContractMessage;
+    if (typeof requestId !== "string" || requestId === "") continue;
+    if (resolution !== "granted" && resolution !== "denied") continue;
+    // First sight only: the snapshot is pushed up to three times per page load
+    // and re-pushed on every reload, and a re-notification of a verdict this
+    // page already knows is not a fresh decision to wait on.
+    if (!shellResolutionArrivals.has(requestId)) shellResolutionArrivals.set(requestId, Date.now());
+    shellResolutions.set(requestId, resolution);
+    isAnyRecorded = true;
+  }
+  if (isAnyRecorded) m.redraw();
+}
+
+/** Drop the verdict cache so the next test starts from a quiet page. */
+export function resetShellPermissionResolutionsForTesting(): void {
+  shellResolutions.clear();
+  shellResolutionArrivals.clear();
+}
+
 /** Subscribe the cards to the shell's verdicts. Called once at app bootstrap. */
 export function initShellPermissionResolutions(): void {
-  setEmbedderMessageHandler(PERMISSION_REQUEST_RESOLVED, (message) => {
-    if (noteShellPermissionResolution(message)) m.redraw();
-  });
+  setEmbedderMessageHandler(PERMISSION_RESOLUTIONS, notePermissionResolutions);
 }
+
+/* Card styling.
+ * The card is styled with utilities at each call site below; the
+ * permission-request-* class names stay as bare markers (the vitest suites and
+ * the e2e tests query them). Shared fragments live here so the two card badges
+ * and the two raw-toggle placements can't drift. */
+
+/** The card shell every state shares. */
+const CARD_CLASS = "permission-request max-w-[560px] rounded-lg border bg-composer px-3.5 py-3";
+
+/** The rounded subject badge; the pending body uses the 32px form, the
+ *  resolved receipt the 24px one. Size + radius are resolved per call site so
+ *  no two utilities fight over one property. */
+const BADGE_BASE = "flex shrink-0 items-center justify-center bg-fill-hover text-secondary";
+
+/** The verdict's color says the outcome: approved reads in the accent green;
+ *  denied reads neutral (a decision, not an error); couldn't-complete warns. */
+const VERDICT_COLOR: Record<PermissionResolution, string> = {
+  granted: "text-accent",
+  denied: "text-secondary",
+  error: "text-warning",
+};
 
 /** The key that heads every card state's eyebrow. 13px is the size of the
  *  verdict glyphs it sits level with on the receipt row. */
 function renderKeyIcon(): m.Vnode {
-  return m.trust(icon("key", { size: 13, className: "permission-request-icon" }));
+  return m.trust(icon("key", { size: 13, className: "permission-request-icon shrink-0" }));
 }
 
 /**
@@ -257,9 +253,16 @@ function renderKeyIcon(): m.Vnode {
 function renderSubjectMark(details: PermissionRequestDetails | null, size: number): m.Vnode {
   const markUrl = details?.scope ? serviceMarkUrl(details.scope) : null;
   if (markUrl === null) {
-    return m.trust(icon("box", { size, className: "permission-request-icon" }));
+    return m.trust(icon("box", { size, className: "permission-request-icon shrink-0" }));
   }
-  return m("img", { src: markUrl, alt: "", width: size, height: size, class: "permission-request-mark" });
+  // object-contain matters because several of the marks are non-square.
+  return m("img", {
+    src: markUrl,
+    alt: "",
+    width: size,
+    height: size,
+    class: "permission-request-mark block shrink-0 object-contain",
+  });
 }
 
 /** The generic subject, used only where a row would otherwise be blank. It
@@ -285,7 +288,7 @@ function permissionTitle(details: PermissionRequestDetails | null, scopeInfo: Sc
  *  (denied), or an exclamation (error / couldn't complete). */
 function renderVerdictIcon(resolution: PermissionResolution): m.Vnode {
   const name: IconName = resolution === "granted" ? "check" : resolution === "denied" ? "close" : "alert";
-  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon" }));
+  return m.trust(icon(name, { size: 13, className: "permission-request-verdict-icon shrink-0" }));
 }
 
 /** The label shown beside the verdict icon. "error" reads as "Couldn't
@@ -299,15 +302,27 @@ function verdictLabel(resolution: PermissionResolution): string {
 /** The resolved verdict shown at the right of the receipt row (approved,
  *  denied, or could-not-complete). */
 function renderPermissionVerdict(resolution: PermissionResolution): m.Vnode {
-  return m("div", { class: `permission-request-verdict permission-request-verdict--${resolution}` }, [
-    renderVerdictIcon(resolution),
-    m("span", verdictLabel(resolution)),
-  ]);
+  return m(
+    "div",
+    {
+      // The modifier marker is interpolated (markers are invisible to the
+      // Tailwind scanner); the color utility comes from the literal map above.
+      class:
+        `permission-request-verdict permission-request-verdict--${resolution} ` +
+        `inline-flex shrink-0 items-center gap-[5px] text-(length:--font-size-helper) font-semibold ` +
+        VERDICT_COLOR[resolution],
+    },
+    [renderVerdictIcon(resolution), m("span", verdictLabel(resolution))],
+  );
 }
 
 /** The eyebrow row every card state shares: a small key + "Permission request". */
 function renderEyebrow(): m.Vnode {
-  return m("div", { class: "permission-request-eyebrow" }, [renderKeyIcon(), m("span", "Permission request")]);
+  return m(
+    "div",
+    { class: "permission-request-eyebrow flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" },
+    [renderKeyIcon(), m("span", "Permission request")],
+  );
 }
 
 /** The plain-text "Show raw request" / "Hide raw request" toggle, or null when
@@ -317,7 +332,9 @@ function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => v
   return m(
     "button",
     {
-      class: "permission-request-raw-toggle",
+      class:
+        "permission-request-raw-toggle cursor-pointer border-none bg-transparent p-0 " +
+        "text-(length:--font-size-helper) text-faint transition-[color] duration-(--dur-base) hover:text-secondary",
       type: "button",
       onclick(e: Event) {
         e.preventDefault();
@@ -332,7 +349,18 @@ function renderRawToggle(rawText: string, rawOpen: boolean, onToggleRaw: () => v
 /** The raw request/response block, shown full-width when the toggle is open. */
 function renderRawBlock(rawText: string, rawOpen: boolean): m.Vnode | null {
   if (!rawText || !rawOpen) return null;
-  return m("div", { class: "permission-request-raw" }, m("pre", m("code", rawText)));
+  return m(
+    "div",
+    { class: "permission-request-raw mt-2.5" },
+    m(
+      "pre",
+      {
+        class:
+          "overflow-auto rounded-md bg-sidebar p-2 font-mono text-(length:--font-size-helper) whitespace-pre-wrap text-secondary",
+      },
+      m("code", rawText),
+    ),
+  );
 }
 
 /**
@@ -371,27 +399,37 @@ export function renderPermissionCard(
     // One compact line: the verdict reads inline right after the title, and
     // the raw toggle keeps to the right edge of the same row, so the receipt
     // never grows a second row.
-    return m("div", { class: "permission-request" }, [
+    return m("div", { class: CARD_CLASS }, [
       renderEyebrow(),
-      m("div", { class: "permission-request-receipt" }, [
-        m("div", { class: "permission-request-badge permission-request-badge--sm" }, renderSubjectMark(details, 14)),
-        m("div", { class: "permission-request-receipt-title" }, title ?? GENERIC_PERMISSION_TITLE),
+      m("div", { class: "permission-request-receipt mt-2.5 flex items-center gap-2" }, [
+        m(
+          "div",
+          { class: `permission-request-badge permission-request-badge--sm h-6 w-6 rounded-md ${BADGE_BASE}` },
+          renderSubjectMark(details, 14),
+        ),
+        m(
+          "div",
+          {
+            class: "permission-request-receipt-title min-w-0 truncate type-label text-primary",
+          },
+          title ?? GENERIC_PERMISSION_TITLE,
+        ),
         renderPermissionVerdict(resolution),
-        rawToggle ? m("div", { class: "permission-request-receipt-toggle" }, rawToggle) : null,
+        rawToggle ? m("div", { class: "permission-request-receipt-toggle ml-auto shrink-0" }, rawToggle) : null,
       ]),
       rawBlock,
     ]);
   }
 
   if (details === null) {
-    return m("div", { class: "permission-request" }, [
+    return m("div", { class: CARD_CLASS }, [
       renderEyebrow(),
       m(
         "div",
-        { class: "permission-request-status" },
+        { class: "permission-request-status mt-[9px] text-(length:--font-size-body) text-secondary" },
         hasResult ? "Couldn't read this request — see the Permissions tab." : "Waiting for the request to register…",
       ),
-      rawToggle ? m("div", { class: "permission-request-toggle-row" }, rawToggle) : null,
+      rawToggle ? m("div", { class: "permission-request-toggle-row mt-2 flex justify-end" }, rawToggle) : null,
       rawBlock,
     ]);
   }
@@ -400,21 +438,26 @@ export function renderPermissionCard(
   // when no rationale survived either, so a titled-but-redundant row never sits
   // under an identical eyebrow.
   const bodyTitle = title ?? (details.rationale === null ? GENERIC_PERMISSION_TITLE : null);
-  return m("div", { class: "permission-request" }, [
+  return m("div", { class: CARD_CLASS }, [
     renderEyebrow(),
-    m("div", { class: "permission-request-body" }, [
-      m("div", { class: "permission-request-badge" }, renderSubjectMark(details, 16)),
-      m("div", { class: "permission-request-info" }, [
-        bodyTitle !== null ? m("div", { class: "permission-request-title" }, bodyTitle) : null,
-        details.rationale ? m("div", { class: "permission-request-reason" }, details.rationale) : null,
+    m("div", { class: "permission-request-body mt-2.5 flex items-start gap-2.5" }, [
+      m("div", { class: `permission-request-badge h-8 w-8 rounded-lg ${BADGE_BASE}` }, renderSubjectMark(details, 16)),
+      m("div", { class: "permission-request-info min-w-0 flex-1" }, [
+        bodyTitle !== null ? m("div", { class: "permission-request-title type-label text-primary" }, bodyTitle) : null,
+        details.rationale
+          ? m(
+              "div",
+              { class: "permission-request-reason text-(length:--font-size-helper) leading-[1.45] text-secondary" },
+              details.rationale,
+            )
+          : null,
       ]),
     ]),
-    m("div", { class: "permission-request-actions" }, [
+    m("div", { class: "permission-request-actions mt-3 flex items-center justify-between gap-2.5" }, [
       m(
-        "button",
+        Button,
         {
-          class: "permission-request-button",
-          type: "button",
+          variant: "primary",
           onclick(e: Event) {
             e.preventDefault();
             e.stopPropagation();
@@ -441,15 +484,38 @@ export function PermissionCard(): m.Component<{
   toolCall: ToolCall;
   toolResult: ToolResultEvent | null;
   resolution: PermissionResolution | null;
+  // For the raw disclosure's on-demand payload fetch (the wire is payload-free).
+  agentId: string;
+  assistantEventId: string;
 }> {
   let rawOpen = false;
   return {
     view(vnode) {
-      const { toolCall, toolResult, resolution } = vnode.attrs;
+      const { toolCall, toolResult, resolution, agentId, assistantEventId } = vnode.attrs;
       const details = parsePermissionRequest(toolCall, toolResult);
       const scopeInfo = details?.scope ? getScopeInfo(details.scope) : null;
-      const rawInput = toolCall.input_preview || "";
-      const rawOutput = toolResult?.output || "";
+      // The raw disclosure fetches the full input/output on open (cached frontend-side);
+      // until they land, the structured request object stands in.
+      if (rawOpen) {
+        if (toolCall.input_chars > 0) {
+          requestEventDetail(agentId, assistantEventId);
+        }
+        if (toolResult && toolResult.output_chars > 0) {
+          requestEventDetail(agentId, toolResult.event_id);
+        }
+      }
+      const inputDetail = rawOpen ? getEventDetailState(agentId, assistantEventId) : undefined;
+      const outputDetail = rawOpen && toolResult ? getEventDetailState(agentId, toolResult.event_id) : undefined;
+      const rawInput =
+        inputDetail?.state === "loaded"
+          ? (inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? "")
+          : "";
+      const fallbackRaw = toolResult?.permission_request
+        ? JSON.stringify(toolResult.permission_request, null, 2)
+        : toolResult
+          ? "Open to load the raw output\u2026"
+          : "";
+      const rawOutput = outputDetail?.state === "loaded" ? (outputDetail.detail.output ?? "") : fallbackRaw;
       const rawText = rawOutput ? `${rawInput}\n\n${rawOutput}` : rawInput;
       // The transcript-classified resolution wins; before it lands, a verdict
       // the shell reported for this request (the user just resolved it in the

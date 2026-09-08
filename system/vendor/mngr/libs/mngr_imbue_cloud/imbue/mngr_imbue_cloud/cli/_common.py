@@ -10,21 +10,20 @@ import functools as _functools
 import json as _json
 import os
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
-from typing import Final
 from typing import NoReturn
 
 import click
-from loguru import logger
 from pydantic import AnyUrl
 
+from imbue.mngr_imbue_cloud.config import ACCOUNTS_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.config import CONNECTOR_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.config import get_active_profile_dir
 from imbue.mngr_imbue_cloud.config import get_sessions_dir
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.session_store import ImbueCloudSessionStore
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountSuspendedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudClientTooOldError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudEmailNotVerifiedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudError
@@ -77,6 +76,21 @@ def resolve_connector_url(override: str | None) -> str:
     )
 
 
+def resolve_accounts_url(override: str | None) -> str | None:
+    """Resolve the browser accounts-origin URL: explicit flag > env var > None.
+
+    None means the tier has no dedicated accounts origin (dev/CI tiers), so
+    browser pages are served on the connector host itself and callers should
+    fall back to the connector URL.
+    """
+    if override:
+        return override.rstrip("/")
+    env_value = os.environ.get(ACCOUNTS_URL_ENV_VAR)
+    if env_value:
+        return env_value.rstrip("/")
+    return None
+
+
 def make_connector_client(connector_url: str | None) -> ImbueCloudConnectorClient:
     return ImbueCloudConnectorClient(base_url=AnyUrl(resolve_connector_url(connector_url)))
 
@@ -92,83 +106,6 @@ def fail_with_json(message: str, *, exit_code: int = 1, **extra: Any) -> NoRetur
     body.update(extra)
     click.echo(_json.dumps(body, indent=2, default=str), err=True)
     sys.exit(exit_code)
-
-
-# Env var name a minds-activated shell uses to flag the pool host DSN for the
-# activated env. Mirrors the field written into ``~/.minds-<env>/secrets.toml``
-# by ``minds env deploy`` so an operator can also point us at a one-off DSN by
-# exporting it directly.
-_MINDS_HOST_POOL_DSN_ENV_VAR: Final[str] = "MINDS_HOST_POOL_DSN"
-# Env vars the minds bootstrap exports on ``minds env activate`` so we can locate
-# the per-env secrets.toml without importing any minds module (these CLIs live in
-# mngr_imbue_cloud and are intentionally decoupled from the minds package).
-_MINDS_ROOT_NAME_ENV_VAR: Final[str] = "MINDS_ROOT_NAME"
-_MINDS_PREFIX: Final[str] = "minds"
-
-
-def _read_activated_minds_host_pool_dsn() -> str | None:
-    """Return the activated minds env's NEON_HOST_POOL_DSN, or None.
-
-    Walks the same on-disk layout ``minds env deploy`` writes:
-
-        $HOME/.<MINDS_ROOT_NAME>/secrets.toml -> [secrets].NEON_HOST_POOL_DSN
-
-    Returns None when ``MINDS_ROOT_NAME`` is unset, when the env root is
-    production (``MINDS_ROOT_NAME=minds``, no per-env secrets.toml), when the file
-    doesn't exist, or when the field is missing / empty. All map to "this CLI has
-    no opinion -- caller must pass ``--database-url`` or set ``MINDS_HOST_POOL_DSN``."
-    """
-    root_name = os.environ.get(_MINDS_ROOT_NAME_ENV_VAR)
-    if not root_name or root_name == _MINDS_PREFIX:
-        return None
-    secrets_path = Path.home() / f".{root_name}" / "secrets.toml"
-    if not secrets_path.is_file():
-        return None
-    try:
-        raw = tomllib.loads(secrets_path.read_text())
-    except OSError as exc:
-        logger.warning("Could not read {} for pool DSN resolution: {}", secrets_path, exc)
-        return None
-    except tomllib.TOMLDecodeError as exc:
-        logger.warning(
-            "Could not parse {} for pool DSN resolution ({}); pass --database-url explicitly.",
-            secrets_path,
-            exc,
-        )
-        return None
-    secrets_block = raw.get("secrets")
-    if not isinstance(secrets_block, dict):
-        return None
-    dsn = secrets_block.get("NEON_HOST_POOL_DSN")
-    if not isinstance(dsn, str) or not dsn:
-        return None
-    return dsn
-
-
-def resolve_pool_database_url(explicit: str | None) -> str:
-    """Resolve the pool DSN for an admin pool/server command.
-
-    Precedence (highest first): explicit ``--database-url``, then
-    ``$MINDS_HOST_POOL_DSN``, then the activated minds env's ``secrets.toml``
-    ``NEON_HOST_POOL_DSN`` (written by ``minds env deploy`` for dev envs), else a
-    useful error. ``$DATABASE_URL`` is intentionally NOT consulted (a generic env
-    var that might point at an unrelated DB); ``MINDS_HOST_POOL_DSN`` is the
-    explicit opt-in for non-activated operators.
-    """
-    if explicit:
-        return explicit
-    env_value = os.environ.get(_MINDS_HOST_POOL_DSN_ENV_VAR)
-    if env_value:
-        return env_value
-    activated_dsn = _read_activated_minds_host_pool_dsn()
-    if activated_dsn:
-        return activated_dsn
-    fail_with_json(
-        "No pool DSN available. Either pass --database-url explicitly, export "
-        f"{_MINDS_HOST_POOL_DSN_ENV_VAR}=<dsn>, or `minds env activate <dev-env>` "
-        "first (deploys write the DSN into the per-env secrets.toml).",
-        error_class="UsageError",
-    )
 
 
 def parse_account(value: str) -> ImbueCloudAccount:
@@ -235,6 +172,14 @@ def handle_imbue_cloud_errors(func):
                 error_class=type(exc).__name__,
                 code="email_not_verified",
                 email=exc.email,
+            )
+        except ImbueCloudAccountSuspendedError as exc:
+            # The message carries the support contact; the code lets callers
+            # (e.g. the minds desktop client) key off the refusal structurally.
+            fail_with_json(
+                str(exc),
+                error_class=type(exc).__name__,
+                code="account_suspended",
             )
         except ImbueCloudClientTooOldError as exc:
             fail_with_json(

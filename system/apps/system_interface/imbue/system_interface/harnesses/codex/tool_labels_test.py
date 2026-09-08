@@ -1,8 +1,9 @@
 import pytest
 
-from imbue.system_interface.harnesses.codex.tool_labels import is_tk_lifecycle
-from imbue.system_interface.harnesses.codex.tool_labels import keeps_full_tool_input
+from imbue.system_interface.harnesses.codex.tool_labels import CODE_MODE_TOOL_NAME
+from imbue.system_interface.harnesses.codex.tool_labels import shell_command
 from imbue.system_interface.harnesses.codex.tool_labels import tool_labels
+from imbue.system_interface.harnesses.tool_output import is_pure_tk_lifecycle_command
 
 
 @pytest.mark.parametrize(
@@ -165,30 +166,6 @@ def test_a_long_command_is_shortened() -> None:
     assert len(caption_label) < 100
 
 
-def test_keeps_full_tool_input_for_patch_and_tk() -> None:
-    """The diff view (patch body) and the step timeline (tk command) need the whole
-    input, so those are exempt from the preview cap; ordinary calls are not."""
-    # apply_patch body -- kept whole for the diff.
-    assert keeps_full_tool_input("exec", "await tools.apply_patch(`*** Begin Patch\n*** Update File: a.py`)") is True
-    # a patch front-loaded into a variable shows no visible call but carries the header.
-    assert keeps_full_tool_input("exec", "*** Begin Patch\n*** Add File: b.py\n+x\n*** End Patch") is True
-    # a tk lifecycle command -- kept whole for the step plan.
-    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"tk create --step foo"})') is True
-    # an ordinary command is truncatable.
-    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"rg --files"})') is False
-    # a tk mention inside another command's argument is not a lifecycle call.
-    assert keeps_full_tool_input("exec", 'await tools.exec_command({"cmd":"echo run tk close s1 later"})') is False
-    # non-exec tools are never exempt.
-    assert keeps_full_tool_input("wait", "anything") is False
-
-
-def test_keeps_full_tool_input_handles_escaped_quotes_in_cmd() -> None:
-    """codex serialises a tk command's quoted title with escaped quotes; the exemption
-    must still recognise it (a bare value regex clipped at the first \\" and failed)."""
-    js = 'await tools.exec_command({"cmd":"tk create --step \\"Fix the parser\\""})'
-    assert keeps_full_tool_input("exec", js) is True
-
-
 def test_exec_caption_unescapes_the_command() -> None:
     """The exec caption reads the real (unescaped) command, not the raw \\"-laden JS."""
     _, caption = tool_labels("exec", 'await tools.exec_command({"cmd":"tk start \\"s1\\""})')
@@ -196,12 +173,10 @@ def test_exec_caption_unescapes_the_command() -> None:
     assert "\\" not in caption
 
 
-def test_batched_tk_command_keeps_full_input_but_is_not_hidden() -> None:
-    """The truncation exemption is segment-wise (deliberately broader) while the hide rule
-    is start-anchored: `cd /code && tk create ...` renders as work AND keeps its full input
-    for the step timeline's fallback."""
-    long_titles = " ".join(f'--step "step number {i} with a long title"' for i in range(12))
-    raw_input = f'await tools.exec_command({{"cmd": "cd /code && tk create {long_titles}"}});'
-    assert len(raw_input) > 200
-    assert keeps_full_tool_input("exec", raw_input) is True
-    assert is_tk_lifecycle("exec", raw_input) is False
+def test_shell_command_finds_the_command_inside_code_mode_js() -> None:
+    """codex runs the shell from inside emitted JavaScript, so the command is an argument of
+    an exec_command call rather than a tool input of its own."""
+    js = 'tools.exec_command({ cmd: "tk start s1", workdir: "/code" })'
+    assert shell_command(CODE_MODE_TOOL_NAME, js) == "tk start s1"
+    assert shell_command("some_other_tool", js) is None
+    assert shell_command(CODE_MODE_TOOL_NAME, 'tools.read_file({ path: "/x" })') is None

@@ -49,7 +49,7 @@ run. By area:
 | File / test | Marks | What it exercises |
 |---|---|---|
 | `test_aws_workspace_release.py::test_aws_workspace_runs_in_runsc_container_on_ec2` | `release`, `timeout(900)`, skip unless AWS creds + `MNGR_AWS_RELEASE_TESTS=1` | Provisions a real EC2 instance, asserts the agent runs in a runsc/gVisor container. Costs money. |
-| `test_snapshot_resume.py` (10 tests) | each `minds_snapshot_resume` + `docker` (+ `rsync` on the electron test) + per-test `timeout` | Most assert against a Modal-snapshot sandbox (pre-baked, stopped DEFAULT_WORKSPACE_TEMPLATE workspace container): resume sanity checks, the backup-update chat gate against a live LLM-backed chat, the backup-service check/update/force-update converge loop (real supervisord + `official`-remote tag fetch from GitHub), the backup enable / env-repair / destination-change flow (real minds-side restic provisioning + `mngr exec` injection; installs a pinned restic on the sandbox host when the image lacks the bundled one), and the in-place backup restore (the real restore worker + workspace script: pinned-restic install, safety snapshot, sync restore, services back). `test_create_workspace_and_sign_in_via_modal_then_chat_via_electron` reuses the snapshot image's warm Electron/Playwright/Xvfb toolchain to drive the real Electron app: it creates a fresh local Docker DEFAULT_WORKSPACE_TEMPLATE workspace (which boots with no AI credentials), signs in through the workspace's own Claude sign-in modal with a raw API key (needs `ANTHROPIC_API_KEY`), sends a chat message, and asserts the agent replies, then `mngr destroy`s in `finally`. Shares its driver with `desktop_client/e2e_workspace_runner.py`. Only via `just test-offload-minds-snapshot` (or `just minds-test-electron` locally). See 1.5. |
+| `test_snapshot_resume.py` (10 tests) | each `minds_snapshot_resume` + `docker` (+ `rsync` on the electron test) + per-test `timeout` | Most assert against a Modal-snapshot sandbox (pre-baked, stopped DEFAULT_WORKSPACE_TEMPLATE workspace container): resume sanity checks, the backup-update chat gate against a live LLM-backed chat, the backup-service check/update/force-update converge loop (real supervisord + `official`-remote tag fetch from GitHub), the backup enable / env-repair / destination-change flow (real minds-side restic provisioning + `mngr exec` injection; installs a pinned restic on the sandbox host when the image lacks the bundled one), and the in-place backup restore (the real restore worker + workspace script: pinned-restic install, safety snapshot, sync restore, services back). `test_create_workspace_and_sign_in_via_modal_then_chat_via_electron` reuses the snapshot image's warm Electron/Playwright/Xvfb toolchain to drive the real Electron app: it creates a fresh local Docker DEFAULT_WORKSPACE_TEMPLATE workspace (which boots with no AI credentials), signs in through the workspace's own provider chooser (the Anthropic API-key path) with a raw API key (needs `ANTHROPIC_API_KEY`), sends a chat message, and asserts the agent replies, then `mngr destroy`s in `finally`. Shares its driver with `desktop_client/e2e_workspace_runner.py`. Only via `just test-offload-minds-snapshot` (or `just minds-test-electron` locally). See 1.5. |
 | `test_sse_redirect.py::test_sse_redirect_on_done` | `release` | Werkzeug server + Playwright; verifies the creating-page SSE stream delivers `done` and the JS redirects. No Docker/agent. |
 | `test_creating_page_layout.py` (2 tests) | `release` | Werkzeug server + Playwright; verifies the creating page fits the window (no scrollbar) at the Electron default size, an intermediate one, and the minimum, with the log panel closed and open -- and that opening the logs shrinks the walkthrough's illustration rather than the page. No Docker/agent. Skips unless the frontend bundle has been built (`pnpm build` in `apps/minds/frontend`), which an editable install does not do. |
 | `imbue/minds/test_claude_version_alignment.py::test_claude_code_version_matches_default_workspace_template_pin` | `release` | Checks the Claude Code CLI pin matches the DEFAULT_WORKSPACE_TEMPLATE pin. |
@@ -58,7 +58,7 @@ run. By area:
 
 An importable helper package, excluded from all offload runs and `test-quick`;
 driven only by `just minds-test-deployment` and siblings (orchestrator
-`apps/minds/scripts/test_deployments.py`). Every test here carries
+`apps/minds_admin/scripts/test_deployments.py`). Every test here carries
 `@pytest.mark.release` (so it is part of the shared release suite, discoverable
 by tag) in addition to its capability mark; all minds release tests run from the
 minds jobs (`test-minds-release`), never from the mngr release workflow, which
@@ -69,14 +69,25 @@ excludes the whole `apps/minds` tree by path.
   `test_deploy_then_destroy_round_trip`.
 - `@pytest.mark.minds_services` (run against a pre-stood-up shared env):
   `test_logged_in_smoke`, `test_litellm_spend_tracking_via_local_workspace`
-  (currently `skip`).
+  (currently `skip`), plus the remote-workspace pool tests
+  (`test_pool_lease`, `test_pool_fast_path_create`,
+  `test_workspace_stop_start`), which lease real pre-baked bare-metal
+  slices -- the release dispatch pre-bakes them onto the standing CI boxes
+  (see `specs/remote-workspaces-in-ci.md`).
 
-### 1.4 JS / Electron tests (`apps/minds/test/`)
+### 1.4 JS / Electron tests (`apps/minds/test/`, `apps/minds/frontend/src/`)
+
+Both suites below run from `just test-minds-js`, wired into CI as the
+**`test-minds-js`** job (see 1.5). Neither is reachable from pytest, so that job
+is the only thing that runs them.
 
 - **Node unit** (`test/unit/*.test.js`): `node --test` suites for the pure
   Electron-shell helpers (startup routing, surface routing, deeplinks, session
-  persistence, log handling, the embed contract). Run via `pnpm test:unit`.
-  **Not in any CI workflow.**
+  persistence, log handling, the embed contract, release channels). Run alone via
+  `pnpm test:unit`.
+- **Frontend unit** (`frontend/src/**/*.test.ts`): vitest suites for the SPA's
+  models and views, rendered without a DOM through the `renderRoot` helper in
+  `frontend/src/testing.ts`. Run alone via `pnpm -C frontend test`.
 - **Playwright e2e** (`test/e2e/`, `playwright.config.js`, `pnpm test:e2e`):
   - `macos-launch.spec.js` -- launches the installed `/Applications/Minds.app`
     via the `mindsApp` fixture. **The only JS spec** (wired into CI in
@@ -88,6 +99,13 @@ excludes the whole `apps/minds` tree by path.
 `.github/workflows/ci.yml` (push to main + all PRs):
 
 - **`check-changelog`** -- changelog gate.
+- **`test-minds-js`** -- `just test-minds-js`, on PRs only and only when
+  `apps/minds/electron`, `apps/minds/test/unit`, `apps/minds/frontend`,
+  `apps/minds/package.json`, `apps/minds/pnpm-lock.yaml` or
+  `apps/minds/todesktop.js` changed. The lockfile counts because
+  `electron-updater` is pinned exactly, so moving it need not touch
+  `package.json`. Node toolchain, so it runs on the orchestrator rather than in
+  an offload sandbox.
 - **`test-offload`** ("Unit + Integration Tests") -- `just test-offload`. Filter:
   `not acceptance and not release and not flaky and not sdk_live and not
   minds_deployment and not minds_services and not minds_snapshot_resume`, plus a
@@ -253,37 +271,35 @@ cross-component behavior.
 6. **Cross-workspace notification route** [snapshot] -- `POST
    /api/v1/agents/<id>/notifications` for the resumed workspace returns `ok` and
    dispatches (assert via a recording dispatcher).
-7. **Health probe** [snapshot] -- `GET /workspaces/<id>/health` returns a
-   `HostHealthResponse` with a sane `dispatch_tier` for a live workspace.
 
 ### 2.2 Electron-driven (one more real lifecycle)
 
-8. **Create -> v1 destroy round-trip** [electron] -- extend the existing create
+7. **Create -> v1 destroy round-trip** [electron] -- extend the existing create
    e2e: after `system_interface` renders, drive `POST
    /api/v1/workspaces/<id>/destroy`, poll `GET
    /workspaces/operations/destroy/<id>` to DONE, and assert the host is gone (the
    operator harness `scripts/electron_full_flow_e2e.py` already does a superset;
    this would crystallize the destroy half as a CI-run acceptance test).
-9. **Browser create posts to `/api/v1/workspaces`** [electron] -- once the create
+8. **Browser create posts to `/api/v1/workspaces`** [electron] -- once the create
    UI is repointed (handoff item #2.B), assert the form submit drives the v1
    create + operation poll, not the legacy `/api/create-agent/...` routes.
 
 ### 2.3 Local integration (no Docker, no login)
 
-10. **`require_api_or_cookie_auth` matrix** [local] -- table-driven: bearer-only,
+9. **`require_api_or_cookie_auth` matrix** [local] -- table-driven: bearer-only,
     cookie-only, both, neither, wrong bearer -> assert 200 vs 401 across a
     representative route. Locks the dual-auth contract the whole `/api/v1`
     surface depends on.
-11. **Operation-status routing precedence** [local] -- a workspace id that has
+10. **Operation-status routing precedence** [local] -- a workspace id that has
     both a stale restart record and a live destroy record resolves to the
     destroy (the documented precedence in `_handle_operation_status`); the
     `creation-` prefix routes to the creator.
-12. **SSH grant validation 400s** [local] -- via the Flask test client with a
+11. **SSH grant validation 400s** [local] -- via the Flask test client with a
     stubbed `mngr` exec: empty/multi-line public key, whitespace in
     `requester_workspace_id`, missing `requester_workspace_id` -> 400 with the
     right message. (Requires making the route's `mngr exec` injectable; see the
     note below.)
-13. **`compose_pruned_authorized_keys` over realistic files** [local] -- already
+12. **`compose_pruned_authorized_keys` over realistic files** [local] -- already
     added in `workspace_ssh_test.py`; extend with a fuzz-style case mixing user
     keys, comments, blank lines, and multiple grants to lock the
     preserve-verbatim guarantee.
@@ -291,18 +307,21 @@ cross-component behavior.
 ### 2.4 Remote / account-bound (NOT for the snapshot stage)
 
 These need a remote host and/or a logged-in account, so they belong in
-release/deployment suites, not the snapshot stage, and cannot run in this
-environment today:
+release/deployment suites, not the snapshot stage. The release tier now has
+real remote-workspace capacity (standing CI bare-metal boxes + a per-run
+slice pre-bake stage -- `specs/remote-workspaces-in-ci.md`), which is where
+the pool lease/create/stop-start tests run; the entries below are the
+remaining ideas:
 
-14. **SSH remote->remote establish + connect** [release] -- create two remote
+13. **SSH remote->remote establish + connect** [release] -- create two remote
     workspaces, grant SSH from one to the other, and actually `ssh`/`git pull`
     across. Exercises the implemented remote-direct path.
-15. **SSH remote->local broker** [release] -- create one remote + one local
+14. **SSH remote->local broker** [release] -- create one remote + one local
     workspace, grant SSH from the remote caller to the local target, and connect
     through the hub-brokered loopback endpoint. The broker itself is implemented;
     the local->local half can run in the snapshot stage (proposal 2b below),
     while the remote-caller half needs a cloud host so it stays release-only.
-16. **imbue_cloud create + backup parity** [deployment] -- already covered
+15. **imbue_cloud create + backup parity** [deployment] -- already covered
     in spirit by the `minds_deployment`/`minds_services` suites.
 
 ## Note on testability gaps

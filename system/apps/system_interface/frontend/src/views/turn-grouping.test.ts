@@ -42,7 +42,7 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
     source: "test",
     model: "m",
     text: "",
-    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_preview: `{"path":"x"}` }],
+    tool_calls: [{ tool_call_id: callId, tool_name: toolName, input_chars: 12 }],
     stop_reason: null,
     usage: null,
     is_auth_error: false,
@@ -52,8 +52,8 @@ function workMsg(ts: string, toolName: string, callId: string, id = `a-${callId}
   };
 }
 
-/** A tk lifecycle command as it appears in the transcript: a Bash tool call whose
- *  input_preview is the JSON-encoded command, carrying the backend's hidden decision. */
+/** A tk lifecycle command as it appears in the transcript: a Bash tool call carrying the
+ *  backend's hidden decision and the resident `tk_command` stamp. */
 function tkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
   return bashMsg(ts, command, callId, id, "hidden");
 }
@@ -78,8 +78,10 @@ function bashMsg(
       {
         tool_call_id: callId,
         tool_name: "Bash",
-        input_preview: JSON.stringify({ command }),
-        ...(display ? { display } : {}),
+        input_chars: JSON.stringify({ command }).length,
+        // The backend stamps the command resident exactly when it carries a tk lifecycle
+        // verb -- which is also when it stamps the hidden decision these fixtures model.
+        ...(display ? { display, tk_command: command } : {}),
       },
     ],
     stop_reason: null,
@@ -91,8 +93,8 @@ function bashMsg(
   };
 }
 
-/** The codex form of a tk lifecycle command: a code-mode `exec` call whose
- *  input_preview is the JS program invoking `tools.exec_command({cmd})`. */
+/** The codex form of a tk lifecycle command: a code-mode `exec` call whose stamped
+ *  tk_command is the inner shell command the backend unwrapped from the JS program. */
 function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callId}`): AssistantMessageEvent {
   return {
     ...tkMsg(ts, command, callId, id),
@@ -100,7 +102,8 @@ function codexTkMsg(ts: string, command: string, callId: string, id = `a-${callI
       {
         tool_call_id: callId,
         tool_name: "exec",
-        input_preview: `await tools.exec_command(${JSON.stringify({ cmd: command })});`,
+        input_chars: 64,
+        tk_command: command,
         display: "hidden",
       },
     ],
@@ -121,9 +124,7 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
       {
         tool_call_id: callId,
         tool_name: "Bash",
-        input_preview: JSON.stringify({
-          command: "latchkey curl -XPOST http://latchkey-self.invalid/permission-requests -d '{}'",
-        }),
+        input_chars: 96,
         display: "permission_request",
       },
     ],
@@ -137,6 +138,18 @@ function permissionMsg(ts: string, callId: string, text = "", id = `a-${callId}`
 }
 
 function result(ts: string, callId: string, output: string): ToolResultEvent {
+  // Mirror the backend: a parseable response object rides along structured as
+  // `permission_request`, the only field the card reads.
+  let permissionRequest: Record<string, unknown> | undefined;
+  const start = output.indexOf("{");
+  if (start >= 0) {
+    try {
+      const parsed: unknown = JSON.parse(output.slice(start));
+      if (typeof parsed === "object" && parsed !== null) permissionRequest = parsed as Record<string, unknown>;
+    } catch {
+      permissionRequest = undefined;
+    }
+  }
   return {
     timestamp: ts,
     type: "tool_result",
@@ -144,8 +157,12 @@ function result(ts: string, callId: string, output: string): ToolResultEvent {
     source: "test",
     tool_call_id: callId,
     tool_name: "test",
-    output,
+    output_chars: output.length,
+    // These fixtures' outputs are tk decoration / step-id echoes, which the backend
+    // stamps resident verbatim.
+    tk_stamp: output,
     is_error: false,
+    ...(permissionRequest === undefined ? {} : { permission_request: permissionRequest }),
   };
 }
 
@@ -285,7 +302,7 @@ describe("decoration from the transcript", () => {
     const piTk = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
       ...tkMsg(ts, command, callId),
       tool_calls: [
-        { tool_call_id: callId, tool_name: "bash", input_preview: JSON.stringify({ command }), display: "hidden" },
+        { tool_call_id: callId, tool_name: "bash", input_chars: 24, tk_command: command, display: "hidden" },
       ],
     });
     const events = [
@@ -382,6 +399,35 @@ describe("historical input fallback", () => {
     const pending = steps.find((s) => s.ticket_id === "cod-step-uazv")!;
     expect(pending.status).toBe("pending");
     expect(pending.title).toBe("Read the docs");
+  });
+
+  // The fallback used to accept only claude's `Bash` and pi's `bash`, which was the last
+  // piece of harness knowledge in this file -- and it left agy (`run_command`, whose command
+  // lives under `CommandLine`) as the one harness with no fallback at all.
+  it("recovers decoration from an agy-shaped tool call", () => {
+    const agyMsg = (ts: string, command: string, callId: string): AssistantMessageEvent => ({
+      ...tkMsg(ts, command, callId),
+      tool_calls: [
+        {
+          tool_call_id: callId,
+          tool_name: "run_command",
+          input_chars: 48,
+          tk_command: command,
+          display: "hidden" as const,
+        },
+      ],
+    });
+    const events = [
+      userMsg("t0", "go"),
+      agyMsg("t1", 'S1=$(tk create --step "Build the app")\necho "S1=$S1"', "tc"),
+      result("t1", "tc", "S1=agy-step-aaaa"),
+      agyMsg("t2", 'tk close agy-step-aaaa "Shipped it."', "c1"),
+      result("t2", "c1", "Updated agy-step-aaaa -> closed"),
+    ];
+    const sections = run(events, /* idle */ false);
+    const step = stepItems(sections[0].items).find((s) => s.ticket_id === "agy-step-aaaa")!;
+    expect(step.title).toBe("Build the app");
+    expect(step.summary).toBe("Shipped it.");
   });
 });
 
@@ -714,11 +760,12 @@ describe("audit regressions", () => {
       model: "m",
       text: "",
       tool_calls: [
-        { tool_call_id: "real1", tool_name: "Edit", input_preview: `{"path":"x"}` },
+        { tool_call_id: "real1", tool_name: "Edit", input_chars: 12 },
         {
           tool_call_id: "tkc",
           tool_name: "Bash",
-          input_preview: JSON.stringify({ command: "tk close s1" }),
+          input_chars: 26,
+          tk_command: "tk close s1",
           display: "hidden",
         },
       ],
@@ -1183,7 +1230,16 @@ describe("permission request breaks", () => {
   });
 });
 
-type PermissionItem = { kind: "permission"; resolution: PermissionResolution | null };
+type PermissionItem = {
+  kind: "permission";
+  resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
+};
+
+/** The verdict a card would show: its own request's id looked up in the id-keyed
+ *  map -- mirrors resolutionForCall in message-renderers.ts. */
+function verdictFor(item: PermissionItem, requestId: string): PermissionResolution | null {
+  return item.resolutionsByRequestId.get(requestId) ?? null;
+}
 
 describe("permission resolutions", () => {
   // When the user grants/denies, the app injects a plain user message; the walk
@@ -1197,15 +1253,15 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
       userMsg(
         "2026-05-01T01:00:02Z",
-        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked.",
+        "Your permission request for Slack was granted with the following permissions: slack-read-all. Please retry the call that was blocked. (request_id: r1)",
         "u-res",
-        { display: "permission_resolution", resolution: "granted" },
+        { display: "permission_resolution", resolution: "granted", request_id: "r1" },
       ),
     ];
     const sections = run(events);
     // The card (in the first turn) carries the verdict...
     expect(sections[0].items.map((i) => i.kind)).toEqual(["permission"]);
-    expect((sections[0].items[0] as PermissionItem).resolution).toBe("granted");
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBe("granted");
     // ...and the notification opened a new turn rather than rendering as a
     // user prompt: a second section exists with no user bubble, and the raw
     // "was granted" text appears as no section's user message.
@@ -1221,10 +1277,16 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "c-s1", startOut("s1", "Connect to your Gmail account")),
       permissionMsg("2026-05-01T01:00:02Z", "perm"),
       result("2026-05-01T01:00:02Z", "perm", '{"request_id":"r1"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Gmail was granted. Retry.", "u-res", {
-        display: "permission_resolution",
-        resolution: "granted",
-      }),
+      userMsg(
+        "2026-05-01T01:00:03Z",
+        "Your permission request for Gmail was granted. Retry. (request_id: r1)",
+        "u-res",
+        {
+          display: "permission_resolution",
+          resolution: "granted",
+          request_id: "r1",
+        },
+      ),
       // Post-approval work and the step closing happen after the boundary.
       workMsg("2026-05-01T01:00:04Z", "Bash", "w-after"),
       result("2026-05-01T01:00:04Z", "w-after", "ok"),
@@ -1254,80 +1316,69 @@ describe("permission resolutions", () => {
       result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
       userMsg(
         "2026-05-01T01:00:02Z",
-        "Your permission request for Slack was denied. Do not retry the blocked call.",
+        "Your permission request for Slack was denied. Do not retry the blocked call. (request_id: r1)",
         "u-res",
-        { display: "permission_resolution", resolution: "denied" },
+        { display: "permission_resolution", resolution: "denied", request_id: "r1" },
       ),
     ];
     const sections = run(events);
-    expect((sections[0].items[0] as PermissionItem).resolution).toBe("denied");
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBe("denied");
   });
 
-  it("resolves the oldest open request first when several are outstanding", () => {
+  it("attaches each verdict to its own card by request id, even when resolved out of order", () => {
+    // Regression for the verdict-swap bug: request A (Gmail) is created first,
+    // B (Slack) second, but B's verdict lands FIRST -- deny is fire-and-forget
+    // on the frontend while grant can block on a real OAuth browser flow, so
+    // denying the newer request while the older one's grant is still working
+    // through sign-in resolves them out of creation order. A stale positional
+    // (FIFO) correlation would attach B's "denied" to A's card and vice versa;
+    // id-based correlation must not.
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),
-      permissionMsg("2026-05-01T01:00:01Z", "perm1"),
-      result("2026-05-01T01:00:01Z", "perm1", '{"request_id":"r1"}'),
-      permissionMsg("2026-05-01T01:00:02Z", "perm2"),
-      result("2026-05-01T01:00:02Z", "perm2", '{"request_id":"r2"}'),
-      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was granted. Retry.", "u-res1", {
-        display: "permission_resolution",
-        resolution: "granted",
-      }),
-      userMsg("2026-05-01T01:00:04Z", "Your permission request for GitHub was denied. Do not retry.", "u-res2", {
+      permissionMsg("2026-05-01T01:00:01Z", "perm-a"),
+      result("2026-05-01T01:00:01Z", "perm-a", '{"request_id":"req-a"}'),
+      permissionMsg("2026-05-01T01:00:02Z", "perm-b"),
+      result("2026-05-01T01:00:02Z", "perm-b", '{"request_id":"req-b"}'),
+      // B (created second) resolves first.
+      userMsg("2026-05-01T01:00:03Z", "Your permission request for Slack was denied. (request_id: req-b)", "u-res-b", {
         display: "permission_resolution",
         resolution: "denied",
+        request_id: "req-b",
       }),
-    ];
-    const sections = run(events);
-    const perms = sections[0].items.filter((i) => i.kind === "permission") as PermissionItem[];
-    expect(perms).toHaveLength(2);
-    expect(perms[0].resolution).toBe("granted"); // first request -> first verdict
-    expect(perms[1].resolution).toBe("denied");
-  });
-
-  it("resolves a workspace-phrased grant so later verdicts don't land one card late", () => {
-    // Regression: the workspace handler's notification ("... permission request
-    // was granted (<verbs>) for <target>") lacks the "permission request for"
-    // phrasing, so it used to go unrecognised -- the workspace request stayed
-    // queued and every later verdict resolved the wrong (one-older) card.
-    const events = [
-      userMsg("2026-05-01T01:00:00Z", "go"),
-      permissionMsg("2026-05-01T01:00:01Z", "perm-ws"),
-      result("2026-05-01T01:00:01Z", "perm-ws", '{"request_id":"r-ws"}'),
-      userMsg(
-        "2026-05-01T01:00:02Z",
-        "Your cross-workspace permission request was granted (minds-workspaces-read) for all workspaces.",
-        "u-res-ws",
-        { display: "permission_resolution", resolution: "granted" },
-      ),
-      permissionMsg("2026-05-01T01:00:03Z", "perm-slack"),
-      result("2026-05-01T01:00:03Z", "perm-slack", '{"request_id":"r-slack"}'),
       userMsg(
         "2026-05-01T01:00:04Z",
-        "Your permission request for Slack was denied. Do not retry the blocked call.",
-        "u-res-slack",
-        { display: "permission_resolution", resolution: "denied" },
+        "Your permission request for Gmail was granted with the following permissions: gmail.readonly. " +
+          "(request_id: req-a)",
+        "u-res-a",
+        { display: "permission_resolution", resolution: "granted", request_id: "req-a" },
       ),
     ];
     const sections = run(events);
     const perms = sections.flatMap((s) => s.items).filter((i) => i.kind === "permission") as PermissionItem[];
     expect(perms).toHaveLength(2);
-    expect(perms[0].resolution).toBe("granted"); // the workspace card, from its own notification
-    expect(perms[1].resolution).toBe("denied"); // the Slack card -- not shifted onto the workspace one
+    // A (created first) shows its OWN verdict -- granted -- not B's.
+    expect(verdictFor(perms[0], "req-a")).toBe("granted");
+    // B (created second, resolved first) shows its OWN verdict -- denied.
+    expect(verdictFor(perms[1], "req-b")).toBe("denied");
   });
 
-  it("leaves a notification with no open request to render as a normal turn", () => {
+  it("hides an id-less notification instead of guessing which card it resolves", () => {
+    // A notice recorded before minds embedded ids attributes nothing: the
+    // arrival-order guess is what used to swap verdicts, and an embedded page
+    // recovers the verdict from the response log via the card's hydration
+    // query. The notice still acts as the turn boundary it is, with no bubble.
     const events = [
       userMsg("2026-05-01T01:00:00Z", "go"),
-      userMsg("2026-05-01T01:00:01Z", "Your permission request for Slack was granted. Retry.", "u-orphan", {
+      permissionMsg("2026-05-01T01:00:01Z", "perm"),
+      result("2026-05-01T01:00:01Z", "perm", '{"request_id":"r1"}'),
+      userMsg("2026-05-01T01:00:02Z", "Your permission request for Slack was granted. Retry.", "u-legacy", {
         display: "permission_resolution",
         resolution: "granted",
       }),
     ];
     const sections = run(events);
-    // No card to claim it, so it falls through and opens its own turn.
+    expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBeNull();
     expect(sections).toHaveLength(2);
-    expect(sections[1].user_event?.event_id).toBe("u-orphan");
+    expect(sections[1].user_event).toBeNull();
   });
 });

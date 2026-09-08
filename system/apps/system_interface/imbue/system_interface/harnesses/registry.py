@@ -23,9 +23,14 @@ from typing import Final
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.harnesses.activity import HarnessActivityTracker
-from imbue.system_interface.harnesses.auth_check import CODEX_AUTH_CHECK
-from imbue.system_interface.harnesses.auth_check import HarnessAuthCheck
-from imbue.system_interface.harnesses.auth_check import PI_AUTH_CHECK
+from imbue.system_interface.harnesses.antigravity.activity import AntigravityActivityTracker
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
+from imbue.system_interface.harnesses.antigravity.model import ANTIGRAVITY_STATE_RELATIVE_PATH
+from imbue.system_interface.harnesses.antigravity.model import AntigravityModelResolver
+from imbue.system_interface.harnesses.antigravity.session import AntigravityHarnessSession
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
+from imbue.system_interface.harnesses.antigravity.tap import AntigravityInterruptToComposer
+from imbue.system_interface.harnesses.antigravity.watcher import AntigravitySessionWatcher
 from imbue.system_interface.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.system_interface.harnesses.claude.model import CLAUDE_CATALOG
 from imbue.system_interface.harnesses.claude.model import CLAUDE_STATE_RELATIVE_PATH
@@ -46,6 +51,7 @@ from imbue.system_interface.harnesses.interrupt import RestartDrainInterruptToCo
 from imbue.system_interface.harnesses.model import HarnessCatalog
 from imbue.system_interface.harnesses.model import HarnessModelResolver
 from imbue.system_interface.harnesses.model import model_state_path
+from imbue.system_interface.harnesses.opencode.placeholder import OpenCodePlaceholderActivityTracker
 from imbue.system_interface.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.system_interface.harnesses.pi_coding.model import PI_STATE_RELATIVE_PATH
 from imbue.system_interface.harnesses.pi_coding.model import PiAtomicShoulderTap
@@ -53,6 +59,9 @@ from imbue.system_interface.harnesses.pi_coding.model import PiInterruptToCompos
 from imbue.system_interface.harnesses.pi_coding.model import PiModelResolver
 from imbue.system_interface.harnesses.pi_coding.model import get_catalog as get_pi_catalog
 from imbue.system_interface.harnesses.pi_coding.watcher import PiSessionWatcher
+from imbue.system_interface.harnesses.placeholder import EMPTY_CATALOG
+from imbue.system_interface.harnesses.placeholder import PlaceholderModelResolver
+from imbue.system_interface.harnesses.placeholder import PlaceholderSessionWatcher
 from imbue.system_interface.harnesses.session import AgentHarnessSession
 from imbue.system_interface.harnesses.session import AtomicShoulderTap
 from imbue.system_interface.harnesses.session import FileHarnessSession
@@ -74,20 +83,11 @@ class PopupAction(StrEnum):
 
     # The can't-send-from-chat notice.
     NOTICE = "notice"
-    # Open the harness's agent-auth surface (see ``HarnessSpec.auth_modal``).
+    # Open the provider chooser. Every harness signs in the same way now, so this needs
+    # nothing per-harness beyond the commands that trigger it.
     OPEN_AUTH = "open_auth"
     # The keep-fast-mode prompt flow.
     FAST_MODE_PROMPT = "fast_mode_prompt"
-
-
-class AuthModalKind(StrEnum):
-    """Which agent-auth surface a harness's ``open_auth`` popups open. Wire strings."""
-
-    # The in-app login modal (claude -- its auth is mind-global).
-    MANAGED = "managed"
-    # A notice showing the harness's ``auth_instructions``, for harnesses whose
-    # sign-in runs in their own TUI.
-    TERMINAL = "terminal"
 
 
 class HarnessPopup(FrozenModel):
@@ -101,6 +101,43 @@ class HarnessPopup(FrozenModel):
     trigger: PopupTrigger
     commands: tuple[str, ...] = ()
     action: PopupAction
+    # NOTICE only: replaces the notice's default "send it from the agent's terminal"
+    # body. A harness declares WHY a command is declined; the composer stays free of
+    # per-command branching, which is the whole point of shipping these declaratively.
+    notice_body: str | None = None
+
+
+# The three commands the model bar owns, declined on EVERY harness for a different
+# reason than the lists below: not that they break the terminal, but that the composer
+# is not where a model change belongs. Typing one works, which is exactly the problem --
+# the message is stamped hidden (it is the bar's own traffic), so the model silently
+# changes with nothing in the transcript to show it, and a typed /fast additionally does
+# not persist, because only the bar's switch path records fastMode where a restart reads
+# it back. Kept as its own popup rather than folded into a harness's declined tuple so
+# the distinct rationale survives: those tuples are measured-against-a-live-agent lists,
+# and a future re-measure would find these three send fine and drop them.
+# Split by whether the harness HAS a fast mode. /model and /effort are universal, but
+# only claude and codex can launch fast (they are the harnesses declaring
+# ``_FAST_MODE_PROMPT_POPUP``), and their catalogs are the only ones carrying
+# ``supports_fast``. Declining /fast on a harness with no fast mode would point the user at
+# a picker control that is not rendered for it -- worse than letting the text through.
+_MODEL_BAR_COMMANDS: Final[tuple[str, ...]] = ("/model", "/effort")
+_MODEL_BAR_COMMANDS_WITH_FAST: Final[tuple[str, ...]] = (*_MODEL_BAR_COMMANDS, "/fast")
+_MODEL_BAR_NOTICE: Final[str] = "Use the model picker below the chat to change the model or effort."
+_MODEL_BAR_NOTICE_WITH_FAST: Final[str] = "Use the model picker below the chat to change the model, effort, or speed."
+_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=_MODEL_BAR_COMMANDS,
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE,
+)
+# For the fast-capable harnesses; pairs with ``_FAST_MODE_PROMPT_POPUP`` on the same spec.
+_MODEL_BAR_POPUP_WITH_FAST: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=_MODEL_BAR_COMMANDS_WITH_FAST,
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE_WITH_FAST,
+)
 
 
 # Claude Code slash commands the chat declines to send (action="notice").
@@ -163,13 +200,10 @@ _CODEX_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/btw",
     "/clear",
     "/delete",
-    "/effort",
     "/exit",
     "/experimental",
-    "/fast",
     "/fork",
     "/keymap",
-    "/model",
     "/new",
     "/plan",
     "/quit",
@@ -188,7 +222,6 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/compact",
     "/fork",
     "/llama",
-    "/model",
     "/name",
     "/new",
     "/quit",
@@ -231,6 +264,12 @@ class HarnessSpec(FrozenModel):
     # disk -- too much for import time, and importing this module must not fail on an image
     # where a harness's data is absent. claude/codex just return their hand-written constant.
     catalog_factory: Callable[[], HarnessCatalog]
+    # The harness's ``*_process_started`` marker filename, touched by mngr on every
+    # launch/resume. Harness IDENTITY, so it is declared here rather than read off a live
+    # tracker instance: the OOM prioritizer resolves it knowing only an agent id, and an
+    # agent that has been discovered but not yet wired up has no tracker to ask -- which
+    # silently cost the prioritizer its aging for exactly the agents it most needs to age.
+    process_started_marker_filename: str
     # The special-event kinds this harness may emit. A parser emitting a kind outside its
     # own declaration is a bug; an empty set is the honest statement that a harness's
     # transcript carries no markers, not an omission.
@@ -248,17 +287,17 @@ class HarnessSpec(FrozenModel):
     # that taps through its live connection (codex) registers none and overrides
     # ``shoulder_tap`` on its session directly.
     shoulder_tap_class: type[AtomicShoulderTap] | None = None
-    # How to tell whether this harness's CLI is signed in before creating an agent on it.
-    # ``None`` = no auth gate (claude's auth lives in the shared ``~/.claude``).
-    auth_check: HarnessAuthCheck | None = None
     # The popups this harness declares for the chat UI, shipped on the wire with the
     # catalog. An empty tuple is the honest statement that a harness has none (pi's
     # composer sends everything as-is and it never launches fast).
     popups: tuple[HarnessPopup, ...] = ()
-    # The user-facing agent-auth surface the ``open_auth`` popup action (and the stream
-    # auth-error hook) opens; ``terminal`` surfaces show ``auth_instructions``.
-    auth_modal: AuthModalKind = AuthModalKind.TERMINAL
-    auth_instructions: str | None = None
+    # The tmux key the cancel/tap actions deliver to end a live turn. Claude binds its own
+    # ``meta+q`` chord (scoped to its chat context so a stray press cannot be reinterpreted);
+    # antigravity uses a single native ``ctrl+c``, which needs no provisioning -- NOT escape,
+    # which is bound to the same action but carries text-editing meaning in too many contexts
+    # to deliver blind. Declared here rather than imported from a harness module, so the
+    # endpoints stay harness-neutral.
+    cancel_chord: str = "M-q"
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -266,6 +305,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         name=HarnessType.CLAUDE,
         watcher_class=ClaudeSessionWatcher,
         tracker_class=ClaudeActivityTracker,
+        process_started_marker_filename=ClaudeActivityTracker.marker_filename,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -282,9 +322,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CLAUDE_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
         ),
-        auth_modal=AuthModalKind.MANAGED,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -296,6 +336,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # emits those, only thread/status/changed, so the dot got stuck. The ledger stays as the
         # queue/message-lifecycle authority; it does not drive the dot.)
         tracker_class=CodexActivityTracker,
+        process_started_marker_filename=CodexActivityTracker.marker_filename,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -310,16 +351,13 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # ``turn/interrupt`` + a per-id settle / the combined early resend), so the registered
         # interrupter default is inert and no shoulder_tap_class is needed.
         session_class=CodexHarnessSession,
-        auth_check=CODEX_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_CODEX_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP_WITH_FAST,
             _FAST_MODE_PROMPT_POPUP,
-        ),
-        auth_instructions=(
-            "Open the agent's terminal and run /logout, then /login, to sign in or switch accounts."
         ),
     ),
     HarnessType.PI_CODING: HarnessSpec(
@@ -329,6 +367,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # so activity is the lifecycle-plus-tail heuristic.
         watcher_class=PiSessionWatcher,
         tracker_class=PiActivityTracker,
+        process_started_marker_filename=PiActivityTracker.marker_filename,
         resolver_class=PiModelResolver,
         catalog_factory=get_pi_catalog,
         model_state_relative_path=PI_STATE_RELATIVE_PATH,
@@ -337,14 +376,73 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # it overrides the base restart-drain rather than SIGKILL-relaunching.
         interrupt_to_composer_class=PiInterruptToComposer,
         shoulder_tap_class=PiAtomicShoulderTap,
-        auth_check=PI_AUTH_CHECK,
         popups=(
             HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=("/login",), action=PopupAction.OPEN_AUTH),
             HarnessPopup(
                 trigger=PopupTrigger.COMPOSER_COMMAND, commands=_PI_DECLINED_COMMANDS, action=PopupAction.NOTICE
             ),
+            _MODEL_BAR_POPUP,
         ),
-        auth_instructions="Open the agent's terminal and run /login to add accounts or keys.",
+    ),
+    # opencode is LAUNCH-ONLY: its mngr plugin can create and run an agent, but it has no
+    # transcript watcher, activity tracker, model resolver or catalog of its own. It is
+    # registered anyway, because an UNregistered harness is not neutral -- ``parse_harness``
+    # would fall it back to claude and point claude's watcher at another harness's state dir.
+    # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
+    # implementation lands. antigravity has since landed all four and no longer uses them.
+    HarnessType.OPENCODE: HarnessSpec(
+        name=HarnessType.OPENCODE,
+        watcher_class=PlaceholderSessionWatcher,
+        tracker_class=OpenCodePlaceholderActivityTracker,
+        process_started_marker_filename=OpenCodePlaceholderActivityTracker.marker_filename,
+        resolver_class=PlaceholderModelResolver,
+        catalog_factory=lambda: EMPTY_CATALOG,
+        # No model_state.json is written for opencode yet; the path is the state-dir root
+        # (claude/pi's value) so the shared reader looks somewhere harmless until it is.
+        model_state_relative_path=Path("."),
+        special_kinds=frozenset(),
+        # The model bar owns these three on every harness, so the composer declines them
+        # here too -- they would otherwise be typed straight at the harness.
+        popups=(_MODEL_BAR_POPUP,),
+    ),
+    HarnessType.ANTIGRAVITY: HarnessSpec(
+        name=HarnessType.ANTIGRAVITY,
+        # Tails agy's own per-conversation SQLite store (the protobuf-encoded ``steps``
+        # table), located from the conversation-ids file mngr's capture hook writes. agy's
+        # transcript carries no turn markers (like claude and pi), so activity is the
+        # lifecycle-plus-tail heuristic -- with one agy-specific correction, see
+        # antigravity/activity.py.
+        watcher_class=AntigravitySessionWatcher,
+        tracker_class=AntigravityActivityTracker,
+        process_started_marker_filename=AntigravityActivityTracker.marker_filename,
+        # Display-only model bar: agy's `/model` is an interactive TUI picker with no
+        # scriptable one-shot form, so the bar reflects and never drives. The session subclass
+        # exists only to absorb catalog staleness -- see its switch_options.
+        resolver_class=AntigravityModelResolver,
+        catalog_factory=lambda: ANTIGRAVITY_CATALOG,
+        session_class=AntigravityHarnessSession,
+        model_state_relative_path=ANTIGRAVITY_STATE_RELATIVE_PATH,
+        special_kinds=frozenset(),
+        # Stop and tap both end the live turn with a SINGLE ctrl+c. Neither retrieves anything
+        # from inside agy: the queue is ours (see antigravity/queue_tracker.py), so stop hands
+        # back what we were holding and the tap simply frees agy for the one typist -- the
+        # flush worker -- to deliver.
+        #
+        # DANGER, and the reason this is a named constant rather than a literal at the press
+        # site: agy treats the FIRST ctrl+c as "interrupt the active operation" and a DOUBLE
+        # press as "exit" -- and its own docs say that valve fires regardless of how the key
+        # is remapped. One press is the interrupt we want; two in quick succession kill the
+        # agent. Both callers press through a shared per-agent interlock that refuses a second
+        # press inside a fixed window (antigravity/turn_state.py), because a greyed button is
+        # not enough protection for a failure that destroys the process.
+        # (Escape is bound to the same `cli.escape` action and would avoid the double-press
+        # hazard, but it carries text-editing meaning in too many contexts to deliver blind.)
+        interrupt_to_composer_class=AntigravityInterruptToComposer,
+        shoulder_tap_class=AntigravityAtomicShoulderTap,
+        cancel_chord="C-c",
+        popups=(_MODEL_BAR_POPUP,),
+        # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
+        # a bare `agy` does on first launch, which is what the instructions below say.
     ),
 }
 

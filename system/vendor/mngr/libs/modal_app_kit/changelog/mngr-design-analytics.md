@@ -1,0 +1,3 @@
+`RequestLoggingMiddleware` now emits one single-line JSON object per HTTP request (`{"type": "http_request", ...}`) instead of the key=value line. `json.dumps` replaces the hand-rolled quoting/sanitization (forged paths stay escaped inside their JSON string by construction), and the line carries the full authenticated user id when the routed handler stashed one in ASGI scope state under the new `AUTHENTICATED_USER_STATE_KEY`. Query strings, bodies, and headers beyond the user agent and the `X-Imbue-Client` client id (still logged as `imbue_client`) stay excluded.
+
+The private handler-bootstrap helper is now public as `ensure_info_log_handler` so apps can emit their own structured INFO lines (e.g. the connector's share-visit records) that reliably reach container stderr.

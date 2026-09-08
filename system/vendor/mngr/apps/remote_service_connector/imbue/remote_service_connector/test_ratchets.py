@@ -34,7 +34,12 @@ def test_prevent_time_sleep() -> None:
     # poll loop (a deadline-bounded poll, exactly what the rule prescribes;
     # the shared wait_for helper lives in imbue_common, which the shipped
     # connector may not import). The seam is faked in unit tests.
-    rc.check_time_sleep(_DIR, snapshot(1))
+    # 2: r2.stores._sleep paces the enforcement-lease acquisition poll loop
+    # (same deadline-bounded-poll shape and the same imbue_common
+    # restriction); tests keep waits negligible via zero wait windows or
+    # pre-released leases, except the serialization test, which exercises
+    # the real poll loop and pays at most one sub-second poll interval.
+    rc.check_time_sleep(_DIR, snapshot(2))
 
 
 def test_prevent_global_keyword() -> None:
@@ -119,10 +124,13 @@ def test_prevent_namedtuple() -> None:
 
 
 def test_prevent_yaml_usage() -> None:
-    # 7: misfires on box_scripts/stop_start string literals naming lima's own
-    # ``lima.yaml`` instance files (which we transport verbatim, never author);
-    # no YAML is read, written, or configured by the connector.
-    rc.check_yaml_usage(_DIR, snapshot(7))
+    # Misfires on box_scripts/stop_start string literals naming lima's own
+    # ``lima.yaml`` instance files, which we transport verbatim, and on
+    # box_scripts_test staging that file to stand in for a lima instance. The
+    # rest is ``accounts_web`` reading electron-updater's channel manifest,
+    # whose ``.yml`` extension and YAML body are fixed by the shipped binary
+    # that consumes it. The connector configures nothing in YAML.
+    rc.check_yaml_usage(_DIR, snapshot(17))
 
 
 def test_prevent_functools_partial() -> None:
@@ -130,7 +138,7 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(17))
+    rc.check_async_await(_DIR, snapshot(18))
 
 
 # --- Naming conventions ---
@@ -210,7 +218,7 @@ def test_prevent_unittest_mock_imports() -> None:
 
 
 def test_prevent_monkeypatch_setattr() -> None:
-    rc.check_monkeypatch_setattr(_DIR, snapshot(8))
+    rc.check_monkeypatch_setattr(_DIR, snapshot(9))
 
 
 def test_prevent_test_container_classes() -> None:

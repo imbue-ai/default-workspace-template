@@ -1,0 +1,1 @@
+Document the new `minds-admin analytics analyst add|remove|list` command as the way to mint, rotate, list, and revoke per-analyst read-only lake credentials in `reports/README.md` (the manual role/token steps remain as the under-the-hood reference). Analyst adds now grant both lakes by default, with `--no-transcripts` as the opt-out.

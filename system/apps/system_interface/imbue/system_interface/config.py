@@ -21,7 +21,7 @@ class Config(BaseSettings):
     # How this instance gets agent lifecycle events. The default (OBSERVE) runs
     # ``mngr observe``, which needs the single-writer observe lock for the mngr
     # host dir. A second system interface on the same host -- the live-editing
-    # preview, or the reveal script's pre-flight boot -- must be launched with
+    # preview, or the update apply's pre-flight boot -- must be launched with
     # FOLLOW so it reads the running observer's event stream instead of fighting
     # it for the lock (which would leave its agent view frozen from boot).
     system_interface_agent_events_mode: AgentEventsMode = AgentEventsMode.OBSERVE

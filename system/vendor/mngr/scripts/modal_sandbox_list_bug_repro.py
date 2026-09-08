@@ -27,12 +27,19 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 
 import modal
 import modal.exception
+
+# Default this repro to Modal's V2 Sandbox backend, matching the mngr-wide
+# default. Via setdefault so you can still reproduce against V1 by exporting
+# MODAL_SANDBOX_V2=0 -- the Sandbox.list() behavior this script probes differs
+# between the V1 and V2 backends.
+os.environ.setdefault("MODAL_SANDBOX_V2", "1")
 
 # Use a distinctive environment name for this reproduction
 REPRO_ENVIRONMENT = "modal-list-bug-repro"

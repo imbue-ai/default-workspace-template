@@ -2,6 +2,7 @@ import fcntl
 import json
 import os
 import queue
+import select
 import threading
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -54,6 +55,9 @@ from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr.utils.file_watch import DirectoryWatchGroup
+from imbue.mngr.utils.file_watch import WATCHED_TAIL_FALLBACK_POLL_SECONDS
+from imbue.mngr.utils.file_watch import start_event_forwarder
 from imbue.mngr.utils.jsonl_warn import MalformedJsonLineWarner
 from imbue.mngr.utils.jsonl_warn import split_complete_lines
 
@@ -64,24 +68,24 @@ AGENT_STATES_EVENT_SOURCE: Final[EventSource] = EventSource("mngr/agent_states")
 ACTIVITY_EVENT_SOURCE: Final[EventSource] = EventSource("mngr/activity")
 OBSERVE_LOCK_FILENAME: Final[str] = "observe_lock"
 FULL_STATE_INTERVAL_SECONDS: Final[float] = 300.0
-_ACTIVITY_DEBOUNCE_SECONDS: Final[float] = 2.0
-# Timeout for each psutil wait() call in a PID watcher's loop. Bounds how long a
-# watcher takes to notice a stop request (it cannot interrupt an in-flight wait),
-# so it must stay small; process death itself is detected event-driven, well
-# before this elapses.
-_WATCH_POLL_SECONDS: Final[float] = 1.0
+# Timeout for the activity worker's queue get. Activity items are handled the
+# moment they arrive (the get returns immediately), so this bounds only how
+# often the worker re-checks that its child processes are still alive.
+_ACTIVITY_QUEUE_POLL_SECONDS: Final[float] = 5.0
+# Timeout for each psutil wait() call in a PID watcher's *fallback* loop (used
+# only when the event-driven pidfd wait is unavailable, i.e. macOS or an old
+# Linux kernel). Bounds how long such a watcher takes to notice a stop request
+# (it cannot interrupt an in-flight wait); process death itself is detected
+# event-driven by psutil, well before this elapses.
+_WATCH_POLL_SECONDS: Final[float] = 3.0
 # Cheap byte-level pre-filter so scanning a large event file does not run every
 # line through ``json.loads``. Only lines containing the literal type token are
 # parsed to confirm they really are full-state snapshots.
 _FULL_STATE_MARKER: Final[bytes] = b'"AGENTS_FULL_STATE"'
-# How often a follower re-reads the tail of the event file (and re-checks that the
-# writing observer is still alive). The observer emits on agent activity and every
-# FULL_STATE_INTERVAL_SECONDS otherwise, so this is far finer-grained than the
-# stream it follows and costs a single ``stat`` per tick when idle.
-_FOLLOW_POLL_SECONDS: Final[float] = 1.0
 # Default for how long ``ObserveEventFollower.stop`` waits for its thread to notice
-# the stop flag. The thread only ever blocks in the poll wait or inside the
-# consumer's sink, so a few default poll intervals is ample.
+# the stop flag. The thread only ever blocks in its wake wait, which ``stop``
+# interrupts at once, or inside the consumer's sink, so this only has to cover
+# a sink that is slow rather than stuck.
 _FOLLOW_JOIN_TIMEOUT_SECONDS: Final[float] = 5.0
 
 
@@ -597,9 +601,12 @@ class ObserveEventFollower(MutableModel):
       atomic-append size, so the tail can legitimately hold a half-written line; it
       is left in place and picked up on a later poll.
 
-    Threading: ``start`` spawns one daemon thread that calls :meth:`poll_once` on a
-    fixed interval. Tests drive :meth:`poll_once` directly instead, so the class
-    needs no test-only seam.
+    Threading: ``start`` spawns one daemon thread that calls :meth:`poll_once`
+    whenever the events directory changes (a watchdog directory watch, as the
+    ``mngr event --follow`` tails use), and on a fallback interval otherwise --
+    that interval only covers a filesystem event the watch missed, and bounds how
+    late a lost observer is noticed. Tests drive :meth:`poll_once` directly
+    instead, so the class needs no test-only seam.
 
     Two kinds of thing can stop events arriving, and they are handled differently:
 
@@ -621,8 +628,10 @@ class ObserveEventFollower(MutableModel):
 
     events_base_dir: Path = Field(frozen=True, description="Directory the observer writes its events under")
     on_line: Callable[[str], None] = Field(frozen=True, description="Sink for each complete event line")
-    poll_interval_seconds: float = Field(
-        default=_FOLLOW_POLL_SECONDS, frozen=True, description="Seconds between tail reads"
+    fallback_poll_seconds: float = Field(
+        default=WATCHED_TAIL_FALLBACK_POLL_SECONDS,
+        frozen=True,
+        description="Longest the follow thread sleeps between tail reads when the directory watch stays quiet",
     )
     join_timeout_seconds: float = Field(
         default=_FOLLOW_JOIN_TIMEOUT_SECONDS,
@@ -632,6 +641,7 @@ class ObserveEventFollower(MutableModel):
 
     _stop_event: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: ObservableThread | None = PrivateAttr(default=None)
+    _watch_group: DirectoryWatchGroup | None = PrivateAttr(default=None)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # None until something internal makes the stream unfollowable for good.
     # "Never started" is not represented here -- that is the owner's fact, not the
@@ -677,8 +687,11 @@ class ObserveEventFollower(MutableModel):
             with self._lock:
                 self._is_started = False
             raise
+        watch_group = DirectoryWatchGroup()
+        self._watch_group = watch_group
         thread = ObservableThread(
             target=self._follow_loop,
+            args=(watch_group,),
             name="observe-follower",
             daemon=True,
             on_failure=self._on_follow_failure,
@@ -728,6 +741,10 @@ class ObserveEventFollower(MutableModel):
                     self.join_timeout_seconds,
                 )
             self._thread = None
+        watch_group = self._watch_group
+        if watch_group is not None:
+            watch_group.stop()
+            self._watch_group = None
 
     def is_stream_healthy(self) -> bool:
         """Whether events are reaching this follower right now.
@@ -781,7 +798,7 @@ class ObserveEventFollower(MutableModel):
             return
         self._drain()
 
-    def _follow_loop(self) -> None:
+    def _follow_loop(self, watch_group: DirectoryWatchGroup) -> None:
         """Poll until stopped, or until something internal makes the stream unfollowable.
 
         An outage does not end the loop: the observer it follows may come back, and
@@ -790,10 +807,27 @@ class ObserveEventFollower(MutableModel):
         past (see :meth:`_on_follow_failure`), so a consumer gating on
         :meth:`is_stream_healthy` cannot keep reporting itself live once this thread
         is gone.
+
+        Pacing: the loop sleeps on a wake event that ``watch_group`` sets whenever
+        the events directory changes, so a line is read the moment the writer
+        appends it and an idle stream costs no wake-ups. The fallback wait covers
+        what the watch cannot: a missed filesystem event, or a directory that did
+        not exist yet when the watch was first attempted (an observer creates it on
+        its first write), which is why the watch is re-attempted until it takes.
+        ``stop`` wakes the loop immediately through a parked forwarder thread.
         """
+        wake_event = threading.Event()
+        start_event_forwarder(self._stop_event, wake_event, name="observe-follower-stop-forwarder")
+        watched_dir = get_observe_events_dir(self.events_base_dir)
+        is_watched = False
         while not self._stop_event.is_set():
+            if not is_watched:
+                is_watched = watch_group.watch(watched_dir, wake_event)
             self.poll_once()
-            self._stop_event.wait(timeout=self.poll_interval_seconds)
+            # A change landing between the clear below and the next read sets the
+            # event again, so the next wait returns immediately -- nothing is lost.
+            wake_event.wait(timeout=self.fallback_poll_seconds)
+            wake_event.clear()
 
     def _on_follow_failure(self, e: BaseException) -> None:
         """Turn an exception that ended the follow thread into the consumer's diagnosis.
@@ -940,6 +974,61 @@ class _AgentWatcher(FrozenModel):
     pid: int = Field(description="PID the watcher is bound to")
     stop_event: threading.Event = Field(description="Set to ask the watcher thread to stop")
     thread: threading.Thread = Field(description="The running watcher thread")
+    stop_wake_write_fd: int = Field(
+        description="Write end of the watcher's stop pipe; closing it wakes the thread's "
+        "event-driven poll(2) wait (the read end sees POLLHUP)"
+    )
+
+
+def _signal_watcher_stop(watcher: _AgentWatcher) -> None:
+    """Ask a watcher thread to stop and wake its (possibly poll(2)-blocked) wait.
+
+    Closing the pipe's write end raises POLLHUP on the read end, which the
+    pidfd wait treats as a stop request. Callers always pop the watcher from
+    the registry (under the watchers lock) before signalling, so each watcher
+    is signalled at most once and the fd is never double-closed.
+    """
+    watcher.stop_event.set()
+    os.close(watcher.stop_wake_write_fd)
+
+
+def _wait_for_pid_exit_via_pidfd(process: psutil.Process, stop_wake_read_fd: int) -> bool | None:
+    """Event-driven wait for a process exit, with no wake-ups until something happens.
+
+    Blocks in poll(2) on the process's pidfd (readable once the process exits)
+    and the watcher's stop pipe (POLLHUP once the write end is closed by
+    :func:`_signal_watcher_stop`). Returns True when the process exited, False
+    on a stop request, and None when pidfd is unavailable on this platform
+    (macOS, or a pre-5.3 Linux kernel) so the caller can fall back to the
+    psutil polling wait. A process that is already gone counts as exited.
+    """
+    if not hasattr(os, "pidfd_open"):
+        return None
+    pid = process.pid
+    try:
+        pidfd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return True
+    except OSError as e:
+        logger.debug("pidfd_open unavailable for pid {} (falling back to psutil wait): {}", pid, e)
+        return None
+    try:
+        # pidfd_open pinned whichever process owns the pid right now, while
+        # ``process`` pinned (by create_time) whichever owned it at watcher
+        # creation. is_running() compares the two: False means the watched
+        # process already exited and the pid was recycled, so report the exit
+        # instead of polling an unrelated process's pidfd forever.
+        if not process.is_running():
+            return True
+        poller = select.poll()
+        poller.register(pidfd, select.POLLIN)
+        poller.register(stop_wake_read_fd, select.POLLIN)
+        # Blocks with no timeout; python retries EINTR internally. Exit wins a
+        # tie so a death racing a stop request is still reported as an exit.
+        ready_fds = {fd for fd, _event_mask in poller.poll()}
+        return pidfd in ready_fds
+    finally:
+        os.close(pidfd)
 
 
 def _make_unknown_agent_details(last_known: AgentDetails) -> AgentDetails:
@@ -1088,6 +1177,11 @@ class AgentObserver(MutableModel):
             finally:
                 self._stop_event.set()
                 self._close_all_watchers()
+                # Wake the activity worker out of its queue wait so it observes
+                # the stop now instead of after the full queue poll timeout.
+                # The empty sentinel is harmless: every post-get step checks
+                # _stop_event first, and an unknown host id fetches nothing.
+                self._activity_queue.put("")
                 activity_worker.join(timeout=5.0)
 
     def _on_activity_failure(self, e: BaseException):
@@ -1274,7 +1368,7 @@ class AgentObserver(MutableModel):
 
             # see if there are any activity events
             try:
-                host_id_str = self._activity_queue.get(timeout=_ACTIVITY_DEBOUNCE_SECONDS)
+                host_id_str = self._activity_queue.get(timeout=_ACTIVITY_QUEUE_POLL_SECONDS)
             except queue.Empty:
                 continue
 
@@ -1460,7 +1554,7 @@ class AgentObserver(MutableModel):
             # watcher first, then start a fresh one bound to the current PID.
             if existing is not None:
                 self._watchers.pop(instance_key_str, None)
-                existing.stop_event.set()
+                _signal_watcher_stop(existing)
                 existing.thread.join(timeout=5.0)
             try:
                 process = psutil.Process(pid)
@@ -1470,18 +1564,33 @@ class AgentObserver(MutableModel):
                 self._activity_queue.put(host_id_str)
                 return
             stop_event = threading.Event()
+            # The stop pipe wakes the thread's event-driven poll(2) wait; the
+            # thread owns (and closes) the read end, the _AgentWatcher entry owns
+            # the write end (closed by _signal_watcher_stop).
+            stop_wake_read_fd, stop_wake_write_fd = os.pipe()
             # is_checked=False so a single watcher's failure is isolated (logged via
             # on_failure) instead of being re-raised at the next strand start / group
             # exit, which would poison the whole ConcurrencyGroup and stop all
             # observation -- see _on_watcher_failure for the intended isolation.
-            thread = self._concurrency_group.start_new_thread(
-                target=lambda: self._watch_pid(instance_key_str, host_id_str, process, pid, stop_event),
-                daemon=True,
-                name=f"observe-pid-watch-{instance_key_str[:14]}",
-                on_failure=self._on_watcher_failure,
-                is_checked=False,
+            is_thread_started = False
+            try:
+                thread = self._concurrency_group.start_new_thread(
+                    target=lambda: self._watch_pid(
+                        instance_key_str, host_id_str, process, pid, stop_event, stop_wake_read_fd
+                    ),
+                    daemon=True,
+                    name=f"observe-pid-watch-{instance_key_str[:14]}",
+                    on_failure=self._on_watcher_failure,
+                    is_checked=False,
+                )
+                is_thread_started = True
+            finally:
+                if not is_thread_started:
+                    os.close(stop_wake_read_fd)
+                    os.close(stop_wake_write_fd)
+            self._watchers[instance_key_str] = _AgentWatcher(
+                pid=pid, stop_event=stop_event, thread=thread, stop_wake_write_fd=stop_wake_write_fd
             )
-            self._watchers[instance_key_str] = _AgentWatcher(pid=pid, stop_event=stop_event, thread=thread)
 
     def _watch_pid(
         self,
@@ -1490,14 +1599,46 @@ class AgentObserver(MutableModel):
         process: psutil.Process,
         pid: int,
         stop_event: threading.Event,
+        stop_wake_read_fd: int,
     ) -> None:
         """Block until the watched process exits (or a stop is requested), then signal activity.
 
-        psutil implements ``wait`` event-driven (os.pidfd_open on Linux, kqueue on
-        macOS), so death is noticed within milliseconds; the short per-call timeout
-        exists only to re-check the stop flags, since an in-flight wait cannot be
-        interrupted.
+        On Linux the wait is fully event-driven: a poll(2) over the process's
+        pidfd and the watcher's stop pipe blocks with no timer at all. When
+        pidfd is unavailable (macOS, old kernels) it falls back to psutil's
+        wait -- itself event-driven for process death -- polled with a short
+        timeout only to notice stop requests.
         """
+        try:
+            pidfd_wait_result = _wait_for_pid_exit_via_pidfd(process, stop_wake_read_fd)
+            if pidfd_wait_result is None:
+                is_exited = self._wait_for_pid_exit_via_psutil(instance_key_str, process, pid, stop_event)
+            else:
+                is_exited = pidfd_wait_result
+        finally:
+            os.close(stop_wake_read_fd)
+        if not is_exited:
+            return
+        # A stop request that raced the exit means this watcher was replaced or
+        # the observer is shutting down -- the re-probe is no longer ours to ask for.
+        if stop_event.is_set() or self._stop_event.is_set():
+            return
+        logger.debug(
+            "Local agent {} main process (pid {}) exited; enqueueing host {} for re-probe",
+            instance_key_str,
+            pid,
+            host_id_str,
+        )
+        self._activity_queue.put(host_id_str)
+
+    def _wait_for_pid_exit_via_psutil(
+        self,
+        instance_key_str: str,
+        process: psutil.Process,
+        pid: int,
+        stop_event: threading.Event,
+    ) -> bool:
+        """Fallback wait for platforms without pidfd. True when the process exited, False on a stop request."""
         while not (stop_event.is_set() or self._stop_event.is_set()):
             try:
                 process.wait(timeout=_WATCH_POLL_SECONDS)
@@ -1508,15 +1649,8 @@ class AgentObserver(MutableModel):
                 # when its underlying os.pidfd_open/kqueue/poll fails; treat any such
                 # failure the same as an exit and re-probe rather than crash the watcher.
                 logger.debug("PID watch for agent {} (pid {}) errored, treating as exit: {}", instance_key_str, pid, e)
-            # Reached once the process has exited (wait returned) or errored out.
-            logger.debug(
-                "Local agent {} main process (pid {}) exited; enqueueing host {} for re-probe",
-                instance_key_str,
-                pid,
-                host_id_str,
-            )
-            self._activity_queue.put(host_id_str)
-            return
+            return True
+        return False
 
     def _close_watcher(self, instance_key_str: str) -> None:
         """Stop and join the watcher for an agent, if any. Idempotent.
@@ -1529,7 +1663,7 @@ class AgentObserver(MutableModel):
             watcher = self._watchers.pop(instance_key_str, None)
             if watcher is None:
                 return
-            watcher.stop_event.set()
+            _signal_watcher_stop(watcher)
             watcher.thread.join(timeout=5.0)
 
     def _close_all_watchers(self) -> None:

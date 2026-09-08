@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // has no document for; identity keeps the asserted URLs the bare /api paths.
 vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
 
+// setMemberTitle repaints as soon as it applies the optimistic name, and
+// mithril's real redraw needs a mounted root that this suite has none of.
+vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
+
 import {
   applyMemberTitleChange,
   displayNameForMember,
@@ -133,6 +137,44 @@ describe("setMemberTitle", () => {
 
     expect(await setMemberTitle(DOCS, "   ")).toBeNull();
     expect(getMemberTitle(DOCS)).toBeNull();
+  });
+
+  it("shows the typed name before the server has answered", async () => {
+    // The point of the optimistic path: renaming a chat goes out to the mngr
+    // CLI, which takes seconds, and the name must not wait on it. The fetch is
+    // left pending so the assertion lands in exactly that window.
+    let releaseServer: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      releaseServer = resolve;
+    });
+    vi.spyOn(globalThis, "fetch").mockReturnValue(pending as Promise<Response>);
+
+    const inFlight = setMemberTitle(DOCS, "  Docs  ");
+    expect(getMemberTitle(DOCS)).toBe("Docs");
+
+    releaseServer({ ok: true, json: () => Promise.resolve({ ref: DOCS, title: "Docs" }) });
+    await inFlight;
+    expect(getMemberTitle(DOCS)).toBe("Docs");
+  });
+
+  it("puts the old name back when the server refuses", async () => {
+    applyMemberTitleChange(DOCS, "Handbook");
+    stubFetch({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({ detail: "A chat named 'Docs' already exists" }),
+    });
+
+    await expect(setMemberTitle(DOCS, "Docs")).rejects.toThrow("A chat named 'Docs' already exists");
+    expect(getMemberTitle(DOCS)).toBe("Handbook");
+  });
+
+  it("puts the old name back when the request never reaches the server", async () => {
+    applyMemberTitleChange(DOCS, "Handbook");
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+
+    await expect(setMemberTitle(DOCS, "Docs")).rejects.toThrow("offline");
+    expect(getMemberTitle(DOCS)).toBe("Handbook");
   });
 
   it("throws with the server's reason and leaves the cache alone", async () => {

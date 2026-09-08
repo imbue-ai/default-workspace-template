@@ -1,6 +1,6 @@
 """Local replica + sync engine for per-account workspace records.
 
-The connector holds one record per (account, host): plaintext metadata (name,
+The connector holds one record per (account, workspace): plaintext metadata (name,
 color, provider, location, lifecycle state) plus an opaque secrets blob
 encrypted under the account's DEK (see ``dek_store``). This module owns the
 minds side of that: a per-account on-disk replica (the offline cache and
@@ -47,25 +47,30 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.secret_wrapping import SecretWrappingError
 from imbue.imbue_common.secret_wrapping import decrypt_secrets
 from imbue.imbue_common.secret_wrapping import encrypt_secrets
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client import dek_store
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
+from imbue.minds.desktop_client.backup_env_store import full_backup_bucket_name_from_env
 from imbue.minds.desktop_client.backup_env_store import read_canonical_env
 from imbue.minds.desktop_client.backup_env_store import write_canonical_env
 from imbue.minds.desktop_client.destroying import has_destroying_marker
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudSyncConflictCliError
 from imbue.minds.errors import BackupProvisioningError
+from imbue.minds.errors import WorkspaceRecordLeaseActiveError
 from imbue.minds.errors import WorkspaceRecordTooNewError
 from imbue.minds.errors import WorkspaceSyncError
 from imbue.minds.mngr_settings.provider_blocks import imbue_cloud_provider_name_for_account
+from imbue.minds.primitives import DeviceId
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import ProviderNotAuthorizedError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.providers.host_key_store import HostKeyOrigin
+from imbue.mngr.providers.host_key_store import has_unpinned_bootstrap_drift
 from imbue.mngr.providers.host_key_store import load_current_host_key_pins
 from imbue.mngr.providers.host_key_store import pin_known_hosts_text
 from imbue.mngr.providers.host_key_store import render_pins_as_known_hosts_text
@@ -161,11 +166,16 @@ def secrets_payload_content_hash(payload: WorkspaceSecretsPayload) -> str:
     return hashlib.sha256(payload.model_dump_json(exclude={"payload_format"}).encode("utf-8")).hexdigest()
 
 
+def encode_encrypted_secrets(dek: bytes, plaintext: bytes) -> str:
+    """The base64 AEAD blob a record's ``encrypted_secrets`` carries for ``plaintext`` under the account DEK."""
+    return b64encode(encrypt_secrets(dek, plaintext)).decode("ascii")
+
+
 class ReplicaRecord(FrozenModel):
     """One workspace record as held in the local replica (wire fields + the dirty flag)."""
 
-    host_id: str = Field(description="Host the workspace is on (PK with the account)")
-    agent_id: str = Field(description="Logical workspace id")
+    host_id: str = Field(description="The workspace's current machine (mutable attribute)")
+    agent_id: str = Field(description="Workspace id (the record's key with the account)")
     display_name: str = Field(default="", description="Workspace display name")
     color: str | None = Field(default=None, description="Workspace accent color")
     provider_kind: str = Field(default="", description="mngr provider instance name")
@@ -179,7 +189,14 @@ class ReplicaRecord(FrozenModel):
             "stamped locally at tombstone time so offline rows still age toward the backup reaper"
         ),
     )
-    restored_from_host_id: str | None = Field(default=None, description="Lineage link for restorations")
+    restored_from_host_id: str | None = Field(default=None, description="Machine-lineage link for restorations")
+    backup_bucket: str | None = Field(
+        default=None,
+        description=(
+            "Full R2 bucket name holding this workspace's backups (from the canonical env); "
+            "consumed server-side by the retention reaper"
+        ),
+    )
     encrypted_secrets: str | None = Field(default=None, description="Base64 AEAD blob under the account DEK")
     revision: int = Field(default=0, description="Last server-acknowledged revision (0 = never pushed)")
     record_format: int = Field(
@@ -218,6 +235,7 @@ class ReplicaRecord(FrozenModel):
             "device_label": self.device_label,
             "state": self.state,
             "restored_from_host_id": self.restored_from_host_id,
+            "backup_bucket": self.backup_bucket,
             "encrypted_secrets": self.encrypted_secrets,
             "revision": push_revision,
             "record_format": self.record_format,
@@ -239,6 +257,7 @@ def replica_record_from_wire(wire: dict[str, object]) -> ReplicaRecord:
         restored_from_host_id=(
             str(wire["restored_from_host_id"]) if wire.get("restored_from_host_id") is not None else None
         ),
+        backup_bucket=(str(wire["backup_bucket"]) if wire.get("backup_bucket") is not None else None),
         encrypted_secrets=(str(wire["encrypted_secrets"]) if wire.get("encrypted_secrets") is not None else None),
         revision=int(str(wire.get("revision", 0))),
         record_format=int(str(wire.get("record_format", 1))),
@@ -393,7 +412,7 @@ class WorkspaceRecordStore(MutableModel):
     outside the lock so a slow connector round-trip never blocks readers.
     """
 
-    paths: WorkspacePaths = Field(frozen=True, description="Minds data dir (replica + keys live under it)")
+    paths: InstallationPaths = Field(frozen=True, description="Minds data dir (replica + keys live under it)")
     mngr_host_dir: Path | None = Field(
         default=None,
         frozen=True,
@@ -403,7 +422,7 @@ class WorkspaceRecordStore(MutableModel):
         ),
     )
     cli: ImbueCloudCli | None = Field(default=None, frozen=True, description="Transport; None disables pushes/pulls")
-    device_id: HostId = Field(
+    device_id: DeviceId = Field(
         frozen=True, description="This install's stable device id (record provenance; see device_identity)"
     )
     device_label: str = Field(frozen=True, description="This device's human-readable name")
@@ -445,7 +464,9 @@ class WorkspaceRecordStore(MutableModel):
                     logger.warning("Ignoring unreadable workspace-record replica {}: {}", path, e)
                     continue
                 entries = raw.get("records", []) if isinstance(raw, dict) else []
-                by_host: dict[str, ReplicaRecord] = {}
+                # Replica files persist a plain record list, so re-keying on
+                # load is what migrates host-keyed replicas from older builds.
+                by_workspace: dict[str, ReplicaRecord] = {}
                 for entry in entries:
                     if not isinstance(entry, dict):
                         continue
@@ -454,16 +475,26 @@ class WorkspaceRecordStore(MutableModel):
                     except ValueError as e:
                         logger.warning("Skipping malformed replica record in {}: {}", path, e)
                         continue
-                    by_host[record.host_id] = record
-                self._records_by_user_id[user_id] = by_host
+                    # A legacy host-keyed replica can carry two rows for one
+                    # workspace (a machine move leaves a tombstoned old-host
+                    # row); keep the ACTIVE row, as the server-side dedup does.
+                    existing = by_workspace.get(record.agent_id)
+                    if (
+                        existing is not None
+                        and existing.state == RECORD_STATE_ACTIVE
+                        and record.state != RECORD_STATE_ACTIVE
+                    ):
+                        continue
+                    by_workspace[record.agent_id] = record
+                self._records_by_user_id[user_id] = by_workspace
         self._is_loaded = True
 
     def _save_unlocked(self, user_id: str) -> None:
         records_dir = self._records_dir()
         records_dir.mkdir(parents=True, exist_ok=True)
         path = self._replica_path(user_id)
-        by_host = self._records_by_user_id.get(user_id, {})
-        payload = {"records": [record.model_dump(mode="json") for record in by_host.values()]}
+        by_workspace = self._records_by_user_id.get(user_id, {})
+        payload = {"records": [record.model_dump(mode="json") for record in by_workspace.values()]}
         tmp_path = path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(payload, indent=2))
         tmp_path.chmod(0o600)
@@ -471,14 +502,14 @@ class WorkspaceRecordStore(MutableModel):
 
     def _set_record_unlocked(self, user_id: str, record: ReplicaRecord) -> None:
         self._load_unlocked()
-        self._records_by_user_id.setdefault(user_id, {})[record.host_id] = record
+        self._records_by_user_id.setdefault(user_id, {})[record.agent_id] = record
         self._save_unlocked(user_id)
 
-    def _drop_record_unlocked(self, user_id: str, host_id: str) -> None:
+    def _drop_record_unlocked(self, user_id: str, workspace_id: str) -> None:
         self._load_unlocked()
-        by_host = self._records_by_user_id.get(user_id, {})
-        if host_id in by_host:
-            del by_host[host_id]
+        by_workspace = self._records_by_user_id.get(user_id, {})
+        if workspace_id in by_workspace:
+            del by_workspace[workspace_id]
             self._save_unlocked(user_id)
 
     # -- Read API -------------------------------------------------------------
@@ -561,9 +592,9 @@ class WorkspaceRecordStore(MutableModel):
                 return None
         own_fields = json.loads(payload.model_dump_json())
         merged = {**(existing_raw or {}), **own_fields}
-        blob = encrypt_secrets(dek, json.dumps(merged, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+        plaintext = json.dumps(merged, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return BuiltRecordSecrets(
-            encrypted=b64encode(blob).decode("ascii"),
+            encrypted=encode_encrypted_secrets(dek, plaintext),
             content_hash=secrets_payload_content_hash(payload),
         )
 
@@ -625,10 +656,15 @@ class WorkspaceRecordStore(MutableModel):
         is_cloud_row = provider_kind.startswith(_CLOUD_PROVIDER_PREFIX)
         with self._lock:
             self._load_unlocked()
-            previous = self._records_by_user_id.get(user_id, {}).get(info.host_id)
+            previous = self._records_by_user_id.get(user_id, {}).get(str(agent_id))
         built_secrets = self.build_encrypted_secrets(
             user_id, agent_id, info.host_id, previous.encrypted_secrets if previous is not None else None
         )
+        # The explicit backup-bucket association rides on the record (the
+        # server-side reaper consumes it); derived from the canonical env, the
+        # single source of truth for where this workspace's backups live.
+        env_content = read_canonical_env(self.paths, AgentId(agent_id))
+        backup_bucket = full_backup_bucket_name_from_env(env_content) if env_content is not None else None
         return ReplicaRecord(
             host_id=info.host_id,
             agent_id=str(agent_id),
@@ -638,6 +674,7 @@ class WorkspaceRecordStore(MutableModel):
             hosting_device_id=None if is_cloud_row else self.device_id,
             device_label=self.device_label,
             state=state,
+            backup_bucket=backup_bucket,
             encrypted_secrets=built_secrets.encrypted if built_secrets is not None else None,
             revision=0,
             is_dirty=True,
@@ -727,7 +764,7 @@ class WorkspaceRecordStore(MutableModel):
             )
         with self._lock:
             self._load_unlocked()
-            previous = self._records_by_user_id.get(user_id, {}).get(record.host_id)
+            previous = self._records_by_user_id.get(user_id, {}).get(record.agent_id)
         if previous is not None:
             if is_record_too_new(previous):
                 raise WorkspaceRecordTooNewError(RECORD_TOO_NEW_MESSAGE)
@@ -750,11 +787,11 @@ class WorkspaceRecordStore(MutableModel):
         if self.cli is None:
             raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         try:
-            self.cli.sync_record_delete(account_email, record.host_id)
+            self.cli.sync_record_delete(account_email, record.agent_id)
         except ImbueCloudCliError as e:
             raise WorkspaceSyncError(f"could not remove the record from the connector: {e}") from e
         with self._lock:
-            self._drop_record_unlocked(user_id, record.host_id)
+            self._drop_record_unlocked(user_id, record.agent_id)
 
     def tombstone_record(self, user_id: str, account_email: str, agent_id: str) -> None:
         """Mark ``agent_id``'s record DESTROYED (kept, with secrets, for backup access).
@@ -783,21 +820,23 @@ class WorkspaceRecordStore(MutableModel):
         except (ImbueCloudCliError, WorkspaceSyncError) as e:
             logger.warning("Queued tombstone for {} (push failed: {})", agent_id, e)
 
-    def remove_record_or_raise(self, user_id: str, account_email: str, host_id: str) -> None:
-        """Remove a record outright by host id (the manual remove-from-list escape hatch)."""
+    def remove_record_or_raise(self, user_id: str, account_email: str, workspace_id: str) -> None:
+        """Remove a record outright by workspace id (the manual remove-from-list escape hatch)."""
         with self._lock:
             self._load_unlocked()
-            existing = self._records_by_user_id.get(user_id, {}).get(host_id)
+            existing = self._records_by_user_id.get(user_id, {}).get(workspace_id)
         if existing is not None and is_record_too_new(existing):
             raise WorkspaceRecordTooNewError(RECORD_TOO_NEW_MESSAGE)
         if self.cli is None:
             raise WorkspaceSyncError("machine sync is not configured (no imbue_cloud CLI)")
         try:
-            self.cli.sync_record_delete(account_email, host_id)
+            self.cli.sync_record_delete(account_email, workspace_id)
+        except ImbueCloudLeaseActiveCliError as e:
+            raise WorkspaceRecordLeaseActiveError(str(e)) from e
         except ImbueCloudCliError as e:
             raise WorkspaceSyncError(f"could not remove the record from the connector: {e}") from e
         with self._lock:
-            self._drop_record_unlocked(user_id, host_id)
+            self._drop_record_unlocked(user_id, workspace_id)
 
     def pull(self, user_id: str, account_email: str) -> bool:
         """Merge the server's records into the replica (local dirty rows win until pushed).
@@ -816,12 +855,12 @@ class WorkspaceRecordStore(MutableModel):
             return False
         with self._lock:
             self._load_unlocked()
-            by_host = self._records_by_user_id.setdefault(user_id, {})
-            server_host_ids = set()
+            by_workspace = self._records_by_user_id.setdefault(user_id, {})
+            server_workspace_ids = set()
             for wire in wire_records:
                 record = replica_record_from_wire(wire)
-                server_host_ids.add(record.host_id)
-                local = by_host.get(record.host_id)
+                server_workspace_ids.add(record.agent_id)
+                local = by_workspace.get(record.agent_id)
                 if local is not None and local.is_dirty:
                     if not is_record_too_new(record):
                         continue
@@ -850,12 +889,12 @@ class WorkspaceRecordStore(MutableModel):
                             record.field_ref().last_applied_secrets_revision, local.last_applied_secrets_revision
                         ),
                     )
-                by_host[record.host_id] = record
+                by_workspace[record.agent_id] = record
             # A row the server no longer has (deleted elsewhere) drops out of
             # the replica unless it has unpushed local changes.
-            for host_id in list(by_host.keys()):
-                if host_id not in server_host_ids and not by_host[host_id].is_dirty:
-                    del by_host[host_id]
+            for workspace_id in list(by_workspace.keys()):
+                if workspace_id not in server_workspace_ids and not by_workspace[workspace_id].is_dirty:
+                    del by_workspace[workspace_id]
             self._save_unlocked(user_id)
         return True
 
@@ -966,7 +1005,9 @@ class WorkspaceRecordStore(MutableModel):
         :meth:`_materialize_record_secrets`) -- converging a drifted backup env
         for any provider kind, and (for cloud rows) writing the synced SSH key
         material into the imbue_cloud provider's per-host state dir so
-        discovery can reach hosts leased on another install. Also sweeps
+        discovery can reach hosts leased on another install (and converging
+        hosts leased here whose material another install has since
+        advanced, e.g. by adopting the host). Also sweeps
         orphaned per-host key dirs. No-op while the account is locked. Returns
         True when SSH material was created or changed, so the caller can
         bounce discovery.
@@ -1006,16 +1047,21 @@ class WorkspaceRecordStore(MutableModel):
           local copy, the only surviving restic credentials, alone). This is
           the convergence path for every provider kind: a device holding a
           stale env picks up the record's rotated one here.
-        - for cloud rows without a local lease, the SSH key files and
-          known_hosts pins are applied as before: pins go through the host-key
-          store as user-origin material with replace-by-(endpoint, keytype)
-          semantics, so a stale first-ordered pin can never shadow the live
-          key and later local bootstrap writes can never displace what the
-          record established. Missing key or known_hosts files (a swept and
-          re-created host dir) re-open the gate regardless of the revision.
-          The lease.json skip covers only this SSH half: the leasing install's
-          keypair is authoritative because it minted it, but its env is no
-          more authoritative than any other device's.
+        - for cloud rows -- leased-here included -- the SSH key files and
+          known_hosts pins are applied: pins go through the host-key store as
+          user-origin material with replace-by-(endpoint, keytype) semantics,
+          so a stale first-ordered pin can never shadow the live key and later
+          local bootstrap writes can never displace what the record
+          established. A lease held here grants no standing authority over
+          the trust material: another install can legitimately advance it
+          (adopting the host rotates its sshd keys, and the synced record is
+          the channel that rotated material arrives through); what protects
+          this install's own newer, not-yet-pushed material is the revision +
+          content-hash gate, not the lease. Missing key or known_hosts files
+          (a swept and re-created host dir) re-open the gate regardless of
+          the revision, as does record known_hosts material whose endpoints
+          still hold only absent-or-bootstrap pins (a device whose earlier
+          client skipped the apply while stamping the revision).
 
         A successful application also stamps ``secrets_content_hash`` with the
         applied payload's digest: local material now mirrors the record, so a
@@ -1036,16 +1082,12 @@ class WorkspaceRecordStore(MutableModel):
                 self._set_ssh_material_error(record.agent_id, "Could not decrypt the synced secrets for this machine.")
             return False
 
-        # The SSH half applies only to cloud rows this install did not lease.
+        # The SSH half applies to every cloud row, leased-here included.
         host_dir = self.imbue_cloud_host_state_dir(account_email, record.host_id) if is_cloud_row else None
-        is_lease_held = host_dir is not None and (host_dir / _LEASE_META_FILENAME).is_file()
-        if is_lease_held:
-            # This install leased the host itself: its own keypair (and the
-            # connector-fed known_hosts pins) are authoritative.
-            self._clear_ssh_material_error(record.agent_id)
-        is_ssh_applicable = host_dir is not None and not is_lease_held and payload.ssh_private_key is not None
+        is_ssh_applicable = host_dir is not None and payload.ssh_private_key is not None
 
-        # The revision gate (with the SSH missing-file escape hatches).
+        # The revision gate (with the SSH escape hatches: missing files, and
+        # record pins the store never absorbed).
         payload_content_hash = secrets_payload_content_hash(payload)
         is_payload_new_here = payload_content_hash != record.secrets_content_hash
         is_due = record.revision > (record.last_applied_secrets_revision or 0) and is_payload_new_here
@@ -1059,6 +1101,10 @@ class WorkspaceRecordStore(MutableModel):
                 is_due
                 or not is_key_pair_present
                 or (payload.ssh_known_hosts is not None and not known_hosts_path.exists())
+                or (
+                    payload.ssh_known_hosts is not None
+                    and has_unpinned_bootstrap_drift(known_hosts_path, payload.ssh_known_hosts)
+                )
             )
         if not is_due:
             self._clear_ssh_material_error(record.agent_id)
@@ -1110,10 +1156,9 @@ class WorkspaceRecordStore(MutableModel):
         # Stamp the local-only tracking fields: the gate closes at this
         # revision, and -- only when the locally collected payload truly
         # matches the applied one -- the parity digest records that local
-        # material now mirrors it. Without parity (e.g. a leased row whose
-        # keypair this pass deliberately does not touch), the previous hash
-        # state is kept, so a device holding partial material stays
-        # ineligible to push its view.
+        # material now mirrors it. Without parity (e.g. local material the
+        # record has not caught up to), the previous hash state is kept, so a
+        # device holding partial material stays ineligible to push its view.
         local_payload = self._collect_secrets_payload(user_id, record.agent_id, record.host_id)
         is_parity = local_payload is not None and secrets_payload_content_hash(local_payload) == payload_content_hash
         stamped = record.model_copy_update(

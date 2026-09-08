@@ -16,6 +16,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
+from imbue.mngr.utils.ssh import quote_ssh_option_value
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
 from imbue.mngr_imbue_cloud.slices.bare_metal import count_authorized_key_lines
@@ -49,6 +50,13 @@ _DISK_NAME_SUFFIX: Final[str] = "-data"
 _BOX_PATH_PREFIX: Final[str] = "PATH=/usr/local/bin:$HOME/.local/bin:$PATH"
 # A slice VM boots in a few minutes; give limactl start a generous cap.
 _LIMA_START_TIMEOUT_SECONDS: Final[float] = 1800.0
+# lima's own instance-running deadline for ``limactl start``. Without an
+# explicit ``--timeout`` lima defaults to 10 minutes, which a fresh slice's
+# first boot to sshd exceeds on a box already running many VMs (~8-12 minutes
+# under CPU/IO contention), killing starts that were seconds from ready
+# (mngr-internal#469). Kept under _LIMA_START_TIMEOUT_SECONDS so the SSH exec
+# cap remains the outer bound.
+_LIMA_START_DEADLINE: Final[str] = "25m"
 _LIMA_SHORT_TIMEOUT_SECONDS: Final[float] = 120.0
 # The reservation (under the box lock) is short but includes ``limactl create``,
 # which materializes the instance's boot disk from the staged base image -- give it
@@ -68,6 +76,10 @@ def _is_already_absent_error(stderr: str) -> bool:
     disk deletes must tolerate the target already being absent.
     """
     stderr_lower = stderr.lower()
+    # The shell's "limactl: command not found" also says "not found" but means
+    # the target was never touched.
+    if "command not found" in stderr_lower:
+        return False
     return "not found" in stderr_lower or "does not exist" in stderr_lower
 
 
@@ -152,7 +164,7 @@ class LimaSliceVpsClient(VpsClientInterface):
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
-            f"UserKnownHostsFile={self._box_known_hosts_file()}",
+            f"UserKnownHostsFile={quote_ssh_option_value(self._box_known_hosts_file())}",
             "-o",
             f"ConnectTimeout={_BOX_CONNECT_TIMEOUT_SECONDS}",
             "-o",
@@ -273,7 +285,7 @@ class LimaSliceVpsClient(VpsClientInterface):
         # Phase 2: boot the reserved VM (the long step), with the lock already released.
         try:
             start_rc, _start_out, start_err = self.run_on_box(
-                f"limactl --log-level=info start {shlex.quote(instance_name)}",
+                f"limactl --log-level=info start --timeout {_LIMA_START_DEADLINE} {shlex.quote(instance_name)}",
                 timeout=_LIMA_START_TIMEOUT_SECONDS,
                 label=f"start:{instance_name}",
                 is_streaming=True,

@@ -11,7 +11,7 @@ That choice exists because ``mngr observe`` is single-writer per host dir (it ho
 an exclusive ``flock`` for its whole run). A system interface serving the workspace
 owns the observer (:attr:`AgentEventsMode.OBSERVE`) and consumes its
 ``--stream-events`` stdout. A *second* one on the same host -- the live-editing
-preview, or the reveal script's pre-flight boot -- must not try to start its own:
+preview, or the update apply's pre-flight boot -- must not try to start its own:
 the lock would reject it, the observer would exit seconds into boot, and that
 instance's agent view would silently freeze forever while every other part of it
 kept working. Such an instance runs in :attr:`AgentEventsMode.FOLLOW` instead.

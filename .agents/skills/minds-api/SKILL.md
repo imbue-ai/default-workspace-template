@@ -2,6 +2,8 @@
 name: minds-api
 description: "Use to act on OTHER Minds workspaces on the user's behalf -- list them, create a fresh one, SSH into one, read or export its backups, start/stop/destroy/recover it, or change its settings and service sharing. Reached through the latchkey gateway's minds-api-proxy; most routes need a per-workspace permission grant. For bringing another workspace's content into this one, use the migrate-workspace skill, which drives these routes as part of a much larger flow."
 compatibility: Requires latchkey (the standard agent gateway) and curl; ssh/ssh-keygen for the SSH capability. mngr (vendored) for handing tasks to another workspace's agent.
+metadata:
+  author: imbue
 ---
 
 # Minds API
@@ -68,10 +70,11 @@ to one specific workspace at a time.
 When a call comes back rejected (a "not permitted by the user" message / 403),
 file a permission request and wait for the user to approve it. Minds uses a
 dedicated `type: "workspace"` request (distinct from the predefined-service
-requests in the `latchkey` skill):
+requests in the `latchkey` skill). It goes in a tool call of its own, with
+nothing else in it and its output untouched -- see "File exactly one permission
+request per tool call" in the `latchkey` skill for why:
 
 ```bash
-# (Never pipe the output through jq because frontend rendering depends on seeing the full output from your tool.)
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
   -d '{

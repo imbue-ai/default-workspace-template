@@ -53,6 +53,7 @@ from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
+from imbue.mngr.hosts.outer_host import SSH_KEEPALIVE_INTERVAL_SECONDS
 from imbue.mngr.interfaces.data_types import CommandResult
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.host_key_store import HostKeyOrigin
@@ -730,7 +731,7 @@ def _is_rsa_private_key(private_key_text: str) -> bool:
 def ensure_client_key_current(access: SliceVmAccessInterface, target: SliceAdoptionTarget) -> None:
     """Resume an in-flight client-key rotation, and rotate a legacy RSA client key to Ed25519.
 
-    Subsumes the retired minds-side RSA -> Ed25519 migration for slices: hosts
+    Subsumes the retired client-side RSA -> Ed25519 migration for slices: hosts
     leased before the Ed25519 keygen switch hold RSA-4096 client keys, which
     keep working for SSH but cannot sign the owner-exec envelopes the hosted
     web chrome uses. Rotating through the reconciler desired state (unlike the
@@ -937,6 +938,12 @@ class ParamikoSliceVmAccess(SliceVmAccessInterface):
         except (paramiko.SSHException, OSError) as e:
             client.close()
             raise AdoptionError(f"SSH connect to {self.address}:{port} failed: {e}") from e
+        # Keepalives so a silently dead path surfaces as a transport error
+        # instead of leaving a blocked read waiting forever (see
+        # SSH_KEEPALIVE_INTERVAL_SECONDS in imbue.mngr.hosts.outer_host).
+        transport = client.get_transport()
+        if transport is not None:
+            transport.set_keepalive(SSH_KEEPALIVE_INTERVAL_SECONDS)
         return client
 
     def _run(self, command: str, timeout_seconds: float) -> CommandResult:

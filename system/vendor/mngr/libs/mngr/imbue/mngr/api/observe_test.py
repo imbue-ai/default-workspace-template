@@ -1,6 +1,8 @@
 import json
+import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -40,6 +42,7 @@ from imbue.mngr.api.observe import _TrackedState
 from imbue.mngr.api.observe import _details_instance_key
 from imbue.mngr.api.observe import _make_unknown_agent_details
 from imbue.mngr.api.observe import _scan_last_snapshot_and_boundary
+from imbue.mngr.api.observe import _wait_for_pid_exit_via_pidfd
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_agent_state_change_event
 from imbue.mngr.api.observe import append_observe_event
@@ -1347,19 +1350,54 @@ class _RaisingWaitProcess(psutil.Process):
         raise OSError("simulated pidfd_open failure")
 
 
-def test_watch_pid_treats_wait_oserror_as_exit_and_enqueues(temp_mngr_ctx: MngrContext, noop_binary: str) -> None:
+def test_psutil_fallback_wait_treats_wait_oserror_as_exit(temp_mngr_ctx: MngrContext, noop_binary: str) -> None:
     """A bare OSError from process.wait() is treated as exit (re-probe), not a crash.
 
     psutil.Process.wait() can surface a plain OSError (not a psutil.Error) from its
-    os.pidfd_open/kqueue/poll backend; _watch_pid must handle it like any other exit
-    and enqueue a re-probe rather than let it escape and kill the watcher thread.
+    os.pidfd_open/kqueue/poll backend; the fallback wait must report it as an exit
+    rather than let it escape and kill the watcher thread.
     """
     observer = _make_observer(temp_mngr_ctx, noop_binary)
 
-    # Runs inline here: it must return normally (no OSError escaping) and enqueue the host.
-    observer._watch_pid("agent-1", "host-9", _RaisingWaitProcess(), 4321, threading.Event())
+    is_exited = observer._wait_for_pid_exit_via_psutil("agent-1", _RaisingWaitProcess(), 4321, threading.Event())
 
-    assert observer._activity_queue.get_nowait() == "host-9"
+    assert is_exited is True
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="pidfd_open is Linux-only")
+def test_wait_for_pid_exit_via_pidfd_reports_exit() -> None:
+    """The pidfd wait returns True once the watched process has exited."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    stop_wake_read_fd, stop_wake_write_fd = os.pipe()
+    try:
+        assert _wait_for_pid_exit_via_pidfd(psutil.Process(proc.pid), stop_wake_read_fd) is True
+    finally:
+        os.close(stop_wake_read_fd)
+        os.close(stop_wake_write_fd)
+        proc.wait()
+
+
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="pidfd_open is Linux-only")
+def test_wait_for_pid_exit_via_pidfd_stop_pipe_close_unblocks() -> None:
+    """Closing the stop pipe's write end wakes the blocked wait and reports no exit."""
+    proc = subprocess.Popen(["sleep", "37963"])
+    stop_wake_read_fd, stop_wake_write_fd = os.pipe()
+    results: list[bool | None] = []
+    process = psutil.Process(proc.pid)
+    thread = threading.Thread(
+        target=lambda: results.append(_wait_for_pid_exit_via_pidfd(process, stop_wake_read_fd)),
+        daemon=True,
+    )
+    thread.start()
+    try:
+        os.close(stop_wake_write_fd)
+        thread.join(timeout=5.0)
+        assert not thread.is_alive(), "pidfd wait did not unblock on stop pipe close"
+        assert results == [False]
+    finally:
+        os.close(stop_wake_read_fd)
+        proc.kill()
+        proc.wait()
 
 
 # === Follower Tests ===
@@ -1729,7 +1767,7 @@ def test_started_follower_keeps_polling_across_an_observer_restart(temp_host_dir
 
     received: queue.Queue[str] = queue.Queue()
     fd = acquire_observe_lock(temp_host_dir)
-    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=received.put, poll_interval_seconds=0.01)
+    follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=received.put, fallback_poll_seconds=0.01)
     try:
         follower.start()
         assert parse_observe_event_line(received.get(timeout=10)) is not None
@@ -1815,7 +1853,7 @@ def test_started_follower_picks_up_new_events_on_its_own_thread(temp_host_dir: P
     received: queue.Queue[str] = queue.Queue()
     with _observer_holding_the_lock(temp_host_dir):
         follower = ObserveEventFollower(
-            events_base_dir=temp_host_dir, on_line=received.put, poll_interval_seconds=0.01
+            events_base_dir=temp_host_dir, on_line=received.put, fallback_poll_seconds=0.01
         )
         try:
             follower.start()
@@ -1828,6 +1866,41 @@ def test_started_follower_picks_up_new_events_on_its_own_thread(temp_host_dir: P
 
     assert isinstance(event, AgentStateEvent)
     assert event.agent.name == "threaded-later"
+
+
+def test_started_follower_is_woken_by_the_write_not_the_fallback_timer(temp_host_dir: Path) -> None:
+    """A line is forwarded the moment the writer appends it, and ``stop`` returns at once.
+
+    Both are properties of the wake-up mechanism, not of the fallback interval, so
+    the fallback is set far past the assertion deadlines: with only the timer to
+    wake it, the thread would neither deliver the appended event nor notice the
+    stop inside those bounds.
+    """
+    agent = make_test_agent_details(name="watched-agent", state=AgentLifecycleState.RUNNING)
+    append_observe_event(temp_host_dir, make_full_agent_state_event([agent]))
+    fallback_seconds = 60.0
+
+    received: queue.Queue[str] = queue.Queue()
+    with _observer_holding_the_lock(temp_host_dir):
+        follower = ObserveEventFollower(
+            events_base_dir=temp_host_dir, on_line=received.put, fallback_poll_seconds=fallback_seconds
+        )
+        try:
+            follower.start()
+            assert parse_observe_event_line(received.get(timeout=10)) is not None
+            later = make_test_agent_details(name="watched-later", state=AgentLifecycleState.WAITING)
+            append_observe_event(temp_host_dir, make_agent_state_event(later))
+            event = parse_observe_event_line(received.get(timeout=10))
+        finally:
+            stop_started_at = time.monotonic()
+            follower.stop()
+            stop_seconds = time.monotonic() - stop_started_at
+
+    assert isinstance(event, AgentStateEvent)
+    assert event.agent.name == "watched-later"
+    assert stop_seconds < follower.join_timeout_seconds, (
+        "stop waited on the fallback timer instead of waking the thread"
+    )
 
 
 def test_stopping_a_follower_whose_sink_is_wedged_says_so(temp_host_dir: Path) -> None:
@@ -1854,7 +1927,7 @@ def test_stopping_a_follower_whose_sink_is_wedged_says_so(temp_host_dir: Path) -
         follower = ObserveEventFollower(
             events_base_dir=temp_host_dir,
             on_line=wedged_sink,
-            poll_interval_seconds=0.01,
+            fallback_poll_seconds=0.01,
             join_timeout_seconds=0.05,
         )
         try:
@@ -1887,7 +1960,7 @@ def test_follow_thread_exiting_unexpectedly_marks_the_stream_dead(temp_host_dir:
         raise _ConsumerFoldError("the consumer's fold failed")
 
     with _observer_holding_the_lock(temp_host_dir):
-        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=explode, poll_interval_seconds=0.01)
+        follower = ObserveEventFollower(events_base_dir=temp_host_dir, on_line=explode, fallback_poll_seconds=0.01)
         try:
             follower.start()
             poll_until(lambda: not follower.is_stream_healthy(), timeout=10.0, poll_interval=0.01)

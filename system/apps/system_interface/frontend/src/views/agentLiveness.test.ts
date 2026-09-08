@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effectiveLifecycleState, livenessCategoryForState } from "./agentLiveness";
+import { effectiveLifecycleState, isAgentProcessDead, livenessCategoryForState } from "./agentLiveness";
 
 describe("livenessCategoryForState", () => {
   it("maps the working states to active", () => {
@@ -56,5 +56,19 @@ describe("effectiveLifecycleState", () => {
     expect(livenessCategoryForState(effectiveLifecycleState("WAITING", "THINKING"))).toBe("active");
     expect(livenessCategoryForState(effectiveLifecycleState("RUNNING", "IDLE"))).toBe("waiting");
     expect(livenessCategoryForState(effectiveLifecycleState("DONE", "THINKING"))).toBe("dormant");
+  });
+});
+
+describe("isAgentProcessDead", () => {
+  it("treats only positive death as dead, with UNKNOWN as non-evidence", () => {
+    expect(isAgentProcessDead("STOPPED")).toBe(true);
+    expect(isAgentProcessDead("DONE")).toBe(true);
+    expect(isAgentProcessDead("REPLACED")).toBe(true);
+    expect(isAgentProcessDead("RUNNING")).toBe(false);
+    expect(isAgentProcessDead("RUNNING_UNKNOWN_AGENT_TYPE")).toBe(false);
+    expect(isAgentProcessDead("WAITING")).toBe(false);
+    // The observer could not look; the agent may be running fine. Anything that ACTS on
+    // death (unmounting a terminal iframe) must not act on non-evidence.
+    expect(isAgentProcessDead("UNKNOWN")).toBe(false);
   });
 });

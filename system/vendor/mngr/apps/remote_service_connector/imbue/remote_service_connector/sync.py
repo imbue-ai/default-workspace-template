@@ -1,21 +1,39 @@
 """Workspace sync: records + account key bundles.
 
-Per-account workspace records: plaintext metadata (name, color, provider,
-location, lifecycle state) plus an opaque, client-side-encrypted secrets
-blob the server can never read. Writes are compare-and-swap on a per-row
-revision counter. The account key bundle holds the argon2id inputs and the
+Per-account workspace records: one row per workspace, keyed by the workspace
+id (the workspace's system-services agent id); the machine it runs on
+(``host_id``) is a mutable attribute. Rows hold plaintext metadata (name,
+color, provider, location, lifecycle state) plus an opaque,
+client-side-encrypted secrets blob the server can never read. Writes are
+compare-and-swap on a per-row revision counter, addressed by workspace id
+(the ``/sync/records/by-workspace/{workspace_id}`` routes); the host-keyed
+routes survive as compat shims -- the DELETE resolves the row through its
+host_id column, while the PUT checks the path against the body's host_id and
+then addresses the row by the body's agent_id. The account key bundle holds the argon2id inputs and the
 password-wrapped data-encryption key (also opaque). All endpoints require
 user (SuperTokens) auth but are NOT paid-gated -- sync is a free feature.
+
+Records and pool leases are two views of one cloud workspace, and the
+connector keeps them consistent: a lease grant inserts a metadata-only record
+stub in the same transaction (``insert_lease_record_stub``), a release
+tombstones the record -- or deletes it while it is still that never-written
+stub -- in the same transaction as its ``removing`` flip
+(``retire_active_record_for_lease``), and a record whose workspace still
+holds a lease can be tombstoned but never hard-deleted -- neither by the
+DELETE routes nor by the retention reaper. The lease-vs-record sweep in
+``lease_records.py`` acts on the remaining drift.
 """
 
 import base64
 import binascii
 import functools
 import logging
+import re
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from typing import Final
 from typing import Protocol
 
 import psycopg2
@@ -30,7 +48,10 @@ import imbue.remote_service_connector.entitlements as entitlements_module
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
 from imbue.remote_service_connector.entitlements import raise_quota_exceeded
+from imbue.remote_service_connector.errors import ConnectorError
+from imbue.remote_service_connector.errors import WorkspaceRecordLeaseActiveError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
+from imbue.remote_service_connector.r2.naming import bucket_owner_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +91,11 @@ class WorkspaceRecordModel(BaseModel):
     color: str | None = Field(default=None, max_length=64, description="Workspace accent color (#rrggbb)")
     provider_kind: str = Field(
         max_length=_MAX_SYNC_TEXT_FIELD_LENGTH,
-        description="mngr provider backend kind; empty when not yet known (create-path seed records)",
+        description=(
+            "The mngr provider *instance* name the workspace is discovered under on its hosting "
+            "device (e.g. 'docker', 'lima', or 'imbue_cloud_<account-slug>' for cloud rows); empty "
+            "when not yet known (create-path seed records)"
+        ),
     )
     hosting_device_id: str | None = Field(
         default=None,
@@ -83,6 +108,15 @@ class WorkspaceRecordModel(BaseModel):
     state: WorkspaceRecordState = Field(description="Lifecycle state; 'destroyed' is a tombstone")
     restored_from_host_id: str | None = Field(
         default=None, max_length=_MAX_SYNC_TEXT_FIELD_LENGTH, description="Lineage link for restored workspaces"
+    )
+    backup_bucket: str | None = Field(
+        default=None,
+        max_length=_MAX_SYNC_TEXT_FIELD_LENGTH,
+        description=(
+            "Full R2 bucket name holding this workspace's backups. Stored and consumed server-side "
+            "(the retention reaper prefers it over deriving a name from the host id); omitted from "
+            "wire responses until the pre-tolerant strict client fleet is out of the support window."
+        ),
     )
     encrypted_secrets: str | None = Field(
         default=None, description="Base64 of the client-encrypted secrets blob (opaque to the server)"
@@ -121,7 +155,7 @@ class AccountKeyBundleModel(BaseModel):
     updated_at: str = Field(default="", description="Server timestamp (response only)")
 
 
-class SyncRevisionConflictError(Exception):
+class SyncRevisionConflictError(ConnectorError):
     """CAS failure: the stored revision does not precede the pushed one."""
 
     def __init__(self, stored_record: dict[str, Any]) -> None:
@@ -129,7 +163,7 @@ class SyncRevisionConflictError(Exception):
         self.stored_record = stored_record
 
 
-class SyncRecordFormatTooNewError(Exception):
+class SyncRecordFormatTooNewError(ConnectorError):
     """A push carried a record_format below the stored row's (a client too old for this record)."""
 
     def __init__(self, stored_record: dict[str, Any]) -> None:
@@ -137,27 +171,25 @@ class SyncRecordFormatTooNewError(Exception):
         self.stored_record = stored_record
 
 
-class SyncActiveAgentConflictError(Exception):
-    """A second ACTIVE record for the same (user_id, agent_id) was rejected."""
-
-
-class SyncStoreConsistencyError(RuntimeError):
+class SyncStoreConsistencyError(ConnectorError, RuntimeError):
     """The store violated one of its own invariants (e.g. a write returned no row)."""
 
 
 _WORKSPACE_RECORD_COLUMNS = (
     "host_id, agent_id, display_name, color, provider_kind, hosting_device_id, device_label, "
     "state, restored_from_host_id, encrypted_secrets, revision, created_at, updated_at, destroyed_at, "
-    "record_format"
+    "record_format, backup_bucket"
 )
 
 # Columns a PUT may modify, in a fixed whitelist so the preserve-on-absent
 # UPDATE below can never write a column the request did not name. A field
 # absent from the push keeps its stored value; an explicitly sent null clears
-# it. (host_id is the row key; revision/updated_at/destroyed_at are managed
-# by the store itself.)
+# it. (agent_id -- the workspace id -- is the row key; host_id is the
+# workspace's current machine and IS mutable; revision/updated_at/destroyed_at
+# are managed by the store itself.)
 UPDATABLE_RECORD_COLUMNS = (
-    "agent_id",
+    "host_id",
+    "backup_bucket",
     "display_name",
     "color",
     "provider_kind",
@@ -168,10 +200,6 @@ UPDATABLE_RECORD_COLUMNS = (
     "encrypted_secrets",
     "record_format",
 )
-
-# Must match the index name in migrations/013_workspace_sync.sql; used to tell
-# an active-agent conflict apart from a primary-key insert race.
-_ONE_ACTIVE_PER_AGENT_INDEX_NAME = "workspace_records_one_active_per_agent_idx"
 
 
 def _workspace_record_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -194,7 +222,129 @@ def _workspace_record_row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "updated_at": str(row[12]) if row[12] is not None else "",
         "destroyed_at": str(row[13]) if row[13] is not None else None,
         "record_format": row[14],
+        "backup_bucket": row[15],
     }
+
+
+# Every pool_hosts status under which a workspace still holds its lease: the
+# lifecycle statuses a user's row can be in, plus the in-flight release marker
+# (a ``removing`` row's VM may still exist). Rows in any of these keep their
+# record tombstone-only (never hard-deleted).
+LEASE_HOLDING_POOL_STATUSES: Final[tuple[str, ...]] = (
+    "leased",
+    "stopping",
+    "stopped",
+    "starting",
+    "crashed",
+    "removing",
+)
+LEASE_HOLDING_STATUSES_SQL: Final[str] = ", ".join(f"'{status}'" for status in LEASE_HOLDING_POOL_STATUSES)
+
+
+def user_id_prefix_sql(user_id_column: str) -> str:
+    """The SQL that derives a record's ``pool_hosts.leased_to_user`` key from its full ``user_id`` column.
+
+    ``pool_hosts.leased_to_user`` holds the 16-hex prefix of the SuperTokens
+    user id that ``workspace_records.user_id`` holds in full; every
+    lease/record join derives the prefix the same way
+    ``auth.derive_user_id_prefix`` does.
+    """
+    return f"SUBSTRING(REPLACE({user_id_column}, '-', ''), 1, 16)"
+
+
+# Records for imbue_cloud workspaces carry the desktop's per-account provider
+# instance name, ``imbue_cloud_<slug(email)>``; the slug rule mirrors minds'
+# ``imbue_cloud_provider_name_for_account`` (duplicated, not imported -- the
+# shipped connector package must not depend on the monorepo). The bare backend
+# name is the fallback for an account with no email on record.
+_LEASE_RECORD_PROVIDER_BACKEND: Final[str] = "imbue_cloud"
+
+
+def lease_record_provider_kind(account_email: str | None) -> str:
+    """The provider instance name a lease's record stub carries (see the note above)."""
+    if account_email is None:
+        return _LEASE_RECORD_PROVIDER_BACKEND
+    slug = re.sub(r"[^a-z0-9]+", "-", account_email.strip().lower()).strip("-")
+    if not slug:
+        return _LEASE_RECORD_PROVIDER_BACKEND
+    return f"{_LEASE_RECORD_PROVIDER_BACKEND}_{slug}"
+
+
+def insert_lease_record_stub(
+    cur: Any,
+    *,
+    user_id: str,
+    host_id: str,
+    agent_id: str,
+    display_name: str,
+    provider_kind: str,
+) -> None:
+    """Insert the metadata-only ACTIVE record for a freshly granted lease, on the caller's cursor.
+
+    Runs inside the lease transaction so a lease without a record can never
+    exist, even transiently. The stub carries no secrets (only clients hold
+    the account DEK); the owning desktop's reconcile enriches it through the
+    normal CAS push. An existing record for the workspace is left alone.
+    """
+    cur.execute(
+        "INSERT INTO workspace_records (user_id, host_id, agent_id, display_name, color, provider_kind, "
+        "hosting_device_id, device_label, state, restored_from_host_id, backup_bucket, encrypted_secrets, "
+        "revision, record_format, destroyed_at) "
+        "VALUES (%s, %s, %s, %s, NULL, %s, NULL, '', 'active', NULL, NULL, NULL, 1, 1, NULL) "
+        "ON CONFLICT (user_id, agent_id) DO NOTHING",
+        (user_id, host_id, agent_id, display_name, provider_kind),
+    )
+
+
+def retire_active_record_for_lease(cur: Any, *, user_id_prefix: str, agent_id: str) -> None:
+    """Retire the ACTIVE record of a workspace whose lease is being released, on the caller's cursor.
+
+    Runs inside the release transaction. A record no client ever wrote to --
+    still the lease-time stub, at revision 1 with no secrets and no backup
+    bucket -- is deleted outright: it belongs to a workspace the user never
+    took possession of (a create or web claim that failed after the lease) or
+    one with nothing to recover, and a tombstone would only surface a ghost in
+    every device's "recently destroyed" list. Every other record is
+    tombstoned, keeping its metadata and secrets for backup access; bumping
+    the revision keeps the CAS honest, so a client holding the pre-release
+    revision conflicts on its next push and rebases instead of resurrecting
+    the row. Revision 1 alone does not prove a stub: a record a client created
+    before the connector wrote stubs also sits at revision 1, with NULL
+    secrets while the account has no master password, so a record that names a
+    backup bucket is always kept.
+    """
+    cur.execute(
+        "DELETE FROM workspace_records "
+        f"WHERE agent_id = %s AND {user_id_prefix_sql('user_id')} = %s AND state = 'active' "
+        "AND revision = 1 AND encrypted_secrets IS NULL AND backup_bucket IS NULL",
+        (agent_id, user_id_prefix),
+    )
+    if cur.rowcount:
+        return
+    cur.execute(
+        "UPDATE workspace_records SET state = 'destroyed', destroyed_at = COALESCE(destroyed_at, NOW()), "
+        "revision = revision + 1, updated_at = NOW() "
+        f"WHERE agent_id = %s AND {user_id_prefix_sql('user_id')} = %s AND state = 'active'",
+        (agent_id, user_id_prefix),
+    )
+
+
+def _lease_holding_pool_row_sql(pool_column: str) -> str:
+    return (
+        f"SELECT 1 FROM pool_hosts WHERE {pool_column} = %s AND leased_to_user = %s "
+        f"AND status IN ({LEASE_HOLDING_STATUSES_SQL}) LIMIT 1"
+    )
+
+
+def _has_lease_holding_pool_row(cur: Any, *, user_id_prefix: str, agent_id: str | None, host_id: str | None) -> bool:
+    """Whether the user holds a pool lease for the workspace (by workspace id, else by host id)."""
+    if agent_id is not None:
+        cur.execute(_lease_holding_pool_row_sql("agent_id"), (agent_id, user_id_prefix))
+    elif host_id is not None:
+        cur.execute(_lease_holding_pool_row_sql("host_id"), (host_id, user_id_prefix))
+    else:
+        return False
+    return cur.fetchone() is not None
 
 
 class SyncStore(Protocol):
@@ -206,7 +356,14 @@ class SyncStore(Protocol):
         """Insert or CAS-update one record; ``sent_fields`` names the fields the push actually carried."""
         ...
 
-    def delete_record(self, user_id: str, host_id: str) -> None: ...
+    def delete_record(self, user_id: str, host_id: str) -> None:
+        """Delete the record whose host_id column matches (the host-keyed compat shim)."""
+        ...
+
+    def delete_record_by_workspace(self, user_id: str, workspace_id: str) -> None:
+        """Delete the record for one workspace id (the row key)."""
+        ...
+
     def scrub_secrets(self, user_id: str) -> int: ...
     def get_bundle(self, user_id: str) -> dict[str, Any] | None: ...
     def put_bundle(self, user_id: str, bundle: dict[str, Any]) -> None: ...
@@ -220,8 +377,18 @@ class SyncStore(Protocol):
         """List destroyed records whose destroyed_at is before ``cutoff`` (the reaper's candidates)."""
         ...
 
-    def any_record_references_backup_bucket(self, user_id_prefix: str, host_id: str) -> bool:
-        """Whether any record (any state, any user with this prefix) references ``host_id``."""
+    def any_record_references_backup_bucket(
+        self, user_id_prefix: str, bucket_name: str, short_name: str, excluding_workspace_id: str | None = None
+    ) -> bool:
+        """Whether any record of a user with this prefix references the bucket.
+
+        A record references a bucket when its explicit ``backup_bucket`` equals
+        the full ``bucket_name``, or its ``host_id`` / ``agent_id`` equals the
+        bucket's ``short_name`` (the legacy name-derived association).
+        ``excluding_workspace_id`` leaves one record (by its agent id) out of
+        the count -- the retention reaper's "does anyone ELSE still reference
+        this record's bucket" question.
+        """
         ...
 
 
@@ -229,8 +396,7 @@ class PostgresSyncStore:
     """SyncStore backed by the connector's existing Neon DB (same DB as pool_hosts)."""
 
     def list_records(self, user_id: str) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT {_WORKSPACE_RECORD_COLUMNS} FROM workspace_records "
@@ -238,8 +404,6 @@ class PostgresSyncStore:
                     (user_id,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
         return [_workspace_record_row_to_dict(row) for row in rows]
 
     def put_record(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
@@ -252,13 +416,12 @@ class PostgresSyncStore:
         raises :class:`SyncRecordFormatTooNewError` before any write. An
         update requires ``record["revision"] == stored revision + 1``;
         otherwise :class:`SyncRevisionConflictError` carries the stored row so
-        the client can merge and retry. The partial unique index on
-        ``(user_id, agent_id) WHERE state = 'active'`` surfaces as
-        :class:`SyncActiveAgentConflictError`. Two concurrent *first* pushes
-        of the same host_id both pass the FOR UPDATE probe and the loser's
-        INSERT hits the primary key instead; by then the winner's row is
+        the client can merge and retry. Rows are addressed by the workspace id
+        (``agent_id``, the primary key with the user). Two concurrent *first*
+        pushes of the same workspace both pass the FOR UPDATE probe and the
+        loser's INSERT hits the primary key; by then the winner's row is
         committed, so one retry reports that race through the regular CAS
-        path (409 + stored row) rather than as an agent conflict.
+        path (409 + stored row).
         """
         try:
             return self._put_record_once(user_id, record, sent_fields)
@@ -266,14 +429,13 @@ class PostgresSyncStore:
             return self._put_record_once(user_id, record, sent_fields)
 
     def _put_record_once(self, user_id: str, record: dict[str, Any], sent_fields: AbstractSet[str]) -> dict[str, Any]:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"SELECT {_WORKSPACE_RECORD_COLUMNS} FROM workspace_records "
-                        "WHERE user_id = %s AND host_id = %s FOR UPDATE",
-                        (user_id, record["host_id"]),
+                        "WHERE user_id = %s AND agent_id = %s FOR UPDATE",
+                        (user_id, record["agent_id"]),
                     )
                     existing = cur.fetchone()
                     encrypted = record["encrypted_secrets"]
@@ -287,8 +449,8 @@ class PostgresSyncStore:
                             cur.execute(
                                 "INSERT INTO workspace_records (user_id, host_id, agent_id, display_name, color, "
                                 "provider_kind, hosting_device_id, device_label, state, restored_from_host_id, "
-                                "encrypted_secrets, revision, record_format, destroyed_at) "
-                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                                "backup_bucket, encrypted_secrets, revision, record_format, destroyed_at) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
                                 "CASE WHEN %s = 'destroyed' THEN NOW() END) "
                                 f"RETURNING {_WORKSPACE_RECORD_COLUMNS}",
                                 (
@@ -302,6 +464,7 @@ class PostgresSyncStore:
                                     record["device_label"],
                                     record["state"],
                                     record["restored_from_host_id"],
+                                    record.get("backup_bucket"),
                                     encrypted_bytes,
                                     record["revision"],
                                     record["record_format"],
@@ -329,7 +492,7 @@ class PostgresSyncStore:
                                     continue
                                 set_clauses.append(f"{column} = %s")
                                 update_params.append(
-                                    encrypted_bytes if column == "encrypted_secrets" else record[column]
+                                    encrypted_bytes if column == "encrypted_secrets" else record.get(column)
                                 )
                             set_clauses.append("revision = %s")
                             update_params.append(record["revision"])
@@ -338,48 +501,51 @@ class PostgresSyncStore:
                                 "destroyed_at = CASE WHEN %s = 'destroyed' THEN COALESCE(destroyed_at, NOW()) END"
                             )
                             update_params.append(record["state"])
-                            update_params.extend([user_id, record["host_id"]])
+                            update_params.extend([user_id, record["agent_id"]])
                             cur.execute(
                                 f"UPDATE workspace_records SET {', '.join(set_clauses)} "
-                                "WHERE user_id = %s AND host_id = %s "
+                                "WHERE user_id = %s AND agent_id = %s "
                                 f"RETURNING {_WORKSPACE_RECORD_COLUMNS}",
                                 tuple(update_params),
                             )
                         written = cur.fetchone()
-                    except psycopg2.errors.UniqueViolation as exc:
-                        if exc.diag.constraint_name == _ONE_ACTIVE_PER_AGENT_INDEX_NAME:
-                            raise SyncActiveAgentConflictError(
-                                f"another ACTIVE record already exists for agent {record['agent_id']}"
-                            ) from exc
-                        # Any other unique violation (the primary key) is a
-                        # concurrent-insert race; the caller retries once.
+                    except psycopg2.errors.UniqueViolation:
+                        # A unique violation here is the primary key: a
+                        # concurrent insert of the same workspace won the race.
+                        # The caller retries once; the retry finds the winner's
+                        # committed row and reports through the CAS path.
                         raise
-        finally:
-            conn.close()
         if written is None:
             # INSERT/UPDATE ... RETURNING on a locked, existing row always
             # yields a row; reaching here means the store broke its own
             # invariant, which must surface as a server error -- not as a 409
             # whose "stored" row would be the pushed record (whose secrets are
             # raw bytes at this point, not wire-shaped base64).
-            raise SyncStoreConsistencyError(f"workspace record write for host {record['host_id']} returned no row")
+            raise SyncStoreConsistencyError(
+                f"workspace record write for workspace {record['agent_id']} returned no row"
+            )
         return _workspace_record_row_to_dict(written)
 
     def delete_record(self, user_id: str, host_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "DELETE FROM workspace_records WHERE user_id = %s AND host_id = %s",
                         (user_id, host_id),
                     )
-        finally:
-            conn.close()
+
+    def delete_record_by_workspace(self, user_id: str, workspace_id: str) -> None:
+        with db.pooled_db_connection() as conn:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM workspace_records WHERE user_id = %s AND agent_id = %s",
+                        (user_id, workspace_id),
+                    )
 
     def scrub_secrets(self, user_id: str) -> int:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -388,13 +554,10 @@ class PostgresSyncStore:
                         (user_id,),
                     )
                     scrubbed = cur.rowcount
-        finally:
-            conn.close()
         return scrubbed
 
     def get_bundle(self, user_id: str) -> dict[str, Any] | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT kdf_salt, kdf_time_cost, kdf_memory_kib, kdf_parallelism, wrapped_dek, key_epoch, "
@@ -402,8 +565,6 @@ class PostgresSyncStore:
                     (user_id,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             return None
         return {
@@ -417,8 +578,7 @@ class PostgresSyncStore:
         }
 
     def put_bundle(self, user_id: str, bundle: dict[str, Any]) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -438,14 +598,11 @@ class PostgresSyncStore:
                             bundle["key_epoch"],
                         ),
                     )
-        finally:
-            conn.close()
 
     def put_bundle_if_absent(self, user_id: str, bundle: dict[str, Any]) -> bool:
         # ON CONFLICT DO NOTHING makes the existence check and the insert one
         # atomic statement, so two racing first-time setups cannot both win.
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -463,47 +620,60 @@ class PostgresSyncStore:
                         ),
                     )
                     return cur.rowcount == 1
-        finally:
-            conn.close()
 
     def delete_bundle(self, user_id: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM account_key_bundles WHERE user_id = %s", (user_id,))
-        finally:
-            conn.close()
 
     def list_destroyed_records_before(self, cutoff: datetime) -> list[dict[str, Any]]:
-        conn = db.get_pool_db_connection()
-        try:
+        # A tombstone whose workspace still holds a pool lease is the
+        # lease-vs-record sweep's evidence of a failed release; it is never
+        # reaped out from under that sweep (the lease's release reaps both).
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT user_id, host_id, destroyed_at FROM workspace_records "
-                    "WHERE state = 'destroyed' AND destroyed_at IS NOT NULL AND destroyed_at < %s "
-                    "ORDER BY destroyed_at",
+                    "SELECT r.user_id, r.host_id, r.agent_id, r.backup_bucket, r.destroyed_at "
+                    "FROM workspace_records r "
+                    "WHERE r.state = 'destroyed' AND r.destroyed_at IS NOT NULL AND r.destroyed_at < %s "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM pool_hosts p WHERE p.agent_id = r.agent_id "
+                    f"AND p.leased_to_user = {user_id_prefix_sql('r.user_id')} "
+                    f"AND p.status IN ({LEASE_HOLDING_STATUSES_SQL})) "
+                    "ORDER BY r.destroyed_at",
                     (cutoff,),
                 )
                 rows = cur.fetchall()
-        finally:
-            conn.close()
-        return [{"user_id": row[0], "host_id": row[1], "destroyed_at": row[2]} for row in rows]
+        return [
+            {
+                "user_id": row[0],
+                "host_id": row[1],
+                "agent_id": row[2],
+                "backup_bucket": row[3],
+                "destroyed_at": row[4],
+            }
+            for row in rows
+        ]
 
-    def any_record_references_backup_bucket(self, user_id_prefix: str, host_id: str) -> bool:
+    def any_record_references_backup_bucket(
+        self, user_id_prefix: str, bucket_name: str, short_name: str, excluding_workspace_id: str | None = None
+    ) -> bool:
         # The bucket name carries only the 16-hex user-id prefix, so the match
-        # re-derives the prefix from user_id exactly as derive_user_id_prefix does.
-        conn = db.get_pool_db_connection()
-        try:
+        # re-derives the prefix from user_id.
+        query = (
+            "SELECT 1 FROM workspace_records "
+            "WHERE (backup_bucket = %s OR host_id = %s OR agent_id = %s) "
+            f"AND {user_id_prefix_sql('user_id')} = %s"
+        )
+        params: tuple[Any, ...] = (bucket_name, short_name, short_name, user_id_prefix)
+        if excluding_workspace_id is not None:
+            query += " AND agent_id <> %s"
+            params = params + (excluding_workspace_id,)
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM workspace_records "
-                    "WHERE host_id = %s AND SUBSTRING(REPLACE(user_id, '-', ''), 1, 16) = %s LIMIT 1",
-                    (host_id, user_id_prefix),
-                )
+                cur.execute(query + " LIMIT 1", params)
                 return cur.fetchone() is not None
-        finally:
-            conn.close()
 
 
 class OrphanBucketStore(Protocol):
@@ -518,21 +688,17 @@ class PostgresOrphanBucketStore:
     """OrphanBucketStore backed by the connector's Neon DB (orphan_backup_buckets table)."""
 
     def get_first_seen(self, bucket_name: str) -> datetime | None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT first_seen_orphaned_at FROM orphan_backup_buckets WHERE bucket_name = %s",
                     (bucket_name,),
                 )
                 row = cur.fetchone()
-        finally:
-            conn.close()
         return row[0] if row is not None else None
 
     def get_or_record_first_seen(self, bucket_name: str) -> datetime:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -542,20 +708,15 @@ class PostgresOrphanBucketStore:
                         (bucket_name,),
                     )
                     row = cur.fetchone()
-        finally:
-            conn.close()
         if row is None:
             raise SyncStoreConsistencyError(f"orphan stamp upsert for {bucket_name} returned no row")
         return row[0]
 
     def delete_stamp(self, bucket_name: str) -> None:
-        conn = db.get_pool_db_connection()
-        try:
+        with db.pooled_db_connection() as conn:
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM orphan_backup_buckets WHERE bucket_name = %s", (bucket_name,))
-        finally:
-            conn.close()
 
 
 @functools.cache
@@ -593,6 +754,12 @@ def _record_wire_response(record: dict[str, Any]) -> dict[str, object]:
     dump = WorkspaceRecordModel(**record).model_dump()
     if dump.get("record_format") == 1:
         del dump["record_format"]
+    # CLEANUP: serve backup_bucket once the same pre-tolerant strict fleet is
+    # out of the support window. Until then the column is server-consumed only
+    # (the retention reaper reads it straight from the store): a strict
+    # extra="forbid" client that saw the field would drop the whole row from
+    # its listing, which its absence-tombstoning would misread as destruction.
+    dump.pop("backup_bucket", None)
     return dump
 
 
@@ -615,75 +782,130 @@ def list_workspace_records_endpoint(request: Request) -> dict[str, object]:
         return {"records": [_record_wire_response(record) for record in records]}
 
 
-@router.put("/sync/records/{host_id}")
-def put_workspace_record_endpoint(request: Request, host_id: str, body: WorkspaceRecordModel) -> dict[str, object]:
+def _put_workspace_record(request: Request, body: WorkspaceRecordModel) -> dict[str, object]:
     """Insert or CAS-update one workspace record; 409 (with the stored row) on conflict.
 
-    Enforces the active-synced-workspaces quota: a push that would create a
-    *new* ACTIVE record (a fresh row, or an existing non-active row flipping
-    to active) is refused at the cap. Updates to already-active rows and
-    tombstoning are always allowed.
+    Rows are addressed by the workspace id (``body.agent_id``). Enforces the
+    active-synced-workspaces quota: a push that would create a *new* ACTIVE
+    record (a fresh row, or an existing non-active row flipping to active) is
+    refused at the cap. Updates to already-active rows and tombstoning are
+    always allowed.
+    """
+    user, user_id = _sync_caller(request)
+    if body.backup_bucket is not None and not body.backup_bucket.startswith(bucket_owner_prefix(user.user_id_prefix)):
+        # The retention reaper acts on this name, so a record may only ever
+        # point it at a bucket in the caller's own namespace.
+        raise HTTPException(status_code=400, detail="backup_bucket must be one of the caller's own buckets")
+    if body.state == WorkspaceRecordState.ACTIVE:
+        existing_records = get_sync_store().list_records(user_id)
+        existing_row = next((r for r in existing_records if r["agent_id"] == body.agent_id), None)
+        is_new_active = existing_row is None or existing_row["state"] != WorkspaceRecordState.ACTIVE.value
+        if is_new_active:
+            # Verified-only email: the backfill's paid-list check is
+            # authorized by domain ownership.
+            entitlements = entitlements_module.ensure_account_entitlements(
+                user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
+            )
+            active_count = sum(1 for r in existing_records if r["state"] == WorkspaceRecordState.ACTIVE.value)
+            if active_count >= entitlements.max_active_synced_workspaces:
+                raise_quota_exceeded(
+                    "max_active_synced_workspaces",
+                    entitlements.max_active_synced_workspaces,
+                    active_count,
+                    "active synced workspaces",
+                )
+    record = body.model_dump(mode="json")
+    record["encrypted_secrets"] = (
+        _decode_size_capped_base64("encrypted_secrets", body.encrypted_secrets, _MAX_ENCRYPTED_SECRETS_BYTES)
+        if body.encrypted_secrets is not None
+        else None
+    )
+    try:
+        stored = get_sync_store().put_record(user_id, record, body.model_fields_set)
+    except SyncRecordFormatTooNewError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "record_format_too_new",
+                "message": (
+                    "This record was written by a newer client "
+                    f"(record_format {exc.stored_record.get('record_format')}); update the app to modify it."
+                ),
+                "stored": _record_wire_response(exc.stored_record),
+            },
+        ) from exc
+    except SyncRevisionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "revision conflict",
+                "stored": _record_wire_response(exc.stored_record),
+            },
+        ) from exc
+    return _record_wire_response(stored)
+
+
+@router.put("/sync/records/by-workspace/{workspace_id}")
+def put_workspace_record_by_workspace_endpoint(
+    request: Request, workspace_id: str, body: WorkspaceRecordModel
+) -> dict[str, object]:
+    """Insert or CAS-update one workspace record, addressed by its workspace id."""
+    with handle_endpoint_errors():
+        if body.agent_id != workspace_id:
+            raise HTTPException(status_code=400, detail="workspace id in the path and body must match")
+        return _put_workspace_record(request, body)
+
+
+# CLEANUP: retire the host-keyed PUT/DELETE routes below once no in-window
+# client release still calls them (clients newer than the workspace-keyed
+# routes use /sync/records/by-workspace/...).
+@router.put("/sync/records/{host_id}")
+def put_workspace_record_endpoint(request: Request, host_id: str, body: WorkspaceRecordModel) -> dict[str, object]:
+    """Insert or CAS-update one workspace record, addressed by its current host (compat shim)."""
+    with handle_endpoint_errors():
+        if body.host_id != host_id:
+            raise HTTPException(status_code=400, detail="host_id in the path and body must match")
+        return _put_workspace_record(request, body)
+
+
+def _refuse_hard_delete_while_leased(user: UserAuth, agent_id: str | None, host_id: str | None) -> None:
+    """Tombstone-first: a record whose workspace still holds a pool lease may not be hard-deleted.
+
+    Destroying the workspace is what releases the lease (and retires the
+    record); hard-deleting the record first would leave a lease no client
+    lists -- exactly the orphan the lease-vs-record sweep exists to catch.
+    """
+    with db.pooled_db_connection() as conn:
+        with conn.cursor() as cur:
+            is_leased = _has_lease_holding_pool_row(
+                cur, user_id_prefix=user.user_id_prefix, agent_id=agent_id, host_id=host_id
+            )
+    if is_leased:
+        raise WorkspaceRecordLeaseActiveError(agent_id or host_id or "")
+
+
+@router.delete("/sync/records/by-workspace/{workspace_id}")
+def delete_workspace_record_by_workspace_endpoint(request: Request, workspace_id: str) -> dict[str, str]:
+    """Remove one workspace record outright by workspace id (disassociation; idempotent).
+
+    Refused (409 ``lease_active``) while the workspace holds a pool lease.
     """
     with handle_endpoint_errors():
         user, user_id = _sync_caller(request)
-        if body.host_id != host_id:
-            raise HTTPException(status_code=400, detail="host_id in the path and body must match")
-        if body.state == WorkspaceRecordState.ACTIVE:
-            existing_records = get_sync_store().list_records(user_id)
-            existing_row = next((r for r in existing_records if r["host_id"] == host_id), None)
-            is_new_active = existing_row is None or existing_row["state"] != WorkspaceRecordState.ACTIVE.value
-            if is_new_active:
-                # Verified-only email: the backfill's paid-list check is
-                # authorized by domain ownership.
-                entitlements = entitlements_module.ensure_account_entitlements(
-                    user_id=user_id, user_id_prefix=user.user_id_prefix, email=user.verified_email or ""
-                )
-                active_count = sum(1 for r in existing_records if r["state"] == WorkspaceRecordState.ACTIVE.value)
-                if active_count >= entitlements.max_active_synced_workspaces:
-                    raise_quota_exceeded(
-                        "max_active_synced_workspaces",
-                        entitlements.max_active_synced_workspaces,
-                        active_count,
-                        "active synced workspaces",
-                    )
-        record = body.model_dump(mode="json")
-        record["encrypted_secrets"] = (
-            _decode_size_capped_base64("encrypted_secrets", body.encrypted_secrets, _MAX_ENCRYPTED_SECRETS_BYTES)
-            if body.encrypted_secrets is not None
-            else None
-        )
-        try:
-            stored = get_sync_store().put_record(user_id, record, body.model_fields_set)
-        except SyncRecordFormatTooNewError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "record_format_too_new",
-                    "message": (
-                        "This record was written by a newer client "
-                        f"(record_format {exc.stored_record.get('record_format')}); update the app to modify it."
-                    ),
-                    "stored": _record_wire_response(exc.stored_record),
-                },
-            ) from exc
-        except SyncRevisionConflictError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "revision conflict",
-                    "stored": _record_wire_response(exc.stored_record),
-                },
-            ) from exc
-        except SyncActiveAgentConflictError as exc:
-            raise HTTPException(status_code=409, detail={"message": str(exc)}) from exc
-        return _record_wire_response(stored)
+        _refuse_hard_delete_while_leased(user, agent_id=workspace_id, host_id=None)
+        get_sync_store().delete_record_by_workspace(user_id, workspace_id)
+        return {"status": "deleted"}
 
 
 @router.delete("/sync/records/{host_id}")
 def delete_workspace_record_endpoint(request: Request, host_id: str) -> dict[str, str]:
-    """Remove one workspace record outright (disassociation; idempotent)."""
+    """Remove one workspace record by its current host (compat shim; idempotent).
+
+    Refused (409 ``lease_active``) while the workspace holds a pool lease.
+    """
     with handle_endpoint_errors():
-        user_id = _sync_caller_user_id(request)
+        user, user_id = _sync_caller(request)
+        _refuse_hard_delete_while_leased(user, agent_id=None, host_id=host_id)
         get_sync_store().delete_record(user_id, host_id)
         return {"status": "deleted"}
 

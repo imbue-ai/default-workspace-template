@@ -1,13 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 
-// The launcher consults the alt-harness feature flag for its tile list. The
-// real implementation caches a meta-tag read, which a test cannot safely poke;
-// this keeps it a plain switch, off by default like the real flag.
-let otherHarnessesEnabled = false;
-let introductoryAgentsEnabled = false;
-vi.mock("../base-path", () => ({
-  areOtherHarnessesEnabled: () => otherHarnessesEnabled,
-  areIntroductoryAgentsEnabled: () => introductoryAgentsEnabled,
+// The New chat tile runs on whichever account the provider picker has selected,
+// so a mutable stand-in lets each case pose a different set of signed-in
+// providers (the real module is state fed by /api/accounts).
+const providerState: { accounts: { id: string; harness: string; label: string }[] } = { accounts: [] };
+vi.mock("../models/Providers", () => ({
+  getAccounts: () => providerState.accounts,
+  getSelectedAccount: () => providerState.accounts[0] ?? null,
+  selectAccount: () => undefined,
+  deleteAccount: () => Promise.resolve(),
+  renameAccount: () => Promise.resolve(),
+  openProviderChooser: () => undefined,
+}));
+
+// The launcher asks the machine's app list whether a "files" app backs its
+// file-viewer tile; a mutable stand-in lets each case pose a different machine
+// (AgentManager's real list is module state fed by the WebSocket).
+const appState: { apps: { name: string; url: string; label: string }[] } = { apps: [] };
+vi.mock("../models/AgentManager", () => ({
+  getApps: () => appState.apps,
 }));
 
 // Mithril captures `requestAnimationFrame` at import time so it can schedule
@@ -26,6 +37,7 @@ import {
   filterRowsByKind,
   formatRecency,
   kindsInRows,
+  openNewTiles,
   resetHiddenKinds,
   sortRowsByRecency,
   type LauncherRow,
@@ -45,8 +57,7 @@ const EMPTY_INVENTORY: MachineInventory = {
   chatAgents: [],
   terminals: [],
   browsers: [],
-  apps: [],
-  urlTabs: [],
+  appInstances: [],
 };
 
 describe("buildLauncherRows", () => {
@@ -57,7 +68,7 @@ describe("buildLauncherRows", () => {
         chatAgents: [{ name: "agent-1", label: "Build the Newsreader" }],
         terminals: [{ name: "build", label: "build" }],
         browsers: [{ name: "gazette", label: "Gazette (signed in)" }],
-        apps: [{ name: "newsreader", label: "Newsreader" }],
+        appInstances: [{ serviceName: "newsreader", instanceName: "newsreader-1", label: "Newsreader 1" }],
       },
       {},
     );
@@ -65,7 +76,7 @@ describe("buildLauncherRows", () => {
       ["chat:agent-1", "chat"],
       ["terminal:build", "terminal"],
       ["service:browser?session=gazette", "browser"],
-      ["service:newsreader", "app"],
+      ["service:newsreader?instance=newsreader-1", "app"],
     ]);
     expect(rows[0].label).toBe("Build the Newsreader");
   });
@@ -274,6 +285,26 @@ function buttonsOf(tree: unknown): VnodeLike[] {
   return tagsOf(tree, "button");
 }
 
+/** The tables' funnel buttons, in table order. Selected by their aria-expanded
+ *  rather than by index: the tiles and the provider picker also render buttons,
+ *  and how many depends on what the user has signed in. */
+function sectionFilterButtonsOf(tree: unknown): VnodeLike[] {
+  return buttonsOf(tree).filter((button) => button.attrs?.["aria-expanded"] !== undefined);
+}
+
+/** Just the "Open new" tiles, which share a class no other button carries.
+ *  `buttonsOf` also returns the tables' row buttons, which have no tile state
+ *  of their own to assert on. */
+function rowsOf(tree: unknown): VnodeLike[] {
+  return buttonsOf(tree).filter((button) => String(button.attrs?.className ?? "").includes("new-tab-launcher-row"));
+}
+
+function tilesOf(tree: unknown): VnodeLike[] {
+  // Mithril moves a `class` attr onto `className` during normalization, so that
+  // is where a rendered vnode's classes actually are.
+  return buttonsOf(tree).filter((button) => String(button.attrs?.className ?? "").includes("new-tab-launcher-tile"));
+}
+
 /** The open filter menu's checkboxes, one per kind that table holds. */
 function inputsOf(tree: unknown): VnodeLike[] {
   return tagsOf(tree, "input");
@@ -309,7 +340,7 @@ function render(overrides: Partial<NewTabLauncherAttrs> = {}): unknown {
 
 describe("NewTabLauncher", () => {
   it("offers the four Open new tiles, with the file viewer inert until an app backs it", () => {
-    const tiles = buttonsOf(render()).slice(0, 4);
+    const tiles = tilesOf(render());
     // Each tile renders its glyph markup and then its label.
     expect(tiles.map((tile) => texts(tile.children)[1])).toEqual(["Chat", "File viewer", "Browser", "Terminal"]);
     expect(tiles[1].attrs?.["aria-disabled"]).toBe("true");
@@ -317,38 +348,89 @@ describe("NewTabLauncher", () => {
     expect(tiles[0].attrs?.onclick).toBeTypeOf("function");
   });
 
-  it("offers the harness tiles only where the host enables the alt harnesses", () => {
-    // The real flag caches a meta-tag read; the mock above keeps it a plain
-    // switch so this test cannot leak an enabled flag into its neighbours.
-    otherHarnessesEnabled = true;
+  it("lets the file viewer act once a files app backs it", () => {
+    appState.apps = [{ name: "files", url: "http://files.test", label: "files-abc123" }];
     try {
-      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 3)).toEqual(["Chat", "Codex agent", "Pi agent"]);
+      const tiles = tilesOf(render());
+      expect(tiles[1].attrs?.["aria-disabled"]).toBeUndefined();
+      expect(tiles[1].attrs?.onclick).toBeTypeOf("function");
     } finally {
-      otherHarnessesEnabled = false;
+      appState.apps = [];
     }
   });
 
-  it("offers the introductory-chat tiles only where the host enables them", () => {
-    introductoryAgentsEnabled = true;
+  it("offers one chat tile, whatever providers are signed in", () => {
+    // The harness a chat runs on is the picker's job now, not a tile's, so the
+    // tile row does not grow with the accounts the user adds.
+    providerState.accounts = [
+      { id: "a", harness: "claude", label: "Anthropic (Claude Code)" },
+      { id: "b", harness: "antigravity", label: "Google (Antigravity CLI)" },
+    ];
     try {
-      const labels = buttonsOf(render()).map((tile) => texts(tile.children)[1]);
-      expect(labels.slice(0, 4)).toEqual([
-        "Chat",
-        "Introductory Claude chat",
-        "Introductory Codex chat",
-        "Introductory Pi chat",
-      ]);
+      const labels = tilesOf(render()).map((tile) => texts(tile.children)[1]);
+      expect(labels).toEqual(["Chat", "File viewer", "Browser", "Terminal"]);
     } finally {
-      introductoryAgentsEnabled = false;
+      providerState.accounts = [];
     }
   });
 
   it("starts a new object of the tile's kind", () => {
     const started: string[] = [];
-    const tiles = buttonsOf(render({ onOpenNew: (kind) => started.push(kind) }));
+    const tiles = tilesOf(render({ onOpenNew: (target) => started.push(target.kind) }));
     (tiles[3].attrs?.onclick as () => void)();
     expect(started).toEqual(["terminal"]);
+  });
+
+  it("hands the selected provider's account straight through", () => {
+    providerState.accounts = [{ id: "a", harness: "pi-coding", label: "Opencode Go (Pi)" }];
+    try {
+      const started: string[] = [];
+      const tiles = tilesOf(
+        render({ onOpenNew: (target) => started.push(target.kind === "chat" ? target.accountId : target.kind) }),
+      );
+      (tiles[0].attrs?.onclick as () => void)();
+      expect(started).toEqual(["a"]);
+    } finally {
+      providerState.accounts = [];
+    }
+  });
+
+  it("stands every tile down while this pane is starting something", () => {
+    // `mngr create` takes seconds. The launcher used to sit there untouched
+    // for all of it, so an impatient second click started a SECOND object.
+    const tiles = tilesOf(render({ isAwaitingCreate: true }));
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.attrs?.["aria-disabled"]).toBe("true");
+      expect(tile.attrs?.onclick).toBeUndefined();
+    }
+  });
+
+  it("says it is starting, so the click is visibly acknowledged", () => {
+    expect(texts(render({ isAwaitingCreate: true }))).toContain("Starting…");
+    expect(texts(render())).not.toContain("Starting…");
+  });
+
+  it("drops the file-viewer tooltip while starting, since every tile is down", () => {
+    // The tooltip explains why THAT one tile cannot act. Leaving it up while
+    // all of them are down would explain the wrong thing. It is attached
+    // through an `oncreate` hook (see hoverTooltipAttrs), so its absence is
+    // what says the tooltip is gone.
+    expect(tilesOf(render({ isAwaitingCreate: true })).some((tile) => tile.attrs?.oncreate !== undefined)).toBe(false);
+    // ...and it is still there when the launcher is idle.
+    expect(tilesOf(render()).some((tile) => tile.attrs?.oncreate !== undefined)).toBe(true);
+  });
+
+  it("gives every idle tile a tooltip", () => {
+    // Each tile says what it starts (the rail's copy for the same kinds), and
+    // the unbacked file viewer says why it cannot act instead. The tooltip is
+    // attached through an `oncreate` hook (see hoverTooltipAttrs), so its
+    // presence on every tile is what says each one carries a tooltip.
+    const tiles = tilesOf(render());
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.attrs?.oncreate).toBeDefined();
+    }
   });
 
   it("splits the machine into the two tables, most recent first", () => {
@@ -374,16 +456,16 @@ describe("NewTabLauncher", () => {
   it("opens a member without touching membership, and files a machine row in", () => {
     const opened: string[] = [];
     const filed: string[] = [];
-    // After the four tiles and the "In this project" funnel come that table's
-    // two rows, then the machine funnel and its single row.
-    const buttons = buttonsOf(
-      render({
-        onOpenMember: (each) => opened.push(each.ref),
-        onOpenFromMachine: (each) => filed.push(each.ref),
-      }),
-    );
-    (buttons[5].attrs?.onclick as () => void)();
-    (buttons[8].attrs?.onclick as () => void)();
+    // The row buttons, in render order: the "In this project" table's two, then
+    // the machine table's single one. Selected by class so the tiles, the
+    // provider picker and the two funnels cannot shift the indices.
+    const tree = render({
+      onOpenMember: (each) => opened.push(each.ref),
+      onOpenFromMachine: (each) => filed.push(each.ref),
+    });
+    const rows = rowsOf(tree);
+    (rows[0].attrs?.onclick as () => void)();
+    (rows[2].attrs?.onclick as () => void)();
     expect(opened).toEqual(["chat:a1"]);
     expect(filed).toEqual(["service:gtd"]);
   });
@@ -393,7 +475,7 @@ describe("NewTabLauncher", () => {
     const vnode = { attrs: launcherAttrs() } as Parameters<LauncherView>[0];
 
     // Open the "In this project" funnel, then uncheck its Chat box.
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     const checkbox = inputsOf(component.view(vnode))[0];
     expect(checkbox.attrs?.checked).toBe(true);
     (checkbox.attrs?.onchange as () => void)();
@@ -413,7 +495,7 @@ describe("NewTabLauncher", () => {
 
     // Open the "In this project" funnel. Its menu names kinds in the plural,
     // and its reset row is inert while nothing is hidden.
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     let tree = component.view(vnode);
     expect(texts(tree)).toContain("Chats");
     expect(resetOf(tree).attrs?.disabled).toBe(true);
@@ -434,9 +516,36 @@ describe("NewTabLauncher", () => {
     // Same table, but with rows the filter hid rather than none to begin with.
     const component = NewTabLauncher();
     const vnode = { attrs: launcherAttrs({ memberRows: [MACHINE_ROWS[0]] }) } as Parameters<LauncherView>[0];
-    (buttonsOf(component.view(vnode))[4].attrs?.onclick as () => void)();
+    (sectionFilterButtonsOf(component.view(vnode))[0].attrs?.onclick as () => void)();
     const checkbox = inputsOf(component.view(vnode))[0];
     (checkbox.attrs?.onchange as () => void)();
     expect(texts(component.view(vnode))).toContain("No tabs match this filter.");
+  });
+});
+
+describe("openNewTiles", () => {
+  const chatTarget = () => openNewTiles().find((tile) => tile.label === "Chat")?.target;
+
+  it("carries the selected account, and no harness", () => {
+    // The server derives the harness from the account, so a target that named one could
+    // only ever contradict the credential the chat will actually run on.
+    providerState.accounts = [{ id: "abc", harness: "pi-coding", label: "Opencode Go (Pi)" }];
+    try {
+      expect(chatTarget()).toEqual({ kind: "chat", accountId: "abc" });
+    } finally {
+      providerState.accounts = [];
+    }
+  });
+
+  it("carries no account when nothing is signed in, which means the workspace login", () => {
+    expect(chatTarget()).toEqual({ kind: "chat", accountId: "" });
+  });
+
+  it("gives the non-chat tiles no harness to send", () => {
+    // Their kinds are the launcher's own vocabulary and never reach mngr.
+    const kinds = openNewTiles()
+      .filter((tile) => tile.target.kind !== "chat")
+      .map((tile) => tile.target.kind);
+    expect(kinds).toEqual(["files", "browser", "terminal"]);
   });
 });

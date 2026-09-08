@@ -45,8 +45,8 @@ without inspecting the process tree:
 | never-kill infra (sshd, supervisord, earlyoom, tini, tmux) | (inherited) | protected (0) | nothing -- 0 is the default, plus earlyoom `--avoid` |
 | a built-in supervisord service | launch | its `SERVICE_BANDS` value | `system/services/oom_priority/bin/oom_tag_service.py <service>` (command prefix) |
 | a user-created supervisord service | launch | user service (above every built-in) | `system/services/oom_priority/bin/oom_tag_service.py user` (command prefix) |
-| an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/claude_oom_launch.py` |
-| an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/claude_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
+| an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
+| an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
 | the browser coordinator | launch | its `SERVICE_BANDS` value (70, the most expendable built-in service) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
 | Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
 
@@ -70,10 +70,10 @@ process -- plus any children it already spawned, found via a
 `/proc/<pid>/task/*/children` walk -- up to that band. It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
-(earlyoom, the listener itself, and the one-shots env-converge and eval-worker)
-are never demoted. Because this path *raises*, a built-in missing from either
-band map is not merely left alone but actively pushed to `USER_SERVICE`, above
-every other built-in -- so
+(earlyoom, the listener itself, and the one-shots env-converge and
+vm-exec-register) are never demoted. Because this path *raises*, a built-in
+missing from either band map is not merely left alone but actively pushed to
+`USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
 requires every program in `supervisord.conf` to name its band outright, unless
 it declares itself user-created by passing the `user` key (for those the
@@ -83,7 +83,7 @@ the RUNNING event fires only after `startsecs` (~1s), leaving a short window
 where an unwrapped service runs untagged.
 
 The agent's main process tags *itself*: the `claude` and `worker` agent types'
-`command` (in `.mngr/settings.toml`) runs `system/services/oom_priority/bin/claude_oom_launch.py`, which
+`command` (in `.mngr/settings.toml`) runs `system/services/oom_priority/bin/agent_oom_launch.py`, which
 sets its own `oom_score_adj` to the agent band, records its pid, then `exec`s
 claude in place. (Both the `claude` and `worker` types set the command. The
 `worker` type has to repeat it rather than inherit it from `claude` because of an
@@ -213,7 +213,7 @@ a protected one.
   *own* process was shed. Read by the revival-notice hook
   (`system/services/oom_priority/bin/claude_shed_notice_hook.py`) and the launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
-  by the launch wrapper (`system/services/oom_priority/bin/claude_oom_launch.py`), read by the kill hook.
+  by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
 
 Both live under `runtime/` so they ride the runtime-backup branch. Their absolute
 location is pinned via `OOM_PRIORITY_RUNTIME_DIR` (see `.mngr/settings.toml`) so

@@ -27,19 +27,23 @@ second gateway URL or a different agent skill.
      the user has not yet authenticated to the service.
    * 403 with `Error: Request not permitted by the user.`: the user has
      authenticated but has not allowed this kind of request.
-3. **Agent writes a request event.** On any of the blocked outcomes, the
-   agent appends a `LatchkeyPredefinedPermissionRequestEvent` to
-   `$MNGR_AGENT_STATE_DIR/events/requests/events.jsonl` with the latchkey
-   service name and a one-paragraph rationale, then ends its turn and goes
-   idle.
-4. **The user opens the request.** The desktop client consumes the
-   gateway's pending-request stream, but a pending request never opens
-   anything by itself: it waits behind the chat card's "Review & respond"
-   relay and the "Waiting on you" rows in a machine's Permissions tab.
+3. **Agent files a request with the gateway.** On any of the blocked
+   outcomes, the agent POSTs to the gateway's `/permission-requests`
+   extension with the request type, its type-specific payload, and a
+   one-paragraph rationale, then ends its turn and goes idle. The gateway
+   persists the request in its own queue.
+4. **The user opens the request.** The gateway's own persisted queue is
+   the pending set: the desktop client reads it on demand (minus requests
+   with a recorded verdict) and follows the gateway's stream only as a
+   change signal. A pending request never opens anything by itself: it
+   waits behind the chat card's "Review & respond" relay and the "Waiting
+   on you" rows in a machine's Permissions tab.
    Either one opens the permission popup as a **centered dialog** over the
-   current window, on a dim backdrop. There is no inbox drawer, no request
-   list page, and no titlebar Requests button: the popup is the only review
-   surface, and those two are the only ways in. It is not a route -- it
+   current window, on a dim backdrop. The popup is the only review
+   surface; the other ways in all lead back to it: the titlebar bell's
+   notification feed (whose pending rows carry the request), its toast
+   cards, and OS-notification clicks each jump to the asking workspace and
+   open the same popup there. It is not a route -- it
    stacks over whatever is on screen, including the workspace-options panel
    -- so dismissing it via Approve/Deny, the close button, a backdrop
    click, or Escape returns the user to their work with nothing changed
@@ -120,22 +124,31 @@ second gateway URL or a different agent skill.
       `~/.minds/events/requests/events.jsonl`. (A `FAILED` approval writes
       no response event and leaves the request pending; see step 6.2.)
    6. On a `GRANTED` outcome, sends the agent a plain-English `mngr message`
-      describing the decision; the agent wakes up and decides whether to
-      retry. A `FAILED` or manual-credentials outcome leaves the request
-      pending and notifies only the user (in the dialog), not the agent.
+      describing the decision (with the request's id embedded, so the chat
+      harness can pair the notice with the right card); the agent wakes up
+      and decides whether to retry. Delivery is retried with backoff for as
+      long as the app runs, so a nudge for a stopped workspace lands when
+      that workspace next comes up; the in-chat card does not depend on it
+      (see step 8). A `FAILED` or manual-credentials outcome leaves the
+      request pending and notifies only the user (in the dialog), not the
+      agent.
 7. **User denies.** The desktop client appends a `DENIED` response event
-   and sends the agent a plain-English denial message. `latchkey_permissions.json`
-   is not touched.
+   and sends the agent a plain-English denial message (same id embedding
+   and retrying as the grant nudge). `latchkey_permissions.json` is not
+   touched.
 8. **The asking workspace hears the verdict at once.** Either resolution
-   also sends the workspace a `minds:permission-request-resolved` embed
-   contract message (see `docs/embed-contract.md`), so its in-chat card
-   flips to Approved/Denied without waiting for the agent's own resolution
-   message to travel back through the transcript. It goes only to the
-   workspace that asked, and only when that workspace is the one on screen
-   -- the chrome mounts one workspace frame at a time, so no other
-   workspace has a live page to update. The transcript stays authoritative:
-   the workspace shows the shell-reported verdict only until the classified
-   one lands.
+   also sends the workspace a one-entry `minds:permission-resolutions`
+   embed contract message (see `docs/embed-contract.md`), so its in-chat
+   card flips to Approved/Denied without waiting for the agent's own
+   resolution message to travel back through the transcript. It goes only
+   to the workspace that asked, and only when that workspace is the one on
+   screen -- the chrome mounts one workspace frame at a time, so no other
+   workspace has a live page to update. A workspace page built AFTER the
+   verdict (a reload, or returning to a workspace resolved while another
+   was displayed) is covered by the snapshot: whenever the chrome (re)loads
+   a frame it pushes that workspace's recent verdicts, read from the
+   response event log via `/ui/api/inbox/resolutions`. Once the
+   transcript's own classified resolution lands, it takes over.
 
 ## Manual credential entry
 
@@ -290,7 +303,10 @@ whatever app state a later route hangs off that prefix.
 Existing hosts pick a newly-added baseline grant up through
 `reconcile_baseline_permissions`, which `register_agent_for_host` applies
 whenever it registers a discovered agent -- a baseline addition alone
-would otherwise only reach newly-created workspaces. Reconciliation only
+would otherwise only reach newly-created workspaces. A remote workspace's
+gateway checks these grants against its *own* copy of the file, so a
+registration that changes the file is also pushed to the workspace's
+machine (see "Grants follow the same ownership" below). Reconciliation only
 *adds permissions to the `latchkey-self` rule*; it never introduces a
 rule, so a baseline addition shaped as a new rule reaches newly-created
 host files only. Auto-registration de-dupes an agent it has already
@@ -338,8 +354,10 @@ mechanism still sees a deny-all gateway -- the implicit `allow all`
 that latchkey applies when the file is missing must never be observable
 by an agent.
 
-`LATCHKEY_DIRECTORY` -- where credentials live -- stays shared across all
-agents on the same machine.
+`LATCHKEY_DIRECTORY` -- where credentials live -- is shared across all agents
+on the same machine, and *only* those: the user's computer keeps one store for
+its local workspaces, and each remote workspace's VPS has one of its own (see
+[Per-machine credentials](#per-machine-credentials) below).
 
 ## Cross-workspace management API permissions
 
@@ -457,20 +475,22 @@ three latchkey features:
   then runs for it. `claude.ai` uses the `cookie-capture` flow: latchkey
   opens the claude.ai login page and stores the `sessionKey` session cookie
   as the credentials.
-* **Self-shipped detent schemas, referenced via `include`.** A custom scope
-  is not one of detent's builtin schemas, so each additional service ships
-  its own scope schema (matching the service domain) plus a permission
-  schema. Rather than inlining those schemas into every host's
-  `latchkey_permissions.json`, minds materializes them **once** into a
-  shared `minds_shared_schemas.json` file and has every per-host file
-  reference it through detent's [`include`](https://github.com/imbue-ai/detent)
-  directive. Granting an additional-service scope is then a plain rule
-  write (no schema injection); detent resolves the scope's schema from the
-  shared include. The include is a bare relative name, which detent resolves
-  relative to the referencing file's directory -- so the same host file
-  works both on the desktop (where the shared file lives in the gateway's
-  opaque-handle directory) and on a VPS (where it is shipped next to the
-  host's `~/.latchkey/permissions.json`).
+* **Self-shipped detent schemas, inlined into every permissions file.** A
+  custom scope is not one of detent's builtin schemas, so each additional
+  service ships its own scope schema (matching the service domain) plus a
+  permission schema. Those schemas are written into every host's
+  `latchkey_permissions.json` -- new files get them from the agent baseline,
+  and existing files pick up changes the next time an agent is registered on
+  the host. Granting an additional-service scope is then a plain rule write
+  against a file that already defines the scope. Keeping them in one shared
+  file that host files pull in through detent's
+  [`include`](https://github.com/imbue-ai/detent) directive does not work here:
+  detent resolves a bare include relative to the referencing file's own
+  directory, and a host's permissions file is read through several of them
+  (its canonical `hosts/<host_id>/` path, the opaque handle a desktop
+  workspace's JWT names, and `~/.latchkey/permissions.json` on a VPS), so the
+  shared file would have to be copied next to each -- and an include that fails
+  to resolve fails the whole permission check for that host.
 
 Additional services are merged into the same catalog the dialog reads, so
 they appear and are granted exactly like builtin ones. The seed entry is
@@ -481,53 +501,114 @@ authenticated by hand instead, with `latchkey auth set <name> -H "..."`;
 either way, granting the permission and supplying credentials are
 independent steps.
 
-## Connectors and accounts (Settings page)
+## Per-machine credentials
 
-The app-level Settings page's **Connectors** tab lists, per connected
-service, the accounts the user has signed in to (latchkey 3.0.0 stores
-credentials per account). The account list is read from
-`latchkey services info <service> --offline` -- the `credentials` object,
-keyed by account name (the unnamed default account keyed by `""`) --
-which also drives the aggregate credential status the grant flow uses.
+Credentials belong to the machine that uses them. The user's computer keeps one
+latchkey store, shared by every local workspace; each remote workspace's VPS
+keeps its own, and is the only holder of its own refresh tokens -- which is what
+lets it renew them while the user's computer is offline, without two machines
+racing to rotate the same one.
 
-Two per-service actions manage accounts:
+Changes travel as operations, made at the moment the user asks for them:
+connecting a service signs in here (the browser and the shared session are
+here) and then hands the credential to the machine; disconnecting clears it on
+the machine, because that is where it is.
 
-* **+ Add account** runs the same browser sign-in as approving a
-  permission request whose service has no credentials yet
-  (`Latchkey.add_account`), but with `LATCHKEY_EPHEMERAL_BROWSER=1` set so
-  the browser starts from a clean session and the user lands on a fresh
-  sign-in screen -- letting them add a genuinely new account instead of
-  being silently re-authenticated as an already-signed-in one. For a Minds
-  Google OAuth service, if signing in with the official Minds client does
-  not succeed, it always falls back to a fresh `auth browser-prepare`
-  self-setup step and retries.
+Every change is carried **synchronously**, by the app itself: it loads mngr's
+provider set in-process, opens the workspace's outer host (its VPS) and hands
+the machine the change in a single remote command, blocking the click that
+asked for it until the machine has taken it (`desktop_client/latchkey/`:
+`machine_access.py` opens the door, `machine_operations.py` is what goes
+through it). Nothing is queued and nothing is applied later, so what the UI
+shows afterwards is what the machine holds -- and a change the machine will
+not take is reported where the user clicked, immediately, rather than as a
+notification about a click they have long since forgotten.
 
-  Because the action *is* that sign-in, it is **disabled** for a service
-  that has no browser flow (`is_browser_sign_in_supported`, resolved per
-  listed service with one `latchkey services info <service> --offline`
-  call -- all of them probed on a thread each, so the page's wall time
-  does not grow with the number of connectors), with the reason on hover,
-  instead of failing with an error after the click. Such a service is connected from a permission dialog, which
-  asks for its credentials directly (see
-  [Manual credential entry](#manual-credential-entry)).
-* **Disconnect** clears one account's stored credentials
-  (`latchkey auth clear <service> --account <account>`). Disconnecting the
-  *last* account for a service also runs the per-service "revoke all"
-  cleanup in the background -- stripping that service's grants from every
-  workspace host file, since they would otherwise have no credentials
-  behind them.
+The provider set is loaded once, lazily, and kept for the life of the app;
+loading it imports every installed provider plugin, so it is started on a
+background thread at startup and the first Permissions tab open normally finds
+it done.
 
-Below the accounts, the panel shows the existing per-workspace grants
-("Allowed on all accounts:"), which are unchanged.
+The desktop keeps each remote machine's credentials in that host's *machine
+store* (`~/.minds/latchkey/mngr_latchkey/hosts/<host_id>/`), a
+`LATCHKEY_DIRECTORY` of its own that shares this computer's config, browser
+session and encryption key. Everything the app does on a workspace's behalf --
+listing its connections, signing in, entering credentials, signing out -- goes
+through the store belonging to *that machine*
+(`desktop_client/latchkey/machine_latchkey.py` decides which one that is), so a
+sign-in for one machine never turns up in another's connectors. What ships to a
+VPS is re-encrypted with that machine's own key on the way out.
 
-This page is app-wide. To edit what one machine's agents may reach, see
-[Permissions tab (per machine)](#permissions-tab-per-machine) below.
+Two consequences the UI makes visible:
+
+* **Connecting a service is per machine.** A service connected on this computer
+  is not connected for a remote workspace: its Permissions tab offers it under
+  Add connection, and connecting it there runs the sign-in for that machine.
+  The browser still opens here (there is nothing to open on a VPS) and reuses
+  this computer's session, so it is usually a consent click rather than a full
+  login.
+* **Sign out reaches as far as the credential is shared.** Disconnecting an
+  account from a machine's Permissions tab clears the credential of the store
+  *that machine* reads and strips *that machine's* now-inert grants. A remote
+  machine holds its own, so the same account keeps working everywhere else; this
+  computer's store is shared by every local machine, so signing out from one of
+  those signs out of all of them. The tab says which of the two it is before it
+  asks to confirm.
+
+A workspace whose gateway has not been provisioned yet has no machine of its own
+to speak of, so it is answered from this computer's store until it has one.
+
+Grants follow the same ownership, and travel the same way. A machine's
+`~/.latchkey/permissions.json` is the policy it enforces, and every permission
+edit made here is pushed to the machine as a full snapshot of the host's
+canonical file. The permission dialog's Approve carries the credential and the
+snapshot as **one change** (applied credential-first on the machine, failed
+together), so neither half of a grant can land without the other; a toggle, a
+revoke, a sign-out cleanup, and the grants that go through the gateway's own
+approve endpoint (cross-workspace access, file sharing, accounts) each push a
+plain snapshot. A machine that will not take one fails the action that asked
+for it: the toggle stays where it was with the reason beside it, and the
+dialog's Approve reports FAILED and leaves its request pending for a retry --
+because it is not a grant until the gateway the agent talks to can act on it.
+
+**Reading is symmetrical.** Opening (or refreshing) a remote workspace's
+Permissions tab reads that machine first -- its credential store, re-encrypted
+for this computer, and the policy its gateway is enforcing, both in one remote
+command -- so the pane shows what its agents actually have rather than what
+this computer last wrote toward it. A machine that cannot be reached shows as
+"permissions can't be loaded", never as a stale answer presented as current.
+
+The two halves reconcile differently on that read, because they are owned
+differently. The **credentials are the machine's**: only it can rotate the
+tokens it holds, so what it reports is adopted, and this computer's copy goes
+back to matching it (which is also how a second computer sees an account the
+first one connected). The **policy is the machine's too**, for a different
+reason: the user may have several computers, and any of them can push a grant,
+so a computer that treated its own copy as the truth would revert what another
+one granted every time the tab was opened. The machine's answer is therefore
+adopted here as well, and the copy here is a cache -- which is also what walks
+back an edit whose push failed, with no separate error reconcile. That is only
+safe because the copy here is never edited *without* being pushed in the same
+breath: the UI's edits while the user waits, and the discovery-driven ones (an
+agent registration, the baseline reconciliation that rides along with it) from
+a background thread, coalesced per host, since the resolver callback they run
+in must not block. An edit that could not be pushed is discarded by the next
+read rather than carried over later, so a writer that cannot push has to say
+so.
+
+The one write that read makes *toward* the machine is the seed: a machine with
+no policy at all permits everything, so it is handed this computer's copy
+instead of being left open. Provisioning seeds it too, before any of this: the
+pass that stands the gateway up writes the host's policy (or the deny-all
+default) alongside it rather than waiting for someone to open the tab.
 
 ## Permissions tab (per machine)
 
-The workspace options panel's **Permissions** tab is the other half of the
-story above: Settings owns accounts across the app, this owns what agents
-in *one* machine may reach. It renders every permission that machine's
+The workspace options panel's **Permissions** tab is where connectors and
+grants live, and the only place they live: each machine holds its own
+credentials, so there is nothing an app-level page could say about them that
+would be true of every machine at once. It owns both halves for one machine --
+which accounts it is connected to, and what its agents may reach with them. It renders every permission that machine's
 host file can carry as a toggle, so the file is editable without going
 back through a request.
 
@@ -542,7 +623,11 @@ have pending requests; each row opens the review popup on that request.
 Three properties are worth knowing:
 
 * **A flip posts one permission, and the server answers with the whole
-  view.** The client sends only the permission it flipped and its new
+  view -- once the machine has taken it.** Every write blocks on the
+  workspace's own machine, so the pane locks while one is in flight: the
+  control that was clicked shows a spinner and every other action grays
+  out (two writes at once would fight over the view each of them answers
+  with). The client sends only the permission it flipped and its new
   state; the desktop client reads the host's permissions file, recomputes
   the affected rule's *complete* permission set, and writes that through
   the gateway's `permissions` extension -- never a diff. Recomputing
@@ -563,14 +648,21 @@ Three properties are worth knowing:
   sign-in that cannot happen. Either way the new account arrives with
   nothing granted.
 
-* **Revoke all and Sign out are different in scope, deliberately.**
-  *Revoke all*, in a connection's heading, drops that account's grants
-  **on this machine only**; the account stays signed in and its grants on
-  other machines are untouched. *Sign out*, at the foot of the panel,
-  clears the stored credential itself -- so the account is gone from
-  **every** machine, and its grants, which would otherwise have nothing
-  behind them, are stripped from every active workspace's host file. It
-  asks first, naming the service and account. An account with leftover
+* **Revoke all and Sign out are different, but both are this machine's.**
+  *Revoke all*, in a connection's heading, drops that account's grants and
+  leaves the account connected -- so re-granting later is a click rather than a
+  fresh sign-in. *Sign out*, at the foot of the panel, clears the stored
+  credential itself, so this machine's grants for it -- which would otherwise
+  have nothing behind them -- are stripped too. Revoke all never reaches past
+  this machine; sign out reaches as far as that credential is shared (this
+  machine alone when it holds its own, every machine on this computer when it
+  reads the desktop's store), and its copy says which. Sign out asks first,
+  naming the service and account.
+
+  Nothing else removes a credential from a machine. A machine only ever holds
+  what was connected for it, so an account with no grants is not something that
+  leaked there and needs cleaning up -- it is one the user connected and has not
+  signed out of. An account with leftover
   grants but no stored credential offers no Sign out -- there is nothing
   left to clear -- and its toggles can be turned off but not on, since
   turning one on would grant something with no credentials behind it.

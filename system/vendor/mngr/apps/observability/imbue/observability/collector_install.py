@@ -8,8 +8,8 @@ sender instead of dropping).
 
 The install script is deliberately self-contained (the rendered config rides
 inside it as a heredoc) so every install path is the same single artifact: the
-box prep flow passes it via ``--extra-prep-script``, the relay flow and the
-instance deploy run it over SSH.
+box prep flow (``minds-admin server prep`` / ``setup``) renders and appends it
+in-process, the relay flow and the instance deploy run it over SSH.
 
 The collector config is YAML because the OpenTelemetry Collector requires
 YAML -- this is a third-party tool's mandated format (like cloud-init's), not
@@ -190,9 +190,10 @@ def render_collector_install_script(config: CollectorInstallConfig) -> str:
     """The idempotent root install script: pinned otelcol-contrib .deb, embedded config, service restart.
 
     Self-contained on purpose: the rendered config rides inside as a quoted
-    heredoc so box prep (``--extra-prep-script``), relay installs, and the
-    instance deploy all run the exact same artifact. The config embeds the
-    ingest credential, so it is installed owner-only for the service user.
+    heredoc so box prep (rendered in-process by ``minds-admin server prep`` /
+    ``setup``), relay installs, and the instance deploy all run the exact same
+    artifact. The config embeds the ingest credential, so it is installed
+    owner-only for the service user.
     """
     amd64_sha256 = _OTELCOL_DEB_SHA256_BY_GOARCH["amd64"]
     arm64_sha256 = _OTELCOL_DEB_SHA256_BY_GOARCH["arm64"]

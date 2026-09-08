@@ -1,6 +1,5 @@
 """Tests for the create form's "enable web access" post-create hook."""
 
-import base64
 from pathlib import Path
 
 import pytest
@@ -20,6 +19,7 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sharing_handler import SharingError
 from imbue.minds.desktop_client.sharing_handler import enable_web_access_for_workspace
+from imbue.minds.desktop_client.testing import read_injected_share_env_text
 from imbue.minds.desktop_client.workspace_create import WebAccessEnabler
 from imbue.minds.primitives import ServiceName
 from imbue.minds.utils.testing import RecordingMngrCaller
@@ -67,6 +67,7 @@ class _RecordingCreateShareCli(FakeImbueCloudCli):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
+        workspace_id: str | None = None,
     ) -> ShareCliInfo:
         self.create_share_calls.append((account, host_id, entry_label))
         raise ImbueCloudCliError("recorded; stopping the bring-up here")
@@ -163,23 +164,6 @@ def test_enable_web_access_local_rows_record_the_shell_label(tmp_path: Path) -> 
     assert cli.create_share_calls == [("owner@example.com", _HOST_ID, "system_interface-abc123")]
 
 
-def _injected_share_env_text(cli: FakeImbueCloudCli) -> str:
-    """Decode the share.env body the (recorded) ``mngr exec`` write shipped into the agent."""
-    caller = cli.mngr_caller
-    assert isinstance(caller, RecordingMngrCaller)
-    for argv in caller.calls:
-        command = argv[-1]
-        if "data/.secrets/share.env" not in command or "printf '%s'" not in command:
-            continue
-        # The combined write carries one clause per file; the share.env clause
-        # is the one whose payload lands in $tmp_env.
-        for clause in command.split(" && "):
-            if 'base64 -d > "$tmp_env"' in clause:
-                encoded = clause.split("printf '%s' ", 1)[1].split(" | base64 -d", 1)[0].strip()
-                return base64.b64decode(encoded).decode("utf-8")
-    raise AssertionError("no share.env write was recorded")
-
-
 def test_enable_web_access_local_row_resolves_urls_without_an_app_context(tmp_path: Path) -> None:
     # Regression: the post-create enabler runs in a worker thread with no Flask
     # app context, so the connector/broker URLs must come from the threaded
@@ -206,7 +190,7 @@ def test_enable_web_access_local_row_resolves_urls_without_an_app_context(tmp_pa
 
     # The share.env actually reached the agent, carrying the connector URL
     # from the threaded config (proving the URL resolution ran off-context).
-    share_env_text = _injected_share_env_text(cli)
+    share_env_text = read_injected_share_env_text(cli)
     connector_url = str(FAKE_CONNECTOR_URL).rstrip("/")
     assert f"SHARE_CONNECTOR_URL={connector_url}" in share_env_text
     assert f"SHARE_CHROME_ORIGIN={connector_url}" in share_env_text
@@ -252,7 +236,7 @@ def test_web_access_enabler_enables_sharing_for_cloud_rows(tmp_path: Path) -> No
     enabler(_AGENT_ID, HostId(_HOST_ID))
 
     assert cli.shares_by_account.get("owner@example.com", {}).get(_HOST_ID) == "active"
-    share_env_text = _injected_share_env_text(cli)
+    share_env_text = read_injected_share_env_text(cli)
     connector_url = str(FAKE_CONNECTOR_URL).rstrip("/")
     assert f"SHARE_CONNECTOR_URL={connector_url}" in share_env_text
 

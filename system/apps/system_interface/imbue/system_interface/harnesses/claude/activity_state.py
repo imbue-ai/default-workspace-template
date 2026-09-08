@@ -28,8 +28,8 @@ def derive(
 
     ``is_agent_running`` reflects the mngr lifecycle (RUNNING / RUNNING_UNKNOWN_AGENT_TYPE);
     a non-running agent is always IDLE, which prevents a STOPPED agent from appearing
-    as "Thinking..." on stale transcript data. ``tail_event_type`` is the cached
-    :func:`activity_state.last_event_type`; ``tail_event_at`` / ``process_started_at``
+    as "Thinking..." on stale transcript data. ``tail_event_type`` is the tracker's folded
+    tail event type (non-turn tail events skipped); ``tail_event_at`` / ``process_started_at``
     feed :func:`activity_state.is_transcript_tail_stale` to drop a turn abandoned by a
     prior process (a mid-turn restart).
 

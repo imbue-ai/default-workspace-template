@@ -1,0 +1,1 @@
+The root uv.lock and the public mirror's overlay lock (`mirror/overlay/uv.lock`) pick up `watchdog` as a new dependency of `imbue-mngr` (directory-change notifications so mngr's follow-mode event tails sleep instead of polling; see the mngr changelog entry for this branch).

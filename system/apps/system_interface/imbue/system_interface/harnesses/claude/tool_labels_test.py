@@ -1,5 +1,6 @@
 import pytest
 
+from imbue.system_interface.harnesses.claude.tool_labels import shell_command
 from imbue.system_interface.harnesses.claude.tool_labels import tool_labels
 
 
@@ -76,3 +77,9 @@ def test_mcp_server_name_may_itself_contain_the_separator() -> None:
     """Split on the LAST separator, so a compound server name does not eat the tool."""
     _, caption_label = tool_labels("mcp__plugin_playwright_playwright__browser_click", "{}")
     assert caption_label == "Running browser click"
+
+
+def test_shell_command_reads_claudes_command_key_and_ignores_other_tools() -> None:
+    assert shell_command("Bash", '{"command":"ls -la"}') == "ls -la"
+    assert shell_command("Read", '{"file_path":"/x"}') is None
+    assert shell_command("Bash", '{"command":123}') is None

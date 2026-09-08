@@ -1,7 +1,7 @@
 """``minds_deployment`` test: auto-rollback on a broken connector ``/health/liveness``.
 
 Drives the v1 -> broken-v2 sequence and asserts the existing
-``minds env deploy`` auto-rollback path restores v1 when
+``minds-admin env deploy`` auto-rollback path restores v1 when
 ``await_apps_healthy`` fails. Does *not* deploy a clean v3 -- the
 "redeploy advances version" contract is covered separately by
 ``test_deploy_new_version``.
@@ -13,7 +13,7 @@ it into the deployed connector's Modal Secret bundle. The deployed
 container then 500s on every ``/health/liveness`` request, which
 fails ``await_apps_healthy``, which raises ``HealthCheckFailedError``
 out of ``deploy_env``, which the CLI catches and chains into
-``minds env recover`` via ``_exec_into_recover``. Recover walks its
+``minds-admin env recover`` via ``_exec_into_recover``. Recover walks its
 reversal steps and ``modal app rollback``s both apps to their captured
 pre-deploy versions.
 
@@ -59,7 +59,7 @@ def test_deploy_auto_rollback_on_broken_healthcheck(ephemeral_env: EphemeralEnvH
 
     Flow:
     1. Capture v1's ``deploy_id`` via ``GET <connector>/version``.
-    2. Run ``minds env deploy`` against the same env with
+    2. Run ``minds-admin env deploy`` against the same env with
        ``MINDS_INJECT_BROKEN_HEALTHCHECK=1`` in the subprocess env.
        ``await_apps_healthy`` fails -> auto-recover fires -> recover
        rolls Modal apps back -> subprocess exits non-zero (the deploy
@@ -84,7 +84,7 @@ def test_deploy_auto_rollback_on_broken_healthcheck(ephemeral_env: EphemeralEnvH
     sub_env = build_minds_env_subprocess_env(ephemeral_env.name)
     sub_env["MINDS_INJECT_BROKEN_HEALTHCHECK"] = "1"
     completed = subprocess.run(
-        ["uv", "run", "minds", "env", "deploy"],
+        ["uv", "run", "minds-admin", "env", "deploy"],
         env=sub_env,
         cwd=str(_REPO_ROOT),
         capture_output=True,
@@ -94,7 +94,7 @@ def test_deploy_auto_rollback_on_broken_healthcheck(ephemeral_env: EphemeralEnvH
     )
     logger.info("=== v2 deploy stdout ({}) ===\n{}", ephemeral_env.name, completed.stdout)
     logger.info("=== v2 deploy stderr ({}) ===\n{}", ephemeral_env.name, completed.stderr)
-    # On a health-check failure the CLI auto-chains into ``minds env recover``
+    # On a health-check failure the CLI auto-chains into ``minds-admin env recover``
     # and then exits NON-ZERO to reflect that the deploy failed -- even though
     # the rollback itself succeeded ("Exiting non-zero to reflect the deploy
     # failure (the rollback itself succeeded)"). So a broken-healthcheck deploy

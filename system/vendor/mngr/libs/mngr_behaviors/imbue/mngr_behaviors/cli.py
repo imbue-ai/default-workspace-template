@@ -140,9 +140,10 @@ def behaviors_validate(corpus_root: Path) -> None:
     only (no '# language:' headers, no en-dialect synonym spellings outside the
     language's construct list); kebab-case folder names, file basenames, and
     tags; at least one tag on every unit (the first is its identity); unique
-    coordinate claims (unit identities plus every Feature/Examples tag);
-    reserved 'overview'/'invariants' filenames; and no dangling .md sidecars
-    or foreign files.
+    coordinate claims (unit identities plus every Feature/Examples tag); a
+    README.md carrying the mandated incipit in every folder; the reserved
+    'README'/'invariants' filenames; and no dangling .md sidecars or foreign
+    files.
     """
     scan = scan_corpus(_require_corpus_root(corpus_root))
     for violation in scan.violations:

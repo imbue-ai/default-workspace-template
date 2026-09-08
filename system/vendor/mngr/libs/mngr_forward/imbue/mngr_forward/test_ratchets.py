@@ -173,7 +173,19 @@ def test_prevent_async_await() -> None:
     # with the client's disconnect, which is what puts the disconnect at the
     # rendezvous first and so leaves the handoff free to finish before the
     # ``asyncio.wait`` waiter resumes -- the ordering the tie branch is about.
-    rc.check_async_await(_DIR, snapshot(105))
+    # 109: the buffered path reads the response headers and the body in two
+    # steps instead of one ``request()``, which is what tells a backend that
+    # never answered from one that answered and then dropped the body. Splitting
+    # them means awaiting the send, the read, and the close separately, and they
+    # stay in one coroutine so the caller still races a single task against the
+    # client disconnect.
+    # 114: witnessing that event streams reach the client incrementally. The
+    # claim is about arrival *ordering*, so the test has to interleave with the
+    # streaming producer; TestClient's synchronous API only returns once the
+    # response is complete, which is exactly the information the unit is about.
+    # Observing it means driving the real handler and its async send channel
+    # against an async stub backend.
+    rc.check_async_await(_DIR, snapshot(114))
 
 
 # --- Hardcoded paths ---
@@ -198,7 +210,10 @@ def test_prevent_num_prefix() -> None:
 
 
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(29))
+    # Most of these are the inline ``noqa: SLF001`` suppressions on
+    # stream_manager_test.py's private-access test hooks; ruff requires the
+    # suppression on the flagged line, so each hook costs one.
+    rc.check_trailing_comments(_DIR, snapshot(30))
 
 
 def test_prevent_init_docstrings() -> None:

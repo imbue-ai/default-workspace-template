@@ -2,6 +2,7 @@ from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Final
 from typing import NoReturn
 from typing import assert_never
 
@@ -18,9 +19,12 @@ from imbue.mngr.api.discover import discover_hosts_and_agents
 from imbue.mngr.api.providers import get_local_host
 from imbue.mngr.api.providers import get_provider_instance
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import AgentNotFoundOnHostError
 from imbue.mngr.errors import AgentStateInconsistencyError
+from imbue.mngr.errors import LockNotHeldError
+from imbue.mngr.errors import NoMatchingHostsError
 from imbue.mngr.errors import ProviderUnavailableError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.errors import parse_provider_unavailable_reason
@@ -46,6 +50,13 @@ from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
+
+# Bound on waiting for the host lock before a start: long enough to outlast any healthy
+# holder (a ``create`` on the same host -- git transfer plus provisioning -- is the long
+# pole and normally finishes within a few minutes), so a wait this long means the holder
+# is wedged, and a loud failure beats queueing behind it forever. Boot-time callers are
+# re-run by their systemd unit and interactive callers can simply retry.
+_START_HOST_LOCK_TIMEOUT_SECONDS: Final[float] = 600.0
 
 
 @pure
@@ -118,11 +129,15 @@ def filter_one_host(
 ) -> DiscoveredHost:
     """Find the single host matching a :class:`HostAddress` filter.
 
-    Raises :class:`UserInputError` when no host matches or when more than one
-    matches.
+    Raises :class:`NoMatchingHostsError` when a host *id* matches nothing (an id
+    is machine-generated, so a miss means the host is gone),
+    :class:`UserInputError` when a user-typed host name matches nothing, and
+    :class:`UserInputError` when more than one host matches.
     """
     matches = filter_all_hosts(address, all_hosts)
     if len(matches) == 0:
+        if isinstance(address.host, HostId):
+            raise NoMatchingHostsError(f"Could not find host with ID: {address}")
         raise UserInputError(f"Could not find host with ID or name: {address}")
     if len(matches) > 1:
         raise UserInputError(f"Multiple hosts found with name: {address}")
@@ -155,7 +170,7 @@ def filter_one_agent(
 ) -> tuple[DiscoveredHost, DiscoveredAgent]:
     """Find the single agent matching the given identifier (by ID or name).
 
-    Raises :class:`AgentNotFoundError` when ``agent`` is an :class:`AgentId`
+    Raises :class:`AgentIdNotFoundError` when ``agent`` is an :class:`AgentId`
     and no agent has that ID. Raises :class:`UserInputError` when an
     :class:`AgentName` has no match, or when more than one agent matches
     (an agent id is unique per host, not globally, so an id can match one
@@ -168,7 +183,10 @@ def filter_one_agent(
     matches = _filter_all_agents(agent, agents_by_host, resolved_host)
     if len(matches) == 0:
         if isinstance(agent, AgentId):
-            raise AgentNotFoundError(str(agent))
+            raise AgentIdNotFoundError(str(agent))
+        # A name miss stays a UserInputError: a name is user-typed, so not matching
+        # is as likely a typo as a gone agent. An id is machine-generated, so a miss
+        # there really does mean the target is gone.
         raise UserInputError(f"Could not find agent with ID or name: {agent}")
     if len(matches) > 1:
         match_lines = "\n".join(
@@ -376,6 +394,11 @@ def ensure_agent_started(agent: AgentInterface, host: OnlineHostInterface, is_st
     agent's lingering session (and its pane content) is left exactly as it was.
     Callers that need a DONE agent actually relaunched (e.g. to deliver a message)
     must use ``revive_done_agent`` instead.
+
+    The start runs under the host lock (``start_agents_locked``): two concurrent
+    unlocked starts of the same stopped agent -- e.g. two ``mngr message`` calls
+    -- could otherwise both see no session, and the slower one's pre-launch reap
+    would kill the tree the faster one had just launched.
     """
     lifecycle_state = agent.get_lifecycle_state()
     if lifecycle_state not in (
@@ -388,7 +411,7 @@ def ensure_agent_started(agent: AgentInterface, host: OnlineHostInterface, is_st
             logger.info("Agent {} is stopped, starting it", agent.name)
             agent.wait_for_ready_signal(
                 is_readiness_awaited=False,
-                start_action=lambda: host.start_agents([agent.id]),
+                start_action=lambda: start_agents_locked(host, [agent.id], is_restart=False),
                 timeout=agent.get_ready_timeout_seconds(),
             )
         else:
@@ -403,10 +426,12 @@ def start_agents_locked(host: OnlineHostInterface, agent_ids: Sequence[AgentId],
 
     The lock serializes the (re)launch against any other operation on this host --
     e.g. the minds desktop client (remote, over SSH) racing a VM/container boot
-    hook (local), or a concurrent ``mngr gc``. The lock blocks indefinitely; gc
-    shares it, so a gc that tore down an agent is serialized before us, and the
-    state-dir check below makes a doomed (re)launch fail with a clear error instead
-    of trying to boot an agent gc already removed.
+    hook (local), or a concurrent ``mngr gc``. gc shares it, so a gc that tore down
+    an agent is serialized before us, and the state-dir check below makes a doomed
+    (re)launch fail with a clear error instead of trying to boot an agent gc already
+    removed. The wait is bounded (``_START_HOST_LOCK_TIMEOUT_SECONDS``): a holder
+    that never releases surfaces as a ``LockNotHeldError`` naming the host, rather
+    than a silent hang that (for a boot-time oneshot) leaves the host's agents down for good.
 
     When ``is_restart`` is False the launch is purely additive: an already-running
     agent's start is a no-op (the start command exits early when its tmux session
@@ -414,18 +439,26 @@ def start_agents_locked(host: OnlineHostInterface, agent_ids: Sequence[AgentId],
     first -- destructive: each agent's lingering session and every window in it are
     killed.
     """
-    with host.lock_cooperatively(timeout_seconds=None):
-        for agent_id in agent_ids:
-            agent_state_dir = get_agent_state_dir_path(host.host_dir, agent_id)
-            if not host.path_exists(agent_state_dir):
-                raise AgentNotFoundOnHostError(agent_id, host.id)
+    try:
+        with host.lock_cooperatively(timeout_seconds=_START_HOST_LOCK_TIMEOUT_SECONDS):
+            for agent_id in agent_ids:
+                agent_state_dir = get_agent_state_dir_path(host.host_dir, agent_id)
+                if not host.path_exists(agent_state_dir):
+                    raise AgentNotFoundOnHostError(agent_id, host.id)
 
-        if is_restart:
-            with log_span("Stopping {} agent(s) for restart", len(agent_ids)):
-                host.stop_agents(agent_ids)
+            if is_restart:
+                with log_span("Stopping {} agent(s) for restart", len(agent_ids)):
+                    host.stop_agents(agent_ids)
 
-        with log_span("Starting {} agent(s)", len(agent_ids)):
-            host.start_agents(agent_ids)
+            with log_span("Starting {} agent(s)", len(agent_ids)):
+                host.start_agents(agent_ids)
+    except LockNotHeldError as e:
+        agent_id_list = ", ".join(str(agent_id) for agent_id in agent_ids)
+        raise LockNotHeldError(
+            f"Could not acquire the host lock on host {host.id} within "
+            f"{_START_HOST_LOCK_TIMEOUT_SECONDS:.0f}s to start agent(s) {agent_id_list}: another mngr "
+            "operation (create, start, or gc) is holding it. If that operation is wedged, stop it and retry."
+        ) from e
 
 
 def revive_done_agent(agent: AgentInterface, host: OnlineHostInterface) -> None:
@@ -513,6 +546,10 @@ def _raise_for_unmatched_identifiers(
             f"{reason} (so mngr cannot tell whether {unmatched_list} exists)",
             user_help_text=unreachable.user_help_text,
         )
+    # Only an all-ids miss is a gone target; one user-typed name in the batch
+    # makes a typo as good an explanation, so the whole failure stays ordinary.
+    if all(isinstance(identifier, AgentId) for identifier in unmatched_identifiers):
+        raise AgentIdNotFoundError(f"No agent(s) found matching: {unmatched_list}")
     raise AgentNotFoundError(f"No agent(s) found matching: {unmatched_list}")
 
 
@@ -693,8 +730,9 @@ def _post_filter_matches_by_addresses(
 
     For addresses without host/provider components, matches pass through
     unchanged. For constrained addresses, only matches on a satisfying host are
-    kept. Raises :class:`AgentNotFoundError` if a constrained address has no
-    matching agents after filtering.
+    kept. Raises :class:`AgentIdNotFoundError` if a constrained address that is
+    an id on both sides has no matching agents after filtering, and
+    :class:`AgentNotFoundError` if either side was a user-typed name.
     """
     has_host_constraints = any(addr.host is not None for addr in addresses)
     if not has_host_constraints:
@@ -722,6 +760,12 @@ def _post_filter_matches_by_addresses(
         agent_str = str(addr.agent)
         has_match = any(str(m.agent_name) == agent_str or str(m.agent_id) == agent_str for m in filtered)
         if not has_match:
+            # The agent identifier already matched during discovery, so it is the
+            # host constraint that missed here: only a fully machine-generated
+            # coordinate is a gone target, since a user-typed host name is as
+            # likely a typo against an agent that is alive elsewhere.
+            if isinstance(addr.agent, AgentId) and isinstance(addr.host.host, HostId):
+                raise AgentIdNotFoundError(f"No agent found matching address: {addr}")
             raise AgentNotFoundError(f"No agent found matching address: {addr}")
 
     return filtered
@@ -745,7 +789,8 @@ def find_one_agent_and_agents_by_host(
     :func:`resolve_to_started_host_and_agent` or
     :func:`resolve_to_started_host_and_running_agent`.
 
-    Raises :class:`UserInputError` if the host constraint matches no hosts.
+    Raises :class:`NoMatchingHostsError` if a host-id constraint matches no
+    hosts, or :class:`UserInputError` if a host-name one does.
     Raises :class:`AgentNotFoundError` / :class:`UserInputError` if the
     agent cannot be resolved (see :func:`filter_one_agent`), or
     :class:`ProviderUnavailableError` in place of either when a provider that
@@ -762,6 +807,9 @@ def find_one_agent_and_agents_by_host(
     if outcome.unavailable_providers and not _filter_all_agents(address.agent, agents_by_host):
         _raise_for_unmatched_identifiers((address.agent,), outcome)
     if not agents_by_host and address.host is not None:
+        # The same id-vs-name split filter_one_agent makes, applied to the host.
+        if isinstance(address.host.host, HostId):
+            raise NoMatchingHostsError(f"No hosts found matching {address.host}")
         raise UserInputError(f"No hosts found matching {address.host}")
 
     host_ref, agent_ref = filter_one_agent(address.agent, resolved_host=None, agents_by_host=agents_by_host)

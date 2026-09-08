@@ -161,7 +161,7 @@ systemctl restart caddy
 """
 
 
-def _run_ssh(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, remote_command: str) -> None:
+def run_ssh_command(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, remote_command: str) -> None:
     try:
         concurrency_group.run_process_to_completion(
             ["ssh", *_SSH_BASE_OPTIONS, f"{ssh_user}@{host}", remote_command],
@@ -172,7 +172,7 @@ def _run_ssh(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, remo
         raise ObservabilityDeployError(f"ssh to {host} failed: {exc}") from exc
 
 
-def _scp_files(
+def scp_files(
     concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, local_paths: list[Path], remote_dir: str
 ) -> None:
     """Copy all files in one scp invocation (one SSH connection); basenames are preserved."""
@@ -187,9 +187,24 @@ def _scp_files(
         raise ObservabilityDeployError(f"scp of {local_names} to {host} failed: {exc}") from exc
 
 
+def run_ssh_command_capturing_output(
+    concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, remote_command: str
+) -> str:
+    """Run one remote command over SSH and return its stdout (e.g. a minted token)."""
+    try:
+        result = concurrency_group.run_process_to_completion(
+            ["ssh", *_SSH_BASE_OPTIONS, f"{ssh_user}@{host}", remote_command],
+            timeout=_SSH_TIMEOUT_SECONDS,
+            name=f"observability-ssh-capture-{host}",
+        )
+    except ProcessError as exc:
+        raise ObservabilityDeployError(f"ssh to {host} failed: {exc}") from exc
+    return result.stdout
+
+
 def run_root_script_over_ssh(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, script: str) -> None:
     """Run one rendered script under sudo on the host (used for installs on hosts we can plainly SSH)."""
-    _run_ssh(concurrency_group, host, ssh_user, f"sudo bash -c {shlex.quote(script)}")
+    run_ssh_command(concurrency_group, host, ssh_user, f"sudo bash -c {shlex.quote(script)}")
 
 
 @retry(
@@ -198,8 +213,9 @@ def run_root_script_over_ssh(concurrency_group: ConcurrencyGroup, host: str, ssh
     wait=wait_fixed(5.0),
     reraise=True,
 )
-def _wait_for_ssh_ready(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str) -> None:
-    _run_ssh(concurrency_group, host, ssh_user, "true")
+def wait_for_ssh_ready(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str) -> None:
+    """Poll until the fresh instance's sshd answers (OVH reports ACTIVE before first boot finishes)."""
+    run_ssh_command(concurrency_group, host, ssh_user, "true")
 
 
 def deploy_instance(
@@ -233,11 +249,11 @@ def deploy_instance(
     # loudly if another local user races the fixed /tmp path back into
     # existence (a -p would silently adopt their directory).
     try:
-        _wait_for_ssh_ready(concurrency_group, host, ssh_user)
-        _run_ssh(
+        wait_for_ssh_ready(concurrency_group, host, ssh_user)
+        run_ssh_command(
             concurrency_group, host, ssh_user, f"rm -rf {REMOTE_STAGING_DIR} && mkdir -m 700 {REMOTE_STAGING_DIR}"
         )
-        _scp_files(concurrency_group, host, ssh_user, [work_dir / name for name in artifacts], REMOTE_STAGING_DIR)
+        scp_files(concurrency_group, host, ssh_user, [work_dir / name for name in artifacts], REMOTE_STAGING_DIR)
         run_root_script_over_ssh(concurrency_group, host, ssh_user, render_instance_install_script())
         run_root_script_over_ssh(
             concurrency_group, host, ssh_user, render_collector_install_script(self_collector_config(config))

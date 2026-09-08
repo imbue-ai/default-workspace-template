@@ -2,6 +2,7 @@
 name: manage-layout
 description: Use when you want to rearrange the workspace dockview tabs (split, move, focus, rename, close, maximize, reload, swap a URL) or inspect the live layout. Note that these ops change what the user is looking at, live -- `layout.py open` puts a tab on their screen the moment it returns, so it is the act of showing them something, not setup.
 metadata:
+  author: imbue
   crystallized: true
 ---
 

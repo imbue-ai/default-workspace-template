@@ -2,7 +2,14 @@
 # minds-evals-generate recipe) because each embeds a full mngr-internal clone;
 # this ignore is a safety net for anyone who points --output back in-tree.
 datasets/
+# The input data the checked-in eval configs upload, which the safety net above would otherwise
+# swallow: a step's `files.source` is resolved relative to the config file, so this path is fixed.
+!configs/datasets/
 # Local harbor job results (the run recipe points -o here).
 jobs/
+# Single-trial regrades (`harbor trial regrade -o` points here). Its output is a bare trial
+# directory with no job config.json, so it does not belong under jobs/, which `harbor view` reads
+# as a folder of jobs.
+regrades/
 # Per-user local secrets (ANTHROPIC_API_KEY etc.), sourced by dev runs only.
 .env.local

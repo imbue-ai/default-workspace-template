@@ -75,11 +75,11 @@ def mcp_caption(tool_name: str) -> str | None:
 
 @pure
 def parse_input_preview(input_preview: str) -> dict[str, Any]:
-    """The tool input as a dict, or empty when it is absent, truncated or not JSON.
+    """The tool input as a dict, or empty when it is absent, not JSON, or not an object.
 
-    ``input_preview`` is clipped to a fixed length by the parsers, so a large
-    input arrives as invalid JSON. That is expected, not exceptional: the caller
-    falls back to a generic label rather than guessing at half a document.
+    Some harness inputs are not JSON objects at all (codex's code-mode JS program,
+    a bare string argument). That is expected, not exceptional: the caller falls
+    back to a generic label rather than guessing at an unparseable input.
     """
     try:
         parsed = json.loads(input_preview)

@@ -2,7 +2,8 @@
 
 Covers ``_build_providers_state_payload`` (combines resolver-tracked providers,
 errored providers, and disabled-on-disk providers into the SSE payload) and
-``_build_workspace_list`` (backend-unreachable verdict + color emission).
+``_build_workspace_list`` (the backend-unreachable and device-cannot-connect
+verdicts + color emission).
 
 Provider enable/disable now lives on ``PATCH /api/v1/desktop/providers/<name>``
 and is tested in ``api_v1_test.py``.
@@ -21,6 +22,7 @@ from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.conftest import seed_provider_snapshots
+from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
 from imbue.minds.desktop_client.workspace_color import DEFAULT_WORKSPACE_COLOR
 from imbue.minds.testing import stub_mngr_host_dir
 from imbue.mngr.api.discovery_events import DiscoveredProvider
@@ -33,6 +35,7 @@ from imbue.mngr.primitives import DiscoveredAgent
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import ProviderBackendName
 from imbue.mngr.primitives import ProviderInstanceName
+from imbue.mngr_forward.data_types import SystemInterfaceBackendFailureReason
 
 _ROOT_NAME = "minds-dev-tname"
 
@@ -272,6 +275,78 @@ def test_build_workspace_list_does_not_report_unreachable_for_unrelated_provider
     workspaces = _build_workspace_list(resolver)
     assert len(workspaces) == 1
     assert "is_backend_unreachable" not in workspaces[0]
+
+
+# -- _build_workspace_list connectivity locality --
+
+
+@pytest.mark.parametrize("backend", ["local", "docker", "lima"])
+def test_build_workspace_list_marks_on_device_machines_as_needing_no_network(backend: str) -> None:
+    """The band reads this to know when *not* to blame the network for an outage.
+
+    A machine on one of these backends answers over loopback, so this device
+    losing its network says nothing about it -- and the band would otherwise
+    displace its recovery copy with "No network connection" and send the user to
+    a card that withholds the restart that would fix it.
+    """
+    resolver = MngrCliBackendResolver()
+    agent = _make_workspace_agent(backend)
+    resolver.update_agents(ParsedAgentsResult(agent_ids=(agent.agent_id,), discovered_agents=(agent,)))
+    seed_provider_snapshots(resolver, providers=(_make_discovered_provider(backend, backend=backend),))
+
+    workspaces = _build_workspace_list(resolver)
+
+    assert len(workspaces) == 1
+    assert workspaces[0]["is_network_dependent"] == "false"
+
+
+def test_build_workspace_list_marks_a_remote_machine_as_needing_the_network() -> None:
+    resolver = MngrCliBackendResolver()
+    agent = _make_workspace_agent("imbue_cloud_acct")
+    resolver.update_agents(ParsedAgentsResult(agent_ids=(agent.agent_id,), discovered_agents=(agent,)))
+    seed_provider_snapshots(
+        resolver, providers=(_make_discovered_provider("imbue_cloud_acct", backend="imbue_cloud"),)
+    )
+
+    workspaces = _build_workspace_list(resolver)
+
+    assert workspaces[0]["is_network_dependent"] == "true"
+
+
+# -- _build_workspace_list device-cannot-connect verdict --
+
+
+def test_build_workspace_list_reports_only_the_causes_that_never_reached_the_machine() -> None:
+    """A failure raised on this device carries ``is_device_cannot_connect``; one that dialed does not.
+
+    The notice band reads this to stop reporting a generic loss of contact for a
+    machine that is very likely running fine. The distinction is the whole point:
+    a cause that reached the network leaves the machine implicated, and blaming
+    the device for it would suppress the restart that fixes it.
+    """
+    resolver = MngrCliBackendResolver()
+    agent = _make_workspace_agent("imbue_cloud_acct")
+    resolver.update_agents(ParsedAgentsResult(agent_ids=(agent.agent_id,), discovered_agents=(agent,)))
+    tracker = SystemInterfaceHealthTracker()
+
+    # Nothing observed yet: no verdict to carry.
+    assert "is_device_cannot_connect" not in _build_workspace_list(resolver, tracker=tracker)[0]
+
+    # A tunnel this device could not build, raised before any packet was sent.
+    tracker.record_connection_failure(
+        agent.agent_id, SystemInterfaceBackendFailureReason.TUNNEL_SETUP_FAILED, "no known_hosts"
+    )
+    assert _build_workspace_list(resolver, tracker=tracker)[0]["is_device_cannot_connect"] == "true"
+
+    # The residual cause, on its own episode: it reached the network and failed
+    # there, so the machine is still implicated. (A fresh tracker, because the
+    # deference window that governs replacing one cause with another is a
+    # separate rule with its own tests.)
+    dialed = SystemInterfaceHealthTracker()
+    dialed.record_connection_failure(
+        agent.agent_id, SystemInterfaceBackendFailureReason.CONNECT_ERROR, "connection refused"
+    )
+    assert "is_device_cannot_connect" not in _build_workspace_list(resolver, tracker=dialed)[0]
 
 
 # -- _build_workspace_list color emission --

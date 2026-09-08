@@ -84,6 +84,14 @@ _S3_ATTACHMENT_BUCKET_BY_ENVIRONMENT: Mapping[SentryDeployEnvironment, str | Non
 #   * ``electron.log.<ts>.gz``    -- rotated (gzipped) Electron main-process logs
 # The live/current files are uncompressed on disk (compressed on upload); the rotated ``*.gz``
 # files are already gzipped by the Electron rotation helper, so they are uploaded as-is.
+#
+# A manual bug report's own files (the in-workspace archive and the shell's captured console
+# tail) are deliberately NOT in this folder: each report stages them into its own private temp
+# directory, so no group's glob can ever sweep one onto an unrelated event and concurrent reports
+# cannot touch each other's files (see the note below the groups). The workspace outer host's
+# latchkey gateway tail takes the opposite route: collection mirrors it into the latchkey plugin
+# data dir, where the ``latchkey_raw_logs`` group below sweeps it onto every event exactly like
+# the desktop gateway's own logs.
 _MINDS_LOG_ATTACHMENT_GROUPS = (
     # The live Python backend jsonl log (mutable -- re-upload on every report).
     LogAttachmentGroup(
@@ -134,6 +142,15 @@ _MINDS_LOG_ATTACHMENT_GROUPS = (
         is_immutable=True,
     ),
 )
+
+# The bug-report staged files (the workspace archive and the console tail, each
+# in its report's own temp staging dir) are deliberately NOT attachment groups:
+# groups are process-global and swept onto every event, so a group matching them
+# would carry one report's consented files onto every unrelated automatic error
+# for as long as they sat on disk. They reach exactly one event instead --
+# ``submit_manual_bug_report``'s ``report_file_paths`` for a collection that has
+# already finished, or ``report_file_uris`` for one still running, which names an
+# S3 key reserved for that report alone.
 
 
 def sentry_deploy_environment_from_minds_env_name(env_name: str | None) -> SentryDeployEnvironment:
@@ -239,17 +256,43 @@ def resolve_latchkey_forward_sentry_env(consent_file_path: Path, anonymous_user_
 
 
 def _external_log_attachment_groups(
-    latchkey_plugin_data_dir: Path, discovery_events_dir: Path
+    latchkey_plugin_data_dir: Path, discovery_events_dir: Path, mngr_cli_events_dir: Path
 ) -> tuple[LogAttachmentGroup, ...]:
     """Attachment groups for logs that live outside ``~/.minds/logs``.
 
     The detached ``mngr latchkey forward`` daemon (which runs discovery and the
-    reverse tunnels) logs into the latchkey plugin data dir, and the shared
-    discovery event stream persists under the mngr host dir -- both essential
-    for diagnosing discovery/replay problems, and both outside the flat minds
-    log folder that the default sweep covers.
+    reverse tunnels) logs into the latchkey plugin data dir, the shared
+    discovery event stream persists under the mngr host dir, and every ``mngr``
+    subprocess minds spawns (recovery restarts included) file-logs its
+    per-command step timeline into the mngr CLI events dir -- all essential for
+    diagnosis, and all outside the flat minds log folder that the default
+    sweep covers.
     """
     return (
+        # The per-command mngr CLI log: the only record of what a spawned mngr
+        # subprocess (e.g. a recovery restart that timed out and was killed)
+        # actually did step by step.
+        LogAttachmentGroup(
+            group_name="mngr_cli_events",
+            glob="events.jsonl",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=False,
+            base_dir=mngr_cli_events_dir,
+        ),
+        # The most recent rotated per-command mngr CLI log: rotation is
+        # size-based, so on a busy install the current file can cover only
+        # hours, and this log is where a spawned `mngr forward`'s stream
+        # diagnostics land (immutable: rotated files never change, so the S3
+        # key is reused).
+        LogAttachmentGroup(
+            group_name="mngr_cli_rotated_events",
+            glob="events.jsonl.*",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=True,
+            base_dir=mngr_cli_events_dir,
+        ),
         # The daemon's structured loguru log (mutable -- re-upload on every report).
         LogAttachmentGroup(
             group_name="latchkey_live_logs",
@@ -257,6 +300,19 @@ def _external_log_attachment_groups(
             max_file_count=MAX_SENTRY_LIST_SIZE,
             is_compressed=True,
             is_immutable=False,
+            base_dir=latchkey_plugin_data_dir,
+        ),
+        # Its most recent rotation, on the same size-based scheme and for the
+        # same reason as the mngr CLI one above: measured at 5-6 hours per file
+        # on a busy install. Mirrors the group the daemon's own reports already
+        # carry (mngr_latchkey/sentry.py's "rotated_logs"); the raw *.log
+        # rotations are deliberately left behind there, so they are here too.
+        LogAttachmentGroup(
+            group_name="latchkey_rotated_logs",
+            glob="*.jsonl.*",
+            max_file_count=1,
+            is_compressed=True,
+            is_immutable=True,
             base_dir=latchkey_plugin_data_dir,
         ),
         # The daemon's raw stdout/stderr capture (latchkey_forward.log).
@@ -289,6 +345,7 @@ def setup_sentry(
     is_error_reporting_enabled: Callable[[], bool],
     latchkey_plugin_data_dir: Path,
     discovery_events_dir: Path,
+    mngr_cli_events_dir: Path,
 ) -> None:
     """Set up Sentry for the minds backend process (Flask integration + flat-log layout)."""
     _setup_sentry(
@@ -300,7 +357,7 @@ def setup_sentry(
         service_name=_MINDS_SENTRY_SERVICE_NAME,
         user_id=anonymous_user_id,
         log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS
-        + _external_log_attachment_groups(latchkey_plugin_data_dir, discovery_events_dir),
+        + _external_log_attachment_groups(latchkey_plugin_data_dir, discovery_events_dir, mngr_cli_events_dir),
         integrations=[FlaskIntegration()],
         is_error_reporting_enabled=is_error_reporting_enabled,
         s3_attachment_bucket=_s3_attachment_bucket_for_environment(environment),

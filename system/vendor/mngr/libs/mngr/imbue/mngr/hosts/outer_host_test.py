@@ -8,14 +8,17 @@ from typing import cast
 import pytest
 from paramiko import ChannelException
 from paramiko import SSHException
+from pyinfra.api.command import StringCommand
 from pyinfra.api.exceptions import ConnectError
 from pyinfra.api.host import Host as PyinfraHost
+from pyinfra.connectors.util import CommandOutput
 
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import HostAuthenticationError
 from imbue.mngr.errors import HostConnectionError
 from imbue.mngr.hosts.host import Host
 from imbue.mngr.hosts.outer_host import OuterHost
+from imbue.mngr.hosts.outer_host import _connect_pyinfra_host_retrying_banner_read_failures
 from imbue.mngr.hosts.outer_host import _is_transient_ssh_connect_error
 from imbue.mngr.hosts.outer_host import _prepend_env_exports
 from imbue.mngr.hosts.outer_host import _sftp_walk
@@ -610,6 +613,77 @@ class _FakePyinfraHostRecoveringOnConnect:
         self.connected = True
 
 
+class _FakePyinfraHostResettingOnCommand:
+    """Pyinfra-host stand-in whose first ``run_shell_command`` is reset by the peer.
+
+    The shape a transport cached across a laptop sleep presents when it is next
+    used: the connection this side still believes in is gone, and the reset
+    arrives from the command rather than from the connect.
+    """
+
+    def __init__(self, failure_count: int) -> None:
+        self.connected = True
+        self.name = "fake-ssh-host"
+        self.connector_cls = type("SSHConnector", (), {})
+        self.command_call_count = 0
+        self.disconnect_call_count = 0
+        self._failure_count = failure_count
+
+    def connect(self, raise_exceptions: bool = False) -> None:
+        self.connected = True
+
+    def disconnect(self) -> None:
+        self.disconnect_call_count += 1
+        self.connected = False
+
+    def run_shell_command(self, command: Any, **kwargs: Any) -> tuple[bool, Any]:
+        self.command_call_count += 1
+        if self.command_call_count <= self._failure_count:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        return True, CommandOutput([])
+
+
+def test_run_shell_command_reconnects_after_the_peer_resets_the_connection(temp_mngr_ctx: MngrContext) -> None:
+    """A reset mid-command rebuilds the connection and retries, rather than surfacing.
+
+    Regression guard for a stale transport across a laptop sleep. The reset
+    arrives as ``ConnectionResetError``, whose message is the errno text rather
+    than "Socket is closed", so it used to miss both the transient classifier
+    and the disconnect-before-retry branch -- and escaped the CLI as a raw
+    paramiko traceback, failing a restart of a machine that was fine.
+    """
+    fake = _FakePyinfraHostResettingOnCommand(failure_count=1)
+    outer = OuterHost(
+        id=HostId.generate(),
+        connector=PyinfraConnector(cast(PyinfraHost, fake)),
+        mngr_ctx=temp_mngr_ctx,
+    )
+
+    success, _output = outer._run_shell_command_with_transient_retry(StringCommand("true"), {})
+
+    assert success is True
+    assert fake.command_call_count == 2
+    # The retry must not reuse the connection the peer just dropped.
+    assert fake.disconnect_call_count == 1
+
+
+def test_a_reset_that_outlives_the_retries_is_translated_not_raw(temp_mngr_ctx: MngrContext) -> None:
+    """A reset that survives the retry budget leaves as a domain error, not a paramiko traceback.
+
+    Exercised at the translation boundary rather than through the retry, which
+    would spend its real ~10s backoff to reach the same assertion.
+    """
+    outer = OuterHost(
+        id=HostId.generate(),
+        connector=PyinfraConnector(create_local_pyinfra_host()),
+        mngr_ctx=temp_mngr_ctx,
+    )
+
+    with pytest.raises(HostConnectionError, match="closed"):
+        with outer._translate_ssh_errors(failed="failed", closed="closed", timed_out="timed out"):
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+
 def test_ensure_connected_retries_banner_read_connect_failures(temp_mngr_ctx: MngrContext) -> None:
     """A banner-read ConnectError is retried, and the connect succeeds on the next attempt.
 
@@ -635,52 +709,50 @@ def test_ensure_connected_retries_banner_read_connect_failures(temp_mngr_ctx: Mn
     assert fake.connect_call_count == 2
 
 
-def test_ensure_connected_recovers_when_only_the_third_banner_read_attempt_succeeds(
-    temp_mngr_ctx: MngrContext,
-) -> None:
-    """Two consecutive banner-read failures still recover on the third attempt.
+def test_banner_read_retry_recovers_after_more_than_three_consecutive_failures() -> None:
+    """The connect retry rides out more than three consecutive banner-read failures.
 
-    Regression test for the widened retry budget: a slow fresh Modal sandbox
-    outlasted the single retry (both offload attempts of
-    test_exec_json_output_on_modal), so the bounded budget is three attempts.
-    """
-    fake = _FakePyinfraHostRecoveringOnConnect(
-        failure_count=2,
-        message="SSH error (Error reading SSH protocol banner)",
-    )
-    outer = OuterHost(
-        id=HostId.generate(),
-        connector=PyinfraConnector(cast(PyinfraHost, fake)),
-        mngr_ctx=temp_mngr_ctx,
-    )
-
-    outer._ensure_connected()
-
-    assert fake.connected is True
-    assert fake.connect_call_count == 3
-
-
-def test_ensure_connected_gives_up_after_three_banner_read_attempts(temp_mngr_ctx: MngrContext) -> None:
-    """A persistent banner-read failure makes exactly three attempts before surfacing.
-
-    Each attempt already blocks for paramiko's banner timeout (30s on provider
-    hosts), so capping at three attempts bounds the worst case (a host that
-    accepts TCP but never speaks SSH) at ~90 seconds.
+    The MIND-202 pin: a fresh Modal sandbox can reset several fresh connections
+    in a row before its sshd answers the banner, and the connect retry must keep
+    trying until the host answers rather than giving up after a fixed count. A
+    zero backoff keeps the test instant while still exercising the deadline loop.
     """
     fake = _FakePyinfraHostRecoveringOnConnect(
         failure_count=5,
         message="SSH error (Error reading SSH protocol banner)",
     )
-    outer = OuterHost(
-        id=HostId.generate(),
-        connector=PyinfraConnector(cast(PyinfraHost, fake)),
-        mngr_ctx=temp_mngr_ctx,
+
+    _connect_pyinfra_host_retrying_banner_read_failures(
+        cast(PyinfraHost, fake),
+        deadline_seconds=5.0,
+        backoff_seconds=0.0,
     )
 
-    with pytest.raises(HostConnectionError):
-        outer._ensure_connected()
+    assert fake.connected is True
+    assert fake.connect_call_count == 6
 
-    assert fake.connect_call_count == 3
+
+def test_banner_read_retry_gives_up_after_the_deadline_elapses() -> None:
+    """A host that never answers the banner is retried until the deadline, then the failure surfaces.
+
+    The retry is bounded by a wall-clock deadline rather than a fixed attempt
+    count, so it makes many well-spaced attempts before reraising the last
+    banner-read ConnectError (which the caller maps to HostConnectionError).
+    """
+    fake = _FakePyinfraHostRecoveringOnConnect(
+        failure_count=1_000_000,
+        message="SSH error (Error reading SSH protocol banner)",
+    )
+
+    with pytest.raises(ConnectError):
+        _connect_pyinfra_host_retrying_banner_read_failures(
+            cast(PyinfraHost, fake),
+            deadline_seconds=0.2,
+            backoff_seconds=0.01,
+        )
+
+    # The deadline, not a fixed attempt count, bounds the retry, so it makes many attempts.
+    assert fake.connect_call_count > 3
 
 
 def test_ensure_connected_does_not_retry_non_transient_connect_failures(temp_mngr_ctx: MngrContext) -> None:
@@ -733,6 +805,7 @@ def test_is_transient_ssh_connect_error_matches_only_banner_read_connect_errors(
         (ChannelException(2, "open failed"), True),
         (EOFError(), True),
         (TimeoutError("Timed out reading output"), True),
+        (ConnectionResetError(54, "Connection reset by peer"), True),
         (ValueError("not transient"), False),
     ],
     ids=[
@@ -743,6 +816,7 @@ def test_is_transient_ssh_connect_error_matches_only_banner_read_connect_errors(
         "channel-exception",
         "eof-error",
         "timeout-error",
+        "connection-reset",
         "non-os-error",
     ],
 )
@@ -758,5 +832,59 @@ def test_is_transient_ssh_error(exception: BaseException, expected: bool) -> Non
     of host creation. ``TimeoutError`` is an ``OSError`` subclass on
     Python 3, but the classifier's OSError branch only matches on the
     "Socket is closed" message, so bare timeouts need their own branch.
+
+    ``ConnectionResetError`` is the same shape of gap, and was reaching users:
+    a transport cached across a laptop sleep is reset by the peer when it is
+    next used, and the errno text ("[Errno 54] Connection reset by peer")
+    slips past the "Socket is closed" match -- so `mngr start` on a machine
+    that was fine died with a raw paramiko traceback instead of reconnecting.
     """
     assert is_transient_ssh_error(exception) is expected
+
+
+class _FakeSftpSetupChannel:
+    """Channel whose SFTP subsystem request fails, recording whether it was closed."""
+
+    def __init__(self) -> None:
+        self.is_closed = False
+        self.timeout: float | None = None
+
+    def settimeout(self, timeout: float) -> None:
+        self.timeout = timeout
+
+    def invoke_subsystem(self, subsystem: str) -> None:
+        raise SSHException("channel request failed")
+
+    def close(self) -> None:
+        self.is_closed = True
+
+
+class _FakeSftpSetupTransport:
+    """Transport handing out a single fake channel for SFTP setup."""
+
+    def __init__(self, channel: _FakeSftpSetupChannel) -> None:
+        self.channel = channel
+
+    def open_session(self, timeout: float | None = None) -> _FakeSftpSetupChannel:
+        return self.channel
+
+
+def test_create_sftp_client_closes_the_channel_when_setup_fails(temp_mngr_ctx: MngrContext) -> None:
+    """A channel whose SFTP setup fails after the open is closed, not leaked.
+
+    The setup steps after ``open_session`` (the subsystem request, version
+    negotiation) can raise; without the cleanup the opened channel would linger
+    on the shared transport across every transient retry.
+    """
+    outer = OuterHost(
+        id=HostId.generate(),
+        connector=PyinfraConnector(create_local_pyinfra_host()),
+        mngr_ctx=temp_mngr_ctx,
+    )
+    channel = _FakeSftpSetupChannel()
+    transport = _FakeSftpSetupTransport(channel)
+
+    with pytest.raises(SSHException, match="channel request failed"):
+        outer._create_sftp_client(cast(Any, transport))
+
+    assert channel.is_closed is True

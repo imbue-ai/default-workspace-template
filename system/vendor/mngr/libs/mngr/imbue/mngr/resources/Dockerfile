@@ -99,7 +99,7 @@ ENV PATH="/root/.local/bin:$PATH"
 # .mngr/settings.toml pin (`[agent_types.claude].version`). The release-test
 # `test_claude_code_version_matches_default_workspace_template_pin` enforces the
 # sync; bump both together when rolling a new claude release.
-ARG CLAUDE_CODE_VERSION="2.1.207"
+ARG CLAUDE_CODE_VERSION="2.1.227"
 RUN curl -fsSL https://claude.ai/install.sh > /tmp/install_claude.sh && ( if [ -n "$CLAUDE_CODE_VERSION" ]; then cat /tmp/install_claude.sh | bash -s "$CLAUDE_CODE_VERSION"; else cat /tmp/install_claude.sh | bash; fi && test -x /root/.local/bin/claude ) || ( cat /tmp/install_claude.sh && exit 1 )
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 
@@ -160,7 +160,7 @@ ENV UV_LINK_MODE=copy
 # call (per-layer caching, see `_build_image_from_dockerfile_contents`). ARGs
 # don't carry across separate calls, so an ARG above would expand to empty in
 # the RUN below and `cargo install offload@` would error.
-RUN export OFFLOAD_VERSION=0.9.12 \
+RUN export OFFLOAD_VERSION=0.9.13 \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path \
     && /root/.cargo/bin/cargo install offload@${OFFLOAD_VERSION} --locked --root /opt/offload \

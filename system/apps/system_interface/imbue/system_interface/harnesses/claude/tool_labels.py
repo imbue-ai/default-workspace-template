@@ -16,6 +16,8 @@ from imbue.system_interface.harnesses.tool_labels import parse_input_preview
 from imbue.system_interface.harnesses.tool_labels import quoted
 from imbue.system_interface.harnesses.tool_labels import shorten
 
+_BASH_TOOL_NAME = "Bash"
+
 # Agent / Task are handled before this table -- they caption as a delegation
 # rather than as a verb over a target.
 _VERB_BY_TOOL_NAME: dict[str, str] = {
@@ -94,3 +96,18 @@ def tool_labels(tool_name: str, input_preview: str) -> tuple[str, str]:
     if target is not None:
         return header_label, f"Running {target}"
     return header_label, GENERIC_CAPTION
+
+
+@pure
+def shell_command(tool_name: str, raw_input: str) -> str | None:
+    """The shell command this tool call runs, or None if it is not a shell call.
+
+    The ONE question each harness answers for itself. Whether that command is a tk lifecycle
+    invocation is decided centrally (``tool_output.is_pure_tk_lifecycle_command`` for the hide
+    rule, ``is_tk_lifecycle_anywhere`` for the resident tk_command stamp), so the rules live in one
+    place and cannot drift between harnesses.
+    """
+    if tool_name != _BASH_TOOL_NAME:
+        return None
+    command = parse_input_preview(raw_input).get("command")
+    return command if isinstance(command, str) else None

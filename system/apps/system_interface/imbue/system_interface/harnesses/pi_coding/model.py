@@ -18,7 +18,7 @@ The live selection is read by the shared reader
 ``model_state.json`` the pi lifecycle extension writes at the agent state-dir root,
 refreshed at session start (before the first turn), on every ``/model`` or thinking-level
 change, and on resume. There is no launch default -- pi is many-provider/many-auth -- so
-the bar shows logo-only until the extension records a model. This resolver only owns the
+the bar renders no slots until the extension records a model. This resolver only owns the
 WRITE (switch) side and the auth-gated picker offer set (:meth:`list_offered_models`).
 """
 
@@ -79,8 +79,8 @@ PI_STATE_RELATIVE_PATH: Path = Path(".")
 _PI_THINKING_LEVELS: tuple[str, ...] = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # The per-agent pi config dir (== PI_CODING_AGENT_DIR), where the agent's auth lives.
-# Kept in sync with _PI_CONFIG_DIR_RELPATH in mngr_pi_coding's plugin.py.
-_PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
+# Kept in sync with PI_CONFIG_DIR_RELPATH in mngr_pi_coding's plugin.py.
+PI_CONFIG_DIR_RELPATH: str = "plugin/pi_coding"
 # How long to wait for `pi --list-models` before falling back to the whole catalog.
 _LIST_MODELS_TIMEOUT_SECONDS: float = 15.0
 
@@ -171,7 +171,7 @@ def build_catalog(data_dir: Path) -> HarnessCatalog:
         # that cannot apply is rare.
         switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
         picker_mode=PickerMode.SEARCH,
-        powered_by_label="Pi Coding",
+        powered_by_text="Powered by Pi Coding",
         # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
         native_atomic_shoulder_tap_possible=True,
     )
@@ -187,7 +187,7 @@ def get_catalog() -> HarnessCatalog:
             options=(),
             switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
             picker_mode=PickerMode.SEARCH,
-            powered_by_label="Pi Coding",
+            powered_by_text="Powered by Pi Coding",
             # pi interrupts natively via the lifecycle extension (interrupt + resubmit).
             native_atomic_shoulder_tap_possible=True,
         )
@@ -221,7 +221,7 @@ class PiModelResolver(HarnessModelResolver):
         executable = shutil.which("pi")
         if executable is None:
             return None
-        pi_config_dir = self._state_dir / _PI_CONFIG_DIR_RELPATH
+        pi_config_dir = self._state_dir / PI_CONFIG_DIR_RELPATH
         env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
         try:
             finished = run_local_command_modern_version(

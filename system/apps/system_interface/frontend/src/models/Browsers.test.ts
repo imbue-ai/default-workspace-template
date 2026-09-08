@@ -14,9 +14,7 @@ describe("createBrowser", () => {
   it("posts an empty body and reports the daemon's minted name", async () => {
     // The daemon mints the name (the first free browser-<N>); the client sends
     // no name of its own and takes whatever came back as the identity to open.
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ name: "browser-1", key_available: true }) });
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ name: "browser-1" }) });
     vi.stubGlobal("fetch", fetchMock);
 
     expect(await createBrowser()).toEqual({ ok: true, name: "browser-1", reason: "" });

@@ -15,7 +15,7 @@ Everything else -- agent creation, discovery, proxying, authentication, the web 
 
 ### App shell
 
-Each window is a frameless `BrowserWindow` (`frame: false` on Linux/Windows, `titleBarStyle: 'hiddenInset'` with `trafficLightPosition` on macOS) hosting ONE web context: the backend-served Mithril SPA shell (`apps/minds/frontend/`). That single page owns the titlebar, client-side routing among the hub pages (the titlebar never reloads), the sandboxed cross-origin iframe that displays workspace content (`WorkspaceFrame`), and the in-DOM Mithril modals (workspace switcher, inbox, help, sign-in, settings, accounts, workspace options). The identical page runs in a plain browser against a local `minds run` -- the desktop app adds only a slim native bridge (`window.mindsNative` from `preload.js`: window controls, native file picker, shell events, and the startup/error/quitting screens).
+Each window is a frameless `BrowserWindow` (`frame: false` on Linux/Windows, `titleBarStyle: 'hiddenInset'` with `trafficLightPosition` on macOS) hosting ONE web context: the backend-served Mithril SPA shell (`apps/minds/frontend/`). That single page owns the titlebar, client-side routing among the hub pages (the titlebar never reloads), the sandboxed cross-origin iframe that displays workspace content (`WorkspaceFrame`), and the in-DOM Mithril modals (workspace switcher, inbox, help, sign-in, settings, accounts, workspace options). The identical page runs in a plain browser against a local `minds run` -- the desktop app adds only a slim native bridge (`window.mindsNative` from `preload.js`: window controls, native file picker, shell events, the release-channel and update-status calls behind Settings > Updates, and the startup/error/quitting screens).
 
 Workspace content is entered through the minds `/forward-bridge` route, which hands the browser a `mngr forward` plugin session before landing on the plugin's `/goto/<host-id>/` workspace entry; the plugin appends a `frame-ancestors` policy to every workspace response so only the minds chrome (and the workspace's own origin family) may embed it. Chrome<->workspace messaging flows exclusively through the embed contract (see [embed-contract.md](./embed-contract.md)).
 
@@ -32,7 +32,9 @@ A separate `shell.html` page handles the loading spinner, the quitting screen, a
 
 ### Shutdown
 
-Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. **On macOS, closing the last window does not quit the app**: it keeps running with no windows (the dock icon stays), matching standard macOS apps. Re-open a window by clicking the dock icon (or `Cmd+N`) -- the `activate` handler lands it on the home page -- and quit explicitly with `Cmd+Q`. On Windows/Linux the last window's close quits, per those platforms' convention. When a quit is *committed* (`Cmd+Q` / `Ctrl+Q`, a SIGTERM/SIGINT, or the last window closing off macOS), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
+Closing an individual window just tears down that window's views -- the backend keeps running while any window is open. **On macOS, closing the last window does not quit the app**: it keeps running with no windows (the dock icon stays), matching standard macOS apps. Re-open a window by clicking the dock icon (or `Cmd+N`), and quit explicitly with `Cmd+Q`. On Windows/Linux the last window's close quits, per those platforms' convention.
+
+A re-opened window always shows the app's *current* state, not just the home page: the backend's home page when it is serving, the loading screen while it is still coming up, and the error screen -- carrying the **Retry** button that restarts the backend -- when startup failed or the backend died while nothing was open. Every entry point that asks for a window shares this: `activate`, `Cmd+N`, `File > New Window`, the dock menu, launching the app again, and a `minds://` deeplink arriving with nothing open. This matters because a windowless app has no other way back: if a request could resolve to no window, the app would sit in the dock unusable until `Cmd+Q`. Closing the window *during* startup is likewise not a cancellation -- the backend finishes coming up and authenticates, and the launch's landing (session restore, or the welcome / consent screens) is still owed: it is applied to the next window you open rather than opening windows unprompted, and is recomputed at that moment, so a session restored long afterwards reflects the machines that exist then. When a quit is *committed* (`Cmd+Q` / `Ctrl+Q`, a SIGTERM/SIGINT, or the last window closing off macOS), Electron sends SIGTERM to the backend process and waits up to 5 seconds. If the process doesn't exit, SIGKILL is sent.
 
 #### Quitting page
 
@@ -68,7 +70,7 @@ Each workspace can live in its own window. There is deliberately NO cross-window
 - **Open in a new window** (from the workspace switcher): right-click a workspace entry for an `Open in new window` context-menu entry (desktop only), or click the arrow icon on the row.
 - **Open a blank window**: cmd+N / ctrl+N, `File > New Window`, or the macOS dock menu. Opens a window on the backend's home page (`/`).
 - **Plain sidebar click**: always navigates the clicking window to that workspace.
-- **Notifications** for workspace `X` focus the most-recently-focused window already showing `X`; otherwise they navigate the most-recently-focused window (a new window is never auto-opened). Non-workspace notification URLs and `auth_required` events navigate the most-recently-focused window.
+- **Notifications** for workspace `X` (a workspace-origin URL) focus the most-recently-focused window already showing `X` without renavigating it; otherwise they navigate the most-recently-focused window (a new window is never auto-opened). A notification carrying the SPA's `/workspace/<id>?review=...` deep link (what the notification feed's OS banners send) also prefers a window already showing `X`, but always navigates it so the `?review=` param lands and opens the review popup. Any other notification URL and `auth_required` events navigate the most-recently-focused window.
 - **Session restore**: on quit, every open window's content URL is recorded to `~/.<MINDS_ROOT_NAME>/window-state.json` (as `{ windows: [{ url, x, y, width, height, displayId }, ...] }`). On next launch (after the backend is ready) one window is reopened per recorded URL (workspace windows restore through the SPA's `/workspace/<id>` route). URLs pointing at workspaces that no longer exist are silently dropped; older file shapes are accepted.
 
 ### Deeplinks (minds://)
@@ -107,8 +109,8 @@ The accent is a **pure function of the window's current route**, not a remembere
 ### Environment variables
 
 - `MINDS_HIDE_MENU=1`: Hides the application menu bar (macOS only; Linux/Windows frameless windows have no menu bar).
-- `MINDS_ROOT_NAME`: Selects the data root for the running backend. Default `minds` (i.e. production at `~/.minds/`). Must match `minds(-<env-name>)?`. Activated by `minds env activate <name>`; legacy values like `devminds` are silently treated as unset with a warning.
-- `MINDS_CLIENT_CONFIG_PATH`: Path to the per-env `client.toml` the backend should load. Set by `minds env activate`; passing `--config-file` to `minds run` overrides it. The backend refuses to start when neither is set.
+- `MINDS_ROOT_NAME`: Selects the data root for the running backend. Default `minds` (i.e. production at `~/.minds/`). Must match `minds(-<env-name>)?`. Activated by `minds-admin env activate <name>`; legacy values like `devminds` are silently treated as unset with a warning.
+- `MINDS_CLIENT_CONFIG_PATH`: Path to the per-env `client.toml` the backend should load. Set by `minds-admin env activate`; passing `--config-file` to `minds run` overrides it. The backend refuses to start when neither is set.
 
 ## Output and logging conventions
 
@@ -127,14 +129,15 @@ The desktop app bundles platform-specific binaries so users need zero prerequisi
 - **lima**: Required for the Lima launch mode (running agents in Linux VMs). SHA256-verified download, pinned to the version in `download-binaries.js`. Self-contained on macOS Apple Silicon via Lima's `vz` backend; macOS Intel and Linux still run the VM itself via host QEMU.
 - **restic**: Per-workspace backup repositories. Downloaded from GitHub releases.
 - **desync**: Content-defined-chunking client that fetches the pre-baked Lima image. Downloaded from GitHub releases. macOS/Linux only.
+- **uv-shims**: macOS only, and the one payload that is generated rather than downloaded. It holds a single `install_name_tool` shim, which runs Apple's real tool from the toolchain under `DEVELOPER_DIR` (the standard Xcode location when that is unset) or from `/Library/Developer/CommandLineTools`, and exits nonzero when neither is present. uv unconditionally execs a bare `install_name_tool` after downloading a managed CPython, to rewrite libpython's Mach-O install name ([astral-sh/uv#14893](https://github.com/astral-sh/uv/issues/14893)); on a Mac with no Xcode Command Line Tools, `/usr/bin/install_name_tool` is the xcselect stub, which asks macOS to offer the developer-tools install and so raises a system modal on first launch. uv reports the shim's nonzero exit as a non-fatal warning and libpython keeps its as-shipped install name, which is inert here: Minds runs `bin/python3.12`, which links libpython statically, and none of the bundled packages link it either.
 
-Each is placed in the `resources/` directory (outside the asar archive). The packaged app prepends the `uv`, `git`, `lima`, and `desync` directories to the backend child process's `PATH`. `restic` and `desync` are also named by explicit absolute path (`MINDS_RESTIC_BINARY`, `MINDS_DESYNC_BINARY`), so their resolution never depends on `PATH` ordering; `restic` is reached *only* that way, its directory never being on `PATH`.
+Each is placed in the `resources/` directory (outside the asar archive). The packaged app prepends the `uv-shims`, `uv`, `git`, `lima`, and `desync` directories to the backend child process's `PATH`, and prepends `uv-shims` to the `uv sync` environment setup's `PATH` as well -- it is the only payload on both, because either spawn can be the one that fetches the managed CPython. `restic` and `desync` are also named by explicit absolute path (`MINDS_RESTIC_BINARY`, `MINDS_DESYNC_BINARY`), so their resolution never depends on `PATH` ordering; `restic` is reached *only* that way, its directory never being on `PATH`.
 
 Dev mode reaches the same pinned binaries: it prepends the `git` and `lima` directories to `PATH` and names `restic`, `desync`, and the latchkey curl by absolute path. `lima` matters because `mngr_lima` resolves `limactl` from `PATH` and enforces only a *minimum* version, so a developer's newer system lima would pass the check and then hang agent creation on the 2.1.x forwarder regression the pin exists to avoid.
 
-`uv` is the deliberate exception. Dev runs the monorepo workspace through `uv run --package minds`, against the same `.venv` and `uv.lock` the developer's shell drives, so it uses *their* uv rather than risking lockfile-format skew against shared state from a second pinned one. It is therefore the one bundled binary dev neither downloads nor resolves (`BINARIES[].usedInDev`).
+`uv` is the deliberate exception. Dev runs the monorepo workspace through `uv run --package minds`, against the same `.venv` and `uv.lock` the developer's shell drives, so it uses *their* uv rather than risking lockfile-format skew against shared state from a second pinned one. It is therefore a bundled binary dev neither downloads nor resolves (`BINARIES[].usedInDev`), and `uv-shims` follows it: dev skips environment setup entirely and shadows nothing for the developer's own uv.
 
-There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./deploy/lima-image.md) for the whole pipeline, and "Why the image is raw" below.
+There is deliberately no bundled `qemu-img`. The pre-baked image is published, downloaded, and consumed as a **raw** image end to end, so nothing converts it. See [lima-image.md](./deploy/setup/lima-image.md) for the whole pipeline, and "Why the image is raw" below.
 
 ### How the shipped binaries are chosen
 
@@ -202,7 +205,7 @@ same shape:
 ```
 
 `MINDS_ROOT_NAME` selects which data root the backend uses. Activation
-(`minds env activate <name>`) sets it to `minds-<env-name>` (or just
+(`minds-admin env activate <name>`) sets it to `minds-<env-name>` (or just
 `minds` for production) and exports the derived `MNGR_HOST_DIR` /
 `MNGR_PREFIX` / `MINDS_CLIENT_CONFIG_PATH` alongside. Two envs
 activated in parallel shells (or by two Electron instances pointed at
@@ -214,7 +217,7 @@ invocations ignore `MINDS_ROOT_NAME`.
 The desktop client picks the env it talks to via shell activation:
 
 ```bash
-eval "$(uv run minds env activate <name>)"
+eval "$(uv run minds-admin env activate <name>)"
 minds run                                  # or `just minds-start`
 ```
 
@@ -227,8 +230,8 @@ The packaged Electron app embeds a `client.toml` + `MINDS_ROOT_NAME`
 pair at build time via `MINDS_CLIENT_CONFIG_BUNDLE` and
 `MINDS_ROOT_NAME_BUNDLE`, and the Electron startup exports the env
 vars + passes `--config-file` explicitly -- end users never have to
-activate anything. See `apps/minds/docs/deploy/environments.md` for the full
-operator workflow and `apps/minds/docs/deploy/vault-setup.md` for how
+activate anything. See `apps/minds/docs/deploy/reference/environments.md` for the full
+operator workflow and `apps/minds/docs/deploy/setup/vault.md` for how
 deploy-time secrets flow through HCP Vault.
 
 ### Configuration file
@@ -339,7 +342,7 @@ apps/minds/
       uv.lock               # Pinned lockfile for reproducible installs
   scripts/
     build.js                # Build orchestrator: downloads binaries, builds wheels, stages resources/
-    download-binaries.js    # BINARIES table + pinned, hash-verified downloads (uv, git, restic, desync, lima, curl)
+    download-binaries.js    # BINARIES table: pinned, hash-verified downloads (uv, git, restic, desync, lima, curl) + the generated uv-shims
     ensure-binaries.js      # Dev: provisions BINARIES into the shared cache, symlinks resources/ at it
     git-manifest.json       # Pinned dugite-native git payload: tag, version, per-target hashes
   resources/                # (gitignored) Built artifacts for packaging

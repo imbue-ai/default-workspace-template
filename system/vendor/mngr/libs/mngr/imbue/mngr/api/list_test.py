@@ -40,10 +40,12 @@ from imbue.mngr.api.list import _process_host_with_error_handling
 from imbue.mngr.api.list import agent_details_to_cel_context
 from imbue.mngr.api.list import build_agent_cel_context
 from imbue.mngr.api.list import list_agents
+from imbue.mngr.cli.exit_codes import EXIT_CODE_ERROR
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import ProviderInstanceConfig
 from imbue.mngr.config.provider_config_registry import _provider_config_registry
 from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import EXIT_CODE_TARGET_NOT_FOUND
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import ProviderDiscoveryError
 from imbue.mngr.errors import ProviderEmptyError
@@ -77,6 +79,7 @@ from imbue.mngr.primitives import IdleMode
 from imbue.mngr.primitives import ProviderBackendName
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SSHInfo
+from imbue.mngr.providers.local.backend import LOCAL_BACKEND_NAME
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.mock_provider_test import MockProviderInstance
 from imbue.mngr.providers.mock_provider_test import make_offline_host
@@ -1092,7 +1095,7 @@ def test_discover_by_address_narrows_to_the_constrained_host(
     )
     assert excluded.agents_by_host == {}
     assert excluded.providers == unconstrained.providers
-    assert excluded.skipped_providers == unconstrained.skipped_providers
+    assert excluded.unavailable_providers == unconstrained.unavailable_providers
 
     kept = discover_by_address(
         AgentAddress(agent=AgentName("no-such-agent"), host=HostAddress(host=HostName(LOCAL_HOST_NAME))),
@@ -1801,13 +1804,22 @@ def _make_list_params(
 
 
 def _make_broken_provider_ctx(temp_mngr_ctx: MngrContext) -> MngrContext:
-    """Build a MngrContext with a configured provider that has an unknown backend."""
-    failing_config = ProviderInstanceConfig(backend=ProviderBackendName("nonexistent-backend-xyz"))
+    """Build a MngrContext with a configured provider that has an unknown backend.
+
+    Pin ``enabled_backends`` so a full-enumeration ``list_agents`` only constructs the
+    ``local`` and broken providers. Otherwise it also discovers over every other
+    registered backend -- e.g. the ``lima`` default instance, whose discovery shells out
+    to ``limactl`` and reads the real ``/mngr`` host dir -- whose environment-dependent
+    failures would add a spurious second error (MIND-229).
+    """
+    broken_backend = ProviderBackendName("nonexistent-backend-xyz")
+    failing_config = ProviderInstanceConfig(backend=broken_backend)
     updated_config = temp_mngr_ctx.config.model_copy_update(
         to_update(
             temp_mngr_ctx.config.field_ref().providers,
             {ProviderInstanceName("broken-provider"): failing_config},
         ),
+        to_update(temp_mngr_ctx.config.field_ref().enabled_backends, [LOCAL_BACKEND_NAME, broken_backend]),
     )
     return temp_mngr_ctx.model_copy_update(
         to_update(temp_mngr_ctx.field_ref().config, updated_config),
@@ -1859,8 +1871,44 @@ def test_list_agents_batch_continue_mode_records_failing_provider_error(
     assert "nonexistent-backend-xyz" in result.errors[0].message
 
 
+@pytest.mark.allow_warnings(match=r"Error discovering agents for provider")
+def test_list_agents_continue_mode_ignores_incidental_backends(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """A full-enumeration continue-mode listing only touches the ctx's enabled backends.
+
+    MIND-229 regression guard: a registered backend outside the ctx's ``enabled_backends``
+    must never be constructed or discovered, so its failures cannot leak into
+    ``result.errors``. This is what keeps the continue-mode provider-error tests hermetic
+    against incidental backends like the ``lima`` default instance.
+    """
+    _backend_registry[_RAISING_DISCOVERY_BACKEND_NAME] = _RaisingDiscoveryProviderBackend
+    _provider_config_registry[_RAISING_DISCOVERY_BACKEND_NAME] = ProviderInstanceConfig
+    try:
+        failing_ctx = _make_broken_provider_ctx(temp_mngr_ctx)
+
+        result = list_agents(
+            mngr_ctx=failing_ctx,
+            is_streaming=False,
+            error_behavior=ErrorBehavior.CONTINUE,
+        )
+
+        provider_errors = [e for e in result.errors if isinstance(e, ProviderErrorInfo)]
+        assert len(provider_errors) == 1
+        assert provider_errors[0].provider_name == ProviderInstanceName("broken-provider")
+    finally:
+        del _backend_registry[_RAISING_DISCOVERY_BACKEND_NAME]
+        del _provider_config_registry[_RAISING_DISCOVERY_BACKEND_NAME]
+
+
 def _make_not_authorized_alongside_local_ctx(temp_mngr_ctx: MngrContext) -> MngrContext:
-    """Build a MngrContext with the default local provider plus one unauthenticated provider."""
+    """Build a MngrContext with the default local provider plus one unauthenticated provider.
+
+    Pin ``enabled_backends`` so a full-enumeration ``list_agents`` only discovers the
+    ``local`` and unauthenticated providers; otherwise an incidental backend (e.g. ``lima``)
+    erroring during discovery would break the "all provider errors are inaccessible"
+    assertion (MIND-229).
+    """
     provider_config = ProviderInstanceConfig(backend=_NOT_AUTHORIZED_DISCOVERY_BACKEND_NAME)
     merged_providers = {
         **temp_mngr_ctx.config.providers,
@@ -1868,6 +1916,10 @@ def _make_not_authorized_alongside_local_ctx(temp_mngr_ctx: MngrContext) -> Mngr
     }
     updated_config = temp_mngr_ctx.config.model_copy_update(
         to_update(temp_mngr_ctx.config.field_ref().providers, merged_providers),
+        to_update(
+            temp_mngr_ctx.config.field_ref().enabled_backends,
+            [LOCAL_BACKEND_NAME, _NOT_AUTHORIZED_DISCOVERY_BACKEND_NAME],
+        ),
     )
     return temp_mngr_ctx.model_copy_update(
         to_update(temp_mngr_ctx.field_ref().config, updated_config),
@@ -2872,3 +2924,70 @@ def test_the_single_agent_lookup_blames_the_unreachable_backend_too(temp_mngr_ct
     # With every provider reachable this stays the ordinary bad-input answer.
     with pytest.raises(UserInputError):
         find_one_agent(address, temp_mngr_ctx)
+
+
+# A lookup that matches nothing exits with the gone-target code only when every
+# identifier it was given is machine-generated. mngr_forward reads the exit code
+# alone to decide whether respawning its per-agent `mngr event --follow` child
+# could ever succeed, and it always addresses `<agent_id>@<host_id>`. A name is
+# user-typed, so a miss there is as likely a typo and must keep the ordinary
+# code -- otherwise `mngr stop <typo>` is indistinguishable from a gone target.
+_MISSING_AGENT_NAME = AgentName("some-machine")
+_MISSING_AGENT_ID = AgentId("agent-fa29307a16734899aa77b0f0563c8c99")
+_MISSING_HOST_ID = HostId("host-fa29307a16734899aa77b0f0563c8c99")
+
+
+@pytest.mark.allow_warnings
+@pytest.mark.parametrize(
+    ("address", "expected_exit_code"),
+    [
+        (AgentAddress(agent=_MISSING_AGENT_NAME), EXIT_CODE_ERROR),
+        (AgentAddress(agent=_MISSING_AGENT_ID), EXIT_CODE_TARGET_NOT_FOUND),
+        (
+            AgentAddress(agent=_MISSING_AGENT_NAME, host=HostAddress(host=HostName("some-host"))),
+            EXIT_CODE_ERROR,
+        ),
+        (
+            AgentAddress(agent=_MISSING_AGENT_NAME, host=HostAddress(host=_MISSING_HOST_ID)),
+            EXIT_CODE_TARGET_NOT_FOUND,
+        ),
+    ],
+    ids=["agent_name", "agent_id", "host_name", "host_id"],
+)
+def test_the_single_agent_lookup_reserves_the_gone_target_code_for_ids(
+    address: AgentAddress, expected_exit_code: int, temp_mngr_ctx: MngrContext
+) -> None:
+    """find_one_agent's four miss paths: an id is gone, a name is bad input."""
+    with pytest.raises(MngrError) as exc_info:
+        find_one_agent(address, temp_mngr_ctx)
+
+    assert exc_info.value.exit_code == expected_exit_code
+
+
+@pytest.mark.allow_warnings
+@pytest.mark.parametrize(
+    ("agent", "expected_exit_code"),
+    [(_MISSING_AGENT_NAME, EXIT_CODE_ERROR), (_MISSING_AGENT_ID, EXIT_CODE_TARGET_NOT_FOUND)],
+    ids=["agent_name", "agent_id"],
+)
+def test_the_bulk_agent_lookup_reserves_the_gone_target_code_for_ids(
+    agent: AgentName | AgentId, expected_exit_code: int, temp_mngr_ctx: MngrContext
+) -> None:
+    """The other entry point has to make the same split.
+
+    `mngr stop` / `start` / `destroy` / `message` / `label` / `archive` resolve
+    through :func:`find_all_agents`, which fails in a different place
+    (``_raise_for_unmatched_identifiers``) than :func:`find_one_agent` does. An
+    exit code carried by the shared exception *class* would look correct in the
+    single-agent tests while silently giving every mistyped name here the
+    gone-target code.
+    """
+    with pytest.raises(MngrError) as exc_info:
+        find_all_agents(
+            addresses=[AgentAddress(agent=agent)],
+            filter_all=False,
+            target_state=None,
+            mngr_ctx=temp_mngr_ctx,
+        )
+
+    assert exc_info.value.exit_code == expected_exit_code

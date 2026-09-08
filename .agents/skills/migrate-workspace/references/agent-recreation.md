@@ -39,12 +39,16 @@ at all.
 
 ## 2. Why the history file is load-bearing
 
-Every minds chat agent shares the primary agent's `CLAUDE_CONFIG_DIR` (the
-template sets `isolate_local_config_dir = false` on the `claude` type and `true`
-only on `main`), so **all** of their sessions sit in **one** `projects/` tree with
-nothing but the session id to tell them apart. There is no per-agent directory to
-read. `claude_session_id_history` is therefore the only thing that says which
-sessions belonged to which agent.
+A minds chat agent's `CLAUDE_CONFIG_DIR` is the provider account it was created
+on (`~/.minds/accounts/<id>/`), and every chat on the same account shares one
+`projects/` tree with nothing but the session id to tell them apart. There is no
+per-agent directory to read. `claude_session_id_history` is therefore the only
+thing that says which sessions belonged to which agent.
+
+Two consequences for a migration. Sessions are spread across as many `projects/`
+trees as the user has accounts, so a sweep has to walk all of them -- and a chat
+whose account was deleted has no tree at all, because deleting an account removes
+its credentials (its transcripts are kept, but nothing points at them any more).
 
 That tree is under the *primary* agent's state dir:
 

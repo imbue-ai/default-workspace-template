@@ -17,6 +17,7 @@ from typing import TypeVar
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 from pyinfra.api.host import Host as PyinfraHost
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
@@ -57,8 +58,8 @@ from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
-from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.utils.name_generator import generate_host_name
+from imbue.mngr.utils.ssh import build_ssh_connect_command
 from imbue.mngr.utils.thread_cleanup import cleanup_thread_local_resources
 from imbue.mngr.utils.thread_cleanup import mngr_executor
 
@@ -121,8 +122,9 @@ def _build_host_details_from_host(
     is_locked: bool | None = None
     locked_time: datetime | None = None
     if isinstance(host, OnlineHostInterface):
-        boot_time = host.get_boot_time()
-        uptime_seconds = host.get_uptime_seconds()
+        boot_info = host.read_boot_info()
+        boot_time = boot_info.boot_time
+        uptime_seconds = boot_info.uptime_seconds
         resource = host.get_provider_resources()
         is_locked = host.is_lock_held()
         # Only fetch locked_time when the lock is held to avoid a redundant
@@ -282,6 +284,37 @@ def build_agent_details_from_offline_ref(
     )
 
 
+def _build_offline_host_and_agent_details(
+    provider: "ProviderInstanceInterface",
+    host_ref: DiscoveredHost,
+    agent_refs: Sequence[DiscoveredAgent],
+    offline_field_generators: Mapping[str, Mapping[str, Callable[[DiscoveredAgent, HostDetails], Any]]] | None,
+    is_authentication_failure: bool = False,
+) -> tuple[HostDetails, list[AgentDetails]]:
+    """Build a host's details and agents from the provider's offline view, making no live host reads.
+
+    The listing fallback for when a host's live detail collection cannot be
+    completed -- whether it is unreachable or too slow to answer within its budget.
+    Reads only persisted records via ``to_offline_host`` (no SSH), so it is cheap
+    and cannot itself stall. For a non-authentication failure, lets the provider
+    correct the offline-derived state from an out-of-band signal it has (e.g.
+    docker's daemon reports the container is still running -> UNKNOWN rather than
+    CRASHED) so a live host with a dead inner sshd is not misreported as offline.
+    """
+    resolved_offline_field_generators = offline_field_generators or {}
+    host = provider.to_offline_host(host_ref.host_id)
+    host_details, _ssh_activity = _build_host_details_from_host(host, host_ref, is_authentication_failure)
+    if not is_authentication_failure:
+        fallback_state = provider.get_connection_error_fallback_state(host_ref.host_id)
+        if fallback_state is not None:
+            host_details = host_details.model_copy_update(to_update(host_details.field_ref().state, fallback_state))
+    agent_details_list = [
+        build_agent_details_from_offline_ref(agent_ref, host_details, resolved_offline_field_generators)
+        for agent_ref in agent_refs
+    ]
+    return host_details, agent_details_list
+
+
 @contextmanager
 def connected_host(
     provider: "ProviderInstanceInterface",
@@ -311,7 +344,7 @@ def _discover_agents_on_host(
     for local hosts.
     """
     # FIXME: wrap this in a bounded retry (e.g. tenacity) so a *transient*
-    # connection failure (timeout, connection refused, banner reset) is retried
+    # connection failure (timeout, connection refused, SSH banner read failure) is retried
     # here rather than immediately surfacing to the caller. The retry predicate
     # must NOT retry permanent failures (HostAuthenticationError / bad key) --
     # those should fail fast. This is the right layer for it: retrying here means
@@ -321,6 +354,12 @@ def _discover_agents_on_host(
     # ProviderDiscoveryError.
     with connected_host(provider, host_id) as host:
         agents = host.discover_agents(timeout_seconds=timeout_seconds)
+        # A successful live read is the one moment discovery can heal the
+        # provider's persisted agent store (e.g. records for agents created by
+        # an in-container bootstrap, which the client-side persist path never
+        # sees). Diff-gated, so this is free in the steady state.
+        if isinstance(host, OnlineHostInterface):
+            provider.heal_persisted_agent_data(host, agents, timeout_seconds=timeout_seconds)
         return agents, _ssh_info_from_host(host)
 
 
@@ -332,9 +371,9 @@ def _discover_agents_on_host_with_offline_fallback(
     """Discover a host's agents (and its SSH endpoint), falling back to the provider's offline view on connection error.
 
     The host was reachable enough to be discovered, but enumerating its agents
-    over SSH failed (sshd crashed, banner reset, auth failure, ...). Rather than
+    over SSH failed (sshd crashed, SSH banner read failure, auth failure, ...). Rather than
     fail the whole provider, recover the host's agents from the provider's
-    persisted/offline records so its workspaces stay visible. Mirrors the
+    persisted/offline records so its agents stay visible. Mirrors the
     inline recovery in ``discover_hosts_and_agents``.
 
     ``timeout_seconds``, when set, bounds the online read (a per-host-timeout hit
@@ -458,6 +497,10 @@ class ProviderInstanceInterface(MutableModel, ABC):
     name: ProviderInstanceName = Field(frozen=True, description="Name of this provider instance")
     host_dir: Path = Field(frozen=True, description="Base directory for mngr data on hosts managed by this instance")
     mngr_ctx: MngrContext = Field(frozen=True, repr=False, description="The mngr context")
+    # Per-host live-agent-id sets from the last completed healing pass, so
+    # steady-state discovery (unchanged live agents) never re-reads the
+    # persisted store. See heal_persisted_agent_data.
+    _healed_live_agent_ids_by_host_id: dict[HostId, frozenset[AgentId]] = PrivateAttr(default_factory=dict)
 
     # =========================================================================
     # Capability Properties
@@ -712,11 +755,11 @@ class ProviderInstanceInterface(MutableModel, ABC):
                 results[host_ref] = agents
             except HostConnectionError as e:
                 # The host was reachable enough to be discovered, but enumerating
-                # its agents failed (sshd crashed, banner reset, auth failure,
+                # its agents failed (sshd crashed, SSH banner read failure, auth failure,
                 # ...). Rather than let that bubble up to
                 # _construct_and_discover_for_provider -- which records a
                 # per-provider error and reports agents=[] / hosts=[] for the
-                # WHOLE provider, making every workspace on it unreachable via
+                # WHOLE provider, making every agent on it unreachable via
                 # mngr_forward -- recover the host's agents from the provider's
                 # offline view.
                 #
@@ -729,7 +772,7 @@ class ProviderInstanceInterface(MutableModel, ABC):
                 # The offline view recovers the host's persisted records: a docker
                 # container that is RUNNING but whose sshd has died still exposes
                 # its agent records via the docker daemon (labels + on-host-volume
-                # data), so its workspaces stay visible -- matching the behavior of
+                # data), so its agents stay visible -- matching the behavior of
                 # a fully-stopped container.
                 #
                 # Any provider whose hosts can raise HostConnectionError is assumed
@@ -976,26 +1019,13 @@ class ProviderInstanceInterface(MutableModel, ABC):
         except HostConnectionError as e:
             self.on_connection_error(host_ref.host_id)
             logger.debug("Host {} unreachable, falling back to offline data: {}", host_ref.host_id, e)
-            host = self.to_offline_host(host_ref.host_id)
-            is_authentication_failure = isinstance(e, HostAuthenticationError)
-            host_details, _ssh_activity = _build_host_details_from_host(host, host_ref, is_authentication_failure)
-            # The offline derivation can only reason from persisted records, so a
-            # shutdown-capable provider reports CRASHED for a host that never
-            # recorded a clean stop. When the connection failure is not an auth
-            # failure, give the provider a chance to correct that from an
-            # out-of-band signal it has (e.g. docker's daemon reports the
-            # container is still running -> UNKNOWN rather than CRASHED), so a
-            # live host with a dead inner sshd is not misreported as offline.
-            if not is_authentication_failure:
-                fallback_state = self.get_connection_error_fallback_state(host_ref.host_id)
-                if fallback_state is not None:
-                    host_details = host_details.model_copy_update(
-                        to_update(host_details.field_ref().state, fallback_state)
-                    )
-            agent_details_list = [
-                build_agent_details_from_offline_ref(agent_ref, host_details, resolved_offline_field_generators)
-                for agent_ref in agent_refs
-            ]
+            host_details, agent_details_list = _build_offline_host_and_agent_details(
+                self,
+                host_ref,
+                agent_refs,
+                offline_field_generators,
+                is_authentication_failure=isinstance(e, HostAuthenticationError),
+            )
 
         finally:
             if initial_host is not None:
@@ -1209,6 +1239,131 @@ class ProviderInstanceInterface(MutableModel, ABC):
 
         The default implementation is a no-op for providers that don't need this.
         """
+
+    @property
+    def is_agent_data_persistence_supported(self) -> bool:
+        """Whether this provider persists agent data for offline listing.
+
+        Providers that override the persisted-agent-data hooks
+        (``persist_agent_data``, ``remove_persisted_agent_data`` and
+        ``list_persisted_agent_data_for_host``) should return True so
+        discovery-time healing keeps the persisted store in sync with each
+        host's live agents. The default False keeps healing a no-op.
+        """
+        return False
+
+    def heal_persisted_agent_data(
+        self,
+        host: OnlineHostInterface,
+        live_agents: Sequence[DiscoveredAgent],
+        timeout_seconds: float | None = None,
+    ) -> None:
+        """Reconcile the persisted agent store with a host's live agent listing.
+
+        ``persist_agent_data`` is only invoked by the client-side mngr process
+        that creates or edits an agent, so agents created *inside* the host
+        (e.g. by an in-container bootstrap running ``mngr create`` against its
+        local provider) never reach the provider's persisted store -- any
+        offline listing then structurally misses them. Called by discovery
+        after a successful live agent read: persists live agents missing from
+        the store and removes records whose agents no longer exist.
+
+        Best-effort and diff-gated: when the live agent id set matches the last
+        healed set for this host, no store read happens at all, so steady-state
+        discovery stays read-only. Expected failure shapes (``MngrError``,
+        ``OSError``) are logged and swallowed so an environmental hiccup in
+        healing does not break discovery; anything else (a programming bug, a
+        raw provider-SDK error) still surfaces.
+
+        ``timeout_seconds`` bounds the pass's own live re-read the same way the
+        caller's listing was bounded (the per-host-bounded discovery path must
+        stay bounded through healing too).
+        """
+        if not self.is_agent_data_persistence_supported:
+            return
+        live_agent_ids = frozenset(agent.agent_id for agent in live_agents)
+        if self._healed_live_agent_ids_by_host_id.get(host.id) == live_agent_ids:
+            return
+        try:
+            self._reconcile_persisted_agent_data(host, live_agent_ids, timeout_seconds)
+        except (MngrError, OSError) as e:
+            logger.warning("Skipped persisted-agent healing for host {}: {}", host.id, e)
+
+    def _reconcile_persisted_agent_data(
+        self,
+        host: OnlineHostInterface,
+        live_agent_ids: frozenset[AgentId],
+        timeout_seconds: float | None,
+    ) -> None:
+        """Apply one healing pass; see :meth:`heal_persisted_agent_data`.
+
+        Deletion safety relies on strict ordering: read the persisted store,
+        probe the host lock, then re-read the live listing, and only delete
+        records absent from that *post-probe* listing. An in-flight create
+        holds the host lock across both its persisted write and its on-host
+        state write, so a held lock means "someone is mutating -- retry next
+        pass", and a free lock means any record without a matching live agent
+        in the post-probe listing is genuinely orphaned (its create crashed or
+        its agent is gone).
+        """
+        persisted_agent_ids: set[AgentId] = set()
+        for record in self.list_persisted_agent_data_for_host(host.id):
+            record_id = record.get("id")
+            if not record_id:
+                # persist_agent_data implementations refuse id-less data, so such
+                # a record is corrupt; healing can never reconcile or remove it,
+                # and a silent skip would leave it lingering with no signal.
+                logger.warning("Ignoring persisted agent record without an id field on host {}", host.id)
+                continue
+            try:
+                persisted_agent_ids.add(AgentId(str(record_id)))
+            except ValueError:
+                logger.warning("Ignoring persisted agent record with malformed id {!r} on host {}", record_id, host.id)
+
+        missing_agent_ids = live_agent_ids - persisted_agent_ids
+        stale_agent_ids = persisted_agent_ids - live_agent_ids
+        if not missing_agent_ids and not stale_agent_ids:
+            self._healed_live_agent_ids_by_host_id[host.id] = live_agent_ids
+            return
+
+        # A held lock means a create/start/gc (possibly running inside the
+        # host) is mutating agent state right now; skip without caching so the
+        # next discovery pass retries.
+        if host.is_lock_held():
+            logger.debug("Skipped persisted-agent healing for host {}: host lock is held", host.id)
+            return
+
+        # Re-read the live listing after the probe: a create that finished
+        # before the probe released the lock only after its on-host state write
+        # completed, so its agent is guaranteed to appear here. The decisions
+        # below are recomputed against this post-probe listing (not the
+        # pre-probe one) so the store ends up consistent with exactly the set
+        # that gets cached -- otherwise an agent that appeared (or vanished)
+        # between the two listings would never be healed, because the next
+        # pass's live listing would match the cache and skip.
+        fresh_agent_by_id = {agent.agent_id: agent for agent in host.discover_agents(timeout_seconds=timeout_seconds)}
+        fresh_agent_ids = frozenset(fresh_agent_by_id)
+
+        for agent_id in sorted(fresh_agent_ids - persisted_agent_ids):
+            fresh_agent = fresh_agent_by_id[agent_id]
+            if not fresh_agent.certified_data.get("id"):
+                # persist_agent_data implementations refuse data without an id,
+                # so skip -- but loudly, or the agent silently never reaches the
+                # persisted store (the healed-set cache masks the skip afterward).
+                logger.warning(
+                    "Not persisting live agent {} on host {}: its certified data has no id field", agent_id, host.id
+                )
+                continue
+            logger.debug("Healing persisted store: persisting live agent {} on host {}", agent_id, host.id)
+            self.persist_agent_data(host.id, dict(fresh_agent.certified_data))
+
+        for agent_id in sorted(persisted_agent_ids - fresh_agent_ids):
+            logger.debug(
+                "Healing persisted store: removing orphaned record for agent {} on host {}", agent_id, host.id
+            )
+            self.remove_persisted_agent_data(host.id, agent_id)
+
+        self._healed_live_agent_ids_by_host_id[host.id] = fresh_agent_ids
 
     # =========================================================================
     # Outer Host Access

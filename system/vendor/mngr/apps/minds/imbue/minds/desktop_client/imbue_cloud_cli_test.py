@@ -10,13 +10,18 @@ from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudAuthFailedCliEr
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudEmailNotVerifiedCliError
+from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudLeaseActiveCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudQuotaExceededCliError
 from imbue.minds.desktop_client.imbue_cloud_cli import ShareCliInfo
+from imbue.minds.desktop_client.imbue_cloud_cli import _ACCOUNTS_URL_SUBPROCESS_ENV
 from imbue.minds.desktop_client.imbue_cloud_cli import _CONNECTOR_URL_SUBPROCESS_ENV
+from imbue.minds.desktop_client.imbue_cloud_cli import _WEB_LOGIN_TIMEOUT_SECONDS
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_conflict_stored
 from imbue.minds.desktop_client.imbue_cloud_cli import _parse_stderr_error_message
+from imbue.minds.desktop_client.supertokens_routes import _WEB_LOGIN_FLOW_TTL_SECONDS
 from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.testing import RecordingMngrCaller
+from imbue.mngr_imbue_cloud.cli.auth import _LOGIN_LISTEN_TIMEOUT_SECONDS
 
 
 def test_expect_success_keeps_traceback_out_of_message_but_on_stderr() -> None:
@@ -113,11 +118,46 @@ def test_expect_success_unstructured_failure_is_not_reported_as_an_auth_verdict(
     assert not isinstance(exc_info.value, ImbueCloudAuthFailedCliError)
 
 
+def test_web_login_timeouts_stay_coherent_and_cover_a_slow_browser_leg() -> None:
+    """The three coupled web-login deadlines must stay ordered as the listen window widens.
+
+    The subprocess-kill deadline must exceed the listen window, so the plugin's own
+    timeout message surfaces instead of a kill; the flow-status TTL must cover the
+    whole subprocess lifetime, so the polling frontend never reports the flow
+    expired while a sign-in is still in progress.
+    """
+    assert _LOGIN_LISTEN_TIMEOUT_SECONDS >= 600
+    assert _WEB_LOGIN_TIMEOUT_SECONDS > _LOGIN_LISTEN_TIMEOUT_SECONDS
+    assert _WEB_LOGIN_FLOW_TTL_SECONDS >= _WEB_LOGIN_TIMEOUT_SECONDS
+
+
 def test_parse_stderr_error_message_survives_surrounding_log_lines() -> None:
     body = json.dumps({"error": "the message", "error_class": "SomeError"}, indent=2)
     stderr = "2026-07-12 10:00:00 | WARNING | noisy {braced} log line\n" + body + "\ntrailing\n"
     assert _parse_stderr_error_message(stderr) == "the message"
     assert _parse_stderr_error_message("no json here\n") is None
+
+
+def test_sync_record_delete_raises_the_typed_lease_active_error_on_the_connectors_refusal() -> None:
+    """The connector's tombstone-first 409 (``code: lease_active``) surfaces as its own error type."""
+    body = json.dumps(
+        {
+            "error": (
+                'Connector error 409: {"detail":{"code":"lease_active","message":"workspace record agent-1 '
+                'still holds a cloud lease; destroy the workspace instead of removing its record"}}'
+            ),
+            "error_class": "ImbueCloudConnectorError",
+        },
+        indent=2,
+    )
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=1, stdout="", stderr="a log line\n" + body + "\n"))
+    cli = ImbueCloudCli(mngr_caller=caller, connector_url=AnyUrl("https://connector.example/"))
+
+    with pytest.raises(ImbueCloudLeaseActiveCliError) as exc_info:
+        cli.sync_record_delete("owner@example.com", "agent-1")
+
+    assert "destroy it instead" in str(exc_info.value)
+    assert "lease_active" in exc_info.value.stderr
 
 
 def test_run_routes_through_mngr_caller_with_home_cwd_and_connector_env() -> None:
@@ -135,6 +175,26 @@ def test_run_routes_through_mngr_caller_with_home_cwd_and_connector_env() -> Non
     assert recorded.cwd == Path.home()
     # The trailing slash is stripped so the plugin builds clean URLs.
     assert recorded.env_overrides == {_CONNECTOR_URL_SUBPROCESS_ENV: "https://connector.example"}
+
+
+def test_run_passes_the_accounts_origin_env_when_configured() -> None:
+    """The accounts origin rides into the subprocess env so ``auth login`` opens
+    the hosted page on the origin where Google OAuth and session cookies work
+    (a flow started on the connector host strands the nonce cookie and fails)."""
+    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout=json.dumps({"state": "none"})))
+    cli = ImbueCloudCli(
+        mngr_caller=caller,
+        connector_url=AnyUrl("https://connector.example/"),
+        accounts_base_url=AnyUrl("https://accounts.example.com/"),
+    )
+
+    cli.get_share_status(account="owner@example.com", host_id="host-abc")
+
+    recorded = caller.recorded_calls[0]
+    assert recorded.env_overrides == {
+        _CONNECTOR_URL_SUBPROCESS_ENV: "https://connector.example",
+        _ACCOUNTS_URL_SUBPROCESS_ENV: "https://accounts.example.com",
+    }
 
 
 def test_parse_conflict_stored_survives_surrounding_log_lines() -> None:

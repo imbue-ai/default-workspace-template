@@ -44,6 +44,11 @@ invariants itself.
   single-use, and says so: starting a follower that is already running would
   forward every line twice, and starting a stopped one would leave a thread that
   exits immediately while still reporting itself live, so both raise instead.
+  The follow thread sleeps on a directory watch (the same watchdog-backed wake
+  the `mngr event --follow` tails use), so a line is forwarded the moment the
+  writer appends it and an idle stream costs no wake-ups; a fallback poll covers
+  a filesystem event the watch missed and bounds how late a lost observer is
+  noticed (`fallback_poll_seconds`, ten seconds by default).
 
 A follower survives the observer it follows being restarted. Losing the writer is
 environmental, not a fault of the fold: the observer can be shed under memory
@@ -69,8 +74,8 @@ to fix it, and the wrong diagnosis sends them somewhere else. `stop` holds to th
 same rule: a thread still running when its wait elapses is logged rather than
 assumed gone, since the only way it gets there is being stuck inside the
 consumer's own sink, still delivering events to a consumer that has just been
-told the follower stopped. How long that wait is, like the poll interval beside
-it, is the consumer's to state (`join_timeout_seconds`): how long a sink may
+told the follower stopped. How long that wait is, like the fallback interval
+beside it, is the consumer's to state (`join_timeout_seconds`): how long a sink may
 reasonably take to return is a fact about the sink.
 
 `AgentDetails.initial_branch` now reports the branch mngr placed an agent's

@@ -13,5 +13,9 @@ THIRD_PARTY_IMPORT_ROOTS: Final[frozenset[str]] = frozenset(
     {
         "fastapi",
         "pydantic",
+        # Consumed via imbue.modal_app_kit.sentry (error reporting to the
+        # dev/ci Bugsink instance), not imported by the shipped modules
+        # directly.
+        "sentry_sdk",
     }
 )

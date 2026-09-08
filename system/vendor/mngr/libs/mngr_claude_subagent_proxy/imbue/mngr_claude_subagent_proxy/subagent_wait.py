@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from loguru import logger
@@ -507,6 +508,22 @@ def _has_target_disappeared_past_grace(runtime: _WaitRuntime, now: float) -> boo
     return False
 
 
+def _agent_turn_text(event: dict[str, Any]) -> str:
+    """The assistant text of one common-transcript record, or "" if it is not an agent turn.
+
+    Reads both stream vintages: the ATIF-shaped ``step`` record with ``source: "agent"`` that the
+    claude emitter writes now, and the legacy ``assistant_message`` record that streams preserved
+    before the ATIF cutover still carry.
+    """
+    if event.get("type") == "step" and event.get("source") == "agent":
+        message = event.get("message")
+        return message if isinstance(message, str) else ""
+    if event.get("type") == "assistant_message":
+        text = event.get("text")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
 def resolve_destroyed_result(target_name: str, location: AgentLocation) -> str:
     """Build the END_TURN payload for an agent that was destroyed before completing."""
     preserved_dir = get_preserved_agent_dir(location.host_dir, AgentName(target_name), AgentId(location.agent_id))
@@ -535,10 +552,8 @@ def resolve_destroyed_result(target_name: str, location: AgentLocation) -> str:
                     continue
                 if not isinstance(event, dict):
                     continue
-                if event.get("type") != "assistant_message":
-                    continue
-                text = event.get("text")
-                if isinstance(text, str) and text:
+                text = _agent_turn_text(event)
+                if text:
                     last_text = text
         except OSError as e:
             logger.warning("Failed to read preserved events {}: {}", events_path, e)

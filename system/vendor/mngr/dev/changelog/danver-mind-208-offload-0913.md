@@ -1,0 +1,3 @@
+Bumped the pinned offload CLI from `0.9.12` to `0.9.13` (latest on crates.io) in the `version` input default of `.github/actions/setup-offload/action.yml`, which every CI offload job uses (none pass an explicit version), so the cargo cache key, version check, and `cargo install` all move together.
+
+0.9.13 is a patch release: its main change is the Modal v2 sandbox backend, now on by default (offload sets `MODAL_SANDBOX_V2=1` and pins `modal==1.5.4`), giving faster sandbox scheduling, higher creation rate limits, and better reliability. No offload config-format changes, so the `offload-modal*.toml` configs are untouched.

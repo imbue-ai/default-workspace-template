@@ -26,7 +26,7 @@ import modal.exception
 from grpclib.exceptions import ProtocolError
 from grpclib.exceptions import StreamTerminatedError
 from modal.stream_type import StreamType as ModalStreamType
-from modal.volume import FileEntryType as ModalFileEntryType
+from modal.types import FileEntryType as ModalFileEntryType
 from pydantic import ConfigDict
 from pydantic import Field
 from tenacity import RetryCallState
@@ -42,6 +42,7 @@ from imbue.modal_proxy.data_types import StreamType
 from imbue.modal_proxy.data_types import TunnelInfo
 from imbue.modal_proxy.errors import ModalProxyAppLockedError
 from imbue.modal_proxy.errors import ModalProxyAuthError
+from imbue.modal_proxy.errors import ModalProxyConnectionError
 from imbue.modal_proxy.errors import ModalProxyError
 from imbue.modal_proxy.errors import ModalProxyInternalError
 from imbue.modal_proxy.errors import ModalProxyInvalidError
@@ -90,6 +91,12 @@ def _translate_modal_error(e: modal.exception.Error) -> ModalProxyError:
         return ModalProxyRateLimitError(str(e))
     if isinstance(e, modal.exception.RemoteError):
         return ModalProxyRemoteError(str(e))
+    # The SDK raises this when it cannot open a connection to the control plane
+    # at all (it folds a connect timeout into the same class), so it is the one
+    # branch here that means "Modal was never reached" rather than "Modal said
+    # no". Callers act on that difference, so it must not fall through below.
+    if isinstance(e, modal.exception.ConnectionError):
+        return ModalProxyConnectionError(str(e))
     return ModalProxyError(str(e))
 
 
@@ -428,8 +435,17 @@ class DirectSandbox(SandboxInterface):
         return DirectImage.model_construct(image=image)
 
     @_translate_exceptions
+    def poll(self) -> int | None:
+        return self.sandbox.poll()
+
+    @_translate_exceptions
     def terminate(self) -> None:
-        self.sandbox.terminate()
+        # wait=True blocks until the sandbox has actually terminated. Modal's V2
+        # terminate is otherwise fire-and-forget, so the sandbox keeps appearing
+        # in Sandbox.list and polling as running for a window afterward, which
+        # makes callers (e.g. start_host) mistake a just-terminated host for a
+        # live one. Synchronous termination also matches the FakeSandbox contract.
+        self.sandbox.terminate(wait=True)
 
 
 class DirectApp(AppInterface):
@@ -468,6 +484,14 @@ class DirectModalInterface(ModalInterface):
     """Implementation of ModalInterface that calls the real Modal Python SDK."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def model_post_init(self, context: Any) -> None:
+        # Opt every real Modal Sandbox operation into Modal's V2 Sandbox backend. Modal
+        # reads MODAL_SANDBOX_V2 from the environment live on each Sandbox call,
+        # and Sandbox.list only returns V2 sandboxes when it is set, so it must
+        # be process-wide rather than per-create. setdefault preserves an
+        # explicit MODAL_SANDBOX_V2=0 opt-out; GPU sandboxes fall back to V1.
+        os.environ.setdefault("MODAL_SANDBOX_V2", "1")
 
     # =====================================================================
     # Environment

@@ -1,22 +1,26 @@
 import threading
+from pathlib import Path
 from typing import Any
 
 import httpx
 from flask import Flask
 from flask import current_app
 from loguru import logger
+from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
+from imbue.mngr.primitives import AgentId
 from imbue.system_interface.agent_discovery import AgentInfo
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
 from imbue.system_interface.harnesses.registry import build_watcher
 from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.welcome_resend import WelcomeResender
+from imbue.system_interface.update_staleness import UpdateStalenessTracker
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 # Key under which the single SystemInterfaceState is stored on ``app.config`` so
@@ -27,6 +31,11 @@ _STATE_CONFIG_KEY = "SYSTEM_INTERFACE_STATE"
 
 class SystemInterfaceStateError(RuntimeError):
     """Raised when the SystemInterfaceState is not attached to a Flask app."""
+
+
+# The frontend build's output, inside the package: what the shell routes serve
+# in production.
+DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
 class SystemInterfaceState(MutableModel):
@@ -49,11 +58,21 @@ class SystemInterfaceState(MutableModel):
     event_queues: AgentEventQueues
     layout_mutex: LayoutMutex
     claude_auth_service: ClaudeAuthService
-    welcome_resender: WelcomeResender
+    auth_flows: AuthFlowService
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
+    # Captures the tree HEAD this process started from, so the app shell can
+    # say when the served tree has moved under it (see update_staleness.py).
+    # A factory (not a shared default): the HEAD read happens per state build,
+    # not at import.
+    update_staleness: UpdateStalenessTracker = Field(default_factory=UpdateStalenessTracker.capture)
+    static_directory: Path = Field(
+        default=DEFAULT_STATIC_DIRECTORY,
+        description="The bundle directory the shell routes serve from: the package's own static/ unless the "
+        "state is built with another (a test serving a shell it wrote)",
+    )
 
     _watchers_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
@@ -88,30 +107,18 @@ class SystemInterfaceState(MutableModel):
             if existing is not None:
                 return existing
 
-            # Single-element holder so the ``on_events`` closure can reach the
-            # watcher we are about to construct. Capturing the watcher directly
-            # (rather than looking it up by id on every event) keeps the
-            # callback self-contained: it cannot KeyError if the dict entry has
-            # since been removed, and does not depend on the entry already
-            # existing before the first event fires.
-            watcher_holder: list[AgentSessionWatcher] = []
-
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
-                # IGNORE: session events are persisted in JSONL and recoverable
-                # via the REST /events endpoint; storing them in the in-memory
-                # replay buffer would grow unboundedly for the agent's lifetime.
-                self.event_queues.broadcast_all_ignored(agent_id, events)
-                # Recompute per-agent activity state from the full transcript.
-                # The watcher's incremental ``events`` argument only contains the
-                # newest lines, but the activity tracker needs the full
-                # transcript to detect unmatched tool_uses across turns and to
-                # read the last event's type.
-                self.agent_manager.update_session_events(agent_id, watcher_holder[0].get_all_events())
+                # Deliver-live-only: session events are persisted in JSONL and recoverable
+                # via the REST /events endpoint, so nothing is buffered for replay.
+                self.event_queues.broadcast_batch(agent_id, events)
+                # Fold the delta into the per-agent activity signals. The tracker is
+                # incremental (seeded with the full backlog below), so it only ever
+                # needs the newly parsed events.
+                self.agent_manager.update_session_events(agent_id, events)
 
             # The harness was resolved once at discovery; the registry turns it into a
             # watcher, so nothing here knows which harness is running.
             watcher = build_watcher(agent_info, on_events)
-            watcher_holder.append(watcher)
             # Bridge the watcher's live queued-message snapshot onto the agents WS
             # state, and register its working->IDLE queue backstop with the manager.
             # Both are no-ops for a harness without a queue populator. The manager
@@ -121,6 +128,17 @@ class SystemInterfaceState(MutableModel):
                 lambda snapshot: self.agent_manager.update_queued_messages(agent_info.id, snapshot)
             )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
+            # A harness that holds the queue on its agent's behalf (antigravity) also needs to
+            # DELIVER it, which needs the manager's send path and a liveness check. No-op for
+            # every other harness, whose queue its own harness consumes.
+            watcher.set_flush_hooks(
+                # `is None` is the delivery test: send_message_to_agent returns the FAILURE
+                # (or None on success), while FlushSendCallback is declared to return True for
+                # delivered. Passing the result straight through inverts it, and antigravity's
+                # flush would count every failed send as delivered and drop the queue.
+                lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
+                lambda: self.agent_manager.is_agent_alive(agent_info.id),
+            )
             self.watchers[agent_info.id] = watcher
 
         # Seed transcript-derived activity signals BEFORE starting the watcher
@@ -135,6 +153,26 @@ class SystemInterfaceState(MutableModel):
         self.agent_manager.update_session_events(agent_info.id, watcher.get_all_events())
         watcher.start()
         return watcher
+
+    def stop_and_remove_watcher(self, agent_id: str) -> None:
+        """Evict one agent's watcher, releasing its resident transcript, thread, and
+        filesystem watches.
+
+        The memory half of the chat lifecycle: called when an agent is destroyed or its
+        lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an OOM
+        shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
+        Cheap no-op when no watcher exists. Rebuild-on-demand is `get_or_create_watcher`:
+        viewing a stopped chat re-reads its transcript from disk transparently.
+
+        The watcher is popped under the lock but stopped outside it -- `stop` joins the
+        watch thread, and holding the lock across that join would stall every other
+        watcher creation for the duration.
+        """
+        with self._watchers_lock:
+            watcher = self.watchers.pop(agent_id, None)
+        if watcher is not None:
+            logger.debug("Evicting the session watcher for agent {}", agent_id)
+            watcher.stop()
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:

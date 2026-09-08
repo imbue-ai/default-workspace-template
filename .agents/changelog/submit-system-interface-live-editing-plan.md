@@ -3,7 +3,7 @@ flow into a lead-driven **live editing loop**. The lead now edits an isolated
 git worktree, builds, and refreshes a labeled preview tab in place (seconds per
 round), iterating with the user; only once the user approves the shape does a
 background worker run the full test + review gate *on that same branch*, after
-which the change is merged and safe-revealed. The editing lease is held across
+which the change is merged and landed through the atomic update apply. The editing lease is held across
 the whole pass (entry through reveal), since there is one served UI and one
 preview tab.
 
@@ -14,14 +14,10 @@ preview tab.
   rebinding, and records the new pid before the health wait so a later `down`
   can still reap it if it never comes up.
 
-- The live loop calls that shared `refresh` directly, and `reveal_system_interface.py`
-  no longer wraps it -- nor `down`, which it used to expose as `unpreview`. Both
-  wrappers took a slug and did nothing with it but build the instance name
-  `si-preview-<slug>`, so each was a second place that had to agree with the
-  convention `preview` already owns. The flow now addresses the instance by the
-  name `preview` prints on success, and the script keeps only the two
-  sub-commands that carry real logic: `preview` (work_dir validation, the
-  system-interface env spec, the one-preview-at-a-time guard) and `reveal`.
+- The live loop calls that shared `refresh` directly rather than through a
+  `reveal_system_interface.py` wrapper: a wrapper would take a slug and do
+  nothing with it but build the instance name `preview` already prints
+  (`si-preview-<slug>`), a second place that has to agree with the convention.
 
 - **`layout.py open` is now documented as the act of showing the user
   something, not as setup.** It mutates the workspace they are looking at, live,
@@ -82,7 +78,7 @@ preview tab.
   every system-interface worker to implement the brief, which on a harden-only
   handoff meant redoing work the user had already signed off on.
 
-- The preview and the reveal pre-flight now **follow** the live agent-lifecycle
+- The preview and the update apply's pre-flight now **follow** the live agent-lifecycle
   event stream instead of competing for it. Both boot a second system interface
   beside the live one, which holds the single-writer `mngr observe` lock, so both
   used to come up with a permanently frozen agent view -- and both used to pass
@@ -132,20 +128,18 @@ preview tab.
   The tradeoff is deliberate: at 200 the instance outlives every agent, including
   the lead driving it.
 
-- **`reveal` restarts only the `system_interface` service, and its health verdict
-  is settled state.** It ran `mngr start --restart system-services`, and the
-  services agent *is* supervisord's parent -- so a dependency-only change bounced
-  every program in the workspace, and a 30s health budget then raced a whole-stack
-  restart storm. The dependency refresh touches this app's own venv and
-  `node_modules`, which nothing else consumes, so it is now
-  `supervisorctl restart system_interface`. The verdict that arms the automatic
-  rollback also stopped being a point-in-time probe: it requires several
-  consecutive healthy answers on an unchanging supervisord pid, over a 60s budget
-  matching the shared serve script's boot gate. Both directions were expensive --
-  the same cosmetic manifest change revealed twice reported "confirmed healthy"
-  while the pid was still turning over, then auto-rolled-back a change that was
-  never broken. The post-rollback "the live UI is confirmed healthy" claim uses
-  the same settled check.
+- **The update apply's health verdict is settled state.** The verdict that arms
+  the automatic rollback used to be a point-in-time probe: one 200 from the live
+  service after the restart. Restarting the services agent turns every
+  supervisord program over, so that single answer could land in the gap between
+  two restarts -- the same cosmetic manifest change applied twice reported
+  "confirmed healthy" while the pid was still turning over, then auto-rolled-back
+  a change that was never broken. It now requires several consecutive healthy
+  answers on an unchanging supervisord pid, within the same budget, and the
+  post-rollback "the live UI is confirmed healthy" claim uses the same settled
+  check. (An earlier revision of this branch also narrowed the restart to the
+  `system_interface` program alone; that was dropped, since the apply restarts
+  the whole services agent on purpose -- see `gabriel-tactful-swift.md`.)
 
 - **`update-system-interface` now says what to do when the hand-off cannot be
   delivered.** `layout.py open` is the act of showing the user the preview, but
@@ -161,9 +155,8 @@ preview tab.
   Type 1 "janky real edit" (rough, but in the real code and shown through the
   real surface) and a Type 2 "detached prototype" (a throwaway mock). `update-app`
   picked up that taxonomy plus guidance that a preview is the exception, not the
-  default (reserve it for changes costly to redo); `update-creation` and
-  `update-self` were updated to match the live-loop handoff onto the lead's
-  branch.
+  default (reserve it for changes costly to redo); `update-creation` was
+  updated to match the live-loop handoff onto the lead's branch.
 
 - `update-system-interface` is now genuinely deltas-only, and says so: it opens by
   telling you to read `update-app` first, then names only what differs. The
@@ -179,7 +172,7 @@ preview tab.
   the change**, not on it being the system interface. Both conditions must hold:
   the worker produced real work the user has not seen, *and* they can observe and
   judge what changed. The question a preview appears to answer first -- does it
-  boot -- is already answered mechanically by safe-reveal's health check and
+  boot -- is already answered mechanically by the apply's health check and
   auto-rollback, so the user's eyes only add "does this look right". A fix for a
   race, an error path, or a scenario they cannot trigger from a tab gives them
   nothing to look at, and asking them to approve an apparently unchanged UI

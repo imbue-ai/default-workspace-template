@@ -13,19 +13,20 @@ Static structural checks (in order, short-circuit on first failure per check):
 - Frontmatter has `name` matching the directory basename.
 - Frontmatter has `description`, 1-1024 characters.
 - SKILL.md body (after frontmatter) is at most 500 lines.
-- If `system/scripts/run.py` exists, it begins with a PEP 723 `# /// script` header.
-  (`run.py` is optional even for crystallized skills -- a skill may be pure
-  SKILL.md prose if every step is judgement or uses existing tools.)
+- If `.agents/skills/<name>/scripts/run.py` exists, it begins with a PEP 723
+  `# /// script` header. (`run.py` is optional even for crystallized skills --
+  a skill may be pure SKILL.md prose if every step is judgement or uses
+  existing tools.)
 
-Runnability check (only when the static checks pass and `system/scripts/run.py`
-exists):
+Runnability check (only when the static checks pass and
+`.agents/skills/<name>/scripts/run.py` exists):
 
-- `uv run system/scripts/run.py --help` exits 0. This forces `uv` to resolve the
-  script's PEP 723 dependencies and import the module, so a broken import or
-  an unresolvable dependency is caught here rather than only at scenario time.
-  `--help` is a shallow import check: it exercises the top-level imports and
-  argparse wiring, not imports done lazily inside subcommand bodies -- those
-  are left to scenario testing.
+- `uv run .agents/skills/<name>/scripts/run.py --help` exits 0. This forces
+  `uv` to resolve the script's PEP 723 dependencies and import the module, so a
+  broken import or an unresolvable dependency is caught here rather than only
+  at scenario time. `--help` is a shallow import check: it exercises the
+  top-level imports and argparse wiring, not imports done lazily inside
+  subcommand bodies -- those are left to scenario testing.
 
 Exits 0 and prints `ok` when valid; exits 1 with a human-readable error to
 stderr otherwise.
@@ -84,7 +85,10 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
 
 
 def _validate_run_py(skill_dir: Path) -> str | None:
-    """If system/scripts/run.py exists, require a PEP 723 header. Absent run.py is OK."""
+    """If .agents/skills/<name>/scripts/run.py exists, require a PEP 723 header.
+
+    Absent run.py is OK.
+    """
     run_py = skill_dir / "scripts" / "run.py"
     if not run_py.is_file():
         return None
@@ -108,11 +112,12 @@ def _run_help_via_uv(run_py: Path) -> subprocess.CompletedProcess[str]:
 def check_runnable(
     skill_dir: Path, runner: RunHelpRunner = _run_help_via_uv
 ) -> str | None:
-    """Confirm ``system/scripts/run.py`` runs far enough to import and build its CLI.
+    """Confirm ``.agents/skills/<name>/scripts/run.py`` imports and builds its CLI.
 
-    Runs ``uv run system/scripts/run.py --help`` via ``runner`` (injectable for
-    testing). Returns an error message on failure, otherwise ``None``. A skill
-    with no ``run.py`` is trivially runnable, so this returns ``None``.
+    Runs ``uv run .agents/skills/<name>/scripts/run.py --help`` via ``runner``
+    (injectable for testing). Returns an error message on failure, otherwise
+    ``None``. A skill with no ``run.py`` is trivially runnable, so this returns
+    ``None``.
     """
     run_py = skill_dir / "scripts" / "run.py"
     if not run_py.is_file():
