@@ -215,14 +215,23 @@ def tk_stamp(content: str) -> str:
     return joined[:MAX_TK_STAMP_LENGTH]
 
 
+# How Claude Code reports a call that one of the workspace's hooks refused: the call's own
+# error text, opening ``<Event>:<Tool> hook error:`` (``PreToolUse:Bash hook error: [...]``).
+_HOOK_BLOCK_ERROR_RE: Final[re.Pattern[str]] = re.compile(r"^\w+(?::\w+)? hook error:")
+
+
 def error_snippet(content: str) -> str:
     """The first non-empty line of a failed call's output, capped -- the resident glance.
 
     The full error text still loads on expand like any other output; this just keeps a
-    failure recognisable in the collapsed row without a fetch.
+    failure recognisable in the collapsed row without a fetch. A call a hook refused gets no
+    snippet: that is the workspace steering the agent, not the command failing, and the
+    hook's message under a collapsed row reads as a fault to whoever is watching.
     """
     for line in content.splitlines():
         stripped = line.strip()
         if stripped:
+            if _HOOK_BLOCK_ERROR_RE.match(stripped):
+                return ""
             return stripped[:MAX_ERROR_SNIPPET_LENGTH]
     return ""
