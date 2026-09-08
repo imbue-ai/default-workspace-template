@@ -6,6 +6,7 @@ import {
   hasMoreStartOptions,
   nextStartCount,
   searchStartOptions,
+  glyphTones,
   startGlyph,
   visibleStartOptions,
 } from "./startSomething";
@@ -19,12 +20,13 @@ describe("the Start something table", () => {
     for (const option of START_OPTIONS) {
       expect(option.title).not.toBe("");
       expect(option.description).not.toBe("");
+      expect(option.hue).toMatch(/^#[0-9a-f]{6}$/);
     }
   });
 
-  it("keeps the learn-about-Minds tile behind the first page", () => {
-    expect(START_OPTIONS.length).toBe(START_PAGE_SIZE + 1);
-    expect(START_OPTIONS[START_PAGE_SIZE].key).toBe("learn");
+  it("keeps the learn-about-Minds and edit-Minds tiles behind the first page", () => {
+    expect(START_OPTIONS.length).toBe(START_PAGE_SIZE + 2);
+    expect(START_OPTIONS.slice(START_PAGE_SIZE).map((option) => option.key)).toEqual(["learn", "edit-minds"]);
   });
 });
 
@@ -50,9 +52,17 @@ describe("searchStartOptions", () => {
 
 describe("startGlyph", () => {
   it("draws the tile's paths in the shared stroke frame at the asked size", () => {
-    const markup = startGlyph(START_OPTIONS[0], 24);
+    const markup = startGlyph(START_OPTIONS[0], 24, true);
     expect(markup.startsWith("<svg ")).toBe(true);
     expect(markup).toContain('width="24"');
     expect(markup).toContain(START_OPTIONS[0].glyphPaths);
+  });
+
+  it("tints the glyph in two tones of the tile's hue, and inherits the text colour when standing down", () => {
+    const tones = glyphTones(START_OPTIONS[0]);
+    expect(tones.stroke).toBe(`color-mix(in srgb, ${START_OPTIONS[0].hue}, black 30%)`);
+    expect(tones.fill).toBe(`color-mix(in srgb, ${START_OPTIONS[0].hue}, white 75%)`);
+    expect(startGlyph(START_OPTIONS[0], 24, true)).toContain(`stroke="${tones.stroke}"`);
+    expect(startGlyph(START_OPTIONS[0], 24, false)).toContain('fill="none" stroke="currentColor"');
   });
 });
