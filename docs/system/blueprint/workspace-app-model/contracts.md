@@ -333,7 +333,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 
 ## 15. Memory priority
 
-`oom_priority.bands.SERVICE_BANDS` carries `"chat": 25`, between `system_interface` (20) and `share-gateway` (35), and `"agent-observer": 25` beside it: the observer is the writer of the agent lifecycle event file every chat instance follows, so shedding it is worth exactly what shedding the chat is.
+`oom_priority.bands.SERVICE_BANDS` carries `"chat": 25`, between `system_interface` (20) and `share-gateway` (35), and `"agent-observer": 24` just below it: the observer is the writer of the agent lifecycle event file every chat instance follows, so shedding it blinds every chat at once while freeing almost nothing.
 The backstop listener resolves a program's band by finding the registry row whose `program` equals the program name and reading its `priority`: a `SERVICE_BANDS` key gives that band, and `user` (or an unknown name) gives `USER_SERVICE`. A program with no row falls back to `SERVICE_BANDS` by program name, then to `_NON_SERVICE_PROGRAM_BANDS` (the programs that are not apps), then to `USER_SERVICE`.
 The `oom_tag_service.py <key>` prefix on a program line tags the program into its band at launch; the backstop covers what the prefix cannot.
 
