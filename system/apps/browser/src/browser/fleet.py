@@ -1,39 +1,40 @@
 """``agentic-browser-fleet``: drive the shared browser fleet from an agent's shell.
 
-This is the CLI the Claude Code agent (the orchestrator) calls. It is a thin,
-stateless HTTP client to the per-workspace browser daemon (runner.py). It does
-NOT drive the browser itself: ``task`` hands a goal to a *browser-use* agent on
-the chosen browser and streams that agent's Thinking/Action trace back here, to
-the orchestrator's own output. ``take control`` is a human action in the UI, not
-something this CLI does.
+This is the CLI the agent calls to OWN a browser -- not to drive one. It is a thin,
+stateless HTTP client to the per-workspace browser daemon (runner.py). Driving happens
+over ``playwright-cli``, pointed at the gated CDP URL that ``new`` and ``acquire``
+print. ``take control`` is a human action in the UI, not something this CLI does.
 
 Ownership rules (enforced by the daemon, surfaced here):
 
-* Each browser is controlled by exactly one party. ``task``/``lock`` acquire it;
-  they release automatically when the command ends (the connection is the lease).
-* Agents never preempt each other: ``task`` on a browser another agent holds
+* Each browser is controlled by exactly one party. The lease is sticky: it is acquired
+  on first use and auto-released after an idle timeout.
+* Agents never preempt each other: ``acquire`` on a browser another agent holds
   waits in a FIFO queue until it is free (``--no-wait`` fails fast instead).
 * A browser a human took control of is locked to the human. Resume only when the
   human tells you to ("keep going") -- then, and only then, pass ``--reclaim``.
 
-Browsers are addressed by NAME (a random ~2-word english name like ``alex-smith``),
+Browsers are addressed by NAME (numbered ``browser-<N>`` for daemon-minted ones),
 not a number. There is no default browser: run ``new`` first (it prints a name),
 then drive that browser by its name.
 
 Commands::
 
-    agentic-browser-fleet ls
-    agentic-browser-fleet new [name]
-    agentic-browser-fleet task <name> "<prompt>" [--reclaim] [--no-wait] [--max-wait S] [--no-pane]
-    agentic-browser-fleet lock <name> [--no-wait] [--max-wait S]    # foreground hold; Ctrl-C releases
-    agentic-browser-fleet unlock <name>                             # alias: release
-    agentic-browser-fleet release <name>
+    agentic-browser-fleet ls [--include-tabs]
+    agentic-browser-fleet new [name]            # prints the `playwright-cli attach --cdp=` line
+    agentic-browser-fleet close <name>          # ends the browser; DELETES its profile
+    agentic-browser-fleet acquire <name> [--reclaim] [--no-wait] [--max-wait S]
+    agentic-browser-fleet release <name>        # alias: unlock
+    agentic-browser-fleet handoff <name> "<reason>"   # alias: request-human
+
+Driving is NOT here -- the agent attaches `playwright-cli` to the gated CDP endpoint this
+CLI hands out. `playwright-cli --help` is the command reference.
 
 The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
 agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
-set -- a parent passes its chat ref to sub-agents -- else the caller's own chat).
+set -- a parent passes its chat address to sub-agents -- else the caller's own chat).
 """
 
 import argparse
@@ -41,6 +42,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -160,43 +162,37 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
 # --- pane pull-in (reuse system/scripts/layout.py) ----------------------------------
 
 
-def _layout(*args: str, quiet: bool = False, no_wait: bool = False) -> bool:
+def _layout(*args: str, quiet: bool = False) -> bool:
     """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
     ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
-    message (used by the pane-pull, which has a friendlier failure note). ``no_wait`` posts the
-    op without waiting for it to settle in ``inspect`` -- the pane-pull is optimistic and a
-    browser pane can take well over layout.py's 5s settle cap to register (its viewer must
-    load), which otherwise reports a false failure even though the pane does open."""
+    message (used by the pane-pull, which has a friendlier failure note)."""
     root = _repo_root()
     layout = root / "system" / "scripts" / "layout.py"
     if not layout.exists():
         return False
-    env = os.environ.copy()
-    if no_wait:
-        env["MINDS_LAYOUT_NO_WAIT_STABLE"] = "1"
     result = subprocess.run(
-        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True, env=env
+        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
     )
     if result.returncode != 0 and not quiet:
         _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
     return result.returncode == 0
 
 
-def _resolve_active_layout() -> tuple[bool, str | None]:
-    """Resolve the layout to surface a browser pane into, via ``layout.py context``.
+def _resolve_active_view() -> tuple[bool, str | None]:
+    """Resolve the view to surface a browser pane into, via ``layout.py context``.
 
-    ``split`` requires a ``--layout`` (mutating ops only apply on clients that have that
-    named layout active), so the pane-pull must name the layout the human is actually
-    viewing. ``context`` is a read-only query over the client-activity log.
+    ``split`` edits the arrangement of the view it is given (``--view``) and keeps the client
+    on it, so the pane-pull names the view the human is actually looking at rather than
+    switching them elsewhere. ``context`` is a read-only query over the client-activity log.
 
-    Returns ``(reachable, layout)``:
-    * ``reachable`` is False when the layout server can't be reached at all -- an isolated
+    Returns ``(reachable, view)``:
+    * ``reachable`` is False when the shell can't be reached at all -- an isolated
       ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
       silently: there is no screen of ours to surface into.
-    * When reachable, ``layout`` is the active layout to target -- the current layout of
-      the connected client that most recently messaged THIS agent (matched by name, since
-      the context summary carries ``agent_name`` not id), else the most-recently-active
-      connected client's layout, else None (reachable but nothing to place it on).
+    * When reachable, ``view`` is the view to target -- the active view of the connected
+      client that most recently messaged THIS agent (its chat instance is addressed by the
+      agent id), else the most-recently-active connected client's view, else None
+      (reachable but nothing to place it on).
     """
     root = _repo_root()
     script = root / "system" / "scripts" / "layout.py"
@@ -211,19 +207,20 @@ def _resolve_active_layout() -> tuple[bool, str | None]:
         clients = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
         return (True, None)
-    # ``context`` lists clients most-recently-active first; keep connected ones reporting a layout.
+    # ``context`` lists clients most-recently-active first; keep connected ones reporting a view.
     connected = [
         client
         for client in clients
-        if isinstance(client, dict) and client.get("is_connected") and client.get("current_layout")
+        if isinstance(client, dict) and client.get("is_connected") and client.get("active_view")
     ]
-    my_name = os.environ.get("MNGR_AGENT_NAME")
-    if my_name:
+    my_id = os.environ.get("MNGR_AGENT_ID")
+    if my_id:
+        my_address = f"app:chat?instance={my_id}"
         for client in connected:
-            if any(msg.get("agent_name") == my_name for msg in client.get("recent_messages", [])):
-                return (True, str(client["current_layout"]))
+            if any(msg.get("address") == my_address for msg in client.get("recent_messages", [])):
+                return (True, str(client["active_view"]))
     if connected:
-        return (True, str(connected[0]["current_layout"]))
+        return (True, str(connected[0]["active_view"]))
     return (True, None)
 
 
@@ -231,32 +228,31 @@ def _pull_in_pane(browser_name: str) -> None:
     """Surface browser ``browser_name`` as its OWN pane beside the requesting agent's chat,
     optimistically.
 
-    Resolves the layout the requester's client is viewing via ``layout.py context`` (see
-    ``_resolve_active_layout``). If the layout server is unreachable -- an isolated
-    ``launch-task`` sub-agent in its own container -- we **skip silently**: there is no
-    screen of ours to surface into. Otherwise we split the browser into that layout next
-    to the agent's own chat (``--relative-to self``), or the parent's chat when a parent
-    handed a sub-agent its ref via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each
-    browser its own pane; splitting an already-open one just focuses it, so this is safe
-    to call repeatedly.
+    Resolves the view the requester's client is looking at via ``layout.py context`` (see
+    ``_resolve_active_view``). If the shell is unreachable -- an isolated ``launch-task``
+    sub-agent in its own container -- we **skip silently**: there is no screen of ours to
+    surface into. Otherwise we split the browser into that view next to the agent's own
+    chat (``--relative-to self``), or the parent's chat when a parent handed a sub-agent
+    its address via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each browser its own
+    pane; splitting an already-open one just focuses it, so this is safe to call repeatedly.
 
-    If the split can't land (no target layout, or the human isn't currently viewing it),
+    If the split can't land (no target view, or the human isn't currently viewing it),
     we fall back to one neutral line offering the manual "+"-menu route -- the browser is
     up and fully drivable from the CLI either way; the pane is only a live-view convenience.
     """
-    reachable, layout = _resolve_active_layout()
+    reachable, view = _resolve_active_view()
     if not reachable:
-        return  # isolated sub-agent / no layout server -- nothing of ours to surface into
-    ref = f"service:browser?session={browser_name}"
-    if layout is not None:
+        return
+    address = f"app:browser?instance={browser_name}"
+    if view is not None:
         # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
         anchor = os.environ.get(_ENV_ANCHOR)
         if anchor and _layout(
-            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", anchor, "--direction", "right", "--new-group", "--view", view, quiet=True
         ):
             return
         if _layout(
-            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", "self", "--direction", "right", "--new-group", "--view", view, quiet=True
         ):
             return
     # Reachable but couldn't place the pane. Not an error -- offer the manual route
@@ -268,11 +264,18 @@ def _pull_in_pane(browser_name: str) -> None:
 # --- commands -----------------------------------------------------------------
 
 
+def _stopped_hint(browser_name: str) -> str:
+    """How to bring a stopped browser back (the daemon sends the same in its ``hint``)."""
+    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_name}`"
+
+
 def _owner_label(browser: dict[str, Any], me: str | None) -> str:
     if browser.get("crashed") or browser.get("lifecycle") == "crashed":
         return "crashed (gone -- start a new one)"
     if browser.get("lifecycle") == "init":
         return "starting (Chromium launching -- ready shortly)"
+    if browser.get("lifecycle") == "stopped":
+        return f"stopped ({_stopped_hint(browser['id'])})"
     if browser["controller"] == "agent":
         name = browser.get("owner_name") or browser.get("owner_agent_id") or "?"
         return "you" if browser.get("owner_agent_id") == me else f"agent {name}"
@@ -303,16 +306,55 @@ def cmd_ls(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _attach_url(browser_name: str, *, attempts: int = 40, delay: float = 0.5) -> str:
+    """Poll for the browser's attach URL.
+
+    ``new`` returns as soon as the browser is REGISTERED; Chromium launches in the
+    background and the capability token only exists once it is up, so the URL is not
+    available synchronously.
+
+    Only ``starting`` is worth waiting on. Any other answer -- a 404, a crashed browser,
+    a daemon that says something unexpected -- will not become an attach URL by waiting,
+    so bail immediately rather than burning the full timeout on a browser that is never
+    going to come up.
+    """
+    for attempt in range(attempts):
+        status, payload = _request("GET", f"/browsers/{browser_name}/attach")
+        if status == 200 and payload.get("ok"):
+            return str(payload.get("attach_url", ""))
+        if status != 200 or payload.get("status") != "starting":
+            return ""
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    return ""
+
+
+def _print_attach(browser_name: str) -> None:
+    """Tell the agent how to drive this browser. This is the whole handover."""
+    url = _attach_url(browser_name)
+    if url:
+        _out(f"   drive it:  playwright-cli -s={browser_name} attach --cdp={url}")
+        # Point at the tool's own help rather than restating its commands anywhere: it
+        # ships with the pinned version, so it cannot drift the way a copy would.
+        _out(f"   then:      playwright-cli -s={browser_name} <command>   "
+             f"(run `playwright-cli --help` for the commands)")
+    else:
+        _out(f"   (still starting up -- run `ls` in a few seconds, then attach to browser {browser_name})")
+
+
 def cmd_new(args: argparse.Namespace) -> int:
-    # `new` picks a random name; pass `new <name>` to choose one. A duplicate or invalid
+    # `new` mints the first free `browser-<N>`; pass `new <name>` to choose one. A duplicate or invalid
     # name is rejected by the daemon (409 / 400) with a clear message.
     body: dict[str, Any] = {"name": args.name} if args.name else {}
+    if args.url:
+        body["url"] = args.url
     status, payload = _request("POST", "/browsers", body)
     if status == 200:
         # Surface the new browser's pane right away, so "open a new browser" visibly
         # opens one (idempotent with the pane-pull the first direct command also does).
         _pull_in_pane(payload["name"])
         _out(f"started browser {payload['name']}")
+        _print_attach(payload["name"])
         return _EXIT_OK
     _err(payload.get("error", f"new failed ({status})"))
     if status == 400:  # invalid name -> a usage problem the agent can fix by picking another.
@@ -323,7 +365,8 @@ def cmd_new(args: argparse.Namespace) -> int:
 
 def cmd_close(args: argparse.Namespace) -> int:
     """Close an entire browser (all its tabs) and free its resources -- not just one tab.
-    Use this when you're permanently done with a browser; the name is retired (never reused)."""
+    Use this when you're permanently done with a browser; its name is retired and its
+    profile (cookies, logins) is deleted with it."""
     status, payload = _request("DELETE", f"/browsers/{args.name}")
     if status != 200:
         _err(payload.get("error", f"close failed ({status})"))
@@ -363,14 +406,14 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
         # the resume queue -- promise the wake (with the re-check fallback), like the direct path.
         _err(
             f"a human is controlling browser {browser_name}. You're queued to resume and will be messaged "
-            f"when they hand it back (if you don't hear back in a while, re-run `state {browser_name}` to "
+            f"when they hand it back (if you don't hear back in a while, re-run `ls` to "
             "check). Tell the user, then end your turn."
         )
         return _EXIT_BUSY
     elif kind == "busy_agent":
         _err(
             f"browser {browser_name} is held by another agent. You're queued for it and will be messaged "
-            f"when it frees (if you don't hear back, re-run `state {browser_name}` to check); for unrelated "
+            f"when it frees (if you don't hear back, re-run `ls` to check); for unrelated "
             "work, use a different browser (or `new`)."
         )
         return _EXIT_BUSY
@@ -398,41 +441,6 @@ def _render_event(event: dict[str, Any], browser_name: str) -> int | None:
     return None
 
 
-def cmd_task(args: argparse.Namespace) -> int:
-    if not args.no_pane:
-        _pull_in_pane(args.name)
-    body: dict[str, Any] = {"prompt": args.prompt, "reclaim": args.reclaim, "wait": not args.no_wait}
-    if args.max_wait is not None:
-        body["max_wait"] = args.max_wait
-    exit_code = _EXIT_ERROR
-    try:
-        for event in _stream(f"/browsers/{args.name}/task", body):
-            code = _render_event(event, args.name)
-            if code is not None:
-                exit_code = code
-    except KeyboardInterrupt:
-        _err("interrupted -- released the browser.")
-        return _EXIT_OK
-    return exit_code
-
-
-def cmd_lock(args: argparse.Namespace) -> int:
-    if not args.no_pane:
-        _pull_in_pane(args.name)
-    body: dict[str, Any] = {"wait": not args.no_wait}
-    if args.max_wait is not None:
-        body["max_wait"] = args.max_wait
-    try:
-        for event in _stream(f"/browsers/{args.name}/hold", body):
-            code = _render_event(event, args.name)
-            if code is not None and event.get("type") != "held":
-                return code
-    except KeyboardInterrupt:
-        _err("released the browser.")
-        return _EXIT_OK
-    return _EXIT_OK
-
-
 def cmd_release(args: argparse.Namespace) -> int:
     status, payload = _request("POST", f"/browsers/{args.name}/release")
     if status != 200:
@@ -446,21 +454,15 @@ def cmd_release(args: argparse.Namespace) -> int:
 
 
 def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int:
-    """Print one direct-command result and return the exit code (owner-aware)."""
+    """Print one ownership-command result and return the exit code (owner-aware).
+
+    The exit code is the whole point. Driving now happens over ``playwright-cli``, which
+    exits 1 for ANY error -- a lease refusal and a stale ref are indistinguishable there.
+    So ``acquire`` is what an agent branches on before it attaches, and this function is
+    what gives it the differentiated code.
+    """
     if payload.get("ok"):
-        if kind == "state":
-            _out(f"browser {browser_name} @ {payload.get('url', '')}  ({payload.get('title', '')})")
-            tabs = payload.get("tabs", [])
-            if len(tabs) > 1:
-                _out("tabs: " + ", ".join(f"[{t['index']}{'*' if t.get('active') else ''}] {t.get('url', '')}" for t in tabs))
-            _out(payload.get("elements") or "(no interactive elements -- try screenshot)")
-        elif kind == "screenshot":
-            _out(f"screenshot saved: {payload.get('screenshot_path')}  (Read it to view)")
-        elif kind == "tab":
-            tabs = payload.get("tabs", [])
-            _out("tabs: " + ", ".join(f"[{t['index']}{'*' if t.get('active') else ''}] {t.get('title') or t.get('url', '')}" for t in tabs))
-        else:
-            _out(f"ok: {kind}")
+        _out(f"ok: {kind}")
         return _EXIT_OK
     status = payload.get("status")
     # Only when the agent was actually enrolled to be woken (a state-CHANGING command, or an
@@ -474,32 +476,32 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
         if enqueued:
             _out(f"browser {browser_name}: the human took control -- you're queued to resume. They can "
                  "see you're waiting, and you'll be messaged to pick up when they hand it back (if you "
-                 f"don't hear back in a while, re-run `state {browser_name}` to check). Tell the user, then end your turn.")
+                 f"don't hear back in a while, re-run `ls` to check). Tell the user, then end your turn.")
             return _EXIT_PREEMPTED
         _out(f"a human is controlling browser {browser_name} right now (you were only looking, so you're not "
-             f"queued for it). Use a different browser (or `new`), or re-run `state {browser_name}` later to check.")
+             f"queued for it). Use a different browser (or `new`), or re-run `ls` later to check.")
         return _EXIT_BUSY
     if status == "busy_agent":
         if enqueued:
             _out(f"browser {browser_name} is held by another agent -- you're queued for it and will be "
-                 f"messaged when it frees (if you don't hear back in a while, re-run `state {browser_name}` to "
+                 f"messaged when it frees (if you don't hear back in a while, re-run `ls` to "
                  f"check). For unrelated work, use a different browser (or `new`).")
         else:
             _out(f"another agent is using browser {browser_name} right now (you were only looking, so you're "
-                 f"not queued). Use a different browser (or `new`), or re-run `state {browser_name}` later to check.")
+                 f"not queued). Use a different browser (or `new`), or re-run `ls` later to check.")
         return _EXIT_BUSY
     if status == "lost_control":
         if enqueued:
             _out(f"browser {browser_name}: the human took control mid-step -- you're queued to resume. "
                  "Tell the user you'll pick up when they hand it back (if you don't hear back in a while, "
-                 f"re-run `state {browser_name}` to check), then end your turn.")
+                 f"re-run `ls` to check), then end your turn.")
             return _EXIT_PREEMPTED
         _out(f"a human took control of browser {browser_name} mid-step; you weren't queued. Use a different "
-             f"browser, or re-run `state {browser_name}` later to check.")
+             f"browser, or re-run `ls` later to check.")
         return _EXIT_BUSY
     if status == "initializing":
         _err("the browser fleet is still starting up (restoring your saved browsers) -- "
-             "try again in a few seconds. `ls` and `state` work now; this command needs the fleet ready.")
+             "try again in a few seconds. `ls` works now; this command needs the fleet ready.")
         return _EXIT_BUSY
     if status == "starting":
         _err(f"browser {browser_name} is still starting up (Chromium is launching) -- "
@@ -508,6 +510,9 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
     if status == "crashed":
         _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "
              f"Start a fresh one with `new` (it gets a new name); browser {browser_name} won't come back.")
+        return _EXIT_ERROR
+    if status == "stopped":
+        _err(payload.get("hint") or f"browser {browser_name} is stopped; {_stopped_hint(browser_name)}")
         return _EXIT_ERROR
     if status == "closed":
         _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
@@ -534,52 +539,12 @@ def _action(browser_name: str, verb: str, kind: str, body: dict[str, Any] | None
     return _render_action(payload, browser_name, kind)
 
 
-def cmd_state(args: argparse.Namespace) -> int:
-    return _action(args.name, "state", "state")
-
-
-def cmd_open(args: argparse.Namespace) -> int:
-    return _action(args.name, "navigate", "navigate", {"url": args.url})
-
-
-def cmd_click(args: argparse.Namespace) -> int:
-    return _action(args.name, "click", "click", {"index": args.index})
-
-
-def cmd_input(args: argparse.Namespace) -> int:
-    return _action(args.name, "input", "input", {"index": args.index, "text": args.text})
-
-
-def cmd_select(args: argparse.Namespace) -> int:
-    return _action(args.name, "select", "select", {"index": args.index, "value": args.value})
-
-
-def cmd_scroll(args: argparse.Namespace) -> int:
-    return _action(args.name, "scroll", "scroll", {"direction": args.direction, "amount": args.amount})
-
-
-def cmd_keys(args: argparse.Namespace) -> int:
-    return _action(args.name, "keys", "keys", {"keys": args.keys})
-
-
-def cmd_screenshot(args: argparse.Namespace) -> int:
-    return _action(args.name, "screenshot", "screenshot")
-
-
-def cmd_tab(args: argparse.Namespace) -> int:
-    body: dict[str, Any] = {"action": args.action}
-    if args.index is not None:
-        body["index"] = args.index
-    if args.url is not None:
-        body["url"] = args.url
-    return _action(args.name, "tab", "tab", body)
-
-
 def cmd_acquire(args: argparse.Namespace) -> int:
     _, payload = _request("POST", f"/browsers/{args.name}/acquire", {"reclaim": args.reclaim})
     if payload.get("ok"):
         _pull_in_pane(args.name)
         _out(f"acquired browser {args.name}")
+        _print_attach(args.name)
         return _EXIT_OK
     return _render_action(payload, args.name, "acquire")
 
@@ -615,82 +580,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ls.add_argument("--include-tabs", action="store_true", help="List every open tab per browser, not just the active one.")
     p_ls.set_defaults(func=cmd_ls)
     p_new = sub.add_parser("new", help="Start a new browser and print its name. Pass an optional name to choose one.")
-    p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'alex-smith'); a duplicate is rejected.")
+    p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'research-1'); a duplicate is rejected.")
+    p_new.add_argument("--url", default=None, help="The page the new browser opens on (an absolute http(s) URL); the home page when omitted.")
     p_new.set_defaults(func=cmd_new)
 
     p_close = sub.add_parser("close", help="Close an entire browser (all tabs) and retire its name. For one tab, use `tab <name> close`.")
     p_close.add_argument("name")
     p_close.set_defaults(func=cmd_close)
 
-    p_task = sub.add_parser("task", help="Run a browser-use task on a browser; stream its trace.")
-    p_task.add_argument("name", help="Browser name (from `ls` or the name `new` printed).")
-    p_task.add_argument("prompt", help="The high-level goal for the browser-use agent.")
-    p_task.add_argument("--reclaim", action="store_true", help="Resume a browser a human took control of -- ONLY when the human told you to.")
-    p_task.add_argument("--no-wait", action="store_true", help="Fail fast if another agent holds it, instead of queueing.")
-    p_task.add_argument("--max-wait", type=float, default=None, help="Seconds to wait for another agent to release before giving up.")
-    p_task.add_argument("--no-pane", action="store_true", help="Do not pull the browser into a UI pane.")
-    p_task.set_defaults(func=cmd_task)
-
-    p_lock = sub.add_parser("lock", help="Hold a browser (foreground) until Ctrl-C; releases on exit.")
-    p_lock.add_argument("name")
-    p_lock.add_argument("--no-wait", action="store_true")
-    p_lock.add_argument("--max-wait", type=float, default=None)
-    p_lock.add_argument("--no-pane", action="store_true")
-    p_lock.set_defaults(func=cmd_lock)
-
     for verb in ("unlock", "release"):
         p_rel = sub.add_parser(verb, help="Release a browser you hold.")
         p_rel.add_argument("name")
         p_rel.set_defaults(func=cmd_release)
-
-    # --- direct control: YOU drive. Run `state` to see numbered elements, then click. ---
-    p_state = sub.add_parser("state", help="Show the page: numbered clickable elements + url + tabs. Run this before clicking.")
-    p_state.add_argument("name")
-    p_state.set_defaults(func=cmd_state)
-
-    p_open = sub.add_parser("open", help="Navigate a browser to a URL.")
-    p_open.add_argument("name")
-    p_open.add_argument("url")
-    p_open.set_defaults(func=cmd_open)
-
-    p_click = sub.add_parser("click", help="Click the element with the given index (from `state`).")
-    p_click.add_argument("name")
-    p_click.add_argument("index", type=int)
-    p_click.set_defaults(func=cmd_click)
-
-    p_input = sub.add_parser("input", help="Type text into the element with the given index.")
-    p_input.add_argument("name")
-    p_input.add_argument("index", type=int)
-    p_input.add_argument("text")
-    p_input.set_defaults(func=cmd_input)
-
-    p_select = sub.add_parser("select", help="Choose an option in a <select> dropdown by visible text.")
-    p_select.add_argument("name")
-    p_select.add_argument("index", type=int)
-    p_select.add_argument("value")
-    p_select.set_defaults(func=cmd_select)
-
-    p_scroll = sub.add_parser("scroll", help="Scroll the page (down/up).")
-    p_scroll.add_argument("name")
-    p_scroll.add_argument("direction", nargs="?", default="down", choices=["down", "up"])
-    p_scroll.add_argument("--amount", type=int, default=500, help="Pixels to scroll.")
-    p_scroll.set_defaults(func=cmd_scroll)
-
-    p_keys = sub.add_parser("keys", help='Send keyboard keys (e.g. "Enter", "Control+a").')
-    p_keys.add_argument("name")
-    p_keys.add_argument("keys")
-    p_keys.set_defaults(func=cmd_keys)
-
-    p_shot = sub.add_parser("screenshot", help="Save a PNG of the browser and print its path (Read it to view).")
-    p_shot.add_argument("name")
-    p_shot.set_defaults(func=cmd_screenshot)
-
-    p_tab = sub.add_parser("tab", help="Tabs within a browser: list / switch / new / close.")
-    p_tab.add_argument("name")
-    p_tab.add_argument("action", nargs="?", default="list", choices=["list", "switch", "new", "close"])
-    p_tab.add_argument("index", type=int, nargs="?", default=None, help="Tab index for switch/close.")
-    p_tab.add_argument("--url", default=None, help="URL for `tab new`.")
-    p_tab.set_defaults(func=cmd_tab)
 
     p_acq = sub.add_parser("acquire", help="Reserve a browser across several commands (optional; the first command auto-acquires).")
     p_acq.add_argument("name")

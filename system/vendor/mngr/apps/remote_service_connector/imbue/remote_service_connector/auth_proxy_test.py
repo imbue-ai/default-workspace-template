@@ -100,7 +100,10 @@ def test_auth_signup_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["user"]["email"] == "new@example.com"
     assert body["tokens"]["access_token"].startswith("at-")
     assert body["needs_email_verification"] is False
-    assert body["is_new_account"] is True
+    # is_new_account is deliberately kept OFF the wire (the pre-tolerant fleet's
+    # strict models reject unknown response fields); it lives on the in-process
+    # AuthResponse object only. See the CLEANUP note on the route decorator.
+    assert "is_new_account" not in body
     assert backend.sent_verification_emails == []
     assert "new@example.com" in backend.accounts_by_email
     assert backend.accounts_by_email["new@example.com"].is_verified is False
@@ -357,7 +360,6 @@ def test_auth_signup_returns_error_on_sdk_outage(monkeypatch: pytest.MonkeyPatch
         "user": None,
         "tokens": None,
         "needs_email_verification": False,
-        "is_new_account": False,
     }
 
 
@@ -996,3 +998,40 @@ def test_partitioned_cookie_middleware_ignores_non_http_scopes() -> None:
     with pytest.raises(StopIteration):
         middleware({"type": "lifespan"}, None, None).send(None)
     assert seen[0]["type"] == "lifespan"
+
+
+def test_auth_signin_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A suspended account's JSON sign-in gets ACCOUNT_SUSPENDED and no session."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    client.post("/auth/signup", json={"email": "banned@example.com", "password": "password123"})
+    account = backend.accounts_by_email["banned@example.com"]
+    session_count_before = len(backend.sessions_by_access_token)
+    backend.suspended_user_ids.add(account.user_id)
+
+    resp = client.post("/auth/signin", json={"email": "banned@example.com", "password": "password123"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_SUSPENDED"
+    assert "support@imbue.com" in body["message"]
+    assert body["tokens"] is None
+    assert len(backend.sessions_by_access_token) == session_count_before
+
+
+def test_auth_session_refresh_refused_for_suspended_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refresh landing in the suspend race window is refused and its session revoked."""
+    backend = _install_fake_supertokens(monkeypatch)
+    client = TestClient(web_app, raise_server_exceptions=False)
+    signup = client.post("/auth/signup", json={"email": "racer@example.com", "password": "password123"}).json()
+    account = backend.accounts_by_email["racer@example.com"]
+    backend.suspended_user_ids.add(account.user_id)
+
+    resp = client.post("/auth/session/refresh", json={"refresh_token": signup["tokens"]["refresh_token"]})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ACCOUNT_SUSPENDED"
+    assert body["tokens"] is None
+    # Nothing usable escaped: the refreshed session was revoked on the spot.
+    assert not any(s.user_id == account.user_id for s in backend.sessions_by_access_token.values())

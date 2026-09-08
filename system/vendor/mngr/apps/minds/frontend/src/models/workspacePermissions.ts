@@ -7,6 +7,12 @@
 // what was actually stored rather than an optimistic guess, at the cost of one
 // round trip per flip.
 //
+// For a remote workspace the server also carries the change to that workspace's
+// own machine before answering, and the read fetches that machine's state, so
+// both are as slow as the network to it. Nothing here is optimistic: `isWriting`
+// locks the whole pane for the duration, so what is on screen is always
+// something the machine has confirmed.
+//
 // Loading is separate from WorkspaceOptionsModel's: an unreachable latchkey
 // gateway must not take the Share or Settings tabs down with it.
 //
@@ -19,6 +25,7 @@ import m from "mithril";
 import type { UiPermissionConnection, UiServiceSignIn, UiWorkspacePermissions } from "../generated/ui";
 import type { FetchJson } from "./workspaceOptions";
 import { defaultFetchJson, errorMessageFromBody } from "./workspaceOptions";
+import { forgetWarmedPermissionsOverview, readWarmedPermissionsOverview } from "./permissionsPrefetch";
 
 export type PermissionsLoadStatus = "idle" | "loading" | "load_failed" | "ready";
 
@@ -27,11 +34,13 @@ export interface PermissionsModelOptions {
   redraw?: () => void;
 }
 
+export const WAITING_SECTION = "waiting";
 export const ADD_CONNECTION_SECTION = "add-connection";
 export const LOCAL_FILES_SECTION = "local-files";
 export const OTHER_MACHINES_SECTION = "other-machines";
 
 const FIXED_SECTIONS: readonly string[] = [
+  WAITING_SECTION,
   ADD_CONNECTION_SECTION,
   LOCAL_FILES_SECTION,
   OTHER_MACHINES_SECTION,
@@ -50,9 +59,19 @@ export function resolvePermissionsSection(
   data: UiWorkspacePermissions | null,
   requested: string | null,
 ): string {
-  if (requested !== null && FIXED_SECTIONS.includes(requested)) return requested;
+  const hasWaiting = (data?.waiting_requests ?? []).length > 0;
+  // Waiting on you is only a place while something is waiting: answering the
+  // last one has to leave, not sit on an empty list.
+  if (requested === WAITING_SECTION && hasWaiting) return requested;
+  if (requested !== null && requested !== WAITING_SECTION && FIXED_SECTIONS.includes(requested)) {
+    return requested;
+  }
   const connectionIds = (data?.connections ?? []).map(connectionSectionId);
   if (requested !== null && connectionIds.includes(requested)) return requested;
+  // Nothing asked for in particular: lead with what is asking for an answer.
+  // Everything else in this pane is what past answers built, and none of it is
+  // waiting on the reader the way a pending request is.
+  if (hasWaiting) return WAITING_SECTION;
   return connectionIds[0] ?? ADD_CONNECTION_SECTION;
 }
 
@@ -157,6 +176,18 @@ export class PermissionsModel {
     return this.busyRowKeys.has(rowKey);
   }
 
+  /** Whether any write is still in flight.
+   *
+   * Every write goes to the workspace's own machine and does not answer until
+   * it has landed there, so the pane locks while one runs: the acting control
+   * spins and everything else grays out. Without that the pane would invite a
+   * second click onto a state the first one is still deciding -- and, since
+   * the responses are the whole view, the two answers would fight over what is
+   * on screen. */
+  isWriting(): boolean {
+    return this.busyRowKeys.size > 0;
+  }
+
   /** Drop the last write's error. The left nav calls this on a section switch:
    * an error about a row that is no longer on screen is noise. */
   clearErrorMessage(): void {
@@ -178,7 +209,13 @@ export class PermissionsModel {
     this.status = "loading";
     this.errorMessage = "";
     this.redrawImpl();
-    const result = await this.fetchJsonImpl(this.apiBase());
+    // Started when the key was pointed at, so the first open usually spends a
+    // read that has already happened rather than watching one. Spent on use:
+    // what this shows changes as grants are made and requests arrive, so every
+    // later read is its own.
+    const warmed = readWarmedPermissionsOverview(this.agentId);
+    forgetWarmedPermissionsOverview();
+    const result = warmed !== null ? await warmed : await this.fetchJsonImpl(this.apiBase());
     if (!result.ok) {
       this.status = "load_failed";
       this.errorMessage = errorMessageFromBody(result.body, `HTTP ${result.status}`);
@@ -188,6 +225,30 @@ export class PermissionsModel {
     this.data = result.body as UiWorkspacePermissions;
     this.status = "ready";
     this.redrawImpl();
+  }
+
+  /** Drop a request from the pane the moment it is answered.
+   *
+   * What is pending is the server's to say, and it says so on the next read --
+   * but the answer was given HERE, and a row that sits there after it reads as
+   * an answer that did not take. So it goes at once, and the refresh that the
+   * resolution triggers anyway is what reconciles: if the server still has it
+   * pending, it comes back.
+   */
+  forgetWaitingRequest(requestId: string): void {
+    const data = this.data;
+    if (data === null) return;
+    const waiting = data.waiting_requests.filter((entry) => entry.id !== requestId);
+    if (waiting.length === data.waiting_requests.length) return;
+    this.data = { ...data, waiting_requests: waiting };
+    this.redrawImpl();
+  }
+
+  /** Whether anything is still waiting on this machine's reader. Read by the
+   * request page on the way out, to decide whether there is a list to go back
+   * to; a pane that has not loaded yet has nothing to offer either way. */
+  hasWaitingRequests(): boolean {
+    return (this.data?.waiting_requests.length ?? 0) > 0;
   }
 
   /** Re-read the pane when the set of pending requests changes.
@@ -265,10 +326,12 @@ export class PermissionsModel {
   /** Disconnect this account from latchkey, then land the pane somewhere that
    * still exists.
    *
-   * NOT scoped to this machine: the stored credential itself is cleared, so the
-   * account is disconnected everywhere and the server strips its grants from
-   * every workspace. The connection therefore leaves the refreshed view
-   * entirely, and the section it occupied has to be given up.
+   * Unlike Revoke all, this clears the stored credential itself -- the one held
+   * by the store this machine reads, which is its own when it has one and this
+   * computer's (shared by every local machine) when it does not -- and the
+   * server strips this workspace's now-inert grants. The connection therefore
+   * leaves the refreshed view entirely, and the section it occupied has to be
+   * given up.
    *
    * Resolves to the section to show next, or null when the write was refused
    * and the pane must stay where it is. */
@@ -301,7 +364,7 @@ export class PermissionsModel {
     this.redrawImpl();
     const sectionIdsBefore = new Set((this.data?.connections ?? []).map(connectionSectionId));
     const result = await this.enqueueWrite(() =>
-      this.fetchJsonImpl("/settings/connectors/add-account", {
+      this.fetchJsonImpl(`${this.apiBase()}/connect-browser`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ service_name: serviceName }),
@@ -428,9 +491,27 @@ export class PermissionsModel {
   }
 
   /** Serialize writes: overlapping flips reach the server in click order and
-   * the last response is the one left on screen. */
+   * the last response is the one left on screen.
+   *
+   * Every write also drops the module's warm, which is a read the user's own
+   * change has just invalidated. Twice, because both ends matter: a warm taken
+   * before the click would otherwise be replayed by a reopen while the write
+   * is still running (the browser sign-in blocks for as long as the sign-in
+   * takes), and one started *during* the write answers from before it landed.
+   * Either would put the pre-change state back on the next open, and the warm
+   * is deduplicated for its whole lifetime, so it would also suppress the
+   * fresh read that open would otherwise make.
+   */
   private enqueueWrite<T>(makeRequest: () => Promise<T>): Promise<T> {
-    const result = this.writeChain.then(makeRequest, makeRequest);
+    forgetWarmedPermissionsOverview();
+    const request = (): Promise<T> => {
+      const pending = makeRequest();
+      // Settled on a side branch rather than awaited, so dropping the warm adds
+      // no hop to the chain the responses come back through.
+      void pending.then(forgetWarmedPermissionsOverview, forgetWarmedPermissionsOverview);
+      return pending;
+    };
+    const result = this.writeChain.then(request, request);
     this.writeChain = result.then(
       () => undefined,
       () => undefined,

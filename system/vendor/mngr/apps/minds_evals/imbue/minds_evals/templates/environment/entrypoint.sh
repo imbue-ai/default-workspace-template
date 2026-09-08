@@ -16,7 +16,7 @@ done
 export MINDS_LATCHKEY_BINARY=/work/mngr/apps/minds/node_modules/.bin/latchkey
 
 echo ">> activating minds env: ${MINDS_ENV:-staging}"
-eval "$(uv run minds env activate "${MINDS_ENV:-staging}")"
+eval "$(uv run minds-admin env activate "${MINDS_ENV:-staging}")"
 
 # Pin the mngr profile. Unlike the old harness there is no shared profile
 # volume: each trial's box seeds its own Modal SSH keypair, and only ever opens

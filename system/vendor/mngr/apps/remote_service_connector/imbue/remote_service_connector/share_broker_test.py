@@ -1,6 +1,7 @@
 """Tests for the accounts broker (share authorization handoff + JWKS)."""
 
 import json
+import logging
 from urllib.parse import parse_qs
 from urllib.parse import quote
 from urllib.parse import urlencode
@@ -15,6 +16,8 @@ from starlette.testclient import TestClient
 from supertokens_python.recipe.emailpassword.interfaces import SignUpOkResult as EPSignUpOkResult
 
 import imbue.remote_service_connector.app as app_mod
+import imbue.remote_service_connector.share_broker as share_broker_module
+from imbue.modal_app_kit.request_logging import RequestLoggingMiddleware
 from imbue.remote_service_connector.share_broker import build_broker_jwks
 from imbue.remote_service_connector.share_broker import mint_share_handoff_token
 from imbue.remote_service_connector.shares import derive_share_user_label
@@ -389,3 +392,64 @@ def test_broker_authorize_login_roundtrip_url_is_resumable(monkeypatch: pytest.M
     assert resp.status_code == 302
     location = resp.headers["location"]
     assert location == f"/login?next={quote(original, safe='')}"
+
+
+class _RecordingLogHandler(logging.Handler):
+    """Captures formatted messages from a propagate=False logger (caplog cannot)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def test_broker_authorize_emits_a_structured_share_visit_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, st_backend = _make_broker_test_client(monkeypatch)
+    domain = _seed_active_share(backend)
+    visitor_user_id = _sign_in_verified_visitor(client, st_backend)
+    callback_origin = f"https://auth-x7k9q2w1.{domain}"
+    recording_handler = _RecordingLogHandler()
+    share_broker_module._share_visit_logger.addHandler(recording_handler)
+    try:
+        resp = client.get(_authorize_url(domain, callback_origin, state="nonce-3"), follow_redirects=False)
+    finally:
+        share_broker_module._share_visit_logger.removeHandler(recording_handler)
+
+    assert resp.status_code == 302
+    assert len(recording_handler.messages) == 1
+    visit_record = json.loads(recording_handler.messages[0])
+    assert visit_record == {
+        "type": "share_visit_authorized",
+        "visitor_user_id": visitor_user_id,
+        "host_id": _SHARE_STUB_HOST_ID,
+        "owner_share_label": _SHARE_STUB_USER_LABEL,
+        "workspace_domain": domain,
+        "is_owner": False,
+    }
+
+
+def test_broker_authorize_stashes_the_visitor_identity_for_the_access_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Wrap the app the way app.py does (RequestLoggingMiddleware outermost) and
+    # confirm an authenticated request's JSON access-log line carries the full
+    # user id stashed during routing.
+    _client, backend, st_backend = _make_broker_test_client(monkeypatch)
+    domain = _seed_active_share(backend)
+    lines: list[str] = []
+    logging_client = TestClient(
+        RequestLoggingMiddleware(web_app, line_sink=lines.append), base_url="https://testserver"
+    )
+    visitor_user_id = _sign_in_verified_visitor(logging_client, st_backend)
+    callback_origin = f"https://auth-x7k9q2w1.{domain}"
+
+    resp = logging_client.get(_authorize_url(domain, callback_origin), follow_redirects=False)
+
+    assert resp.status_code == 302
+    access_records = [json.loads(line) for line in lines]
+    authorize_records = [r for r in access_records if r["path"] == "/share/authorize"]
+    assert len(authorize_records) == 1
+    assert authorize_records[0]["user"] == visitor_user_id
+    assert authorize_records[0]["type"] == "http_request"

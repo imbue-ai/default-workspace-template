@@ -37,9 +37,10 @@ _PASSWORD = "correct horse battery staple"
 _SALT = bytes(range(16))
 _DEK = bytes(range(32))
 _SECRETS_PLAINTEXT = (
-    '{"restic_env":"export RESTIC_REPOSITORY=s3:endpoint/bucket\\n",'
-    '"ssh_private_key":"-----BEGIN OPENSSH PRIVATE KEY-----\\nfake\\n-----END OPENSSH PRIVATE KEY-----\\n",'
-    '"ssh_known_hosts":null}'
+    '{"payload_format":1,'
+    '"restic_env":"export RESTIC_REPOSITORY=s3:endpoint/bucket\\n",'
+    '"ssh_known_hosts":null,'
+    '"ssh_private_key":"-----BEGIN OPENSSH PRIVATE KEY-----\\nfake\\n-----END OPENSSH PRIVATE KEY-----\\n"}'
 )
 
 

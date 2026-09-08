@@ -20,6 +20,9 @@ from imbue.minds.utils.sentry.core import resolve_latchkey_forward_sentry_env
 from imbue.minds.utils.sentry.core import resolve_sentry_environment
 from imbue.minds.utils.sentry.core import sentry_deploy_environment_from_minds_env_name
 from imbue.minds.utils.sentry.core import write_latchkey_forward_sentry_consent
+from imbue.mngr.primitives import HostId
+from imbue.mngr_latchkey.remote._mirror import materialize_machine_store
+from imbue.mngr_latchkey.remote._mirror import write_machine_credentials
 from imbue.mngr_latchkey.sentry import MNGR_LATCHKEY_SENTRY_CONSENT_FILE_ENV_VAR
 from imbue.mngr_latchkey.sentry import MNGR_LATCHKEY_SENTRY_DSN_ENV_VAR
 from imbue.mngr_latchkey.sentry import MNGR_LATCHKEY_SENTRY_ENVIRONMENT_ENV_VAR
@@ -27,6 +30,7 @@ from imbue.mngr_latchkey.sentry import MNGR_LATCHKEY_SENTRY_S3_BUCKET_ENV_VAR
 from imbue.mngr_latchkey.sentry import MNGR_LATCHKEY_SENTRY_USER_ID_ENV_VAR
 from imbue.mngr_latchkey.sentry import read_forward_sentry_consent
 from imbue.mngr_latchkey.sentry import resolve_forward_sentry_config
+from imbue.mngr_latchkey.store import plugin_data_dir
 
 
 def test_sentry_environment_from_minds_env_name_maps_production_and_staging() -> None:
@@ -165,6 +169,66 @@ def test_collect_external_attachments_classifies_flat_minds_log_layout(tmp_path:
     assert len(callbacks) == 7
 
 
+def test_error_event_sweeps_never_pick_up_staged_bug_report_files(tmp_path: Path) -> None:
+    """A report's staged files must appear only on that report, never on error events.
+
+    The staged bug-report files sit in the same flat logs dir the groups sweep,
+    and they persist until the next report clears them. The groups are
+    process-global and swept onto every automatic error event, so a group
+    matching these names would carry one user-consented report's chats and logs
+    onto every unrelated crash in between. They are attached one-shot instead;
+    this pins that no group ever matches them.
+    """
+    logs_folder = tmp_path / "logs"
+    logs_folder.mkdir()
+    (logs_folder / "minds-events.jsonl").write_text("live\n")
+    (logs_folder / "bug-report-workspace-logs.log").write_text("supervisorctl status\n")
+    (logs_folder / "bug-report-transcript.log").write_text('{"type": "user_message"}\n')
+    (logs_folder / "bug-report-console.log").write_text("[console:ERROR] boom\n")
+
+    uploader = ErrorAttachmentsS3Uploader(log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS)
+    try:
+        raise ValueError("boom")
+    except ValueError as exception:
+        groups, callbacks = uploader.collect_external_attachments(exception=exception, logs_folder=logs_folder)
+
+    assert set(groups) == {"", "live_logs"}, sorted(groups)
+    # one callback per upload: traceback + the one live log file.
+    assert len(callbacks) == 2
+
+
+def test_collect_external_attachments_never_reaches_into_a_machine_store(tmp_path: Path) -> None:
+    """A bug report sweeps the latchkey plugin dir, which now holds credential stores below it.
+
+    Each remote workspace's machine store lives at ``<plugin dir>/hosts/<host
+    id>/`` and holds that machine's credentials. The external groups glob the
+    plugin dir itself, so nothing there is reachable -- and the decoys below,
+    named exactly what each group matches, are what would be swept (alongside
+    the credential store beside them) if a glob ever became recursive.
+    """
+    logs_folder = tmp_path / "logs"
+    logs_folder.mkdir()
+    (logs_folder / "minds-events.jsonl").write_text("live\n")
+    latchkey_directory = tmp_path / "latchkey"
+    data_dir = plugin_data_dir(latchkey_directory)
+    store_dir = materialize_machine_store(latchkey_directory, data_dir, HostId.generate())
+    write_machine_credentials(store_dir, b"encrypted-2277", "2")
+    for decoy_name in ("events.jsonl", "events.jsonl.20260824172552142020", "gateway.log"):
+        (store_dir / decoy_name).write_text("decoy\n")
+
+    uploader = ErrorAttachmentsS3Uploader(
+        log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS
+        + _external_log_attachment_groups(data_dir, tmp_path / "no-discovery", tmp_path / "no-mngr-cli")
+    )
+    try:
+        raise ValueError("boom")
+    except ValueError as exception:
+        groups, _callbacks = uploader.collect_external_attachments(exception=exception, logs_folder=logs_folder)
+
+    swept = [path for paths in groups.values() for path in paths]
+    assert [path for path in swept if str(store_dir) in str(path)] == []
+
+
 def test_collect_external_attachments_sweeps_latchkey_and_discovery_dirs(tmp_path: Path) -> None:
     # The latchkey forward daemon's logs (structured jsonl + raw stdout/stderr capture)
     # and the shared discovery event stream live outside the flat minds logs dir; the
@@ -175,26 +239,52 @@ def test_collect_external_attachments_sweeps_latchkey_and_discovery_dirs(tmp_pat
     latchkey_dir = tmp_path / "latchkey" / "mngr_latchkey"
     latchkey_dir.mkdir(parents=True)
     (latchkey_dir / "events.jsonl").write_text("daemon-structured\n")
+    (latchkey_dir / "events.jsonl.20260824172552142020").write_text("daemon-rotated\n")
+    # The daemon rotates its raw capture too; that one is deliberately not swept.
     (latchkey_dir / "latchkey_forward.log").write_text("daemon-raw\n")
+    (latchkey_dir / "latchkey_forward.log.20260824172552142020").write_text("daemon-raw-rotated\n")
     discovery_dir = tmp_path / "mngr" / "events" / "mngr" / "discovery"
     discovery_dir.mkdir(parents=True)
     (discovery_dir / "events.jsonl").write_text("discovery\n")
+    mngr_cli_events_dir = tmp_path / "mngr" / "events" / "logs" / "mngr"
+    mngr_cli_events_dir.mkdir(parents=True)
+    (mngr_cli_events_dir / "events.jsonl").write_text("cli-command\n")
+    (mngr_cli_events_dir / "events.jsonl.20260824172552142020").write_text("cli-rotated-old\n")
+    (mngr_cli_events_dir / "events.jsonl.20260825081231000000").write_text("cli-rotated-new\n")
 
     uploader = ErrorAttachmentsS3Uploader(
         log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS
-        + _external_log_attachment_groups(latchkey_dir, discovery_dir)
+        + _external_log_attachment_groups(latchkey_dir, discovery_dir, mngr_cli_events_dir)
     )
     try:
         raise ValueError("boom")
     except ValueError as exception:
         groups, callbacks = uploader.collect_external_attachments(exception=exception, logs_folder=logs_folder)
 
-    assert set(groups) == {"", "live_logs", "latchkey_live_logs", "latchkey_raw_logs", "discovery_events"}
+    assert set(groups) == {
+        "",
+        "live_logs",
+        "latchkey_live_logs",
+        "latchkey_rotated_logs",
+        "latchkey_raw_logs",
+        "discovery_events",
+        "mngr_cli_events",
+        "mngr_cli_rotated_events",
+    }
+    # The live globs must not pick up the rotated siblings, and the raw capture's
+    # own rotation must not be swept at all -- it only ever rotates because it
+    # grew oversized, which is the bulk rotating it exists to stop re-uploading.
     assert len(groups["latchkey_live_logs"]) == 1
+    assert len(groups["latchkey_rotated_logs"]) == 1
     assert len(groups["latchkey_raw_logs"]) == 1
     assert len(groups["discovery_events"]) == 1
-    # one callback per upload: traceback + the four log files.
-    assert len(callbacks) == 5
+    assert len(groups["mngr_cli_events"]) == 1
+    # Only the newest rotated CLI events file is swept, not every epoch (two
+    # rotated files exist; max_file_count keeps one). Which one is the newest
+    # is _n_newest_files's mtime contract, pinned where that helper lives.
+    assert len(groups["mngr_cli_rotated_events"]) == 1
+    # one callback per upload: traceback + the seven log files.
+    assert len(callbacks) == 8
 
 
 def test_collect_external_attachments_tolerates_missing_external_dirs(tmp_path: Path) -> None:
@@ -206,7 +296,9 @@ def test_collect_external_attachments_tolerates_missing_external_dirs(tmp_path: 
 
     uploader = ErrorAttachmentsS3Uploader(
         log_attachment_groups=_MINDS_LOG_ATTACHMENT_GROUPS
-        + _external_log_attachment_groups(tmp_path / "no-latchkey", tmp_path / "no-discovery")
+        + _external_log_attachment_groups(
+            tmp_path / "no-latchkey", tmp_path / "no-discovery", tmp_path / "no-mngr-cli"
+        )
     )
     try:
         raise ValueError("boom")

@@ -1,7 +1,9 @@
 """Unit tests for the shell-aware tk command parser.
 
-These pin the behaviour the gate hook (``system/scripts/claude_tk_standalone_check.py``)
-relies on, plus the ``extract_create_titles`` / ``flag_values`` surface the
+These pin the behaviour the gate hooks in ``system/scripts/`` rely on --
+``agent_tk_standalone_check.py`` (segments and verbs) and
+``agent_latchkey_request_check.py`` (segment words and ``terminator``) --
+plus the ``extract_create_titles`` / ``flag_values`` surface the
 package exposes for callers that need step titles out of a ``tk create --step``
 command. The cases that motivated moving off regexes -- quoted operators, escaped
 quotes inside titles, a tk verb merely mentioned inside another command's
@@ -54,6 +56,23 @@ def test_redirect_is_recorded_not_a_separator() -> None:
     assert parsed is not None
     assert [seg.tk_verb for seg in parsed.segments] == ["start"]
     assert parsed.segments[0].has_redirect is True
+
+
+def test_terminator_records_the_operator_that_ended_each_segment() -> None:
+    """The operator is what tells a trailing `;` (an empty tail segment, not a
+    second command) from a trailing `&` (which backgrounds the command itself)."""
+    parsed = parse_command('tk close a "x" && tk start b | tee log')
+    assert parsed is not None
+    assert [seg.terminator for seg in parsed.segments] == ["&&", "|", None]
+
+    trailing_semicolon = parse_command("tk start cod-step-x;")
+    assert trailing_semicolon is not None
+    assert [seg.terminator for seg in trailing_semicolon.segments] == [";", None]
+    assert trailing_semicolon.segments[1].words == ()
+
+    backgrounded = parse_command("tk start cod-step-x &")
+    assert backgrounded is not None
+    assert backgrounded.segments[0].terminator == "&"
 
 
 def test_a_mentioned_verb_inside_a_quote_is_not_an_invocation() -> None:

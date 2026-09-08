@@ -25,12 +25,14 @@ import type {
   UiPermissionConnection,
   UiSelfPermissionToggle,
   UiWaitingPermissionRequest,
+  UiWorkspacePermissions,
 } from "../../../generated/ui";
 import type { PermissionsModel } from "../../../models/workspacePermissions";
 import {
   ADD_CONNECTION_SECTION,
   LOCAL_FILES_SECTION,
   OTHER_MACHINES_SECTION,
+  WAITING_SECTION,
   connectActionFor,
   connectServiceRowKey,
   connectionSectionId,
@@ -42,9 +44,7 @@ import {
   selfToggleRowKey,
 } from "../../../models/workspacePermissions";
 import { navEntryClass, splitPane } from "../../components/SplitPane";
-
-/** Waiting rows shown before the "+N more" reveal. */
-const WAITING_PREVIEW_COUNT = 3;
+import { warmRequestDetail } from "../../../models/requestDetailPrefetch";
 
 /** How long a "Revoke all" stays armed after its first click. */
 const REVOKE_CONFIRM_WINDOW_MS = 4000;
@@ -68,6 +68,17 @@ const catalogFallbackMark = (): m.Children => m(Icon16, { name: "box", extra: "s
 const SELF_TOGGLE_BLOCKED_TITLE =
   "This grant can't be re-enabled; ask the agent to request it again.";
 const CONNECTOR_TOGGLE_BLOCKED_TITLE = "Connect this account before granting permissions.";
+/** Why every other control is inert while one change is being applied. */
+const PANE_BUSY_TITLE = "Waiting for the last change to reach this machine.";
+
+/** Whether a control must sit out because a DIFFERENT write is still running.
+ *
+ * A write is not finished until the workspace's own machine has taken it, and
+ * its response replaces the whole pane, so exactly one may be in flight. The
+ * acting control shows its own spinner instead (see `renderSwitch`). */
+function isLockedByAnotherWrite(model: PermissionsModel, rowKey: string): boolean {
+  return model.isWriting() && !model.isRowBusy(rowKey);
+}
 
 /** Why a service offers no action at all: latchkey cannot sign in to it and
  * told us nothing about the credentials it takes, so there is nothing to ask
@@ -78,18 +89,17 @@ function unconnectableTitle(displayName: string): string {
 
 export interface PermissionsTabAttrs {
   model: PermissionsModel;
-  /** Machine name for the heading; '' when the options load has not landed. */
+  /** Workspace name for the heading; '' when the options load has not landed. */
   workspaceName: string;
   /** ?section from the URL, or null for "whatever is first". */
   requestedSection: string | null;
   onSelectSection: (section: string) => void;
-  /** Open the review popup on a waiting request. It opens OVER this panel,
-   * which keeps its scroll, selected section, and in-flight edits. */
+  /** Open a waiting request. It opens as its own page over this pane, which
+   * stays mounted underneath with its scroll and section intact. */
   onReviewRequest: (requestId: string) => void;
 }
 
 interface PermissionsTabLocalState {
-  isWaitingExpanded: boolean;
   /** Row key of the armed "Revoke all", if any: the second click fires it. */
   armedRevokeRowKey: string | null;
   disarmTimer: ReturnType<typeof setTimeout> | null;
@@ -101,7 +111,6 @@ interface PermissionsTabLocalState {
 
 export function PermissionsTab(): m.Component<PermissionsTabAttrs> {
   const local: PermissionsTabLocalState = {
-    isWaitingExpanded: false,
     armedRevokeRowKey: null,
     disarmTimer: null,
     disconnectSectionId: null,
@@ -120,7 +129,6 @@ export function PermissionsTab(): m.Component<PermissionsTabAttrs> {
     },
     view(vnode) {
       const { model, workspaceName, requestedSection, onSelectSection, onReviewRequest } = vnode.attrs;
-      const data = model.data;
       const machineName = workspaceName.trim();
 
       return m("div", { class: "flex flex-col flex-1 min-h-0" }, [
@@ -140,8 +148,7 @@ export function PermissionsTab(): m.Component<PermissionsTabAttrs> {
               ]
             : "What agents in this machine can access. They can never reach beyond the permissions you grant them.",
         ),
-        renderWaitingStrip(data?.waiting_requests ?? [], local, onReviewRequest),
-        renderBody(model, local, machineName, requestedSection, onSelectSection),
+        renderBody(model, local, machineName, requestedSection, onSelectSection, onReviewRequest),
       ]);
     },
   };
@@ -160,6 +167,7 @@ function renderBody(
   machineName: string,
   requestedSection: string | null,
   onSelectSection: (section: string) => void,
+  onReviewRequest: (requestId: string) => void,
 ): m.Children {
   if (model.status === "idle" || model.status === "loading") {
     return m("p", { class: "mt-6 type-body text-secondary flex items-center gap-2 shrink-0" }, [
@@ -184,6 +192,8 @@ function renderBody(
     );
   }
 
+  // Waiting on you is a section like any other: what is selected is whatever
+  // the URL asks for.
   const selected = resolvePermissionsSection(data, requestedSection);
   const selectSection = (section: string): void => {
     disarmRevoke(local);
@@ -195,7 +205,7 @@ function renderBody(
   return [
     splitPane({
       navLabel: "Permission sections",
-      nav: renderNav(data.connections, selected, selectSection),
+      nav: renderNav(data.connections, data.waiting_requests, selected, selectSection),
       content: [
         model.errorMessage
           ? m(
@@ -204,7 +214,7 @@ function renderBody(
               model.errorMessage,
             )
           : null,
-        renderSelectedPanel(model, local, data.connections, machineName, selected, selectSection),
+        renderSelectedPanel(model, local, data, machineName, selected, selectSection, onReviewRequest),
       ],
       extra: "mt-8",
       // pb-8 keeps the panel foot (the Disconnect button) off the pane's
@@ -222,71 +232,34 @@ function renderBody(
 /** Pending permission requests from this machine's agents, oldest first (the
  * one the agent has been blocked on longest leads). Each row opens the review
  * popup on that request. Hidden entirely when nothing is pending. */
-function renderWaitingStrip(
+/** The requests this machine's agents are waiting on, oldest first (the one
+ * blocked longest leads). Each opens as its own page over this pane.
+ *
+ * The list lives in the pane -- so it scrolls with everything else, and sits
+ * beside the connections its answers create -- while the request itself is read
+ * on a page of its own, which is the room a dialog needs.
+ */
+function renderWaitingPanel(
   waitingRequests: UiWaitingPermissionRequest[],
-  local: PermissionsTabLocalState,
   onReviewRequest: (requestId: string) => void,
 ): m.Children {
-  if (waitingRequests.length === 0) return null;
-  const hiddenCount = waitingRequests.length - WAITING_PREVIEW_COUNT;
-  const visible =
-    local.isWaitingExpanded || hiddenCount <= 0
-      ? waitingRequests
-      : waitingRequests.slice(0, WAITING_PREVIEW_COUNT);
-
-  return m("section#ws-perm-waiting", { class: "mt-6 shrink-0 max-w-[760px]" }, [
-    m("h2", { class: "type-section text-tertiary flex items-center gap-1.5" }, [
+  return m("section", { "data-perm-panel": WAITING_SECTION }, [
+    m("h2", { class: "type-heading text-primary flex items-center gap-2 mb-1" }, [
       "Waiting on you",
       m(Badge, { count: waitingRequests.length }),
     ]),
     m(
-      "div",
-      { class: "mt-2 flex flex-col gap-0.5" },
-      visible.map((waiting) =>
-        m(
-          "button",
-          {
-            type: "button",
-            "data-perm-waiting-id": waiting.id,
-            class: "flex w-full items-center gap-2 rounded-md px-1 py-2 text-left cursor-pointer hover:bg-fill-hover",
-            onclick: () => onReviewRequest(waiting.id),
-          },
-          [
-            m(
-              "span",
-              { class: "flex h-5 w-5 shrink-0 items-center justify-center" },
-              serviceMark(
-                waiting.service_name,
-                "w-4 h-4",
-                "brand",
-                m(Icon16, { name: "key", extra: "text-primary" }),
-              ),
-            ),
-            m("span", { class: "min-w-0 flex-1" }, [
-              m("span", { class: "block truncate type-label text-primary" }, waiting.title),
-              waiting.reason
-                ? m("span", { class: "mt-0.5 block truncate type-helper text-secondary" }, waiting.reason)
-                : null,
-            ]),
-            m(Icon16, { name: "chevron-right", size: "sm", extra: "shrink-0 text-tertiary" }),
-          ],
-        ),
-      ),
+      "p",
+      { class: "type-body text-secondary mb-4" },
+      waitingRequests.length === 1
+        ? "An agent in this machine is waiting on an answer."
+        : "Agents in this machine are waiting on an answer. The one asked for longest is first.",
     ),
-    hiddenCount > 0 && !local.isWaitingExpanded
-      ? m(
-          "button",
-          {
-            type: "button",
-            id: "ws-perm-waiting-more",
-            class: "mt-1.5 ml-1 type-helper text-tertiary hover:text-secondary cursor-pointer",
-            onclick: () => {
-              local.isWaitingExpanded = true;
-            },
-          },
-          `+${hiddenCount} more`,
-        )
-      : null,
+    m(
+      "div",
+      { class: "flex flex-col gap-0.5" },
+      waitingRequests.map((waiting) => renderWaitingRow(waiting, onReviewRequest)),
+    ),
   ]);
 }
 
@@ -294,6 +267,7 @@ function renderWaitingStrip(
 
 function renderNav(
   connections: UiPermissionConnection[],
+  waitingRequests: UiWaitingPermissionRequest[],
   selected: string,
   selectSection: (section: string) => void,
 ): m.Children {
@@ -311,6 +285,25 @@ function renderNav(
     );
 
   return [
+    // Waiting requests lead the nav: they are the one thing here that is
+    // asking for an answer, and everything below is what past answers built.
+    waitingRequests.length === 0
+      ? null
+      : [
+          m(
+            "div",
+            { class: "flex flex-col gap-0.5" },
+            navEntry(
+              WAITING_SECTION,
+              m(Icon16, { name: "key", extra: "shrink-0" }),
+              m("span", { class: "flex min-w-0 flex-1 items-center gap-1.5" }, [
+                m("span", { class: "truncate" }, "Waiting on you"),
+                m(Badge, { count: waitingRequests.length }),
+              ]),
+            ),
+          ),
+          m("div", { class: "my-1.5 h-px bg-subtle" }),
+        ],
     m("div", { class: "flex flex-col gap-0.5" }, [
       ...connections.map((connection) =>
         navEntry(
@@ -363,17 +356,20 @@ function renderNav(
 function renderSelectedPanel(
   model: PermissionsModel,
   local: PermissionsTabLocalState,
-  connections: UiPermissionConnection[],
+  data: UiWorkspacePermissions,
   machineName: string,
   selected: string,
   selectSection: (section: string) => void,
+  onReviewRequest: (requestId: string) => void,
 ): m.Children {
+  const connections: UiPermissionConnection[] = data.connections;
+  if (selected === WAITING_SECTION) return renderWaitingPanel(data.waiting_requests, onReviewRequest);
   if (selected === LOCAL_FILES_SECTION) return renderLocalFilesPanel(model);
   if (selected === OTHER_MACHINES_SECTION) return renderOtherMachinesPanel(model);
   if (selected === ADD_CONNECTION_SECTION) return renderAddConnectionPanel(model, selectSection);
   const connection = connections.find((entry) => connectionSectionId(entry) === selected);
   if (connection === undefined) return null;
-  return renderConnectionPanel(model, local, connection, machineName, selectSection);
+  return renderConnectionPanel(model, local, connection, machineName, data.is_credential_store_shared, selectSection);
 }
 
 function renderConnectionPanel(
@@ -381,10 +377,13 @@ function renderConnectionPanel(
   local: PermissionsTabLocalState,
   connection: UiPermissionConnection,
   machineName: string,
+  isCredentialStoreShared: boolean,
   selectSection: (section: string) => void,
 ): m.Children {
   const machineLabel = machineLabelFor(machineName);
-  const isDisconnectBusy = model.isRowBusy(disconnectRowKey(connection.service_name, connection.account));
+  const disconnectKey = disconnectRowKey(connection.service_name, connection.account);
+  const isDisconnectBusy = model.isRowBusy(disconnectKey);
+  const isDisconnectLocked = isLockedByAnotherWrite(model, disconnectKey);
   return m("section", { "data-perm-panel": connectionSectionId(connection) }, [
     m("div", { class: "flex items-center justify-between gap-3 mb-1" }, [
       m("h2", { class: "type-heading text-primary flex items-center gap-2 min-w-0" }, [
@@ -431,6 +430,7 @@ function renderConnectionPanel(
               renderSwitch({
                 isGranted: toggle.is_granted,
                 isBusy: model.isRowBusy(rowKey),
+                isLocked: isLockedByAnotherWrite(model, rowKey),
                 // A grant can always be turned OFF, even on a disconnected
                 // account -- only turning one ON needs a live connection.
                 isBlocked: !toggle.is_granted && !connection.is_connected,
@@ -447,16 +447,19 @@ function renderConnectionPanel(
     ]),
     // Disconnect sits at the FOOT of the panel, apart from the toggles and from
     // the heading's Revoke all: that one drops this machine's grants, this one
-    // takes the account away from every machine. Only a connected account has a
-    // stored sign-in to forget -- a leftover-grants row is Revoke all's job.
+    // forgets the sign-in behind them. Only a connected account has one to
+    // forget -- a leftover-grants row is Revoke all's job.
     connection.is_connected
       ? [
           m(SectionHeader, { divider: true }, "Disconnect"),
           m("p", { class: "type-body text-secondary mb-3" }, [
             "Disconnect from ",
             m("span", { class: "font-semibold" }, `${connection.display_name} · ${connection.account_label}`),
-            `. Disconnecting is not limited to ${machineLabel} — every machine will lose this access. `,
-            "Use Revoke all above to disconnect just this machine.",
+            isCredentialStoreShared
+              ? `. ${machineLabel} shares one sign-in with every other machine on this computer, so all ` +
+                `of them lose this access. `
+              : `. Only ${machineLabel} loses this access — every other machine keeps its own sign-in. `,
+            "Use Revoke all above to drop just this machine's grants and keep it connected.",
           ]),
           m(
             Button,
@@ -464,7 +467,7 @@ function renderConnectionPanel(
               variant: "danger",
               size: "md",
               "data-perm-disconnect": connection.service_name,
-              disabled: isDisconnectBusy,
+              disabled: isDisconnectBusy || isDisconnectLocked,
               onclick: () => {
                 model.clearErrorMessage();
                 disarmRevoke(local);
@@ -473,7 +476,7 @@ function renderConnectionPanel(
             },
             isDisconnectBusy ? "Disconnecting..." : "Disconnect",
           ),
-          renderDisconnectDialog(model, local, connection, machineLabel, selectSection),
+          renderDisconnectDialog(model, local, connection, machineLabel, isCredentialStoreShared, selectSection),
         ]
       : null,
   ]);
@@ -489,10 +492,13 @@ function renderDisconnectDialog(
   local: PermissionsTabLocalState,
   connection: UiPermissionConnection,
   machineLabel: string,
+  isCredentialStoreShared: boolean,
   selectSection: (section: string) => void,
 ): m.Children {
   const isOpen = local.disconnectSectionId === connectionSectionId(connection);
-  const isBusy = model.isRowBusy(disconnectRowKey(connection.service_name, connection.account));
+  const rowKey = disconnectRowKey(connection.service_name, connection.account);
+  const isBusy = model.isRowBusy(rowKey);
+  const isLocked = isLockedByAnotherWrite(model, rowKey);
   const close = (): void => {
     local.disconnectSectionId = null;
   };
@@ -507,13 +513,18 @@ function renderDisconnectDialog(
           m(
             "h2",
             { class: "type-heading-lg text-primary mb-3" },
-            `Disconnect ${connection.display_name} · ${connection.account_label} from Minds?`,
+            isCredentialStoreShared
+              ? `Disconnect ${connection.display_name} · ${connection.account_label} from this computer?`
+              : `Disconnect ${connection.display_name} · ${connection.account_label} from ${machineLabel}?`,
           ),
           m("p", { class: "type-body text-primary mb-4" }, [
             "This will disconnect ",
             m("strong", `${connection.display_name} · ${connection.account_label}`),
-            ` from all of your machines in Minds, not just ${machineLabel}. Agents won't be able `,
-            "to use it anywhere until you connect it again from scratch.",
+            isCredentialStoreShared
+              ? ` from every machine on this computer, including ${machineLabel}. Their agents won't be able ` +
+                "to use it until you connect it again."
+              : ` from ${machineLabel}, whose agents won't be able to use it until you connect it again. ` +
+                "Every other machine keeps its own sign-in.",
           ]),
           model.errorMessage ? m(Notice, { variant: "error", role: "alert" }, model.errorMessage) : null,
           m("div", { class: "flex justify-end gap-3" }, [
@@ -531,7 +542,7 @@ function renderDisconnectDialog(
               {
                 variant: "danger",
                 "data-perm-disconnect-confirm": connection.service_name,
-                disabled: isBusy,
+                disabled: isBusy || isLocked,
                 onclick: () => {
                   void model.disconnect(connection).then((section) => {
                     // Refused: the dialog stays up holding the reason.
@@ -566,7 +577,7 @@ function renderRevokeAllButton(
       size: "md",
       extra: "shrink-0",
       "data-perm-revoke-all": connection.service_name,
-      disabled: isBusy,
+      disabled: isBusy || isLockedByAnotherWrite(model, rowKey),
       onclick: () => {
         model.clearErrorMessage();
         if (!isArmed) {
@@ -720,14 +731,15 @@ function renderCatalogAction(
   actionLabel: string,
   selectSection: (section: string) => void,
 ): m.Children {
-  const isBusy = model.isRowBusy(connectServiceRowKey(service.service_name));
+  const rowKey = connectServiceRowKey(service.service_name);
+  const isBusy = model.isRowBusy(rowKey);
   const action = connectActionFor(service.sign_in);
   const attrs = {
     variant: "secondary" as const,
     size: "md" as const,
     extra: "shrink-0",
     "data-perm-connect": service.service_name,
-    disabled: isBusy || action === "unconnectable",
+    disabled: isBusy || isLockedByAnotherWrite(model, rowKey) || action === "unconnectable",
     ...(action === "unconnectable" ? { title: unconnectableTitle(service.display_name) } : {}),
   };
   if (action === "credential_form") {
@@ -775,7 +787,9 @@ function renderCredentialForm(
   selectSection: (section: string) => void,
 ): m.Children {
   const signIn = service.sign_in;
-  const isBusy = model.isRowBusy(connectServiceRowKey(service.service_name));
+  const rowKey = connectServiceRowKey(service.service_name);
+  const isBusy = model.isRowBusy(rowKey);
+  const isLocked = isLockedByAnotherWrite(model, rowKey);
   const isComplete = isCredentialFormComplete(signIn, model.credentialValues, model.credentialAccountName);
   return m(
     "div",
@@ -829,7 +843,7 @@ function renderCredentialForm(
             variant: "primary",
             size: "md",
             "data-perm-credential-submit": service.service_name,
-            disabled: isBusy || !isComplete,
+            disabled: isBusy || isLocked || !isComplete,
             onclick: () => {
               void model.connectWithCredentials(service.service_name).then((section) => {
                 if (section !== null) selectSection(section);
@@ -919,9 +933,11 @@ function renderSelfSwitch(
   toggle: UiSelfPermissionToggle,
   ariaLabel: string,
 ): m.Children {
+  const rowKey = selfToggleRowKey(toggle.permission);
   return renderSwitch({
     isGranted: toggle.is_granted,
-    isBusy: model.isRowBusy(selfToggleRowKey(toggle.permission)),
+    isBusy: model.isRowBusy(rowKey),
+    isLocked: isLockedByAnotherWrite(model, rowKey),
     // A grant whose schema is gone can still be turned off; turning it back on
     // has to come from the agent asking again.
     isBlocked: !toggle.is_granted && !toggle.can_enable,
@@ -935,6 +951,7 @@ function renderSelfSwitch(
 interface SwitchOptions {
   isGranted: boolean;
   isBusy: boolean;
+  isLocked: boolean;
   isBlocked: boolean;
   blockedTitle: string;
   label: string;
@@ -942,20 +959,64 @@ interface SwitchOptions {
   onFlip: (enabled: boolean) => void;
 }
 
+/** A permission switch, spinning while its own write runs and inert while any
+ * other one does.
+ *
+ * The write is not done until the workspace's own machine has taken it, so the
+ * spinner is the honest state: the switch has not moved yet. Every other
+ * control is locked meanwhile, because the response to a write is the whole
+ * view -- two in flight would fight over what is on screen. */
 function renderSwitch(options: SwitchOptions): m.Children {
-  const { isGranted, isBusy, isBlocked, blockedTitle, label, permission, onFlip } = options;
-  return m("button", {
-    type: "button",
-    role: "switch",
-    "aria-checked": isGranted ? "true" : "false",
-    "aria-label": label,
-    "data-perm-permission": permission,
-    // Busy stays clickable-looking but is ignored by the model: a second click
-    // while the write runs should read as "wait", not "broken".
-    class: isBusy ? "perm-switch shrink-0 is-busy" : "perm-switch shrink-0",
-    disabled: isBlocked,
-    ...(isBlocked ? { title: blockedTitle } : {}),
-    onclick: () => onFlip(!isGranted),
-  });
+  const { isGranted, isBusy, isLocked, isBlocked, blockedTitle, label, permission, onFlip } = options;
+  const title = isBlocked ? blockedTitle : isLocked ? PANE_BUSY_TITLE : null;
+  return m("span", { class: "flex shrink-0 items-center gap-2" }, [
+    isBusy ? m(Spinner, { size: "sm" }) : null,
+    m("button", {
+      type: "button",
+      role: "switch",
+      "aria-checked": isGranted ? "true" : "false",
+      "aria-label": label,
+      "data-perm-permission": permission,
+      class: isBusy ? "perm-switch shrink-0 is-busy" : "perm-switch shrink-0",
+      disabled: isBlocked || isBusy || isLocked,
+      ...(title === null ? {} : { title }),
+      onclick: () => onFlip(!isGranted),
+    }),
+  ]);
 }
 
+
+/** One waiting request: a row that opens it. */
+function renderWaitingRow(
+  waiting: UiWaitingPermissionRequest,
+  onReviewRequest: (requestId: string) => void,
+): m.Children {
+  return m(
+    "button",
+    {
+      type: "button",
+      "data-perm-waiting-id": waiting.id,
+      class: "flex w-full items-center gap-2 rounded-md px-1 py-2 text-left cursor-pointer hover:bg-fill-hover",
+      // Pointing at the row starts fetching what opening it will show. The
+      // detail costs a latchkey probe server-side, so starting it on the way in
+      // is the difference between opening onto the request and onto a spinner.
+      onpointerenter: () => warmRequestDetail(waiting.id),
+      onfocus: () => warmRequestDetail(waiting.id),
+      onclick: () => onReviewRequest(waiting.id),
+    },
+    [
+      m(
+        "span",
+        { class: "flex h-5 w-5 shrink-0 items-center justify-center" },
+        serviceMark(waiting.service_name, "w-4 h-4", "brand", m(Icon16, { name: "key", extra: "text-primary" })),
+      ),
+      m("span", { class: "min-w-0 flex-1" }, [
+        m("span", { class: "block truncate type-label text-primary" }, waiting.title),
+        waiting.reason
+          ? m("span", { class: "mt-0.5 block truncate type-helper text-secondary" }, waiting.reason)
+          : null,
+      ]),
+      m(Icon16, { name: "chevron-right", size: "sm", extra: "shrink-0 text-tertiary" }),
+    ],
+  );
+}

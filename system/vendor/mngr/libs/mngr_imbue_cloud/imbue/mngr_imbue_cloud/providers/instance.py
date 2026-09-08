@@ -37,6 +37,7 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from pathlib import PurePosixPath
+from threading import Lock
 from typing import Any
 from typing import Final
 from typing import assert_never
@@ -50,7 +51,10 @@ from pydantic import PrivateAttr
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.concurrency_group.executor import ConcurrencyGroupExecutor
+from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import HostAuthenticationError
 from imbue.mngr.errors import HostNotFoundError
@@ -95,11 +99,11 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ImageReference
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import SSHInfo
 from imbue.mngr.primitives import SnapshotId
 from imbue.mngr.primitives import SnapshotName
 from imbue.mngr.primitives import VolumeId
-from imbue.mngr.primitives import build_ssh_connect_command
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.host_dir_layouts import host_dir_fallbacks
 from imbue.mngr.providers.host_key_store import move_host_endpoint_pins
@@ -113,20 +117,20 @@ from imbue.mngr.providers.ssh_utils import wait_for_sshd
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
 from imbue.mngr.utils.polling import poll_for_value
+from imbue.mngr.utils.ssh import build_ssh_connect_command
 from imbue.mngr_imbue_cloud.config import ImbueCloudProviderConfig
 from imbue.mngr_imbue_cloud.config import get_provider_data_dir
 from imbue.mngr_imbue_cloud.connector.auth_helper import get_active_token
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.session_store import ImbueCloudSessionStore
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
-from imbue.mngr_imbue_cloud.data_types import LeaseResult
-from imbue.mngr_imbue_cloud.data_types import LeasedHostInfo
-from imbue.mngr_imbue_cloud.data_types import WorkspaceInfo
 from imbue.mngr_imbue_cloud.data_types import parse_imbue_cloud_build_args
 from imbue.mngr_imbue_cloud.errors import FastPathUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudLeaseUnavailableError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import RepoIdentityError
+from imbue.mngr_imbue_cloud.errors import UnrecognizedWorkspaceStatusError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStartFailedError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStartTimeoutError
 from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
@@ -134,7 +138,8 @@ from imbue.mngr_imbue_cloud.hosts.host import ImbueCloudHost
 from imbue.mngr_imbue_cloud.primitives import FAST_PATH_ADOPTABLE_START_ARGS
 from imbue.mngr_imbue_cloud.primitives import FastMode
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
-from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
+from imbue.mngr_imbue_cloud.primitives import POOL_HOST_SERVICES_AGENT_NAME
+from imbue.mngr_imbue_cloud.primitives import WORKSPACE_PRIMARY_AGENT_LABEL
 from imbue.mngr_imbue_cloud.providers.adoption import ParamikoSliceVmAccess
 from imbue.mngr_imbue_cloud.providers.adoption import SliceAdoptionTarget
 from imbue.mngr_imbue_cloud.providers.adoption import ensure_adopted
@@ -146,6 +151,10 @@ from imbue.mngr_imbue_cloud.providers.rebuild import build_delegated_vps_provide
 from imbue.mngr_imbue_cloud.providers.rebuild import build_slice_rebuild_provider
 from imbue.mngr_imbue_cloud.providers.wipe import build_pool_host_wipe_script
 from imbue.mngr_imbue_cloud.repo_identity import canonicalize_repo_source
+from imbue.mngr_imbue_cloud.wire_types import LeaseResult
+from imbue.mngr_imbue_cloud.wire_types import LeasedHostInfo
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceInfo
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
 from imbue.mngr_vps.container_setup import docker_inspect_running
 from imbue.mngr_vps.container_setup import start_container_sshd
 from imbue.mngr_vps.host_setup import apply_host_setup_on_outer
@@ -157,6 +166,10 @@ _SSH_WAIT_TIMEOUT_SECONDS: Final[float] = 120.0
 # (download + boot + container relaunch), so the poll window is generous.
 _WORKSPACE_START_TIMEOUT_SECONDS: Final[float] = 1200.0
 _WORKSPACE_START_POLL_SECONDS: Final[float] = 5.0
+# Provisional: picked with no imbue_cloud-specific data on a safe concurrent-SSH
+# ceiling (mngr_vps uses 32 for a different provider; not assumed to transfer).
+# Bump once MIND-230 gets an answer from whoever owns the imbue_cloud backend.
+_DISCOVERY_MAX_WORKERS: Final[int] = 8
 
 
 def _resolve_fast_path_attributes(attributes: LeaseAttributes) -> LeaseAttributes:
@@ -297,15 +310,46 @@ def _rewrite_container_host_name(
             pass
 
 
-# How each non-running wire status surfaces as an mngr host state. Stopping
-# deliberately reads as STOPPED: the VM is already down seconds after the stop
-# request, and the in-flight upload is invisible plumbing (Q21 in the plan).
+# How each non-running wire status surfaces as an mngr host state. Every
+# status maps to its literal counterpart: a stopping host really is
+# mid-stop (its upload is in flight and the connector refuses starts until
+# it lands on stopped), so rendering it as an already-startable STOPPED
+# would offer an action the server rejects.
 WORKSPACE_HOST_STATE_BY_STATUS: Final[dict[WorkspaceStatus, HostState]] = {
-    WorkspaceStatus.STOPPING: HostState.STOPPED,
+    WorkspaceStatus.STOPPING: HostState.STOPPING,
     WorkspaceStatus.STOPPED: HostState.STOPPED,
     WorkspaceStatus.STARTING: HostState.STARTING,
     WorkspaceStatus.CRASHED: HostState.CRASHED,
+    # A wire status this client version does not recognize (a newer server):
+    # observed but not actionable, and never treated as absent.
+    WorkspaceStatus.UNKNOWN: HostState.UNKNOWN,
 }
+
+
+@pure
+def _synthesize_services_agent_for_lifecycle_entry(
+    entry: WorkspaceInfo, host_id: HostId, provider_name: ProviderInstanceName
+) -> DiscoveredAgent:
+    """The services-agent stub for a non-running host this install has never listed.
+
+    The pool row's ``agent_id`` is the host's pre-baked ``system-services`` agent
+    by construction, so the stub can honestly carry that agent's name and its
+    ``is_primary`` label. Without the label, consumers that recognize a host's
+    primary agent by it (e.g. a ``has(agent.labels.is_primary)`` agent filter)
+    would drop a stopped host that was never seen running from this install,
+    even though the lifecycle listing reports it.
+    """
+    return DiscoveredAgent(
+        agent_id=AgentId(entry.agent_id),
+        agent_name=AgentName(POOL_HOST_SERVICES_AGENT_NAME),
+        host_id=host_id,
+        provider_name=provider_name,
+        certified_data={
+            "id": entry.agent_id,
+            "name": POOL_HOST_SERVICES_AGENT_NAME,
+            "labels": {WORKSPACE_PRIMARY_AGENT_LABEL: "true"},
+        },
+    )
 
 
 @pure
@@ -329,25 +373,87 @@ def leased_info_from_workspace(workspace: WorkspaceInfo) -> LeasedHostInfo:
     )
 
 
-def _read_workspace_start_outcome(
-    client: "ImbueCloudConnectorClient", token: SecretStr, host_db_id: str, host_id: HostId
+def _workspace_start_failed_error(host_id: HostId, transition_error: str | None) -> WorkspaceStartFailedError:
+    return WorkspaceStartFailedError(f"host {host_id} failed to start: {transition_error or 'unknown error'}")
+
+
+def _workspace_abandoned_error(host_id: HostId, transition_error: str | None) -> WorkspaceStartFailedError:
+    return WorkspaceStartFailedError(
+        f"host {host_id} was abandoned ({transition_error or 'no reason recorded'}); "
+        "restore its data from backup onto a fresh host"
+    )
+
+
+def _unrecognized_workspace_status_error(host_id: HostId) -> UnrecognizedWorkspaceStatusError:
+    return UnrecognizedWorkspaceStatusError(
+        f"host {host_id} is in a state this app version does not recognize; update the app to manage it"
+    )
+
+
+class _WorkspaceStartPollState(MutableModel):
+    """Mutable bookkeeping for one host-start poll, advanced once per probe."""
+
+    is_start_requested: bool = Field(default=False, description="Whether this poll has issued its start request")
+    last_observed_status: WorkspaceStatus | None = Field(
+        default=None, description="Most recent status the poll observed"
+    )
+    last_transition_error: str | None = Field(
+        default=None, description="Most recent non-empty transition_error the poll observed"
+    )
+
+
+def _advance_workspace_start(
+    client: "ImbueCloudConnectorClient",
+    # Fetched per probe (not once for the whole poll) so a poll outliving the
+    # access token's remaining validity keeps authenticating: the provider's
+    # token helper refreshes near expiry, and a token minted 20 minutes ago
+    # would otherwise surface mid-poll as a bare 401 instead of a start error.
+    token_provider: Callable[[], SecretStr],
+    host_db_id: str,
+    host_id: HostId,
+    state: _WorkspaceStartPollState,
 ) -> WorkspaceInfo | Exception | None:
-    """One start-poll probe: the running workspace, a terminal failure, or None (keep polling)."""
-    current = client.get_workspace(token, host_db_id)
-    if current.status == WorkspaceStatus.RUNNING:
-        return current
-    if current.status == WorkspaceStatus.STOPPED:
-        return WorkspaceStartFailedError(
-            f"workspace {host_id} failed to start: {current.transition_error or 'unknown error'}"
-        )
-    if current.status == WorkspaceStatus.CRASHED:
-        # An operator abandoned the workspace mid-start; it can never reach
-        # running, so waiting out the poll window would only bury the reason.
-        return WorkspaceStartFailedError(
-            f"workspace {host_id} was abandoned ({current.transition_error or 'no reason recorded'}); "
-            "restore it from its backup into a fresh workspace"
-        )
-    return None
+    """One start-poll step: the running host's wire record, a terminal failure, or None (keep polling).
+
+    Requests the start itself the moment the host is startable: a
+    still-``stopping`` host is waited out first (the connector refuses
+    starts mid-stop; the stop lands on ``stopped`` once its upload verifies).
+    """
+    current = client.get_workspace(token_provider(), host_db_id)
+    state.last_observed_status = current.status
+    if current.transition_error:
+        state.last_transition_error = current.transition_error
+    match current.status:
+        case WorkspaceStatus.RUNNING:
+            return current
+        case WorkspaceStatus.CRASHED:
+            # An operator abandoned the host; it can never reach running,
+            # so waiting out the poll window would only bury the reason.
+            return _workspace_abandoned_error(host_id, current.transition_error)
+        case WorkspaceStatus.UNKNOWN:
+            return _unrecognized_workspace_status_error(host_id)
+        case WorkspaceStatus.STARTING:
+            return None
+        case WorkspaceStatus.STOPPED:
+            if state.is_start_requested:
+                # Our start ran and landed back on stopped: it failed, and the
+                # row carries the reason.
+                return _workspace_start_failed_error(host_id, current.transition_error)
+            client.start_workspace(token_provider(), host_db_id)
+            state.is_start_requested = True
+            return None
+        case WorkspaceStatus.STOPPING:
+            if state.is_start_requested:
+                # Only an old connector lands a failed in-window restart back
+                # on stopping; surface its recorded reason instead of burning
+                # the rest of the poll window into a generic timeout.
+                # CLEANUP: drop this bounce-to-stopping branch (keeping the
+                # plain wait below) once every tier runs a connector that
+                # lands failed starts back on 'stopped' (#547).
+                return _workspace_start_failed_error(host_id, current.transition_error)
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 class ImbueCloudProvider(BaseProviderInstance):
@@ -628,7 +734,7 @@ class ImbueCloudProvider(BaseProviderInstance):
         except WorkspacesEndpointUnavailableError:
             logger.debug("imbue_cloud[{}]: connector has no /workspaces; using leased-only listing", self.name)
             self._workspaces_cache = None
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ImbueCloudUnreachableError) as exc:
             raise ProviderUnavailableError(
                 self.name,
                 f"could not reach Imbue Cloud: {exc}",
@@ -687,18 +793,20 @@ class ImbueCloudProvider(BaseProviderInstance):
         #
         # Narrow the propagated type by cause so consumers can tell "the
         # connector is unreachable" apart from "auth/account problem": a
-        # transport-level httpx failure (connection refused, DNS, timeout --
-        # the flaky-wifi / connector-down case) becomes ProviderUnavailableError,
-        # which recovery UIs treat as "don't bother restarting, just retry". A
-        # connector status error (ImbueCloudConnectorError) or an auth failure
+        # transport-level failure (connection refused, DNS, timeout -- the
+        # flaky-wifi / connector-down case, whether raised raw by httpx or as
+        # the client's typed unreachable error once its bounded retry is
+        # exhausted) becomes ProviderUnavailableError, which recovery UIs
+        # treat as "don't bother restarting, just retry". A connector status
+        # error (ImbueCloudConnectorError) or an auth failure
         # (ImbueCloudAuthError) keeps its own type and falls through to the
         # generic "can't reach your workspace" handling instead. The curated
-        # user_help_text keeps ProviderUnavailableError from telling a cloud user
-        # to "start Docker".
+        # user_help_text keeps ProviderUnavailableError from telling a cloud
+        # user to "start Docker".
         try:
             token = self._get_access_token(account)
             self._leased_hosts_cache = self.client.list_hosts(token)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ImbueCloudUnreachableError) as exc:
             raise ProviderUnavailableError(
                 self.name,
                 f"could not reach Imbue Cloud: {exc}",
@@ -800,117 +908,31 @@ class ImbueCloudProvider(BaseProviderInstance):
     ) -> dict[DiscoveredHost, list[DiscoveredAgent]]:
         leased = self._list_leased_hosts_cached()
         result: dict[DiscoveredHost, list[DiscoveredAgent]] = {}
-        for entry in leased:
-            host_id = HostId(entry.host_id)
-            raw, outer_error, is_auth_failure = self._collect_listing_raw_via_outer(entry)
-            if raw is None:
-                # Outer SSH itself failed; fall back to a lease-only stub
-                # so the host doesn't disappear from `mngr list`. An auth
-                # mismatch means the host answered but rejected this
-                # machine's key -> UNAUTHENTICATED: observation of the container
-                # is impossible and a retry or restart routes through the
-                # same rejected credential, so consumers should treat it as
-                # terminal rather than restart-worthy. Any other failure means
-                # we could not observe the host at all -- the box may be down,
-                # or the network path from this client may be broken -- so the
-                # state is UNKNOWN, not CRASHED: an unreachable host is
-                # non-evidence about the container, and consumers (e.g. the
-                # minds recovery page) must not read it as a positive
-                # "container is down" verdict.
-                fallback_state = HostState.UNAUTHENTICATED if is_auth_failure else HostState.UNKNOWN
-                host_ref = DiscoveredHost(
-                    host_id=host_id,
-                    host_name=HostName(entry.host_name),
-                    provider_name=self.name,
-                    host_state=fallback_state,
-                )
-                # Re-attach the full set of agents last seen on this host (each
-                # with its cached certified_data, marked stale) so the workspace
-                # keeps its labels -- and its is_primary sidebar/restart guard --
-                # through the unreachable window. Only when nothing was ever
-                # cached (first-ever discovery) do we fall back to the bare
-                # lease stub, preserving today's behavior for that case. The
-                # host state stays truthfully UNKNOWN/UNAUTHENTICATED: cached
-                # data restores identity, not liveness.
-                agent_refs = self._load_last_known_agents(host_id) or [
-                    DiscoveredAgent(
-                        agent_id=AgentId(entry.agent_id),
-                        agent_name=AgentName(entry.agent_id),
-                        host_id=host_id,
-                        provider_name=self.name,
-                    )
-                ]
-                # Stash the outer error so get_host_and_agent_details can
-                # surface it in failure_reason without re-trying SSH.
-                self._listing_raw_cache[host_id] = {
-                    "outer_ssh_error": outer_error,
-                    "outer_ssh_is_auth_failure": is_auth_failure,
-                }
-                result[host_ref] = agent_refs
-                continue
-            self._listing_raw_cache[host_id] = raw
-            # Record which layout this container actually uses while we have a
-            # live answer, so the host objects built later (`mngr exec`,
-            # `mngr start`) address the same directory this pass just read.
-            # Only a pass that found certified data proves the resolution: an
-            # empty container reports the configured default by construction,
-            # which would overwrite a good record with a guess.
-            resolved_host_dir = raw.get("host_dir")
-            if isinstance(resolved_host_dir, str) and resolved_host_dir and raw.get("certified_data"):
-                self._persist_resolved_host_dir(host_id, resolved_host_dir)
-            host_state = derive_host_state_from_raw(raw)
-            if host_state == HostState.DESTROYED and not include_destroyed:
-                continue
-            # ``entry.host_name`` is the canonical user-supplied name from the
-            # connector. On-host certified data may lag (e.g. the bake's
-            # initial value before a lease overwrites it), so the lease wins.
-            host_ref = DiscoveredHost(
-                host_id=host_id,
-                host_name=HostName(entry.host_name),
-                provider_name=self.name,
-                host_state=host_state,
-            )
-            agent_refs: list[DiscoveredAgent] = []
-            for agent_raw in raw.get("agents", []):
-                data = agent_raw.get("data", {})
-                agent_id_str = data.get("id")
-                agent_name_str = data.get("name")
-                if not agent_id_str or not agent_name_str:
-                    continue
-                # Carry the raw per-agent data (its labels, type, work_dir, etc.) as
-                # certified_data, exactly the same ``agent_raw["data"]`` the rich
-                # ``get_host_and_agent_details`` path reads. Without it these streaming
-                # refs are label-less, so any consumer that filters on labels -- e.g. the
-                # minds system_interface forward's ``--agent-include
-                # has(agent.labels.is_primary)`` -- silently drops every imbue_cloud agent.
-                agent_refs.append(
-                    DiscoveredAgent(
-                        agent_id=AgentId(agent_id_str),
-                        agent_name=AgentName(agent_name_str),
-                        host_id=host_id,
-                        provider_name=self.name,
-                        certified_data=data,
-                    )
-                )
-            if agent_refs:
-                # A real listing: refresh the sticky-identity cache so a later
-                # unreachable pass can re-attach exactly these agents.
-                self._persist_last_known_agents(host_id, agent_refs)
-            else:
-                # The outer-SSH discovery returned no agents (e.g. container
-                # gone, or data.json is empty). Re-attach the last-known agents
-                # (marked stale) if we have them, so the host keeps its labels;
-                # otherwise synthesize a single agent from the lease so the host
-                # still shows in the listing (unchanged first-discovery behavior).
-                agent_refs = self._load_last_known_agents(host_id) or [
-                    DiscoveredAgent(
-                        agent_id=AgentId(entry.agent_id),
-                        agent_name=AgentName(entry.agent_id),
-                        host_id=host_id,
-                        provider_name=self.name,
-                    )
-                ]
-            result[host_ref] = agent_refs
+        # Each leased host needs its own outer-SSH round trip (connect + run the
+        # listing script), so a sequential loop's wall time is the sum across every
+        # leased host rather than the slowest one -- confirmed to reach ~30s on a
+        # 13-host account (MIND-230), enough to blow through every 30-second-budgeted
+        # caller of this discovery path. Fan out with a bounded pool, mirroring
+        # mngr_vps's identical-shaped fan-out (instance.py's
+        # ``_discover_host_records_with_agents``); results are collected in
+        # submission order so this returns the same host ordering as before.
+        cache_lock = Lock()
+        if leased:
+            with log_span("Reading outer listings from {} leased host(s) in parallel", len(leased)):
+                with ConcurrencyGroupExecutor(
+                    parent_cg=cg,
+                    name=f"{type(self).__name__}-discover_outer_listing",
+                    max_workers=min(len(leased), _DISCOVERY_MAX_WORKERS),
+                ) as executor:
+                    futures = [
+                        executor.submit(self._discover_one_leased_host, entry, include_destroyed, cache_lock)
+                        for entry in leased
+                    ]
+                for future in futures:
+                    pair = future.result()
+                    if pair is not None:
+                        host_ref, agent_refs = pair
+                        result[host_ref] = agent_refs
         # Non-running workspaces have no box to SSH: surface them from the
         # lifecycle listing alone, re-attaching the last-known agents so the
         # workspace keeps its labels (and its is_primary guard) while stopped.
@@ -925,14 +947,143 @@ class ImbueCloudProvider(BaseProviderInstance):
                 host_state=WORKSPACE_HOST_STATE_BY_STATUS[workspace.status],
             )
             result[host_ref] = self._load_last_known_agents(host_id) or [
+                _synthesize_services_agent_for_lifecycle_entry(workspace, host_id, self.name)
+            ]
+        return result
+
+    def _discover_one_leased_host(
+        self,
+        entry: LeasedHostInfo,
+        include_destroyed: bool,
+        cache_lock: Lock,
+    ) -> tuple[DiscoveredHost, list[DiscoveredAgent]] | None:
+        """Run one leased host's outer-SSH listing and shape it into a discovery result.
+
+        Runs on a worker thread from ``discover_hosts_and_agents``'s fan-out.
+        ``cache_lock`` guards ``self._listing_raw_cache`` (a plain dict shared
+        across every in-flight host's thread); the sticky-identity and
+        resolved-host-dir persistence calls need no lock of their own since
+        each writes a distinct per-host file. Returns ``None`` only for a
+        destroyed host when the caller doesn't want those included.
+        """
+        host_id = HostId(entry.host_id)
+        raw, outer_error, is_auth_failure = self._collect_listing_raw_via_outer(entry)
+        if raw is None:
+            # Per-host failure isolation and its WARNING-level logging
+            # (inside _collect_listing_raw_via_outer, above) predate this PR
+            # unchanged: introduced in 668ad81ad1b757102588ba70a8f338e639d1b12b
+            # ("Surface outer-SSH auth failures as UNAUTHENTICATED, not
+            # CRASHED", Josh Albrecht, 2026-05-11). Parallelizing the caller
+            # does not change what happens when one host's outer SSH fails.
+            #
+            # Outer SSH itself failed; fall back to a lease-only stub
+            # so the host doesn't disappear from `mngr list`. An auth
+            # mismatch means the host answered but rejected this
+            # machine's key -> UNAUTHENTICATED: observation of the container
+            # is impossible and a retry or restart routes through the
+            # same rejected credential, so consumers should treat it as
+            # terminal rather than restart-worthy. Any other failure means
+            # we could not observe the host at all -- the box may be down,
+            # or the network path from this client may be broken -- so the
+            # state is UNKNOWN, not CRASHED: an unreachable host is
+            # non-evidence about the container, and consumers (e.g. the
+            # minds recovery page) must not read it as a positive
+            # "container is down" verdict.
+            fallback_state = HostState.UNAUTHENTICATED if is_auth_failure else HostState.UNKNOWN
+            host_ref = DiscoveredHost(
+                host_id=host_id,
+                host_name=HostName(entry.host_name),
+                provider_name=self.name,
+                host_state=fallback_state,
+            )
+            # Re-attach the full set of agents last seen on this host (each
+            # with its cached certified_data, marked stale) so the workspace
+            # keeps its labels -- and its is_primary sidebar/restart guard --
+            # through the unreachable window. Only when nothing was ever
+            # cached (first-ever discovery) do we fall back to the bare
+            # lease stub, preserving today's behavior for that case. The
+            # host state stays truthfully UNKNOWN/UNAUTHENTICATED: cached
+            # data restores identity, not liveness.
+            agent_refs = self._load_last_known_agents(host_id) or [
                 DiscoveredAgent(
-                    agent_id=AgentId(workspace.agent_id),
-                    agent_name=AgentName(workspace.agent_id),
+                    agent_id=AgentId(entry.agent_id),
+                    agent_name=AgentName(entry.agent_id),
                     host_id=host_id,
                     provider_name=self.name,
                 )
             ]
-        return result
+            # Stash the outer error so get_host_and_agent_details can
+            # surface it in failure_reason without re-trying SSH.
+            with cache_lock:
+                self._listing_raw_cache[host_id] = {
+                    "outer_ssh_error": outer_error,
+                    "outer_ssh_is_auth_failure": is_auth_failure,
+                }
+            return host_ref, agent_refs
+        with cache_lock:
+            self._listing_raw_cache[host_id] = raw
+        # Record which layout this container actually uses while we have a
+        # live answer, so the host objects built later (`mngr exec`,
+        # `mngr start`) address the same directory this pass just read.
+        # Only a pass that found certified data proves the resolution: an
+        # empty container reports the configured default by construction,
+        # which would overwrite a good record with a guess.
+        resolved_host_dir = raw.get("host_dir")
+        if isinstance(resolved_host_dir, str) and resolved_host_dir and raw.get("certified_data"):
+            self._persist_resolved_host_dir(host_id, resolved_host_dir)
+        host_state = derive_host_state_from_raw(raw)
+        if host_state == HostState.DESTROYED and not include_destroyed:
+            return None
+        # ``entry.host_name`` is the canonical user-supplied name from the
+        # connector. On-host certified data may lag (e.g. the bake's
+        # initial value before a lease overwrites it), so the lease wins.
+        host_ref = DiscoveredHost(
+            host_id=host_id,
+            host_name=HostName(entry.host_name),
+            provider_name=self.name,
+            host_state=host_state,
+        )
+        agent_refs: list[DiscoveredAgent] = []
+        for agent_raw in raw.get("agents", []):
+            data = agent_raw.get("data", {})
+            agent_id_str = data.get("id")
+            agent_name_str = data.get("name")
+            if not agent_id_str or not agent_name_str:
+                continue
+            # Carry the raw per-agent data (its labels, type, work_dir, etc.) as
+            # certified_data, exactly the same ``agent_raw["data"]`` the rich
+            # ``get_host_and_agent_details`` path reads. Without it these streaming
+            # refs are label-less, so any consumer that filters on labels -- e.g. the
+            # minds system_interface forward's ``--agent-include
+            # has(agent.labels.is_primary)`` -- silently drops every imbue_cloud agent.
+            agent_refs.append(
+                DiscoveredAgent(
+                    agent_id=AgentId(agent_id_str),
+                    agent_name=AgentName(agent_name_str),
+                    host_id=host_id,
+                    provider_name=self.name,
+                    certified_data=data,
+                )
+            )
+        if agent_refs:
+            # A real listing: refresh the sticky-identity cache so a later
+            # unreachable pass can re-attach exactly these agents.
+            self._persist_last_known_agents(host_id, agent_refs)
+        else:
+            # The outer-SSH discovery returned no agents (e.g. container
+            # gone, or data.json is empty). Re-attach the last-known agents
+            # (marked stale) if we have them, so the host keeps its labels;
+            # otherwise synthesize a single agent from the lease so the host
+            # still shows in the listing (unchanged first-discovery behavior).
+            agent_refs = self._load_last_known_agents(host_id) or [
+                DiscoveredAgent(
+                    agent_id=AgentId(entry.agent_id),
+                    agent_name=AgentName(entry.agent_id),
+                    host_id=host_id,
+                    provider_name=self.name,
+                )
+            ]
+        return host_ref, agent_refs
 
     def _collect_listing_raw_via_outer(
         self,
@@ -1698,7 +1849,7 @@ class ImbueCloudProvider(BaseProviderInstance):
             if not lease_result.outer_host_public_key or not lease_result.container_host_public_key:
                 raise MngrError(
                     f"lease of host {host_id} returned no pinned SSH host keys; upgrade the connector and run the "
-                    "one-time `mngr imbue_cloud admin` host-key backfill"
+                    "one-time operator host-key backfill (`pool backfill-host-keys`)"
                 )
             self._record_host_key(
                 host_id, lease_result.vps_address, lease_result.ssh_port, lease_result.outer_host_public_key
@@ -2245,12 +2396,14 @@ class ImbueCloudProvider(BaseProviderInstance):
 
         Stops the *whole workspace*: the container is stopped gracefully
         first (so agents shut down cleanly), then the connector halts the
-        slice VM, uploads its disks to the tier's storage bucket in the
-        background, and frees the bare-metal slot once the upload verifies
-        (after the local-retention window). ``mngr start`` brings the same
-        workspace back -- near-instantly inside the window, via a restore
-        onto any same-region box after it. Returns once the stop is accepted
-        (the VM halts seconds later; the upload is invisible plumbing).
+        slice VM and uploads its disks to the tier's storage bucket in the
+        background -- the workspace shows as stopping until the upload
+        verifies and lands it on stopped; its halted local VM (and the
+        bare-metal slot) is kept through the local-retention window, then
+        reaped. ``mngr start`` brings the same workspace back --
+        near-instantly inside the window, via a restore onto any same-region
+        box after it. Returns once the stop is accepted (the VM halts
+        seconds later; the upload runs server-side).
 
         Against a connector that predates /workspaces, this falls back to
         the old container-only stop (the VM keeps running and billing).
@@ -2347,38 +2500,52 @@ class ImbueCloudProvider(BaseProviderInstance):
         return self._build_host_object(leased)
 
     def _start_workspace_and_wait(self, host_id: HostId, workspace: WorkspaceInfo) -> None:
-        """Ask the connector to start a stopped workspace and wait until it is running.
+        """Drive a stopped (or still-stopping) workspace to running and wait for it.
 
         The start is asynchronous server-side (restore may download the
         workspace onto a different box), so this polls the workspace until
         it reports ``running`` -- then refreshes caches and re-pins the host
-        keys under the (possibly new) address/ports. A start that lands back
-        on ``stopped`` with a recorded error raises ``WorkspaceStartFailedError``
-        (e.g. "no capacity available right now, try again later"); the
-        artifact is untouched and the start can simply be retried.
+        keys under the (possibly new) address/ports. A workspace still
+        ``stopping`` is waited out first (the connector refuses starts
+        mid-stop; its upload usually verifies within minutes) and the start
+        is requested the moment it lands on ``stopped``. A start that lands
+        back on ``stopped`` with a recorded error raises
+        ``WorkspaceStartFailedError`` (e.g. "no capacity available right now,
+        try again later"); the artifact is untouched and the start can simply
+        be retried.
         """
+        if workspace.status == WorkspaceStatus.UNKNOWN:
+            # A lifecycle state this client version cannot interpret: driving a
+            # start from it would act blindly, so refuse with the remedy
+            # (before any account/token work -- the refusal needs neither).
+            raise _unrecognized_workspace_status_error(host_id)
+        if workspace.status == WorkspaceStatus.CRASHED:
+            raise _workspace_abandoned_error(host_id, workspace.transition_error)
         account = self._require_account()
-        token = self._get_access_token(account)
         host_db_id = str(workspace.host_db_id)
-        if workspace.status in (WorkspaceStatus.STOPPED, WorkspaceStatus.STOPPING):
-            self.client.start_workspace(token, host_db_id)
-        elif workspace.status == WorkspaceStatus.CRASHED:
-            raise WorkspaceStartFailedError(
-                f"workspace {host_id} was abandoned ({workspace.transition_error or 'no reason recorded'}); "
-                "restore it from its backup into a fresh workspace"
-            )
-        else:
-            # Already starting (e.g. a concurrent request); just wait for it.
-            pass
+        state = _WorkspaceStartPollState()
+        if workspace.status == WorkspaceStatus.STARTING:
+            # A start is already in flight (e.g. a concurrent request): wait on
+            # it rather than layering another request on top.
+            state.is_start_requested = True
 
         outcome, _poll_count, _elapsed = poll_for_value(
-            lambda: _read_workspace_start_outcome(self.client, token, host_db_id, host_id),
+            lambda: _advance_workspace_start(
+                self.client, lambda: self._get_access_token(account), host_db_id, host_id, state
+            ),
             timeout=_WORKSPACE_START_TIMEOUT_SECONDS,
             poll_interval=_WORKSPACE_START_POLL_SECONDS,
         )
         if outcome is None:
+            last_status = state.last_observed_status.value if state.last_observed_status is not None else "unknown"
+            error_note = (
+                f"; last recorded transition error: {state.last_transition_error}"
+                if state.last_transition_error
+                else ""
+            )
             raise WorkspaceStartTimeoutError(
-                f"workspace {host_id} did not reach running within {_WORKSPACE_START_TIMEOUT_SECONDS:.0f}s"
+                f"host {host_id} did not reach running within {_WORKSPACE_START_TIMEOUT_SECONDS:.0f}s "
+                f"(last observed status: {last_status}{error_note})"
             )
         if isinstance(outcome, Exception):
             raise outcome

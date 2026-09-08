@@ -215,8 +215,11 @@ class ListCliOptions(AgentFilterCliOptions, CommonCliOptions):
 @optgroup.option(
     "--on-error",
     type=click.Choice(["abort", "continue"], case_sensitive=False),
-    default="abort",
-    help="What to do when errors occur: abort (stop immediately) or continue (keep going)",
+    default="continue",
+    help="What to do when errors occur: abort (stop immediately) or continue (keep going). "
+    "The default is continue, so a single unreachable or unauthenticated provider does not "
+    "block a listing the other providers can still serve -- its failure is reported in the "
+    "errors channel and the process still exits non-zero (provider-inaccessible).",
 )
 @add_common_options
 @click.pass_context
@@ -227,10 +230,10 @@ def list_command(ctx: click.Context, **kwargs) -> None:
         logger.error("Aborted: {}", e.message)
         ctx.exit(EXIT_CODE_ERROR)
     except ProviderUnavailableError as e:
-        # Abort mode (the default): a single unreachable or unauthenticated provider
-        # propagated out of discovery. Show its clean, attributable message and exit
-        # with the granular provider-inaccessible code (same code used in continue mode
-        # and by gc), rather than the generic exit code Click would use otherwise.
+        # Reached only under explicit --on-error abort (continue is the default): a single
+        # unreachable or unauthenticated provider propagated out of discovery. Show its clean,
+        # attributable message and exit with the granular provider-inaccessible code (same code
+        # used in continue mode and by gc), rather than the generic exit code Click would use otherwise.
         e.show()
         ctx.exit(EXIT_CODE_PROVIDER_INACCESSIBLE)
 
@@ -1158,14 +1161,15 @@ def _emit_hosts_view(
     still gets a row (with empty labels) so a broken tag file never hides the
     host itself.
     """
-    agents_by_host, providers = discover_hosts_and_agents(
+    outcome = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=provider_names,
         agent_identifiers=None,
         include_destroyed=True,
         reset_caches=False,
     )
-    provider_by_name = {str(provider.name): provider for provider in providers}
+    agents_by_host = outcome.agents_by_host
+    provider_by_name = {str(provider.name): provider for provider in outcome.providers}
 
     host_rows: list[dict[str, Any]] = []
     sorted_host_items = sorted(

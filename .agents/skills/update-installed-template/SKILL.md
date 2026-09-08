@@ -1,6 +1,8 @@
 ---
 name: update-installed-template
 description: Pull a newer version of a template this mind already adopted from its remote repo and merge it in, reconciling it with this mind's own adaptations. Use when the user wants to update, upgrade, or pull the latest version of an adopted template.
+metadata:
+  author: imbue
 ---
 
 # Update an installed template
@@ -201,7 +203,8 @@ version `<n>` you pulled in §1.
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the sections `## Workspace`, `## Migrations`, `## Templates`,
   `## Adopted templates` in that order (byte-identical to the shipped root
-  file; `update-self` §5b carries the exact heredoc) -- then append.
+  file; the exact block is `_VERSION_HISTORY_STARTER` in `update-self`'s
+  `scripts/update_self.py`) -- then append.
 - **Create the heading** `### <slug>  --  <repo-url>` under `## Adopted
   templates` if this slug has none yet (a mind's first update of a given
   template; the initial adopt via `use-template` does not record here).

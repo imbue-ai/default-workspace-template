@@ -72,7 +72,7 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
 
     This is the read every consumer performs. If it ever returns just
     ``system_interface``, a consumer is silently asserting over one program out
-    of thirteen -- which is exactly how the OOM band checks degraded when the
+    of fifteen -- which is exactly how the OOM band checks degraded when the
     drop-ins were introduced.
     """
     parser = _parse_main_config()

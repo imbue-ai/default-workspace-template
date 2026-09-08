@@ -5,6 +5,7 @@ import pytest
 import imbue.remote_service_connector.entitlements as entitlements_mod
 import imbue.remote_service_connector.errors as errors_mod
 from imbue.remote_service_connector.testing import EXPLORER_PLAN_VALUES
+from imbue.remote_service_connector.testing import FREE_PLAN_VALUES
 from imbue.remote_service_connector.testing import InMemoryEntitlementsStore
 from imbue.remote_service_connector.testing import make_fake_entitlements_store
 
@@ -16,20 +17,21 @@ def test_initial_plan_pre_cutoff_paid_email_gets_ally() -> None:
     assert plan == "ally"
 
 
-def test_initial_plan_post_cutoff_paid_email_gets_explorer() -> None:
-    """Accounts created after the ship cutoff always start as explorer, paid-listed or not."""
+def test_initial_plan_post_cutoff_paid_email_gets_free() -> None:
+    """Accounts created after the ship cutoff always backfill as free, paid-listed or not."""
     after_cutoff = entitlements_mod._PREEXISTING_ACCOUNT_CUTOFF_EPOCH_MS + 1
     plan = entitlements_mod._initial_plan_name_for_user(
         "user-1", "alice@imbue.com", time_joined_getter=lambda uid: after_cutoff, paid_checker=lambda email: True
     )
-    assert plan == "explorer"
+    assert plan == "free"
 
 
-def test_initial_plan_unpaid_email_gets_explorer() -> None:
+def test_initial_plan_unpaid_email_gets_free() -> None:
+    """The lazy backfill never assigns explorer (it carries the analytics consent)."""
     plan = entitlements_mod._initial_plan_name_for_user(
         "user-1", "bob@gmail.com", time_joined_getter=lambda uid: 0, paid_checker=lambda email: False
     )
-    assert plan == "explorer"
+    assert plan == "free"
 
 
 def test_ensure_account_entitlements_copies_plan_values_and_is_idempotent() -> None:
@@ -37,14 +39,40 @@ def test_ensure_account_entitlements_copies_plan_values_and_is_idempotent() -> N
     first = entitlements_mod.ensure_account_entitlements(
         user_id="user-1", user_id_prefix="prefix1", email="", store=store
     )
-    assert first.plan_name == "explorer"
-    assert first.max_remote_workspaces == EXPLORER_PLAN_VALUES["max_remote_workspaces"]
+    assert first.plan_name == "free"
+    assert first.max_remote_workspaces == FREE_PLAN_VALUES["max_remote_workspaces"]
     # A manual bump survives a second ensure (lazy creation never overwrites).
     store.update_entitlements("user-1", {"max_remote_workspaces": 7})
     second = entitlements_mod.ensure_account_entitlements(
         user_id="user-1", user_id_prefix="prefix1", email="", store=store
     )
     assert second.max_remote_workspaces == 7
+
+
+def test_create_entitlements_row_from_plan_copies_values_and_never_overwrites() -> None:
+    store = make_fake_entitlements_store()
+    entitlements_mod.create_entitlements_row_from_plan(
+        store, user_id="user-1", user_id_prefix="prefix1", plan_name="explorer"
+    )
+    row = store.get_entitlements("user-1")
+    assert row is not None
+    assert row["plan_name"] == "explorer"
+    assert row["max_remote_workspaces"] == EXPLORER_PLAN_VALUES["max_remote_workspaces"]
+    # A second write (a race with a lazy creation, a retried signup) never
+    # clobbers the existing row.
+    entitlements_mod.create_entitlements_row_from_plan(
+        store, user_id="user-1", user_id_prefix="prefix1", plan_name="free"
+    )
+    unchanged = store.get_entitlements("user-1")
+    assert unchanged is not None
+    assert unchanged["plan_name"] == "explorer"
+
+
+def test_create_entitlements_row_from_plan_raises_when_plan_not_seeded() -> None:
+    with pytest.raises(errors_mod.PlanNotFoundError):
+        entitlements_mod.create_entitlements_row_from_plan(
+            InMemoryEntitlementsStore(), user_id="user-1", user_id_prefix="p", plan_name="explorer"
+        )
 
 
 def test_ensure_account_entitlements_raises_when_plan_not_seeded() -> None:

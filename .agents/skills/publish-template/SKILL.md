@@ -1,6 +1,8 @@
 ---
 name: publish-template
 description: Publish a clean, shareable snapshot of the apps/features this mind built to a new GitHub repo (an "template" another mind can adapt). Use when the user asks to publish, share, or export what they built as a reusable template.
+metadata:
+  author: imbue
 ---
 
 # Publish a template
@@ -290,7 +292,8 @@ a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
 (The same marker walk seeds the version ledger's `## Workspace` origin line in
-§8 step 4 below (and in `update-self` §5b) -- with one deliberate difference: the
+§8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
+`scripts/update_self.py`) -- with one deliberate difference: the
 origin-line walk takes the OLDEST marker (where the mind started) where this
 section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
 the primary; keep the two in step if either ever changes.)
@@ -859,18 +862,25 @@ latchkey curl http://latchkey-self.invalid/permissions/self \
 
 For whichever is missing, initiate the permission request YOURSELF (each
 request opens the approval/login flow in the minds app; the body must be
-exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`):
+exactly the four fields shown -- `agent_id`, `type`, `payload`, `rationale`).
+A request has to be the **only** command in its tool call, so when both are
+missing this is two calls, one after the other -- no waiting for the first
+verdict in between.
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this template as a new GitHub repo on your account."}'
+```
+
+```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
     -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
 ```
 
-Tell the user in chat that a GitHub approval is waiting for them in minds,
+Tell the user in chat that a GitHub approval is waiting for them in minds (say
+so once, and mention that a second one follows when you are filing both),
 then poll the probes **as a background task, bounded** (mirror `launch-task`'s
 background-await pattern; a foreground `while` loop can be killed by your own
 tool-execution timeout):
@@ -1160,8 +1170,8 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the empty sections `## Workspace`, `## Migrations`,
   `## Templates`, `## Adopted templates` in that order (byte-identical to
-  the shipped root file; `update-self` §5b carries the exact heredoc) -- then
-  append.
+  the shipped root file; the exact block is `_VERSION_HISTORY_STARTER` in
+  `update-self`'s `scripts/update_self.py`) -- then append.
 
 - **Seed the `## Workspace` origin line if it is absent** -- exactly once per
   workspace, as the FIRST line under `## Workspace`. Resolve the template base
@@ -1370,7 +1380,8 @@ What it does, in order (see the script for the exact commands):
     WORKSPACE-only -- the SOURCE mind's own record of what it came from and
     everything it has published -- and never belongs in a published template.
     A mind created from this template grows its own ledger on demand (this
-    skill's §8 step 4 and `update-self` §5b write the starter the first time it
+    skill's §8 step 4 and the update apply -- `update-self`'s
+    `scripts/update_self.py` -- write the starter the first time it
     is needed), so nothing is lost by omitting it. Runs after the no-diff guard, so it can
     never make an empty include set look publishable.
 11. Validates `system/supervisord.conf` WITHOUT starting the daemon (never

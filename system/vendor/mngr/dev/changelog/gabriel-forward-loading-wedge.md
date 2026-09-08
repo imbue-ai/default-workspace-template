@@ -1,0 +1,1 @@
+Updated the `blueprint/decompose-connect-error/verify_427_repro.py` planning script for the new three-argument `ForwardResolver.update_services` signature (labels now accompany services), keeping the repo-wide type check green.

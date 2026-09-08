@@ -28,19 +28,19 @@ from imbue.minds.bootstrap import MINDS_ROOT_NAME_ENV_VAR
 from imbue.minds.bootstrap import mngr_host_dir_for
 from imbue.minds.bootstrap import mngr_prefix_for
 from imbue.minds.bootstrap import root_name_for_env_name
-from imbue.minds.cli._activated_env import MODAL_PROFILE_ENV_VAR
-from imbue.minds.cli._activated_env import modal_profile_for_tier_or_none
-from imbue.minds.cli._activated_env import tier_for_env_name
-from imbue.minds.cli.paid import admin_key_from_supertokens_secret
+from imbue.minds.config.modal_profile import MODAL_PROFILE_ENV_VAR
+from imbue.minds.config.modal_profile import modal_profile_for_tier_or_none
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.primitives import SharedEnvRole
 from imbue.minds.envs.paths import client_config_file
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.vault_reader import VaultPath
+from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import delete_vault_kv
 from imbue.minds.envs.vault_reader import read_vault_kv
 from imbue.minds.envs.vault_reader import write_vault_kv
 from imbue.minds.errors import MindError
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 _SUPERTOKENS_TENANT_ID: Final[str] = "public"
 _CONNECTOR_HTTP_TIMEOUT_SECONDS: Final[float] = 60.0
@@ -82,7 +82,16 @@ _CI_VAULT_PREFIX: Final[str] = "secrets/minds/ci"
 
 
 def ci_admin_auth_header() -> dict[str, str]:
-    """Bearer header for the connector's admin endpoints, from the ci tier's supertokens Vault entry."""
+    """Bearer header for the connector's admin endpoints.
+
+    Prefers an injected ``$MINDS_ADMIN_KEY`` (the CI test job's Vault role
+    cannot read the tier's static supertokens entry, so the env-build step
+    republishes the key with the per-env secrets and the CI job exports it),
+    falling back to the ci tier's supertokens Vault entry for local runs.
+    """
+    injected_admin_key = os.environ.get("MINDS_ADMIN_KEY")
+    if injected_admin_key:
+        return {"Authorization": f"Bearer {injected_admin_key}"}
     secret = read_vault_kv(VaultPath(f"{_CI_VAULT_PREFIX}/supertokens"))
     return {"Authorization": f"Bearer {admin_key_from_supertokens_secret(secret, _CI_VAULT_PREFIX)}"}
 
@@ -109,6 +118,30 @@ def read_shared_env_secrets(*, env_name: DevEnvName, role: SharedEnvRole) -> dic
 def delete_shared_env_secrets(*, env_name: DevEnvName, role: SharedEnvRole) -> None:
     """Delete an env's per-env secrets from Vault. Idempotent against already-gone."""
     delete_vault_kv(env_secrets_vault_path(env_name=env_name, role=role))
+
+
+# The per-env Vault path carrying the pool bake's secrets for the (separately
+# authorized) test job. The CI test runner's Vault role reads only a curated
+# subset of minds/ci plus minds/ci/runs/*, and the static template deploy key
+# at minds/ci/dwt is not in that subset -- so the bake stage (whose role reads
+# all of minds/ci/*) republishes the key under the env's runs/ directory,
+# exactly the same hand-off pattern as the shared-env secrets above.
+POOL_DWT_READ_KEY_SECRET_KEY: Final[str] = "DWT_READ_KEY_B64"
+
+
+def pool_secrets_vault_path(*, env_name: DevEnvName) -> VaultPath:
+    """Vault directory holding one env's pool-bake secrets for the test job."""
+    return VaultPath(f"{RUN_SECRETS_VAULT_ROOT}/{env_name}/pool")
+
+
+def publish_pool_secrets(*, env_name: DevEnvName, secrets: Mapping[str, str]) -> None:
+    """Write the pool bake's per-env secrets to the env's per-env Vault path."""
+    write_vault_kv(pool_secrets_vault_path(env_name=env_name), dict(secrets))
+
+
+def delete_pool_secrets(*, env_name: DevEnvName) -> None:
+    """Delete an env's pool-bake secrets from Vault. Idempotent against already-gone."""
+    delete_vault_kv(pool_secrets_vault_path(env_name=env_name))
 
 
 def read_ci_test_user_credentials() -> tuple[NonEmptyStr, SecretStr]:
@@ -257,14 +290,14 @@ def create_verified_user_via_admin_api(
 
 
 def build_minds_env_subprocess_env(name: DevEnvName) -> dict[str, str]:
-    """Build the env dict for a ``minds env deploy/destroy`` subprocess targeting ``name``.
+    """Build the env dict for a ``minds-admin env deploy/destroy`` subprocess targeting ``name``.
 
-    Mirrors what ``minds env activate --deploy <name>`` exports (without
+    Mirrors what ``minds-admin env activate --deploy <name>`` exports (without
     going through the print-shell-vars indirection): MINDS_ROOT_NAME,
     MNGR_HOST_DIR, MNGR_PREFIX, MINDS_CLIENT_CONFIG_PATH, and (for tiers
     with a committed ``modal_workspace``) MODAL_PROFILE. The
     MODAL_PROFILE lookup goes through the same
-    ``modal_profile_for_tier_or_none`` helper ``minds env activate``
+    ``modal_profile_for_tier_or_none`` helper ``minds-admin env activate``
     itself uses, so a separated CI Modal workspace (planned)
     automatically lands here without having to update a test-only
     hardcoded constant. Including MODAL_PROFILE is required for the
@@ -460,7 +493,7 @@ def modal_env_exists(name: DevEnvName) -> bool:
 def neon_project_exists(*, name: DevEnvName, org_id: str, api_token: SecretStr) -> bool:
     """Return True if a Neon project named ``minds-<name>`` exists under ``org_id``.
 
-    Mirrors the lookup ``minds env destroy`` uses internally (Neon
+    Mirrors the lookup ``minds-admin env destroy`` uses internally (Neon
     doesn't enforce unique names, so we look up by name + org). Returns
     True for 1+ matches, False for zero matches.
     """

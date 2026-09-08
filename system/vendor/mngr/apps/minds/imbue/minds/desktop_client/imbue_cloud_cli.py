@@ -36,14 +36,16 @@ from imbue.minds.errors import MindError
 from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.mngr_caller import MngrCaller
 from imbue.minds.utils.mngr_caller import get_default_mngr_caller
+from imbue.mngr_imbue_cloud.errors import CLIENT_TOO_OLD_FALLBACK_MESSAGE
+from imbue.mngr_imbue_cloud.wire import WireModel
 
 _DEFAULT_TIMEOUT_SECONDS = 60.0
 _LEASE_TIMEOUT_SECONDS = 300.0
-# The plugin's `auth login` enforces its own 300s listen deadline
+# The plugin's `auth login` enforces its own listen deadline
 # (_LOGIN_LISTEN_TIMEOUT_SECONDS in the plugin's cli/auth.py) with a proper
 # timeout error; this outer kill deadline needs headroom over it (spawn, code
 # exchange, session persist) so the plugin's message is the one that surfaces.
-_WEB_LOGIN_TIMEOUT_SECONDS = 330.0
+_WEB_LOGIN_TIMEOUT_SECONDS = 630.0
 _KEY_OP_TIMEOUT_SECONDS = 90.0
 # Force-destroy empties the bucket over S3 before deleting it, so it can run
 # far longer than the other bucket ops (many objects, plus credential
@@ -55,6 +57,7 @@ _BUCKET_DESTROY_TIMEOUT_SECONDS = 600.0
 # kept duplicated here to avoid pulling the plugin's config module into the
 # desktop client.
 _CONNECTOR_URL_SUBPROCESS_ENV: str = "MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL"
+_ACCOUNTS_URL_SUBPROCESS_ENV: str = "MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL"
 
 # The plugin's error_class marker for a structured quota refusal, as written
 # into its JSON stderr body by handle_imbue_cloud_errors. Substring-matched
@@ -65,6 +68,17 @@ _QUOTA_ERROR_CLASS_SIGNAL = "ImbueCloudQuotaExceededError"
 # (``code: email_not_verified``), written by handle_imbue_cloud_errors.
 # Substring-matched like the quota signal.
 _EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL = "ImbueCloudEmailNotVerifiedError"
+
+# The plugin's error_class marker for the connector's structured HTTP 426
+# "client too old" refusal, written by handle_imbue_cloud_errors. Substring-
+# matched like the quota signal.
+_CLIENT_TOO_OLD_ERROR_CLASS_SIGNAL = "ImbueCloudClientTooOldError"
+
+# The connector's structured code for refusing to hard-delete the record of a
+# workspace that still holds its pool lease (a 409 relayed by the plugin's
+# ``sync records delete``). Substring-matched like the quota signal: the code
+# rides inside the relayed connector body.
+_LEASE_ACTIVE_CODE_SIGNAL = "lease_active"
 
 # The plugin's error_class marker for a structured auth rejection, written by
 # ``_persist_auth_response`` in the plugin's auth CLI whenever the connector
@@ -116,6 +130,14 @@ class ImbueCloudEmailNotVerifiedCliError(ImbueCloudCliError):
     email: str | None = None
 
 
+class ImbueCloudClientTooOldCliError(ImbueCloudCliError):
+    """The connector refused the operation because this app version is no longer supported.
+
+    Deterministic -- retrying cannot succeed until the app updates -- so
+    callers surface an "update the app" prompt instead of a generic failure.
+    """
+
+
 class ImbueCloudAuthFailedCliError(ImbueCloudCliError):
     """The auth backend rejected an ``auth signin`` / ``signup`` / ``login`` attempt.
 
@@ -131,6 +153,15 @@ class ImbueCloudAuthFailedCliError(ImbueCloudCliError):
     auth_message: str = ""
 
 
+class ImbueCloudLeaseActiveCliError(ImbueCloudCliError):
+    """The connector refused to hard-delete a record because its workspace still holds a pool lease.
+
+    Tombstone-first: destroying the workspace is what releases the lease (and
+    retires the record), so the remedy is destroy, not remove-from-list.
+    Deterministic -- retrying cannot succeed while the lease exists.
+    """
+
+
 class ImbueCloudSyncConflictCliError(ImbueCloudCliError):
     """A record push hit a 409 (revision CAS or active-agent conflict).
 
@@ -141,7 +172,7 @@ class ImbueCloudSyncConflictCliError(ImbueCloudCliError):
     stored_record: dict[str, Any] | None = None
 
 
-class ImbueCloudAuthSession(FrozenModel):
+class ImbueCloudAuthSession(WireModel):
     """Result of a successful auth signin/signup/login invocation."""
 
     user_id: str
@@ -150,7 +181,7 @@ class ImbueCloudAuthSession(FrozenModel):
     needs_email_verification: bool = False
 
 
-class ImbueCloudAuthAccount(FrozenModel):
+class ImbueCloudAuthAccount(WireModel):
     """One entry from `mngr imbue_cloud auth list`."""
 
     user_id: str
@@ -159,7 +190,7 @@ class ImbueCloudAuthAccount(FrozenModel):
     is_active: bool = False
 
 
-class LeasedHost(FrozenModel):
+class LeasedHost(WireModel):
     """One row of `mngr imbue_cloud hosts list`."""
 
     host_db_id: str
@@ -173,28 +204,28 @@ class LeasedHost(FrozenModel):
     leased_at: str
 
 
-class LiteLLMKeyMaterial(FrozenModel):
+class LiteLLMKeyMaterial(WireModel):
     """Result of `mngr imbue_cloud keys litellm create`."""
 
     key: SecretStr
     base_url: AnyUrl
 
 
-class ShareCliRelayEndpoint(FrozenModel):
+class ShareCliRelayEndpoint(WireModel):
     """One relay a shared workspace tunnels to (from `shares create` / `shares status`)."""
 
     relay_id: str
     endpoint: str
 
 
-class ShareCliRelayLogin(FrozenModel):
+class ShareCliRelayLogin(WireModel):
     """One relay's last tunnel Login stamp for a share (from `shares status`)."""
 
     relay_id: str
     last_login_at: str | None = None
 
 
-class ShareCliInfo(FrozenModel):
+class ShareCliInfo(WireModel):
     """Result of `mngr imbue_cloud shares create` / `shares status`."""
 
     host_id: str
@@ -208,6 +239,10 @@ class ShareCliInfo(FrozenModel):
     relay_token: SecretStr | None = None
     last_tunnel_login_at: str | None = None
     cert_not_after: str | None = None
+    # The tier's hosted web-chrome origin, stamped into share.env as
+    # SHARE_CHROME_ORIGIN; None against a connector that predates the field or
+    # a tier with none configured (callers fall back to the connector origin).
+    chrome_origin: str | None = None
 
 
 # How long a readiness poll may reuse a cached connector share lookup. The
@@ -267,7 +302,7 @@ class ActiveShareCache(MutableModel):
             self._lookup_and_deadline_by_host_id.pop(host_id, None)
 
 
-class R2BucketKeyMaterial(FrozenModel):
+class R2BucketKeyMaterial(WireModel):
     """A bucket-scoped S3 credential, as emitted by `mngr imbue_cloud bucket ...`.
 
     Mirror of the plugin's ``R2KeyMaterial`` JSON shape; the secret is
@@ -281,14 +316,14 @@ class R2BucketKeyMaterial(FrozenModel):
     access: str
 
 
-class R2BucketInfo(FrozenModel):
+class R2BucketInfo(WireModel):
     """Metadata for an R2 bucket, as emitted by `mngr imbue_cloud bucket info`."""
 
     bucket_name: str
     s3_endpoint: AnyUrl
 
 
-class R2BucketCreateResult(FrozenModel):
+class R2BucketCreateResult(WireModel):
     """Result of `mngr imbue_cloud bucket create`: the bucket plus its default key."""
 
     bucket: R2BucketInfo
@@ -319,6 +354,17 @@ class ImbueCloudCli(MutableModel):
             "env var; the plugin has no baked-in default."
         ),
     )
+    accounts_base_url: AnyUrl | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Base URL of the tier's browser accounts origin (client.toml `accounts_base_url`, "
+            "e.g. https://accounts.imbue.com on production). Passed to the plugin via the "
+            "MNGR__PROVIDERS__IMBUE_CLOUD__ACCOUNTS_URL env var so `auth login` opens the hosted "
+            "login page on the origin where Google OAuth and session cookies actually work. None "
+            "on tiers without a dedicated accounts domain (the connector host serves the pages)."
+        ),
+    )
 
     def _run(
         self,
@@ -334,6 +380,8 @@ class ImbueCloudCli(MutableModel):
         # MNGR_HOST_DIR etc. from the minds backend, so only this override is
         # needed.
         env_overrides = {_CONNECTOR_URL_SUBPROCESS_ENV: str(self.connector_url).rstrip("/")}
+        if self.accounts_base_url is not None:
+            env_overrides[_ACCOUNTS_URL_SUBPROCESS_ENV] = str(self.accounts_base_url).rstrip("/")
         # Run from $HOME like every other laptop-side mngr invocation, so this
         # does not resolve project config from minds' cwd (the monorepo root in
         # a dev checkout). Otherwise `mngr imbue_cloud auth list` loads
@@ -378,6 +426,15 @@ class ImbueCloudCli(MutableModel):
             exc.stdout = result.stdout
             exc.stderr = result.stderr
             raise exc
+        if _CLIENT_TOO_OLD_ERROR_CLASS_SIGNAL in result.stderr:
+            too_old_message = _parse_stderr_error_message(result.stderr)
+            too_old_exc = ImbueCloudClientTooOldCliError(
+                too_old_message if too_old_message else CLIENT_TOO_OLD_FALLBACK_MESSAGE
+            )
+            too_old_exc.exit_code = exit_code
+            too_old_exc.stdout = result.stdout
+            too_old_exc.stderr = result.stderr
+            raise too_old_exc
         if _QUOTA_ERROR_CLASS_SIGNAL in result.stderr:
             quota_message = _parse_stderr_error_message(result.stderr)
             quota_exc = ImbueCloudQuotaExceededCliError(
@@ -387,6 +444,14 @@ class ImbueCloudCli(MutableModel):
             quota_exc.stdout = result.stdout
             quota_exc.stderr = result.stderr
             raise quota_exc
+        if _LEASE_ACTIVE_CODE_SIGNAL in result.stderr:
+            lease_active_exc = ImbueCloudLeaseActiveCliError(
+                f"{command_repr}: the workspace still holds its cloud lease; destroy it instead"
+            )
+            lease_active_exc.exit_code = exit_code
+            lease_active_exc.stdout = result.stdout
+            lease_active_exc.stderr = result.stderr
+            raise lease_active_exc
         if _EMAIL_NOT_VERIFIED_ERROR_CLASS_SIGNAL in result.stderr:
             verification_body = _parse_stderr_error_body(result.stderr) or {}
             verification_message = _parse_stderr_error_message(result.stderr)
@@ -646,6 +711,7 @@ class ImbueCloudCli(MutableModel):
         host_id: str,
         entry_label: str | None = None,
         preferred_region: str | None = None,
+        workspace_id: str | None = None,
     ) -> ShareCliInfo:
         """Enable sharing for a workspace host; the returned relay token is only ever returned here.
 
@@ -657,6 +723,8 @@ class ImbueCloudCli(MutableModel):
         keeps an existing share's region.
         """
         args = ["shares", "create", host_id, "--account", account]
+        if workspace_id:
+            args.extend(["--workspace-id", workspace_id])
         if entry_label:
             args.extend(["--entry-label", entry_label])
         if preferred_region:
@@ -866,9 +934,14 @@ class ImbueCloudCli(MutableModel):
         body = self._expect_success(result, "sync records push")
         return body if isinstance(body, dict) else {}
 
-    def sync_record_delete(self, account: str, host_id: str) -> None:
+    def sync_record_delete(self, account: str, record_id: str) -> None:
+        """Delete one record by workspace id (``agent-<hex>``, preferred) or host id.
+
+        Raises ``ImbueCloudLeaseActiveCliError`` when the connector refuses
+        because the workspace still holds its pool lease.
+        """
         result = self._run(
-            ["sync", "records", "delete", host_id, "--account", account],
+            ["sync", "records", "delete", record_id, "--account", account],
             cg_name="imbue-cloud-sync-record-delete",
         )
         self._expect_success(result, "sync records delete")

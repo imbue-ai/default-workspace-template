@@ -163,6 +163,20 @@ _OUTLINE_KEYWORDS: Final[tuple[str, ...]] = ("Scenario Outline", "Scenario Templ
 # just their own file (per the behaviors skill's scope rules).
 _INVARIANTS_FEATURE_BASENAME: Final[str] = "invariants.feature"
 
+# The prose-context file mandated in every corpus folder (per the behaviors
+# skill). Its basename is spelled in the conventional uppercase, so it is exempt
+# from the kebab-case rule and from the sidecar-matching rule that governs every
+# other .md file.
+_README_BASENAME: Final[str] = "README"
+_README_FILE_NAME: Final[str] = "README.md"
+
+# Every README.md must open with this incipit, verbatim, so anyone reaching a
+# corpus file is pointed at the tmr-behaviors skill. The behaviors skill mandates
+# the wording; this constant is the single source of truth for it.
+REQUIRED_README_INCIPIT: Final[str] = (
+    "Understanding this behavior corpus calls for the tmr-behaviors skill; consult it when reading this file."
+)
+
 
 @pure
 def _strip_tag_sigil(tag_name: str) -> str:
@@ -640,29 +654,34 @@ def _scan_corpus_structure(corpus_root: Path, violations: list[BehaviorViolation
             basename = Path(file_name).stem
             if file_name.endswith(".feature"):
                 feature_files.append(file)
-                _check_file_basename_is_kebab_case(file, basename, violations)
-                if basename == "overview":
+                if basename == _README_BASENAME:
                     violations.append(
                         BehaviorViolation(
                             file=file,
                             line=None,
                             message=(
-                                "'overview' is a reserved basename for the folder's overview.md prose file; "
-                                "no .feature file may be named 'overview'"
+                                f"'{_README_BASENAME}' is a reserved basename for the folder's {_README_FILE_NAME} "
+                                "prose file; no .feature file may be named 'README'"
                             ),
                             is_unit_omitted=False,
                         )
                     )
+                else:
+                    _check_file_basename_is_kebab_case(file, basename, violations)
             elif file_name.endswith(".md"):
+                # README.md is the mandated folder-context file: exempt from the
+                # kebab-case rule and from the sidecar-matching rule below.
+                if basename == _README_BASENAME:
+                    continue
                 _check_file_basename_is_kebab_case(file, basename, violations)
-                if basename != "overview" and basename not in feature_basenames:
+                if basename not in feature_basenames:
                     violations.append(
                         BehaviorViolation(
                             file=file,
                             line=None,
                             message=(
                                 f"markdown file '{file_name}' has no matching '{basename}.feature' in its folder; "
-                                "every .md except overview.md must be the sidecar of a same-basename .feature"
+                                f"every .md except {_README_FILE_NAME} must be the sidecar of a same-basename .feature"
                             ),
                             is_unit_omitted=False,
                         )
@@ -676,7 +695,48 @@ def _scan_corpus_structure(corpus_root: Path, violations: list[BehaviorViolation
                         is_unit_omitted=False,
                     )
                 )
+        _check_folder_has_readme_with_incipit(folder, visible_file_names, violations)
     return sorted(feature_files)
+
+
+def _check_folder_has_readme_with_incipit(
+    folder: Path, visible_file_names: list[str], violations: list[BehaviorViolation]
+) -> None:
+    """Every corpus folder must carry a README.md that opens with the mandated incipit."""
+    if _README_FILE_NAME not in visible_file_names:
+        violations.append(
+            BehaviorViolation(
+                file=folder / _README_FILE_NAME,
+                line=None,
+                message=f"every corpus folder must contain a {_README_FILE_NAME} (prose context for the folder and everything below it)",
+                is_unit_omitted=False,
+            )
+        )
+        return
+    readme_file = folder / _README_FILE_NAME
+    if not _readme_opens_with_incipit(readme_file.read_text(encoding="utf-8")):
+        violations.append(
+            BehaviorViolation(
+                file=readme_file,
+                line=None,
+                message=f"{_README_FILE_NAME} must open with the mandated incipit, verbatim: {REQUIRED_README_INCIPIT!r}",
+                is_unit_omitted=False,
+            )
+        )
+
+
+@pure
+def _readme_opens_with_incipit(text: str) -> bool:
+    """The incipit is the README's first content line, after an optional leading title heading."""
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    if index < len(lines) and lines[index].lstrip().startswith("# "):
+        index += 1
+        while index < len(lines) and not lines[index].strip():
+            index += 1
+    return index < len(lines) and lines[index].strip() == REQUIRED_README_INCIPIT
 
 
 def _check_file_basename_is_kebab_case(file: Path, basename: str, violations: list[BehaviorViolation]) -> None:

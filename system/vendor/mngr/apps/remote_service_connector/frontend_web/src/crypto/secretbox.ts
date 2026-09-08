@@ -196,21 +196,32 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 // The decrypted contents of a record's encrypted_secrets blob (the desktop's
-// WorkspaceSecretsPayload). Serialized with the same field order + compact
-// separators as pydantic's model_dump_json so plaintext digests agree.
+// WorkspaceSecretsPayload). payload_format versions the blob's semantics:
+// a client whose supported format is below it must never rewrite the blob.
+// Serialized canonically (sorted keys, compact separators) to match the
+// desktop's writer byte-for-byte; the desktop's plaintext content digest is
+// computed from its typed view (excluding payload_format), so digests stay
+// stable regardless.
 export interface WorkspaceSecretsPayload {
+  payload_format?: number;
   restic_env: string | null;
   ssh_private_key: string | null;
   ssh_known_hosts: string | null;
 }
 
+// The newest payload semantics this bundle understands (stamped into every
+// blob it writes).
+export const SUPPORTED_PAYLOAD_FORMAT = 1;
+
 export function serializeSecretsPayload(
   payload: WorkspaceSecretsPayload,
 ): string {
+  // Alphabetical key order == the desktop writer's json.dumps(sort_keys=True).
   return JSON.stringify({
+    payload_format: payload.payload_format ?? SUPPORTED_PAYLOAD_FORMAT,
     restic_env: payload.restic_env,
-    ssh_private_key: payload.ssh_private_key,
     ssh_known_hosts: payload.ssh_known_hosts,
+    ssh_private_key: payload.ssh_private_key,
   });
 }
 
@@ -235,6 +246,8 @@ export async function decryptSecretsPayload(
     unknown
   >;
   return {
+    payload_format:
+      typeof parsed.payload_format === "number" ? parsed.payload_format : 1,
     restic_env: (parsed.restic_env as string | null) ?? null,
     ssh_private_key: (parsed.ssh_private_key as string | null) ?? null,
     ssh_known_hosts: (parsed.ssh_known_hosts as string | null) ?? null,

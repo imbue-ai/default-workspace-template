@@ -16,12 +16,16 @@ python manifests tree must cover every uv workspace member's pyproject.toml
 exactly what ``pnpm install --frozen-lockfile`` reads.
 
 Finally, the in-sandbox runner program (a Python program held in a string and
-executed via ``python -c`` inside the sandbox) is compile-checked, so a syntax
-error in it fails here instead of after the multi-minute image build in CI.
+executed via ``python -c`` inside the sandbox) is compile-checked and checked
+for unbound names in every scope, so a syntax error or a reference to one of
+this script's own constants (which are not in scope in the sandbox process)
+fails here instead of after the multi-minute image build in CI.
 """
 
+import builtins
 import re
 import shlex
+import symtable
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -157,14 +161,23 @@ def test_python_manifest_paths_cover_all_workspace_members() -> None:
     ``tools/*`` entry in ``[tool.uv.workspace].members``) would be missing
     from that layer and break the image build -- so the script's globs must
     cover every member pattern the root pyproject declares.
+
+    Directories the root pyproject excludes are standalone uv projects, not
+    members: uv never reads their manifests here, so they are expected to be
+    absent (and staging them would bust the layer cache on their dep churn).
     """
     root_pyproject = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())
-    member_patterns: list[str] = root_pyproject["tool"]["uv"]["workspace"]["members"]
-    expected_member_manifests = {
+    workspace = root_pyproject["tool"]["uv"]["workspace"]
+    excluded_manifests = {
         path.relative_to(_REPO_ROOT).as_posix()
-        for pattern in member_patterns
+        for pattern in workspace.get("exclude", ())
         for path in _REPO_ROOT.glob(f"{pattern}/pyproject.toml")
     }
+    expected_member_manifests = {
+        path.relative_to(_REPO_ROOT).as_posix()
+        for pattern in workspace["members"]
+        for path in _REPO_ROOT.glob(f"{pattern}/pyproject.toml")
+    } - excluded_manifests
     assert expected_member_manifests, "no uv workspace members found -- is the test reading the right repo?"
     staged_paths = set(_python_manifest_relative_paths(_REPO_ROOT))
     assert "pyproject.toml" in staged_paths
@@ -174,6 +187,11 @@ def test_python_manifest_paths_cover_all_workspace_members() -> None:
         "These uv workspace member manifests are NOT staged into the snapshot image's python "
         f"manifests layer: {sorted(missing_manifests)}. Update _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS "
         "in scripts/snapshot_minds_e2e_state.py to cover them."
+    )
+    staged_but_excluded = excluded_manifests & staged_paths
+    assert not staged_but_excluded, (
+        "These manifests belong to standalone projects excluded from the uv workspace, so uv does "
+        f"not read them here and staging them only busts the layer cache: {sorted(staged_but_excluded)}."
     )
 
 
@@ -193,12 +211,36 @@ def test_stage_dep_manifest_trees_copy_only_manifest_files(tmp_path: Path) -> No
 
 
 def test_in_sandbox_runner_program_is_valid_python() -> None:
-    """The ``python -c`` runner program string must at least be syntactically valid.
+    """The ``python -c`` runner program string must be syntactically valid and
+    must not reference names it never binds.
 
     The program only ever executes inside the Modal sandbox, after the
     multi-minute image build and dockerd bring-up -- a syntax error there is
-    the most expensive possible way to discover a typo in the string. This
-    guard cannot vouch for imports or runtime behavior (those need the real
-    sandbox), but it catches the cheap-to-catch failure mode at unit-test time.
+    the most expensive possible way to discover a typo in the string. The
+    unbound-name check catches the other cheap-to-catch mistake: the program
+    is a plain (non-interpolated) string run in a separate process, so a
+    reference to one of this script's own module-level constants is a
+    NameError in the sandbox. This guard cannot vouch for imports or runtime
+    behavior (those need the real sandbox).
     """
     compile(_IN_SANDBOX_RUNNER_PROGRAM, "<in-sandbox-runner-program>", "exec")
+    module_table = symtable.symtable(_IN_SANDBOX_RUNNER_PROGRAM, "<in-sandbox-runner-program>", "exec")
+    module_bound_names = {
+        symbol.get_name() for symbol in module_table.get_symbols() if symbol.is_assigned() or symbol.is_imported()
+    }
+    unbound_names = sorted(
+        symbol.get_name()
+        for table in _table_and_descendants(module_table)
+        for symbol in table.get_symbols()
+        if symbol.is_referenced()
+        and symbol.is_global()
+        and symbol.get_name() not in module_bound_names
+        and not hasattr(builtins, symbol.get_name())
+    )
+    assert unbound_names == []
+
+
+def _table_and_descendants(table: symtable.SymbolTable) -> list[symtable.SymbolTable]:
+    """The table and every scope nested in it: a global referenced from inside a function is
+    recorded only in that function's own table, never in the module's."""
+    return [table, *(nested for child in table.get_children() for nested in _table_and_descendants(child))]

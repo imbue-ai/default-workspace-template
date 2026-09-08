@@ -1,0 +1,78 @@
+{
+  "mngr_branch": "main",
+  "timeout_seconds": 4500,
+  "verification_timeout_seconds": 900,
+  "personas": [
+    {
+      "id": "project-roadmap",
+      "persona": "Head of product at a small startup. Non-technical, but knows their own projects well.",
+      "reward_strategy": "final",
+      "steps": [
+        {
+          "name": "build-from-data",
+          "files": [{"source": "datasets/roadmap-v1", "upload_id": "41e940fcd33540078ab77fd79f3b3943"}],
+          "prompts": [
+            "Can you build me an editable roadmap tool? I downloaded a pull of my delivery milestones, it's in /home/user/workspace/data/uploads/41e940fcd33540078ab77fd79f3b3943. Sketch me something first so I can see where you're heading.",
+            {
+              "goal": "See a concrete mockup of the roadmap view built around your real milestones and sign off on it, pushing back until the layout is clear.",
+              "max_exchanges": 4
+            }
+          ],
+          "expectations": {
+            "outcome": "The agent presented a concrete mockup or design of a roadmap drawn from the uploaded export, and the client approved it. Nothing needs to be built or running yet, and a plan or a promise is not a mockup."
+          },
+          "min_reward": {"gates": 1.0, "outcome": 0.5}
+        },
+        {
+          "name": "adjust-requirements",
+          "prompts": [
+            "The sketch is right, go ahead and build it for real now, with my edits saved. And one more thing: about half the milestones have a second owning team, and the exec team will want to filter by team. Can you fold that in?",
+            {
+              "goal": "Get the real, saving version built, not the sketch: keep going until you can open the running roadmap, filter it by team, see two-team milestones handled, and rename a milestone and have the rename still be there after a reload.",
+              "max_exchanges": 3
+            }
+          ],
+          "expectations": {
+            "outcome": "A working roadmap view, delivered as a running Minds app tab the client can open, populated from the uploaded export, with a filter by team, milestones that can be owned by two teams, and edits that are saved rather than a sketch that keeps nothing.",
+            "deliverable": {"kind": "minds-app"},
+            "ui_flows": [
+              {
+                "name": "filter-by-team",
+                "steps": "Open the roadmap. Read the milestones and their owning teams. Filter the view down to a single team.",
+                "expect": "Only that team's milestones remain visible, including milestones that team co-owns."
+              }
+            ]
+          },
+          "min_reward": {"gates": 1.0, "outcome": 0.5}
+        },
+        {
+          "name": "updated-dataset",
+          "files": [{"source": "datasets/roadmap-v2", "upload_id": "985e2d4f7eb948b3b45a8f0923521ab8"}],
+          "prompts": [
+            "I downloaded an updated pull of the data, it's in /home/user/workspace/data/uploads/985e2d4f7eb948b3b45a8f0923521ab8. Can you bring the roadmap up to date with it?",
+            {
+              "goal": "Confirm the roadmap now reflects the updated data, that the team filter still works, and that renaming a milestone still sticks after a reload.",
+              "max_exchanges": 3
+            }
+          ],
+          "expectations": {
+            "outcome": "The running roadmap reflects the updated export: the milestones only that export carries are shown, the ones it dropped are gone, and the changed dates and statuses are the updated ones. The team filter still works and an edit survives a reload.",
+            "deliverable": {"kind": "minds-app"},
+            "ui_flows": [
+              {
+                "name": "updated-content",
+                "steps": "Open the roadmap. Check once whether milestone M-141 ('Usage-based invoicing') is listed. Then check once whether milestone M-107 ('Referral program pilot') is listed. One look each is enough; do not repeat a check that has already answered.",
+                "expect": "M-141 is listed and M-107 is not."
+              },
+              {
+                "name": "edit-persistence",
+                "steps": "Edit a milestone's title to 'Renamed by eval'. Reload the page.",
+                "expect": "'Renamed by eval' is still visible after the reload."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

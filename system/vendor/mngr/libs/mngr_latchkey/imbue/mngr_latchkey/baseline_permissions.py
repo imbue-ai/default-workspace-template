@@ -5,7 +5,9 @@ Every host that minds creates gets a ``latchkey_permissions.json`` seeded from
 reach (filing a permission request, reading its own permissions, browsing the
 catalog, the Minds API schema), plus the per-agent Minds API proxy gate that
 :func:`imbue.mngr_latchkey.agent_setup.register_agent_for_host` later extends
-with each agent registered on the host.
+with each agent registered on the host, plus the detent schemas of the
+additional (custom) services the plugin ships, which are inlined so that granting one is a plain
+rule write against a file that already defines the scope.
 
 It lives in its own module -- rather than inside ``agent_setup`` where it is
 used -- so that code which must not depend on the agent-creation machinery (in
@@ -16,8 +18,10 @@ freshly-created host's permissions file look like?".
 
 from typing import Final
 
+from pydantic import JsonValue
+
+from imbue.mngr_latchkey.additional_services import additional_service_schemas
 from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
-from imbue.mngr_latchkey.store import SHARED_SCHEMAS_FILENAME
 
 # Detent schema names and host string for the gateway-self baseline that
 # every agent inherits. Defined inline (in the agent's permissions file)
@@ -95,6 +99,23 @@ _PERM_MINDS_APP_VERSION: Final[str] = "minds-app-version-read"
 _MINDS_API_TIMEZONE_INBOUND_PATH: Final[str] = "/minds-api-proxy/api/v1/timezone"
 _PERM_MINDS_API_TIMEZONE: Final[str] = "minds-api-timezone-read"
 
+# Desktop egress: a remote host asks for a third-party request to leave
+# from the user's own machine (rather than from its VPS) by prefixing the target
+# URL with ``/via-desktop``, which the VPS gateway's forwarding extension
+# unwraps onto the desktop gateway's native ``/gateway/<url>`` endpoint. This
+# permission opens only the *route*; what may actually be reached through it is
+# decided by the ordinary per-service, per-account rules in this same file, which
+# the desktop evaluates against the real target URL after unwrapping. A service
+# the user has granted is therefore reachable both ways with one grant, and a
+# service they have not granted is reachable neither way -- so this is granted by
+# default and never appears as its own consent prompt.
+#
+# The path is required to continue with an absolute http(s) URL, matching what
+# the forwarding extension itself accepts, so the grant cannot be stretched to
+# some other gateway-self endpoint hidden behind the prefix.
+VIA_DESKTOP_PATH_PATTERN: Final[str] = r"^/via-desktop/https?://"
+_PERM_VIA_DESKTOP_EGRESS: Final[str] = "via-desktop-egress"
+
 # The minds desktop client's cross-workspace management API
 # (``/api/v1/workspaces/...``) attaches its per-verb permission schemas to the
 # ``latchkey-self`` scope, just like file-sharing and accounts. Those schemas are
@@ -103,6 +124,18 @@ _PERM_MINDS_API_TIMEZONE: Final[str] = "minds-api-timezone-read"
 # rule when the user approves a grant (see ``permission_requests.mjs``'s
 # ``computeWorkspaceEffect`` and the ``workspace_permissions`` module). Nothing
 # about them needs to exist here.
+
+# The detent scope/permission schemas of the *additional* (custom) services the
+# plugin ships --
+# e.g. ``claude-ai``. They are not in detent's builtin catalog, so a granted
+# custom scope only resolves if its schema is in the file the gateway reads.
+# Every permissions file the plugin writes therefore carries them inline, so the file
+# the gateway reads is self-contained no matter which of its several paths it was
+# reached through (an opaque handle on the desktop, the canonical
+# ``hosts/<host_id>/`` path, or ``~/.latchkey/permissions.json`` on a VPS).
+# :func:`imbue.mngr_latchkey.agent_setup.reconcile_baseline_permissions`
+# refreshes them on files that already exist.
+ADDITIONAL_SERVICE_SCHEMAS: Final[dict[str, JsonValue]] = additional_service_schemas()
 
 
 AGENT_BASELINE_PERMISSIONS: Final[LatchkeyPermissionsConfig] = LatchkeyPermissionsConfig(
@@ -125,6 +158,9 @@ AGENT_BASELINE_PERMISSIONS: Final[LatchkeyPermissionsConfig] = LatchkeyPermissio
                 _PERM_MINDS_APP_VERSION,
                 # Every agent may read the (non-agent-scoped) host timezone.
                 _PERM_MINDS_API_TIMEZONE,
+                # Every agent may route an outbound request through the user's
+                # machine; the per-service rules still decide what it reaches.
+                _PERM_VIA_DESKTOP_EGRESS,
             ],
         },
     ),
@@ -222,10 +258,17 @@ AGENT_BASELINE_PERMISSIONS: Final[LatchkeyPermissionsConfig] = LatchkeyPermissio
             },
             "required": ["method", "path"],
         },
+        # Any method: the wrapped request keeps the caller's verb, and the
+        # desktop re-checks it against the target service's own rules.
+        _PERM_VIA_DESKTOP_EGRESS: {
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "pattern": VIA_DESKTOP_PATH_PATTERN,
+                },
+            },
+            "required": ["path"],
+        },
+        **ADDITIONAL_SERVICE_SCHEMAS,
     },
-    # Every host file references the shared additional-services schemas file, so a
-    # granted custom scope (e.g. ``claude-ai``) resolves without inlining its
-    # schema here. The bare name resolves relative to the file's directory (see
-    # ``SHARED_SCHEMAS_FILENAME``).
-    include=(SHARED_SCHEMAS_FILENAME,),
 )

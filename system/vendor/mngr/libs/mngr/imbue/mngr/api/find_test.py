@@ -1,4 +1,7 @@
 from collections.abc import Callable
+from collections.abc import Iterator
+from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -8,8 +11,10 @@ from imbue.imbue_common.model_update import to_update
 from imbue.mngr.agents.base_agent import BaseAgent
 from imbue.mngr.api.address_parsers import parse_host_location_address
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.find import _START_HOST_LOCK_TIMEOUT_SECONDS
 from imbue.mngr.api.find import _filter_all_agents
 from imbue.mngr.api.find import _find_agents_by_identifiers_or_state
+from imbue.mngr.api.find import _post_filter_matches_by_addresses
 from imbue.mngr.api.find import determine_resolved_path
 from imbue.mngr.api.find import ensure_agent_started
 from imbue.mngr.api.find import filter_all_hosts
@@ -18,13 +23,22 @@ from imbue.mngr.api.find import filter_one_host
 from imbue.mngr.api.find import get_host_from_list_by_id
 from imbue.mngr.api.find import get_unique_host_from_list_by_name
 from imbue.mngr.api.find import group_agents_by_host
+from imbue.mngr.api.find import start_agents_locked
+from imbue.mngr.cli.exit_codes import EXIT_CODE_ERROR
 from imbue.mngr.cli.testing import create_test_agent
 from imbue.mngr.config.data_types import AgentTypeConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentNotFoundError
+from imbue.mngr.errors import EXIT_CODE_TARGET_NOT_FOUND
+from imbue.mngr.errors import LockNotHeldError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import UserInputError
 from imbue.mngr.hosts.host import Host
+from imbue.mngr.hosts.host import _START_AGENT_LAUNCH_TIMEOUT_SECONDS
+from imbue.mngr.hosts.outer_host import SSH_TRANSIENT_RETRY_BACKOFFS_SECONDS
+from imbue.mngr.hosts.outer_host import SSH_TRANSIENT_RETRY_MAX_ATTEMPTS
 from imbue.mngr.interfaces.host import CreateAgentOptions
+from imbue.mngr.primitives import AgentAddress
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import AgentLifecycleState
 from imbue.mngr.primitives import AgentName
@@ -36,9 +50,11 @@ from imbue.mngr.primitives import HostAddress
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostLocationAddress
 from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import HostNameOrId
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.utils.testing import allow_warnings
+from imbue.mngr.utils.testing import make_local_host_of_class
 
 
 def test_parse_host_location_address_with_agent_only() -> None:
@@ -159,6 +175,63 @@ def test_filter_one_host_raises_when_not_found() -> None:
             address=HostAddress(host=HostName("nonexistent")),
             all_hosts=[],
         )
+
+
+@pytest.mark.parametrize(
+    ("host", "expected_exit_code"),
+    [
+        (HostName("nonexistent"), EXIT_CODE_ERROR),
+        (HostId("host-fa29307a16734899aa77b0f0563c8c99"), EXIT_CODE_TARGET_NOT_FOUND),
+    ],
+    ids=["host_name", "host_id"],
+)
+def test_filter_one_host_reserves_the_gone_target_code_for_ids(host: HostNameOrId, expected_exit_code: int) -> None:
+    """The host-target lookup makes the same id-vs-name split the agent one does.
+
+    Host-addressed commands (`mngr event @HOST`, mngr file / limit / snapshot / wait) resolve
+    here rather than through find_one_agent, so an exit code carried only by the agent path
+    would mean the answer to "does this host exist" depends on which command was run.
+    """
+    with pytest.raises(MngrError) as exc_info:
+        filter_one_host(address=HostAddress(host=host), all_hosts=[])
+
+    assert exc_info.value.exit_code == expected_exit_code
+
+
+_LIVE_AGENT_ELSEWHERE = AgentMatch(
+    agent_id=AgentId("agent-fa29307a16734899aa77b0f0563c8c99"),
+    agent_name=AgentName("some-machine"),
+    host_id=HostId("host-11111111111111111111111111111111"),
+    host_name=HostName("its-real-host"),
+    provider_name=ProviderInstanceName("local"),
+)
+
+
+@pytest.mark.parametrize(
+    ("host", "expected_exit_code"),
+    [
+        (HostName("some-other-host"), EXIT_CODE_ERROR),
+        (HostId("host-22222222222222222222222222222222"), EXIT_CODE_TARGET_NOT_FOUND),
+    ],
+    ids=["host_name", "host_id"],
+)
+def test_the_host_qualified_bulk_lookup_reserves_the_gone_target_code_for_id_only_addresses(
+    host: HostNameOrId, expected_exit_code: int
+) -> None:
+    """An agent id that is alive elsewhere plus a mistyped host *name* is not a gone target.
+
+    `mngr stop <agent>@<host>` fails here rather than in the miss paths the other
+    tests drive: the agent identifier already matched discovery, and it is the host
+    constraint that rejects it. So the gone-target code has to depend on the host
+    component too -- otherwise a typo'd host name reports an agent that is demonstrably
+    running as permanently gone.
+    """
+    address = AgentAddress(agent=_LIVE_AGENT_ELSEWHERE.agent_id, host=HostAddress(host=host))
+
+    with pytest.raises(MngrError) as exc_info:
+        _post_filter_matches_by_addresses([address], [_LIVE_AGENT_ELSEWHERE])
+
+    assert exc_info.value.exit_code == expected_exit_code
 
 
 def test_filter_one_host_disambiguates_with_host_provider_form() -> None:
@@ -1062,6 +1135,108 @@ def test_ensure_agent_started_respects_config_when_data_unset(
     ensure_agent_started(agent, agent.host, is_start_desired=True)
 
     assert agent.captured_timeouts == [37.5]
+
+
+class _LockRecordingHost(Host):
+    """Local Host whose cooperative lock is observable, and optionally refused, so tests can see
+    what a start does with it without holding a real flock."""
+
+    is_lock_refused: bool = Field(default=False, description="Refuse every acquisition with LockNotHeldError")
+    is_currently_locked: bool = Field(default=False, description="Whether the (fake) lock is held right now")
+    lock_timeouts: list[float | None] = Field(
+        default_factory=list, description="The timeout_seconds passed to each acquisition attempt"
+    )
+    is_lock_held_at_start: list[bool] = Field(
+        default_factory=list, description="Whether the lock was held when each start_agents call ran"
+    )
+
+    @contextmanager
+    def lock_cooperatively(self, timeout_seconds: float | None = 300.0) -> Iterator[None]:
+        self.lock_timeouts.append(timeout_seconds)
+        if self.is_lock_refused:
+            raise LockNotHeldError("Timed out waiting to acquire the host lock")
+        self.is_currently_locked = True
+        try:
+            yield
+        finally:
+            self.is_currently_locked = False
+
+    def start_agents(self, agent_ids: Sequence[AgentId]) -> None:
+        self.is_lock_held_at_start.append(self.is_currently_locked)
+
+
+def _make_lock_recording_host(local_provider: LocalProviderInstance, is_lock_refused: bool) -> _LockRecordingHost:
+    return make_local_host_of_class(local_provider, _LockRecordingHost, is_lock_refused=is_lock_refused)
+
+
+def test_start_agents_locked_bounds_the_lock_wait_and_names_the_host_on_timeout(
+    local_provider: LocalProviderInstance,
+) -> None:
+    """The start path waits a bounded time for the host lock and, on timeout, says which host and agents.
+
+    Regression guard: the wait used to be unbounded, so a start queued behind a wedged
+    holder hung silently forever -- for a boot-time oneshot, leaving the host's agents down for good.
+    """
+    host = _make_lock_recording_host(local_provider, is_lock_refused=True)
+    agent_id = AgentId.generate()
+
+    with pytest.raises(LockNotHeldError) as exc_info:
+        start_agents_locked(host, [agent_id], is_restart=False)
+
+    assert host.lock_timeouts == [_START_HOST_LOCK_TIMEOUT_SECONDS]
+    message = str(exc_info.value)
+    assert str(host.id) in message
+    assert str(agent_id) in message
+    assert f"{_START_HOST_LOCK_TIMEOUT_SECONDS:.0f}s" in message
+    assert host.is_lock_held_at_start == []
+
+
+def test_start_lock_wait_outlasts_the_launch_bound_ssh_worst_case() -> None:
+    """The launch bound's SSH worst case (every transient retry plus backoff) ends before the lock wait does.
+
+    Every start runs under the host lock, so a start queued behind one whose launch is
+    wedged waits for that launch's retries to exhaust. Were the lock wait shorter, the
+    queued start would fail with a misleading lock-timeout error while the holder was
+    still legitimately retrying. Pins the relation between the three inputs (launch
+    bound, SSH retry policy, lock wait), which live in three different modules.
+    """
+    worst_case_seconds = SSH_TRANSIENT_RETRY_MAX_ATTEMPTS * _START_AGENT_LAUNCH_TIMEOUT_SECONDS + sum(
+        SSH_TRANSIENT_RETRY_BACKOFFS_SECONDS
+    )
+    assert worst_case_seconds < _START_HOST_LOCK_TIMEOUT_SECONDS
+
+
+class _StartThroughAgent(BaseAgent[AgentTypeConfig]):
+    """Test agent that keeps the base readiness behavior (just run the start action)."""
+
+
+@pytest.mark.tmux
+def test_ensure_agent_started_starts_a_stopped_agent_under_the_host_lock(
+    local_provider: LocalProviderInstance,
+    temp_work_dir: Path,
+) -> None:
+    """Auto-starting a stopped agent (message/connect/exec paths) must take the host lock first.
+
+    Regression guard: this path used to call start_agents unlocked, so two concurrent
+    auto-starts of the same agent could both see "no session" and the slower one's
+    pre-launch reap would kill the tree the faster one had just launched.
+    """
+    agent = create_test_agent(
+        local_provider,
+        temp_work_dir,
+        agent_config=None,
+        agent_type=None,
+        extra_data=None,
+        agent_class=_StartThroughAgent,
+    )
+    assert agent.get_lifecycle_state() == AgentLifecycleState.STOPPED
+    host = _make_lock_recording_host(local_provider, is_lock_refused=False)
+
+    ensure_agent_started(agent, host, is_start_desired=True)
+
+    assert host.is_lock_held_at_start == [True]
+    assert host.lock_timeouts == [_START_HOST_LOCK_TIMEOUT_SECONDS]
+    assert host.is_currently_locked is False
 
 
 def _make_same_id_agents_on_two_hosts() -> tuple[AgentId, dict[DiscoveredHost, list[DiscoveredAgent]]]:

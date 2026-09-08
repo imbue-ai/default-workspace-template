@@ -69,6 +69,11 @@ _DEFAULT_DISCOVERY_ERROR_TIMEOUT_SECONDS: Final[float] = 120.0
 _DEFAULT_HOST_DISCOVERY_TIMEOUT_SECONDS: Final[float] = 30.0
 _DEFAULT_AGENT_DISCOVERY_TIMEOUT_SECONDS: Final[float] = 30.0
 
+# Wall-clock budget for reading one host's live details while listing agents/hosts.
+# A host slower than this falls back to its offline/partial data so one slow or
+# contended host cannot stall the whole read.
+_DEFAULT_HOST_DETAIL_READ_TIMEOUT_SECONDS: Final[float] = 20.0
+
 # === Helper Functions ===
 
 PluginConfigT = TypeVar("PluginConfigT", bound="PluginConfig")
@@ -505,6 +510,12 @@ class MngrConfig(FrozenModel):
         default_factory=RetryConfig,
         description="Connection retry configuration",
     )
+    host_detail_read_timeout_seconds: PositiveFloat = Field(
+        default=PositiveFloat(_DEFAULT_HOST_DETAIL_READ_TIMEOUT_SECONDS),
+        description="How long (in seconds) to wait for a single host's live detail collection while listing "
+        "agents/hosts before falling back to that host's offline/partial data, so one slow or contended host "
+        "cannot stall the whole read.",
+    )
     logging: LoggingConfig = Field(
         default_factory=LoggingConfig,
         description="Logging configuration",
@@ -546,6 +557,13 @@ class MngrConfig(FrozenModel):
             "poorly-scoped test cannot pick up a real config (e.g. ~/.mngr) and perform real "
             "operations; configs written for tests set this to True to opt in."
         ),
+    )
+    strict_host_record_parsing: bool = Field(
+        default=False,
+        description="When true, a host record that exists on a provider's state store but cannot be parsed "
+        "(after retries) raises an error instead of being treated as missing. The default (false) logs a "
+        "warning and treats the record as missing, which keeps discovery and destroy working around a "
+        "corrupt record at the cost of that host silently dropping out of listings.",
     )
     default_destroyed_host_persisted_seconds: float = Field(
         default=_DEFAULT_DESTROYED_HOST_PERSISTED_SECONDS,
@@ -682,6 +700,10 @@ class OutputOptions(FrozenModel):
     is_quiet: bool = Field(
         default=False,
         description="Whether to suppress all stdout output (set by --quiet)",
+    )
+    extra_format: str | None = Field(
+        default=None,
+        description="A command-specific extra format name (e.g. 'atif') that matched instead of a builtin OutputFormat",
     )
 
 

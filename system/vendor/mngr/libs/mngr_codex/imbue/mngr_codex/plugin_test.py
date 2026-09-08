@@ -94,7 +94,7 @@ def test_codex_agent_config_has_correct_defaults() -> None:
     assert config.model_reasoning_effort is None
     assert config.sandbox_mode == "workspace-write"
     assert config.auto_allow_permissions is False
-    assert config.auto_dismiss_dialogs is False
+    assert config.auto_dismiss_dialogs_at_startup is False
     assert config.update_policy is CodexUpdatePolicy.ASK
     assert config.config_overrides == {}
     assert config.emit_common_transcript is True
@@ -925,6 +925,10 @@ def test_assemble_command_honors_command_override(codex_agent: CodexAgent) -> No
     assert "/opt/codex --remote" in command
 
 
+# assert_posix_compatible shells out to shellcheck; fast locally but observed
+# exceeding the default 10s pytest-timeout under CI sandbox load.
+@pytest.mark.flaky
+@pytest.mark.timeout(60)
 def test_assemble_command_is_posix_compatible(codex_agent: CodexAgent) -> None:
     """The assembled command runs in the user's interactive shell (possibly zsh), so it
     must avoid bash-only constructs (the socket-wait loop uses POSIX `[ -S ]` / `$(())`)."""
@@ -1261,8 +1265,10 @@ def test_non_interactive_without_optin_aborts(local_provider: LocalProviderInsta
 def test_auto_dismiss_dialogs_persists_trust_without_optin_ctx(
     local_provider: LocalProviderInstance, tmp_path: Path
 ) -> None:
-    """auto_dismiss_dialogs trusts silently even when the ctx is non-interactive."""
-    agent = _make_codex_agent(CodexAgent, local_provider, tmp_path, CodexAgentConfig(auto_dismiss_dialogs=True))
+    """auto_dismiss_dialogs_at_startup trusts silently even when the ctx is non-interactive."""
+    agent = _make_codex_agent(
+        CodexAgent, local_provider, tmp_path, CodexAgentConfig(auto_dismiss_dialogs_at_startup=True)
+    )
     _provision(agent)
     assert is_project_trusted(_read_user_codex_config(agent), str(agent.work_dir.resolve()))
 

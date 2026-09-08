@@ -313,7 +313,7 @@ def move_host_endpoint_pins(
     """Relocate ``host_id``'s pins from one endpoint to another and re-render the known_hosts file.
 
     For hosts whose keys survive a move but whose address/port change (e.g. a
-    stopped imbue_cloud workspace restored onto a different box): the same
+    stopped host whose disks a provider restores at a new endpoint): the same
     public keys are re-pinned at the new endpoint with their origins intact --
     so a user-origin pin stays user-origin and no re-trust decision is made --
     and the dead endpoint's pins are dropped. A no-op when the host has no pins
@@ -533,6 +533,35 @@ def load_current_host_key_pins(known_hosts_path: Path) -> tuple[HostKeyPin, ...]
         loaded_state = _load_state(host_key_store_path(known_hosts_path))
         imported_state = _import_known_hosts_file(loaded_state, known_hosts_path)
     return tuple(pin for record in imported_state.records for pin in record.pins)
+
+
+def has_unpinned_bootstrap_drift(known_hosts_path: Path, known_hosts_text: str) -> bool:
+    """Whether applying ``known_hosts_text`` would add trust the store still lacks.
+
+    True when some parseable line's endpoint has no pin at all, or holds a
+    *different* BOOTSTRAP-origin key (bootstrap material carries no deliberate
+    trust decision, so the text's key was never knowingly superseded). A
+    differing USER-origin pin does NOT count as drift: the user's own devices
+    made a newer trust decision at that endpoint (e.g. a local rotation), and
+    this deferral is what protects it -- re-applied text would land as freshly
+    timestamped USER-origin pins, which origin precedence alone would accept.
+    Unparseable lines are ignored, mirroring :func:`pin_known_hosts_text`.
+    """
+    now = datetime.now(timezone.utc)
+    pin_by_endpoint = {_endpoint_key(pin): pin for pin in load_current_host_key_pins(known_hosts_path)}
+    for raw_line in known_hosts_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parsed = _parse_pin_from_line(line, now, HostKeyOrigin.USER)
+        if parsed is None:
+            continue
+        existing = pin_by_endpoint.get(_endpoint_key(parsed))
+        if existing is None:
+            return True
+        if existing.public_key != parsed.public_key and existing.origin is HostKeyOrigin.BOOTSTRAP:
+            return True
+    return False
 
 
 @pure

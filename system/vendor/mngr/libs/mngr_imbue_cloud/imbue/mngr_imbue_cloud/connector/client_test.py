@@ -5,6 +5,8 @@ never go to the network; this isolates the tests from connector availability
 and makes them deterministic.
 """
 
+import ast
+import inspect
 import json as _json
 
 import httpx
@@ -13,29 +15,35 @@ from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
 
+from imbue.mngr_imbue_cloud.connector import client as connector_client_module
+from imbue.mngr_imbue_cloud.connector.client import CLIENT_ID_HEADER
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.connector.client import create_litellm_key_rotating_on_exists
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
-from imbue.mngr_imbue_cloud.data_types import LiteLLMKeyInfo
-from imbue.mngr_imbue_cloud.data_types import LiteLLMKeyMaterial
-from imbue.mngr_imbue_cloud.data_types import SyncKeyBundle
-from imbue.mngr_imbue_cloud.data_types import SyncWorkspaceRecord
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudAccountSuspendedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketExistsError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketLimitError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotEmptyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudBucketNotFoundError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudCleanupGrantBudgetError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudClientTooOldError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudEmailNotVerifiedError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudKeyError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudLeaseUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudQuotaExceededError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudRecordFormatTooNewError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudShareError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
 from imbue.mngr_imbue_cloud.errors import WorkspacesEndpointUnavailableError
-from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
+from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyInfo
+from imbue.mngr_imbue_cloud.wire_types import LiteLLMKeyMaterial
+from imbue.mngr_imbue_cloud.wire_types import SyncKeyBundle
+from imbue.mngr_imbue_cloud.wire_types import SyncWorkspaceRecord
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
 
 
 def _make_client(handler) -> tuple[ImbueCloudConnectorClient, httpx.MockTransport]:
@@ -106,6 +114,63 @@ def test_lease_host_success_parses_response(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.agent_id == "agent-abc"
     assert result.host_name == "my-host"
     assert result.attributes == {"cpus": 2}
+
+
+def test_lease_host_retries_connect_error_then_succeeds() -> None:
+    # ConnectError is a connect-phase failure (e.g. DNS EAI_NONAME); it is retried.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ConnectError("simulated DNS failure", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "host_db_id": "00000000-0000-0000-0000-000000000001",
+                "vps_address": "10.0.0.1",
+                "ssh_port": 22,
+                "ssh_user": "root",
+                "container_ssh_port": 2222,
+                "agent_id": "agent-abc",
+                "host_id": "host-xyz",
+                "host_name": "my-host",
+                "attributes": {"cpus": 2},
+            },
+        )
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    result = client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+    assert result.vps_address == "10.0.0.1"
+    assert calls["n"] == 2
+
+
+def test_lease_host_does_not_retry_post_send_error() -> None:
+    # ReadError is a post-send failure, so a non-idempotent lease must not retry it.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadError("simulated post-send failure", request=request)
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudUnreachableError):
+        client.lease_host(SecretStr("tok"), LeaseAttributes(cpus=2), "ssh-ed25519 AAAA", "my-host")
+    assert calls["n"] == 1
+
+
+def test_auth_signin_transport_error_raises_typed_auth_error() -> None:
+    # A transport failure surfaces as a typed ImbueCloudAuthError, not a raw httpx error.
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ReadError("simulated post-send failure", request=request)
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    with pytest.raises(ImbueCloudAuthError):
+        client.auth_signin("alice@imbue.com", "hunter2")
+    assert calls["n"] == 1
 
 
 def test_rename_host_success_posts_new_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -610,12 +675,17 @@ def test_admin_account_endpoints_use_admin_paths(monkeypatch: pytest.MonkeyPatch
                     "llm_budget_resets_at": None,
                     "active_synced_workspaces": 0,
                 },
+                "suspended_at": "2026-08-22 00:00:00+00:00",
+                "suspended_reason": "abuse",
             },
         )
 
     client = _install_mock_httpx(monkeypatch, handler)
     info = client.admin_get_account(SecretStr("adm"), "alice@imbue.com")
     assert info.plan_name == "explorer"
+    # The operator view carries the suspension state (what `account show` renders).
+    assert info.suspended_at == "2026-08-22 00:00:00+00:00"
+    assert info.suspended_reason == "abuse"
     client.admin_set_account_plan(SecretStr("adm"), "alice@imbue.com", "ally")
     client.admin_set_account_quota(SecretStr("adm"), "alice@imbue.com", "max_buckets", 60)
     assert seen == [
@@ -801,6 +871,145 @@ def test_get_workspace_retries_transient_transport_error(monkeypatch: pytest.Mon
     assert state["calls"] == 2
 
 
+def test_list_hosts_retries_transient_transport_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The discovery read behind `mngr list`/`mngr create` must ride out a
+    transport blip instead of surfacing "could not reach Imbue Cloud"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/hosts"
+        return httpx.Response(200, json={"hosts": []})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
+    assert client.list_hosts(SecretStr("tok")) == []
+    assert state["calls"] == 2
+
+
+def test_list_workspaces_retries_transient_transport_error_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/workspaces"
+        return httpx.Response(200, json=[_workspace_entry("running")])
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=1, handler=handler)
+    workspaces = client.list_workspaces(SecretStr("tok"))
+    assert [workspace.status for workspace in workspaces] == [WorkspaceStatus.RUNNING]
+    assert state["calls"] == 2
+
+
+def test_list_hosts_exhausted_retries_raise_the_typed_unreachable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Terminal transport failure on the listings surfaces as ImbueCloudUnreachableError,
+    the type the provider maps back to ProviderUnavailableError (the user-facing
+    "could not reach Imbue Cloud" card)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"hosts": []})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=99, handler=handler)
+    with pytest.raises(ImbueCloudUnreachableError) as exc_info:
+        client.list_hosts(SecretStr("tok"))
+    assert state["calls"] == 3
+    assert "could not reach the imbue_cloud connector" in str(exc_info.value)
+
+
+def test_list_hosts_does_not_retry_auth_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 401 is a response, not a transport failure: fail fast with the auth type,
+    exactly one request on the wire."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "no token"})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
+    with pytest.raises(ImbueCloudAuthError):
+        client.list_hosts(SecretStr("tok"))
+    assert state["calls"] == 1
+
+
+def test_list_workspaces_does_not_retry_the_old_connector_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The old-connector fallback signal is status-based, so it must keep failing
+    fast (one request) and keep its type -- callers use it to fall back to /hosts."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    client, state = _install_flaky_httpx_get(monkeypatch, fail_times=0, handler=handler)
+    with pytest.raises(WorkspacesEndpointUnavailableError):
+        client.list_workspaces(SecretStr("tok"))
+    assert state["calls"] == 1
+
+
+# -- Modal 303 long-request redirects --
+#
+# The connector is a Modal web function: a synchronous request that runs long
+# is answered with ``303 See Other`` pointing at an attempt-token URL the
+# client must GET to fetch the eventual result. Every call path must follow
+# it, or a slow-but-successful operation reads as a failure.
+
+
+def test_release_host_follows_modal_303_redirect_to_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/hosts/db-1/release":
+            assert request.method == "POST"
+            return httpx.Response(303, headers={"Location": "/attempts/tok-303"})
+        assert request.url.path == "/attempts/tok-303"
+        assert request.method == "GET"
+        return httpx.Response(200, json={"status": "released"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    # A slow release that Modal parked behind an attempt URL still reads as
+    # success -- before follow_redirects the bare 303 raised here.
+    client.release_host(SecretStr("tok"), "db-1")
+    assert seen_paths == ["/hosts/db-1/release", "/attempts/tok-303"]
+
+
+def test_send_follows_modal_303_redirect_to_result() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/workspaces/00000000-0000-0000-0000-000000000042":
+            return httpx.Response(303, headers={"Location": "/attempts/tok-303"})
+        assert request.url.path == "/attempts/tok-303"
+        assert request.method == "GET"
+        return httpx.Response(200, json=_workspace_entry("running"))
+
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"), transport=httpx.MockTransport(handler))
+    workspace = client.get_workspace(SecretStr("tok"), "00000000-0000-0000-0000-000000000042")
+    assert workspace.status == WorkspaceStatus.RUNNING
+    assert seen_paths == ["/workspaces/00000000-0000-0000-0000-000000000042", "/attempts/tok-303"]
+
+
+def test_every_module_level_httpx_call_in_client_follows_redirects() -> None:
+    """The client mixes ``_send``-routed calls with direct module-level httpx
+    calls, so "every connector call follows redirects" holds only if each
+    direct call site carries the flag itself. A new endpoint written in the
+    direct-call style without it would silently reintroduce the 303 bug for
+    that endpoint, so pin the invariant over the module source."""
+    tree = ast.parse(inspect.getsource(connector_client_module))
+    lines_missing_follow_redirects: list[int] = []
+    checked_call_count = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_module_level_httpx_verb = (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "httpx"
+            and func.attr in ("get", "post", "put", "delete")
+        )
+        if not is_module_level_httpx_verb:
+            continue
+        checked_call_count += 1
+        if "follow_redirects" not in {keyword.arg for keyword in node.keywords}:
+            lines_missing_follow_redirects.append(node.lineno)
+    # A floor well below the current count, purely to prove the scan matched
+    # real call sites rather than passing vacuously after a refactor.
+    assert checked_call_count >= 5
+    assert lines_missing_follow_redirects == []
+
+
 # -- Workspace sync methods --
 
 
@@ -849,10 +1058,10 @@ def test_list_sync_records_keeps_the_server_destroyed_at_stamp(monkeypatch: pyte
     assert records[0].destroyed_at == "2026-07-01T00:00:00+00:00"
 
 
-def test_put_sync_record_returns_stored_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_put_sync_record_uses_the_workspace_keyed_route(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "PUT"
-        assert request.url.path == "/sync/records/host-1"
+        assert request.url.path == "/sync/records/by-workspace/agent-1"
         body = _json.loads(request.content)
         assert body["revision"] == 1
         return httpx.Response(200, json=_sync_record_json())
@@ -860,6 +1069,59 @@ def test_put_sync_record_returns_stored_row(monkeypatch: pytest.MonkeyPatch) -> 
     client = _install_mock_httpx(monkeypatch, handler)
     stored = client.put_sync_record(SecretStr("tok"), SyncWorkspaceRecord.model_validate(_sync_record_json()))
     assert stored.revision == 1
+
+
+def test_put_sync_record_falls_back_to_the_host_route_on_an_older_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path.startswith("/sync/records/by-workspace/"):
+            return httpx.Response(404, json={"detail": "Not Found"})
+        return httpx.Response(200, json=_sync_record_json())
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    stored = client.put_sync_record(SecretStr("tok"), SyncWorkspaceRecord.model_validate(_sync_record_json()))
+    assert stored.revision == 1
+    assert seen_paths == ["/sync/records/by-workspace/agent-1", "/sync/records/host-1"]
+
+
+def test_delete_sync_record_by_workspace_uses_the_workspace_keyed_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        return httpx.Response(200, json={"status": "deleted"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.delete_sync_record_by_workspace(SecretStr("tok"), "agent-1")
+    assert calls == [("DELETE", "/sync/records/by-workspace/agent-1")]
+
+
+def test_delete_sync_record_by_workspace_falls_back_via_the_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.method == "DELETE" and request.url.path.startswith("/sync/records/by-workspace/"):
+            return httpx.Response(404, json={"detail": "Not Found"})
+        if request.method == "GET" and request.url.path == "/sync/records":
+            return httpx.Response(200, json={"records": [_sync_record_json()]})
+        return httpx.Response(200, json={"status": "deleted"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.delete_sync_record_by_workspace(SecretStr("tok"), "agent-1")
+    assert calls == [
+        ("DELETE", "/sync/records/by-workspace/agent-1"),
+        ("GET", "/sync/records"),
+        ("DELETE", "/sync/records/host-1"),
+    ]
 
 
 def test_put_sync_record_conflict_carries_stored_row(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1098,6 +1360,7 @@ def test_create_share_parses_token_and_domain(monkeypatch: pytest.MonkeyPatch) -
                 "region": "us1",
                 "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
                 "relay_token": "secret-relay-token",
+                "chrome_origin": "https://minds.example.com",
             },
         )
 
@@ -1112,6 +1375,30 @@ def test_create_share_parses_token_and_domain(monkeypatch: pytest.MonkeyPatch) -
     assert info.relay_endpoints[0].relay_id == "relay-" + "1" * 16
     assert info.relay_token is not None
     assert info.relay_token.get_secret_value() == "secret-relay-token"
+    assert info.chrome_origin == "https://minds.example.com"
+
+
+def test_create_share_defaults_chrome_origin_to_none_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A connector that predates the field (or a tier with no hosted chrome)
+    # sends nothing; callers use None to fall back to the connector origin.
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "relay_endpoints": [],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID)
+
+    assert info.chrome_origin is None
 
 
 def test_create_share_sends_preferred_region(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1134,6 +1421,34 @@ def test_create_share_sends_preferred_region(monkeypatch: pytest.MonkeyPatch) ->
     info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID, preferred_region="us2")
 
     assert info.region == "us2"
+
+
+def test_create_share_sends_workspace_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace_id = "agent-" + "c" * 32
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shares"
+        # The workspace id must ride the body: dropping it silently downgrades
+        # the share to the legacy host-keyed flow (host-id-led domain that
+        # does not follow the workspace across machines).
+        assert _json.loads(request.content) == {"host_id": _SHARE_HOST_ID, "workspace_id": workspace_id}
+        return httpx.Response(
+            200,
+            json={
+                "host_id": _SHARE_HOST_ID,
+                "workspace_id": workspace_id,
+                "workspace_domain": _SHARE_DOMAIN,
+                "region": "us1",
+                "relay_endpoints": [{"relay_id": "relay-" + "1" * 16, "endpoint": "relay-us1.infra.imbue.com:7000"}],
+                "relay_token": "secret-relay-token",
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+
+    info = client.create_share(SecretStr("tok"), _SHARE_HOST_ID, workspace_id=workspace_id)
+
+    assert info.workspace_domain == _SHARE_DOMAIN
 
 
 def test_list_share_relays_parses(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1392,7 +1707,7 @@ def test_auth_device_token_maps_404_to_a_too_old_connector_error() -> None:
         return httpx.Response(404, json={"detail": "Not Found"})
 
     client = _make_transport_client(handler)
-    with pytest.raises(ImbueCloudAuthError, match="minds env deploy"):
+    with pytest.raises(ImbueCloudAuthError, match="minds-admin env deploy"):
         client.auth_device_token(code="c", code_verifier="v", redirect_uri="http://127.0.0.1:1/callback")
 
 
@@ -1581,3 +1896,174 @@ def test_admin_abandon_workspace_posts_reason_with_admin_key(monkeypatch: pytest
     assert seen["path"] == "/admin/workspaces/00000000-0000-0000-0000-000000000042/abandon"
     assert seen["auth"] == "Bearer adminkey"
     assert seen["body"] == {"reason": "box died"}
+
+
+def test_admin_release_workspace_posts_with_admin_key_and_returns_the_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"status": "released"})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    status = client.admin_release_workspace(SecretStr("adminkey"), "00000000-0000-0000-0000-000000000043")
+
+    assert status == "released"
+    assert seen["path"] == "/admin/workspaces/00000000-0000-0000-0000-000000000043/release"
+    assert seen["auth"] == "Bearer adminkey"
+
+
+def test_admin_run_lease_record_sweep_passes_dry_run_and_grace_as_query_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["query"] = dict(request.url.params)
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"status": "completed", "result": {"dry_run": True}})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    result = client.admin_run_lease_record_sweep(SecretStr("adminkey"), dry_run=True, grace_seconds=0.0)
+
+    assert result["result"] == {"dry_run": True}
+    assert seen["path"] == "/admin/sweep/lease-records"
+    assert seen["query"] == {"dry_run": "1", "grace_seconds": "0.0"}
+    assert seen["auth"] == "Bearer adminkey"
+
+
+def test_every_request_carries_the_client_identification_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen_headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers)
+        return httpx.Response(200, json=[])
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+    client.list_hosts(SecretStr("token"))
+    client.auth_forgot_password("a@b.com")
+
+    assert len(seen_headers) == 2
+    for headers in seen_headers:
+        identifier = headers.get(CLIENT_ID_HEADER)
+        assert identifier is not None and "imbue-cloud-plugin/" in identifier
+        assert headers.get("user-agent") == identifier
+
+
+def test_http_426_raises_the_typed_client_too_old_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            426,
+            json={
+                "detail": {
+                    "code": "client_too_old",
+                    "min_version": "0.4.0",
+                    "sunset_date": "2026-10-01",
+                    "message": "This app version is no longer supported; please update it.",
+                }
+            },
+        )
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+
+    with pytest.raises(ImbueCloudClientTooOldError) as exc_info:
+        client.get_account(SecretStr("token"))
+    assert exc_info.value.min_version == "0.4.0"
+    assert exc_info.value.sunset_date == "2026-10-01"
+
+
+def test_record_push_maps_the_format_conflict_to_its_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={"detail": {"code": "record_format_too_new", "message": "update the app to modify it", "stored": {}}},
+        )
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+    record = SyncWorkspaceRecord(
+        host_id="host-1", agent_id="agent-1", provider_kind="lima", state="active", revision=2
+    )
+
+    with pytest.raises(ImbueCloudRecordFormatTooNewError) as exc_info:
+        client.put_sync_record(SecretStr("token"), record)
+    # The typed error carries the connector's human message alone, not the
+    # repr of the whole detail dict (stored row included).
+    assert str(exc_info.value) == "update the app to modify it"
+
+
+def test_listing_with_every_entry_unparseable_raises_instead_of_reporting_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"unrelated": 1}, {"unrelated": 2}])
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+
+    with pytest.raises(ImbueCloudConnectorError, match="refusing to report an empty listing"):
+        client.list_workspaces(SecretStr("token"))
+
+
+def test_workspace_with_unrecognized_status_coerces_to_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    entry = {
+        "host_db_id": "00000000-0000-0000-0000-000000000001",
+        "status": "migrating",
+        "agent_id": "agent-1",
+        "host_id": "host-1",
+        "host_name": "ws",
+        "added_by_a_newer_server": True,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[entry])
+
+    _install_fake_transport(monkeypatch, handler)
+    client = ImbueCloudConnectorClient(base_url=AnyUrl("https://example.com"))
+
+    workspaces = client.list_workspaces(SecretStr("token"))
+
+    assert len(workspaces) == 1
+    assert workspaces[0].status is WorkspaceStatus.UNKNOWN
+
+
+def test_admin_suspension_endpoints_hit_the_right_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _json.loads(request.content) if request.content else None
+        seen.append((request.method, request.url.path, body))
+        return httpx.Response(200, json={"status": "ok", "steps": {}})
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    client.admin_revoke_sessions(SecretStr("adm"), "alice@imbue.com")
+    client.admin_suspend_account(SecretStr("adm"), "alice@imbue.com", "abuse", block_storage=True)
+    client.admin_unsuspend_account(SecretStr("adm"), "alice@imbue.com")
+    client.admin_stop_workspace(SecretStr("adm"), "11111111-2222-3333-4444-555566667777")
+    assert seen == [
+        ("POST", "/admin/accounts/alice@imbue.com/revoke-sessions", None),
+        ("POST", "/admin/accounts/alice@imbue.com/suspend", {"reason": "abuse", "block_storage": True}),
+        ("POST", "/admin/accounts/alice@imbue.com/unsuspend", None),
+        ("POST", "/admin/workspaces/11111111-2222-3333-4444-555566667777/stop", None),
+    ]
+
+
+def test_account_suspended_403_raises_the_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "detail": {
+                    "code": "account_suspended",
+                    "message": "This account is suspended. Contact support@imbue.com.",
+                }
+            },
+        )
+
+    client = _install_mock_httpx(monkeypatch, handler)
+    with pytest.raises(ImbueCloudAccountSuspendedError, match="support@imbue.com"):
+        client.auth_device_token("code-1", "verifier-1", "http://127.0.0.1:1234/callback")

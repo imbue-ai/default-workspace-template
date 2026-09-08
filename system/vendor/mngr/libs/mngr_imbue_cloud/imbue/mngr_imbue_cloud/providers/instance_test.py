@@ -3,16 +3,19 @@
 import json
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Event
 from typing import Any
 from typing import cast
 
 import httpx
 import pytest
+from loguru import logger
 from pydantic import AnyUrl
 from pydantic import Field
 from pydantic import SecretStr
@@ -21,6 +24,7 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import HostAuthenticationError
 from imbue.mngr.errors import HostNotFoundError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import ProviderUnavailableError
@@ -44,22 +48,25 @@ from imbue.mngr.providers.ssh_utils import format_as_known_hosts_address
 from imbue.mngr_imbue_cloud.config import ImbueCloudProviderConfig
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_imbue_cloud.data_types import LeaseAttributes
-from imbue.mngr_imbue_cloud.data_types import LeasedHostInfo
-from imbue.mngr_imbue_cloud.data_types import WorkspaceInfo
 from imbue.mngr_imbue_cloud.errors import FastPathUnavailableError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudAuthError
 from imbue.mngr_imbue_cloud.errors import ImbueCloudConnectorError
+from imbue.mngr_imbue_cloud.errors import ImbueCloudUnreachableError
+from imbue.mngr_imbue_cloud.errors import UnrecognizedWorkspaceStatusError
 from imbue.mngr_imbue_cloud.errors import WorkspaceStartFailedError
 from imbue.mngr_imbue_cloud.hosts.host import ImbueCloudHost
 from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
 from imbue.mngr_imbue_cloud.primitives import LeaseDbId
-from imbue.mngr_imbue_cloud.primitives import WorkspaceStatus
 from imbue.mngr_imbue_cloud.providers.instance import ImbueCloudProvider
 from imbue.mngr_imbue_cloud.providers.instance import WORKSPACE_HOST_STATE_BY_STATUS
+from imbue.mngr_imbue_cloud.providers.instance import _WorkspaceStartPollState
+from imbue.mngr_imbue_cloud.providers.instance import _advance_workspace_start
 from imbue.mngr_imbue_cloud.providers.instance import _read_first_existing_host_record
-from imbue.mngr_imbue_cloud.providers.instance import _read_workspace_start_outcome
 from imbue.mngr_imbue_cloud.providers.instance import _resolve_fast_path_attributes
 from imbue.mngr_imbue_cloud.providers.instance import leased_info_from_workspace
+from imbue.mngr_imbue_cloud.wire_types import LeasedHostInfo
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceInfo
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
 from imbue.mngr_vps.container_setup import RUNNING_CONTAINER_STATE
 
 
@@ -576,6 +583,81 @@ def test_list_leased_hosts_preserves_auth_error() -> None:
         provider._list_leased_hosts_cached()
 
 
+def test_list_leased_hosts_maps_exhausted_transport_retries_to_provider_unavailable() -> None:
+    """When the client's bounded transport retry is exhausted, the typed unreachable
+    error surfaces exactly like a raw transport failure: as ProviderUnavailableError
+    (the retry-not-restart signal)."""
+    provider = _make_discovery_provider(ImbueCloudUnreachableError("could not reach the imbue_cloud connector"))
+
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        provider._list_leased_hosts_cached()
+
+    assert exc_info.value.provider_name == ProviderInstanceName("imbue-cloud-test")
+    assert "docker" not in (exc_info.value.user_help_text or "").lower()
+
+
+def test_list_leased_hosts_preserves_connector_status_error() -> None:
+    """A connector *status* error (a response arrived, e.g. a 5xx) keeps its own
+    type -- only transport-unreachable failures become ProviderUnavailableError."""
+    provider = _make_discovery_provider(ImbueCloudConnectorError("Connector error 500: boom"))
+
+    with pytest.raises(ImbueCloudConnectorError) as exc_info:
+        provider._list_leased_hosts_cached()
+    assert not isinstance(exc_info.value, ImbueCloudUnreachableError)
+
+
+class _ListWorkspacesClient:
+    """Stub connector client whose ``list_workspaces`` raises a preset exception."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def list_workspaces(self, access_token: SecretStr) -> list[WorkspaceInfo]:
+        raise self._error
+
+
+class _WorkspacesDiscoveryProvider(ImbueCloudProvider):
+    """Provider stub isolating ``_list_workspaces_cached``'s connector failure modes."""
+
+    def _require_account(self, override: str | None = None) -> ImbueCloudAccount:
+        return ImbueCloudAccount("user@example.com")
+
+    def _get_access_token(self, account: ImbueCloudAccount) -> SecretStr:
+        return SecretStr("token")
+
+
+def _make_workspaces_discovery_provider(list_workspaces_error: Exception) -> _WorkspacesDiscoveryProvider:
+    return _WorkspacesDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        client=_ListWorkspacesClient(list_workspaces_error),
+    )
+
+
+def test_list_workspaces_cached_maps_transport_failure_to_provider_unavailable() -> None:
+    provider = _make_workspaces_discovery_provider(httpx.ReadTimeout("timed out"))
+
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        provider._list_workspaces_cached()
+    assert exc_info.value.provider_name == ProviderInstanceName("imbue-cloud-test")
+
+
+def test_list_workspaces_cached_maps_exhausted_transport_retries_to_provider_unavailable() -> None:
+    provider = _make_workspaces_discovery_provider(
+        ImbueCloudUnreachableError("could not reach the imbue_cloud connector")
+    )
+
+    with pytest.raises(ProviderUnavailableError) as exc_info:
+        provider._list_workspaces_cached()
+    assert exc_info.value.provider_name == ProviderInstanceName("imbue-cloud-test")
+
+
+def test_list_workspaces_cached_preserves_auth_error() -> None:
+    provider = _make_workspaces_discovery_provider(ImbueCloudAuthError("Unauthenticated (401)"))
+
+    with pytest.raises(ImbueCloudAuthError):
+        provider._list_workspaces_cached()
+
+
 class _HostSshInfoProvider(_NoWorkspacesMixin, ImbueCloudProvider):
     """Provider stub that returns a fixed discovered host, isolating the ``host_ssh_infos``
     attachment in ``discover_hosts_and_agents_within_timeouts`` from the outer-SSH machinery."""
@@ -713,6 +795,252 @@ def test_discover_hosts_and_agents_carries_agent_labels_as_certified_data(temp_m
     assert discovered_agent.certified_data == agent_data
     # The label filter the minds forward applies reads through the ``labels`` property.
     assert discovered_agent.labels["is_primary"] == "true"
+
+
+class _MultiHostDiscoveryProvider(_NoWorkspacesMixin, ImbueCloudProvider):
+    """Provider stub with per-lease outer-listing behavior, isolating the parallel
+    fan-out in ``discover_hosts_and_agents`` across several leased hosts at once.
+
+    A host missing from ``_raw_by_host_id`` simulates an outer-SSH failure for
+    that host (returns ``(None, ..., False)``, the same shape a real unreachable
+    box produces). ``_delay_seconds`` simulates each host's outer-SSH round trip
+    taking real wall time, for the wall-clock-bound test below.
+    """
+
+    _leases: list[LeasedHostInfo] = []
+    _raw_by_host_id: dict[HostId, Mapping[str, Any]] = {}
+    _delay_seconds: float = 0.0
+
+    def _list_leased_hosts_cached(self) -> list[LeasedHostInfo]:
+        return list(self._leases)
+
+    def _collect_listing_raw_via_outer(self, lease: LeasedHostInfo) -> tuple[dict[str, Any] | None, str | None, bool]:
+        if self._delay_seconds:
+            # An Event that nothing ever sets, waited on with a timeout, blocks the
+            # calling thread for the timeout -- the codebase's idiom for a bounded
+            # wait in a test (see mngr_caller_test.py) instead of a bare time.sleep.
+            Event().wait(timeout=self._delay_seconds)
+        raw = self._raw_by_host_id.get(HostId(lease.host_id))
+        if raw is None:
+            return None, "simulated outer SSH failure", False
+        return dict(raw), None, False
+
+
+def _running_raw() -> dict[str, Any]:
+    return {
+        "container_state": RUNNING_CONTAINER_STATE,
+        "certified_data": {"image": "some-image"},
+        "agents": [],
+    }
+
+
+# this tests: IF 6 hosts each take 0.4s to check
+# THEN: the whole call takes about 0.4s, not 2.4s -- they run at the same time, not one after another
+def test_discover_hosts_and_agents_fans_out_across_hosts_in_parallel(temp_mngr_ctx: MngrContext) -> None:
+    """N leased hosts finish in about one host's delay, not N times that.
+
+    This is the property a sequential per-host loop was missing (MIND-230):
+    wall time scaled with fleet size until, on a 13-workspace account, it broke
+    every 30-second-budgeted caller of this discovery path. This test fails
+    against the old sequential implementation and should keep failing if a
+    future change accidentally reverts to it.
+    """
+    host_count = 6
+    per_host_delay_seconds = 0.4
+    margin_multiplier = 3
+    leases = [_make_lease(HostId.generate()) for _ in range(host_count)]
+    provider = _MultiHostDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _leases=leases,
+        _raw_by_host_id={HostId(lease.host_id): _running_raw() for lease in leases},
+        _delay_seconds=per_host_delay_seconds,
+    )
+
+    started_at = time.monotonic()
+    agents_by_host = provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+    elapsed_seconds = time.monotonic() - started_at
+
+    assert len(agents_by_host) == host_count
+    # Sequential would take host_count * per_host_delay_seconds (2.4s here).
+    # The threshold (3x one host's delay, under the pytest-timeout module's
+    # 10s default) leaves generous room for CI scheduling noise while still
+    # failing hard against a regression to the sequential loop.
+    assert elapsed_seconds < per_host_delay_seconds * margin_multiplier, (
+        f"took {elapsed_seconds:.2f}s for {host_count} hosts at {per_host_delay_seconds}s each -- "
+        "looks sequential, not parallel"
+    )
+
+
+# this tests: IF 4 hosts answer fine and 1 host fails, all checked at the same time
+# THEN: the 4 good hosts still come back correct -- one host's failure doesn't spoil the others
+def test_discover_hosts_and_agents_isolates_one_hosts_failure_under_concurrency(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """A host whose outer SSH fails falls back to its lease-only stub without
+    affecting the other hosts' results, even when every host is resolved
+    concurrently (not just when they run one at a time, as the old sequential
+    loop's tests only ever exercised)."""
+    ok_leases = [_make_lease(HostId.generate()) for _ in range(4)]
+    failing_lease = _make_lease(HostId.generate())
+    provider = _MultiHostDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _leases=[*ok_leases, failing_lease],
+        _raw_by_host_id={HostId(lease.host_id): _running_raw() for lease in ok_leases},
+    )
+
+    agents_by_host = provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+
+    assert len(agents_by_host) == 5
+    failing_host_id = HostId(failing_lease.host_id)
+    failing_host_ref = next(host_ref for host_ref in agents_by_host if host_ref.host_id == failing_host_id)
+    assert failing_host_ref.host_state == HostState.UNKNOWN
+    ok_host_refs = [host_ref for host_ref in agents_by_host if host_ref.host_id != failing_host_id]
+    assert len(ok_host_refs) == 4
+    assert all(host_ref.host_state == HostState.RUNNING for host_ref in ok_host_refs)
+
+
+# this tests: IF 20 hosts are all checked at the same time
+# THEN: every single one's result lands correctly in the shared cache -- none get dropped or overwritten
+def test_discover_hosts_and_agents_caches_every_hosts_listing_under_concurrency(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """Every concurrently-discovered host's raw listing lands in the shared cache
+    dict under its own host_id.
+
+    A functional-correctness check, not a proof that ``cache_lock`` specifically
+    is load-bearing: CPython's GIL makes same-size dict writes to distinct keys
+    effectively atomic already, so this test would likely still pass with the
+    lock removed. The lock stays as cheap, correct defensive practice against
+    dict-resize edge cases and any future change to where the GIL is released."""
+    host_count = 20
+    leases = [_make_lease(HostId.generate()) for _ in range(host_count)]
+    raw_by_host_id = {HostId(lease.host_id): _running_raw() for lease in leases}
+    provider = _MultiHostDiscoveryProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _leases=leases,
+        _raw_by_host_id=raw_by_host_id,
+    )
+
+    provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+
+    for lease in leases:
+        host_id = HostId(lease.host_id)
+        assert provider._listing_raw_cache[host_id] == raw_by_host_id[host_id]
+
+
+class _LogCapture:
+    """Captures loguru messages and levels for test assertions."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+        self.levels: list[str] = []
+
+    def sink(self, message: Any) -> None:
+        record = message.record
+        self.messages.append(record["message"])
+        self.levels.append(record["level"].name)
+
+
+@contextmanager
+def _capture_logs() -> Iterator[_LogCapture]:
+    """Context manager that installs a loguru sink and yields a _LogCapture."""
+    cap = _LogCapture()
+    handler_id = logger.add(cap.sink, level="TRACE", format="{message}")
+    try:
+        yield cap
+    finally:
+        logger.remove(handler_id)
+
+
+class _AuthFailureOuterProvider(_NoWorkspacesMixin, ImbueCloudProvider):
+    """Provider stub whose outer-SSH connection always rejects.
+
+    Unlike ``_MultiHostDiscoveryProvider``, this does NOT stub out
+    ``_collect_listing_raw_via_outer`` -- it exercises the real method's
+    ``except HostAuthenticationError`` branch, so the logging that branch does
+    is real logging, not a simulated stand-in for it.
+    """
+
+    _lease: LeasedHostInfo | None = None
+
+    def _list_leased_hosts_cached(self) -> list[LeasedHostInfo]:
+        return [self._lease] if self._lease is not None else []
+
+    @contextmanager
+    def outer_host_for(self, host_id: HostId) -> Iterator[OuterHostInterface | None]:
+        raise HostAuthenticationError("simulated: this machine's key was rejected")
+        # Unreachable: required syntactically to keep this a generator function.
+        yield
+
+
+# this tests: IF a host's real (unstubbed) outer-SSH connection is rejected
+# THEN: the failure is logged at WARNING, not discarded, and the reason is cached for later surfacing
+def test_discover_hosts_and_agents_logs_a_real_outer_ssh_failure(temp_mngr_ctx: MngrContext) -> None:
+    """Verifies the logging/surfacing claim made in PR review discussion end to
+    end, through the real (unstubbed) failure path -- not through a test double
+    that bypasses it, which is what every other failure-path test in this file
+    does for speed and isolation."""
+    host_id = HostId.generate()
+    lease = _make_lease(host_id)
+    provider = _AuthFailureOuterProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        host_dir=Path("/tmp/imbue-cloud-test-host-dir"),
+        _lease=lease,
+    )
+
+    with _capture_logs() as logs:
+        agents_by_host = provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
+
+    warning_messages = [m for m, level in zip(logs.messages, logs.levels, strict=True) if level == "WARNING"]
+    assert any("outer SSH authentication failed" in m for m in warning_messages), logs.messages
+
+    host_ref = next(iter(agents_by_host))
+    assert host_ref.host_state == HostState.UNAUTHENTICATED
+    cached = provider._listing_raw_cache[host_id]
+    assert cached["outer_ssh_is_auth_failure"] is True
+    assert "simulated" in cached["outer_ssh_error"]
+
+
+class _CrashingOuterProvider(_NoWorkspacesMixin, ImbueCloudProvider):
+    """Provider stub whose outer-SSH connection raises something that
+    ``_collect_listing_raw_via_outer`` does NOT catch -- a genuine bug, not an
+    expected host-unreachable/auth-rejected condition."""
+
+    _lease: LeasedHostInfo | None = None
+
+    def _list_leased_hosts_cached(self) -> list[LeasedHostInfo]:
+        return [self._lease] if self._lease is not None else []
+
+    @contextmanager
+    def outer_host_for(self, host_id: HostId) -> Iterator[OuterHostInterface | None]:
+        raise RuntimeError("simulated: a genuine bug, not an expected SSH failure")
+        # Unreachable: required syntactically to keep this a generator function.
+        yield
+
+
+# this tests: IF a host's check raises something that is not an expected SSH failure (a real bug)
+# THEN: it is never caught and discarded -- it propagates out so nobody has to debug a phantom missing workspace
+def test_discover_hosts_and_agents_does_not_swallow_an_unexpected_exception(temp_mngr_ctx: MngrContext) -> None:
+    """Only HostAuthenticationError/MngrError are treated as expected host
+    failures inside _collect_listing_raw_via_outer. Anything else must fail
+    loud through the concurrent fan-out exactly as it did through the old
+    sequential loop -- catching and discarding it here would turn a real bug
+    into a workspace that silently vanishes from `mngr list`."""
+    host_id = HostId.generate()
+    lease = _make_lease(host_id)
+    provider = _CrashingOuterProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        host_dir=Path("/tmp/imbue-cloud-test-host-dir"),
+        _lease=lease,
+    )
+
+    with pytest.raises(RuntimeError, match="simulated: a genuine bug"):
+        provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group)
 
 
 def test_ensure_host_key_pinned_does_not_clobber_a_recorded_key(temp_mngr_ctx: MngrContext) -> None:
@@ -1279,48 +1607,120 @@ class _CannedWorkspaceClient(ImbueCloudConnectorClient):
     """Connector-client stub whose ``get_workspace`` returns a canned workspace (no HTTP)."""
 
     canned_workspace: WorkspaceInfo
+    start_request_count: int = 0
 
     def get_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceInfo:
         return self.canned_workspace
 
+    def start_workspace(self, access_token: SecretStr, host_db_id: str) -> WorkspaceStatus:
+        self.start_request_count = self.start_request_count + 1
+        return WorkspaceStatus.STARTING
 
-def test_read_workspace_start_outcome_distinguishes_terminal_statuses() -> None:
-    host_id = HostId("host-" + "a" * 32)
 
-    def outcome_for(workspace: WorkspaceInfo) -> WorkspaceInfo | Exception | None:
-        client = _CannedWorkspaceClient(base_url=AnyUrl("https://example.com"), canned_workspace=workspace)
-        return _read_workspace_start_outcome(
-            client,
-            SecretStr("tok"),
-            "00000000-0000-0000-0000-0000000000aa",
-            host_id,
-        )
+def _advance_once(
+    workspace: WorkspaceInfo, state: _WorkspaceStartPollState, token_calls: list[int] | None = None
+) -> tuple[WorkspaceInfo | Exception | None, "_CannedWorkspaceClient"]:
+    client = _CannedWorkspaceClient(base_url=AnyUrl("https://example.com"), canned_workspace=workspace)
 
+    def token_provider() -> SecretStr:
+        if token_calls is not None:
+            token_calls.append(1)
+        return SecretStr("tok")
+
+    outcome = _advance_workspace_start(
+        client,
+        token_provider,
+        "00000000-0000-0000-0000-0000000000aa",
+        HostId("host-" + "a" * 32),
+        state,
+    )
+    return outcome, client
+
+
+def test_advance_workspace_start_distinguishes_terminal_statuses() -> None:
     # Running: success, the workspace itself comes back.
-    running = outcome_for(_make_workspace_info("running"))
+    running, _client = _advance_once(_make_workspace_info("running"), _WorkspaceStartPollState())
     assert isinstance(running, WorkspaceInfo)
 
-    # Stopped: the start failed server-side; the recorded error surfaces.
-    stopped = outcome_for(_make_workspace_info("stopped", with_placement=False, transition_error="no capacity"))
+    # Stopped after our start request: the start failed server-side; the
+    # recorded error surfaces.
+    stopped, _client = _advance_once(
+        _make_workspace_info("stopped", with_placement=False, transition_error="no capacity"),
+        _WorkspaceStartPollState(is_start_requested=True),
+    )
     assert isinstance(stopped, WorkspaceStartFailedError)
     assert "no capacity" in str(stopped)
 
     # Crashed (operator abandon mid-start): terminal failure, not a 20-minute
     # poll-until-timeout; the message carries the reason and the recovery path.
-    crashed = outcome_for(_make_workspace_info("crashed", with_placement=False, transition_error="box died"))
+    crashed, _client = _advance_once(
+        _make_workspace_info("crashed", with_placement=False, transition_error="box died"),
+        _WorkspaceStartPollState(),
+    )
     assert isinstance(crashed, WorkspaceStartFailedError)
     assert "box died" in str(crashed)
     assert "backup" in str(crashed)
 
-    # In-flight statuses keep the poll going.
-    assert outcome_for(_make_workspace_info("starting", with_placement=False)) is None
-    assert outcome_for(_make_workspace_info("stopping")) is None
+    # An in-flight start keeps the poll going.
+    starting, _client = _advance_once(
+        _make_workspace_info("starting", with_placement=False), _WorkspaceStartPollState(is_start_requested=True)
+    )
+    assert starting is None
 
 
-def test_workspace_host_state_mapping_shows_stopping_as_stopped() -> None:
-    # A stopping workspace's VM is already down; the in-flight upload is
-    # invisible plumbing, so users see STOPPED immediately.
-    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STOPPING] == HostState.STOPPED
+def test_advance_workspace_start_requests_the_start_once_the_stop_lands() -> None:
+    # Still stopping: wait it out (the connector refuses starts mid-stop);
+    # no start request is issued yet.
+    state = _WorkspaceStartPollState()
+    outcome, client = _advance_once(_make_workspace_info("stopping"), state)
+    assert outcome is None
+    assert client.start_request_count == 0
+    assert state.is_start_requested is False
+
+    # Stopped: the probe itself issues the start request, exactly once.
+    outcome_after_stop, client_after_stop = _advance_once(_make_workspace_info("stopped", with_placement=False), state)
+    assert outcome_after_stop is None
+    assert client_after_stop.start_request_count == 1
+    assert state.is_start_requested is True
+
+
+def test_advance_workspace_start_surfaces_an_old_connector_bounce_to_stopping() -> None:
+    # Only an old connector lands a failed in-window restart back on
+    # stopping; the recorded reason must surface within one poll cycle
+    # instead of burning the rest of the window into a generic timeout.
+    bounced, _client = _advance_once(
+        _make_workspace_info("stopping", transition_error="Error reading SSH protocol banner"),
+        _WorkspaceStartPollState(is_start_requested=True),
+    )
+    assert isinstance(bounced, WorkspaceStartFailedError)
+    assert "SSH protocol banner" in str(bounced)
+
+
+def test_advance_workspace_start_fetches_a_token_every_probe() -> None:
+    # The token is fetched per probe (refresh-near-expiry runs inside the
+    # provider's token helper), so a poll outliving the token's remaining
+    # validity keeps authenticating.
+    state = _WorkspaceStartPollState()
+    token_calls: list[int] = []
+    _advance_once(_make_workspace_info("starting", with_placement=False), state, token_calls)
+    _advance_once(_make_workspace_info("starting", with_placement=False), state, token_calls)
+    assert len(token_calls) == 2
+
+
+def test_advance_workspace_start_records_the_last_observed_status_and_error() -> None:
+    # The poll state feeds the timeout message, so a start that never
+    # converges names the real recorded reason instead of a bare timeout.
+    state = _WorkspaceStartPollState()
+    _advance_once(_make_workspace_info("stopping", transition_error="box unreachable"), state)
+    assert state.last_observed_status is WorkspaceStatus.STOPPING
+    assert state.last_transition_error == "box unreachable"
+
+
+def test_workspace_host_state_mapping_is_literal_for_every_status() -> None:
+    # A stopping workspace is genuinely mid-stop (upload in flight; the
+    # connector refuses starts until it lands on stopped), so it must not
+    # render as an already-startable STOPPED.
+    assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STOPPING] == HostState.STOPPING
     assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STOPPED] == HostState.STOPPED
     assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.STARTING] == HostState.STARTING
     assert WORKSPACE_HOST_STATE_BY_STATUS[WorkspaceStatus.CRASHED] == HostState.CRASHED
@@ -1328,6 +1728,22 @@ def test_workspace_host_state_mapping_shows_stopping_as_stopped() -> None:
     for status in WorkspaceStatus:
         if status != WorkspaceStatus.RUNNING:
             assert status in WORKSPACE_HOST_STATE_BY_STATUS
+
+
+def test_start_refuses_a_workspace_whose_status_this_client_does_not_recognize() -> None:
+    """A wire status coerced to UNKNOWN (a newer server) refuses the start with the update remedy.
+
+    The refusal fires before any account/token resolution, so a bare provider
+    suffices: driving a lifecycle transition from an unintelligible state
+    would act blindly, and the accurate remedy is updating the app.
+    """
+    provider = ImbueCloudProvider.model_construct(name=ProviderInstanceName("imbue-cloud-test"))
+    # "migrating" is not in this client's vocabulary; the WireEnum coerces it.
+    workspace = _make_workspace_info("migrating")
+    assert workspace.status is WorkspaceStatus.UNKNOWN
+
+    with pytest.raises(UnrecognizedWorkspaceStatusError, match="update the app"):
+        provider._start_workspace_and_wait(HostId.generate(), workspace)
 
 
 _VM_USER_KEY = "ssh-ed25519 AAAAVMUSER rotated-vm-host-key"
@@ -1469,3 +1885,47 @@ def test_move_host_pins_is_a_noop_without_persisted_lease_meta(tmp_path: Path, t
     record = load_host_key_record(known_hosts, host_id)
     assert record is not None
     assert [(pin.address, pin.port) for pin in record.pins] == [("198.51.100.9", 22010)]
+
+
+class _CannedLifecycleProvider(ImbueCloudProvider):
+    """Provider stub whose lifecycle listing reports canned non-running workspaces and no leases."""
+
+    _workspaces: list[WorkspaceInfo] = []
+
+    def _list_leased_hosts_cached(self) -> list[LeasedHostInfo]:
+        return []
+
+    def _list_workspaces_cached(self) -> list[WorkspaceInfo] | None:
+        return list(self._workspaces)
+
+
+def test_stopped_workspace_never_listed_here_is_discovered_as_a_labelled_services_agent(
+    temp_mngr_ctx: MngrContext,
+) -> None:
+    """A stopped workspace this install has no cached agents for still surfaces its primary agent.
+
+    The pool row's agent is the pre-baked ``system-services`` agent, so the
+    stub carries that name and the ``is_primary`` label; a bare, label-less stub
+    would be dropped by every consumer that recognizes a workspace by the label,
+    making a stopped workspace vanish from the workspace list.
+    """
+    host_id = HostId.generate()
+    workspace = _make_workspace_info("stopped", with_placement=False)
+    stopped_workspace = workspace.model_copy_update(
+        to_update(workspace.field_ref().host_id, str(host_id)),
+        to_update(workspace.field_ref().agent_id, str(AgentId.generate())),
+    )
+    provider = _CannedLifecycleProvider.model_construct(
+        name=ProviderInstanceName("imbue-cloud-test"),
+        mngr_ctx=temp_mngr_ctx,
+        _workspaces=[stopped_workspace],
+    )
+
+    host_ref, agents = _only_entry(provider.discover_hosts_and_agents(cg=temp_mngr_ctx.concurrency_group))
+
+    assert host_ref.host_state == HostState.STOPPED
+    assert [str(agent.agent_id) for agent in agents] == [stopped_workspace.agent_id]
+    assert str(agents[0].agent_name) == "system-services"
+    assert agents[0].labels == {"is_primary": "true"}
+    # A stub is a live statement about the row, not a replayed cache entry.
+    assert "stale" not in agents[0].certified_data

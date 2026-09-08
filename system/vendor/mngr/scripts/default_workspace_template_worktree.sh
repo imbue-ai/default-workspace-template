@@ -91,14 +91,15 @@ git -C "$dest" checkout -q -b "$branch" "$base"
 # container can never inherit these values (creation clones the branch, and
 # this file is never committed).
 #
-# system/vendor/mngr is exempted from the clean-tree gate: `just minds-start`
-# (and `sync-vendor-mngr-rsync` / `propagate-changes`) rsync the live mngr tree
-# into that tracked subtree, deliberately leaving thousands of uncommitted
-# files behind, and that machine-generated state is byte-identical to a
-# deliberate revendor -- no gate can tell them apart. Review of that content
-# is owned by the mngr repo (whatever legitimately lands there came from an
-# mngr PR with its own gates), and a DWT PR missing a revendor it depends on
-# fails its own CI. Everything else in the checkout keeps the clean-tree gate.
+# system/vendor/mngr is exempted from the clean-tree gate: `just
+# sync-vendor-mngr-live` (which `just minds-start` runs at launch) and
+# `propagate-changes` rsync the live mngr tree into that tracked subtree,
+# deliberately leaving thousands of uncommitted files behind, and that
+# machine-generated state is byte-identical to a deliberate revendor -- no
+# gate can tell them apart. Review of that content is owned by the mngr repo
+# (whatever legitimately lands there came from an mngr PR with its own gates),
+# and a DWT PR missing a revendor it depends on fails its own CI. Everything
+# else in the checkout keeps the clean-tree gate.
 mkdir -p "$dest/.reviewer"
 cat > "$dest/.reviewer/settings.local.json" <<'REVIEWER_SETTINGS'
 {

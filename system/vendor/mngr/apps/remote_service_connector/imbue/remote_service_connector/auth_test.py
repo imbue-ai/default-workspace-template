@@ -414,3 +414,31 @@ def test_route_invalid_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _make_test_client(monkeypatch)
     resp = client.get("/hosts", headers={"Authorization": "Bearer not-a-valid-jwt!!!"})
     assert resp.status_code == 401
+
+
+def test_authenticate_supertokens_threads_check_database_to_the_session_getter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The D3 knob: state-modifying routes verify sessions against the core, reads stay stateless."""
+    user_id = "a1b2c3d4-e5f6-7890-abcd-1234567890ab"
+    monkeypatch.setenv("SUPERTOKENS_CONNECTION_URI", "https://st.example.com")
+    seen_kwargs: dict[str, object] = {}
+
+    def _capturing_getter(**kwargs: object) -> _FakeSession:
+        seen_kwargs.update(kwargs)
+        return _FakeSession(user_id)
+
+    _authenticate_supertokens(
+        "valid-token",
+        session_getter=_capturing_getter,
+        email_resolver=lambda _user_id: ("alice@example.com", True),
+        check_database=True,
+    )
+    assert seen_kwargs["check_database"] is True
+
+    _authenticate_supertokens(
+        "valid-token",
+        session_getter=_capturing_getter,
+        email_resolver=lambda _user_id: ("alice@example.com", True),
+    )
+    assert seen_kwargs["check_database"] is False

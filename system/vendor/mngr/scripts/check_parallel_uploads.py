@@ -46,13 +46,13 @@ PARALLEL_TIMEOUT_SECONDS = 30
 def get_host(mngr_ctx: MngrContext) -> OnlineHostInterface:
     """Find the 'spica' host and return it."""
     print("  Discovering hosts (modal only)...")
-    agents_by_host, _providers = discover_hosts_and_agents(
+    agents_by_host = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=("modal",),
         agent_identifiers=None,
         include_destroyed=False,
         reset_caches=False,
-    )
+    ).agents_by_host
     print(f"  Discovery complete. Found {len(agents_by_host)} host(s).")
 
     for host_ref in agents_by_host:

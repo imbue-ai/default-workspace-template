@@ -255,8 +255,8 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
       // Forwarded to the Python backend so Sentry tags reports with the desktop
       // app version (release) and the git SHA the build was cut from.
       const { releaseId, gitSha } = getBuildMetadata();
-      // When build.js embedded a client.toml + root_name pair (production
-      // / staging / beta packaged builds), pass --config-file explicitly
+      // When build.js embedded a client.toml + root_name pair (any packaged
+      // build, which today means production or staging), pass --config-file explicitly
       // so the backend doesn't have to fall back to MINDS_CLIENT_CONFIG_PATH.
       // Dev-mode builds (no bundle) inherit MINDS_CLIENT_CONFIG_PATH from
       // the user's activated shell instead; the backend refuses to start
@@ -339,7 +339,12 @@ function startBackend(onProgress, onNotification, onAuthEvent, onMngrForwardStar
         const gitBinDir = paths.getGitBinDir();
         const limaBinDir = paths.getLimaBinDir();
         const desyncBinDir = paths.getDesyncBinDir();
-        const bundledBinDirs = [uvBinDir, gitBinDir, limaBinDir, desyncBinDir];
+        // The shim is first so it shadows /usr/bin/install_name_tool if this
+        // `uv run` is the one that has to fetch the managed CPython.
+        const bundledBinDirs = [
+          ...(process.platform === 'darwin' ? [paths.getUvShimBinDir()] : []),
+          uvBinDir, gitBinDir, limaBinDir, desyncBinDir,
+        ];
         const uvCacheDir = paths.getUvCacheDir();
         const uvPythonDir = paths.getUvPythonDir();
         const pyprojectDir = paths.getPyprojectDir();

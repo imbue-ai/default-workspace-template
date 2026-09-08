@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WireRecord } from "./api";
-import { pushRecordWithCas } from "./records";
+import { pushRecordWithCas, RecordTooNewError } from "./records";
 
 function wireRecord(overrides: Partial<WireRecord>): WireRecord {
   return {
@@ -125,5 +125,60 @@ describe("pushRecordWithCas", () => {
     await expect(
       pushRecordWithCas(stored.host_id, () => wireRecord({})),
     ).rejects.toThrow(/kept conflicting/);
+  });
+});
+
+
+describe("forward compatibility", () => {
+  it("round-trips unknown record fields through a spread-based mutate", async () => {
+    // A newer server added a field this bundle does not know about; the
+    // spread-based mutate pattern must carry it through the push untouched.
+    const stored = {
+      ...wireRecord({ revision: 3 }),
+      added_by_a_newer_server: "must-survive",
+    } as WireRecord;
+    const seen: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+      const pushed = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      seen.push(pushed);
+      return jsonResponse(200, pushed);
+    });
+
+    await pushRecordWithCas(stored.host_id, (latest) => ({
+      ...(latest ?? stored),
+      display_name: "renamed",
+    }));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].added_by_a_newer_server).toBe("must-survive");
+    expect(seen[0].display_name).toBe("renamed");
+  });
+
+  it("refuses to mutate a record whose record_format is too new", async () => {
+    // The first PUT conflicts, handing back a stored row written at a newer
+    // record_format; the retry must refuse instead of rewriting it.
+    const stored = wireRecord({ revision: 5, record_format: 99 });
+    vi.stubGlobal("fetch", async () =>
+      jsonResponse(409, { detail: { message: "revision conflict", stored } }),
+    );
+
+    await expect(
+      pushRecordWithCas(stored.host_id, (latest) => ({
+        ...(latest ?? stored),
+        display_name: "renamed",
+      })),
+    ).rejects.toThrow(RecordTooNewError);
+  });
+
+  it("surfaces the server's record_format_too_new refusal as RecordTooNewError", async () => {
+    vi.stubGlobal("fetch", async () =>
+      jsonResponse(409, {
+        detail: { code: "record_format_too_new", message: "update the app" },
+      }),
+    );
+
+    await expect(
+      pushRecordWithCas(wireRecord({}).host_id, () => wireRecord({})),
+    ).rejects.toThrow(RecordTooNewError);
   });
 });

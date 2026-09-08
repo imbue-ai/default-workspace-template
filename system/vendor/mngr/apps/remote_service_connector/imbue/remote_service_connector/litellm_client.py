@@ -13,9 +13,12 @@ LiteLLM cannot fail an unrelated request.
 import logging
 import os
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
+
+from imbue.modal_app_kit.metrics import emit_metric
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,11 @@ def litellm_request(
     )
     if response.status_code >= 400:
         detail = response.text[:500]
-        logger.warning("LiteLLM API error: %s %s -> %s %s", method, path, response.status_code, detail)
+        # Counted rather than warned: some rejections are routine (e.g.
+        # /user/new for an existing user on every key mint), and the raised
+        # HTTPException already surfaces the genuine failures to the caller.
+        emit_metric("litellm_api_error", 1, {"path": path, "status": str(response.status_code)})
+        logger.info("LiteLLM API error: %s %s -> %s %s", method, path, response.status_code, detail)
         raise HTTPException(status_code=response.status_code, detail="LiteLLM error: {}".format(detail))
     return response
 
@@ -63,6 +70,21 @@ def litellm_request(
 def litellm_base_url_for_agents() -> str:
     """Return the base URL agents should use as ANTHROPIC_BASE_URL."""
     return litellm_proxy_url()
+
+
+def list_litellm_user_key_entries(user_id: str) -> list[Any]:
+    """Return every virtual key LiteLLM holds for the account, as full objects.
+
+    Without ``return_full_object=true`` LiteLLM answers with a bare list of
+    token-id strings; with it, each entry is a dict carrying token / alias /
+    spend / budget. The response is either the list itself or a ``keys``
+    envelope depending on the proxy version, so both shapes are unwrapped
+    here. Entries are returned unfiltered -- callers project what they need
+    and decide how to treat a non-dict entry.
+    """
+    response = litellm_request("GET", "/key/list", params={"user_id": user_id, "return_full_object": "true"})
+    data = response.json()
+    return data if isinstance(data, list) else data.get("keys", [])
 
 
 _LITELLM_USER_BUDGET_DURATION = "1mo"
@@ -108,7 +130,10 @@ def get_litellm_user_spend(
     except (HTTPException, httpx.HTTPError) as exc:
         # HTTPException covers HTTP >= 400 responses and missing proxy config;
         # httpx.HTTPError covers transport failures (proxy unreachable).
-        logger.warning("LiteLLM /user/info for %s failed (%s); reporting zero spend", user_id[:8], exc)
+        # Counts the degraded outcome (spend reported as zero); the HTTP >= 400
+        # path is additionally counted inside litellm_request with its status.
+        emit_metric("litellm_spend_read_failed", 1, {})
+        logger.warning("LiteLLM /user/info for %s failed; reporting zero spend", user_id[:8], exc_info=exc)
         return 0.0, None
     data = response.json()
     info = data.get("user_info") if isinstance(data, dict) else None

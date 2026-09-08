@@ -1,14 +1,24 @@
 import re
+from collections.abc import Mapping
 from enum import auto
 from typing import Final
 from typing import Self
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.ids import RandomId
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
 
 IMBUE_CLOUD_BACKEND_NAME: Final[str] = "imbue_cloud"
+
+# The pre-baked agent every pool host carries, whose id is the pool row's
+# ``agent_id`` and the workspace's durable identity (see ``WorkspaceId``).
+POOL_HOST_SERVICES_AGENT_NAME: Final[str] = "system-services"
+# The agent label minds stamps on that agent and by which every consumer
+# (minds' workspace list, the forward's ``has(agent.labels.is_primary)`` filter)
+# recognizes a workspace's primary agent.
+WORKSPACE_PRIMARY_AGENT_LABEL: Final[str] = "is_primary"
 
 # The minds environment tiers. Every env name maps to exactly one tier, and every
 # bare-metal box belongs to exactly one tier. Tiers are isolated by construction --
@@ -30,16 +40,27 @@ CI_TIER: Final[str] = "ci"
 # was added out of band.
 EXPECTED_AUTHORIZED_KEY_COUNT: Final[int] = 1
 
-# OVH-US datacenters the imbue_cloud host pool can land VPSes in. Used to
-# validate the ``region`` create-path knob client-side (the connector itself
-# accepts any string and simply matches the column). Kept small and explicit on
-# purpose; extend when the pool gains new datacenters.
-KNOWN_OVH_US_REGIONS: Final[frozenset[str]] = frozenset({"US-EAST-VA", "US-WEST-OR"})
+# The OVH-US regions the imbue_cloud host pool can land hosts in (the lease-region
+# labels stamped on pool rows), each mapped to the OVH datacenter code serving it,
+# as used by the OVH order/catalog and ``/dedicated/server/datacenter/availabilities``
+# APIs and stored in ``bare_metal_servers.region``: ``vin`` = Vint Hill,
+# ``hil`` = Hillsboro. The single source for the pairing -- the region/datacenter
+# collections below derive from it. Kept small and explicit on purpose; extend
+# when the pool gains new datacenters.
+OVH_DATACENTER_CODE_BY_US_REGION: Final[Mapping[str, str]] = {"US-EAST-VA": "vin", "US-WEST-OR": "hil"}
 
-# The OVH datacenter codes for those US regions, as used by the OVH order/catalog and
-# ``/dedicated/server/datacenter/availabilities`` APIs and stored in ``bare_metal_servers.region``:
-# ``vin`` = Vint Hill (US-EAST-VA), ``hil`` = Hillsboro (US-WEST-OR).
-OVH_US_DATACENTER_CODES: Final[frozenset[str]] = frozenset({"vin", "hil"})
+# Used to validate the ``region`` create-path knob client-side (the connector
+# itself accepts any string and simply matches the column).
+KNOWN_OVH_US_REGIONS: Final[frozenset[str]] = frozenset(OVH_DATACENTER_CODE_BY_US_REGION)
+
+# The reverse pairing: the lease-region label served by each OVH datacenter code
+# (as stored in ``bare_metal_servers.region``). Derived from the forward map so
+# the two can never disagree.
+US_REGION_BY_OVH_DATACENTER_CODE: Final[Mapping[str, str]] = {
+    datacenter: region for region, datacenter in OVH_DATACENTER_CODE_BY_US_REGION.items()
+}
+
+OVH_US_DATACENTER_CODES: Final[frozenset[str]] = frozenset(OVH_DATACENTER_CODE_BY_US_REGION.values())
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -65,7 +86,7 @@ def tier_for_env_name(env_name: str) -> str:
     ``production`` and ``staging`` are each their own tier; a ``ci-`` prefix marks
     the CI orchestrator's ephemeral envs; every other name (by convention
     ``dev-<user>``) is a dev env. This is the canonical definition --
-    ``imbue.minds.cli._activated_env`` re-exports it rather than keeping a second
+    the minds operator CLI re-exports it rather than keeping a second
     copy, so the box-exclusivity guard and the minds CLI can never disagree about
     which tier an env belongs to.
     """
@@ -84,11 +105,26 @@ def is_box_exclusive_to_tier(*, authorized_key_count: int, foreign_tier_slice_co
 
     The one definition of the rule, so the bake-time guard
     (``assert_box_is_exclusive_to_tier``) and the read-only audit
-    (``admin server list --verify-occupancy``, which tells operators a bake would
+    (``minds-admin server list --verify-occupancy``, which tells operators a bake would
     refuse) can never disagree. A box is exclusive when it authorizes exactly the
     owning tier's pool key and carries no slice stamped for an env in another tier.
     """
     return authorized_key_count == EXPECTED_AUTHORIZED_KEY_COUNT and foreign_tier_slice_count == 0
+
+
+class WorkspaceId(RandomId):
+    """The durable identity of a workspace: the id of its ``system-services`` agent.
+
+    A workspace is the logical unit a user works out of (permissions, apps, data);
+    the machine it currently runs on is a swappable attribute (an mngr host id).
+    No separate id space exists -- the value IS the services agent's ``agent-<32hex>``
+    id -- but workspace-level code types it as ``WorkspaceId`` so a machine id can
+    never be passed where the workspace's identity belongs. The connector
+    cannot import this type (its container ships standalone) and validates
+    the same shape by convention.
+    """
+
+    PREFIX = "agent"
 
 
 class SuperTokensUserId(NonEmptyStr):
@@ -138,23 +174,6 @@ class BareMetalServerStatus(NonEmptyStr):
         return super().__new__(cls, normalized)
 
 
-class WorkspaceStatus(LowerCaseStrEnum):
-    """Wire lifecycle status of a remote workspace (GET /workspaces).
-
-    ``running`` maps from the connector-internal ``leased``. ``stopping``
-    means the VM is halted and its upload is in flight (still restartable in
-    place); ``stopped`` means the artifact is in object storage and the
-    bare-metal slot is freed; ``starting`` means a supervisor is restoring
-    it; ``crashed`` means an operator abandoned it (recover from backup).
-    """
-
-    RUNNING = auto()
-    STOPPING = auto()
-    STOPPED = auto()
-    STARTING = auto()
-    CRASHED = auto()
-
-
 class ImbueCloudKeyType(UpperCaseStrEnum):
     """The class of secret being requested."""
 
@@ -162,11 +181,11 @@ class ImbueCloudKeyType(UpperCaseStrEnum):
 
 
 class PoolHostDestroyOutcomeStatus(LowerCaseStrEnum):
-    """Per-host outcome of an admin pool destroy, as emitted in the JSON report.
+    """Per-host outcome of an operator pool destroy, as emitted in the JSON report.
 
     Lowercase wire values (``destroyed`` / ``skipped_leased`` / ``already_gone`` /
-    ``failed``) -- the format operators and scripts read from ``admin pool destroy``
-    and ``teardown-slices``.
+    ``failed``) -- the format operators and scripts read from
+    ``minds-admin pool destroy`` and ``teardown-slices``.
     """
 
     DESTROYED = auto()
@@ -176,7 +195,7 @@ class PoolHostDestroyOutcomeStatus(LowerCaseStrEnum):
 
 
 class SliceBakeOutcomeStatus(LowerCaseStrEnum):
-    """Per-slice outcome of an admin pool create (bake), as emitted in the JSON report."""
+    """Per-slice outcome of an operator pool bake (``minds-admin pool create``), as emitted in the JSON report."""
 
     SUCCEEDED = auto()
     FAILED = auto()
@@ -222,23 +241,6 @@ FAST_PATH_ADOPTABLE_START_ARGS: Final[frozenset[str]] = frozenset(
         "--restart=unless-stopped",
     }
 )
-
-
-class InvalidR2BucketAccess(ValueError):
-    """Raised when an R2 key access scope is not 'read' or 'readwrite'."""
-
-
-_R2_ACCESS_VALUES: Final[tuple[str, ...]] = ("read", "readwrite")
-
-
-class R2BucketAccess(NonEmptyStr):
-    """Access scope for an R2 bucket key: 'read' or 'readwrite' (lowercase wire form)."""
-
-    def __new__(cls, value: str) -> Self:
-        normalized = value.strip().lower()
-        if normalized not in _R2_ACCESS_VALUES:
-            raise InvalidR2BucketAccess(f"access must be one of {_R2_ACCESS_VALUES}, got '{value}'")
-        return super().__new__(cls, normalized)
 
 
 class R2BucketShortName(NonEmptyStr):

@@ -1,0 +1,1 @@
+Carries the Bugsink error-reporting bring-up for the oauth redirector (sentry-sdk init with the deploy-time-baked `OAUTH_REDIRECTOR_SENTRY_DSN`) via a merge of `mngr/env-tier-sentry`, and inherits the shared `init_sentry` helper's new policy of reporting stdlib `logger.warning` records as warning-level Bugsink events (e.g. the missing-allowlist deploy warning).

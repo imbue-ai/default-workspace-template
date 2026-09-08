@@ -2,12 +2,14 @@
 // pending authorize handoff is marked as user-confirmed.
 
 // Clamp a ?next= value to a same-host path (mirrors the server-side check;
-// anything else falls back to the account page).
+// anything else falls back to the web client -- the product, not the account
+// page. Flows with a real destination (the desktop handoff, share visits,
+// the web chrome's own login links) always pass an explicit next.
 export function sanitizeNextPath(candidate: string | null): string {
   if (candidate && candidate.startsWith("/") && !candidate.startsWith("//") && !candidate.startsWith("/\\")) {
     return candidate;
   }
-  return "/manage";
+  return "/web";
 }
 
 export function isAuthorizeNext(next: string): boolean {

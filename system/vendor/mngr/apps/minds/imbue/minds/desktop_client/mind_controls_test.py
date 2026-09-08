@@ -14,7 +14,7 @@ from pathlib import Path
 
 from flask.testing import FlaskClient
 
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.app import create_desktop_client
 from imbue.minds.desktop_client.auth import FileAuthStore
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
@@ -55,7 +55,7 @@ def _make_client(tmp_path: Path, resolver: MngrCliBackendResolver) -> tuple[Flas
         http_client=None,
         # Mount the /api/v1 surface so the desktop running-workspaces / stop-hosts
         # / state-container routes are reachable with the session cookie.
-        paths=WorkspacePaths(data_dir=tmp_path / "minds"),
+        paths=InstallationPaths(data_dir=tmp_path / "minds"),
     )
     return app.test_client(), auth_store
 
@@ -177,6 +177,53 @@ def test_running_minds_reads_discovery_without_subprocess(tmp_path: Path) -> Non
     assert [entry["id"] for entry in running] == [str(running_agent)]
     # The per-entry shape the Electron quit flow reads: id + human name.
     assert set(running[0].keys()) == {"id", "name"}
+
+
+def test_running_minds_omits_running_cloud_workspaces(tmp_path: Path) -> None:
+    """The quit prompt is about the user's own machine, so cloud minds stay out of it.
+
+    imbue_cloud (like aws / gcp / azure) is shutdown-capable -- its workspace row
+    carries a Start/Stop control -- but a cloud mind goes on running with the app
+    closed, so quitting must not list it as something the user is leaving behind.
+    """
+    cloud_agent = AgentId.generate()
+    local_agent = AgentId.generate()
+    resolver = MngrCliBackendResolver()
+    seed_provider_snapshots(
+        resolver,
+        providers=(
+            _docker_provider(),
+            make_discovered_provider(
+                ProviderInstanceName("imbue_cloud_alice"),
+                ProviderInstanceConfig(backend=ProviderBackendName("imbue_cloud"), is_enabled=True),
+            ),
+        ),
+        error_by_provider_name={},
+        last_snapshot_at=datetime.now(timezone.utc),
+    )
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(cloud_agent, local_agent),
+            discovered_agents=(
+                DiscoveredAgent(
+                    host_id=_HOST_B,
+                    agent_id=cloud_agent,
+                    agent_name=AgentName("ws-agent"),
+                    provider_name=ProviderInstanceName("imbue_cloud_alice"),
+                    certified_data={"labels": {"workspace": "geebspace", "is_primary": "true"}},
+                ),
+                _capable_workspace_agent(local_agent, host=_HOST_A),
+            ),
+            host_state_by_host_id={str(_HOST_A): HostState.RUNNING, str(_HOST_B): HostState.RUNNING},
+        )
+    )
+    client, auth_store = _make_client(tmp_path, resolver)
+    _authenticate(client, auth_store)
+
+    response = client.get("/api/v1/desktop/running-workspaces")
+
+    assert response.status_code == 200
+    assert [entry["id"] for entry in response.get_json()["running"]] == [str(local_agent)]
 
 
 def test_running_minds_reflects_optimistic_override(tmp_path: Path) -> None:

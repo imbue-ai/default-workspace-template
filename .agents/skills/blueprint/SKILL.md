@@ -1,6 +1,8 @@
 ---
 name: blueprint
 description: Start a new plan-writing session. Explores the codebase and asks clarifying questions.
+metadata:
+  author: imbue
 ---
 
 ## Blueprint — Start plan session

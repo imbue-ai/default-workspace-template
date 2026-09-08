@@ -7,13 +7,16 @@ from threading import Lock
 from typing import Final
 
 from loguru import logger
+from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_call
 from imbue.imbue_common.logging import log_span
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.api.discovery_events import resolve_provider_names_for_identifiers
-from imbue.mngr.api.providers import get_all_provider_instances
+from imbue.mngr.api.providers import get_all_provider_instances_and_skipped
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import ProviderDiscoveryError
 from imbue.mngr.errors import ProviderUnavailableError
@@ -34,6 +37,56 @@ from imbue.mngr.utils.thread_cleanup import mngr_executor
 # blocked on so a hang is visible by name instead of only inferable from silence.
 _SLOW_PROVIDER_DISCOVERY_WARN_SECONDS: Final[float] = 10.0
 _PENDING_PROVIDER_WARN_INTERVAL_SECONDS: Final[float] = 15.0
+
+
+class Unreachable(FrozenModel):
+    """Why a provider could not be reached: it failed to construct, so it was never queried.
+
+    Carries the provider's own error and curated remediation, which is what a
+    caller that turns this back into a user-facing failure needs (see
+    :func:`_raise_for_unmatched_identifiers`).
+    """
+
+    provider_name: ProviderInstanceName = Field(description="Name of the provider that could not be reached")
+    error_type_name: str = Field(description="The type name of the construction exception")
+    error_message: str = Field(description="The construction exception's message")
+    user_help_text: str | None = Field(default=None, description="The exception's curated remediation, or None")
+
+
+class DiscoveryOutcome(FrozenModel):
+    """What one discovery pass saw, including the providers it could not reach.
+
+    A provider that could not be reached is absent from ``agents_by_host`` in
+    exactly the same way as a provider that genuinely holds no agents, so a
+    caller that reads only the hosts cannot tell "this agent does not exist" from
+    "the backend hosting it could not be reached". ``results_by_provider`` closes
+    that gap.
+    """
+
+    agents_by_host: dict[DiscoveredHost, list[DiscoveredAgent]] = Field(
+        description="Agents discovered per host, across every provider that answered"
+    )
+    results_by_provider: dict[ProviderInstanceName, BaseProviderInstance | Unreachable] = Field(
+        description=(
+            "Each provider mapped to the instance that answered, or to why it could not be reached. A "
+            "provider that answered but holds nothing simply contributes no hosts -- that is the empty "
+            "case, and it needs no entry of its own."
+        )
+    )
+
+    @property
+    def providers(self) -> list[BaseProviderInstance]:
+        """The provider instances that answered (the reachable ones)."""
+        return [result for result in self.results_by_provider.values() if not isinstance(result, Unreachable)]
+
+    @property
+    def unavailable_providers(self) -> list[Unreachable]:
+        """The providers discovery could not reach, each leaving a gap in what it can claim.
+
+        This is why "not found" is not always honest: an agent on an unreachable
+        provider is absent from the snapshot exactly as a deleted one is.
+        """
+        return [result for result in self.results_by_provider.values() if isinstance(result, Unreachable)]
 
 
 def warn_on_duplicate_host_names(
@@ -135,13 +188,36 @@ def _run_discovery(
     provider_names: tuple[str, ...] | None,
     include_destroyed: bool,
     reset_caches: bool,
-) -> tuple[dict[DiscoveredHost, list[DiscoveredAgent]], list[BaseProviderInstance]]:
+) -> DiscoveryOutcome:
     """Run the actual discovery against providers. Shared implementation for discover_hosts_and_agents."""
     agents_by_host: dict[DiscoveredHost, list[DiscoveredAgent]] = {}
     results_lock = Lock()
 
-    providers = get_all_provider_instances(mngr_ctx, provider_names)
-    logger.trace("Found {} provider instances", len(providers))
+    providers, skipped_providers = get_all_provider_instances_and_skipped(mngr_ctx, provider_names)
+    logger.trace("Found {} provider instances ({} skipped)", len(providers), len(skipped_providers))
+    # One entry per provider: the instance that answered, or why it could not be
+    # reached. An unreachable provider is queried by nobody, so it contributes no
+    # hosts and no agents -- indistinguishable, from the hosts alone, from a
+    # provider that holds none. Recording why (and logging it) is what lets a
+    # caller resolving an identifier tell the two apart. An empty provider
+    # answered and holds nothing, so it is simply left out.
+    results_by_provider: dict[ProviderInstanceName, BaseProviderInstance | Unreachable] = {
+        provider.name: provider for provider in providers
+    }
+    for skipped in skipped_providers:
+        if skipped.is_empty:
+            continue
+        results_by_provider[skipped.provider_name] = Unreachable(
+            provider_name=skipped.provider_name,
+            error_type_name=skipped.error_type_name,
+            error_message=skipped.error_message,
+            user_help_text=skipped.user_help_text,
+        )
+        logger.warning(
+            "Discovery could not reach provider {}, so its hosts and agents are absent from this snapshot: {}",
+            skipped.provider_name,
+            skipped.error_message,
+        )
 
     if reset_caches:
         logger.debug("Resetting provider caches before discovery")
@@ -175,7 +251,7 @@ def _run_discovery(
     # Warn if any host names are duplicated within the same provider
     warn_on_duplicate_host_names(agents_by_host)
 
-    return (agents_by_host, providers)
+    return DiscoveryOutcome(agents_by_host=agents_by_host, results_by_provider=results_by_provider)
 
 
 @pure
@@ -201,11 +277,13 @@ def discover_hosts_and_agents(
     agent_identifiers: Sequence[str] | None,
     include_destroyed: bool,
     reset_caches: bool,
-) -> tuple[dict[DiscoveredHost, list[DiscoveredAgent]], list[BaseProviderInstance]]:
+) -> DiscoveryOutcome:
     """Discover hosts and agents from providers.
 
     Uses ConcurrencyGroup to query providers in parallel for better performance.
-    Returns lightweight DiscoveredHost/DiscoveredAgent data without connecting to hosts.
+    Returns lightweight DiscoveredHost/DiscoveredAgent data without connecting to hosts,
+    alongside the providers that could not be constructed -- see
+    :class:`DiscoveryOutcome` for why a caller resolving an identifier needs those.
 
     When agent_identifiers is provided and provider_names is None, uses the discovery
     event stream to resolve identifiers to provider names and queries only those providers.
@@ -232,11 +310,11 @@ def discover_hosts_and_agents(
         )
 
         # Run discovery with only the resolved providers
-        agents_by_host, providers = _run_discovery(mngr_ctx, resolved_providers, include_destroyed, reset_caches)
+        outcome = _run_discovery(mngr_ctx, resolved_providers, include_destroyed, reset_caches)
 
         # Verify all identifiers were found; if not, the event stream was stale
-        if _all_identifiers_found(agent_identifiers, agents_by_host):
-            return agents_by_host, providers
+        if _all_identifiers_found(agent_identifiers, outcome.agents_by_host):
+            return outcome
 
         # Fall back to a full scan. Provider instances are cached so this
         # does not leak resources even though get_all_provider_instances is called again.
@@ -249,7 +327,7 @@ def discover_by_address(
     mngr_ctx: MngrContext,
     include_destroyed: bool = False,
     reset_caches: bool = False,
-) -> tuple[dict[DiscoveredHost, list[DiscoveredAgent]], list[BaseProviderInstance]]:
+) -> DiscoveryOutcome:
     """Discover hosts and agents scoped by a single :class:`AgentAddress`.
 
     The address's provider (if any) narrows discovery so we skip irrelevant
@@ -261,7 +339,7 @@ def discover_by_address(
     if address.host is not None and address.host.provider is not None:
         provider_names = (str(address.host.provider),)
 
-    agents_by_host, providers = discover_hosts_and_agents(
+    outcome = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=provider_names,
         agent_identifiers=(str(address.agent),),
@@ -270,12 +348,12 @@ def discover_by_address(
     )
 
     if address.host is None:
-        return dict(agents_by_host), providers
+        return outcome
 
     constraint: HostAddress = address.host
     filtered = {
         host_ref: agent_refs
-        for host_ref, agent_refs in agents_by_host.items()
+        for host_ref, agent_refs in outcome.agents_by_host.items()
         if constraint.matches_host(host_ref.host_id, host_ref.host_name, host_ref.provider_name)
     }
-    return filtered, providers
+    return outcome.model_copy_update(to_update(outcome.field_ref().agents_by_host, filtered))

@@ -47,6 +47,7 @@ def test_unknown_program_and_its_children_are_raised_to_the_user_service_band() 
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [101],
+        priority_by_program={},
     )
     assert proc.writes == [(100, bands.USER_SERVICE), (101, bands.USER_SERVICE)]
 
@@ -58,8 +59,32 @@ def test_builtin_program_missing_its_prefix_is_raised_to_its_own_band() -> None:
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [],
+        priority_by_program={},
     )
     assert proc.writes == [(200, bands.SERVICE_BANDS["share-gateway"])]
+
+
+def test_a_registered_apps_manifest_priority_is_what_the_backstop_raises_to() -> None:
+    # A user-built app whose manifest declares a built-in band name is raised
+    # to that band, not to the by-name fallback; one that declares ``user`` (or
+    # nothing) still lands at USER_SERVICE.
+    proc = _FakeProc({150: 0, 151: 0})
+    registry = {"news-dashboard": "files", "my-tool": "user"}
+    oom_tag_backstop.handle_running_event(
+        _running_payload("news-dashboard", 150),
+        read_adj=proc.read,
+        write_adj=proc.write,
+        list_descendants=lambda pid: [],
+        priority_by_program=registry,
+    )
+    oom_tag_backstop.handle_running_event(
+        _running_payload("my-tool", 151),
+        read_adj=proc.read,
+        write_adj=proc.write,
+        list_descendants=lambda pid: [],
+        priority_by_program=registry,
+    )
+    assert proc.writes == [(150, bands.SERVICE_BANDS["files"]), (151, bands.USER_SERVICE)]
 
 
 def test_never_lowers_a_process_already_above_its_band() -> None:
@@ -80,28 +105,31 @@ def test_never_lowers_a_process_already_above_its_band() -> None:
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [310],
+        priority_by_program={},
     )
     oom_tag_backstop.handle_running_event(
         _running_payload("app-watcher", 301),
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [],
+        priority_by_program={},
     )
     assert proc.writes == []
 
 
 def test_protected_programs_are_never_touched() -> None:
-    # The one-shots (env-converge, eval-worker) matter as much as the OOM
+    # The one-shots (env-converge, vm-exec-register) matter as much as the OOM
     # machinery here: the backstop *raises*, so a program missing from
     # _NON_SERVICE_PROGRAM_BANDS is not merely left alone but actively pushed to
     # USER_SERVICE (200), above every built-in.
     proc = _FakeProc({400: 0})
-    for program_name in ("earlyoom", "oom-tag-backstop", "env-converge", "eval-worker"):
+    for program_name in ("earlyoom", "oom-tag-backstop", "env-converge", "vm-exec-register"):
         oom_tag_backstop.handle_running_event(
             _running_payload(program_name, 400),
             read_adj=proc.read,
             write_adj=proc.write,
             list_descendants=lambda pid: [],
+            priority_by_program={},
         )
     assert proc.writes == []
 
@@ -114,6 +142,7 @@ def test_exited_processes_are_skipped() -> None:
         read_adj=proc.read,
         write_adj=proc.write,
         list_descendants=lambda pid: [501],
+        priority_by_program={},
     )
     assert proc.writes == [(500, bands.USER_SERVICE)]
 
@@ -126,6 +155,7 @@ def test_malformed_payload_is_ignored() -> None:
             read_adj=proc.read,
             write_adj=proc.write,
             list_descendants=lambda pid: [],
+            priority_by_program={},
         )
     assert proc.writes == []
 

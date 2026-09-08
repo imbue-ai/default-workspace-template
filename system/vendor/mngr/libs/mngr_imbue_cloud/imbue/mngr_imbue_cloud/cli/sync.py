@@ -20,9 +20,9 @@ from imbue.mngr_imbue_cloud.cli._common import make_connector_client
 from imbue.mngr_imbue_cloud.cli._common import make_session_store
 from imbue.mngr_imbue_cloud.cli._common import resolve_account_or_active
 from imbue.mngr_imbue_cloud.connector.auth_helper import get_active_token
-from imbue.mngr_imbue_cloud.data_types import SyncKeyBundle
-from imbue.mngr_imbue_cloud.data_types import SyncWorkspaceRecord
 from imbue.mngr_imbue_cloud.errors import ImbueCloudSyncConflictError
+from imbue.mngr_imbue_cloud.wire_types import SyncKeyBundle
+from imbue.mngr_imbue_cloud.wire_types import SyncWorkspaceRecord
 
 
 def _read_json_payload(model_name: str, input_file: str | None) -> dict[str, object]:
@@ -102,18 +102,30 @@ def push_record(account: str | None, connector_url: str | None, input_file: str 
 
 
 @records.command(name="delete")
-@click.argument("host_id")
+@click.argument("record_id")
 @click.option("--account", default=None, help="Account email (defaults to the active account)")
 @click.option("--connector-url", default=None, help="Override connector URL")
 @handle_imbue_cloud_errors
-def delete_record(host_id: str, account: str | None, connector_url: str | None) -> None:
-    """Remove one workspace record outright (disassociation; idempotent)."""
+def delete_record(record_id: str, account: str | None, connector_url: str | None) -> None:
+    """Remove one workspace record outright (disassociation; idempotent).
+
+    RECORD_ID is the workspace id (``agent-<hex>``, preferred -- the record's
+    durable key) or, for compatibility, the workspace's current host id
+    (``host-<hex>``).
+
+    Refused (connector 409 ``lease_active``) while the workspace still holds
+    its cloud lease: destroy the workspace instead, which releases the lease
+    and retires the record.
+    """
     client = make_connector_client(connector_url)
     store = make_session_store()
     parsed_account = resolve_account_or_active(store, account)
     token = get_active_token(store, client, parsed_account)
-    client.delete_sync_record(token, host_id)
-    emit_json({"status": "deleted", "host_id": host_id})
+    if record_id.startswith("agent-"):
+        client.delete_sync_record_by_workspace(token, record_id)
+    else:
+        client.delete_sync_record(token, record_id)
+    emit_json({"status": "deleted", "record_id": record_id})
 
 
 @sync.command(name="scrub-secrets")
