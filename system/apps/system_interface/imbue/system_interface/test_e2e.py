@@ -210,15 +210,11 @@ def _running_e2e_server(
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
-        catalog_fetcher = (
-            FakeTemplateCatalogFetcher(
-                body_by_url={}
-                if catalog_body is None
-                else {config.system_interface_template_catalog_url: catalog_body}
-            )
-            if is_catalog_offered
-            else None
-        )
+        catalog_fetcher: FakeTemplateCatalogFetcher | None = None
+        if is_catalog_offered:
+            catalog_fetcher = FakeTemplateCatalogFetcher()
+            if catalog_body is not None:
+                catalog_fetcher.body_by_url[config.system_interface_template_catalog_url] = catalog_body
         state = build_test_state(
             config=config, shell_state_directory=state_dir, template_catalog_fetcher=catalog_fetcher
         )
