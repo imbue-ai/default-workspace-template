@@ -8,6 +8,7 @@
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { Modal, MODAL_TITLE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
 import { writeUpParagraphs } from "../models/TemplateCatalog";
@@ -51,6 +52,11 @@ export function templateRequirements(template: CatalogTemplate): TemplateRequire
 
 export interface TemplateDetailModalAttrs {
   template: CatalogTemplate;
+  /** Whether both actions stand down (no app takes a first message, or the pane is already
+   *  starting something): they render disabled and neither callback fires. */
+  isStartDisabled: boolean;
+  /** What a hover over a standing-down action says; null when there is nothing to explain. */
+  startDisabledReason: string | null;
   onClose: () => void;
   /** "Make it mine": adopt the template into this machine. */
   onAdopt: (template: CatalogTemplate) => void;
@@ -61,9 +67,15 @@ export interface TemplateDetailModalAttrs {
 export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
   return {
     view(vnode) {
-      const { template, onClose, onAdopt, onCreateMachine } = vnode.attrs;
+      const { template, isStartDisabled, startDisabledReason, onClose, onAdopt, onCreateMachine } = vnode.attrs;
       const paragraphs = writeUpParagraphs(template.what_it_is);
       const requirements = templateRequirements(template);
+      // The same stand-down as the prompt tiles: aria-disabled rather than disabled, so the
+      // element still takes the hover that explains why.
+      const startAttrs = {
+        "aria-disabled": isStartDisabled ? "true" : undefined,
+        ...(isStartDisabled && startDisabledReason !== null ? hoverTooltipAttrs(startDisabledReason) : {}),
+      };
       return m(
         Modal,
         {
@@ -89,12 +101,21 @@ export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
           actions: [
             m(
               Button,
-              { extra: "new-tab-template-create-machine", onclick: () => onCreateMachine(template) },
+              {
+                extra: "new-tab-template-create-machine",
+                onclick: isStartDisabled ? undefined : () => onCreateMachine(template),
+                ...startAttrs,
+              },
               "Create a new machine from this",
             ),
             m(
               Button,
-              { variant: "primary", extra: "new-tab-template-adopt", onclick: () => onAdopt(template) },
+              {
+                variant: "primary",
+                extra: "new-tab-template-adopt",
+                onclick: isStartDisabled ? undefined : () => onAdopt(template),
+                ...startAttrs,
+              },
               "Make it mine",
             ),
           ],
