@@ -179,6 +179,24 @@ def test_store_refetches_once_the_copy_is_no_longer_fresh_and_keeps_the_old_one_
     assert reading.catalog is not None and [template.slug for template in reading.catalog.templates] == ["inbox"]
 
 
+def test_store_still_answers_the_fetched_catalog_when_the_cache_cannot_be_written(tmp_path: Path) -> None:
+    """A cache that cannot be written costs the next process its fallback, not this one its answer."""
+    # The cache path's parent is a regular file, so the directory for the copy cannot be made.
+    blocking_file = tmp_path / "not-a-directory"
+    blocking_file.write_text("")
+    fetcher = FakeTemplateCatalogFetcher(
+        body_by_url={_CATALOG_URL: catalog_document(catalog_template_document("inbox"))}
+    )
+    store = TemplateCatalogStore(
+        catalog_url=_CATALOG_URL, cache_path=blocking_file / CATALOG_CACHE_FILENAME, fetcher=fetcher
+    )
+
+    reading = store.read()
+
+    assert reading.availability is TemplateCatalogAvailability.FRESH
+    assert reading.catalog is not None and [template.slug for template in reading.catalog.templates] == ["inbox"]
+
+
 def test_store_ignores_a_disk_copy_it_cannot_read(tmp_path: Path) -> None:
     (tmp_path / CATALOG_CACHE_FILENAME).write_text('{"format": 7}')
     reading = _store(tmp_path, FakeTemplateCatalogFetcher()).read()

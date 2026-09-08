@@ -32,6 +32,7 @@ from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
@@ -317,7 +318,7 @@ class TemplateCatalogStore(MutableModel):
         # A copy that cannot be written costs the next process its fallback, not this one its answer.
         try:
             write_json_atomic(self.cache_path, catalog.model_dump(mode="json"))
-        except OSError as e:
+        except ShellStateError as e:
             logger.warning("Could not cache the template catalog at {}: {}", self.cache_path, e)
 
 
