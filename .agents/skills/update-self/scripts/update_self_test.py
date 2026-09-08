@@ -4647,10 +4647,50 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     }
     assert envs[update_layout.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
     assert envs[update_layout.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
-    # Targeting is per executable, not global: the other tool is not on PATH
-    # here, so its install is left to uv's own default rather than aimed at the
-    # directory that happens to hold mngr.
-    assert "UV_TOOL_DIR" not in envs[update_layout.SYSTEM_INTERFACE_DIR]
+    # A tool that is not on PATH at all has no installation to target: it is
+    # installed beside the mngr tool, whose bin directory the program lines
+    # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
+    # left to it installs fine and is never found -- what a pre-arc workspace's
+    # first update hit, with the chat pre-flight's ``chat-app: not found``).
+    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_DIR"] == str(tools)
+    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+
+
+def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
+    apply_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A workspace from before the app model has no chat tool at all; the merge's
+    install of it must land where the merged program line will find it."""
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (bin_dir / update_layout.MNGR_EXECUTABLE).write_text(
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    )
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+    _write_app(apply_repo, "chat", "chat", "chat-app", True)
+    runner = _apply_runner(
+        "A\tsystem/apps/chat/imbue/chat/main.py\n" + _BACKEND_MANIFEST_DIFF, apply_repo
+    )
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(
+        bin_dir / update_layout.MNGR_EXECUTABLE
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    chat_install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"] and argv[4] == "system/apps/chat"
+    )
+    assert chat_install_env["UV_TOOL_DIR"] == str(tools)
+    assert chat_install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    assert (
+        f"installing 'chat' beside the mngr tool ({bin_dir})" in capsys.readouterr().err
+    )
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:

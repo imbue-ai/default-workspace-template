@@ -275,19 +275,45 @@ def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
     return tool_dir, script.parent
 
 
+def _installed_tool_location(
+    executable: str, tool_name: str, runner: Runner
+) -> tuple[Path, Path] | None:
+    """``(tool_dir, bin_dir)`` of the uv tool installation behind ``executable``
+    as found on PATH, or ``None`` when there is none to confirm."""
+    found = runner.which(executable)
+    return _tool_location(Path(found), tool_name) if found is not None else None
+
+
 def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     """The environment for a ``uv tool`` call, aimed at ``executable``'s own
-    installation when we can confirm which that is."""
+    installation when we can confirm which that is, else at the mngr tool's.
+
+    A tool the merge adds (the chat, terminal, and files apps, for a workspace
+    from before the app model) is on no PATH yet, and uv's own default tool
+    directory follows ``$HOME`` -- which at runtime is not the one
+    build_workspace.sh installed under, and whose bin directory is on nobody's
+    PATH. Left to that default the new tool installs fine and is never found: the
+    pre-flight's ``chat-app`` is ``not found`` and the apply rolls back. So a tool
+    with no installation of its own goes beside the mngr tool, whose bin
+    directory every program line resolves its entry point through.
+    """
     env = dict(os.environ)
-    found = runner.which(executable)
-    location = _tool_location(Path(found), tool_name) if found is not None else None
+    location = _installed_tool_location(executable, tool_name, runner)
     if location is None:
+        beside_mngr = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
+        if beside_mngr is None:
+            sys.stderr.write(
+                f"refresh: could not identify the uv tool behind '{executable}' "
+                f"(not an installed uv tool on PATH) nor the one behind "
+                f"'{MNGR_EXECUTABLE}'; letting uv choose the tool directory, which may "
+                "install a copy that nothing on PATH runs.\n"
+            )
+            return env
         sys.stderr.write(
-            f"refresh: could not identify the uv tool behind '{executable}'"
-            f" ({found or 'not on PATH'}); letting uv choose the tool directory,"
-            " which may rebuild a copy that is not the one being run.\n"
+            f"refresh: '{executable}' is not an installed uv tool on PATH; installing "
+            f"'{tool_name}' beside the mngr tool ({beside_mngr[1]}).\n"
         )
-        return env
+        location = beside_mngr
     env["UV_TOOL_DIR"] = str(location[0])
     env["UV_TOOL_BIN_DIR"] = str(location[1])
     return env
