@@ -70,7 +70,9 @@ import sys
 import tempfile
 import textwrap
 import time
+import tomllib
 from collections.abc import Iterator
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Final
 
@@ -97,7 +99,7 @@ _RUNC_VERSION: Final[str] = "v1.3.0"
 # Keep these in sync with apps/minds/.nvmrc and apps/minds/package.json engines.
 _NODE_VERSION: Final[str] = "24.15.0"
 _PNPM_VERSION: Final[str] = "10.33.4"
-_CLAUDE_CODE_VERSION: Final[str] = "2.1.207"
+_CLAUDE_CODE_VERSION: Final[str] = "2.1.227"
 
 # In-sandbox entrypoint that invokes the shared e2e workspace runner the
 # pytest test also uses, but without the test's mngr-destroy cleanup. The
@@ -140,6 +142,12 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # Snapshot builds are test infrastructure, not a real install, so they
     # must not count toward Latchkey's usage.
     _write_to_os_environ("LATCHKEY_DISABLE_COUNTING", "1")
+    # Opt into Modal's V2 Sandbox backend, matching the mngr-wide default. Uses
+    # setdefault (not _write_to_os_environ) so an explicit MODAL_SANDBOX_V2=0
+    # still wins: this sandbox pairs vm_runtime with snapshot_filesystem, and if
+    # that combination is ever unsupported on V2 the workflow can fall back to
+    # V1 without a code change.
+    os.environ.setdefault("MODAL_SANDBOX_V2", "1")
     # Force the local-docker workspace to runc: the dockerd inside this Modal
     # vm_runtime sandbox only has the default runc registered (no gVisor), so a
     # runsc container fails with "unknown or invalid runtime name: runsc". The
@@ -152,6 +160,13 @@ _IN_SANDBOX_RUNNER_PROGRAM: Final[str] = textwrap.dedent(
     # stacked template's docker_runtime outranks it.) Mirrors the pytest path in
     # apps/minds/test_snapshot_resume.py.
     _write_to_os_environ("MINDS_DOCKER_RUNTIME_DEFAULT", "RUNC")
+    # The workspace image build is network-bound (apt and pip mirrors, the
+    # pi extension npm installs in setup_system.sh) and a healthy one runs
+    # 8 to 10.5 minutes here, so the docker provider's 600-second default
+    # build timeout would be the tighter of the two deadlines on the create
+    # flow. The runner's create-flow wait sits above this so the boot after
+    # the build still fits.
+    _write_to_os_environ("MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS", "900")
     # The snapshot-resume suite never exercises the browser stack, so the
     # workspace skips its env.d browser unit -- most importantly the
     # hundreds-of-MB Fortress engine download -- making this build faster and
@@ -262,7 +277,8 @@ _STAGING_RSYNC_EXCLUDES: Final[tuple[str, ...]] = (
 # install third-party deps in layers that change only when the manifests do
 # (see _build_snapshot_image). The python tree is the root pyproject/lockfile
 # plus every uv workspace member's pyproject.toml (uv needs the member
-# manifests to construct the workspace even with --no-install-workspace).
+# manifests to construct the workspace even with --no-install-workspace);
+# _python_manifest_relative_paths drops the excluded standalone projects.
 # The pnpm tree is what `pnpm install --frozen-lockfile` reads (apps/minds is
 # a single-package pnpm workspace with no install-time scripts that need
 # source files -- its package.json has no preinstall/postinstall/prepare).
@@ -285,12 +301,20 @@ _PNPM_MANIFEST_RELATIVE_PATHS: Final[tuple[str, ...]] = (
 
 def _python_manifest_relative_paths(repo_root: Path) -> tuple[str, ...]:
     """Return the repo-relative paths uv needs for a manifests-only sync."""
-    member_manifests = sorted(
-        path.relative_to(repo_root).as_posix()
-        for pattern in _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS
-        for path in repo_root.glob(pattern)
-    )
-    return ("pyproject.toml", "uv.lock", *member_manifests)
+    # Directories the root pyproject excludes from the workspace are standalone
+    # uv projects: uv does not read their manifests when constructing this
+    # workspace, so staging them would only make their dependency churn
+    # invalidate this image layer for nothing.
+    root_pyproject = tomllib.loads((repo_root / "pyproject.toml").read_text())
+    excluded_globs = tuple(root_pyproject["tool"]["uv"]["workspace"].get("exclude", ()))
+    member_manifests: list[str] = []
+    for pattern in _PY_WORKSPACE_MEMBER_MANIFEST_GLOBS:
+        for path in repo_root.glob(pattern):
+            relative = path.relative_to(repo_root).as_posix()
+            if any(fnmatch(relative, f"{glob}/*") for glob in excluded_globs):
+                continue
+            member_manifests.append(relative)
+    return ("pyproject.toml", "uv.lock", *sorted(member_manifests))
 
 
 def _copy_relative_paths(source_root: Path, relative_paths: tuple[str, ...], target_root: Path) -> None:
@@ -660,13 +684,14 @@ def _create_workspace_in_sandbox(sandbox: modal.Sandbox) -> None:
     because Electron needs an X display.
     """
     command = "cd /code/mngr && xvfb-run -a uv run python -c {}".format(shlex.quote(_IN_SANDBOX_RUNNER_PROGRAM))
-    # Budget: 1500s. The wrapped runner budgets 900s for the post-submit create
+    # Budget: 1500s. The wrapped runner budgets 1200s for the post-submit create
     # phase alone (its headline cost is the in-sandbox DEFAULT_WORKSPACE_TEMPLATE
-    # container build, legitimately ~8-10.5 minutes in CI), plus the Electron
-    # launch/attach and system-interface phases. Keeping this exec timeout above
-    # any realistic run total means a stall hits the runner's own per-phase
-    # deadline (which names the stuck phase) rather than this generic exec
-    # timeout.
+    # container build, legitimately ~8-10.5 minutes in CI and given 900s by the
+    # MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS set in the program above),
+    # plus the Electron launch/attach and system-interface phases. Keeping this
+    # exec timeout above any realistic run total means a stall hits the runner's
+    # own per-phase deadline (which names the stuck phase) rather than this
+    # generic exec timeout.
     returncode = _exec_in_sandbox(
         sandbox,
         command,

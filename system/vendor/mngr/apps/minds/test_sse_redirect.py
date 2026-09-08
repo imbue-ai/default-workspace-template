@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
-from imbue.minds.config.data_types import WorkspacePaths
+from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.agent_creator import AgentCreateAttemptStatus
 from imbue.minds.desktop_client.agent_creator import AgentCreator
 from imbue.minds.desktop_client.agent_creator import CreateAttemptLogSink
@@ -57,7 +57,7 @@ def test_sse_redirect_on_done(tmp_path: Path) -> None:
     port = _find_free_port()
     code = OneTimeCode("test-sse-code-abc123")
 
-    paths = WorkspacePaths(data_dir=tmp_path)
+    paths = InstallationPaths(data_dir=tmp_path)
     auth_store = FileAuthStore(data_directory=paths.auth_dir)
     auth_store.add_one_time_code(code=code)
     resolver = MngrCliBackendResolver()
@@ -141,10 +141,8 @@ def test_sse_redirect_on_done(tmp_path: Path) -> None:
                 # then put the log sentinel. The creating page's status poll
                 # (`operations/create/<create_attempt_id>`) is the authoritative
                 # completion signal: once it returns DONE + redirect_url the
-                # page stamps data-ready + data-redirect-url on the creating
-                # root, and the walkthrough enters the workspace from there.
-                # The redirect URL is the canonical `/goto/<agent>/` route the
-                # real creator populates.
+                # walkthrough enters the workspace. The redirect URL is the
+                # canonical `/goto/<agent>/` route the real creator populates.
                 with creator._lock:
                     creator._statuses[str(create_attempt_id)] = AgentCreateAttemptStatus.DONE
                     creator._canonical_agent_ids[str(create_attempt_id)] = agent_id
@@ -153,15 +151,19 @@ def test_sse_redirect_on_done(tmp_path: Path) -> None:
                 log_sink.put("[test] Agent created successfully.")
                 log_sink.put(LOG_SENTINEL)
 
-                logger.info("CreateAttempt done, waiting for the ready state...")
-                page.wait_for_selector("#creating[data-ready='true']", state="attached", timeout=10000)
-
-                # Nothing to click: the walkthrough enters the workspace itself
-                # as soon as it sees the ready state, wherever it has got to.
-                logger.info("Ready state reached, waiting for browser redirect...")
-                page.wait_for_url(re.compile(r"/goto/"), timeout=10000)
+                # The walkthrough enters the workspace as soon as its status
+                # poll sees DONE. Entry is an in-app route change: the SPA
+                # extracts the agent id from the `/goto/<agent>/` redirect URL
+                # and routes to `/workspace/<agent-id>` (the workspace
+                # surface), so that main-frame URL is the observable
+                # completion signal. The `/forward-bridge?next=...` URL only
+                # ever appears as the workspace iframe's src, never in the
+                # main frame; this minimal fixture runs no forward plugin, so
+                # that iframe dead-ends in a 404, which does not matter here.
+                logger.info("CreateAttempt done, waiting for the redirect into the workspace...")
+                page.wait_for_url(re.compile(rf"/workspace/{agent_id}"), timeout=10000)
                 logger.info("Redirect happened! URL: {}", page.url)
-                assert f"/goto/{agent_id}" in page.url
+                assert f"/workspace/{agent_id}" in page.url
 
             finally:
                 browser.close()

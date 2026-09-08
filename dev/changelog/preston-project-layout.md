@@ -1,0 +1,1 @@
+The scheduled automation-agent prompt in `.mngr/settings.toml` surfaces its chat tab the projects-native way: a single `layout.py open "chat:$MNGR_AGENT_NAME"` that lands in the view the user is looking at, replacing the retired per-named-layout loop (`for L in desktop mobile; do ... --layout "$L" ...; done`) that targeted the deleted `desktop` / `mobile` layouts.

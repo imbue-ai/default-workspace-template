@@ -1,0 +1,3 @@
+Add dashboards-as-code: committed `imbue/observability/dashboards/*.dashboard.json` definitions and a new `observability import-dashboards --ssh-host <ip>` command that imports them into an instance over the SSH tunnel, replace-by-title (idempotent; re-running converges on what the repo holds).
+
+The first committed dashboard, `Fleet version mix`, charts active accounts per `X-Imbue-Client` version, lease demand and outcomes, the connector's baked-pool composition gauges (`pool_hosts_count`), per-region slot capacity (`pool_slots_total` / `pool_slots_used`), and the pool-gauge sweep heartbeat, with a `minds_env` variable for the shared dev instance.

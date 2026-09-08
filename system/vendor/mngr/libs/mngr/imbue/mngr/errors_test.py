@@ -6,14 +6,17 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from imbue.mngr.cli.exit_codes import EXIT_CODE_ERROR
 from imbue.mngr.colors import ERROR_COLOR
 from imbue.mngr.colors import RESET_COLOR
 from imbue.mngr.errors import AgentError
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import AgentNotFoundOnHostError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import CommandTimeoutError
 from imbue.mngr.errors import DuplicateAgentNameError
+from imbue.mngr.errors import EXIT_CODE_TARGET_NOT_FOUND
 from imbue.mngr.errors import HostConnectionError
 from imbue.mngr.errors import HostDataSchemaError
 from imbue.mngr.errors import HostError
@@ -24,7 +27,9 @@ from imbue.mngr.errors import HostNotStoppedError
 from imbue.mngr.errors import ImageNotFoundError
 from imbue.mngr.errors import LockNotHeldError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import ModalAuthError
 from imbue.mngr.errors import NoCommandDefinedError
+from imbue.mngr.errors import NoMatchingHostsError
 from imbue.mngr.errors import ProviderError
 from imbue.mngr.errors import ProviderInstanceNotFoundError
 from imbue.mngr.errors import ProviderNotAuthorizedError
@@ -33,6 +38,7 @@ from imbue.mngr.errors import SendMessageError
 from imbue.mngr.errors import SnapshotNotFoundError
 from imbue.mngr.errors import SnapshotsNotSupportedError
 from imbue.mngr.errors import UserInputError
+from imbue.mngr.errors import parse_provider_unavailable_reason
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostName
@@ -275,6 +281,66 @@ def test_provider_not_authorized_error_has_user_help_text() -> None:
     assert "enabled_backends" in error.user_help_text
 
 
+def test_provider_unavailable_reason_round_trips_through_subprocess_stderr() -> None:
+    """The reason survives the trip an out-of-process caller actually sees.
+
+    minds runs mngr as a subprocess and recovers this from stderr, which carries
+    Click's ``Error: `` prefix, the trailing ``user_help_text``, and a reason that
+    has its own ``: `` and sentence-final period. The parser must return exactly
+    the reason the error was constructed with, not a truncated or over-long slice.
+    """
+    provider = "imbue_cloud_someone-imbue-com"
+    reason = "could not reach Imbue Cloud: [Errno 8] nodename nor servname provided, or not known"
+    error = ProviderUnavailableError(ProviderInstanceName(provider), reason)
+    stderr = f"Error: {error}  [{error.user_help_text}]"
+
+    assert parse_provider_unavailable_reason(stderr, provider) == reason
+    assert parse_provider_unavailable_reason(stderr, None) == reason
+
+
+def test_provider_unavailable_reason_answers_for_the_named_provider_among_several() -> None:
+    """A provider the caller did not ask about answers for nothing, however many are named.
+
+    A command aborts on whichever provider it queried first turned out to be
+    unavailable, which need not be the one the caller is asking about -- so a
+    caller that named a provider must not be handed some other backend's outage
+    and go on to report it as theirs.
+
+    Text carrying more than one provider's message is what separates "answer for
+    the one asked about" from "answer with the first one there is": only then does
+    the parser have to walk past a foreign message to reach the caller's, and it
+    must do so whichever order they arrive in.
+    """
+    foreign = ProviderUnavailableError(ProviderInstanceName("imbue_cloud_someone-imbue-com"), "no route")
+    mine = ProviderUnavailableError(ProviderInstanceName("docker"), "Cannot connect to the Docker daemon")
+
+    assert parse_provider_unavailable_reason(f"Error: {foreign}", "docker") is None
+    assert (
+        parse_provider_unavailable_reason(f"Error: {foreign}\nError: {mine}", "docker")
+        == "Cannot connect to the Docker daemon"
+    )
+    assert (
+        parse_provider_unavailable_reason(f"Error: {mine}\nError: {foreign}", "docker")
+        == "Cannot connect to the Docker daemon"
+    )
+    # A caller with no provider to compare against takes whichever comes first.
+    assert parse_provider_unavailable_reason(f"Error: {foreign}\nError: {mine}", None) == "no route"
+
+
+def test_provider_unavailable_reason_is_none_for_non_matching_messages() -> None:
+    """Only the generic shape is recovered; anything else reads as no reason at all.
+
+    An unrelated failure must return None because a false positive would report a
+    real machine problem as a backend outage, which offers no restart.
+    ``ModalAuthError`` returns None for a different reason, and at a cost: it *is*
+    a ``ProviderUnavailableError``, but it keeps its own verbatim message, so it
+    carries no marker and its outage stays unrecovered. The parser stays pinned to
+    the one shape it can parse rather than guessing at per-subclass wording.
+    """
+    assert parse_provider_unavailable_reason(f"Error: {ModalAuthError()}", None) is None
+    assert parse_provider_unavailable_reason("exited 1: Error: Agent agent-abc not found", None) is None
+
+
 def test_mngr_error_displays_single_error_prefix_via_click() -> None:
     """MngrError should display exactly one 'Error: ' prefix when shown via Click.
 
@@ -290,7 +356,7 @@ def test_mngr_error_displays_single_error_prefix_via_click() -> None:
     result = runner.invoke(cmd)
 
     # Should have exactly one "Error: " prefix, not "Error: Error: "
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_CODE_ERROR
     assert result.output.startswith("Error: ")
     assert "Error: Error:" not in result.output
     assert "Agent not found: test-agent" in result.output
@@ -457,3 +523,44 @@ def test_show_includes_user_help_text_inside_colored_span(monkeypatch: pytest.Mo
     assert rendered.endswith(f"{RESET_COLOR}\n")
     assert "Error: bad flag  [" in rendered
     assert "mngr --help" in rendered
+
+
+def _exit_code_of(error: MngrError) -> int:
+    """Run a click command that raises ``error`` and return the process exit code."""
+
+    @click.command()
+    def cmd() -> None:
+        raise error
+
+    return CliRunner().invoke(cmd).exit_code
+
+
+@pytest.mark.parametrize(
+    "gone_target_error",
+    [
+        AgentIdNotFoundError("agent-fa29307a16734899aa77b0f0563c8c99"),
+        NoMatchingHostsError("No hosts found matching host-fa29307a16734899aa77b0f0563c8c99"),
+    ],
+    ids=["agent_id", "host_id"],
+)
+def test_gone_target_errors_exit_with_the_target_not_found_code(gone_target_error: MngrError) -> None:
+    """A machine-generated identifier that matches nothing must exit EXIT_CODE_TARGET_NOT_FOUND.
+
+    mngr_forward spawns a `mngr event --follow` child per agent and sees only
+    (exit_code, stderr). It uses this code to tell "this target cannot come back
+    by retrying" from a transient failure, so the code has to survive click's
+    ClickException handling -- which is what this drives.
+    """
+    assert _exit_code_of(gone_target_error) == EXIT_CODE_TARGET_NOT_FOUND
+
+
+def test_a_plain_not_found_error_keeps_the_generic_exit_code() -> None:
+    """The gone-target code must not ride on the base classes the name paths raise.
+
+    ``AgentNotFoundError`` is raised for user-typed names too (see find's
+    _raise_for_unmatched_identifiers, which backs `mngr stop`/`destroy`/...), and
+    ``UserInputError`` for everything malformed. Putting the code on either would
+    make a typo indistinguishable from a target that is genuinely gone.
+    """
+    assert _exit_code_of(AgentNotFoundError("some-typo")) == EXIT_CODE_ERROR
+    assert _exit_code_of(UserInputError("bad input")) == EXIT_CODE_ERROR

@@ -94,13 +94,40 @@ deploy-apt-mirror:
 test-apt-mirror-worker:
   cd apps/apt_mirror/worker && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm test
 
+# Run the minds JS suites (Electron shell node:test units + SPA frontend vitest).
+[group("minds test")]
+test-minds-js:
+  # --ignore-scripts: the units load `semver`, read `electron-updater`'s
+  # AppUpdater.js off disk, and are otherwise node builtins -- so the packages
+  # are needed but their postinstalls are not, and a plain install fetches the
+  # Electron binary and Playwright's browsers to run neither.
+  cd apps/minds && pnpm install --frozen-lockfile --ignore-scripts && pnpm test:unit
+  # `generate` before `check`: src/generated/ is gitignored, so a fresh checkout
+  # has no ui.ts and tsc would otherwise fail on the missing import rather than
+  # on anything real. `check` at all because vitest transpiles TypeScript
+  # without typechecking it, so the suites alone never see a type error.
+  cd apps/minds/frontend && pnpm install --frozen-lockfile && pnpm run generate && pnpm run check && pnpm test
+
+
+# Type-check and test apps/minds_evals. It is a standalone uv project, not a
+# workspace member (see the root [tool.uv.workspace].exclude), so it has its own
+# lock and venv: the root `uv sync --all-packages`, `just test-quick`, `just
+# test-offload` and the root `ty check` all skip it, and this recipe is the only
+# thing that runs its suite. `--locked` fails rather than silently re-resolving,
+# so a pyproject edit without a matching `uv lock` is caught here.
+[group("minds evals")]
+test-minds-evals args="":
+  cd apps/minds_evals && uv sync --locked && uv run ty check && uv run pytest {{args}}
+
 
 # Render one relay's on-disk config (frps.toml, nftables.conf, the :80
 # redirector) into OUT_DIR. The deploy recipe copies these onto the VPS; see
 # apps/share_relay/README.md. RELAY_ID comes from `just register-share-relay`
-# (or `mngr imbue_cloud admin relays list`); CONTENT_DOMAIN is the env's content
+# (or `minds-admin relays list`); CONTENT_DOMAIN is the env's content
 # apex (imbueminds.com / minds-staging.com / minds-dev.com); PLUGIN_AUTH_URL is
-# the connector's /frps/auth endpoint for that env.
+# the connector's /frps/auth endpoint for that env, WITHOUT any secret. The
+# plugin secret is read from FRPS_AUTH_SECRET in the environment
+# (Vault: secrets/minds/<tier>/sharing/FRPS_AUTH_SECRET).
 [group("share-relay ops")]
 render-share-relay relay_id region content_domain plugin_auth_url out_dir:
   uv run share-relay render --relay-id {{relay_id}} --region {{region}} \
@@ -130,10 +157,11 @@ deregister-share-relay connector_url relay_id:
 
 # Install/refresh a relay host's software + config (pinned frps, nftables,
 # :80 redirector, healthcheck) and restart its services. relay_id comes from
-# `just register-share-relay` (or `mngr imbue_cloud admin relays list`);
-# plugin_auth_url must include the shared-secret path segment:
-# https://<connector>/frps/auth/<secret>
-# (the secret lives in Vault under secrets/minds/<tier>/sharing/FRPS_AUTH_SECRET).
+# `just register-share-relay` (or `minds-admin relays list`);
+# plugin_auth_url is the secret-free connector endpoint
+# (https://<connector>/frps/auth); the plugin secret is read from
+# FRPS_AUTH_SECRET in the environment
+# (Vault: secrets/minds/<tier>/sharing/FRPS_AUTH_SECRET).
 [group("share-relay ops")]
 deploy-share-relay host relay_id region content_domain plugin_auth_url:
   uv run share-relay deploy --host {{host}} --relay-id {{relay_id}} --region {{region}} \
@@ -166,7 +194,7 @@ test-share-relay:
 # Regenerate the committed hash-locked image_requirements.txt exports that the
 # Modal service images (remote_service_connector, modal_litellm) install from.
 # Run after changing an app's [dependency-groups] image pins or relocking
-# uv.lock; per-app drift tests and the `minds env deploy` preflight fail until
+# uv.lock; per-app drift tests and the `minds-admin env deploy` preflight fail until
 # the committed exports match uv.lock again.
 [group("mngr dev")]
 export-image-requirements:

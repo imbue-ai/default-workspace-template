@@ -34,8 +34,10 @@ from imbue.minds.desktop_client.ui_channel import UiChannelBroadcaster
 from imbue.minds.desktop_client.ui_models import UI_SCHEMA_VERSION
 from imbue.minds.desktop_client.ui_models import UiAccountsMessage
 from imbue.minds.desktop_client.ui_models import UiDiscoveryHealthMessage
+from imbue.minds.desktop_client.ui_models import UiEnvironmentMessage
 from imbue.minds.desktop_client.ui_models import UiHealthMessage
 from imbue.minds.desktop_client.ui_models import UiHelloMessage
+from imbue.minds.desktop_client.ui_models import UiNotificationsMessage
 from imbue.minds.desktop_client.ui_models import UiOpenHelpMessage
 from imbue.minds.desktop_client.ui_models import UiProvidersMessage
 from imbue.minds.desktop_client.ui_models import UiReloadMessage
@@ -43,6 +45,7 @@ from imbue.minds.desktop_client.ui_models import UiRequestsMessage
 from imbue.minds.desktop_client.ui_models import UiSnapshot
 from imbue.minds.desktop_client.ui_models import UiWorkspaceRefreshMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspaceStoppedMessage
+from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdatesMessage
 from imbue.minds.desktop_client.ui_models import UiWorkspacesMessage
 from imbue.minds.errors import MindError
 from imbue.mngr.errors import MngrError
@@ -64,11 +67,20 @@ class UiStatePublisher(MutableModel):
         frozen=True, description="Current providers panel state"
     )
     derive_requests: Callable[[], UiRequestsMessage] = Field(frozen=True, description="Current inbox summary")
+    derive_notifications: Callable[[], UiNotificationsMessage] = Field(
+        frozen=True, description="Current notification feed"
+    )
     derive_discovery_health: Callable[[], UiDiscoveryHealthMessage] = Field(
         frozen=True, description="Current discovery pipeline health"
     )
+    derive_environment: Callable[[], UiEnvironmentMessage] = Field(
+        frozen=True, description="Current device-level connectivity condition"
+    )
     derive_health_states: Callable[[], tuple[UiHealthMessage, ...]] = Field(
         frozen=True, description="Per-workspace health snapshot for connect-time state"
+    )
+    derive_workspace_updates: Callable[[], UiWorkspaceUpdatesMessage] = Field(
+        frozen=True, description="Current per-workspace update state"
     )
 
     _wake_event: threading.Event = PrivateAttr(default_factory=threading.Event)
@@ -115,8 +127,11 @@ class UiStatePublisher(MutableModel):
             accounts=self.derive_accounts(),
             providers=self.derive_providers(),
             requests=self.derive_requests(),
+            notifications=self.derive_notifications(),
             health=self.derive_health_states(),
             discovery_health=self.derive_discovery_health(),
+            workspace_updates=self.derive_workspace_updates(),
+            environment=self.derive_environment(),
         )
 
     def build_snapshot_frames(self) -> list[str]:
@@ -134,6 +149,12 @@ class UiStatePublisher(MutableModel):
             marked = health_message.model_copy_update(to_update(health_message.field_ref().is_snapshot, True))
             frames.append(marked.model_dump_json())
         frames.append(snapshot.discovery_health.model_dump_json())
+        marked_notifications = snapshot.notifications.model_copy_update(
+            to_update(snapshot.notifications.field_ref().is_snapshot, True)
+        )
+        frames.append(marked_notifications.model_dump_json())
+        frames.append(snapshot.workspace_updates.model_dump_json())
+        frames.append(snapshot.environment.model_dump_json())
         return frames
 
     def publish_now(self) -> None:
@@ -145,7 +166,10 @@ class UiStatePublisher(MutableModel):
                 | UiAccountsMessage
                 | UiProvidersMessage
                 | UiRequestsMessage
-                | UiDiscoveryHealthMessage,
+                | UiNotificationsMessage
+                | UiDiscoveryHealthMessage
+                | UiWorkspaceUpdatesMessage
+                | UiEnvironmentMessage,
             ],
             ...,
         ] = (
@@ -153,7 +177,10 @@ class UiStatePublisher(MutableModel):
             self.derive_accounts,
             self.derive_providers,
             self.derive_requests,
+            self.derive_notifications,
             self.derive_discovery_health,
+            self.derive_workspace_updates,
+            self.derive_environment,
         )
         for derive in derives:
             try:

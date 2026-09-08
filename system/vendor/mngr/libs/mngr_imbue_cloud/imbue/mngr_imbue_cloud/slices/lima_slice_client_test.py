@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 
 from imbue.mngr.primitives import HostId
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
+from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_HOST_ID_HEX_LENGTH
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.errors import LimaCommandError
 from imbue.mngr_vps.primitives import VpsInstanceId
@@ -51,6 +54,27 @@ def test_box_ssh_command_targets_the_lima_user_with_the_pool_key() -> None:
     # non-login shell still finds limactl (extracted to /usr/local/bin by prep).
     assert command[-1].endswith("limactl list --json")
     assert "/usr/local/bin" in command[-1]
+
+
+def test_box_ssh_command_quotes_a_known_hosts_path_containing_a_space(tmp_path: Path) -> None:
+    """ssh splits UserKnownHostsFile on whitespace, so the pinned path needs its own quotes.
+
+    The known_hosts file is written beside the pool key, so a key directory whose
+    name contains a space produces a spaced path here without anyone choosing one.
+    """
+    key_dir = tmp_path / "pool keys"
+    key_dir.mkdir()
+    client = LimaSliceVpsClient(
+        box_address="box.example",
+        box_ssh_user="limahost",
+        private_key_path=str(key_dir / "id"),
+        box_host_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "A" * 20,
+    )
+    command = client._box_ssh_command("limactl list --json")
+    option = next(arg for arg in command if arg.startswith("UserKnownHostsFile="))
+    value = option.removeprefix("UserKnownHostsFile=")
+    assert value.startswith('"') and value.endswith('"'), option
+    assert " " in value, option
 
 
 def test_box_ssh_command_requires_a_private_key() -> None:
@@ -102,6 +126,13 @@ def test_destroy_instance_deletes_disk_when_instance_already_absent() -> None:
 
 def test_destroy_instance_raises_on_genuine_delete_failure() -> None:
     client = _recording_client({"limactl delete": (1, "", "permission denied")})
+    with pytest.raises(LimaCommandError):
+        client.destroy_instance(VpsInstanceId("mngr-slice-abc"))
+
+
+def test_destroy_instance_raises_when_limactl_itself_is_missing() -> None:
+    """The shell's "command not found" is not the instance being absent: the VM was never touched."""
+    client = _recording_client({"limactl delete": (127, "", "bash: limactl: command not found")})
     with pytest.raises(LimaCommandError):
         client.destroy_instance(VpsInstanceId("mngr-slice-abc"))
 
@@ -183,12 +214,16 @@ def test_provision_slice_vm_reserves_under_lock_then_starts_and_returns_box_chos
     # The ports come from the box reservation, and the instance/disk names are env-stamped.
     assert result.vm_ssh_host_port == 22001
     assert result.container_ssh_host_port == 22002
-    assert result.instance_name == f"mngr-slice-dev-josh-{host_id.get_uuid().hex}"
-    assert result.disk_name == f"mngr-slice-dev-josh-{host_id.get_uuid().hex}-data"
+    host_hex = host_id.get_uuid().hex[:SLICE_HOST_ID_HEX_LENGTH]
+    assert result.instance_name == f"mngr-slice-dev-josh-{host_hex}"
+    assert result.disk_name == f"mngr-slice-dev-josh-{host_hex}-data"
     # The reserve happened before the boot, and the boot was a separate command.
     reserve_idx = next(i for i, cmd in enumerate(client.recorded_commands) if "base64 -d | bash" in cmd)
     start_idx = next(i for i, cmd in enumerate(client.recorded_commands) if "limactl --log-level=info start" in cmd)
     assert reserve_idx < start_idx
+    # The boot must override lima's default 10-minute instance-running deadline:
+    # first boots on a loaded box legitimately take longer (mngr-internal#469).
+    assert "--timeout 25m" in client.recorded_commands[start_idx]
 
 
 def test_provision_slice_vm_raises_slice_capacity_error_when_box_is_full() -> None:

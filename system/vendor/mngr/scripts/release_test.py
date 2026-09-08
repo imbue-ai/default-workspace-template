@@ -1,3 +1,5 @@
+import ast
+import re
 import subprocess
 import sys
 import tomllib
@@ -5,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
 # scripts/release.py uses bare imports of its sibling modules (e.g.
 # `from changelog_release_utils import ...`), matching how it's invoked
@@ -14,11 +17,14 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from scripts.release import DEPENDENCY_COOLDOWN  # noqa: E402
 from scripts.release import _gate_release_on_pending_changelog_entries  # noqa: E402
 from scripts.release import _pluralize_entry  # noqa: E402
 from scripts.release import _realign_dep_string  # noqa: E402
 from scripts.release import temp_ref_of_working_tree  # noqa: E402
 from scripts.release import update_exclude_newer  # noqa: E402
+from scripts.utils import REPO_ROOT  # noqa: E402
+from scripts.utils import iter_standalone_project_dirs  # noqa: E402
 
 
 def _write_changelog_entry(tmp_path: Path, name: str, content: str = "- entry", project: str = "mngr") -> None:
@@ -189,3 +195,85 @@ def test_temp_ref_of_working_tree_snapshots_unstaged_edits_without_touching_stat
     assert _git(repo, "rev-parse", "HEAD") == head_before
     assert _git(repo, "status", "--porcelain") == "M a.txt"
     assert (repo / "a.txt").read_text() == "unstaged edit\n"
+
+
+def test_standalone_projects_use_the_rolling_supply_chain_cooldown() -> None:
+    """Every standalone uv project must express the cooldown as a rolling window.
+
+    A project excluded from the root workspace resolves against its own lock, so the
+    root's cutoff does not constrain it at all -- and nothing advances a second copy
+    of that cutoff: this script moves the root's and the mirror overlay's, and a
+    standalone project is neither. A pinned timestamp there would start rotting the
+    day it was written, silently widening that one project's supply-chain window. A
+    relative window cannot: it is always the current policy. This holds the window
+    equal to ``DEPENDENCY_COOLDOWN``, the single place the policy is stated, and
+    requires the uv floor that makes it load-bearing -- uv below 0.10 does not reject
+    a relative value, it drops the cooldown silently and discards the lockfile.
+
+    This lives here rather than in the root ``test_meta_ratchets.py`` because that
+    file is carried into the public mirror, where ``scripts/release.py`` is not: an
+    import of it there fails at collection. The public tree has no standalone
+    projects anyway (they are private apps), so nothing is lost by keeping the check
+    on this side of the boundary.
+    """
+    expected_window = f"{int(DEPENDENCY_COOLDOWN.total_seconds() // 86400)} days"
+    problems: list[str] = []
+    for project_dir in iter_standalone_project_dirs():
+        relative_dir = project_dir.relative_to(REPO_ROOT)
+        project_uv = tomllib.loads((project_dir / "pyproject.toml").read_text()).get("tool", {}).get("uv", {})
+        window = project_uv.get("exclude-newer")
+        if window != expected_window:
+            problems.append(f"{relative_dir}: [tool.uv] exclude-newer is {window!r}, expected {expected_window!r}")
+        required_version = project_uv.get("required-version")
+        if required_version is None or Version(str(required_version).lstrip(">=~^ ")) < Version("0.10"):
+            problems.append(
+                f"{relative_dir}: [tool.uv] required-version is {required_version!r}; "
+                "a relative exclude-newer needs uv >= 0.10, which older uv drops silently"
+            )
+    assert not problems, "Standalone uv projects must declare the rolling supply-chain cooldown:\n" + "\n".join(
+        f"  - {p}" for p in problems
+    )
+
+
+def test_mirrored_python_files_only_import_mirrored_scripts_modules() -> None:
+    """A file the public mirror carries must not import a ``scripts`` module it does not.
+
+    ``mirror/copy.bara.sky`` states this invariant in a comment ("The subset is
+    import-self-contained") but nothing enforced it, so the failure mode was a green
+    private test suite and a mirror gate that dies at collection: the public tree is
+    materialized, ``test_meta_ratchets.py`` comes across, the module it imports does
+    not, and every test in that file errors out. Checking it here turns a CI-only
+    discovery into a local one.
+
+    Only ``scripts`` imports are checked. ``libs/`` and ``apps/minds`` cross the
+    boundary wholesale, so an import of those cannot dangle; the ``scripts`` subset is
+    hand-picked file by file, which is what makes it easy to fall out of.
+    """
+    sky = (REPO_ROOT / "mirror" / "copy.bara.sky").read_text()
+    include_block = sky[sky.index("include = [") : sky.index("exclude = [")]
+    mirrored = set(re.findall(r'"([^"]+)"', include_block))
+
+    dangling: list[str] = []
+    for relative_path in sorted(mirrored):
+        if not relative_path.endswith(".py"):
+            continue
+        source_file = REPO_ROOT / relative_path
+        if not source_file.exists():
+            continue
+        tree = ast.parse(source_file.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("scripts."):
+                imported = node.module
+            elif isinstance(node, ast.Import) and any(a.name.startswith("scripts.") for a in node.names):
+                imported = next(a.name for a in node.names if a.name.startswith("scripts."))
+            else:
+                continue
+            imported_path = imported.replace(".", "/") + ".py"
+            if imported_path not in mirrored:
+                dangling.append(f"{relative_path} imports {imported}, which the mirror does not carry")
+
+    assert not dangling, (
+        "Mirrored files must be import-self-contained (see mirror/copy.bara.sky). Either add the "
+        "module to PUBLIC_FILES or move the importing code out of the mirrored file:\n"
+        + "\n".join(f"  - {d}" for d in dangling)
+    )

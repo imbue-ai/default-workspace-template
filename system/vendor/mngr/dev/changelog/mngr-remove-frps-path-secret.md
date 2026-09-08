@@ -1,0 +1,5 @@
+The share-relay justfile recipes (`render-share-relay`, `deploy-share-relay`) and the dev-relay provisioning script now treat `--plugin-auth-url` as the secret-free connector endpoint and pass the frps plugin secret via the `FRPS_AUTH_SECRET` environment variable (`provision_dev_relay_config.py` writes it into `relay.env`), matching the userinfo-based plugin auth that keeps the secret out of access-logged URL paths (issue #616).
+
+The `sharing.sh` Vault template documents the new delivery (plugin `addr` userinfo -> `Authorization: Basic` header) and that `FRPS_AUTH_SECRET` accepts a comma-separated set for zero-downtime rotation.
+
+`test_meta_ratchets.py`'s repo-walking `test_top_level_cov_flags_are_union_of_subproject_cov_flags` is now marked `@pytest.mark.flaky` with a 60s per-test timeout, following the file's existing import-linter precedent: it tripped the global 10s pytest-timeout on a slow CI sandbox (an incidental flake hit on this PR's runs; its `..._omit_covers_subproject_omits` sibling got the same marks on main independently).

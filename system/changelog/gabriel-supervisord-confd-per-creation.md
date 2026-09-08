@@ -4,6 +4,4 @@ Two agents building two independent creations in one workspace used to block eac
 
 `system_interface` is the one program still declared in the main config, and only for an external reason: the minds desktop client's recovery probe reads that file with `configparser`, which does not follow supervisord's `[include]`, so moving it would silently degrade the probe's port and health checks. It moves once the include-aware probe (imbue-ai/mngr-internal#171) has shipped in a minds release.
 
-The root `pyproject.toml` no longer gains an entry per scaffolded app. Built-in services must stay listed there -- a root-closure-scoped `uv sync` prunes members outside the root closure and deletes their console scripts, which took `owner-exec` down once -- but scaffolded creations are covered by two other layers instead: mngr's restore and update scripts sync with `--all-packages`, and every scaffolded program runs `uv run --all-packages <name>`, which reinstates a pruned member on the next restart.
-
 Start order is unchanged: supervisord orders programs by `(priority, name)` and every program uses the default priority, so the declaring file has no bearing on startup.

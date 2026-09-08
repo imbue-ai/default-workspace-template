@@ -1,6 +1,8 @@
 import json
 import queue
 import threading
+from collections.abc import Mapping
+from collections.abc import Sequence
 from typing import Any
 
 from loguru import logger as _loguru_logger
@@ -52,12 +54,12 @@ class WebSocketBroadcaster(MutableModel):
     # successful enqueue. A client is only disconnected once its counter reaches
     # ``_MAX_CONSECUTIVE_QUEUE_FULL`` -- a brief stall is tolerated.
     _consecutive_queue_full_by_id: dict[int, int] = PrivateAttr(default_factory=dict)
-    # Self-reported identity of each connected client (client_id, active
-    # layout slug, device kind), keyed by ``id(queue)``. Populated when the
-    # client sends its ``client_state`` registration over the WebSocket;
-    # absent for clients that have not registered (yet). Entries die with the
-    # connection, so "connected client on layout X" means exactly "an open,
-    # registered WebSocket whose latest report named X".
+    # Self-reported identity of each connected client (client_id, active view,
+    # device kind), keyed by ``id(queue)``. Populated when the client sends its
+    # ``client_state`` registration over the WebSocket; absent for clients that
+    # have not registered (yet). Entries die with the connection, so "connected
+    # client on view X" means exactly "an open, registered WebSocket whose latest
+    # report named X".
     _client_info_by_queue_id: dict[int, dict[str, str]] = PrivateAttr(default_factory=dict)
 
     def register(self) -> queue.Queue[str | None]:
@@ -82,7 +84,7 @@ class WebSocketBroadcaster(MutableModel):
         self,
         client_queue: queue.Queue[str | None],
         client_id: str,
-        active_layout_slug: str,
+        active_view: str,
         device_kind: str,
     ) -> None:
         """Record (or update) the self-reported identity of one connected client."""
@@ -91,7 +93,7 @@ class WebSocketBroadcaster(MutableModel):
                 return
             self._client_info_by_queue_id[id(client_queue)] = {
                 "client_id": client_id,
-                "active_layout_slug": active_layout_slug,
+                "active_view": active_view,
                 "device_kind": device_kind,
             }
 
@@ -106,31 +108,31 @@ class WebSocketBroadcaster(MutableModel):
             info = self._client_info_by_queue_id.get(id(client_queue))
             return dict(info) if info is not None else None
 
-    def has_client_on_layout(self, layout_slug: str) -> bool:
-        """Whether any registered client currently has ``layout_slug`` active."""
+    def connected_client_ids(self) -> set[str]:
+        """The ids of every registered client with at least one open window."""
         with self._lock:
-            return any(info["active_layout_slug"] == layout_slug for info in self._client_info_by_queue_id.values())
+            return {info["client_id"] for info in self._client_info_by_queue_id.values()}
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
-        self._broadcast_to_matching(message, target_layout_slug=None)
+        self._broadcast_to_matching(message, target_client_id=None)
 
-    def broadcast_to_layout(self, message: dict[str, Any], layout_slug: str) -> None:
-        """Send a message only to registered clients whose active layout is ``layout_slug``.
+    def broadcast_to_client(self, message: dict[str, Any], client_id: str) -> None:
+        """Send a message only to the windows of one client (every registered connection carrying its id).
 
-        Clients that have not (yet) sent their ``client_state`` registration
-        never match: without a report there is no layout to compare against.
+        Connections that have not (yet) sent their ``client_state`` registration never match:
+        without a report there is no client id to compare against.
         """
-        self._broadcast_to_matching(message, target_layout_slug=layout_slug)
+        self._broadcast_to_matching(message, target_client_id=client_id)
 
-    def _broadcast_to_matching(self, message: dict[str, Any], target_layout_slug: str | None) -> None:
+    def _broadcast_to_matching(self, message: dict[str, Any], target_client_id: str | None) -> None:
         text = json.dumps(message)
         with self._lock:
             dead_queues: list[queue.Queue[str | None]] = []
             for client_queue in self._client_queues:
-                if target_layout_slug is not None:
+                if target_client_id is not None:
                     info = self._client_info_by_queue_id.get(id(client_queue))
-                    if info is None or info["active_layout_slug"] != target_layout_slug:
+                    if info is None or info["client_id"] != target_client_id:
                         continue
                 try:
                     client_queue.put_nowait(text)
@@ -167,135 +169,66 @@ class WebSocketBroadcaster(MutableModel):
             _MAX_CONSECUTIVE_QUEUE_FULL,
         )
 
-    def broadcast_agents_updated(self, agents: list[dict[str, Any]]) -> None:
-        """Broadcast an agents_updated event."""
-        self.broadcast({"type": "agents_updated", "agents": agents})
-
-    def broadcast_apps_updated(self, apps: list[dict[str, str]]) -> None:
-        """Broadcast an apps_updated event."""
+    def broadcast_apps_updated(self, apps: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast the whole inventory (contracts.md section 8): every app with its instances."""
         self.broadcast({"type": "apps_updated", "apps": apps})
 
-    def broadcast_proto_agent_created(
-        self,
-        agent_id: str,
-        name: str,
-        creation_type: str,
-        parent_agent_id: str | None,
-    ) -> None:
-        """Broadcast a proto_agent_created event."""
+    def broadcast_projects_updated(self, projects: Sequence[Mapping[str, Any]]) -> None:
+        """Broadcast every project after a project write (contracts.md section 8)."""
+        self.broadcast({"type": "projects_updated", "projects": projects})
+
+    def broadcast_tab_rebound(self, client_id: str, view_id: str, tab_id: str, address: str) -> None:
+        """Tell the owning client that one of its tabs now shows another instance (the tab route)."""
         self.broadcast(
             {
-                "type": "proto_agent_created",
-                "agent_id": agent_id,
-                "name": name,
-                "creation_type": creation_type,
-                "parent_agent_id": parent_agent_id,
+                "type": "tab_rebound",
+                "client_id": client_id,
+                "view_id": view_id,
+                "tab_id": tab_id,
+                "address": address,
             }
         )
 
-    def broadcast_proto_agent_completed(self, agent_id: str, success: bool, error: str | None) -> None:
-        """Broadcast a proto_agent_completed event."""
+    def broadcast_layout_updated(self, view_id: str, client_id: str, save_id: str) -> None:
+        """A client layout was written (a browser's save or the shell's own edit); the owning windows refetch it."""
         self.broadcast(
             {
-                "type": "proto_agent_completed",
-                "agent_id": agent_id,
-                "success": success,
-                "error": error,
+                "type": "layout_updated",
+                "view_id": view_id,
+                "client_id": client_id,
+                "save_id": save_id,
             }
         )
+
+    def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
+        """A client's stored active view moved; its other windows switch to it."""
+        self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})
 
     def broadcast_layout_op(
         self,
         op: str,
         args: dict[str, Any],
-        requester_agent_id: str = "",
-        target_layout_slug: str | None = None,
+        requester: str = "",
+        target_client_id: str | None = None,
     ) -> None:
-        """Broadcast a layout_op event telling the frontend to mutate the dockview layout.
+        """Send a transient ``layout_op`` (maximize, restore, refresh, the interface reload) to the browser.
 
-        The frontend dispatches on ``op`` (e.g. ``open``, ``focus``, ``split``,
-        ``move``, ``close``, ``rename``, ``maximize``, ``restore``, ``replace-url``,
-        ``refresh``) and applies the corresponding dockview primitive. ``args`` is
-        an op-specific payload keyed by ref (e.g. ``{"ref": "service:web"}`` for
-        ``open``).
-
-        ``requester_agent_id`` is the ``MNGR_AGENT_ID`` of the agent that invoked
-        ``system/scripts/layout.py``. The frontend uses it to anchor splits against the
-        requester's own chat panel and to resolve the ``self`` ref.
-
-        ``target_layout_slug`` restricts delivery to clients whose active layout
-        matches (mutating ops are layout-targeted); None broadcasts to everyone
-        (state-preserving ops like ``refresh`` / ``reload_system_interface``).
+        ``requester`` is the address of the instance that invoked ``system/scripts/layout.py``
+        (its own instance); the frontend resolves the ``self`` address with it.
+        ``target_client_id`` names the client whose windows apply the op; None reaches every
+        window (``refresh`` of a whole app, ``reload_system_interface``).
         """
-        message = {"type": "layout_op", "op": op, "args": args, "requester_agent_id": requester_agent_id}
-        if target_layout_slug is None:
+        message = {
+            "type": "layout_op",
+            "op": op,
+            "args": args,
+            "requester": requester,
+            "target_client_id": target_client_id,
+        }
+        if target_client_id is None:
             self.broadcast(message)
         else:
-            self.broadcast_to_layout(message, target_layout_slug)
-
-    def broadcast_layout_saved(self, layout_slug: str, display_name: str, saved_by_client_id: str) -> None:
-        """Broadcast that a named layout's content was saved.
-
-        Sent to every client (not just those on the layout): the "+" menu
-        dialogs list all layouts, so everyone needs the fresh registry. A
-        client with the layout active (other than the saver, identified by
-        ``saved_by_client_id``) re-fetches and re-applies the content.
-        """
-        self.broadcast(
-            {
-                "type": "layout_saved",
-                "layout_slug": layout_slug,
-                "display_name": display_name,
-                "saved_by_client_id": saved_by_client_id,
-            }
-        )
-
-    def broadcast_layout_deleted(self, layout_slug: str, fallback_layout_slug: str) -> None:
-        """Broadcast that a named layout was deleted.
-
-        Clients with the layout active switch to ``fallback_layout_slug``.
-        """
-        self.broadcast(
-            {
-                "type": "layout_deleted",
-                "layout_slug": layout_slug,
-                "fallback_layout_slug": fallback_layout_slug,
-            }
-        )
-
-    def broadcast_load_layout(self, layout_slug: str, display_name: str, target_client_id: str | None) -> None:
-        """Broadcast an agent-driven request that a client switch to a layout.
-
-        ``target_client_id`` names the one client that should switch; None
-        means every client switches (the fallback when the requesting client
-        could not be resolved from message metadata).
-        """
-        self.broadcast(
-            {
-                "type": "load_layout",
-                "layout_slug": layout_slug,
-                "display_name": display_name,
-                "target_client_id": target_client_id,
-            }
-        )
-
-    def broadcast_terminal_session(self, terminal_id: str | None, session_id: str, session_name: str) -> None:
-        """Broadcast that a terminal tab's tmux client switched to / renamed a session.
-
-        ``terminal_id`` identifies the dockview tab whose ttyd client changed
-        session (resolved server-side from the client tty for a session switch);
-        it is ``None`` for a rename, where the frontend matches the affected tab
-        by ``session_id`` instead. The frontend updates the matching tab's title
-        to ``session_name``.
-        """
-        self.broadcast(
-            {
-                "type": "terminal_session",
-                "terminal_id": terminal_id,
-                "session_id": session_id,
-                "session_name": session_name,
-            }
-        )
+            self.broadcast_to_client(message, target_client_id)
 
     def shutdown(self) -> None:
         """Signal all clients to disconnect by sending None sentinel."""

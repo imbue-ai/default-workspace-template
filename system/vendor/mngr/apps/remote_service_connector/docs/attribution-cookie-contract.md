@@ -136,8 +136,8 @@ download is counted (and tagged, when the cookie is present):
 https://minds.imbue.com/download?platform=mac
 ```
 
-- `platform=mac` (or the precise `mac-arm64`): 302 to the latest macOS
-  arm64 installer (ToDesktop's stable channel URL).
+- `platform=mac` (or the precise `mac-arm64`): 302 to the macOS arm64
+  `.dmg` the stable release channel serves, read from `stable-mac.yml`.
 - `platform=source`: 302 to https://github.com/imbue-ai/mngr, the escape
   hatch for platforms without builds.
 - Unknown or missing `platform`: 404. Coordinate new platform values with

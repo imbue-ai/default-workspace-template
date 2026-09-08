@@ -1,0 +1,1 @@
+This is the merge of `minh/auth-provider-lanes` (the provider-accounts sign-in work) into current `main`. It carries no changes of its own beyond resolving the merge; see that branch's `minh-auth-provider-lanes.md` entry for what actually changed.

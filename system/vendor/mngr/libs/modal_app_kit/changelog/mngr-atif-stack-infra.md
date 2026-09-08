@@ -1,0 +1,1 @@
+Marked the sentry tests module flaky and raised its per-test timeout to 30s: the SDK's cold-sandbox first-use setup has blown the global 10s pytest-timeout in CI on both the first attempt and the flaky retry.

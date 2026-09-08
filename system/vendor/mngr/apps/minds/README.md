@@ -7,7 +7,7 @@ Run persistent, autonomous AI agents with web access and global forwarding.
 The minds app creates and manages persistent Claude agents running in Docker containers. Each agent gets:
 
 - A local web interface accessible through the desktop client
-- Optional machine-level sharing over a self-hosted relay, with TLS terminated inside the workspace
+- Optional workspace sharing over a self-hosted relay, with TLS terminated inside the workspace
 - Apps (terminal, etc.) and background services supervised by supervisord
 - The ability to expose app ports via both local and global URLs
 
@@ -30,15 +30,14 @@ app prints on startup.
    - A web UI for creating agents from template repositories
    - Reverse proxying to agent web servers (HTTP + WebSocket)
    - A servers page showing local and shared URLs per agent
-   - Controls for enabling/disabling machine-level sharing (a per-workspace share on a self-hosted relay)
+   - Controls for enabling/disabling sharing (a per-workspace share on a self-hosted relay)
 
 2. **Agents** are created from template repositories (like [default-workspace-template](https://github.com/imbue-ai/default-workspace-template)) using `mngr create`. The template's `.mngr/settings.toml` drives all configuration.
 
-3. Inside each minds container, the "primary" agent (`system-services`) runs only the bootstrap and background services -- it is a plain `command`-type agent whose window-0 command is `sleep infinity`, so no claude is ever involved. The user's actual chat agent is a separate `mngr` agent created by the bootstrap on first boot (named after the host). `CLAUDE_CONFIG_DIR` is deliberately unset workspace-wide, so every claude in the workspace (mngr-launched agents and a bare `claude` in a terminal alike) shares claude's own default `~/.claude` -- auth, plugins, marketplaces, and sessions are configured once and shared. Destroying chat agents does not affect services; the services agent is hidden from the UI agent list (it carries `is_primary=true`) and protected against direct destroy.
+3. Inside each minds container, the "primary" agent (`system-services`) runs only the bootstrap and background services -- it is a plain `command`-type agent whose window-0 command is `sleep infinity`, so no claude is ever involved. The user's chat agents are separate `mngr` agents created on demand: the workspace boots with no chat (it opens on its new-tab screen), and each chat binds to a provider account -- a folder under `~/.minds/accounts` minted by the sign-in flow -- when it is created (the credential rides `mngr create`'s own flags, so claude chats point at their account via a per-agent `CLAUDE_CONFIG_DIR` in the agent's env file, and other harnesses follow a credential symlink in the agent's state directory). Destroying chat agents does not affect services; the services agent is hidden from the UI agent list (it carries `is_primary=true`) and protected against direct destroy.
 
 4. Inside the services agent's Docker container:
    - The bootstrap (`uv run bootstrap`) runs first-boot setup and then execs `supervisord -n`, which supervises the background services declared as `[program:*]` sections in `supervisord.conf`
-   - On first boot the bootstrap also creates the initial chat agent (gated by `data/.state/initial_chat_created`)
    - Apps register their ports via `system/scripts/forward_port.py` into `data/.state/apps.toml`
    - An **app watcher** service monitors `apps.toml` and writes server events to `events.jsonl` for discovery
    - A **share-gateway** service watches `data/.secrets/share.env` for relay materials and runs the workspace's share stack (relay tunnel + in-workspace TLS) while sharing is enabled

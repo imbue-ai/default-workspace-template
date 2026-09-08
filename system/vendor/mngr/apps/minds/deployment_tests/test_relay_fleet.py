@@ -31,6 +31,8 @@ from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
 from imbue.minds.deployment_tests.helpers import ci_admin_auth_header
 from imbue.minds.envs.vault_reader import VaultPath
 from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.mngr_imbue_cloud.primitives import CI_TIER
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
@@ -44,6 +46,18 @@ _RELAY_RECOVERY_POLL_SECONDS: Final[float] = 2.0
 
 def _connector_url(env: SharedEnvHandle) -> str:
     return str(env.urls.connector_url).rstrip("/")
+
+
+def _skip_on_per_run_ci_env(env: SharedEnvHandle) -> None:
+    """Per-run ``ci-*`` envs never carry a relay fleet, so the fleet checks skip there.
+
+    Relays are registered per region label by ``just provision-dev-relay``
+    (dev/ci; the env name is the region label) or the staging/production
+    runbook -- the CI orchestrator's ephemeral envs go through neither, so an
+    empty fleet is their designed state, not an outage.
+    """
+    if tier_for_env_name(str(env.urls.env_name)) == CI_TIER:
+        pytest.skip("per-run ci envs provision no relay fleet; these checks target standing envs")
 
 
 def _auth_header(user: VerifiedUserHandle) -> dict[str, str]:
@@ -67,7 +81,9 @@ def _probe_healthz(ip_address: str) -> bool:
 @pytest.mark.timeout(180)
 def test_relay_fleet_is_registered_and_healthy(shared_env: Callable[[str], SharedEnvHandle]) -> None:
     """Every active relay row answers its healthz probe directly (fleet inventory matches reality)."""
-    relays = _list_active_relays(_connector_url(shared_env("default")))
+    env = shared_env("default")
+    _skip_on_per_run_ci_env(env)
+    relays = _list_active_relays(_connector_url(env))
     assert relays, "no active relay registered for this env (run `just provision-dev-relay`)"
     for relay in relays:
         assert _probe_healthz(str(relay["ip_address"])), f"relay {relay['relay_id']} healthz unreachable"
@@ -78,7 +94,9 @@ def test_share_assignment_returns_the_regions_relay_fleet(
     shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
     """A fresh share's relay token fetches an assignment naming every active relay of its region."""
-    base = _connector_url(shared_env("default"))
+    env = shared_env("default")
+    _skip_on_per_run_ci_env(env)
+    base = _connector_url(env)
     host_id = f"host-{uuid.uuid4().hex}"
     created = httpx.post(
         f"{base}/shares",
@@ -140,7 +158,9 @@ def test_relay_failover_keeps_the_region_serviceable(
     Skips on single-relay regions (dev/ci envs) -- the multi-relay shape is a
     staging/production property.
     """
-    base = _connector_url(shared_env("default"))
+    env = shared_env("default")
+    _skip_on_per_run_ci_env(env)
+    base = _connector_url(env)
     relays = _list_active_relays(base)
     relays_by_region: dict[str, list[dict[str, Any]]] = {}
     for relay in relays:

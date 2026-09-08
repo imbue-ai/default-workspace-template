@@ -16,7 +16,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+import scaffold_flask_lib
+from app_manifest.manifest import load_manifest
+from app_manifest.primitives import MAX_DISPLAY_NAME_LENGTH
+
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
+
+_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
 # The shipped shape: the main config declares no programs at all, only the
 # daemon's own sections and the [include] that pulls in the drop-ins.
@@ -54,9 +61,9 @@ members = ["system/apps/*"]
 
 def _dropin(name: str, port: int | None) -> str:
     command = (
-        f'command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run --all-packages {name}"'
+        f'command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && {name}"'
         if port is not None
-        else f"command=uv run --all-packages {name}"
+        else f"command={name}"
     )
     return f"[program:{name}]\n{command}\ndirectory=/home/user/workspace\n"
 
@@ -73,6 +80,8 @@ def _make_workspace(
 
 
 def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess[str]:
+    icon = root.parent / "icon.svg"
+    icon.write_text(_ICON)
     return subprocess.run(
         [
             sys.executable,
@@ -81,6 +90,8 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
             name,
             "--description",
             "a test app",
+            "--icon-file",
+            str(icon),
             "--repo-root",
             str(root),
             "--skip-uv-sync",
@@ -97,7 +108,7 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     `uv.lock` is the one shared file a real scaffold rewrites, and only because
     `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
     """
-    root = _make_workspace(tmp_path, {"browser": 8081, "app-watcher": None})
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "app-watcher": None})
     before_conf = (root / "system/supervisord.conf").read_text()
     before_pyproject = (root / "pyproject.toml").read_text()
 
@@ -106,9 +117,9 @@ def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
 
     program = (root / "system/supervisord.conf.d/news.conf").read_text()
     assert "[program:news]" in program
-    # A scaffolded member is not a root dependency, so a root-closure-scoped
-    # `uv sync` prunes it; --all-packages is what reinstates it on restart.
-    assert "uv run --all-packages news" in program
+    # The app registers its own manifest and runs its own tool entry point, so
+    # nothing about it lives in a file another creation also writes.
+    assert "--manifest system/apps/news/app.toml" in program
     assert (root / "system/apps/news/src/news/runner.py").exists()
 
     assert (root / "system/supervisord.conf").read_text() == before_conf
@@ -143,7 +154,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
 
 def test_auto_picked_port_avoids_a_port_held_by_a_dropin(tmp_path: Path) -> None:
     """8080 and 8081 are taken by drop-ins alone, so the next app gets 8082."""
-    root = _make_workspace(tmp_path, {"browser": 8081, "dashboard": 8080})
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081, "dashboard": 8080})
 
     result = _scaffold(root, "news")
     assert result.returncode == 0, result.stderr
@@ -159,7 +170,7 @@ def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> 
     fails. Refusing is the only outcome the agent can act on.
     """
     root = _make_workspace(
-        tmp_path,
+        tmp_path / "workspace",
         {},
         main_conf=_MAIN_CONF.replace("files = supervisord.conf.d/*.conf", "files = programs.d/*.conf"),
     )
@@ -175,7 +186,7 @@ def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> 
 def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: Path) -> None:
     """The port pre-flight follows the declared globs, so a renamed directory is still scanned."""
     root = _make_workspace(
-        tmp_path,
+        tmp_path / "workspace",
         {},
         main_conf=_MAIN_CONF.replace(
             "files = supervisord.conf.d/*.conf",
@@ -192,7 +203,7 @@ def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: 
 
 
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
-    root = _make_workspace(tmp_path, {"browser": 8081})
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
 
     result = _scaffold(root, "news", "--port", "8081")
 
@@ -207,7 +218,7 @@ def test_name_already_declared_by_a_dropin_is_refused(tmp_path: Path) -> None:
     The refusal has to come before anything is written: a half-scaffolded lib
     left in the tree is foreign dirt the next hardening pass cannot clean.
     """
-    root = _make_workspace(tmp_path, {"browser": 8081})
+    root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
 
     result = _scaffold(root, "browser")
 
@@ -222,7 +233,7 @@ def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
     A duplicate there does not just shadow the other declaration -- it breaks the
     config for every program at the next reread.
     """
-    root = _make_workspace(tmp_path, {})
+    root = _make_workspace(tmp_path / "workspace", {})
     (root / "system/supervisord.conf.d/oom-tag-backstop.conf").write_text(
         "[eventlistener:oom-tag-backstop]\ncommand=python3 backstop.py\n"
     )
@@ -232,3 +243,43 @@ def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "[eventlistener:oom-tag-backstop]" in result.stderr
     assert not (root / "system/apps").exists()
+
+
+def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None:
+    lib_dir = scaffold_flask_lib._write_lib(
+        tmp_path, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
+    )
+
+    manifest = load_manifest(lib_dir / "app.toml")
+
+    assert lib_dir == tmp_path / "system" / "apps" / "inbox_status"
+    assert manifest.name == "inbox-status"
+    assert manifest.display_name == "Inbox status"
+    assert manifest.icon == "icon.svg"
+    assert manifest.instances is False
+    assert manifest.priority == "user"
+    assert manifest.program == "inbox-status"
+    assert manifest.default_shortcut is None
+
+
+def test_display_name_falls_back_to_the_description() -> None:
+    assert scaffold_flask_lib._display_name("inbox status dashboard", None) == "inbox status dashboard"
+    assert scaffold_flask_lib._display_name("inbox status dashboard", " Inbox ") == "Inbox"
+
+
+@pytest.mark.parametrize("candidate", ["", "   ", "x" * 65, 'say "hi"'])
+def test_display_name_refuses_what_the_manifest_would_not_take(candidate: str) -> None:
+    with pytest.raises(SystemExit):
+        scaffold_flask_lib._display_name("description", candidate)
+
+
+def test_the_display_name_limit_matches_the_library() -> None:
+    # The scaffold runs in its own PEP 723 environment and cannot import the
+    # library, so it carries its own copy of the limit.
+    assert scaffold_flask_lib.MAX_DISPLAY_NAME_LENGTH == MAX_DISPLAY_NAME_LENGTH
+
+
+def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
+    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
+    assert '"shell:location"' in source
+    assert "minds-location" not in source

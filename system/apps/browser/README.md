@@ -14,18 +14,54 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   and streamed to the viewer as live H.264 (pixelflux, damage-driven stripes) plus
   Opus audio (pcmflux) over a WebSocket, with XTEST input, resize, and clipboard back
   the other way (see `videopipe.py` / `audiopipe.py` / `mediastream.py`). Each browser
-  is addressed by a random ~2-word english NAME (e.g. `alex-smith`), generated on
-  demand and never reused; the fleet starts empty and there is no default
-  browser.
+  is addressed by NAME: daemon-minted ones are numbered `browser-<N>` (shown as
+  "Browser N" in the workspace UI -- the same display-name/canonical-name pairing
+  chats and minds hosts use), while browsers created by older builds keep their
+  random english names. Closing a browser retires its name and deletes its
+  profile, which is what frees the number for a later create; the fleet starts
+  empty and there is no default browser.
 - **Ownership** is one locked, compare-and-set state machine per browser. Agents
   never preempt each other -- a second agent waits in a FIFO queue
   (monitor-and-wait). The human can take control from the UI at any time, which
   always wins and pins the browser to the human. For direct control ownership is a
   sticky lease (acquired on the first command, re-checked before every command, and
   auto-released when idle); for `task` it is bound to the live request connection.
+- **Instances** (`instances.py`, `bridged_fleet.py`): the daemon also serves the
+  instances API of the workspace app model (`/_instances`, mounted on the same
+  Flask app because the daemon serves its own origin; the manifest names no
+  separate `instances_url`). One instance per browser: key = the name, URL
+  `/?session=<name>`, title `Browser N` for a numbered name and a legacy name
+  verbatim, status `working` while an agent holds control, `idle` otherwise (a
+  browser still launching included), `error` once it crashed; `explicit`
+  lifetime, not renameable. `new` creates through the same path as `POST
+  /browsers` (409 with the reason while the fleet is full or Chromium is not
+  installed), delete is the same close as `DELETE /browsers/<name>`, and a
+  location report with an absolute `http(s)` URL navigates the live browser's
+  active tab (409 while an agent holds it, while it is launching, stopped, or
+  crashed, or when Chromium refuses the navigation; a rooted path is 400) and checkpoints
+  the manifest so a restart restores the new page. Reads, delete, and location
+  answer 503 until the restore finishes,
+  like the daemon's own state-changing routes; create does not wait, like `POST
+  /browsers`. A failure of the daemon itself underneath a verb (its loop not
+  answering in time, a startup error) is a 500 with a detail body. Every fleet
+  event that changes the list or a status (a registration, a launch reaching
+  `running` or failing, a close, a crash, every ownership write) nudges the shell
+  (`POST <shell>/api/apps/browser/changed`) from a daemon thread, so a slow shell
+  never stalls the event loop. The `/browsers` routes serve the CLI; the shell
+  reaches the daemon only through the instances API. Every browser is
+  `stoppable`: `POST /_instances/<name>/stop` ends its Chromium (refreshing its
+  tab list first)
+  but keeps the browser, its profile, and its tabs, and lists it as `stopped`;
+  `.../start` relaunches it on those tabs from the same profile (409 while it
+  is still launching, or when the fleet is full). A stopped browser does not
+  count toward the fleet cap, is restored as stopped after a daemon restart
+  (the manifest entry's `stopped` flag), refuses the fleet CLI's verbs with
+  status `stopped` and a hint naming `layout.py start`, and shows a "stopped"
+  overlay with a Start button in the viewer (which calls the daemon's own
+  `POST /browsers/<name>/start`; `.../stop` is its counterpart).
 - **CLI** (`agentic-browser-fleet`): the thin client the agent uses to drive the
   fleet. The fleet starts empty, so the first step is always `new` (it prints the
-  random name of the browser it started); every other command takes that
+  name of the browser it started); every other command takes that
   `<name>`. Primary path is **direct control** -- `state <name>` shows the page as
   a numbered list of clickable elements, then `open`/`click`/`input`/`scroll`/
   `keys`/`screenshot`/`tab` act on it (lifting browser-use's own executor against
@@ -41,8 +77,15 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
   does this itself, we just point `user_data_dir` at a durable dir. A tiny manifest
-  (`data/.state/browser-fleet.json`) records which browsers existed and their tab
-  URLs. Both the profiles and the manifest live on the workspace volume and are
+  (`data/.apps/browser/instances.json`, the app's instance records) records which
+  browsers existed and their tab URLs. It is checkpointed every ten seconds and
+  once more when the daemon is stopped: supervisord signals the daemon alone
+  (`stopasgroup=false`), so that
+  final checkpoint runs while every Chromium can still be asked for its tabs, and only
+  then does the daemon close each browser. Each browser also keeps the tab list its
+  last successful query returned, and reports that list whenever Chromium cannot
+  answer (still launching, dying, crashed), so a checkpoint never records a browser
+  as having no tabs because the query failed. Both the profiles and the manifest live on the workspace volume and are
   captured by the restic host backup (`data/` is gitignored, so neither rides GitHub
   sync); a backup restore brings the tab list back (logged out only if the profiles
   themselves were lost). On daemon startup the
@@ -51,7 +94,8 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   "initializing" until restore finishes, while `ls`/`state` stay open. A fresh
   workspace starts with an empty fleet (no default browser); the first `new`
   creates one. `close <name>` retires a browser and forgets its profile; a
-  crashed browser is never restored as healthy.
+  crashed browser is never restored as healthy; a stopped browser comes back
+  stopped, with its tabs, until it is started.
   - The profile dir name contains the literal `browser-use-user-data-dir-` substring
     on purpose -- it makes browser_use's `_copy_profile()` use the dir in place
     instead of copying it to a temp dir (which would silently defeat persistence).

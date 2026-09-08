@@ -1,0 +1,1 @@
+Staging branch for the chat data-model simplification work. The only changes to this project are those delivered by merging `mngr/update-auth-pr` (the provider-accounts sign-in refactor) as the branch's base -- see that branch's `mngr-update-auth-pr.md` and `minh-auth-provider-lanes.md` entries for the substance.

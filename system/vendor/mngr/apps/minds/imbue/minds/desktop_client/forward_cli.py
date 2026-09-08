@@ -48,10 +48,10 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.config.data_types import MNGR_BINARY
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backend_resolver import ParsedAgentsResult
-from imbue.minds.desktop_client.backend_resolver import REQUESTS_EVENT_SOURCE_NAME
 from imbue.minds.desktop_client.backend_resolver import SERVICES_EVENT_SOURCE_NAME
 from imbue.minds.desktop_client.backend_resolver import ServiceDeregisteredRecord
 from imbue.minds.desktop_client.backend_resolver import parse_service_log_record
+from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.errors import EnvelopeStreamConsumerError
 from imbue.minds.utils.secret_redaction import redact_secret_flag_values
 from imbue.mngr.api.discovery_aggregator import AggregatorDelta
@@ -74,8 +74,29 @@ _PREAUTH_TOKEN_LENGTH: Final[int] = 64
 
 OnAgentDiscoveredCallback = Callable[[AgentId, RemoteSSHInfo | None, str], None]
 OnAgentDestroyedCallback = Callable[[AgentId], None]
-OnSystemInterfaceBackendFailureCallback = Callable[[AgentId, SystemInterfaceBackendFailureReason, int | None], None]
+OnSystemInterfaceBackendFailureCallback = Callable[
+    [AgentId, SystemInterfaceBackendFailureReason, int | None, str | None], None
+]
 OnUnexpectedExitCallback = Callable[[int], None]
+
+
+def _parse_backend_failure_reason(raw_reason: str) -> SystemInterfaceBackendFailureReason:
+    """Map an envelope's ``reason`` string to the enum, falling back to ``CONNECT_ERROR``.
+
+    A reason this build does not know is still a report that the plugin could
+    not reach a backend, so it is read as the generic connection-class failure
+    rather than dropped. Producer and consumer ship pinned to the same commit,
+    so this should never fire -- it exists so that if the pinning ever slips,
+    the cost is a coarser verdict rather than a workspace whose outage minds
+    never hears about at all.
+    """
+    try:
+        return SystemInterfaceBackendFailureReason(raw_reason)
+    except ValueError:
+        logger.warning(
+            "Unknown system_interface_backend_failure reason {!r}; treating it as a connection failure", raw_reason
+        )
+        return SystemInterfaceBackendFailureReason.CONNECT_ERROR
 
 
 class ForwardSubprocessConfig(FrozenModel):
@@ -209,6 +230,15 @@ class EnvelopeStreamConsumer(MutableModel):
             "present, and are dropped by the observe handler."
         ),
     )
+    sleep_tracker: SleepTracker | None = Field(
+        default=None,
+        frozen=True,
+        description=(
+            "Records the windows in which this process was not running, so an errored snapshot "
+            "whose poll straddled one is treated like the pre-start replay: the error is dropped and "
+            "the snapshot advances no freshness. None (tests, embedded factories) fences nothing."
+        ),
+    )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # The shared span-aware, per-provider discovery reconciler. Every parsed
@@ -235,6 +265,9 @@ class EnvelopeStreamConsumer(MutableModel):
     # the agents on each host when building the resolver's view.
     _ssh_by_host_id: dict[str, RemoteSSHInfo] = PrivateAttr(default_factory=dict)
     _services_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
+    # Parallel to _services_by_agent: {agent_id_str: {service_name: registered
+    # SVG icon markup}}. Untrusted workspace content, sanitized by consumers.
+    _icons_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
     # Parallel to _services_by_agent: {agent_id_str: {service_name: origin label}}.
     # Carries each service's public origin hostname label (``<name>-<rand>``) so
     # the resolver -- and thus the Share tab -- can build per-service share links.
@@ -253,11 +286,6 @@ class EnvelopeStreamConsumer(MutableModel):
     # blocks on the event so `minds run` can learn the port at startup.
     _listening_event: threading.Event = PrivateAttr(default_factory=threading.Event)
     _listening_port: int | None = PrivateAttr(default=None)
-    # Mirror of the plugin's per-agent ``ForwardResolver`` service map, fed by
-    # ``resolver_snapshot`` envelopes. Used by minds' recovery-diagnostics path
-    # to render Q7 (whether the plugin has seen the agent's system_interface).
-    # Empty dict on a fresh / restarted plugin until the first envelope arrives.
-    _resolver_snapshot_by_agent: dict[str, dict[str, str]] = PrivateAttr(default_factory=dict)
 
     # -- Public callback registration -------------------------------------
 
@@ -276,14 +304,14 @@ class EnvelopeStreamConsumer(MutableModel):
     ) -> None:
         """Register a callback fired for each ``system_interface_backend_failure`` forward-stream envelope.
 
-        The callback receives ``(agent_id, reason, status_code)``. ``reason``
-        is a ``SystemInterfaceBackendFailureReason`` enum value (CONNECT_ERROR /
-        SSE_EOF / ERROR_RESPONSE / UNRESOLVED / STALLED); ``status_code`` is set
-        when ``reason`` is ``ERROR_RESPONSE`` (the backend's non-2xx status) and
-        ``None`` otherwise. ``STALLED`` is the one reason that does not report a
-        failed request: it means the backend has not answered yet, and the
-        request may still succeed.
-        Used by minds to feed its ``SystemInterfaceHealthTracker``.
+        The callback receives ``(agent_id, reason, status_code, detail)``.
+        ``reason`` is a ``SystemInterfaceBackendFailureReason`` enum value;
+        ``status_code`` is set when ``reason`` is ``ERROR_RESPONSE`` (the
+        backend's non-2xx status) and ``None`` otherwise; ``detail`` is the
+        verbatim error text when the plugin had an exception to quote.
+        ``STALLED`` is the one reason that does not report a failed request: it
+        means the backend has not answered yet, and the request may still
+        succeed. Used by minds to feed its ``SystemInterfaceHealthTracker``.
         """
         with self._lock:
             self._on_system_interface_backend_failure_callbacks.append(callback)
@@ -455,6 +483,12 @@ class EnvelopeStreamConsumer(MutableModel):
         else:
             logger.trace("Unknown envelope stream {!r}", stream)
 
+    def _did_poll_straddle_a_sleep(self, event: ProviderDiscoverySnapshotEvent) -> bool:
+        """Whether this process stopped running somewhere inside the poll's own window."""
+        if self.sleep_tracker is None:
+            return False
+        return self.sleep_tracker.was_asleep_during(event.discovery_started_at, event.discovery_finished_at)
+
     def _handle_observe_payload(self, payload: dict[str, Any]) -> None:
         # Re-serialize to a single-line JSON so we can reuse mngr's parser.
         try:
@@ -518,6 +552,26 @@ class EnvelopeStreamConsumer(MutableModel):
                     is_snapshot_state_current = False
             else:
                 self._pre_start_drop_logger.flush_provider(event.provider_name)
+                # A poll that straddled a sleep is the same case inside one
+                # lifetime: its error describes a window in which this process
+                # -- and the network in front of it -- was not there, not the
+                # provider. The socket it timed out on was opened before the lid
+                # closed and read after it opened, so what it reports is that
+                # the laptop went away, and consuming that as the provider's
+                # last word blames a backend that was never asked. Every reader
+                # of provider freshness is fenced here, at the ingress, rather
+                # than each remembering to ask the tracker. A clean poll that
+                # spanned the same sleep completed after the wake and is kept.
+                if error is not None and self._did_poll_straddle_a_sleep(event):
+                    logger.info(
+                        "Dropping provider error for {} from a discovery poll that straddled a sleep ({} to {}): {}",
+                        event.provider_name,
+                        event.discovery_started_at.isoformat(),
+                        event.discovery_finished_at.isoformat(),
+                        error.message,
+                    )
+                    error = None
+                    is_snapshot_state_current = False
             # A per-provider snapshot is also a discovery event, so update_providers
             # bumps last_event_at; merge just this provider's state + freshness.
             # A clean snapshot additionally carries its full host-id set (with the
@@ -611,6 +665,7 @@ class EnvelopeStreamConsumer(MutableModel):
             with self._lock:
                 self._services_by_agent.pop(str(agent_id), None)
                 self._labels_by_agent.pop(str(agent_id), None)
+                self._icons_by_agent.pop(str(agent_id), None)
             self.resolver.update_services(agent_id, {})
             self._fire_destroyed(agent_id)
         for instance_key in delta.added_agent_instances:
@@ -671,10 +726,6 @@ class EnvelopeStreamConsumer(MutableModel):
     def _handle_event_payload(self, agent_id: AgentId, payload: dict[str, Any]) -> None:
         source = payload.get("source", "")
         aid_str = str(agent_id)
-        if source == REQUESTS_EVENT_SOURCE_NAME:
-            raw_line = json.dumps(payload, separators=(",", ":"))
-            self.resolver.fire_on_request(aid_str, raw_line)
-            return
         if source != SERVICES_EVENT_SOURCE_NAME:
             return
         try:
@@ -685,87 +736,52 @@ class EnvelopeStreamConsumer(MutableModel):
         with self._lock:
             services = self._services_by_agent.setdefault(aid_str, {})
             labels = self._labels_by_agent.setdefault(aid_str, {})
+            icons = self._icons_by_agent.setdefault(aid_str, {})
             if isinstance(record, ServiceDeregisteredRecord):
                 services.pop(str(record.service), None)
                 labels.pop(str(record.service), None)
+                icons.pop(str(record.service), None)
             else:
                 services[str(record.service)] = record.url
                 if record.label:
                     labels[str(record.service)] = record.label
                 else:
                     labels.pop(str(record.service), None)
+                if record.icon:
+                    icons[str(record.service)] = record.icon
+                else:
+                    icons.pop(str(record.service), None)
             services_snapshot = dict(services)
             labels_snapshot = dict(labels)
-        self.resolver.update_services(agent_id, services_snapshot, labels_snapshot)
+            icons_snapshot = dict(icons)
+        self.resolver.update_services(agent_id, services_snapshot, labels_snapshot, icons_snapshot)
 
     # -- Forward-stream payloads ------------------------------------------
-
-    def get_resolver_snapshot_for_agent(self, agent_id: AgentId) -> dict[str, str]:
-        """Return the latest plugin-side service map for ``agent_id``.
-
-        Returns an empty dict if no ``resolver_snapshot`` envelope has been
-        seen for this agent yet (plugin restarted, or agent not yet
-        published its services). The caller should treat the empty case
-        as "no entry yet" -- it is not evidence of failure.
-        """
-        with self._lock:
-            return dict(self._resolver_snapshot_by_agent.get(str(agent_id), {}))
-
-    def _handle_resolver_snapshot(self, payload: dict[str, Any]) -> None:
-        """Record the latest per-agent service map from a ``resolver_snapshot`` envelope."""
-        services_by_agent = payload.get("services_by_agent")
-        if not isinstance(services_by_agent, dict):
-            logger.warning("Malformed resolver_snapshot envelope: {}", payload)
-            return
-        new_snapshot: dict[str, dict[str, str]] = {}
-        for aid, services in services_by_agent.items():
-            if not isinstance(aid, str) or not isinstance(services, dict):
-                continue
-            # The plugin keys its map by agent *instance* (``<agent_id>@<host_id>``;
-            # agent ids are only unique per host); minds' consumer view stays
-            # keyed by the bare agent id until its workspace-level duplicate
-            # policy lands, so normalize the key (tolerating the older bare-id
-            # form) and surface a collision instead of silently overwriting.
-            # CLEANUP: drop this bare-id normalization (consume the instance-keyed
-            # map directly) once minds' workspace-level duplicate policy lands --
-            # see specs/allow-duplicate-agent-ids.md, follow-up item 7.
-            bare_agent_id = aid.partition("@")[0]
-            entry: dict[str, str] = {}
-            for service_name, url in services.items():
-                if isinstance(service_name, str) and isinstance(url, str):
-                    entry[service_name] = url
-            if bare_agent_id in new_snapshot:
-                logger.warning(
-                    "resolver_snapshot has service maps for agent {} on multiple hosts; keeping the last one",
-                    bare_agent_id,
-                )
-            new_snapshot[bare_agent_id] = entry
-        with self._lock:
-            self._resolver_snapshot_by_agent = new_snapshot
 
     def _handle_forward_payload(self, payload: dict[str, Any]) -> None:
         payload_type = payload.get("type")
         if payload_type == "reverse_tunnel_established":
             logger.trace("Ignoring reverse_tunnel_established envelope: {}", payload)
-        elif payload_type == "resolver_snapshot":
-            self._handle_resolver_snapshot(payload)
         elif payload_type == "system_interface_backend_failure":
             try:
                 agent_id = AgentId(str(payload["agent_id"]))
-                reason = SystemInterfaceBackendFailureReason(str(payload["reason"]))
+                raw_reason = str(payload["reason"])
             except (KeyError, ValueError, TypeError) as e:
                 logger.warning("Could not parse system_interface_backend_failure payload: {}", e)
                 return
+            reason = _parse_backend_failure_reason(raw_reason)
             raw_status_code = payload.get("status_code")
             try:
                 status_code: int | None = int(raw_status_code) if raw_status_code is not None else None
             except (ValueError, TypeError):
                 status_code = None
+            raw_detail = payload.get("detail")
+            detail = str(raw_detail) if raw_detail is not None else None
             with self._lock:
                 callbacks = list(self._on_system_interface_backend_failure_callbacks)
             for callback in callbacks:
                 try:
-                    callback(agent_id, reason, status_code)
+                    callback(agent_id, reason, status_code, detail)
                 except (OSError, RuntimeError, ValueError) as e:
                     logger.warning("system_interface_backend_failure callback failed for {}: {}", agent_id, e)
         elif payload_type == "listening":
@@ -803,6 +819,7 @@ class EnvelopeStreamConsumer(MutableModel):
 def start_mngr_forward(
     config: ForwardSubprocessConfig,
     resolver: MngrCliBackendResolver,
+    sleep_tracker: SleepTracker | None = None,
 ) -> tuple[EnvelopeStreamConsumer, str, str]:
     """Spawn the ``mngr forward`` subprocess and attach an envelope consumer.
 
@@ -840,7 +857,7 @@ def start_mngr_forward(
         env=env,
         cwd=str(Path.home()),
     )
-    consumer = EnvelopeStreamConsumer(resolver=resolver)
+    consumer = EnvelopeStreamConsumer(resolver=resolver, sleep_tracker=sleep_tracker)
     consumer.attach(process)
     return consumer, preauth_cookie, browser_bridge_token
 

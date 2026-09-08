@@ -65,8 +65,10 @@ BUMP_KINDS: Final[tuple[str, ...]] = ("major", "minor", "patch")
 BUMP_LEVEL_ORDER: Final[dict[str, int]] = {"patch": 0, "minor": 1, "major": 2}
 
 # Supply-chain cooldown window: the resolver only adopts registry releases that
-# have been public at least this long. Enforced via the root `[tool.uv]
-# exclude-newer` cutoff, which a release advances to (release date - this window).
+# have been public at least this long. Two consumers: this script advances the
+# root and mirror-overlay `[tool.uv] exclude-newer` cutoffs to (release date -
+# this window), and standalone uv projects declare it directly as a relative
+# window, which scripts/release_test.py holds equal to this value.
 DEPENDENCY_COOLDOWN: Final[timedelta] = timedelta(weeks=2)
 
 PUBLISH_WORKFLOW: Final[str] = "publish.yml"
@@ -409,7 +411,11 @@ def update_internal_dep_pins(all_versions: dict[str, str]) -> list[str]:
 
 
 def update_exclude_newer(pyproject_path: Path, release_date: date) -> str | None:
-    """Advance the root ``[tool.uv] exclude-newer`` cutoff, forward-only.
+    """Advance a pyproject's ``[tool.uv] exclude-newer`` cutoff, forward-only.
+
+    Called for the two pinned cutoffs in the repo: the root workspace and the
+    public-mirror overlay. Standalone uv projects state the cooldown as a relative
+    window instead, which needs no advancing -- see the note in ``main``.
 
     The cutoff is the supply-chain cooldown boundary: uv refuses to consider any
     package uploaded after it when resolving, so we only adopt registry releases
@@ -1032,6 +1038,13 @@ def main() -> None:
     print("Regenerating uv.lock...")
     run("uv", "lock")
 
+    # Standalone uv projects (root `[tool.uv.workspace].exclude`) are deliberately
+    # not touched here. They express the cooldown as a rolling window rather than a
+    # pinned cutoff, so there is nothing for a release to advance -- the window is
+    # always the current policy, which scripts/release_test.py holds equal to
+    # DEPENDENCY_COOLDOWN. Their locks stay `uv lock --check`-valid indefinitely and
+    # refresh when someone re-locks them, not on the release cadence; relocking them
+    # here would pull a window's worth of unreviewed dependency churn into a release.
     overlay_files: list[str] = []
     if OVERLAY_DIR.exists():
         print("Refreshing the public-mirror overlay artifacts...")

@@ -24,11 +24,14 @@
 //
 //   3. Transcript emission. On `message_end` it appends the raw pi message to
 //      `$MNGR_AGENT_STATE_DIR/logs/<type>_transcript/events.jsonl` and, when
-//      `MNGR_PI_EMIT_COMMON_TRANSCRIPT=1`, a record in mngr's agent-agnostic
-//      common envelope to
+//      `MNGR_PI_EMIT_COMMON_TRANSCRIPT=1`, an ATIF-shaped record to mngr's
+//      agent-agnostic stream at
 //      `$MNGR_AGENT_STATE_DIR/events/<type>/common_transcript/events.jsonl`,
-//      which `mngr transcript` reads. Emitting straight from the structured
-//      events avoids re-parsing pi's tree-structured session JSONL.
+//      which `mngr transcript` reads: a `header` line when the file is created,
+//      then `step` and `observation` records at full fidelity (complete tool
+//      arguments, untruncated outputs, thinking as `reasoning_content`). See
+//      specs/atif-transcript-alignment/spec.md. Emitting straight from the
+//      structured events avoids re-parsing pi's tree-structured session JSONL.
 //
 //   4. Model/effort state. pi carries no static per-agent model config file (its
 //      model comes from launch args / pi settings, its effort from the thinking
@@ -53,7 +56,7 @@
 //     itself is installed (npm, brew, bundled binary). Event/message shapes are
 //     declared locally as the minimal structural types we read.
 
-import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
@@ -224,8 +227,11 @@ const RETRACT_KEY = "minds_interrupt_retract";
 const CONTROL_NAME = "pi_control.json";
 const CONTROL_POLL_MS = 200;
 
-const INPUT_PREVIEW_LIMIT = 200;
-const TOOL_OUTPUT_LIMIT = 2000;
+// The ATIF revision the emitted common-transcript records follow. Kept in sync with
+// PINNED_ATIF_SCHEMA_VERSION in imbue/mngr/agents/common_transcript_records.py.
+const ATIF_SCHEMA_VERSION = "ATIF-v1.7";
+
+const IMAGE_PLACEHOLDER = "[image omitted]";
 
 // --- Helpers. ---------------------------------------------------------------
 
@@ -270,15 +276,13 @@ function countLines(filePath: string): number {
   return parts.length;
 }
 
-function truncate(text: string, limit: number): string {
-  return text.length > limit ? text.slice(0, limit) + "..." : text;
-}
-
 function isoTimestamp(message: AgentMessage): string {
   const ms = typeof message.timestamp === "number" ? message.timestamp : Date.now();
   return new Date(ms).toISOString();
 }
 
+// Text extraction. Images carry no text, so they become the placeholder the spec's
+// fidelity rules prescribe rather than vanishing.
 function textFromContent(content: string | ContentBlock[] | undefined): string {
   if (typeof content === "string") {
     return content;
@@ -287,11 +291,65 @@ function textFromContent(content: string | ContentBlock[] | undefined): string {
     return "";
   }
   return content
-    .filter((block): block is TextBlock => block != null && (block as ContentBlock).type === "text")
-    .map((block) => block.text)
+    .map((block) => {
+      if (block == null) {
+        return "";
+      }
+      const blockType = (block as ContentBlock).type;
+      if (blockType === "text") {
+        return (block as TextBlock).text;
+      }
+      return blockType === "image" ? IMAGE_PLACEHOLDER : "";
+    })
     .join("");
 }
 
+// The agent's thinking, as ATIF `reasoning_content`: several blocks in one
+// inference are joined with blank lines.
+function reasoningFromContent(content: ContentBlock[] | undefined): string {
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const block of content) {
+    if (block != null && (block as ContentBlock).type === "thinking") {
+      const thinking = (block as { thinking?: unknown }).thinking;
+      if (typeof thinking === "string" && thinking) {
+        blocks.push(thinking);
+      }
+    }
+  }
+  return blocks.join("\n\n");
+}
+
+// ATIF requires `arguments` to be a JSON object. A native value that is not one is
+// preserved verbatim under `_raw` rather than dropped.
+function argumentsObject(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    // An absent or empty native payload means "no arguments", not a raw empty string.
+    if (!value.trim()) {
+      return {};
+    }
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // not JSON; fall through to the _raw wrapper
+    }
+    return { _raw: value };
+  }
+  return { _raw: JSON.stringify(value) ?? String(value) };
+}
+
+// The ATIF tool calls of an assistant turn, each with its complete arguments object.
 function toolCallsFromContent(content: ContentBlock[] | undefined): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
@@ -302,59 +360,54 @@ function toolCallsFromContent(content: ContentBlock[] | undefined): Array<Record
       const call = block as ToolCallBlock;
       calls.push({
         tool_call_id: call.id,
-        tool_name: call.name,
-        input_preview: truncate(JSON.stringify(call.arguments ?? {}), INPUT_PREVIEW_LIMIT),
+        function_name: call.name,
+        arguments: argumentsObject(call.arguments),
       });
     }
   }
   return calls;
 }
 
-// Ordered text/tool_call segments of an assistant turn, preserving the source
-// interleaving (unlike the flat text + tool_calls split). Unknown block types
-// (thinking, image, ...) carry no transcript-visible content and are skipped.
-function partsFromContent(content: ContentBlock[] | undefined): Array<Record<string, unknown>> {
-  if (!Array.isArray(content)) {
-    return [];
+// pi's per-message usage in ATIF `MetricsSchema` names, or null when the message
+// reports none. ATIF's prompt_tokens is ALL input including cache hits and cache
+// writes; cached_tokens is the cache-read subset. The cache-write count has no ATIF
+// field, so it rides under metrics.extra.
+function metricsFromUsage(usage: PiUsage | undefined): Record<string, unknown> | null {
+  if (!usage) {
+    return null;
   }
-  const parts: Array<Record<string, unknown>> = [];
-  for (const block of content) {
-    if (block == null) {
-      continue;
-    }
-    const blockType = (block as ContentBlock).type;
-    if (blockType === "text") {
-      const text = (block as TextBlock).text;
-      if (text) {
-        parts.push({ type: "text", content: text });
-      }
-    } else if (blockType === "toolCall") {
-      const call = block as ToolCallBlock;
-      parts.push({
-        type: "tool_call",
-        tool_call_id: call.id,
-        tool_name: call.name,
-        input_preview: truncate(JSON.stringify(call.arguments ?? {}), INPUT_PREVIEW_LIMIT),
-      });
-    }
+  const hasTokens =
+    usage.input != null || usage.output != null || usage.cacheRead != null || usage.cacheWrite != null;
+  const cost = usage.cost?.total;
+  if (!hasTokens && typeof cost !== "number") {
+    return null;
   }
-  return parts;
+  const cacheRead = usage.cacheRead ?? 0;
+  const metrics: Record<string, unknown> = {};
+  if (hasTokens) {
+    metrics.prompt_tokens = (usage.input ?? 0) + cacheRead + (usage.cacheWrite ?? 0);
+    metrics.completion_tokens = usage.output ?? 0;
+    metrics.cached_tokens = cacheRead;
+  }
+  if (typeof cost === "number") {
+    metrics.cost_usd = cost;
+  }
+  if (usage.cacheWrite != null) {
+    metrics.extra = { cache_creation_input_tokens: usage.cacheWrite };
+  }
+  return metrics;
 }
 
 // --- Shell-command safety guards (see system/scripts/POLICY_HOOKS.md). -------
 //
-// The same shell-command policies claude/codex enforce via PreToolUse hooks, in
-// the form pi's extension API allows: a `tool_call` handler that returns
-// `{block, reason}` to refuse a command, or mutates `event.input.command` to
-// rewrite it. Kept in step with the claude scripts of the same purpose:
-//   claude_block_pipe_tail_head.sh, claude_prevent_commit_rewrite.sh,
-//   claude_rewrite_bash_command.py.
-// (The tk workflow-discipline guards -- require-steps, tk-standalone, carryover,
-// stop nudge -- are defined further down, just above the extension.)
+// Rules that hold for every pi agent, applied in the `tool_call` handler: return
+// `{block, reason}` to refuse a command, or mutate `event.input.command` to
+// rewrite it. A rule that belongs to the repo an agent runs in goes in that
+// repo's own `.pi/extensions/`, which pi loads alongside this one.
 
-// Block: a command that pipes into tail/head (mirrors claude_block_pipe_tail_head.sh).
+// Block: a command that pipes into tail/head.
 const PIPE_TAIL_HEAD_RE = /\|\s*(tail|head)(\s|$)/;
-// Block: git history-rewriting commands (mirrors claude_prevent_commit_rewrite.sh).
+// Block: git history-rewriting commands.
 const GIT_REBASE_RE = /^git\s+rebase/;
 const GIT_COMMIT_RE = /^git\s+commit\b/;
 const GIT_COMMIT_REWRITE_RE = /--(amend|fixup)/;
@@ -395,8 +448,8 @@ function readDataField(path: string, field: string): string | null {
 }
 
 /** The `export GIT_AUTHOR_.../GIT_COMMITTER_...; ` prefix, or "" when unresolved.
- * Mirrors claude_rewrite_bash_command.py's resolve_commit_identity: name from
- * <state_dir>/data.json (fallback MNGR_AGENT_NAME), email <agent_id>@<host_id>. */
+ * Name from <state_dir>/data.json (fallback MNGR_AGENT_NAME), email
+ * <agent_id>@<host_id>. */
 function gitIdentityPrefix(): string {
   const agentId = process.env.MNGR_AGENT_ID;
   const stateDir = process.env.MNGR_AGENT_STATE_DIR;
@@ -425,127 +478,6 @@ function rewriteBashCommand(command: string): string {
   return gitIdentityPrefix() + oomTagPrefix() + command;
 }
 
-// --- tk workflow-discipline guards (see system/scripts/POLICY_HOOKS.md). -----
-//
-// The step/progress-view discipline claude enforces via its tk hooks, re-expressed
-// for pi. pi shells out to the vendored `ticket` binary for step state (the same
-// source the claude scripts read) and reuses the python tk-standalone checker
-// verbatim; the reminder text is copied from the scripts so all harnesses read
-// identically. Mapping to pi's SDK channels:
-//   * tk-standalone block  -> the tool_call handler ({block, reason}).
-//   * require-steps nudge  -> the tool_result handler (append to the result content;
-//     pi's tool_call result cannot inject non-blocking context, so the reminder
-//     rides the tool result -- same visible effect, one tool-round later).
-//   * open-steps carryover -> before_agent_start (append to the turn's systemPrompt).
-//   * open-steps stop nudge-> agent_settled (stderr only).
-
-const WORK_DIR = process.env.MNGR_AGENT_WORK_DIR || process.cwd();
-const TICKET_SCRIPT = join(WORK_DIR, "system", "vendor", "tk", "ticket");
-const TK_STANDALONE_CHECKER = join(WORK_DIR, "system", "scripts", "claude_tk_standalone_check.py");
-const TICKETS_DIR = process.env.TICKETS_DIR || join(WORK_DIR, ".tickets");
-
-// pi's read-only tools -- the substantive-work reminder never fires for these
-// (mirrors the skip list in claude_require_steps_pretool.sh).
-const READONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
-
-// A bash command that itself invokes tk/ticket -- the require-steps reminder skips
-// it so the agent can freely create/manage steps (mirrors the script's tk skip).
-const TK_COMMAND_RE = /(^|[|&;]\s*|\/)(tk|ticket)\s/;
-
-// Reminder text copied verbatim from claude_require_steps_pretool.sh /
-// claude_open_tickets_reminder.sh so every harness reads identically.
-const REQUIRE_STEPS_NONE =
-  "\n[Step tracking reminder]\n\n" +
-  "You are about to do work without declaring any step records. The chat progress view requires steps to render your work as a structured timeline.\n\n" +
-  'Before continuing, declare your plan as step records (each prints `Created <id>: <title>`):\n' +
-  '  tk create --step "Description of first step"\n' +
-  '  tk create --step "Description of second step"\n' +
-  "  ...\n" +
-  "Then start the first step with its literal id: tk start <id>\n\n" +
-  "See CLAUDE.md > Task management for the full protocol.\n";
-const REQUIRE_STEPS_NOT_STARTED =
-  "\n[Step tracking reminder]\n\n" +
-  "You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.\n";
-
-/** Run `ticket steps [args]` and return non-empty step lines, or null when tk
- * cannot be consulted (no tickets dir / script). "" means consulted, no steps.
- * Never throws. */
-function ticketSteps(args: string[]): string | null {
-  if (!existsSync(TICKETS_DIR) || !existsSync(TICKET_SCRIPT)) return null;
-  try {
-    // Invoke via `bash` (the ticket script is bash) rather than exec'ing it directly,
-    // so it works even when it sits on a noexec mount. TICKETS_DIR is exported explicitly:
-    // the constant may be the WORK_DIR fallback (env var unset), and the child must read
-    // the same tickets dir this guard checked -- the shell hooks these mirror export it too.
-    const res = spawnSync("bash", [TICKET_SCRIPT, "steps", ...args], {
-      encoding: "utf-8",
-      env: { ...process.env, TICKETS_DIR },
-    });
-    // tk exits non-zero when there are no steps at all; that is "" (consulted), not null.
-    const out = res.status === 0 && typeof res.stdout === "string" ? res.stdout : "";
-    return out.split("\n").filter((line) => line.trim() !== "").join("\n");
-  } catch {
-    return null;
-  }
-}
-
-/** The require-steps reminder to inject, or null to stay silent. Mirrors
- * claude_require_steps_pretool.sh: silent when a step is in_progress or tk can't be
- * consulted; "not started" when steps exist but none is in_progress; else "no steps". */
-function requireStepsReminder(): string | null {
-  const inProgress = ticketSteps(["--status=in_progress"]);
-  if (inProgress === null || inProgress !== "") return null;
-  const openAll = ticketSteps([]);
-  if (openAll === null) return null;
-  return openAll !== "" ? REQUIRE_STEPS_NOT_STARTED : REQUIRE_STEPS_NONE;
-}
-
-/** The open-steps carryover reminder to inject, or null when there are none.
- * Mirrors claude_open_tickets_reminder.sh. */
-function carryoverReminder(): string | null {
-  const openAll = ticketSteps([]);
-  if (!openAll) return null;
-  return (
-    "\n[Open task reminder from default-workspace-template]\n\n" +
-    "You have step records that are not yet closed:\n\n" +
-    openAll +
-    "\n\n" +
-    "For each one, decide before continuing: keep working on it (call `tk start <id>` if it's not already in_progress), " +
-    'replace it with a fresh step, or close it now with `tk close <id> "<summary>"` (the positional summary is required for steps). ' +
-    "The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- " +
-    "the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.\n\n" +
-    "See CLAUDE.md > Task management for the full protocol.\n"
-  );
-}
-
-/** Count this agent's still-open step records (for the stop nudge). */
-function openStepCount(): number {
-  const openAll = ticketSteps([]);
-  return openAll ? openAll.split("\n").filter((line) => line.trim() !== "").length : 0;
-}
-
-/** The block reason when a bash command is a non-standalone tk start/close, else
- * null. Reuses the exact shlex tokenizing checker the claude hook runs. Never throws
- * (fails open: a checker error blocks nothing). */
-function tkStandaloneReason(command: string): string | null {
-  if (!/\b(tk|ticket)\b/.test(command) || !existsSync(TK_STANDALONE_CHECKER)) return null;
-  try {
-    // TICKETS_DIR is exported for the same reason as in ticketSteps: the checker must see
-    // the resolved dir even when only the WORK_DIR fallback names it.
-    const res = spawnSync("python3", [TK_STANDALONE_CHECKER, command], {
-      encoding: "utf-8",
-      env: { ...process.env, TICKETS_DIR },
-    });
-    if (res.status === 2) {
-      const reason = typeof res.stderr === "string" ? res.stderr.trim() : "";
-      return reason || "Run `tk start` / `tk close` as the only command in the tool call.";
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 // --- Extension. -------------------------------------------------------------
 
 export default function mngrPiLifecycle(pi: PiApi): void {
@@ -565,7 +497,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   const modelStatePath = join(stateDir, MODEL_STATE_NAME);
   const rawPath = join(stateDir, "logs", `${agentType}_transcript`, "events.jsonl");
   const commonPath = join(stateDir, "events", agentType, "common_transcript", "events.jsonl");
-  const commonSource = `${agentType}/common_transcript`;
+  const commonEmitter = `${agentType}/common_transcript`;
 
   // Usage events (per-message cost/tokens for `mngr usage`). Written only when
   // mngr_pi_coding_usage provisioned its gate marker -- that package ships the
@@ -576,14 +508,35 @@ export default function mngrPiLifecycle(pi: PiApi): void {
   // USAGE_SOURCE_NAME.
   const emitUsage = existsSync(join(stateDir, "pi_emit_usage"));
   const usagePath = join(stateDir, "events", "pi-coding", "usage", "events.jsonl");
-  let usageSeq = emitUsage ? countLines(usagePath) : 0;
 
-  // event_id must be unique within commonPath so `mngr transcript`'s dedupe set
-  // never drops a real record. Seed the counter from the existing line count so
-  // ids keep climbing across stop/start (a `--continue` restart reuses the same
-  // session id but only fires message_end for *new* messages, so a per-session
-  // reset would collide with ids written before the restart).
-  let commonSeq = emitCommon ? countLines(commonPath) : 0;
+  // Event ids hash the message's own timestamp and content: unique per event
+  // globally (analytics dedupes transcripts fleet-wide by event id), and stable
+  // for the single moment each message is appended -- so a `--continue` restart,
+  // which reuses the session id but only fires message_end for *new* messages,
+  // cannot collide with the ids written before it.
+  const makeEventId = (prefix: string, message: AgentMessage): string => {
+    const rawContent = (message as { content?: unknown }).content ?? "";
+    const contentText = typeof rawContent === "string" ? rawContent : JSON.stringify(rawContent);
+    const digest = createHash("sha256")
+      .update(`${isoTimestamp(message)}:${contentText.slice(0, 1024)}`)
+      .digest("hex")
+      .slice(0, 32);
+    return `${prefix}-${digest}`;
+  };
+
+  // The stream's first line is the header, so a non-empty file already has one.
+  let commonLineCount = emitCommon ? countLines(commonPath) : 0;
+
+  // Write the header on file creation. pi appends incrementally (unlike opencode,
+  // which rewrites the whole stream), so this fires once in the life of the file:
+  // a restart finds a non-empty file and leaves the existing header alone.
+  const ensureCommonHeader = (): void => {
+    if (commonLineCount > 0) {
+      return;
+    }
+    appendLine(commonPath, JSON.stringify(commonHeaderRecord(commonEmitter, basename(stateDir))));
+    commonLineCount = 1;
+  };
 
   // Record this (main) agent's session file so the plugin can resume it
   // explicitly with `pi --session <file>` -- more robust than `--continue`,
@@ -967,65 +920,18 @@ export default function mngrPiLifecycle(pi: PiApi): void {
     if (typeof command !== "string" || !command) return;
     const reason = commandBlockReason(command);
     if (reason !== null) return { block: true, reason };
-    // Hard-block a chained/redirected tk start/close (mirrors claude_tk_standalone.sh).
-    const tkReason = tkStandaloneReason(command);
-    if (tkReason !== null) return { block: true, reason: tkReason };
     try {
       input.command = rewriteBashCommand(command);
+      // The rewrite prepends `export ...; test -w ...; `, and pi calls every extension's
+      // tool_call handler on this same event: a guard in another extension that reads
+      // `input.command` after us would see the prefix as a command chained ahead of the
+      // agent's, and refuse it. On claude/codex the rewriter runs LAST for exactly this
+      // reason; pi offers no ordering control, so carry the agent's own command instead.
+      // Recorded after the rewrite so a frozen event cannot cost the rewrite itself.
+      event.mngrOriginalCommand = command;
     } catch {
       // Rewrite is best-effort (matches claude's pass-through-on-failure); never block on it.
     }
-  });
-
-  // Require-steps soft nudge (mirrors claude_require_steps_pretool.sh). pi's tool_call
-  // result can only block, so the non-blocking reminder rides the tool RESULT: when a
-  // substantive tool ran with no in-progress step, append the reminder to the result the
-  // model reads. Skipped for read-only tools and for bash commands that invoke tk itself.
-  // Not wrapped in safe(): it must return a value, and it already fails silent internally.
-  pi.on("tool_result", (event: any) => {
-    try {
-      const toolName = event?.toolName;
-      if (typeof toolName !== "string" || READONLY_TOOLS.has(toolName)) return undefined;
-      if (toolName === "bash") {
-        const command = event?.input?.command;
-        if (typeof command === "string" && TK_COMMAND_RE.test(command)) return undefined;
-      }
-      const reminder = requireStepsReminder();
-      if (reminder === null) return undefined;
-      const content = Array.isArray(event?.content) ? event.content : [];
-      return { content: [...content, { type: "text", text: reminder }] };
-    } catch {
-      return undefined;
-    }
-  });
-
-  // Open-steps carryover (mirrors claude_open_tickets_reminder.sh): when a new turn
-  // starts with still-open steps, append the reminder to this turn's system prompt --
-  // the guaranteed model-visible channel; pi resets the override each turn.
-  pi.on("before_agent_start", (event: any) => {
-    try {
-      const reminder = carryoverReminder();
-      if (reminder === null) return undefined;
-      const base = typeof event?.systemPrompt === "string" ? event.systemPrompt : "";
-      return { systemPrompt: `${base}\n\n${reminder}` };
-    } catch {
-      return undefined;
-    }
-  });
-
-  // Open-steps stop nudge (mirrors claude_open_tickets_stop_nudge.sh): a non-blocking,
-  // stderr-only note when the run settles with steps still open. agent_settled is pi's
-  // true "run fully settled" signal (fires after any retry/continuation drains).
-  pi.on("agent_settled", () => {
-    safe("agent_settled nudge", () => {
-      const count = openStepCount();
-      if (count > 0) {
-        process.stderr.write(
-          `[task-management] Stopping with ${count} step record(s) still open. ` +
-            "They'll appear at the top of the next turn's progress block.\n",
-        );
-      }
-    });
   });
 
   pi.on("agent_end", (_event, _ctx) => {
@@ -1063,7 +969,7 @@ export default function mngrPiLifecycle(pi: PiApi): void {
             return "";
           }
         })();
-        const usageRecord = toUsageRecord(message, sessionFile, () => `evt-pi-usage-${usageSeq++}`);
+        const usageRecord = toUsageRecord(message, sessionFile, () => makeEventId("evt-pi-usage", message));
         if (usageRecord !== null) {
           appendLine(usagePath, JSON.stringify(usageRecord));
         }
@@ -1071,9 +977,11 @@ export default function mngrPiLifecycle(pi: PiApi): void {
       if (!emitCommon) {
         return;
       }
-      const record = toCommonRecord(message, commonSource, () => `pi-${commonSeq++}`);
+      const record = toCommonRecord(message, commonEmitter, () => makeEventId("pi", message));
       if (record !== null) {
+        ensureCommonHeader();
         appendLine(commonPath, JSON.stringify(record));
+        commonLineCount += 1;
       }
     });
   });
@@ -1130,62 +1038,121 @@ export function toUsageRecord(
   };
 }
 
-// Convert a pi AgentMessage into an mngr common-transcript record, or null for
-// message roles the common schema does not represent (bashExecution, custom,
-// branchSummary, compactionSummary). `nextId` is called at most once and only
-// for emitted records, so the id counter stays dense.
+// The `header` line every stream opens with, pinning the ATIF revision its records
+// follow. pi appends incrementally, so the emitter writes this once, when the
+// common-transcript file is created (see ensureCommonHeader). Its event_id hashes
+// the agent id and emitter: a fixed "header" id repeats identically across the
+// fleet, so analytics' event-id dedupe would collapse every agent's header to one.
+export function commonHeaderRecord(emitter: string, agentId: string): Record<string, unknown> {
+  const digest = createHash("sha256").update(`${agentId}:${emitter}`).digest("hex").slice(0, 32);
+  return { type: "header", event_id: `header-${digest}`, emitter, schema_version: ATIF_SCHEMA_VERSION };
+}
+
+// Convert a pi AgentMessage into an ATIF-shaped common-transcript record (see
+// specs/atif-transcript-alignment/spec.md), or null for message roles the stream
+// does not represent (bashExecution, custom, branchSummary). `nextId` is called at
+// most once, and only for emitted records.
+//
+// One assistant message becomes ONE agent step: ATIF models no interleaving, so its
+// text blocks concatenate into `message`, its thinking into `reasoning_content`, and
+// its toolCall blocks into `tool_calls` with complete arguments. Tool results are
+// separate `observation` records, matched back to their call by `source_call_id`.
 export function toCommonRecord(
   message: AgentMessage,
-  source: string,
+  emitter: string,
   nextId: () => string,
 ): Record<string, unknown> | null {
   const timestamp = isoTimestamp(message);
   if (message.role === "user") {
     const user = message as UserMessage;
     return {
-      timestamp,
-      type: "user_message",
+      type: "step",
       event_id: nextId(),
-      source,
-      role: "user",
-      content: textFromContent(user.content),
+      emitter,
+      timestamp,
+      source: "user",
+      message: textFromContent(user.content),
     };
   }
   if (message.role === "assistant") {
     const assistant = message as AssistantMessage;
-    const usage = assistant.usage ?? {};
-    return {
-      timestamp,
-      type: "assistant_message",
+    const reasoning = reasoningFromContent(assistant.content);
+    const toolCalls = toolCallsFromContent(assistant.content);
+    const metrics = metricsFromUsage(assistant.usage);
+    const step: Record<string, unknown> = {
+      type: "step",
       event_id: nextId(),
-      source,
-      role: "assistant",
-      model: assistant.model ?? "",
-      text: textFromContent(assistant.content),
-      tool_calls: toolCallsFromContent(assistant.content),
-      parts: partsFromContent(assistant.content),
-      parts_ordered: true,
-      finish_reason: assistant.stopReason ?? "",
-      usage: {
-        input_tokens: usage.input ?? null,
-        output_tokens: usage.output ?? null,
-        cache_read_tokens: usage.cacheRead ?? null,
-        cache_write_tokens: usage.cacheWrite ?? null,
-      },
+      emitter,
+      timestamp,
+      source: "agent",
+      message: textFromContent(assistant.content),
     };
+    if (assistant.model) {
+      step.model_name = assistant.model;
+    }
+    if (reasoning) {
+      step.reasoning_content = reasoning;
+    }
+    if (toolCalls.length > 0) {
+      step.tool_calls = toolCalls;
+    }
+    if (metrics !== null) {
+      step.metrics = metrics;
+    }
+    if (assistant.stopReason) {
+      // ATIF has no stop-reason field, so it rides as a step-level extra.
+      step.extra = { finish_reason: assistant.stopReason };
+    }
+    return step;
   }
   if (message.role === "toolResult") {
     const result = message as ToolResultMessage;
     return {
-      timestamp,
-      type: "tool_result",
+      type: "observation",
       event_id: nextId(),
-      source,
-      tool_call_id: result.toolCallId,
-      tool_name: result.toolName,
-      output: truncate(textFromContent(result.content), TOOL_OUTPUT_LIMIT),
-      is_error: result.isError === true,
+      emitter,
+      timestamp,
+      results: [
+        {
+          // The schema requires a call id and a tool name on every streamed result, so a
+          // message missing either (pi's types say they are always present) degrades to
+          // the empty string rather than emitting a line that fails validation.
+          source_call_id: result.toolCallId ?? "",
+          content: textFromContent(result.content),
+          // is_error / tool_name have no ATIF field of their own.
+          extra: { is_error: result.isError === true, tool_name: result.toolName ?? "" },
+        },
+      ],
+    };
+  }
+  if (message.role === "compactionSummary") {
+    // Compaction is a system-initiated operation whose result (the summary) already
+    // exists at emission time, so it rides inline on the step -- ATIF v1.7's
+    // context_management convention marks what happened to the context.
+    // The compactionSummary message shape read here, and the assumption that pi always
+    // replaces (rather than truncates) the compacted context, are asserted by synthetic
+    // fixtures rather than confirmed against captured native output.
+    const summary = compactionSummaryText(message);
+    return {
+      type: "step",
+      event_id: nextId(),
+      emitter,
+      timestamp,
+      source: "system",
+      message: "",
+      observation: { results: [{ content: summary }] },
+      extra: { context_management: { type: "compaction", boundary: "replace" } },
     };
   }
   return null;
+}
+
+// The summary text of a compactionSummary message. pi carries it either as a
+// `summary` string or as ordinary content blocks depending on how the compaction ran.
+function compactionSummaryText(message: AgentMessage): string {
+  const summary = (message as { summary?: unknown }).summary;
+  if (typeof summary === "string" && summary) {
+    return summary;
+  }
+  return textFromContent((message as { content?: string | ContentBlock[] }).content);
 }

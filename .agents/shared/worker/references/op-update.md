@@ -120,8 +120,8 @@ store slips in, since the harden attention is otherwise on the changed path.
 
 ### Review gates
 
-Run `/autofix` and the other gates per `harden-creation.md`. In the committed
-path, any fixes become follow-up commits on your branch.
+Ensure all review gates have been run per `harden-creation.md`, before the final gate
+report, so the user sees a single report that already reflects the verdicts.
 
 ### Final gate, then hand off
 

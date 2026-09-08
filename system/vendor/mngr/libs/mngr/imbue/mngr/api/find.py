@@ -1,6 +1,9 @@
+from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Final
+from typing import NoReturn
 from typing import assert_never
 
 from loguru import logger
@@ -10,15 +13,21 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_call
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
+from imbue.mngr.api.discover import DiscoveryOutcome
 from imbue.mngr.api.discover import discover_by_address
 from imbue.mngr.api.discover import discover_hosts_and_agents
 from imbue.mngr.api.providers import get_local_host
 from imbue.mngr.api.providers import get_provider_instance
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import AgentNotFoundOnHostError
 from imbue.mngr.errors import AgentStateInconsistencyError
+from imbue.mngr.errors import LockNotHeldError
+from imbue.mngr.errors import NoMatchingHostsError
+from imbue.mngr.errors import ProviderUnavailableError
 from imbue.mngr.errors import UserInputError
+from imbue.mngr.errors import parse_provider_unavailable_reason
 from imbue.mngr.hosts.common import get_agent_state_dir_path
 from imbue.mngr.hosts.host import Host
 from imbue.mngr.interfaces.agent import AgentInterface
@@ -41,6 +50,13 @@ from imbue.mngr.primitives import LOCAL_PROVIDER_NAME
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.providers.base_provider import BaseProviderInstance
 from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
+
+# Bound on waiting for the host lock before a start: long enough to outlast any healthy
+# holder (a ``create`` on the same host -- git transfer plus provisioning -- is the long
+# pole and normally finishes within a few minutes), so a wait this long means the holder
+# is wedged, and a loud failure beats queueing behind it forever. Boot-time callers are
+# re-run by their systemd unit and interactive callers can simply retry.
+_START_HOST_LOCK_TIMEOUT_SECONDS: Final[float] = 600.0
 
 
 @pure
@@ -113,11 +129,15 @@ def filter_one_host(
 ) -> DiscoveredHost:
     """Find the single host matching a :class:`HostAddress` filter.
 
-    Raises :class:`UserInputError` when no host matches or when more than one
-    matches.
+    Raises :class:`NoMatchingHostsError` when a host *id* matches nothing (an id
+    is machine-generated, so a miss means the host is gone),
+    :class:`UserInputError` when a user-typed host name matches nothing, and
+    :class:`UserInputError` when more than one host matches.
     """
     matches = filter_all_hosts(address, all_hosts)
     if len(matches) == 0:
+        if isinstance(address.host, HostId):
+            raise NoMatchingHostsError(f"Could not find host with ID: {address}")
         raise UserInputError(f"Could not find host with ID or name: {address}")
     if len(matches) > 1:
         raise UserInputError(f"Multiple hosts found with name: {address}")
@@ -150,7 +170,7 @@ def filter_one_agent(
 ) -> tuple[DiscoveredHost, DiscoveredAgent]:
     """Find the single agent matching the given identifier (by ID or name).
 
-    Raises :class:`AgentNotFoundError` when ``agent`` is an :class:`AgentId`
+    Raises :class:`AgentIdNotFoundError` when ``agent`` is an :class:`AgentId`
     and no agent has that ID. Raises :class:`UserInputError` when an
     :class:`AgentName` has no match, or when more than one agent matches
     (an agent id is unique per host, not globally, so an id can match one
@@ -163,7 +183,10 @@ def filter_one_agent(
     matches = _filter_all_agents(agent, agents_by_host, resolved_host)
     if len(matches) == 0:
         if isinstance(agent, AgentId):
-            raise AgentNotFoundError(str(agent))
+            raise AgentIdNotFoundError(str(agent))
+        # A name miss stays a UserInputError: a name is user-typed, so not matching
+        # is as likely a typo as a gone agent. An id is machine-generated, so a miss
+        # there really does mean the target is gone.
         raise UserInputError(f"Could not find agent with ID or name: {agent}")
     if len(matches) > 1:
         match_lines = "\n".join(
@@ -296,13 +319,14 @@ def resolve_host_location(
     agent_identifiers: tuple[str, ...] | None = None
     if parsed.agent is not None:
         agent_identifiers = (str(parsed.agent),)
-    agents_by_host, _providers = discover_hosts_and_agents(
+    outcome = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=provider_names,
         agent_identifiers=agent_identifiers,
         include_destroyed=False,
         reset_caches=False,
     )
+    agents_by_host = outcome.agents_by_host
     return resolve_host_location_address(
         parsed,
         agents_by_host,
@@ -370,6 +394,11 @@ def ensure_agent_started(agent: AgentInterface, host: OnlineHostInterface, is_st
     agent's lingering session (and its pane content) is left exactly as it was.
     Callers that need a DONE agent actually relaunched (e.g. to deliver a message)
     must use ``revive_done_agent`` instead.
+
+    The start runs under the host lock (``start_agents_locked``): two concurrent
+    unlocked starts of the same stopped agent -- e.g. two ``mngr message`` calls
+    -- could otherwise both see no session, and the slower one's pre-launch reap
+    would kill the tree the faster one had just launched.
     """
     lifecycle_state = agent.get_lifecycle_state()
     if lifecycle_state not in (
@@ -382,7 +411,7 @@ def ensure_agent_started(agent: AgentInterface, host: OnlineHostInterface, is_st
             logger.info("Agent {} is stopped, starting it", agent.name)
             agent.wait_for_ready_signal(
                 is_readiness_awaited=False,
-                start_action=lambda: host.start_agents([agent.id]),
+                start_action=lambda: start_agents_locked(host, [agent.id], is_restart=False),
                 timeout=agent.get_ready_timeout_seconds(),
             )
         else:
@@ -397,10 +426,12 @@ def start_agents_locked(host: OnlineHostInterface, agent_ids: Sequence[AgentId],
 
     The lock serializes the (re)launch against any other operation on this host --
     e.g. the minds desktop client (remote, over SSH) racing a VM/container boot
-    hook (local), or a concurrent ``mngr gc``. The lock blocks indefinitely; gc
-    shares it, so a gc that tore down an agent is serialized before us, and the
-    state-dir check below makes a doomed (re)launch fail with a clear error instead
-    of trying to boot an agent gc already removed.
+    hook (local), or a concurrent ``mngr gc``. gc shares it, so a gc that tore down
+    an agent is serialized before us, and the state-dir check below makes a doomed
+    (re)launch fail with a clear error instead of trying to boot an agent gc already
+    removed. The wait is bounded (``_START_HOST_LOCK_TIMEOUT_SECONDS``): a holder
+    that never releases surfaces as a ``LockNotHeldError`` naming the host, rather
+    than a silent hang that (for a boot-time oneshot) leaves the host's agents down for good.
 
     When ``is_restart`` is False the launch is purely additive: an already-running
     agent's start is a no-op (the start command exits early when its tmux session
@@ -408,18 +439,26 @@ def start_agents_locked(host: OnlineHostInterface, agent_ids: Sequence[AgentId],
     first -- destructive: each agent's lingering session and every window in it are
     killed.
     """
-    with host.lock_cooperatively(timeout_seconds=None):
-        for agent_id in agent_ids:
-            agent_state_dir = get_agent_state_dir_path(host.host_dir, agent_id)
-            if not host.path_exists(agent_state_dir):
-                raise AgentNotFoundOnHostError(agent_id, host.id)
+    try:
+        with host.lock_cooperatively(timeout_seconds=_START_HOST_LOCK_TIMEOUT_SECONDS):
+            for agent_id in agent_ids:
+                agent_state_dir = get_agent_state_dir_path(host.host_dir, agent_id)
+                if not host.path_exists(agent_state_dir):
+                    raise AgentNotFoundOnHostError(agent_id, host.id)
 
-        if is_restart:
-            with log_span("Stopping {} agent(s) for restart", len(agent_ids)):
-                host.stop_agents(agent_ids)
+            if is_restart:
+                with log_span("Stopping {} agent(s) for restart", len(agent_ids)):
+                    host.stop_agents(agent_ids)
 
-        with log_span("Starting {} agent(s)", len(agent_ids)):
-            host.start_agents(agent_ids)
+            with log_span("Starting {} agent(s)", len(agent_ids)):
+                host.start_agents(agent_ids)
+    except LockNotHeldError as e:
+        agent_id_list = ", ".join(str(agent_id) for agent_id in agent_ids)
+        raise LockNotHeldError(
+            f"Could not acquire the host lock on host {host.id} within "
+            f"{_START_HOST_LOCK_TIMEOUT_SECONDS:.0f}s to start agent(s) {agent_id_list}: another mngr "
+            "operation (create, start, or gc) is holding it. If that operation is wedged, stop it and retry."
+        ) from e
 
 
 def revive_done_agent(agent: AgentInterface, host: OnlineHostInterface) -> None:
@@ -452,6 +491,68 @@ class AgentMatch(FrozenModel):
     provider_name: ProviderInstanceName = Field(description="Name of the provider instance that owns the host")
 
 
+def _raise_for_unmatched_identifiers(
+    unmatched_identifiers: Collection[AgentNameOrId],
+    outcome: DiscoveryOutcome,
+) -> NoReturn:
+    """Fail a lookup whose identifiers matched nothing, naming the reason we have.
+
+    "Not found" is only honest when discovery could actually see everywhere the
+    agent might be. A provider that failed to construct -- a Docker daemon that
+    is not running, a cloud provider we cannot reach -- is silently absent from
+    the snapshot, so an agent living on it looks exactly like an agent that does
+    not exist. Reporting that as "not found" sends the reader looking for a
+    deleted machine when the real problem is a backend that is down, and it is
+    the one case where the *provider's* error is the useful message.
+
+    Note this deliberately reports an outage even when the unreachable provider
+    is not known to be the agent's: with the provider unreachable, which agents
+    it holds is exactly what cannot be established.
+    """
+    unmatched_list = ", ".join(sorted(str(i) for i in unmatched_identifiers))
+    # Name what discovery DID return before failing: "not found" can also be a
+    # gap within a provider that *did* answer (a host whose record reads failed
+    # reports its agents as absent), and this summary is what tells those apart
+    # after the fact.
+    discovered_summary = (
+        "; ".join(
+            f"{host_ref.provider_name}/{host_ref.host_name} ({host_ref.host_id}, "
+            f"state={host_ref.host_state.value if host_ref.host_state is not None else 'unknown'}): "
+            f"{len(agent_refs)} agent(s)"
+            for host_ref, agent_refs in sorted(outcome.agents_by_host.items(), key=lambda kv: str(kv[0].host_id))
+        )
+        or "no hosts"
+    )
+    logger.warning("Agent lookup failed for {}; discovery returned: {}", unmatched_list, discovered_summary)
+    unavailable_providers = outcome.unavailable_providers
+    if unavailable_providers:
+        unreachable = unavailable_providers[0]
+        # The skip carries the provider's *rendered* error, not its bare reason,
+        # so it is unwrapped before being wrapped again -- otherwise the provider
+        # is named twice and mngr's marker sentence trails the message twice.
+        # A subclass with its own message shape carries no marker, and keeps it.
+        reason = (
+            parse_provider_unavailable_reason(unreachable.error_message, str(unreachable.provider_name))
+            or unreachable.error_message
+        )
+        # The provider's own remediation rides along, because the default this
+        # constructor would otherwise supply tells the user to start Docker --
+        # wrong advice for the cloud credential failures that curate their own.
+        # The exception's *class* does not survive the skip (a name is all it
+        # holds), so a ProviderNotAuthorizedError arrives as its base here; no
+        # caller on this path branches on that, and the text is what is read.
+        raise ProviderUnavailableError(
+            unreachable.provider_name,
+            f"{reason} (so mngr cannot tell whether {unmatched_list} exists)",
+            user_help_text=unreachable.user_help_text,
+        )
+    # Only an all-ids miss is a gone target; one user-typed name in the batch
+    # makes a typo as good an explanation, so the whole failure stays ordinary.
+    if all(isinstance(identifier, AgentId) for identifier in unmatched_identifiers):
+        raise AgentIdNotFoundError(f"No agent(s) found matching: {unmatched_list}")
+    raise AgentNotFoundError(f"No agent(s) found matching: {unmatched_list}")
+
+
 def _find_agents_by_identifiers_or_state(
     agent_identifiers: Sequence[AgentNameOrId],
     filter_all: bool,
@@ -468,15 +569,18 @@ def _find_agents_by_identifiers_or_state(
 
     When provider_names is set, only those providers are queried during discovery.
 
-    Raises AgentNotFoundError if any identifier does not match an agent.
+    Raises AgentNotFoundError if any identifier does not match an agent, or
+    ProviderUnavailableError if a provider that could have hosted it was
+    unreachable (see :func:`_raise_for_unmatched_identifiers`).
     """
-    agents_by_host, _ = discover_hosts_and_agents(
+    outcome = discover_hosts_and_agents(
         mngr_ctx,
         provider_names=provider_names,
         agent_identifiers=tuple(str(i) for i in agent_identifiers) if not filter_all and agent_identifiers else None,
         include_destroyed=include_destroyed,
         reset_caches=False,
     )
+    agents_by_host = outcome.agents_by_host
 
     candidates: list[AgentMatch] = []
     matched_identifiers: set[AgentNameOrId] = set()
@@ -514,22 +618,7 @@ def _find_agents_by_identifiers_or_state(
     if agent_identifiers:
         unmatched_identifiers = set(agent_identifiers) - matched_identifiers
         if unmatched_identifiers:
-            unmatched_list = ", ".join(sorted(str(i) for i in unmatched_identifiers))
-            # Name what discovery DID return before failing: "not found" can be
-            # a discovery gap (a provider whose record reads failed reports its
-            # hosts/agents as absent) rather than a truly-absent agent, and this
-            # summary is what tells the two apart after the fact.
-            discovered_summary = (
-                "; ".join(
-                    f"{host_ref.provider_name}/{host_ref.host_name} ({host_ref.host_id}, "
-                    f"state={host_ref.host_state.value if host_ref.host_state is not None else 'unknown'}): "
-                    f"{len(agent_refs)} agent(s)"
-                    for host_ref, agent_refs in sorted(agents_by_host.items(), key=lambda kv: str(kv[0].host_id))
-                )
-                or "no hosts"
-            )
-            logger.warning("Agent lookup failed for {}; discovery returned: {}", unmatched_list, discovered_summary)
-            raise AgentNotFoundError(f"No agent(s) found matching: {unmatched_list}")
+            _raise_for_unmatched_identifiers(unmatched_identifiers, outcome)
 
     if not filter_all or target_state is None:
         return candidates
@@ -641,8 +730,9 @@ def _post_filter_matches_by_addresses(
 
     For addresses without host/provider components, matches pass through
     unchanged. For constrained addresses, only matches on a satisfying host are
-    kept. Raises :class:`AgentNotFoundError` if a constrained address has no
-    matching agents after filtering.
+    kept. Raises :class:`AgentIdNotFoundError` if a constrained address that is
+    an id on both sides has no matching agents after filtering, and
+    :class:`AgentNotFoundError` if either side was a user-typed name.
     """
     has_host_constraints = any(addr.host is not None for addr in addresses)
     if not has_host_constraints:
@@ -670,6 +760,12 @@ def _post_filter_matches_by_addresses(
         agent_str = str(addr.agent)
         has_match = any(str(m.agent_name) == agent_str or str(m.agent_id) == agent_str for m in filtered)
         if not has_match:
+            # The agent identifier already matched during discovery, so it is the
+            # host constraint that missed here: only a fully machine-generated
+            # coordinate is a gone target, since a user-typed host name is as
+            # likely a typo against an agent that is alive elsewhere.
+            if isinstance(addr.agent, AgentId) and isinstance(addr.host.host, HostId):
+                raise AgentIdNotFoundError(f"No agent found matching address: {addr}")
             raise AgentNotFoundError(f"No agent found matching address: {addr}")
 
     return filtered
@@ -693,12 +789,27 @@ def find_one_agent_and_agents_by_host(
     :func:`resolve_to_started_host_and_agent` or
     :func:`resolve_to_started_host_and_running_agent`.
 
-    Raises :class:`UserInputError` if the host constraint matches no hosts.
+    Raises :class:`NoMatchingHostsError` if a host-id constraint matches no
+    hosts, or :class:`UserInputError` if a host-name one does.
     Raises :class:`AgentNotFoundError` / :class:`UserInputError` if the
-    agent cannot be resolved (see :func:`filter_one_agent`).
+    agent cannot be resolved (see :func:`filter_one_agent`), or
+    :class:`ProviderUnavailableError` in place of either when a provider that
+    could have held the agent was unreachable (see
+    :func:`_raise_for_unmatched_identifiers`).
     """
-    agents_by_host, _providers = discover_by_address(address, mngr_ctx, include_destroyed=False)
+    outcome = discover_by_address(address, mngr_ctx, include_destroyed=False)
+    agents_by_host = outcome.agents_by_host
+    # An agent on a provider discovery could not reach is absent from the
+    # snapshot in exactly the way a deleted one is, so neither "not found" nor
+    # "no hosts matching" is honest until every provider has answered. Checked
+    # on nothing-matched only: an ambiguous name is a complete answer, and a
+    # backend that happens to be down does not make it less complete.
+    if outcome.unavailable_providers and not _filter_all_agents(address.agent, agents_by_host):
+        _raise_for_unmatched_identifiers((address.agent,), outcome)
     if not agents_by_host and address.host is not None:
+        # The same id-vs-name split filter_one_agent makes, applied to the host.
+        if isinstance(address.host.host, HostId):
+            raise NoMatchingHostsError(f"No hosts found matching {address.host}")
         raise UserInputError(f"No hosts found matching {address.host}")
 
     host_ref, agent_ref = filter_one_agent(address.agent, resolved_host=None, agents_by_host=agents_by_host)

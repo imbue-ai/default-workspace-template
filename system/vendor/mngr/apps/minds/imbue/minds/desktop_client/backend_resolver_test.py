@@ -122,6 +122,19 @@ def test_parse_service_log_records_captures_the_origin_label() -> None:
     assert records[0].label == "terminal-x7k9q2w1"
 
 
+def test_parse_service_log_records_captures_the_registered_icon() -> None:
+    text = '{"service": "notes", "url": "http://127.0.0.1:9100", "icon": "<svg viewBox=\\"0 0 24 24\\"></svg>"}\n'
+    records = parse_service_log_records(text)
+
+    assert len(records) == 1
+    assert isinstance(records[0], ServiceLogRecord)
+    assert records[0].icon == '<svg viewBox="0 0 24 24"></svg>'
+    # No ``icon`` in the row -> empty (an app that registered none).
+    bare = parse_service_log_records('{"service": "web", "url": "http://127.0.0.1:9101"}\n')
+    assert isinstance(bare[0], ServiceLogRecord)
+    assert bare[0].icon == ""
+
+
 def test_parse_service_log_records_returns_empty_for_empty_input() -> None:
     assert parse_service_log_records("") == []
     assert parse_service_log_records("\n") == []
@@ -562,6 +575,39 @@ def test_host_state_override_wins_over_discovery_then_drops_on_agreement() -> No
     assert resolver.get_host_state(host) is HostState.RUNNING
 
 
+def test_stopped_override_is_retired_by_a_backend_observed_stopping_reading() -> None:
+    """Discovery observing the stop still in flight (STOPPING) retires a STOPPED override.
+
+    An imbue_cloud host stop returns once the stop is accepted, while the
+    workspace reports STOPPING for as long as its upload runs -- that reading
+    is fresher than the optimistic settle, so the honest "Stopping" badge must
+    show instead of an already-startable "Stopped" one.
+    """
+    host = HostId.generate()
+    agent = AgentId.generate()
+    resolver = _resolver_with_host_state(host, agent, HostState.RUNNING)
+    resolver.set_host_state_override(host, HostState.STOPPED)
+
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(_workspace_agent(host, agent),),
+            host_state_by_host_id={str(host): HostState.STOPPING},
+        )
+    )
+
+    assert resolver.get_host_state(host) is HostState.STOPPING
+    # The override is gone: the eventual settled reading shows unmasked.
+    resolver.update_agents(
+        ParsedAgentsResult(
+            agent_ids=(agent,),
+            discovered_agents=(_workspace_agent(host, agent),),
+            host_state_by_host_id={str(host): HostState.STOPPED},
+        )
+    )
+    assert resolver.get_host_state(host) is HostState.STOPPED
+
+
 def test_clear_host_state_override_reverts_to_discovery() -> None:
     host = HostId.generate()
     agent = AgentId.generate()
@@ -963,6 +1009,78 @@ def test_last_good_topology_retains_provider_hosts_on_errored_snapshot(tmp_path:
 
     assert str(cloud_host) in _read_last_good_agent_topology(topology_path).agents_by_host
     assert set(resolver.list_restorable_workspace_ids()) == {cloud_agent}
+
+
+def test_is_host_positively_absent_requires_a_clean_snapshot_from_the_owning_provider() -> None:
+    """Absence evidence needs a clean snapshot: before one arrives there is no
+    evidence (the startup warm-up window that once let a FAILED destroy finalize
+    as DONE), and a clean snapshot that still lists the host proves presence."""
+    host_id = HostId.generate()
+    provider = ProviderInstanceName("imbue_cloud_user")
+    resolver = MngrCliBackendResolver()
+
+    # No snapshot from the provider yet: no evidence.
+    assert not resolver.is_host_positively_absent(provider, host_id)
+
+    # A clean snapshot that still lists the host: present, not absent.
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(str(host_id),),
+    )
+    assert not resolver.is_host_positively_absent(provider, host_id)
+
+    # A later clean snapshot without the host: positively absent.
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(),
+    )
+    assert resolver.is_host_positively_absent(provider, host_id)
+
+
+def test_is_host_positively_absent_ignores_errored_and_not_state_current_snapshots() -> None:
+    """An errored poll proves nothing (hosts unreachable, not absent), and a
+    snapshot whose state-current claim was dropped (production: the errored
+    pre-start replay) carries no usable state -- neither may create or replace
+    absence evidence."""
+    host_id = HostId.generate()
+    provider = ProviderInstanceName("imbue_cloud_user")
+    resolver = MngrCliBackendResolver()
+
+    # A snapshot marked not state-current records no evidence, even though it
+    # is error-free and omits the host.
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(),
+        is_snapshot_state_current=False,
+    )
+    assert not resolver.is_host_positively_absent(provider, host_id)
+
+    # A clean snapshot listing the host, then an errored poll: the errored poll
+    # must not replace the presence evidence with absence.
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=None,
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=(str(host_id),),
+    )
+    resolver.update_providers(
+        provider_name=provider,
+        provider=None,
+        error=DiscoveryError(type_name="ProviderUnavailableError", message="cloud down", provider_name=provider),
+        last_snapshot_at=datetime.now(timezone.utc),
+        clean_snapshot_host_ids=None,
+    )
+    assert not resolver.is_host_positively_absent(provider, host_id)
 
 
 def test_last_good_topology_resets_legacy_file_without_provider_names(tmp_path: Path) -> None:

@@ -59,6 +59,8 @@ fi
 # PI_SUBAGENTS_VERSION / PI_WEB_ACCESS_VERSION); bump all together,
 # deliberately. Best-effort throughout: a failure must not abort the rest of
 # the seed, and the grep guard skips work when the entry is already present.
+# The npm_config_* vars reach the npm that `pi install` shells out to, and keep
+# the fallback off npm's audit round trip -- see setup_system.sh for why.
 if command -v pi >/dev/null 2>&1; then
     if [ -d /opt/pi-extensions/npm/node_modules ] && [ ! -d /home/user/.pi/agent/npm ]; then
         mkdir -p /home/user/.pi/agent
@@ -81,7 +83,8 @@ if command -v pi >/dev/null 2>&1; then
                     echo "seed_home_skeleton: warning: failed to register pi extension ${pi_ext}" >&2
                 fi
             else
-                PI_CODING_AGENT_DIR=/home/user/.pi/agent pi install "${pi_ext}" \
+                npm_config_audit=false npm_config_fund=false \
+                    PI_CODING_AGENT_DIR=/home/user/.pi/agent pi install "${pi_ext}" \
                     || echo "seed_home_skeleton: warning: failed to register pi extension ${pi_ext}" >&2
             fi
         fi

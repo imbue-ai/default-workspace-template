@@ -13,17 +13,8 @@ For each (version, arch) it:
   3. signs the manifest with ``minisign`` (detached), and
   4. uploads the new chunks + index + manifest + signature to R2.
 
-Uploads go to R2's S3 API via boto3, reading ``R2_ACCOUNT_ID`` /
-``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY``.
-
-Cloudflare's REST object API is deliberately not an option here. It is governed
-by the global api.cloudflare.com rate limit of 1200 requests per 5 minutes, and
-a single image is ~65,000 chunks: even uploading flat out, one publish cannot
-finish inside that budget and starts returning 429 partway through. The S3 API
-has no such limit. If you only hold an account API token, derive S3 credentials
-from it rather than reaching for the REST API -- for an account-owned R2 token,
-the access key id is the token's id and the secret is the SHA-256 of the token
-value.
+Uploads go to R2's S3 API via ``scripts/r2/client.py``, which reads
+``R2_ACCOUNT_ID`` / ``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY``.
 
 Content-addressed chunks are skipped when already present, so re-publishing a
 near-identical image only uploads the changed chunks.
@@ -44,9 +35,13 @@ from datetime import timezone
 from http import HTTPStatus
 from pathlib import Path
 
-import boto3
 import click
 from botocore.client import Config
+
+from scripts.r2.client import R2Credentials
+from scripts.r2.client import R2CredentialsError
+from scripts.r2.client import read_r2_credentials
+from scripts.r2.client import s3_client
 
 _MANIFEST_PREFIX = "manifests"
 _INDEX_PREFIX = "indexes"
@@ -76,20 +71,16 @@ class ObjectStore(ABC):
 class S3ObjectStore(ObjectStore):
     """boto3 against the R2 S3-compatible endpoint (production path)."""
 
-    def __init__(self, account_id: str, access_key_id: str, secret_access_key: str, bucket: str) -> None:
+    def __init__(self, credentials: R2Credentials, bucket: str) -> None:
         self._bucket = bucket
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-            aws_access_key_id=access_key_id,
-            aws_secret_access_key=secret_access_key,
-            config=Config(
+        self._client = s3_client(
+            credentials,
+            Config(
                 signature_version="s3v4",
                 retries={"max_attempts": 5, "mode": "standard"},
                 # botocore's default pool is 10, which would throttle the upload fan-out.
                 max_pool_connections=_UPLOAD_CONCURRENCY,
             ),
-            region_name="auto",
         )
 
     def exists(self, key: str) -> bool:
@@ -201,12 +192,11 @@ def _sign_manifest(manifest_bytes: bytes, secret_key_file: Path) -> bytes:
 
 
 def _build_store(bucket: str) -> ObjectStore:
-    return S3ObjectStore(
-        account_id=os.environ["R2_ACCOUNT_ID"],
-        access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-        bucket=bucket,
-    )
+    try:
+        credentials = read_r2_credentials(os.environ)
+    except R2CredentialsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    return S3ObjectStore(credentials, bucket)
 
 
 @click.command()

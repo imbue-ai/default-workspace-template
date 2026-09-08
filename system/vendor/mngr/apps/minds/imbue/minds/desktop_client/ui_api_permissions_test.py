@@ -14,6 +14,7 @@ from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import StaticBackendResolver
 from imbue.minds.desktop_client.conftest import build_desktop_client_for_test
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
+from imbue.minds.desktop_client.latchkey.gateway_client import StreamedPermissionRequest
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
 from imbue.minds.desktop_client.latchkey.permission_overview import SELF_SCOPE
@@ -21,13 +22,13 @@ from imbue.minds.desktop_client.latchkey.testing import FakeAccountsLatchkey
 from imbue.minds.desktop_client.latchkey.testing import FakeLatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.testing import build_fake_gateway_client
 from imbue.minds.desktop_client.latchkey.testing import build_permissions_test_catalog
+from imbue.minds.desktop_client.latchkey.testing import leave_grant_on_this_computer
 from imbue.minds.desktop_client.latchkey.testing import seed_connector_grant
-from imbue.minds.desktop_client.request_events import RequestEvent
-from imbue.minds.desktop_client.request_events import RequestInbox
-from imbue.minds.desktop_client.request_events import create_latchkey_accounts_permission_request_event
-from imbue.minds.desktop_client.request_events import create_latchkey_file_sharing_permission_request_event
-from imbue.minds.desktop_client.request_events import create_latchkey_predefined_permission_request_event
-from imbue.minds.desktop_client.request_events import create_latchkey_workspace_permission_request_event
+from imbue.minds.desktop_client.testing import StaticPendingRequests
+from imbue.minds.desktop_client.testing import create_accounts_permission_request
+from imbue.minds.desktop_client.testing import create_file_sharing_permission_request
+from imbue.minds.desktop_client.testing import create_predefined_permission_request
+from imbue.minds.desktop_client.testing import create_workspace_permission_request
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
@@ -100,6 +101,7 @@ def _build_handler(
             concurrency_group=ConcurrencyGroup(name="ui-api-permissions-test-unused"),
         ),
         gateway_client=gateway_client if gateway_client is not None else build_fake_gateway_client(),
+        carry_grant_to_machine=leave_grant_on_this_computer,
     )
 
 
@@ -110,7 +112,7 @@ def _build_client(
     host_id: HostId,
     is_authenticated: bool = True,
     gateway_client: FakeLatchkeyGatewayClient | None = None,
-    inbox: RequestInbox | None = None,
+    inbox: StaticPendingRequests | None = None,
     has_handler: bool = True,
     host_by_agent: dict[str, str] | None = None,
 ) -> FlaskClient:
@@ -127,7 +129,7 @@ def _build_client(
         is_authenticated=is_authenticated,
         backend_resolver=resolver,
         request_event_handlers=handlers,
-        request_inbox=inbox,
+        pending_requests=inbox,
     )
     return client
 
@@ -513,8 +515,13 @@ def test_connector_disconnect_clears_the_credential_and_drops_the_connection(tmp
     assert load_permissions(permissions_path_for_host(latchkey.plugin_data_dir, host_id)).rules == ()
 
 
-def test_connector_disconnect_strips_grants_on_every_workspace(tmp_path: Path) -> None:
-    """Disconnecting is not machine-scoped: every workspace holding the account loses its grants."""
+def test_connector_disconnect_leaves_other_machines_grants_alone(tmp_path: Path) -> None:
+    """Disconnecting is machine-scoped, because the credential it clears is.
+
+    Every machine keeps its own credentials, so signing an account out here says
+    nothing about the same account on another machine -- and stripping that
+    machine's grants would revoke access that still has a credential behind it.
+    """
     agent_id, other_agent_id = AgentId(), AgentId()
     host_id, other_host_id = HostId(), HostId()
     latchkey = _latchkey(tmp_path)
@@ -534,10 +541,11 @@ def test_connector_disconnect_strips_grants_on_every_workspace(tmp_path: Path) -
     )
 
     assert response.status_code == 200
-    # Both files are empty by the time the response lands: no polling, because
-    # the strip is part of the request rather than a background thread.
+    # This machine's file is empty by the time the response lands: no polling,
+    # because the strip is part of the request rather than a background thread.
     assert load_permissions(permissions_path_for_host(latchkey.plugin_data_dir, host_id)).rules == ()
-    assert load_permissions(permissions_path_for_host(latchkey.plugin_data_dir, other_host_id)).rules == ()
+    other_rules = load_permissions(permissions_path_for_host(latchkey.plugin_data_dir, other_host_id)).rules
+    assert [permission for rule in other_rules for permission in rule.values()] == [["slack-chat-write"]]
 
 
 def test_connector_disconnect_keeps_the_services_other_accounts(tmp_path: Path) -> None:
@@ -816,18 +824,19 @@ def test_writes_are_rejected_with_503_without_a_permission_handler(tmp_path: Pat
 def test_workspace_permissions_lists_waiting_requests_oldest_first(tmp_path: Path) -> None:
     """Pending requests from this workspace's agents lead with the longest-blocked one."""
     agent_id, sibling_agent_id, host_id = AgentId(), AgentId(), HostId()
-    older = create_latchkey_predefined_permission_request_event(
+    older = create_predefined_permission_request(
         agent_id=str(sibling_agent_id),
         scope="slack-api",
         rationale="post the standup summary",
     )
-    newer = create_latchkey_file_sharing_permission_request_event(
+    newer = create_file_sharing_permission_request(
         agent_id=str(sibling_agent_id),
         path="/Users/me/notes",
         access="READ",
         rationale="read the design notes",
     )
-    inbox = RequestInbox().add_request(older).add_request(newer)
+    # ``pending`` is display order (newest first), matching the gateway view.
+    inbox = StaticPendingRequests(pending=(newer, older))
     client = _build_client(
         tmp_path,
         _latchkey(tmp_path),
@@ -841,8 +850,8 @@ def test_workspace_permissions_lists_waiting_requests_oldest_first(tmp_path: Pat
     assert response.status_code == 200
     waiting = json.loads(response.data)["waiting_requests"]
     assert [(row["id"], row["title"], row["service_name"]) for row in waiting] == [
-        (str(older.event_id), "Slack", "slack"),
-        (str(newer.event_id), "Local files", ""),
+        (older.request_id, "Slack", "slack"),
+        (newer.request_id, "Local files", ""),
     ]
     assert waiting[0]["reason"] == "post the standup summary"
 
@@ -851,7 +860,7 @@ def test_workspace_permissions_lists_waiting_requests_oldest_first(tmp_path: Pat
     "make_event,expected_title,expected_service_name",
     [
         pytest.param(
-            lambda agent_id: create_latchkey_predefined_permission_request_event(
+            lambda agent_id: create_predefined_permission_request(
                 agent_id=agent_id, scope="not-in-the-catalog", rationale="why"
             ),
             "not-in-the-catalog",
@@ -859,13 +868,13 @@ def test_workspace_permissions_lists_waiting_requests_oldest_first(tmp_path: Pat
             id="predefined-outside-the-catalog",
         ),
         pytest.param(
-            lambda agent_id: create_latchkey_workspace_permission_request_event(agent_id=agent_id, rationale="why"),
+            lambda agent_id: create_workspace_permission_request(agent_id=agent_id, rationale="why"),
             "Other machines",
             "",
             id="cross-workspace",
         ),
         pytest.param(
-            lambda agent_id: create_latchkey_accounts_permission_request_event(agent_id=agent_id, rationale="why"),
+            lambda agent_id: create_accounts_permission_request(agent_id=agent_id, rationale="why"),
             "Device accounts",
             "",
             id="device-accounts",
@@ -874,7 +883,7 @@ def test_workspace_permissions_lists_waiting_requests_oldest_first(tmp_path: Pat
 )
 def test_waiting_requests_title_every_kind_the_strip_can_show(
     tmp_path: Path,
-    make_event: Callable[[str], RequestEvent],
+    make_event: Callable[[str], StreamedPermissionRequest],
     expected_title: str,
     expected_service_name: str,
 ) -> None:
@@ -890,7 +899,7 @@ def test_waiting_requests_title_every_kind_the_strip_can_show(
         _latchkey(tmp_path),
         (agent_id, sibling_agent_id),
         host_id,
-        inbox=RequestInbox().add_request(event),
+        inbox=StaticPendingRequests(pending=(event,)),
     )
 
     response = client.get(f"/ui/api/workspaces/{agent_id}/permissions")
@@ -904,7 +913,7 @@ def test_waiting_requests_title_every_kind_the_strip_can_show(
 
 def test_waiting_requests_exclude_other_workspaces(tmp_path: Path) -> None:
     agent_id, other_agent_id, host_id = AgentId(), AgentId(), HostId()
-    other_request = create_latchkey_file_sharing_permission_request_event(
+    other_request = create_file_sharing_permission_request(
         agent_id=str(other_agent_id),
         path="/Users/me/elsewhere",
         access="READ",
@@ -921,7 +930,7 @@ def test_waiting_requests_exclude_other_workspaces(tmp_path: Path) -> None:
         is_authenticated=True,
         backend_resolver=resolver,
         request_event_handlers=(_build_handler(tmp_path, _latchkey(tmp_path)),),
-        request_inbox=RequestInbox().add_request(other_request),
+        pending_requests=StaticPendingRequests(pending=(other_request,)),
     )
 
     response = client.get(f"/ui/api/workspaces/{agent_id}/permissions")
@@ -937,3 +946,49 @@ def test_workspace_permissions_rejects_a_malformed_workspace_id(tmp_path: Path) 
     response = client.get("/ui/api/workspaces/not-an-agent-id/permissions")
 
     assert response.status_code == 404
+
+
+def test_connect_browser_signs_in_and_answers_with_the_refreshed_pane(tmp_path: Path) -> None:
+    """Add connection's sign-in belongs to the machine whose pane asked for it."""
+    agent_id, host_id = AgentId(), HostId()
+    latchkey = _latchkey(tmp_path, accounts_by_service={})
+    client = _build_client(tmp_path, latchkey, (agent_id,), host_id)
+
+    response = client.post(
+        f"/ui/api/workspaces/{agent_id}/permissions/connect-browser",
+        json={"service_name": "slack"},
+    )
+
+    assert response.status_code == 200
+    assert latchkey.added_account_calls == ["slack"]
+    payload = json.loads(response.data)
+    assert [entry["service_name"] for entry in payload["connections"]] == ["slack"]
+
+
+def test_connect_browser_reports_a_sign_in_that_did_not_complete(tmp_path: Path) -> None:
+    agent_id, host_id = AgentId(), HostId()
+    latchkey = _latchkey(tmp_path, accounts_by_service={})
+    latchkey.add_account_result = (False, "the browser was closed")
+    client = _build_client(tmp_path, latchkey, (agent_id,), host_id)
+
+    response = client.post(
+        f"/ui/api/workspaces/{agent_id}/permissions/connect-browser",
+        json={"service_name": "slack"},
+    )
+
+    assert response.status_code == 502
+    assert "the browser was closed" in json.loads(response.data)["error"]
+
+
+def test_connect_browser_rejects_an_unknown_service(tmp_path: Path) -> None:
+    agent_id, host_id = AgentId(), HostId()
+    latchkey = _latchkey(tmp_path)
+    client = _build_client(tmp_path, latchkey, (agent_id,), host_id)
+
+    response = client.post(
+        f"/ui/api/workspaces/{agent_id}/permissions/connect-browser",
+        json={"service_name": "not-a-service"},
+    )
+
+    assert response.status_code == 400
+    assert latchkey.added_account_calls == []

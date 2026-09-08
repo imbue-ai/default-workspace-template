@@ -1,0 +1,5 @@
+Server lifecycle convergence (issue #496 Phase 3): `minds-admin server setup` and `server prep` now run one shared composed prep -- the base box prep, the observability collector install (resolved in-process from the activated tier's `secrets/minds/<tier>/observability` Vault entry), the `--extra-prep-script` escape hatch (now also on `setup`), and a `systemctl is-active otelcol-contrib` verification. Fail-closed: when the tier has a boxes ingest credential, a failed collector install or an inactive unit fails the prep and `setup` refuses to mark the box `ready`; no credential is a clean skip, exactly like the old exit-3 recipe semantics.
+
+`minds-admin server order` / `await-delivery` / `setup` / `pricing` are now env-aware: OVH supplier credentials resolve from the activated tier's `secrets/minds/<tier>/ovh` Vault entry, with the existing `OVH_*` env vars preserved as the non-activated override (the pool DSN and pool SSH key already resolved this way).
+
+`minds_admin` now depends on `imbue-observability` and renders the collector install script in-process, replacing the shell assembly that lived in `private.just`'s `prep-server` recipe.

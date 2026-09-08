@@ -139,7 +139,7 @@ def test_browser_login_contract_over_http(shared_env: Callable[[str], SharedEnvH
 
 @pytest.mark.timeout(_TEST_TIMEOUT_SECONDS)
 def test_hosted_pages_signup_via_playwright(shared_env: Callable[[str], SharedEnvHandle]) -> None:
-    """Drive the real hosted pages: the bundle renders, sign-up works, /manage shows the account."""
+    """Drive the real hosted pages: the bundle renders, sign-up works, and lands on the web client."""
     playwright_api = pytest.importorskip("playwright.sync_api")
     env = shared_env("default")
     wait_for_env_ready(env)
@@ -153,7 +153,7 @@ def test_hosted_pages_signup_via_playwright(shared_env: Callable[[str], SharedEn
             pytest.skip(f"Playwright chromium is not installed on this runner: {exc}")
         try:
             page = browser.new_page()
-            # No ?next=: a signup with no pending handoff lands on /manage.
+            # No ?next=: a signup with no pending handoff lands on /web.
             page.goto(f"{connector_url}/signup")
             # The built bundle must actually be deployed (not the 503
             # placeholder). With Google configured on the tier, the signup tab
@@ -163,12 +163,26 @@ def test_hosted_pages_signup_via_playwright(shared_env: Callable[[str], SharedEn
             if page.locator("#reveal-email-form-btn").count() > 0:
                 page.click("#reveal-email-form-btn")
             page.wait_for_selector("#auth-submit-btn", timeout=30_000)
+            # The plan selector renders with Explorer preselected; keep it.
+            assert page.locator("#plan-select").input_value() == "explorer"
             page.fill("#email", email)
             page.fill("#password", password)
             page.fill("#confirm-password", password)
+            # Submitting without the terms agreement must be refused with a
+            # visible error, not create an account.
             page.click("#auth-submit-btn")
-            # A signup with no pending handoff lands on the account page.
-            page.wait_for_url(f"{connector_url}/manage", timeout=30_000)
+            page.wait_for_selector("text=please check the box", timeout=30_000)
+            assert page.url.startswith(f"{connector_url}/signup")
+            page.check("#terms-checkbox")
+            page.click("#auth-submit-btn")
+            # A signup with no pending handoff lands on the web client (the
+            # product), not the account page.
+            page.wait_for_url(f"{connector_url}/web", timeout=30_000)
+            # The web-chrome bundle must actually be deployed (not the 503
+            # "not built" placeholder).
+            assert "not built" not in page.content()
+            # The account page still works for the fresh session.
+            page.goto(f"{connector_url}/manage")
             page.wait_for_selector("#signout-btn", timeout=30_000)
             assert email in page.content()
         finally:

@@ -87,26 +87,34 @@ test('workspace endpoint send posts to the parent with the type merged in', () =
   assert.strictEqual(parentWin.posted[0].targetOrigin, '*');
 });
 
-test('workspace endpoint validates the permission-resolution payload', () => {
+test('workspace endpoint validates the permission-resolutions payload', () => {
   const seen = [];
   contract.createWorkspaceEndpoint({
     handlers: {
-      [contract.PERMISSION_REQUEST_RESOLVED]: (msg) => seen.push([msg.requestId, msg.resolution]),
+      [contract.PERMISSION_RESOLUTIONS]: (msg) => seen.push(msg.resolutions.map((r) => [r.requestId, r.resolution])),
     },
   });
-  const from = (data) => win.deliver({ source: parentWin, origin: 'o', data });
+  const from = (resolutions) =>
+    win.deliver({ source: parentWin, origin: 'o', data: { type: contract.PERMISSION_RESOLUTIONS, resolutions } });
   // Only the two verdicts the contract defines, and only ids of the
-  // server-issued shape, reach the card.
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, requestId: 'evt-a', resolution: 'maybe' });
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, requestId: 'evt-a' });
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, requestId: 'evt-1/../admin', resolution: 'granted' });
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, resolution: 'granted' });
+  // server-issued shape, reach the card; one bad entry rejects the message.
+  from([{ requestId: 'evt-a', resolution: 'maybe' }]);
+  from([{ requestId: 'evt-1/../admin', resolution: 'granted' }]);
+  from([{ resolution: 'granted' }]);
+  from('evt-a');
   assert.deepStrictEqual(seen, []);
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, requestId: 'evt-a', resolution: 'granted' });
-  from({ type: contract.PERMISSION_REQUEST_RESOLVED, requestId: 'evt-b', resolution: 'denied' });
+  // An empty answer is valid ("all still pending"), and good entries pass whole.
+  from([]);
+  from([
+    { requestId: 'evt-a', resolution: 'granted' },
+    { requestId: 'evt-b', resolution: 'denied' },
+  ]);
   assert.deepStrictEqual(seen, [
-    ['evt-a', 'granted'],
-    ['evt-b', 'denied'],
+    [],
+    [
+      ['evt-a', 'granted'],
+      ['evt-b', 'denied'],
+    ],
   ]);
 });
 
@@ -138,6 +146,7 @@ test('embedder endpoint validates payload shapes before dispatch', () => {
       [contract.OPEN_REQUEST_MODAL]: (msg) => seen.push(['request', msg.requestId]),
       [contract.OPEN_HELP]: (msg) => seen.push(['help', msg.agentId]),
       [contract.OPEN_AI_KEYS_PAGE]: (msg) => seen.push(['keys', msg.hostId]),
+      [contract.OPEN_SHARE_SETTINGS]: (msg) => seen.push(['share', msg.serviceName]),
     },
   });
   const from = (data) => win.deliver({ source: frameWin, origin: 'o', data });
@@ -145,16 +154,23 @@ test('embedder endpoint validates payload shapes before dispatch', () => {
   from({ type: contract.OPEN_REQUEST_MODAL });
   from({ type: contract.OPEN_HELP, agentId: 'agent-XYZ!' });
   from({ type: contract.OPEN_AI_KEYS_PAGE, hostId: 'agent-abc123' });
+  // serviceName is required: absent, off-shape, and over-length are dropped.
+  from({ type: contract.OPEN_SHARE_SETTINGS });
+  from({ type: contract.OPEN_SHARE_SETTINGS, serviceName: '' });
+  from({ type: contract.OPEN_SHARE_SETTINGS, serviceName: 'web/../admin' });
+  from({ type: contract.OPEN_SHARE_SETTINGS, serviceName: 'a'.repeat(65) });
   assert.deepStrictEqual(seen, []);
   from({ type: contract.OPEN_HELP, agentId: 'agent-abc123' });
   from({ type: contract.OPEN_HELP });
   from({ type: contract.OPEN_AI_KEYS_PAGE, hostId: 'host-abc123' });
   from({ type: contract.OPEN_AI_KEYS_PAGE, hostId: '' });
+  from({ type: contract.OPEN_SHARE_SETTINGS, serviceName: 'system_interface' });
   assert.deepStrictEqual(seen, [
     ['help', 'agent-abc123'],
     ['help', undefined],
     ['keys', 'host-abc123'],
     ['keys', ''],
+    ['share', 'system_interface'],
   ]);
 });
 

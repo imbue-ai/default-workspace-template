@@ -58,7 +58,7 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[5]
 
 # Every SPA route (the hub pages and the ``/workspace/<id>`` workspace
 # surface) is served from the backend's bare-localhost origin. We match those
-# backend pages, not the ``host-<id>.localhost`` proxy.
+# backend pages, not the ``agent-<id>.localhost`` proxy.
 # The capturing group exposes the bare origin (``http://localhost:<port>``)
 # so :func:`_backend_origin_from_page` can reuse the same pattern instead of
 # re-encoding the localhost-origin contract a second time.
@@ -68,15 +68,17 @@ _BACKEND_ORIGIN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(http://localhos
 # the mngr_forward plugin, so the port may differ from the bare backend. The
 # scheme is ``https`` when the proxy serves TLS + HTTP/2 (the default) and
 # ``http`` otherwise, so accept both. (The bare minds backend origin stays
-# plain ``http`` -- see ``_BACKEND_ORIGIN_PATTERN``.)
+# plain ``http`` -- see ``_BACKEND_ORIGIN_PATTERN``.) New origins carry the
+# workspace id (``agent-<hex>``); ``host-<hex>`` covers pre-existing
+# workspaces still on the legacy machine-keyed origin.
 _AGENT_SUBDOMAIN_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^https?://(?:[a-z0-9_-]+\.)*host-[a-f0-9]+\.localhost:\d+(?:/|$)"
+    r"^https?://(?:[a-z0-9_-]+\.)*(?:host|agent)-[a-f0-9]+\.localhost:\d+(?:/|$)"
 )
 
 # Default env identity when nothing is activated: a dedicated, inert
 # ``ci-snapshot`` tier (committed under
 # apps/minds/imbue/minds/config/envs/ci-snapshot/) so callers can boot the
-# backend without an explicit ``minds env activate`` step and without pointing
+# backend without an explicit ``minds-admin env activate`` step and without pointing
 # at any real environment.
 _DEFAULT_MINDS_ROOT_NAME: Final[str] = "minds-ci-snapshot"
 _DEFAULT_MINDS_TIER: Final[str] = "ci-snapshot"
@@ -111,9 +113,12 @@ _PICK_ROUND_SECONDS: Final[int] = 20
 # ~8-10.5 minutes there (the build-minds-snapshot job measured a healthy run
 # overshooting the old 600s budget at 625s, and the job failed on roughly
 # alternating main runs from exactly this deadline). The build's duration is
-# network-bound (apt/pip mirrors), so headroom -- not a tighter deadline -- is
-# what keeps this signal meaningful.
-_CREATE_FORM_TIMEOUT_SECONDS: Final[int] = 900
+# network-bound (apt/pip mirrors, the pi extension npm installs), so headroom
+# -- not a tighter deadline -- is what keeps this signal meaningful. The
+# snapshot script gives `docker build` itself 900 seconds
+# (MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS); this budget sits above
+# that so the container boot after the build still fits.
+_CREATE_FORM_TIMEOUT_SECONDS: Final[int] = 1200
 _SYSTEM_INTERFACE_TIMEOUT_SECONDS: Final[int] = 180
 _CREATE_OUTCOME_POLL_INTERVAL_MS: Final[int] = 500
 
@@ -630,7 +635,7 @@ def _wait_for_workspace_ready_or_failure(browser: Browser, creating_page: Page, 
     form is submitted:
 
     - **success**: the ready workspace opens inside the chrome page's sandboxed
-      content iframe on the ``host-<id>.localhost`` origin. The SPA creating page
+      content iframe on the ``agent-<id>.localhost`` origin. The SPA creating page
       extracts the workspace coordinate from the ready workspace's ``/goto``
       URL and enters it in-app on the ``/workspace/<id>`` route, arming the
       iframe. This scans every page's FRAMES for the one that reached the
@@ -698,7 +703,7 @@ def _drive_create_flow(
     form for those modes and ignored (the row is hidden) for others.
 
     There is no AI-provider or API-key field: workspaces boot unauthenticated
-    and sign in through the workspace's own Claude sign-in modal afterwards.
+    and sign in through the workspace's own provider chooser afterwards.
     """
     backend_origin = _backend_origin_from_page(page)
     logger.info("Backend origin: {}", backend_origin)
@@ -970,16 +975,21 @@ def create_workspace_via_electron(
 
 _FLOW_SHOT_DIR: Final[Path] = Path("/tmp/minds-electron-flow")
 _CHAT_INPUT_SELECTOR: Final[str] = "textarea.message-input-textbox"
+# A chat renders inside its own frame at the chat app's origin: the page's URL path is the
+# chat's agent id, which is how the frame is found among the workspace frame's children.
+_CHAT_PAGE_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"/agent-[0-9a-f]+/?$")
+_CHAT_FRAME_POLL_INTERVAL_MS: Final[int] = 500
 # Terminal panels are cross-origin iframes at the terminal service's own
 # origin (service-per-origin): the terminal's origin label is ``terminal-<rand>``
 # (a random per-service suffix), so the origin is
-# https://terminal-<rand>.host-<hex>.localhost:<port>/. Match the ``terminal-``
+# https://terminal-<rand>.agent-<hex>.localhost:<port>/. Match the ``terminal-``
 # label prefix -- the trailing hyphen keeps it from matching an unrelated
 # service whose name merely starts with "terminal".
 _TERMINAL_IFRAME_SELECTOR: Final[str] = 'iframe[src^="https://terminal-"], iframe[src^="http://terminal-"]'
-# The DEFAULT_WORKSPACE_TEMPLATE bootstrap creates the initial chat agent asynchronously after the
-# dockview first renders (it shows "Waiting for initial chat agent..." until
-# then), so the chat input can take a while to appear on a fresh first boot.
+# The workspace boots with no chat: signing in from the first-run provider
+# chooser starts the workspace's first chat, and creating that agent runs
+# asynchronously, so the chat input can take a while to appear on a fresh
+# first boot.
 _CHAT_INPUT_TIMEOUT_SECONDS: Final[int] = 240
 _CHAT_REPLY_TIMEOUT_SECONDS: Final[int] = 240
 _DESTROY_TIMEOUT_SECONDS: Final[int] = 300
@@ -1085,25 +1095,30 @@ def drive_create_docker_imbue_workspace(
     return workspace_page
 
 
-def _host_id_from_subdomain(url: str) -> str:
-    """Extract the ``host-<hex>`` workspace coordinate from a workspace-origin URL."""
+def _workspace_coordinate_from_subdomain(url: str) -> str:
+    """Extract the workspace coordinate label from a workspace-origin URL.
+
+    New origins carry the workspace id (``agent-<hex>``); a pre-existing
+    workspace may still be on the legacy machine-keyed ``host-<hex>`` origin.
+    """
     if _AGENT_SUBDOMAIN_PATTERN.match(url) is None:
         raise WorkspaceFlowError(f"Not a workspace-origin URL: {url!r}")
-    # host is e.g. ``[<service>.]host-<hex>.localhost:<port>``; the workspace
-    # coordinate is the ``host-`` label.
     netloc = url.split("://", 1)[1].split("/", 1)[0]
     for label in netloc.split("."):
-        if label.startswith("host-"):
+        if label.startswith(("host-", "agent-")):
             return label
-    raise WorkspaceFlowError(f"No host-<hex> label in workspace-origin URL: {url!r}")
+    raise WorkspaceFlowError(f"No workspace coordinate label in workspace-origin URL: {url!r}")
 
 
-def _agent_id_for_host(content_page: Page, backend_origin: str, host_id: str) -> str:
-    """Resolve the agent id for ``host_id`` via ``GET /api/v1/workspaces``.
+def _agent_id_for_coordinate(content_page: Page, backend_origin: str, coordinate: str) -> str:
+    """Resolve the agent id for a workspace-origin coordinate.
 
-    Content URLs carry the host coordinate while the v1 API and the settings
-    routes are agent-keyed, so the flow needs this translation once.
+    An ``agent-<hex>`` coordinate already IS the workspace's agent id; a legacy
+    ``host-<hex>`` coordinate needs the one host->agent translation (the v1 API
+    and the settings routes are agent-keyed).
     """
+    if coordinate.startswith("agent-"):
+        return coordinate
     content_page.goto(backend_origin + "/", wait_until="domcontentloaded")
     rows = content_page.evaluate(
         """(args) =>
@@ -1114,25 +1129,51 @@ def _agent_id_for_host(content_page: Page, backend_origin: str, host_id: str) ->
         {"origin": backend_origin},
     )
     for row in rows if isinstance(rows, list) else []:
-        if isinstance(row, dict) and row.get("host_id") == host_id and row.get("agent_id"):
+        if isinstance(row, dict) and row.get("host_id") == coordinate and row.get("agent_id"):
             return str(row["agent_id"])
-    raise WorkspaceFlowError(f"No workspace with host id {host_id!r} in /api/v1/workspaces")
+    raise WorkspaceFlowError(f"No workspace with host id {coordinate!r} in /api/v1/workspaces")
+
+
+def _find_chat_frame(workspace: Page | Frame) -> Frame | None:
+    """The first chat page's frame currently inside the workspace, or None while it has opened none."""
+    candidates = workspace.frames if isinstance(workspace, Page) else workspace.child_frames
+    return next((frame for frame in candidates if _CHAT_PAGE_URL_PATTERN.search(frame.url.split("?", 1)[0])), None)
+
+
+def _chat_frame(workspace: Page | Frame, timeout_seconds: float) -> Frame:
+    """The first chat page's frame inside the workspace, once the workspace has opened one.
+
+    Raises WorkspaceFlowError when no chat frame appears within ``timeout_seconds``.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    chat = _find_chat_frame(workspace)
+    while chat is None and time.monotonic() < deadline:
+        workspace.wait_for_timeout(_CHAT_FRAME_POLL_INTERVAL_MS)
+        chat = _find_chat_frame(workspace)
+    if chat is None:
+        raise WorkspaceFlowError(f"No chat frame opened inside the workspace within {timeout_seconds:.0f}s")
+    return chat
 
 
 def _send_message_and_await_reply(page: Page | Frame, token: str) -> None:
     """Type a unique-token prompt into the dockview chat and wait for the reply to echo it."""
-    logger.info("Waiting up to {}s for the initial chat agent / chat input", _CHAT_INPUT_TIMEOUT_SECONDS)
-    page.wait_for_selector(_CHAT_INPUT_SELECTOR, state="visible", timeout=_CHAT_INPUT_TIMEOUT_SECONDS * 1000)
+    logger.info("Waiting up to {}s for the first chat's frame and its input", _CHAT_INPUT_TIMEOUT_SECONDS)
+    input_deadline = time.monotonic() + _CHAT_INPUT_TIMEOUT_SECONDS
+    chat = _chat_frame(page, _CHAT_INPUT_TIMEOUT_SECONDS)
+    # Playwright reads a zero timeout as "wait forever", so the remainder is floored.
+    input_wait_seconds = max(input_deadline - time.monotonic(), 1.0)
+    logger.info("Chat frame at {}; waiting up to {:.0f}s for its input", chat.url, input_wait_seconds)
+    chat.wait_for_selector(_CHAT_INPUT_SELECTOR, state="visible", timeout=input_wait_seconds * 1000)
     prompt = f"Reply with exactly this token and nothing else: {token}"
-    page.fill(_CHAT_INPUT_SELECTOR, prompt)
-    page.press(_CHAT_INPUT_SELECTOR, "Enter")
+    chat.fill(_CHAT_INPUT_SELECTOR, prompt)
+    chat.press(_CHAT_INPUT_SELECTOR, "Enter")
     logger.info("Sent chat message with token {}", token)
     # The user turn should render (optimistic pending bubble or a committed user
     # message) almost immediately -- proves the chat round-trips through the proxy.
-    page.wait_for_selector(".pending-message, .message.message-user", state="attached", timeout=30_000)
+    chat.wait_for_selector(".pending-message, .message.message-user", state="attached", timeout=30_000)
     _flow_screenshot(page, "03-message-sent")
     logger.info("Waiting up to {}s for the agent reply to echo the token", _CHAT_REPLY_TIMEOUT_SECONDS)
-    page.wait_for_function(
+    chat.wait_for_function(
         """(token) => {
             const list = document.querySelector('.message-list');
             if (!list) return false;
@@ -1333,10 +1374,10 @@ def run_full_workspace_flow(
                     browser, content_page, default_workspace_template_path, workspace_name
                 )
                 results["STEP 1 create"] = "PASS"
-                workspace_host_id = _host_id_from_subdomain(workspace_page.url)
-                logger.info("Machine host id (from subdomain): {}", workspace_host_id)
-                agent_id = _agent_id_for_host(content_page, backend_origin, workspace_host_id)
-                logger.info("Machine agent id (via /api/v1/workspaces): {}", agent_id)
+                workspace_coordinate = _workspace_coordinate_from_subdomain(workspace_page.url)
+                logger.info("Workspace coordinate (from subdomain): {}", workspace_coordinate)
+                agent_id = _agent_id_for_coordinate(content_page, backend_origin, workspace_coordinate)
+                logger.info("Workspace agent id: {}", agent_id)
 
                 _run_flow_step(
                     results,

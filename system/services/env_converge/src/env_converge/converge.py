@@ -17,6 +17,12 @@ Ordering rule (removal stickiness): on a rootfs that carries the identity
 stamp, capture runs FIRST so deliberate removals stick; on a fresh rootfs
 (image rebuild, restore onto a new container) converge runs first from the
 record, then captures and stamps.
+
+The same rule guards ad-hoc captures (`capture_unless_fresh_rootfs`, the
+`env-converge capture` CLI the apt Post-Invoke hook invokes): on an unstamped
+rootfs the record is authoritative and about to be replayed, so capturing
+would clobber it with the fresh rootfs's state -- the capture is skipped until
+the slow phase completes and stamps.
 """
 
 import json
@@ -24,8 +30,10 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from imbue.imbue_common.pure import pure
 from loguru import logger
 
 from env_converge.capture import (
@@ -37,15 +45,22 @@ from env_converge.capture import (
     resolve_cargo_binary,
     resolve_rustup_binary,
 )
-from env_converge.data_types import ConvergeResult, OverlayApplyResult, UnitRunResult
+from env_converge.data_types import (
+    AptState,
+    CargoState,
+    ConvergeResult,
+    NpmGlobalState,
+    OverlayApplyResult,
+    RecordSnapshot,
+    UnitRunResult,
+    UvToolState,
+)
 from env_converge.events import EnvConvergeEventType, emit_event
 from env_converge.record import (
+    ROOTFS_STAMP_PATH,
     EnvConvergeError,
     is_rootfs_stamped,
-    read_apt_state,
-    read_cargo_state,
-    read_npm_state,
-    read_uv_tool_state,
+    read_record_snapshot,
     stamp_rootfs,
     write_apt_state,
     write_base_identity,
@@ -189,48 +204,84 @@ def run_unit_scripts(workspace_dir: Path, overlay_dir: Path) -> list[UnitRunResu
     return results
 
 
-def _install_missing(
-    kind: str,
-    missing: list[str],
-    build_command: "list[str]",
-) -> tuple[list[str], list[str]]:
-    """Install one batch; returns (installed, unavailable). Never raises."""
-    if not missing:
-        return [], []
+def _run_install_command(command: list[str]) -> tuple[bool, str]:
+    """Run one install command; returns (is_ok, error detail). Never raises."""
     try:
         completed = subprocess.run(
-            build_command,
+            command,
             capture_output=True,
             text=True,
             check=False,
             timeout=_INSTALL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        emit_event(
-            EnvConvergeEventType.PACKAGE_UNAVAILABLE,
-            {"kind": kind, "packages": missing, "error": str(e)},
-        )
-        return [], missing
+        return False, str(e)
     if completed.returncode != 0:
-        logger.warning(
-            "Installing recorded {} packages failed: {}", kind, completed.stderr[-1000:]
-        )
-        emit_event(
-            EnvConvergeEventType.PACKAGE_UNAVAILABLE,
-            {
-                "kind": kind,
-                "packages": missing,
-                "stderr_tail": completed.stderr[-2000:],
-            },
-        )
-        return [], missing
-    emit_event(
-        EnvConvergeEventType.PACKAGE_INSTALLED, {"kind": kind, "packages": missing}
+        return False, completed.stderr[-2000:]
+    return True, ""
+
+
+def _report_entry_unavailable(kind: str, entry: str, detail: str) -> None:
+    """Warn about and emit one recorded entry that could not be installed."""
+    logger.warning(
+        "Installing recorded {} package {} failed: {}",
+        kind,
+        entry,
+        detail[-1000:],
     )
-    return missing, []
+    emit_event(
+        EnvConvergeEventType.PACKAGE_UNAVAILABLE,
+        {"kind": kind, "packages": [entry], "stderr_tail": detail},
+    )
 
 
-def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
+def _install_missing(
+    kind: str,
+    missing: list[str],
+    build_command: Callable[[Sequence[str]], list[str]],
+) -> tuple[list[str], list[str]]:
+    """Install one batch; returns (installed, unavailable). Never raises.
+
+    A failed multi-entry batch falls back to one install per entry, so a single
+    unavailable entry cannot sink the whole batch (apt and npm refuse the entire
+    invocation when any one name cannot be resolved).
+    """
+    if not missing:
+        return [], []
+    is_batch_ok, batch_detail = _run_install_command(build_command(missing))
+    if is_batch_ok:
+        emit_event(
+            EnvConvergeEventType.PACKAGE_INSTALLED, {"kind": kind, "packages": missing}
+        )
+        return missing, []
+    if len(missing) == 1:
+        _report_entry_unavailable(kind, missing[0], batch_detail)
+        return [], missing
+
+    # Batch failure with several entries: retry each alone so the rest survive.
+    logger.warning(
+        "Installing recorded {} packages as one batch failed ({}); retrying each alone",
+        kind,
+        batch_detail[-500:],
+    )
+    installed: list[str] = []
+    unavailable: list[str] = []
+    for entry in missing:
+        is_entry_ok, entry_detail = _run_install_command(build_command([entry]))
+        if is_entry_ok:
+            installed.append(entry)
+        else:
+            _report_entry_unavailable(kind, entry, entry_detail)
+            unavailable.append(entry)
+    if installed:
+        emit_event(
+            EnvConvergeEventType.PACKAGE_INSTALLED,
+            {"kind": kind, "packages": installed},
+        )
+    return installed, unavailable
+
+
+def _install_missing_cargo(recorded: CargoState | None) -> tuple[list[str], list[str]]:
     """Replay recorded cargo crates (and the rustup default toolchain) missing here.
 
     Returns (installed, unavailable). Non-critical by design: cargo binaries in
@@ -240,7 +291,6 @@ def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
     rustup here. `--locked` uses each crate's committed lockfile so the
     recorded version resolves the same dependency set every time.
     """
-    recorded = read_cargo_state(record_dir)
     if recorded is None:
         return [], []
 
@@ -257,7 +307,7 @@ def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
                 toolchain_installed, toolchain_unavailable = _install_missing(
                     "rust_toolchain",
                     [recorded.default_toolchain],
-                    [rustup, "toolchain", "install", recorded.default_toolchain],
+                    lambda names: [rustup, "toolchain", "install", *names],
                 )
                 installed.extend(toolchain_installed)
                 unavailable.extend(toolchain_unavailable)
@@ -275,7 +325,7 @@ def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
         for crate in missing:
             spec = f"{crate}@{recorded.version_by_crate[crate]}"
             crate_installed, crate_unavailable = _install_missing(
-                "cargo", [spec], [cargo, "install", "--locked", spec]
+                "cargo", [spec], lambda specs: [cargo, "install", "--locked", *specs]
             )
             installed.extend(crate_installed)
             unavailable.extend(crate_unavailable)
@@ -284,9 +334,13 @@ def _install_missing_cargo(record_dir: Path) -> tuple[list[str], list[str]]:
 
 
 def install_missing_from_record(
-    record_dir: Path,
+    recorded: RecordSnapshot,
 ) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
-    """Install record entries absent from this rootfs.
+    """Install entries from the given record snapshot that are absent from this rootfs.
+
+    Takes the record as an in-memory snapshot (read before anything in this
+    converge pass could rewrite the record files) rather than re-reading from
+    disk, so a concurrent capture can never change what gets replayed.
 
     Returns (installed_apt, installed_npm, installed_uv, installed_cargo,
     unavailable). The apt install-set is the recorded manual set (dependencies
@@ -295,12 +349,11 @@ def install_missing_from_record(
     """
     unavailable: list[str] = []
 
-    recorded_apt = read_apt_state(record_dir)
     installed_apt: list[str] = []
-    if recorded_apt is not None:
+    if recorded.apt_state is not None:
         current = capture_apt_state()
         missing_apt = sorted(
-            set(recorded_apt.manual_packages) - set(current.version_by_package)
+            set(recorded.apt_state.manual_packages) - set(current.version_by_package)
         )
         if missing_apt:
             subprocess.run(
@@ -311,65 +364,185 @@ def install_missing_from_record(
         installed_apt, unavailable_apt = _install_missing(
             "apt",
             missing_apt,
-            [
+            lambda names: [
                 "apt-get",
                 "install",
                 "-y",
                 "-qq",
                 "--no-install-recommends",
-                *missing_apt,
+                *names,
             ],
         )
         unavailable.extend(unavailable_apt)
 
-    recorded_npm = read_npm_state(record_dir)
     installed_npm: list[str] = []
-    if recorded_npm is not None:
+    if recorded.npm_state is not None:
+        recorded_npm_versions = recorded.npm_state.version_by_package
         current_npm = capture_npm_state()
         missing_npm = sorted(
-            set(recorded_npm.version_by_package) - set(current_npm.version_by_package)
+            set(recorded_npm_versions) - set(current_npm.version_by_package)
         )
-        npm_specs = [
-            f"{name}@{recorded_npm.version_by_package[name]}" for name in missing_npm
-        ]
+        npm_specs = [f"{name}@{recorded_npm_versions[name]}" for name in missing_npm]
         installed_npm, unavailable_npm = _install_missing(
-            "npm", npm_specs, ["npm", "install", "-g", *npm_specs]
+            "npm", npm_specs, lambda specs: ["npm", "install", "-g", *specs]
         )
         unavailable.extend(unavailable_npm)
 
-    recorded_uv = read_uv_tool_state(record_dir)
     installed_uv: list[str] = []
-    if recorded_uv is not None:
+    if recorded.uv_tool_state is not None:
+        recorded_uv_versions = recorded.uv_tool_state.version_by_tool
         current_uv = capture_uv_tool_state()
-        missing_uv = sorted(
-            set(recorded_uv.version_by_tool) - set(current_uv.version_by_tool)
-        )
+        missing_uv = sorted(set(recorded_uv_versions) - set(current_uv.version_by_tool))
         for tool in missing_uv:
-            spec = f"{tool}=={recorded_uv.version_by_tool[tool]}"
+            spec = f"{tool}=={recorded_uv_versions[tool]}"
             installed, not_installed = _install_missing(
-                "uv_tool", [spec], ["uv", "tool", "install", spec]
+                "uv_tool", [spec], lambda specs: ["uv", "tool", "install", *specs]
             )
             installed_uv.extend(installed)
             unavailable.extend(not_installed)
 
-    installed_cargo, unavailable_cargo = _install_missing_cargo(record_dir)
+    installed_cargo, unavailable_cargo = _install_missing_cargo(recorded.cargo_state)
     unavailable.extend(unavailable_cargo)
 
     return installed_apt, installed_npm, installed_uv, installed_cargo, unavailable
 
 
-def capture_all(record_dir: Path, snapshot_timestamp: str, workspace_dir: Path) -> None:
-    """Capture every source's actual state into the record ("dpkg is truth")."""
+@pure
+def _merge_missing_recorded_apt(
+    recorded: AptState | None, captured: AptState
+) -> AptState:
+    if recorded is None:
+        return captured
+    preserved_manual = tuple(
+        sorted(set(captured.manual_packages) | set(recorded.manual_packages))
+    )
+    return AptState(
+        manual_packages=preserved_manual,
+        version_by_package=captured.version_by_package,
+        recorded_at=captured.recorded_at,
+    )
+
+
+@pure
+def _merge_missing_recorded_npm(
+    recorded: NpmGlobalState | None, captured: NpmGlobalState
+) -> NpmGlobalState:
+    if recorded is None:
+        return captured
+    return NpmGlobalState(
+        version_by_package={
+            **recorded.version_by_package,
+            **captured.version_by_package,
+        },
+        recorded_at=captured.recorded_at,
+    )
+
+
+@pure
+def _merge_missing_recorded_uv(
+    recorded: UvToolState | None, captured: UvToolState
+) -> UvToolState:
+    if recorded is None:
+        return captured
+    return UvToolState(
+        version_by_tool={**recorded.version_by_tool, **captured.version_by_tool},
+        recorded_at=captured.recorded_at,
+    )
+
+
+@pure
+def _merge_missing_recorded_cargo(
+    recorded: CargoState | None, captured: CargoState
+) -> CargoState:
+    if recorded is None:
+        return captured
+    recorded_only_toolchains = tuple(
+        toolchain
+        for toolchain in recorded.toolchains
+        if toolchain not in captured.toolchains
+    )
+    return CargoState(
+        version_by_crate={**recorded.version_by_crate, **captured.version_by_crate},
+        toolchains=captured.toolchains + recorded_only_toolchains,
+        default_toolchain=captured.default_toolchain
+        if captured.default_toolchain is not None
+        else recorded.default_toolchain,
+        recorded_at=captured.recorded_at,
+    )
+
+
+def capture_all(
+    record_dir: Path,
+    snapshot_timestamp: str,
+    workspace_dir: Path,
+    # A pre-replay record snapshot whose entries must survive this capture even
+    # when they are not installed (a fresh-rootfs replay that could not install
+    # them keeps them recorded, so the next fresh boot replays them again).
+    # None captures actual state verbatim ("dpkg is truth").
+    record_to_preserve: RecordSnapshot | None,
+) -> None:
+    """Capture every source's actual state into the record."""
+    captured_apt = capture_apt_state()
+    captured_npm = capture_npm_state()
+    captured_uv = capture_uv_tool_state()
+    captured_cargo = capture_cargo_state()
+    if record_to_preserve is not None:
+        captured_apt = _merge_missing_recorded_apt(
+            record_to_preserve.apt_state, captured_apt
+        )
+        captured_npm = _merge_missing_recorded_npm(
+            record_to_preserve.npm_state, captured_npm
+        )
+        captured_uv = _merge_missing_recorded_uv(
+            record_to_preserve.uv_tool_state, captured_uv
+        )
+        captured_cargo = _merge_missing_recorded_cargo(
+            record_to_preserve.cargo_state, captured_cargo
+        )
     write_base_identity(
         record_dir, capture_base_identity(snapshot_timestamp, workspace_dir)
     )
-    write_apt_state(record_dir, capture_apt_state())
-    write_npm_state(record_dir, capture_npm_state())
-    write_uv_tool_state(record_dir, capture_uv_tool_state())
-    write_cargo_state(record_dir, capture_cargo_state())
+    write_apt_state(record_dir, captured_apt)
+    write_npm_state(record_dir, captured_npm)
+    write_uv_tool_state(record_dir, captured_uv)
+    write_cargo_state(record_dir, captured_cargo)
     emit_event(
         EnvConvergeEventType.STATE_CAPTURED, {"snapshot_timestamp": snapshot_timestamp}
     )
+
+
+def capture_unless_fresh_rootfs(
+    record_dir: Path,
+    workspace_dir: Path,
+    is_forced: bool,
+    stamp_path: Path = ROOTFS_STAMP_PATH,
+) -> bool:
+    """Capture into the record unless this rootfs is fresh; returns whether it captured.
+
+    On an unstamped rootfs (never converged: an image rebuild or a restore onto
+    a new machine) the record is authoritative and about to be replayed by the
+    slow phase, so an ad-hoc capture -- most importantly the apt Post-Invoke
+    hook firing off the units' own installs -- would clobber the very record
+    the replay needs. The record stays untouched until the slow phase completes
+    and stamps; `is_forced` overrides for deliberate operator use.
+    """
+    if not is_forced and not is_rootfs_stamped(stamp_path):
+        logger.info(
+            "Skipping capture: this rootfs has not completed a converge yet, so "
+            "the record is authoritative and must survive to be replayed"
+        )
+        emit_event(
+            EnvConvergeEventType.CAPTURE_SKIPPED_FRESH_ROOTFS,
+            {"record_dir": str(record_dir)},
+        )
+        return False
+    capture_all(
+        record_dir,
+        read_pinned_snapshot_timestamp(workspace_dir),
+        workspace_dir,
+        record_to_preserve=None,
+    )
+    return True
 
 
 def read_pinned_snapshot_timestamp(workspace_dir: Path) -> str:
@@ -389,16 +562,33 @@ def run_slow_phase(
     # Known rootfs: capture FIRST so deliberate removals made since the last
     # capture stick instead of being resurrected by the replay below.
     if not is_fresh:
-        capture_all(record_dir, snapshot_timestamp, workspace_dir)
+        capture_all(
+            record_dir, snapshot_timestamp, workspace_dir, record_to_preserve=None
+        )
+
+    # Snapshot the record into memory before the units run: their installs can
+    # fire the apt capture hook, and the replay must work from what the record
+    # said when this pass started, not from whatever a re-capture left behind.
+    # (The hook itself also skips unstamped rootfses; this read makes the
+    # replay independent of that guard.)
+    recorded_snapshot = read_record_snapshot(record_dir)
 
     unit_results = run_unit_scripts(workspace_dir, overlay_dir)
     installed_apt, installed_npm, installed_uv, installed_cargo, unavailable = (
-        install_missing_from_record(record_dir)
+        install_missing_from_record(recorded_snapshot)
     )
 
     # Reality changed (units ran, packages installed) -- or this is a fresh
-    # rootfs whose record predates it; either way, re-capture and stamp.
-    capture_all(record_dir, snapshot_timestamp, workspace_dir)
+    # rootfs whose record predates it; either way, re-capture and stamp. On the
+    # fresh path, recorded entries the replay could not install are preserved
+    # in the record so a later fresh boot can replay them (the next stamped
+    # boot's capture-first reconciles them away if they stay uninstalled).
+    capture_all(
+        record_dir,
+        snapshot_timestamp,
+        workspace_dir,
+        record_to_preserve=recorded_snapshot if is_fresh else None,
+    )
     stamp_rootfs()
 
     result = ConvergeResult(

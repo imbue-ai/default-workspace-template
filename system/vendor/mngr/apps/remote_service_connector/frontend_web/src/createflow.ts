@@ -115,7 +115,10 @@ async function pushWorkspaceRecord(
   claim: ClaimResult,
   encryptedSecrets: string,
 ): Promise<void> {
+  // Spread the stored row first so fields a newer deploy added survive this
+  // push (the fields this flow owns overwrite them).
   await pushRecordWithCas(claim.host_id, (stored) => ({
+    ...(stored ?? {}),
     host_id: claim.host_id,
     agent_id: claim.agent_id,
     display_name: claim.display_name,

@@ -23,4 +23,4 @@ uv run mngr behaviors validate --root apps/minds/behaviors
 
 ## The behavior language
 
-The `.feature` language this tool serves - folders, tags, coordinates, invariants as `Rule` blocks with folder scoping, overview/sidecar prose files, and the `witnesses` test back-link convention - is defined by the behaviors skill (`.claude/skills/behaviors/`).
+The `.feature` language this tool serves - folders, tags, coordinates, invariants as `Rule` blocks with folder scoping, README/sidecar prose files, and the `witnesses` test back-link convention - is defined by the behaviors skill (`.claude/skills/behaviors/`).

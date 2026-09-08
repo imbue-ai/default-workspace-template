@@ -123,8 +123,9 @@ describe("secrets blobs", () => {
     expect(textDecoder.decode(plaintext)).toBe(vectors.secrets.plaintext);
   });
 
-  it("serializes the payload with pydantic's field order + separators", () => {
+  it("serializes the payload with canonical sorted keys + compact separators", () => {
     const serialized = serializeSecretsPayload({
+      payload_format: 1,
       restic_env: "export RESTIC_REPOSITORY=s3:endpoint/bucket\n",
       ssh_private_key:
         "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n",
@@ -142,6 +143,7 @@ describe("secrets blobs", () => {
     });
     const decrypted = await decryptSecretsPayload(dek, encrypted);
     expect(decrypted).toEqual({
+      payload_format: 1,
       restic_env: null,
       ssh_private_key: "key material",
       ssh_known_hosts: "example.com ssh-ed25519 AAAA",

@@ -8,7 +8,7 @@ The retention window is a fixed constant served by the connector (`GET /policies
 
 A destroyed workspace's backup consists of three things:
 
-- its R2 **bucket** (imbue_cloud backups only; named `<account-prefix>--<host-id>`),
+- its R2 **bucket** (imbue_cloud backups only; named `<account-prefix>--<workspace-id>` -- buckets provisioned before workspace-keyed naming carry `<account-prefix>--<host-id>` and are grandfathered),
 
 - its synced **workspace record** (the tombstone, `state = destroyed`, stamped with `destroyed_at` by the connector),
 
@@ -27,6 +27,8 @@ Bring-your-own backends (your own S3 bucket via an API key) are never reaped at 
 Both reapers are idempotent, so they never conflict; whoever runs first wins.
 
 Any record tombstoned for longer than the window is reapable regardless of how it was tombstoned (explicit destroy or absence detection) -- the window itself is the safety margin for local workspaces, and a workspace that reappears in discovery is resurrected (clearing the clock) before it can ever be reaped.
+
+The one exception is an imbue_cloud workspace whose pool lease still exists: its record is never removed (and cannot be hard-deleted from the list) until the lease is released, because that tombstone is what the connector's lease-vs-record sweep acts on to finish a destroy whose release failed. The connector's reaper skips such a tombstone entirely; the client-side reaper has no view of the lease, so it may still reap the backup bucket at the window, but the connector refuses the record's removal (`lease_active`) and the reaper retries it on later passes. Releasing the lease -- through destroy, or the operator's `minds-admin workspaces release` -- is what frees the record for the reaper.
 
 ## Quota-pressure eviction
 

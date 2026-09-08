@@ -1,5 +1,9 @@
+import re
+from typing import Final
+
 from pydantic import AnyHttpUrl
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import field_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -11,6 +15,12 @@ from imbue.share_relay.primitives import DEFAULT_VHOST_HTTPS_PORT
 from imbue.share_relay.primitives import RegionCode
 from imbue.share_relay.primitives import RelayId
 from imbue.share_relay.primitives import RelayPort
+
+# The plugin secret is rendered unencoded into the plugin addr's URL userinfo,
+# so it must be userinfo-safe: a character like '@', ':' or '/' would corrupt
+# the rendered frps config into one whose auth callbacks silently fail.
+# `openssl rand -hex 32` output (the documented generation command) fits.
+_PLUGIN_AUTH_SECRET_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
 class RelayConfiguration(FrozenModel):
@@ -36,7 +46,17 @@ class RelayConfiguration(FrozenModel):
         description="The content domain apex workspace hostnames live under (e.g. 'imbueminds.com')"
     )
     plugin_auth_url: AnyHttpUrl = Field(
-        description="Connector endpoint the frps server-plugin calls to authorize Login / NewProxy operations"
+        description=(
+            "Connector endpoint the frps server-plugin calls to authorize Login / NewProxy operations "
+            "(secret-free; the secret is carried separately in plugin_auth_secret)"
+        )
+    )
+    plugin_auth_secret: SecretStr = Field(
+        description=(
+            "Shared secret authenticating plugin callbacks to the connector; rendered as the plugin "
+            "addr's URL userinfo, which frps's HTTP client delivers as an Authorization: Basic header "
+            "(so the secret never appears in the connector's access-logged URL path)"
+        )
     )
     vhost_https_port: RelayPort = Field(
         default=DEFAULT_VHOST_HTTPS_PORT,
@@ -65,16 +85,31 @@ class RelayConfiguration(FrozenModel):
 
     @field_validator("plugin_auth_url")
     @classmethod
-    def _plugin_auth_url_has_no_query_or_fragment(cls, value: AnyHttpUrl) -> AnyHttpUrl:
+    def _plugin_auth_url_is_a_bare_origin_and_path(cls, value: AnyHttpUrl) -> AnyHttpUrl:
         # The frps config renderer keeps only the URL's origin and path (frps
-        # concatenates addr + path itself), so a query/fragment would be
-        # silently dropped -- e.g. a secret passed as ?secret=... would render
-        # a relay whose auth callbacks all fail. Reject loudly instead; the
-        # secret belongs in a path segment (https://<connector>/frps/auth/<secret>).
+        # concatenates addr + path itself and appends its own query), so a
+        # query/fragment would be silently dropped -- e.g. a secret passed as
+        # ?secret=... would render a relay whose auth callbacks all fail. And
+        # the renderer inserts plugin_auth_secret as the addr's userinfo, so
+        # userinfo in the URL itself would collide with that insertion.
         if value.query or value.fragment:
             raise InvalidRelayConfigurationError(
                 "plugin_auth_url must not carry a query string or fragment; "
-                "put the shared secret in a path segment (https://<connector>/frps/auth/<secret>)"
+                "the plugin secret is supplied separately via plugin_auth_secret"
+            )
+        if value.username or value.password:
+            raise InvalidRelayConfigurationError(
+                "plugin_auth_url must not carry userinfo; "
+                "the plugin secret is supplied separately via plugin_auth_secret"
+            )
+        return value
+
+    @field_validator("plugin_auth_secret")
+    @classmethod
+    def _plugin_auth_secret_is_userinfo_safe(cls, value: SecretStr) -> SecretStr:
+        if _PLUGIN_AUTH_SECRET_RE.match(value.get_secret_value()) is None:
+            raise InvalidRelayConfigurationError(
+                "plugin_auth_secret must be 16..128 characters of [A-Za-z0-9_-] (generate with `openssl rand -hex 32`)"
             )
         return value
 

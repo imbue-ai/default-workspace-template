@@ -134,9 +134,9 @@ def delete_prefix(config: StorageConfig, prefix: str) -> int:
     return _delete_prefix_with_client(client, config.bucket, prefix)
 
 
-# Keep in sync with ``imbue.minds.envs.providers.workspace_storage`` -- the
-# minds env tooling carries its own copy of this loop because the shipped
-# connector container and the shipped minds wheel cannot import each other.
+# Keep in sync with ``imbue.minds_admin.envs.providers.workspace_storage`` -- the
+# private minds-admin env tooling carries its own copy of this loop because the
+# shipped connector container cannot import it.
 def _delete_prefix_with_client(client: Any, bucket: str, prefix: str) -> int:
     deleted_count = 0
     try:

@@ -1,0 +1,1 @@
+Re-locked `uv.lock` so `uv lock --check` passes again. The `system/vendor/mngr` refresh in 26747687f raised `imbue_common`'s `sentry-sdk` floor to 2.63.0 without regenerating the lockfile, which left the recorded specifier at 2.59.0 and failed the lockfile gate on every pull request against `main`, not just this one.

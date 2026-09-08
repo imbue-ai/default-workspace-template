@@ -32,9 +32,6 @@ def test_prevent_while_true() -> None:
 
 def test_prevent_time_sleep() -> None:
     # Justified matches: ``destroying_test.py`` (a real test poll loop),
-    # ``cli/env.py::_exec_into_recover`` (the 5-second auto-rollback
-    # countdown -- a deliberate user-facing pause so the operator can
-    # Ctrl-C if they want to intervene before recover fires),
     # ``deployment_tests/_mailtm.py::MailtmInbox._wait_for_message_body``
     # (polling the mail.tm HTTP API for an inbound email -- no
     # event-driven alternative without standing up an IMAP listener),
@@ -54,15 +51,24 @@ def test_prevent_time_sleep() -> None:
     # ``deployment_tests/test_relay_fleet.py`` (deadline-bounded healthz
     # poll after restarting a stopped relay's frps -- pacing probes of a
     # real remote service; no event-driven alternative).
-    rc.check_time_sleep(_DIR, snapshot(11))
+    rc.check_time_sleep(_DIR, snapshot(10))
 
 
 def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
+# `test_litellm_via_workspace.py` builds Python SCRIPTS as strings and runs them INSIDE a
+# workspace container; their `print` calls are that script's return protocol, read straight back
+# off stdout by the test. The rule's regex cannot tell a string literal from code, which is the
+# misfire this exists for -- it is not an exemption for the test's own output. The count stays at
+# 5: those are the genuine output primitives (`utils/output.py`, `utils/logging.py`, `main.py`,
+# and the hello-world example's server).
+_EMBEDDED_CONTAINER_SCRIPTS: tuple[str, ...] = ("test_litellm_via_workspace.py",)
+
+
 def test_prevent_bare_print() -> None:
-    rc.check_bare_print(_DIR, snapshot(6))
+    rc.check_bare_print(_DIR, snapshot(5), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
 
 
 # --- Exception handling ---
@@ -88,7 +94,7 @@ def test_prevent_broad_exception_catch() -> None:
     # is a best-effort post-create side effect running in the create worker, so an
     # unexpected failure must be logged (with traceback) and survived rather than
     # crashing the worker and skipping the create's remaining steps.
-    rc.check_broad_exception_catch(_DIR, snapshot(11))
+    rc.check_broad_exception_catch(_DIR, snapshot(10))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -359,14 +365,7 @@ def test_prevent_direct_subprocess() -> None:
         # git shell-outs from test / operator code, never from product code.
         "*/desktop_client/default_workspace_template_worktree.py",
     )
-    # The one allowed match is ``cli/env.py::_exec_into_recover``,
-    # which uses ``os.execvp`` to REPLACE the current process with
-    # ``minds env recover`` on deploy failure. That is the opposite of
-    # "spawn a managed child" -- there's no subprocess to clean up,
-    # and the whole point is for stdout/stderr/exit-code to flow
-    # through to the operator's shell as if recover were the original
-    # command. ConcurrencyGroup doesn't apply.
-    rc.check_direct_subprocess(_DIR, snapshot(1), excluded_patterns=excluded)
+    rc.check_direct_subprocess(_DIR, snapshot(0), excluded_patterns=excluded)
 
 
 def test_prevent_bare_tmux_targets() -> None:

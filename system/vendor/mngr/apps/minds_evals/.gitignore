@@ -2,7 +2,25 @@
 # minds-evals-generate recipe) because each embeds a full mngr-internal clone;
 # this ignore is a safety net for anyone who points --output back in-tree.
 datasets/
+# The input data the checked-in eval configs upload, which the safety net above would otherwise
+# swallow: a step's `files.source` is resolved relative to the config file, so this path is fixed.
+!configs/datasets/
 # Local harbor job results (the run recipe points -o here).
 jobs/
+# Single-trial regrades (`harbor trial regrade -o` points here). Its output is a bare trial
+# directory with no job config.json, so it does not belong under jobs/, which `harbor view` reads
+# as a folder of jobs.
+regrades/
 # Per-user local secrets (ANTHROPIC_API_KEY etc.), sourced by dev runs only.
 .env.local
+# The vendored viewer's toolchain and build output, both produced by scripts/build_viewer.sh.
+# bun lives inside the project rather than on the developer's machine, since only the viewer
+# recipes need it.
+.bun/
+viewer/node_modules/
+viewer/build/
+# The repo root ignores **/lib/ as Python build output. The vendored viewer has a real source
+# directory at that path, and the negation has to name the directory itself: git never descends
+# into an excluded directory, so a pattern matching only the files inside it would not bring them
+# back.
+!viewer/app/lib/

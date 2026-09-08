@@ -73,12 +73,12 @@ def generate_management_key(output_dir: str) -> None:
     )
     logger.info("")
     logger.info(
-        "     Vault is the source of truth; `minds env deploy` (with that tier"
+        "     Vault is the source of truth; `minds-admin env deploy` (with that tier"
         " activated) pushes the value into the `pool-ssh-<tier>` Modal Secret.",
     )
     logger.info("")
     logger.info("  2. Pass the public key file to the pool bake command:")
-    logger.info("     uv run mngr imbue_cloud admin pool create \\")
+    logger.info("     uv run minds-admin pool create \\")
     logger.info("       --count 3 \\")
     logger.info('       --attributes \'{"repo_branch_or_tag": "<branch-or-tag>"}\' \\')
     logger.info("       --workspace-dir <path/to/default-workspace-template> \\")

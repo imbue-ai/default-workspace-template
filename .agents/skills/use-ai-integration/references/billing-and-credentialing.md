@@ -42,11 +42,16 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
 
 ## Credential resolution
 
-Workspace credentials live in the `env` block of the shared
-`~/.claude/settings.json`, written only by the in-UI Claude sign-in
-modal. They are deliberately NOT in the process environment: supervisord
-freezes its env at boot, so an env-var credential would go stale the moment
-the user changes auth in the modal.
+Workspace credentials live in a per-ACCOUNT config directory. Signing in through the provider
+chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time by an env var
+naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
+antigravity, `PI_CODING_AGENT_DIR` for pi. Nothing rebinds a chat afterwards.
+
+This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
+why the resolver below reaches for a shared file. The shared path still exists and is still what
+a bare `claude` in a terminal uses; it is no longer where a CHAT's credential lives. A helper
+that wants the credential a particular chat is running on has to read that chat's account
+folder, not the shared one.
 
 - **Keyed integrations pin their key at setup.** A keyed integration
   snapshots `ANTHROPIC_API_KEY` (+ `ANTHROPIC_BASE_URL`) into
@@ -67,9 +72,11 @@ the user changes auth in the modal.
   attempted (litellm's auth error, or a non-zero `claude -p` exit surfaced as
   `ClaudeCLIError`) rather than hanging.
 
-`CLAUDE_CONFIG_DIR` is unset workspace-wide, so every claude (and the
-resolver in `claude_p.py`) lands on claude's own default `~/.claude` --
-which is what makes the settings file findable from any process.
+`CLAUDE_CONFIG_DIR` is unset workspace-WIDE, so a bare `claude` in a terminal and the resolver
+in `claude_p.py` both land on claude's own default `~/.claude`, which is what makes the shared
+settings file findable from any process. A chat AGENT is the exception and is deliberately
+different: its own `CLAUDE_CONFIG_DIR` is set on its process, pointing at the account it was
+created against.
 
 ## The mngr `claude -p` session-hook bug
 
