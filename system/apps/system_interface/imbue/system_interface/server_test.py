@@ -65,6 +65,21 @@ def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Pa
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
 
 
+def test_a_preview_shells_page_says_so_and_carries_no_staleness_banner(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text("<html><head></head><body>test</body></html>")
+
+    state = build_test_state(is_preview=True)
+    state.static_directory = static_dir
+    response = create_application(state).test_client().get("/")
+
+    assert response.status_code == 200
+    assert 'name="system-interface-preview"' in response.text
+    assert 'content="true"' in response.text
+    assert "system-interface-update-staleness" not in response.text
+
+
 def test_index_is_served_uncacheable(client: FlaskClient, tmp_path: Path) -> None:
     """The shell must never be cached, or a reload cannot pick up a new build.
 

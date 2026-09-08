@@ -165,13 +165,15 @@ def build_test_state(
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
+    is_preview: bool = False,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share.
+    and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
+    the read-only preview shell.
     """
     shell = build_shell_state(
         state_directory=shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory(),
@@ -179,7 +181,9 @@ def build_test_state(
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
     )
-    return SystemInterfaceState(config=config if config is not None else Config(), shell=shell)
+    return SystemInterfaceState(
+        config=config if config is not None else Config(), shell=shell, is_preview=is_preview
+    )
 
 
 def _find_free_port() -> int:

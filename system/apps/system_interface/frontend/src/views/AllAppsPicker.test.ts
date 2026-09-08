@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
+import { markPageAsPreviewShell } from "../testing/previewShell";
 import { appRecord } from "../testing/records";
 import { applyApps, resetInventoryForTesting } from "../models/Inventory";
 import { AllAppsPicker, filterActions, pickableActions, pinKey, unpinnedActions } from "./AllAppsPicker";
@@ -82,6 +83,20 @@ describe("AllAppsPicker", () => {
       expect.objectContaining({ name: "terminal" }),
       expect.objectContaining({ id: "new" }),
     );
+  });
+
+  it("in a preview shell, a row runs nothing but still pins", () => {
+    const restore = markPageAsPreviewShell();
+    try {
+      applyApps([appRecord("terminal")]);
+      const attrs = mount({});
+      root.querySelector<HTMLElement>("[data-app]")!.click();
+      expect(attrs.onRunAction).not.toHaveBeenCalled();
+      root.querySelector<HTMLElement>(".project-rail-pin")!.click();
+      expect(attrs.onPin).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   it("offers every app with no pins under Everything", () => {

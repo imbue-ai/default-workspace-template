@@ -185,9 +185,11 @@ def build_inventory_document(
     connected_client_ids: AbstractSet[str],
     # The addresses in each client's layout of its active view.
     docked_by_client_id: Mapping[str, Sequence[Address]],
+    is_preview: bool = False,
 ) -> dict[str, Any]:
     """The one document of contracts.md section 9: projects, Everything's tabs, every app, and every known client."""
     return {
+        "is_preview": is_preview,
         "projects": [project_wire_json(project) for project in projects],
         "everything": {
             "id": EVERYTHING_VIEW_ID,

@@ -11,6 +11,7 @@ import { EVERYTHING_VIEW_ID } from "../models/Projects";
 import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, placeMenu, shortcutLabel } from "./Sidebar";
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
+import { markPageAsPreviewShell } from "../testing/previewShell";
 import { appRecord, instanceRecord, projectRecord } from "../testing/records";
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
@@ -255,6 +256,31 @@ describe("Sidebar", () => {
       .find((el) => el.textContent?.trim() === "Stop Terminal")!
       .click();
     expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
+  });
+
+  it("in a preview shell, offers no verb that acts on a live instance or app, and creates nothing", () => {
+    const restore = markPageAsPreviewShell();
+    try {
+      const attrs = mount({});
+      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
+      expect(attrs.onRunShortcut).not.toHaveBeenCalled();
+      root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
+      m.redraw.sync();
+      const shortcutItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+        el.textContent?.trim(),
+      );
+      expect(shortcutItems).not.toContain("Stop Terminal");
+      expect(shortcutItems).not.toContain("New terminal");
+      expand();
+      root.querySelector<HTMLElement>('[aria-label="Actions for terminal one"]')!.click();
+      m.redraw.sync();
+      const rowItems = Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
+        el.textContent?.trim(),
+      );
+      expect(rowItems).toEqual(["Refresh", "Share Terminal", "Add to project...", "Remove from project"]);
+    } finally {
+      restore();
+    }
   });
 
   it("switches views from the header menu", () => {

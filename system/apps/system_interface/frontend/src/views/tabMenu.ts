@@ -12,6 +12,7 @@
 
 import type { AppRecord, InstanceRecord } from "../models/Inventory";
 import { isAppStoppable } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import type { IconName } from "@imbue/workspace-ui/src/components/icons";
 
 /** One actionable row. */
@@ -63,6 +64,10 @@ export interface TabMenuActions {
  * single-instance app's tab, where the two coincide, and only for an app the workspace can
  * honestly stop (supervised, not critical, and not inside a critical app's program); a
  * multi-instance app is stopped from the rail's row menu.
+ *
+ * A preview shell offers none of the verbs that act on the live instance or app (Rename, Stop,
+ * Start, Delete): its backend refuses them, since a preview owns nothing it could change. The
+ * tab and filing verbs stay, since they edit the preview's own copy of the layout.
  */
 export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions: TabMenuActions): TabMenuEntry[] {
   const opening: TabMenuEntry[] = [{ label: "Refresh", iconName: "refresh", run: actions.refresh }];
@@ -71,7 +76,8 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
   }
   opening.push({ label: "Add to project...", iconName: "folder-plus", run: actions.addToProjects });
   const closing: TabMenuEntry[] = [];
-  if (instance.renameable) {
+  const canActOnLive = !isPreviewShell();
+  if (instance.renameable && canActOnLive) {
     closing.push({ label: "Rename", iconName: "edit", run: actions.rename });
   }
   if (actions.closeTab !== null) {
@@ -80,7 +86,7 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
   if (actions.removeFromProject !== null) {
     closing.push({ label: "Remove from project", iconName: "minus-circle", run: actions.removeFromProject });
   }
-  if (instance.stoppable && app.is_running) {
+  if (instance.stoppable && app.is_running && canActOnLive) {
     const action = instance.status === "stopped" ? "start" : "stop";
     closing.push({
       label: `${action === "stop" ? "Stop" : "Start"} ${instance.title}`,
@@ -88,7 +94,7 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
       run: () => actions.setInstanceLifecycle(action),
     });
   }
-  if (!app.has_instances && isAppStoppable(app)) {
+  if (!app.has_instances && isAppStoppable(app) && canActOnLive) {
     const action = app.is_running ? "stop" : "start";
     closing.push({
       label: `${action === "stop" ? "Stop" : "Start"} ${app.display_name}`,
@@ -96,7 +102,7 @@ export function tabMenuEntries(app: AppRecord, instance: InstanceRecord, actions
       run: () => actions.setAppLifecycle(action),
     });
   }
-  if (app.has_instances) {
+  if (app.has_instances && canActOnLive) {
     closing.push({ label: `Delete ${instance.title}`, iconName: "trash", isDestructive: true, run: actions.delete });
   }
   return closing.length === 0 ? opening : [...opening, TAB_MENU_DIVIDER, ...closing];

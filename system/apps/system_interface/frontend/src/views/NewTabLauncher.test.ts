@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
+import { markPageAsPreviewShell } from "../testing/previewShell";
 import { appRecord } from "../testing/records";
 import {
   NewTabLauncher,
@@ -109,6 +110,19 @@ describe("NewTabLauncher", () => {
     m.mount(root, { view: () => m(NewTabLauncher, attrs) });
     return attrs;
   }
+
+  it("in a preview shell, a tile runs nothing", () => {
+    const restore = markPageAsPreviewShell();
+    try {
+      const attrs = mount({});
+      const tile = root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!;
+      expect(tile.getAttribute("aria-disabled")).toBe("true");
+      tile.click();
+      expect(attrs.onRunAction).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
 
   it("runs a tile's action with no parameters, whichever app it is", () => {
     const attrs = mount({});

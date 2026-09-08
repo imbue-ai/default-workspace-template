@@ -15,6 +15,7 @@
 
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import { appIconMarkupByName } from "./components/appIcon";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
@@ -319,7 +320,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   }
 
   function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
-    const isDisabled = attrs.isAwaitingCreate === true;
+    // A preview shell creates nothing: its backend refuses the create, so the tile is inert.
+    const isDisabled = attrs.isAwaitingCreate === true || isPreviewShell();
     const run = (): void => attrs.onRunAction(tile.app, tile.action.id);
     return m(
       "div",
