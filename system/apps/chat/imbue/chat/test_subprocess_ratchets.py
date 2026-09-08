@@ -20,12 +20,11 @@ import pytest
 from detached_subprocess.ratchets import BACKGROUND_SPAWN_RULE
 from detached_subprocess.ratchets import RAW_SPAWN_RULE
 from detached_subprocess.ratchets import called_name
-from detached_subprocess.ratchets import find_background_spawns
-from detached_subprocess.ratchets import find_raw_spawns
 from detached_subprocess.ratchets import find_undetached_background_spawns
 from inline_snapshot import snapshot
 
 from imbue.imbue_common.ratchet_testing.ratchets import TEST_FILE_PATTERNS
+from imbue.imbue_common.ratchet_testing.standard_ratchet_checks import assert_ratchet
 
 _SOURCE = Path(__file__).parent.parent.parent
 _AGENT_MANAGER = _SOURCE / "imbue" / "chat" / "agent_manager.py"
@@ -43,13 +42,11 @@ _ALLOWED_BACKGROUND_SPAWN_FILES = ("agent_manager.py", *TEST_FILE_PATTERNS)
 
 
 def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
-    chunks = find_raw_spawns(_SOURCE, _ALLOWED_RAW_SPAWN_FILES)
-    assert len(chunks) <= snapshot(0), RAW_SPAWN_RULE.format_failure(chunks)
+    assert_ratchet(RAW_SPAWN_RULE, _SOURCE, snapshot(0), _ALLOWED_RAW_SPAWN_FILES)
 
 
 def test_prevent_background_process_spawns_outside_the_one_that_detaches_itself() -> None:
-    chunks = find_background_spawns(_SOURCE, _ALLOWED_BACKGROUND_SPAWN_FILES)
-    assert len(chunks) <= snapshot(0), BACKGROUND_SPAWN_RULE.format_failure(chunks)
+    assert_ratchet(BACKGROUND_SPAWN_RULE, _SOURCE, snapshot(0), _ALLOWED_BACKGROUND_SPAWN_FILES)
 
 
 def test_the_allowlisted_background_spawns_detach_themselves() -> None:

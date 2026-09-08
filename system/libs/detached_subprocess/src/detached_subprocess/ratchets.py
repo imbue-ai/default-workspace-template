@@ -17,16 +17,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from imbue.imbue_common.ratchet_testing.common_ratchets import RatchetRuleInfo
-from imbue.imbue_common.ratchet_testing.core import (
-    FileExtension,
-    RatchetMatchChunk,
-    RegexPattern,
-    check_regex_ratchet,
-    get_ast_nodes_of_type,
-)
+from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
+from imbue.imbue_common.ratchet_testing.core import get_ast_nodes_of_type
 
-RAW_SPAWN_RULE = RatchetRuleInfo(
+# Every ConcurrencyGroup entry point that reaches the subprocess runner. Shared by the rule and
+# by the guard standing behind an allowlisted file's exemption from it: the exemption waives all
+# of these at once, so a guard that knew about fewer would leave the rest unchecked in that file.
+BACKGROUND_SPAWN_NAMES = ("run_process_in_background", "run_process_to_completion", "run_background")
+
+RAW_SPAWN_RULE = RegexRatchetRule(
     rule_name="subprocess spawns outside the detached runner",
     rule_description=(
         "A workspace service must spawn every subprocess written in its own source through "
@@ -40,9 +39,19 @@ RAW_SPAWN_RULE = RatchetRuleInfo(
         "calling it: handing it to something else as a value (a default argument, a callback) "
         "spawns just as attached, and is how the sign-in probe slipped past a call-only rule."
     ),
+    # The import alternative is anchored to the start of a line and to the `from ... import`
+    # prefix so it reads code and not prose: the modules that spawn also name the runner in
+    # comments, which a bare name pattern would misfire on. What follows `import` is left open
+    # (up to a trailing `#`) so an alias spelling -- `... as _run`, which reaches the attached
+    # runner exactly as the sign-in probe's default argument did -- still matches.
+    pattern_string=(
+        r"^from \S+ import [^#\n]*\brun_local_command_modern_version\b"
+        r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\("
+    ),
+    is_multiline=True,
 )
 
-BACKGROUND_SPAWN_RULE = RatchetRuleInfo(
+BACKGROUND_SPAWN_RULE = RegexRatchetRule(
     rule_name="ConcurrencyGroup process spawns outside the allowlisted file",
     rule_description=(
         "A long-running background process started through ConcurrencyGroup reaches the same "
@@ -51,34 +60,8 @@ BACKGROUND_SPAWN_RULE = RatchetRuleInfo(
         "genuinely has to outlive the call must pass is_detached_from_terminal=True; anything "
         "else should prefer run_detached_command."
     ),
+    pattern_string="|".join(rf"{name}\(" for name in BACKGROUND_SPAWN_NAMES),
 )
-
-# Every ConcurrencyGroup entry point that reaches the subprocess runner. Shared by the rule and
-# by the guard standing behind an allowlisted file's exemption from it: the exemption waives all
-# of these at once, so a guard that knew about fewer would leave the rest unchecked in that file.
-BACKGROUND_SPAWN_NAMES = ("run_process_in_background", "run_process_to_completion", "run_background")
-
-# The import alternative is anchored to the start of a line and to the `from ... import` prefix
-# so it reads code and not prose: the modules that spawn also name the runner in comments, which
-# a bare name pattern would misfire on. What follows `import` is left open (up to a trailing `#`)
-# so an alias spelling -- `... as _run`, which reaches the attached runner exactly as the
-# sign-in probe's default argument did -- still matches.
-_RAW_SPAWN_PATTERN = RegexPattern(
-    r"^from \S+ import [^#\n]*\brun_local_command_modern_version\b"
-    r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\(",
-    multiline=True,
-)
-
-
-def find_raw_spawns(source_dir: Path, allowed_files: tuple[str, ...]) -> tuple[RatchetMatchChunk, ...]:
-    """Spawns under ``source_dir`` that bypass the detached runner, outside ``allowed_files``."""
-    return check_regex_ratchet(source_dir, FileExtension(".py"), _RAW_SPAWN_PATTERN, allowed_files)
-
-
-def find_background_spawns(source_dir: Path, allowed_files: tuple[str, ...]) -> tuple[RatchetMatchChunk, ...]:
-    """ConcurrencyGroup spawns under ``source_dir`` outside ``allowed_files``."""
-    pattern = RegexPattern("|".join(rf"{name}\(" for name in BACKGROUND_SPAWN_NAMES), multiline=False)
-    return check_regex_ratchet(source_dir, FileExtension(".py"), pattern, allowed_files)
 
 
 def called_name(call: ast.Call) -> str | None:
@@ -96,7 +79,9 @@ def find_undetached_background_spawns(module_path: Path) -> tuple[list[ast.Call]
     Used by the guard standing behind a file's exemption from :data:`BACKGROUND_SPAWN_RULE`:
     nothing else would notice a spawn there going back to attached.
     """
-    spawns = [call for call in get_ast_nodes_of_type(module_path, ast.Call) if called_name(call) in BACKGROUND_SPAWN_NAMES]
+    spawns = [
+        call for call in get_ast_nodes_of_type(module_path, ast.Call) if called_name(call) in BACKGROUND_SPAWN_NAMES
+    ]
     undetached = []
     for spawn in spawns:
         detachment = {keyword.arg: keyword.value for keyword in spawn.keywords}.get("is_detached_from_terminal")
