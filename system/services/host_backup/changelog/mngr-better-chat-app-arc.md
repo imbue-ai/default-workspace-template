@@ -1,0 +1,1 @@
+Comment-only: the snapshot-exclusion note in `config.py` no longer describes the update apply's pre-apply copies as exactly two uv tool environments, since the apply now copies aside the mngr tool and each critical app's own tool (phase 1 of the workspace app model).
