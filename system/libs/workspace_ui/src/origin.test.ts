@@ -4,9 +4,9 @@ import { deriveAppOrigin, workspaceHostCoordinate } from "./origin";
 
 describe("deriveAppOrigin", () => {
   it("nests the app's origin label as a hostname label on a local workspace host", () => {
-    expect(
-      deriveAppOrigin("terminal-x7k9q2w1", "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421", "http:"),
-    ).toBe("http://terminal-x7k9q2w1.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421/");
+    expect(deriveAppOrigin("terminal-x7k9q2w1", "host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421", "http:")).toBe(
+      "http://terminal-x7k9q2w1.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.localhost:8421/",
+    );
   });
 
   it("handles a local workspace host without a port", () => {
