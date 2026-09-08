@@ -454,6 +454,21 @@ def _surface_report(page: Page, address: str, stamp: str | None = None) -> dict[
     return page.evaluate(_SURFACE_REPORT_JS, [address, stamp])
 
 
+def _wait_for_surface_shown(page: Page, address: str, stamp: str | None = None) -> dict[str, Any]:
+    """The surface report once a surface holding ``address`` is on screen.
+
+    The live layer places a page's surface on the animation frame after the dock has laid
+    its pane out (a zero-sized pane keeps it hidden), so a report taken the instant the tab
+    appears can find the element present but not yet shown; the wait is for that frame.
+    """
+    page.wait_for_function(
+        f"([address, stamp]) => ({_SURFACE_REPORT_JS.strip()})([address, stamp]).shownCount >= 1",
+        arg=[address, stamp],
+        timeout=15000,
+    )
+    return _surface_report(page, address, stamp)
+
+
 # ---------- the shell ----------
 
 
@@ -780,7 +795,7 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         _wait_for_view(page, STARTER_PROJECT_ID)
         _open_fixture_instance(page)
         page.evaluate(_WATCH_SURFACE_REMOVALS_JS)
-        in_project = _surface_report(page, _FIXTURE_ADDRESS, "the-original-element")
+        in_project = _wait_for_surface_shown(page, _FIXTURE_ADDRESS, "the-original-element")
         assert in_project["count"] == 1, f"the starter project should hold exactly one page: {in_project}"
         assert in_project["shownCount"] == 1, f"the starter project's page should be on screen: {in_project}"
         _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
@@ -791,7 +806,7 @@ def test_one_instance_is_one_element_in_every_view_showing_it(tmp_path: Path, pa
         _open_from_launcher(page, _FIXTURE_ADDRESS)
         expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
 
-        in_everything = _surface_report(page, _FIXTURE_ADDRESS)
+        in_everything = _wait_for_surface_shown(page, _FIXTURE_ADDRESS)
         assert in_everything["count"] == 1, f"opening the instance in Everything forked its page: {in_everything}"
         assert in_everything["shownCount"] == 1, f"Everything is not showing the page: {in_everything}"
         assert in_everything["stamps"] == ["the-original-element"], (
