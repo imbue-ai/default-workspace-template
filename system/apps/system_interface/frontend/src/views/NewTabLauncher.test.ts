@@ -19,7 +19,7 @@ import {
   railPageTarget,
   railPaging,
   restingSections,
-  searchRows,
+  searchLauncherRows,
   searchTiles,
   sortRowsByRecency,
   splitLaunchTiles,
@@ -142,9 +142,9 @@ describe("tile helpers", () => {
 
 describe("search helpers", () => {
   it("finds rows by title or app, every token of the query somewhere", () => {
-    expect(searchRows(MACHINE, "chat").map((r) => r.address)).toEqual(["app:chat?instance=c1"]);
-    expect(searchRows(MACHINE, "viewer file").map((r) => r.address)).toEqual(["app:files"]);
-    expect(searchRows(MACHINE, "nothing here")).toEqual([]);
+    expect(searchLauncherRows(MACHINE, "chat").map((r) => r.address)).toEqual(["app:chat?instance=c1"]);
+    expect(searchLauncherRows(MACHINE, "viewer file").map((r) => r.address)).toEqual(["app:files"]);
+    expect(searchLauncherRows(MACHINE, "nothing here")).toEqual([]);
   });
 
   it("finds the actions a query can answer with, by the row text they render as", () => {

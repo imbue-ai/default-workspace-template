@@ -157,7 +157,7 @@ export function restingSections(
 }
 
 /** The machine's instances a query finds: by title or by the app they belong to. */
-export function searchRows(rows: readonly LauncherRow[], query: string): LauncherRow[] {
+export function searchLauncherRows(rows: readonly LauncherRow[], query: string): LauncherRow[] {
   return rows.filter((row) => matchesQuery(query, row.label, row.appDisplayName, row.appName));
 }
 
@@ -884,7 +884,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   function searchResults(attrs: NewTabLauncherAttrs, nowMs: number): m.Children {
     const trimmed = query.trim();
     const actionTiles = searchTiles(attrs.tiles, trimmed);
-    const rows = searchRows(attrs.rows, trimmed);
+    const rows = searchLauncherRows(attrs.rows, trimmed);
     const starts = searchStartOptions(START_OPTIONS, trimmed);
     const templates = attrs.catalog.kind === "loaded" ? searchTemplates(attrs.catalog.catalog.templates, trimmed) : [];
 
