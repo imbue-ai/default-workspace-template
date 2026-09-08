@@ -82,3 +82,5 @@ The apply's tool-environment refresh has a test for the case where neither the t
 The apply refuses (exit 1, nothing changed) a merge ref that re-merges a target the tree landed and then rolled back without first reverting the rollback commit, naming that commit: git counts the reverted content as already merged, so such a merge lands only what the target gained since, and the probes could not tell the old release plus a few files from a good update. A merge ref that carries the revert (the worker reference's retry step) is applied as usual.
 
 The re-merge refusal reads each `target..HEAD` log line once, partitioning it into the commit and its subject, rather than splitting the line three times.
+
+The apply's `--target-ref` help names the third thing the flag enables besides the ledger entry and the post-success `env-converge upgrade`: the refusal of a merge ref that re-merges the target after a rollback without reverting the rollback first.

@@ -779,7 +779,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="The release this update lands (update-self mode): enables the "
         "VERSION_HISTORY.md ledger entry and the post-success "
-        "`env-converge upgrade`.",
+        "`env-converge upgrade`, and refuses a merge ref that re-merges this "
+        "target after a rollback of it without reverting the rollback first.",
     )
     apply_parser.set_defaults(func=_cmd_apply)
 
