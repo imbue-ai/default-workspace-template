@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,6 +52,9 @@ POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
+# How long every child together gets to honour SIGTERM before it is killed. Sized to fit inside
+# supervisord's stopwaitsecs for [program:share-gateway], which is the unset default of 10s.
+_STOP_GRACE_SECONDS = 10.0
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -85,22 +89,43 @@ def _wait_for_change_inotify(fd: object, timeout_seconds: float) -> bool:
         return False
 
 
+def _stop_children(
+    children: Sequence[tuple[str, subprocess.Popen[bytes]]],
+    grace_seconds: float = _STOP_GRACE_SECONDS,
+) -> None:
+    """SIGTERM every child before waiting on any, then reap them all against one deadline.
+
+    Detaching these children put them out of reach of supervisord's group signals, so this is
+    the only SIGTERM they get and the only budget they get is the program's ``stopwaitsecs``.
+    Signalling and waiting one child at a time would spend that whole budget on the first slow
+    child and leave the rest holding their ports when supervisord SIGKILLs this process.
+    """
+    signalled = []
+    for name, process in children:
+        if process.poll() is not None:
+            continue
+        _log(f"Stopping {name}...")
+        process.send_signal(signal.SIGTERM)
+        signalled.append(process)
+    deadline = time.monotonic() + grace_seconds
+    for process in signalled:
+        try:
+            process.wait(timeout=max(deadline - time.monotonic(), 0.0))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:
-    if process is None or process.poll() is not None:
+    if process is None:
         return
-    _log(f"Stopping {name}...")
-    process.send_signal(signal.SIGTERM)
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+    _stop_children([(name, process)])
 
 
 def _start_child(argv: list[str], name: str) -> subprocess.Popen[bytes]:
     """A managed child (caddy, frpc), in its own session.
 
-    ``_stop_child`` signals it by handle, which is what makes detaching safe: supervisord's
+    ``_stop_children`` signals it by handle, which is what makes detaching safe: supervisord's
     group kill no longer reaches it, and that explicit stop is now its only path down.
     """
     _log(f"Starting {name}: {' '.join(argv[:3])}...")
@@ -270,10 +295,14 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
 def _stop_stack(stack: ShareStack | None) -> None:
     if stack is None:
         return
-    for relay_id, frpc_process in sorted(stack.frpc_process_by_relay_id.items()):
-        _stop_child(frpc_process, f"frpc[{relay_id}]")
+    children = [
+        (f"frpc[{relay_id}]", frpc_process)
+        for relay_id, frpc_process in sorted(stack.frpc_process_by_relay_id.items())
+    ]
+    if stack.caddy_process is not None:
+        children.append(("caddy", stack.caddy_process))
+    _stop_children(children)
     stack.frpc_process_by_relay_id.clear()
-    _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
     _log("Share stack stopped")
