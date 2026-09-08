@@ -49,6 +49,11 @@ data/.secrets/*
 !data/.tasks/
 data/.tasks/*
 !data/.tasks/README.md
+!data/.imbue/
+data/.imbue/*
+!data/.imbue/plans/
+data/.imbue/plans/*
+!data/.imbue/plans/CLAUDE.md
 
 # Sculptor local config (per-checkout, not shared).
 **/.sculptor/
@@ -298,10 +303,12 @@ marimo/_lsp/
 # Frontend build artifacts
 **/frontend-dist/
 
-# system_interface frontend build artifacts and binary assets
-# (built fresh on mind creation via `cd system/apps/system_interface/frontend && npm ci && npm run build`)
+# Frontend build artifacts and binary assets of the shell and the chat app
+# (built fresh on mind creation via `cd system && npm ci && npm run build`)
 system/apps/system_interface/imbue/system_interface/static/
+system/apps/chat/imbue/chat/static/
 system/apps/system_interface/frontend/media/*.ico
+system/apps/chat/frontend/media/*.ico
 system/apps/system_interface/frontend/src/assets/*.png
 
 # Claude Code local settings (session-specific permissions)

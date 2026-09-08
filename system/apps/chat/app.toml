@@ -1,0 +1,26 @@
+# The chat app: the agent harness UI. Its pages render inside iframes at this origin, served
+# by the ``chat`` program at its own port (docs/system/blueprint/workspace-app-model/).
+name = "chat"
+display_name = "Chat"
+icon = "icon.svg"
+instances = true
+critical = true
+priority = "chat"
+
+[default_shortcut]
+action = "new"
+mode = "new"
+
+[[actions]]
+id = "new"
+label = "New Chat"
+params = [{name = "account_id", label = "Provider account", required = false}]
+
+[[actions]]
+id = "subagent"
+label = "Open subagent"
+params = [
+    {name = "parent", label = "Parent chat", required = true},
+    {name = "session", label = "Subagent session", required = true},
+    {name = "description", label = "Description", required = false},
+]

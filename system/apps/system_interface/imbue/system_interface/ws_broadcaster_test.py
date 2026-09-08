@@ -54,18 +54,6 @@ def test_unregister_nonexistent_is_safe() -> None:
     broadcaster.unregister(other_queue)
 
 
-def test_broadcast_agents_updated() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    agents = [{"id": "a1", "name": "agent-1", "state": "RUNNING"}]
-    broadcaster.broadcast_agents_updated(agents)
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "agents_updated"
-    assert msg["agents"] == agents
-
-
 def test_broadcast_apps_updated() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
@@ -78,45 +66,19 @@ def test_broadcast_apps_updated() -> None:
     assert msg["apps"] == apps
 
 
-def test_broadcast_proto_agent_created() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    broadcaster.broadcast_proto_agent_created(
-        agent_id="a1", name="test", creation_type="worktree", parent_agent_id=None
-    )
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_created"
-    assert msg["agent_id"] == "a1"
-    assert msg["creation_type"] == "worktree"
-    assert msg["parent_agent_id"] is None
-
-
-def test_broadcast_proto_agent_completed() -> None:
-    broadcaster = WebSocketBroadcaster()
-    q = broadcaster.register()
-
-    broadcaster.broadcast_proto_agent_completed(agent_id="a1", success=True, error=None)
-
-    msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_completed"
-    assert msg["success"] is True
-    assert msg["error"] is None
-
-
 def test_broadcast_layout_op_open() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_layout_op("open", {"ref": "service:web"}, requester_agent_id="agent-1")
+    broadcaster.broadcast_layout_op("open", {"ref": "service:web"}, requester="app:chat?instance=agent-1")
 
     msg = json.loads(_get_message(q))
     assert msg == {
         "type": "layout_op",
         "op": "open",
         "args": {"ref": "service:web"},
-        "requester_agent_id": "agent-1",
+        "requester": "app:chat?instance=agent-1",
+        "target_client_id": None,
     }
 
 
@@ -125,27 +87,33 @@ def test_broadcast_layout_op_passes_args_through_unchanged() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    payload = {"ref": "service:web", "relative_to": "chat:alice", "direction": "right", "ratio": 0.5}
-    broadcaster.broadcast_layout_op("split", payload, requester_agent_id="agent-2")
+    payload = {
+        "ref": "service:web",
+        "relative_to": "chat:alice",
+        "direction": "right",
+        "ratio": 0.5,
+    }
+    broadcaster.broadcast_layout_op("split", payload, requester="app:chat?instance=agent-2")
 
     msg = json.loads(_get_message(q))
     assert msg == {
         "type": "layout_op",
         "op": "split",
         "args": payload,
-        "requester_agent_id": "agent-2",
+        "requester": "app:chat?instance=agent-2",
+        "target_client_id": None,
     }
 
 
-def test_broadcast_layout_op_defaults_requester_agent_id_to_empty_string() -> None:
-    """``requester_agent_id`` is optional; omitting it yields an empty string."""
+def test_broadcast_layout_op_defaults_the_requester_to_an_empty_string() -> None:
+    """``requester`` is optional; omitting it yields an empty string."""
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
     broadcaster.broadcast_layout_op("restore", {})
 
     msg = json.loads(_get_message(q))
-    assert msg["requester_agent_id"] == ""
+    assert msg["requester"] == ""
 
 
 def test_shutdown_sends_none_sentinel() -> None:
@@ -293,33 +261,24 @@ def test_evicted_client_receives_shutdown_sentinel() -> None:
     assert stuck_queue.get_nowait() is None
 
 
-def test_broadcast_terminal_session_delivers_typed_event() -> None:
-    """A session switch broadcasts the terminal_id-tagged terminal_session event."""
+def test_broadcast_projects_updated_and_tab_rebound_are_typed_events() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_terminal_session("term-abc", "$3", "terminal-2")
+    broadcaster.broadcast_projects_updated([{"id": "p1"}])
+    broadcaster.broadcast_tab_rebound("client-1", "everything", "tab-0123456789abcdef", "app:terminal?instance=k")
 
-    message = json.loads(_get_message(client_queue))
-    assert message == {
-        "type": "terminal_session",
-        "terminal_id": "term-abc",
-        "session_id": "$3",
-        "session_name": "terminal-2",
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "projects_updated",
+        "projects": [{"id": "p1"}],
     }
-
-
-def test_broadcast_terminal_session_allows_null_terminal_id_for_rename() -> None:
-    """A rename broadcasts with terminal_id=None so the frontend matches by session_id."""
-    broadcaster = WebSocketBroadcaster()
-    client_queue = broadcaster.register()
-
-    broadcaster.broadcast_terminal_session(None, "$5", "renamed-terminal")
-
-    message = json.loads(_get_message(client_queue))
-    assert message["terminal_id"] is None
-    assert message["session_id"] == "$5"
-    assert message["session_name"] == "renamed-terminal"
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "tab_rebound",
+        "client_id": "client-1",
+        "view_id": "everything",
+        "tab_id": "tab-0123456789abcdef",
+        "address": "app:terminal?instance=k",
+    }
 
 
 def test_shutdown_delivers_sentinel_even_to_full_queue() -> None:
@@ -340,24 +299,23 @@ def test_shutdown_delivers_sentinel_even_to_full_queue() -> None:
     assert drained[-1] is None
 
 
-def test_set_client_info_and_layout_lookup() -> None:
+def test_set_client_info_and_view_lookup() -> None:
     broadcaster = WebSocketBroadcaster()
     first_queue = broadcaster.register()
     broadcaster.register()
 
-    broadcaster.set_client_info(first_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(first_queue, "client-1", "everything", "desktop")
 
-    assert broadcaster.has_client_on_layout("desktop") is True
-    assert broadcaster.has_client_on_layout("mobile") is False
+    assert broadcaster.connected_client_ids() == {"client-1"}
     infos = broadcaster.get_connected_client_infos()
-    assert infos == [{"client_id": "client-1", "active_layout_slug": "desktop", "device_kind": "desktop"}]
+    assert infos == [{"client_id": "client-1", "active_view": "everything", "device_kind": "desktop"}]
 
 
 def test_set_client_info_ignores_unregistered_queue() -> None:
     broadcaster = WebSocketBroadcaster()
     stray_queue: queue.Queue[str | None] = queue.Queue()
 
-    broadcaster.set_client_info(stray_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(stray_queue, "client-1", "everything", "desktop")
 
     assert broadcaster.get_connected_client_infos() == []
 
@@ -365,63 +323,62 @@ def test_set_client_info_ignores_unregistered_queue() -> None:
 def test_unregister_drops_client_info() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
-    broadcaster.set_client_info(client_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(client_queue, "client-1", "everything", "desktop")
 
     broadcaster.unregister(client_queue)
 
-    assert broadcaster.has_client_on_layout("desktop") is False
-
-
-def test_broadcast_to_layout_targets_only_matching_clients() -> None:
-    broadcaster = WebSocketBroadcaster()
-    desktop_queue = broadcaster.register()
-    mobile_queue = broadcaster.register()
-    unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(desktop_queue, "client-1", "desktop", "desktop")
-    broadcaster.set_client_info(mobile_queue, "client-2", "mobile", "mobile")
-
-    broadcaster.broadcast_layout_op("close", {"ref": "service:web"}, "agent-1", target_layout_slug="desktop")
-
-    message = json.loads(_get_message(desktop_queue))
-    assert message["op"] == "close"
-    assert mobile_queue.empty()
-    # A client that never registered its layout is not targeted either.
-    assert unregistered_queue.empty()
+    assert broadcaster.connected_client_ids() == set()
 
 
 def test_broadcast_layout_op_without_target_reaches_everyone() -> None:
     broadcaster = WebSocketBroadcaster()
     desktop_queue = broadcaster.register()
     unregistered_queue = broadcaster.register()
-    broadcaster.set_client_info(desktop_queue, "client-1", "desktop", "desktop")
+    broadcaster.set_client_info(desktop_queue, "client-1", "everything", "desktop")
 
-    broadcaster.broadcast_layout_op("refresh", {"ref": "service:web"}, "agent-1")
+    broadcaster.broadcast_layout_op("refresh", {"address": "app:files"}, "agent-1")
 
     assert json.loads(_get_message(desktop_queue))["op"] == "refresh"
     assert json.loads(_get_message(unregistered_queue))["op"] == "refresh"
 
 
-def test_layout_registry_broadcasts_reach_all_clients() -> None:
+def test_broadcast_to_client_reaches_every_window_of_that_client_only() -> None:
+    broadcaster = WebSocketBroadcaster()
+    first_window = broadcaster.register()
+    second_window = broadcaster.register()
+    other_client = broadcaster.register()
+    unregistered_queue = broadcaster.register()
+    broadcaster.set_client_info(first_window, "client-1", "everything", "desktop")
+    broadcaster.set_client_info(second_window, "client-1", "project-1", "desktop")
+    broadcaster.set_client_info(other_client, "client-2", "project-1", "mobile")
+
+    broadcaster.broadcast_layout_op(
+        "maximize", {"address": "app:files"}, "app:chat?instance=agent-1", target_client_id="client-1"
+    )
+
+    for window in (first_window, second_window):
+        message = json.loads(_get_message(window))
+        assert message["op"] == "maximize" and message["target_client_id"] == "client-1"
+    assert other_client.empty()
+    # A window that never registered its client is not targeted either.
+    assert unregistered_queue.empty()
+
+
+def test_layout_updated_and_active_view_changed_are_typed_events() -> None:
     broadcaster = WebSocketBroadcaster()
     client_queue = broadcaster.register()
 
-    broadcaster.broadcast_layout_saved("desktop", "desktop", "client-1")
-    broadcaster.broadcast_layout_deleted("mobile", "desktop")
-    broadcaster.broadcast_load_layout("desktop", "desktop", None)
+    broadcaster.broadcast_layout_updated("project-1", "client-1", "save-0123456789abcdef")
+    broadcaster.broadcast_active_view_changed("client-1", "project-1")
 
-    saved = json.loads(_get_message(client_queue))
-    assert saved == {
-        "type": "layout_saved",
-        "layout_slug": "desktop",
-        "display_name": "desktop",
-        "saved_by_client_id": "client-1",
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "layout_updated",
+        "view_id": "project-1",
+        "client_id": "client-1",
+        "save_id": "save-0123456789abcdef",
     }
-    deleted = json.loads(_get_message(client_queue))
-    assert deleted == {"type": "layout_deleted", "layout_slug": "mobile", "fallback_layout_slug": "desktop"}
-    load = json.loads(_get_message(client_queue))
-    assert load == {
-        "type": "load_layout",
-        "layout_slug": "desktop",
-        "display_name": "desktop",
-        "target_client_id": None,
+    assert json.loads(_get_message(client_queue)) == {
+        "type": "active_view_changed",
+        "client_id": "client-1",
+        "view_id": "project-1",
     }

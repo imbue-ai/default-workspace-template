@@ -1,1519 +1,457 @@
+import html
 import json
-import os
 import queue
-import socket
-import threading
-import traceback
-from collections.abc import Callable
-from collections.abc import Iterator
-from pathlib import Path
+import re
+import shlex
+from datetime import datetime
+from datetime import timezone
 from typing import Any
-from uuid import uuid4
+from typing import Final
 
-import httpx
 from flask import Flask
 from flask import Response
 from flask import request
 from flask import send_file
 from flask import send_from_directory
-from flask_sock import Sock
 from loguru import logger as _loguru_logger
+from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import NotFound
 
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
-from imbue.mngr.errors import MngrError
-from imbue.mngr.primitives import AgentId
-from imbue.system_interface import client_activity
-from imbue.system_interface import latchkey_endpoints
-from imbue.system_interface import workspace_layouts
-from imbue.system_interface.agent_discovery import AgentInfo
-from imbue.system_interface.agent_discovery import discover_agents
-from imbue.system_interface.agent_discovery import get_host_dir
-from imbue.system_interface.agent_discovery import start_agent
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.app_context import attach_state
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.attachments import delete_upload
-from imbue.system_interface.attachments import get_uploads_directory
-from imbue.system_interface.attachments import resolve_upload_path
-from imbue.system_interface.attachments import store_uploaded_file
-from imbue.system_interface.config import Config
-from imbue.system_interface.event_queues import AgentEventQueues
-from imbue.system_interface.file_serving import try_serve_file
-from imbue.system_interface.harnesses.claude import auth_endpoints
-from imbue.system_interface.harnesses.claude.launch_defaults import get_workspace_fast_mode_decision_path
-from imbue.system_interface.harnesses.claude.launch_defaults import read_workspace_fast_mode_decision
-from imbue.system_interface.harnesses.claude.launch_defaults import write_workspace_fast_mode_decision
-from imbue.system_interface.harnesses.claude.tap import TAP_CHORD
-from imbue.system_interface.harnesses.interrupt import restart_drain
-from imbue.system_interface.harnesses.model import ModelIdentity
-from imbue.system_interface.harnesses.model import ModelOption
-from imbue.system_interface.harnesses.registry import HARNESS_SPECS
-from imbue.system_interface.harnesses.registry import build_resolver
-from imbue.system_interface.harnesses.registry import get_catalog
-from imbue.system_interface.harnesses.session import SendOutcome
-from imbue.system_interface.harnesses.session_watcher import AgentSessionWatcher
-from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.layout_ops import allocate_next_terminal_name
-from imbue.system_interface.layout_ops import allocate_terminal_panel_id
-from imbue.system_interface.layout_ops import filter_user_terminal_sessions
-from imbue.system_interface.layout_ops import is_broadcasting_op
-from imbue.system_interface.layout_ops import is_destroyable_terminal_session
-from imbue.system_interface.layout_ops import is_known_op
-from imbue.system_interface.layout_ops import is_mutating_op
-from imbue.system_interface.layout_ops import is_sessionless_browser_ref
-from imbue.system_interface.layout_ops import layout_inspect
-from imbue.system_interface.layout_ops import layout_list
-from imbue.system_interface.layout_ops import parse_tmux_sessions_output
-from imbue.system_interface.models import ActivityRequest
-from imbue.system_interface.models import ActivityResponse
-from imbue.system_interface.models import AgentCreationError
-from imbue.system_interface.models import AgentListItem
-from imbue.system_interface.models import AgentListResponse
-from imbue.system_interface.models import AgentRestartError
-from imbue.system_interface.models import AttachmentError
-from imbue.system_interface.models import AttachmentUploadResponse
-from imbue.system_interface.models import CreateAgentResponse
-from imbue.system_interface.models import CreateChatRequest
-from imbue.system_interface.models import DestroyAgentResponse
-from imbue.system_interface.models import DrainToComposerResponse
-from imbue.system_interface.models import ErrorResponse
-from imbue.system_interface.models import InterruptAgentResponse
-from imbue.system_interface.models import ModelOptionsResponse
-from imbue.system_interface.models import PoweredByResponse
-from imbue.system_interface.models import RandomNameResponse
-from imbue.system_interface.models import SendMessageRequest
-from imbue.system_interface.models import SendMessageResponse
-from imbue.system_interface.models import SetModelChoiceRequest
-from imbue.system_interface.models import SetWorkspaceFastModeRequest
-from imbue.system_interface.models import ShoulderTapAtomicResponse
-from imbue.system_interface.models import StartAgentResponse
-from imbue.system_interface.models import TerminalSessionInfo
-from imbue.system_interface.models import WorkspaceFastModeResponse
-from imbue.system_interface.plugins import get_plugin_manager
-from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import document_response
+from imbue.system_interface.documents import inject_base_path_meta_tag
+from imbue.system_interface.documents import inject_meta_tag
+from imbue.system_interface.request_helpers import handle_unhandled_exception
+from imbue.system_interface.request_helpers import json_response
+from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.projects import project_wire_json
+from imbue.system_interface.shell.routes import register_shell_routes
+from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
+from imbue.system_interface.wsgi import build_sock
 
-_LOOPBACK_CLIENT_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# The browser-side contract module (contracts.md section 10): built as its own library
+# entry into ``static/_static/`` and served with a permissive CORS header, since every
+# app page that speaks the contract loads it from the shell's origin.
+APP_CONTRACT_FILENAME: Final[str] = "app_contract.js"
+APP_CONTRACT_PATH: Final[str] = f"/_static/{APP_CONTRACT_FILENAME}"
+
+# The terminal app's registered name: the not-built placeholder embeds it as the way out.
+_TERMINAL_APP_NAME: Final[str] = "terminal"
+
+# An app's origin label as ``forward_port.py`` mints it: one DNS label. Read back rather than
+# assumed, because the registry is a file on disk that other things write; a row that could
+# not be a hostname could not name an origin either.
+_ORIGIN_LABEL_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
 
 logger = _loguru_logger
 
-STATIC_DIRECTORY = Path(__file__).parent / "static"
 
-_FRONTEND_NOT_BUILT_HTML = (
-    "<html><body><p>Frontend not built. Run <code>npm run build</code> in <code>frontend/</code>.</p></body></html>"
+def _shell() -> ShellState:
+    return get_state().shell
+
+
+def _terminal_origin_label() -> str | None:
+    """The terminal app's unguessable origin label, or None when there is no terminal to offer."""
+    entry = _shell().inventory.entry(_TERMINAL_APP_NAME)
+    if entry is None or not _ORIGIN_LABEL_PATTERN.match(entry.row.label):
+        return None
+    return entry.row.label
+
+
+# How often the placeholder asks whether the bundle is back. Also the interval
+# of the scriptless fallback below, so both routes behave the same.
+_NOT_BUILT_POLL_SECONDS = 10
+
+# The ``mngr`` invocation the placeholder offers for standing up an agent to
+# repair the workspace. It mirrors what the chat app's ``_build_chat_create_command``
+# runs for a chat -- ``--template chat`` for the shared work directory, the output
+# style, and running in the workspace tree rather than a worktree of it, plus the
+# ``user_created`` label that puts the agent in the dynamic chat memory band.
+# Where it differs from that builder:
+#
+# No ``--type``, which is the one thing that builder cannot leave out: it is
+# serving a menu entry, so the harness is a choice the user already made. This
+# page has no such choice to carry, so leaving the flag off lets ``mngr`` resolve
+# the harness from ``[commands.create] type`` -- whatever this workspace is
+# configured to open chats as, rather than whatever it was when this string was
+# written. ``--template chat`` supplies the rest either way: it is harness-
+# agnostic (``output_style`` is honored by the claude, codex and pi plugins
+# alike), so it does not pick one and must not be relied on to.
+#
+# No ``--transfer none`` either, for a different reason: the ``chat`` template
+# already sets it, and the builder spells it out only because it is assembling
+# an argv rather than a line for a reader. It is not optional the way the harness
+# is -- an agent in a worktree would repair a copy of the workspace instead of
+# the workspace -- so ``test_chat_system.py`` reads the template and fails if that
+# setting ever leaves it, rather than trusting this comment.
+#
+# ``--connect`` instead of its ``--no-connect``, which exists to keep a headless
+# caller from attaching. Someone typing this wants the opposite, and connecting
+# is what turns the create into a conversation. Not merely explicit for the
+# reader's sake: the workspace's own ``[commands.create] connect = false`` is
+# the default this overrides.
+#
+# ``--message`` so the agent opens already knowing what the reader is looking at.
+# It quotes the page's own heading, which is the one detail a reader on this page
+# can be certain of and the one the agent can act on without being told anything
+# else.
+#
+# No name, so mngr mints one. A reload, a second tab, or a first attempt that did
+# not finish therefore starts a fresh conversation rather than rejoining an
+# earlier one.
+#
+# Written as the shell line a reader sees and copies, because that string is the
+# artifact; the argv is derived from it by the same parse a shell performs, so
+# what is offered cannot drift from what runs. Quoted with ``"`` rather than as
+# ``shlex.join`` would (``'i'"'"'m ...``): the message carries apostrophes, and
+# this is the one line on the page a reader has to be able to read in full.
+#
+# Kept in sync with that builder by ``test_chat_system.py``, which also validates it
+# against the live CLI. It is a suggestion, not a dispatch: the server never
+# runs it, so an agent is created only if the reader decides to.
+_NOT_BUILT_REPAIR_MNGR_COMMAND: Final[str] = (
+    "mngr create --connect --template chat --label user_created=true "
+    '--message "i\'m seeing \\"this workspace\'s interface needs to be rebuilt, can you fix it?\\""'
 )
 
-# Default number of events for tail-first loading
-_DEFAULT_TAIL_COUNT = 50
+_NOT_BUILT_REPAIR_ARGV: Final[tuple[str, ...]] = tuple(shlex.split(_NOT_BUILT_REPAIR_MNGR_COMMAND))
 
-# Name under which the browser daemon registers itself (via forward_port.py)
-# in data/.state/apps.toml. The /api/browsers passthrough resolves the daemon's
-# local backend URL from this registry entry.
-_BROWSER_SERVICE_NAME = "browser"
+# ``mngr connect`` refuses to attach from inside tmux unless ``is_nested_tmux_allowed``
+# is set (see ``mngr.api.connect``, which gates purely on ``$TMUX``), and it is the
+# connect half of the create above that would hit it. The workspace's own terminal
+# tabs are tmux sessions, so a reader who runs this in one gets a created agent and
+# an error instead of a conversation. Dropping ``TMUX`` for this one command is
+# exactly what mngr does for itself once the check passes, and scoping it with
+# ``env -u`` leaves the reader's own shell alone.
+_NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_COMMAND
 
-# How often flask-sock sends a keepalive ping on each WebSocket connection.
-# Pings detect (and tear down) half-dead peers without any asyncio machinery --
-# each connection owns its own thread, so a wedged send only stalls that thread.
-_WS_PING_INTERVAL_SECONDS = 25
+# Served in place of the app whenever the compiled bundle is missing. The bundle
+# is gitignored build output, so a code refresh that replaces the tree can leave
+# the workspace here. The page offers a way out and returns to the interface on
+# its own once there is one, so a bundle restored by anything else -- most often
+# the reveal flow's rollback -- brings the reader back without them having to
+# know to retry.
+#
+# The way out is a terminal, not a "rebuild" button. A button has to be right
+# about what went wrong; the states that strand a workspace here are dominated
+# by ones where a build dispatched from the server would fail too (no registry,
+# no memory, a lockfile that does not resolve), and it would fail with nowhere
+# to say so, on a page with no application to render the failure. It would also
+# inherit the server's memory band, which puts it ahead of the user's chats and
+# agents in a shed. A shell is the general case of every repair rather than one
+# of them, and the terminal app is already running and already *more* protected
+# than this server, so the page is pointing at something that outlives it
+# rather than starting anything.
+#
+# Nothing here is part of the compiled bundle -- this is a string in the
+# backend -- so the script below ships whether or not the frontend has ever
+# been built. That is what lets the page be more than static text in exactly
+# the state where the frontend is missing.
+_FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interface not built</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; display: flex;
+         align-items: center; justify-content: center; min-height: 100vh;
+         background: #14161a; color: #e6e8eb; }
+  main { max-width: 48rem; padding: 2rem; width: 100%; box-sizing: border-box; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 0.75rem; }
+  p { line-height: 1.5; margin: 0 0 1rem; color: #b6bcc4; max-width: 34rem; }
+  code { background: #1d2026; border-radius: 4px; padding: 0.1rem 0.3rem;
+         font-size: 0.9em; }
+  /* The command wraps rather than scrolling: a horizontal scrollbar hides
+     most of it behind a control nobody looks for, and this is the one line on
+     the page a reader has to be able to read in full. */
+  #repair { position: relative; }
+  pre { background: #1d2026; border-radius: 6px; padding: 0.75rem 1rem;
+        margin: 0 0 1rem; font-size: 0.85em; color: #e6e8eb;
+        white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* Room for the copy button, so the last line never runs underneath it. */
+  #repair-command { padding-right: 5.5rem; }
+  #copy-repair { position: absolute; top: 0.5rem; right: 0.5rem;
+                 font: inherit; font-size: 0.8em; padding: 0.25rem 0.6rem;
+                 color: #e6e8eb; background: #2a2f37; border: 1px solid #3a414b;
+                 border-radius: 4px; cursor: pointer; }
+  #copy-repair:hover { background: #333a44; }
+  #copy-repair[hidden] { display: none; }
+  #terminal-slot[hidden] { display: none; }
+  #terminal { width: 100%; height: 24rem; border: 1px solid #2a2f37;
+              border-radius: 6px; background: #000; }
+</style>
+<!-- The scriptless fallback for the poll at the end of the body. Whole-page
+     reloads and a live terminal cannot coexist -- a refresh every ten seconds
+     would destroy the session the reader is typing into -- so this runs only
+     where there is no script to poll with, and therefore no terminal either. -->
+<noscript><meta http-equiv="refresh" content="__POLL_SECONDS__"></noscript>
+</head>
+<body>
+<main>
+  <h1>This workspace's interface needs to be rebuilt</h1>
+  <p>The compiled interface is missing, so there is nothing to show yet. Your
+     work and your agents are untouched -- only the interface itself is gone,
+     and this page returns to the interface on its own once it is back.</p>
+  <p>If you would rather not work the repair out yourself, this creates an agent
+     and tells it what you are looking at:</p>
+  <div id="repair">
+    <pre id="repair-command">__REPAIR_COMMAND__</pre>
+    <!-- Hidden until the script confirms it can actually copy, so the page
+         never shows a button that does nothing. -->
+    <button id="copy-repair" type="button" hidden>Copy</button>
+  </div>
+  <!-- The lead-in belongs to the terminal, not to the command: the command
+       stands on its own wherever the reader finds a shell, so it keeps its own
+       introduction above and is never left orphaned when there is no terminal
+       to offer. -->
+  <p id="terminal-intro" hidden>You can run that -- or do the repair yourself --
+     in this workspace's terminal, below.</p>
+  <div id="terminal-slot" hidden>
+    <iframe id="terminal" title="Workspace terminal"></iframe>
+  </div>
+</main>
+<script>
+(function () {
+  // The terminal's hostname label, minted per workspace, or "" when there is
+  // no terminal registered to offer.
+  var terminalLabel = __TERMINAL_LABEL__;
 
-# Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
-# class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
-# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
-# teardown (a partial destroy the user saw as a 500). Every internal mngr
-# cleanup step is itself bounded, so destroy cannot hang indefinitely: a
-# generous cap only converts spurious kills into patience.
-_DESTROY_TIMEOUT_SECONDS = 120.0
+  // Mirrors deriveAppOrigin/workspaceHostCoordinate in
+  // system/libs/workspace_ui/src/origin.ts, which is canonical: an app origin is its label
+  // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
+  // workspace-keyed share domain, bare 32-hex share) label and everything
+  // after it -- and never onto this page's host verbatim, which
+  // would nest the app under the shell's own label and route back here.
+  //
+  // It differs from origin.ts in one way, deliberately: no coordinate label
+  // means no origin, rather than falling back to the host unchanged. The shell
+  // can assume it is running inside a workspace; this page cannot (a direct
+  // hit on the loopback port has no coordinate), and a made-up origin would
+  // show the reader a broken frame instead of the prose that still helps them.
+  function appOrigin(label) {
+    var labels = window.location.host.split(".");
+    for (var index = 0; index < labels.length; index++) {
+      // The port rides on whichever label is last, so it is stripped before
+      // matching -- otherwise a coordinate that happens to BE the last label
+      // reads as an ordinary one and the terminal is silently not offered.
+      // The slice below keeps it, which is what the origin needs.
+      if (/^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/i.test(labels[index].split(":")[0])) {
+        return window.location.protocol + "//" + label + "." +
+               labels.slice(index).join(".") + "/";
+      }
+    }
+    return null;
+  }
+
+  // The command is long enough to be worth not retyping, and the reader may be
+  // copying it into a terminal on the far side of a share. Shown only when the
+  // clipboard is actually reachable: it needs a secure context, which every
+  // workspace origin is (``*.localhost`` locally, https on a share) but which a
+  // direct hit on the loopback port is not.
+  var copyButton = document.getElementById("copy-repair");
+  if (navigator.clipboard && window.isSecureContext) {
+    copyButton.hidden = false;
+    copyButton.addEventListener("click", function () {
+      navigator.clipboard
+        .writeText(document.getElementById("repair-command").textContent)
+        .then(function () {
+          copyButton.textContent = "Copied";
+          setTimeout(function () {
+            copyButton.textContent = "Copy";
+          }, 2000);
+        })
+        // A denied permission is the realistic failure. Selecting the text puts
+        // the reader one keystroke from the same result rather than leaving a
+        // button that silently did nothing.
+        .catch(function () {
+          window.getSelection().selectAllChildren(document.getElementById("repair-command"));
+          copyButton.textContent = "Press to copy";
+        });
+    });
+  }
+
+  var origin = terminalLabel ? appOrigin(terminalLabel) : null;
+  if (origin) {
+    document.getElementById("terminal").src = origin;
+    document.getElementById("terminal-slot").hidden = false;
+    document.getElementById("terminal-intro").hidden = false;
+  }
+
+  // Ask whether the bundle is back rather than reloading blind. The reply
+  // carries the same header the reveal flow's own health check reads, so a
+  // rebuild by ANY route -- a rollback, a build run in the terminal above --
+  // brings the interface back with no further action. Asking (rather than
+  // refreshing) is what lets the terminal stay alive between checks.
+  setInterval(function () {
+    fetch(window.location.pathname, { method: "HEAD", cache: "no-store" })
+      .then(function (response) {
+        if (response.headers.get("__BUILT_HEADER__") === "true") {
+          window.location.reload();
+        }
+      })
+      // The backend restarting is the expected way for this to fail, and it is
+      // also a moment when the bundle may be arriving. Say nothing and ask again.
+      .catch(function () {});
+  }, __POLL_SECONDS__ * 1000);
+})();
+</script>
+</body>
+</html>
+"""
 
 
-class _ReflectClientSubprotocols:
-    """A WebSocket subprotocols allow-list that accepts whatever the client offers.
+def _inject_update_staleness_meta_tag(html_content: str, staleness: str | None) -> str:
+    """Inject the update-staleness variant so the frontend can render its banner.
 
-    ``flask_sock`` builds one ``simple_websocket.Server`` per connection from
-    ``SOCK_SERVER_OPTIONS`` and completes the WebSocket handshake (selecting and
-    echoing the subprotocol) *before* our route handler runs, so a handler cannot
-    choose the subprotocol per-connection. ``simple_websocket``'s default
-    ``choose_subprotocol`` echoes the first client-offered subprotocol that is
-    ``in`` this allow-list; making ``__contains__`` always true turns that into a
-    transparent passthrough -- the server echoes back whatever subprotocol the
-    client requested.
-
-    Chrome aborts a WebSocket handshake (close 1006) if the client offered a
-    subprotocol and the 101 response echoes none, so any future WS route that
-    negotiates a subprotocol works without touching this list. Today's own
-    endpoints (the ``/api/ws`` broadcaster and the proto-agent-logs stream)
-    offer no subprotocol, so the negotiation loop never runs and no
-    subprotocol is echoed -- the passthrough is inert for them but keeps the
-    server permissive for subprotocol-bearing clients.
+    Injected only when stale: the banner keys off the tag's presence, and a
+    consistent workspace's shell carries no tag at all.
     """
-
-    def __contains__(self, _subprotocol: object) -> bool:
-        return True
-
-
-def _json_response(content: Any, status_code: int = 200) -> Response:
-    """Build a compact JSON response, matching the wire format the frontend expects."""
-    body = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
-    return Response(body, status=status_code, mimetype="application/json")
+    if staleness is None:
+        return html_content
+    return inject_meta_tag(html_content, UPDATE_STALENESS_META_TAG, staleness)
 
 
-def _html_response(html_content: str, status_code: int = 200) -> Response:
-    """Build an uncacheable HTML response for the app shell.
+def _shell_update_staleness() -> str | None:
+    """The staleness variant to inject into this app shell, if any.
 
-    The shell is assembled per request (base path, hostname, agent id, and the
-    configured plugin script tags are injected into it), so it is never a
-    cacheable artifact to begin with. It is also the *only* thing standing
-    between a reload and a stale UI: the built assets it links are
-    content-hashed, so a freshly-fetched shell always names the current bundle,
-    and a cached one always names the old one.
-
-    That matters because a page cannot drop its own HTTP cache -- the
-    ``location.reload(true)`` form is a Firefox-only extension -- so
-    ``reloadInterface`` (see ``frontend/src/reload.ts``) can only reload and
-    trust the response to be fresh. ``no-store`` is what makes that trust
-    well-founded, including for viewers reaching the workspace through a
-    shared Cloudflare tunnel, where an intermediary is free to cache anything
-    we do not mark otherwise.
+    Asked per built-shell request, so a tree that moved -- or an apply marker
+    that appeared -- after this process started is still seen. Skipped for
+    ``HEAD``: that is the not-built placeholder's own poll, once every ten
+    seconds per open tab for the length of an outage, and the placeholder
+    itself never asks (it carries no banner). Reading staleness forks git, and
+    an outage is precisely when the tree has moved and both of its reads run.
     """
-    response = Response(html_content, status=status_code, mimetype="text/html")
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
-def _inject_base_path_meta_tag(html_content: str, root_path: str) -> str:
-    meta_tag = f'<meta name="system-interface-base-path" content="{root_path}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _read_host_name() -> str:
-    """Read the host name from $MNGR_HOST_DIR/data.json, falling back to socket.gethostname()."""
-    host_dir = os.environ.get("MNGR_HOST_DIR", "")
-    if host_dir:
-        data_path = Path(host_dir) / "data.json"
-        if data_path.exists():
-            try:
-                data = json.loads(data_path.read_text())
-                name = data.get("host_name")
-                if name:
-                    return str(name)
-            except (json.JSONDecodeError, OSError):
-                pass
-    return socket.gethostname()
-
-
-def _inject_hostname_meta_tag(html_content: str) -> str:
-    hostname = _read_host_name()
-    meta_tag = f'<meta name="system-interface-hostname" content="{hostname}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _inject_plugin_script_tags(html_content: str, plugin_basenames: list[str], root_path: str) -> str:
-    script_tags = "\n".join(f'<script src="{root_path}/plugins/{basename}"></script>' for basename in plugin_basenames)
-    return html_content.replace("</body>", f"{script_tags}\n</body>")
-
-
-def _inject_agent_id_meta_tag(html_content: str) -> str:
-    """Inject the primary agent ID as a meta tag for the frontend."""
-    agent_id = os.environ.get("MNGR_AGENT_ID", "")
-    meta_tag = f'<meta name="system-interface-agent-id" content="{agent_id}">'
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
-
-
-def _are_other_harnesses_enabled() -> bool:
-    """Whether the non-claude harness launchers are enabled, from ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``.
-
-    Off by default: the "New Codex agent"/"New Pi agent" launchers appear only
-    when this is set to a truthy value (``1``/``true``/``yes``/``on``), so every alt
-    harness can be dark-launched and turned on per host without a rebuild. Claude is the
-    workspace default and is never gated by this flag.
-    """
-    return os.environ.get("FEATURE_FLAG_ENABLE_OTHER_HARNESSES", "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _inject_enable_other_harnesses_meta_tag(html_content: str) -> str:
-    """Inject the alt-harness feature flag so the frontend can gate the non-claude launchers."""
-    meta_tag = (
-        f'<meta name="system-interface-enable-other-harnesses" '
-        f'content="{str(_are_other_harnesses_enabled()).lower()}">'
-    )
-    return html_content.replace("</head>", f"{meta_tag}\n</head>")
+    if request.method == "HEAD":
+        return None
+    return get_state().update_staleness.staleness()
 
 
 def _index() -> Response:
-    index_path = STATIC_DIRECTORY / "index.html"
+    index_path = get_state().static_directory / "index.html"
     if index_path.exists():
-        config: Config = get_state().config
+        staleness = _shell_update_staleness()
         root_path = (request.script_root or "").rstrip("/")
         html_content = index_path.read_text()
-        html_content = _inject_base_path_meta_tag(html_content, root_path)
-        html_content = _inject_hostname_meta_tag(html_content)
-        html_content = _inject_agent_id_meta_tag(html_content)
-        html_content = _inject_enable_other_harnesses_meta_tag(html_content)
-        if config.javascript_plugin_basenames:
-            html_content = _inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
-        return _html_response(html_content)
-    return _html_response(_FRONTEND_NOT_BUILT_HTML)
+        html_content = inject_base_path_meta_tag(html_content, root_path)
+        html_content = _inject_update_staleness_meta_tag(html_content, staleness)
+        return document_response(html_content, is_frontend_built=True)
+    return _frontend_not_built_response()
+
+
+def render_frontend_not_built_page(terminal_label: str | None) -> str:
+    """Fill the not-built placeholder in, given the terminal's origin label.
+
+    Takes the label rather than reading the registry itself so the page can be
+    rendered for a workspace with no terminal (pass ``None``) without touching
+    the filesystem, which is the case worth testing and the one hardest to
+    arrange for real.
+
+    The label is substituted as a JSON literal, so the script receives a string
+    however it is spelled, and ``""`` -- which the script treats as "no
+    terminal" -- when there is none. ``_terminal_origin_label`` has already
+    rejected anything that is not a single DNS label, so no value that reaches
+    here can close the script element.
+
+    The repair command goes in as HTML text rather than markup. It is a shell
+    line written for a reader, so ``&`` and ``<`` are ordinary characters in it
+    that the browser would otherwise take as an entity reference or a tag --
+    which would show something other than the command, and hand the copy button
+    (which reads ``textContent``) something other than what the tests validated.
+    Quotes are left alone: this is text content, and the line is full of them.
+    """
+    return (
+        _FRONTEND_NOT_BUILT_TEMPLATE.replace("__TERMINAL_LABEL__", json.dumps(terminal_label or ""))
+        .replace("__REPAIR_COMMAND__", html.escape(_NOT_BUILT_REPAIR_COMMAND, quote=False))
+        .replace("__BUILT_HEADER__", FRONTEND_BUILT_HEADER)
+        .replace("__POLL_SECONDS__", str(_NOT_BUILT_POLL_SECONDS))
+    )
+
+
+def _frontend_not_built_response() -> Response:
+    """Render the placeholder shown when there is no compiled bundle to serve.
+
+    A ``HEAD`` gets the header and nothing else. That is the placeholder's own
+    poll asking whether the bundle is back yet -- every ten seconds, for every
+    open tab, for as long as the outage lasts -- and answering it in full would
+    re-read the app registry and re-render the page each time, and bury the one
+    diagnostic below in six repetitions a minute of itself. Werkzeug drops the
+    body of a HEAD response anyway, so the caller sees no difference.
+    """
+    if request.method == "HEAD":
+        return document_response("", is_frontend_built=False)
+    # Logged with the resolved directory because the usual cause is that the
+    # served tree was replaced under a running service, which is otherwise
+    # invisible from the supervisor logs.
+    _loguru_logger.warning(
+        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
+    )
+    return document_response(render_frontend_not_built_page(_terminal_origin_label()), is_frontend_built=False)
 
 
 def _index_catch_all(path: str) -> Response:
-    # An agent-authored file is addressed by its absolute on-disk path, which
-    # lands here as a catch-all path; serve it (image inline, any other existing
-    # file as a download) before falling through to the single-page-app shell.
-    # Paths that match no file are client-side routes and render the app as before.
-    file_response = try_serve_file(path)
-    if file_response is not None:
-        return file_response
+    # Every other path is a client-side route and renders the app shell.
     return _index()
 
 
+def _health_endpoint() -> Response:
+    """The probe route of contracts.md section 5: alive, and whether the built frontend is being served."""
+    is_frontend_built = (get_state().static_directory / "index.html").exists()
+    return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
+
+
+def _serve_app_contract() -> Response:
+    """Serve the browser-side contract module (contracts.md section 10) for any origin's app page."""
+    contract_path = get_state().static_directory / "_static" / APP_CONTRACT_FILENAME
+    if not contract_path.is_file():
+        return Response(status=404)
+    response = send_file(contract_path, mimetype="text/javascript")
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
+
 def _favicon() -> Response:
-    favicon_path = STATIC_DIRECTORY / "favicon.ico"
+    favicon_path = get_state().static_directory / "favicon.ico"
     if favicon_path.exists():
         return send_file(favicon_path, mimetype="image/x-icon")
     return Response(status=404)
 
 
 def _serve_asset(filename: str) -> Response:
-    assets_directory = STATIC_DIRECTORY / "assets"
-    return send_from_directory(assets_directory, filename)
-
-
-def _discover_with_filters() -> list[AgentInfo]:
-    """Discover agents using the app-level filter configuration."""
-    state = get_state()
-    return discover_agents(
-        provider_names=state.provider_names,
-        include_filters=state.include_filters,
-        exclude_filters=state.exclude_filters,
-    )
-
-
-def _list_agents_endpoint() -> Response:
-    """List all mngr-managed agents."""
-    agents = _discover_with_filters()
-    items = [AgentListItem(id=agent.id, name=agent.name, state=agent.state) for agent in agents]
-    return _json_response(AgentListResponse(agents=items).model_dump())
-
-
-def _find_agent(agent_id: str) -> AgentInfo | None:
-    """Find a specific agent by ID, from the AgentManager's already-loaded state."""
-    agent_manager: AgentManager = get_state().agent_manager
-    return agent_manager.get_agent_info_by_id(agent_id)
-
-
-def _agent_not_found_response(agent_id: str) -> Response:
-    error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-    return _json_response(error.model_dump(), status_code=404)
-
-
-def _get_events(agent_id: str) -> Response:
-    """Get events for an agent. Supports tail-first loading and backfill."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    before_event_id = request.args.get("before")
-    after_event_id = request.args.get("after")
-    offset_str = request.args.get("offset")
-    limit_str = request.args.get("limit", str(_DEFAULT_TAIL_COUNT))
+    assets_directory = get_state().static_directory / "assets"
+    # A missing asset is a plain 404, as for the favicon above, rather than the
+    # HTML error page ``send_from_directory`` would raise. Existence and safety
+    # are both left to ``send_from_directory``: ``filename`` arrives with any
+    # ``..`` segments intact, so joining it onto the directory ourselves would
+    # stat paths outside it -- an existence oracle for the whole filesystem.
     try:
-        limit = int(limit_str)
-    except ValueError:
-        limit = _DEFAULT_TAIL_COUNT
-    # A non-positive limit would defeat the window cap and break slicing, so fall
-    # back to the default.
-    if limit <= 0:
-        limit = _DEFAULT_TAIL_COUNT
-
-    watcher = get_state().get_or_create_watcher(agent_info)
-    if before_event_id:
-        # Page older: the `limit` events immediately before the cursor.
-        events = watcher.get_backfill_events(before_event_id, limit=limit)
-    elif after_event_id:
-        # Page newer: the `limit` events immediately after the cursor (used when
-        # the loaded window has been moved off the live tail by a jump).
-        events = watcher.get_forward_events(after_event_id, limit=limit)
-    elif offset_str is not None:
-        # Jump: a `limit`-event window starting at an arbitrary global index, so
-        # the client can land at a far scroll position in one bounded read.
-        try:
-            offset = int(offset_str)
-        except ValueError:
-            offset = 0
-        events = watcher.get_events_at_offset(offset, limit)
-    else:
-        # Initial load: the newest `limit` events (the live tail). Bounded read
-        # from the end; the client pages/jumps from here.
-        events = watcher.get_tail_events(limit)
-
-    # `total` is the full transcript length and `offset` is the global index of the
-    # first returned event. Together they place the loaded window in the whole
-    # conversation, so the client sizes the scrollbar for the full length and
-    # derives whether more history exists above (offset > 0) and below
-    # (offset + len < total) -- no separate has_more flag needed.
-    total = watcher.get_total_event_count()
-    offset = watcher.get_event_offset(events[0]["event_id"]) if events else total
-    return _json_response({"events": events, "offset": offset, "total": total})
-
-
-def _stream_filtered_events(
-    agent_id: str,
-    event_queues: AgentEventQueues,
-    event_queue: "queue.Queue[dict[str, Any] | None]",
-    should_forward: Callable[[dict[str, Any]], bool],
-) -> Iterator[str]:
-    """Yield SSE frames for queued events that pass ``should_forward``.
-
-    Shared by the main agent stream and the per-subagent stream, which differ
-    only in which events they keep: the main stream drops subagent-session
-    events (they belong to the per-subagent stream, and would otherwise render
-    the subagent's own prompt and tool calls inline in the parent thread),
-    while the subagent stream keeps only its own session. Filtered-out events
-    do not reset the keepalive counter. A ``None`` from the queue (shutdown
-    sentinel) ends the stream.
-    """
-    keepalive_counter = 0
-    _loguru_logger.info("SSE stream opened for agent {} (conn {})", agent_id, id(event_queue))
-    close_reason = "event-queues shutdown"
-    try:
-        while not event_queues.is_shutdown:
-            try:
-                event = event_queue.get(timeout=1)
-                if event is None:
-                    close_reason = "queue shutdown sentinel"
-                    break
-                if not should_forward(event):
-                    continue
-                keepalive_counter = 0
-                yield f"data: {json.dumps(event)}\n\n"
-            except queue.Empty:
-                keepalive_counter += 1
-                if keepalive_counter >= 8:
-                    keepalive_counter = 0
-                    yield ": keepalive\n\n"
-    except GeneratorExit:
-        close_reason = "client disconnected"
-    finally:
-        _loguru_logger.info(
-            "SSE stream closed for agent {} (conn {}, reason: {})", agent_id, id(event_queue), close_reason
-        )
-        event_queues.unregister(agent_id, event_queue)
-
-
-def _sse_response(generator: Iterator[str]) -> Response:
-    return Response(
-        generator,
-        mimetype="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-def _stream_events(agent_id: str) -> Response:
-    """SSE stream for an agent's new events."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-
-    event_queues = state.event_queues
-    event_queue = event_queues.register(agent_id)
-
-    return _sse_response(_stream_filtered_events(agent_id, event_queues, event_queue, watcher.is_main_session_event))
-
-
-def _send_message_endpoint(agent_id: str) -> Response:
-    """Send a message to an agent."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    send_message_request = SendMessageRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
-    message_id = send_message_request.message_id or uuid4().hex
-
-    # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
-    # records the message as *Sending* around mngr's blocking delivery (greying the tap button
-    # for the duration); the codex session hands it to its live ledger, passing ``message_id``
-    # only as the correlation token the committed item echoes back (Fix 2).
-    session = agent_manager.get_or_create_session(agent_info)
-    outcome = session.send(send_message_request.message, message_id)
-    if outcome is SendOutcome.NOT_READY:
-        failure = ErrorResponse(
-            detail=f"Agent '{agent_info.name}' is not ready to receive messages yet (its daemon is starting)."
-        )
-        return _json_response(failure.model_dump(), status_code=503)
-    if outcome is SendOutcome.FAILED:
-        failure = ErrorResponse(detail=f"Failed to send message to agent '{agent_info.name}' (0 successful agents)")
-        return _json_response(failure.model_dump(), status_code=500)
-
-    _record_client_message_activity(agent_info, send_message_request)
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _record_client_message_activity(agent_info: AgentInfo, send_message_request: SendMessageRequest) -> None:
-    """Record which client (and layout) a message came from, so agents can attribute requests to a
-    client via ``layout.py context``. Legacy callers without client metadata are not recorded."""
-    events_path = _client_activity_events_path()
-    if events_path is not None and send_message_request.client_id:
-        client_activity.append_message_event(
-            events_path,
-            client_id=send_message_request.client_id,
-            device_kind=send_message_request.device_kind,
-            layout_slug=send_message_request.active_layout,
-            agent_id=agent_info.id,
-            agent_name=agent_info.name,
-            message_text=send_message_request.message,
-        )
-
-
-def _get_harnesses_endpoint() -> Response:
-    """The static per-harness model catalogs -- the model bar's compile-time half.
-
-    One response covers every harness (each catalog dumped verbatim: options,
-    switch mode, picker mode, powered-by label, shoulder-tap capability); the
-    frontend keys in by an agent's harness.
-
-    Every harness is always included, deliberately: ``FEATURE_FLAG_ENABLE_OTHER_HARNESSES``
-    gates only the "New <harness> agent" launchers in the new-tab menu, not harness support
-    itself. A codex or pi agent that exists some other way (``mngr create``, one made before
-    the flag was turned off) still needs its catalog for the model bar to resolve, so
-    filtering here would strand that agent's chip on an unrecognized model.
-    """
-    catalogs: dict[str, Any] = {}
-    for harness in HARNESS_SPECS:
-        # A parsed catalog (pi) reads data files; a bad/absent one must be
-        # skipped, not 500 the endpoint for every other harness.
-        try:
-            catalogs[harness.value] = get_catalog(harness).model_dump()
-        except (OSError, ValueError) as e:
-            logger.warning("Skipping model catalog for harness {}: {}", harness.value, e)
-    return _json_response(catalogs)
-
-
-def _agent_switch_options(agent_manager: "AgentManager", agent_info: AgentInfo) -> tuple[ModelOption, ...]:
-    """The option set the switch endpoint validates against: per-agent for codex, static otherwise.
-
-    Codex has no static catalog, so its valid model/effort/fast set is per-agent -- the ONE reconciled
-    set (:meth:`AgentManager.get_codex_model_options`) that the picker offered and the chip matches
-    against, seeded on connect and refreshed by each picker-open (D2), falling back to the persisted
-    sidecar while that in-memory set is empty (post-restart). Empty (no set and no sidecar) only until
-    first populated -- a switch then fails validation, which is correct: nothing to switch to until a
-    connect, a picker-open, or a persisted sidecar supplies the account's ``model/list``. Every other
-    harness validates against its static catalog options.
-    """
-    return agent_manager.get_or_create_session(agent_info).switch_options()
-
-
-def _set_model_choice_endpoint(agent_id: str) -> Response:
-    """Apply a model/effort/fast selection by asking the agent's resolver to switch.
-
-    Harness-blind: it validates the request against the agent's option set (the static catalog for
-    claude/pi, the per-agent ``model/list`` set for codex), then hands a concrete identity to the
-    resolver's ``switch`` (which decides how to apply it). Returns 400 for an invalid selection, 404
-    for an unknown agent, 500 when the switch fails. On success it forces one authoritative
-    model-choice broadcast so the frontend reconciles.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    req = SetModelChoiceRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
-    options = _agent_switch_options(agent_manager, agent_info)
-    # The picker only ever sends a valid option id, so validation is an exact id lookup.
-    option = next((opt for opt in options if opt.id == req.model_id), None)
-    if option is None:
-        return _json_response(ErrorResponse(detail=f"Unknown model '{req.model_id}'").model_dump(), status_code=400)
-
-    # Flat guards (rather than a branch per axis-presence) so effort is validated
-    # against the model's declared set: required + in-set when the model has efforts,
-    # and absent when it does not.
-    declared_efforts = {choice.level for choice in option.efforts}
-    has_effort_axis = len(option.efforts) > 0
-    if has_effort_axis and req.effort is None:
-        return _json_response(ErrorResponse(detail="This model requires an effort level").model_dump(), 400)
-    if has_effort_axis and req.effort is not None and req.effort not in declared_efforts:
-        return _json_response(
-            ErrorResponse(detail=f"'{req.effort}' is not a valid effort for '{req.model_id}'").model_dump(), 400
-        )
-    if not has_effort_axis and req.effort is not None:
-        return _json_response(ErrorResponse(detail=f"'{req.model_id}' has no effort axis").model_dump(), 400)
-    if req.fast and not option.supports_fast:
-        return _json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
-
-    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
-    # only the switch/offer side -- is built inline from agent_info rather than cached.
-    resolver = build_resolver(agent_info)
-
-    identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
-    result = resolver.switch(
-        identity, frozenset(req.axes), lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line)
-    )
-    if not result.ok:
-        detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
-        return _json_response(ErrorResponse(detail=detail).model_dump(), status_code=500)
-
-    # Force one authoritative broadcast so the optimistic pick reconciles even when
-    # the resolved value is unchanged (see H1 in the model-bar plan).
-    agent_manager.refresh_model_choice(agent_info.id)
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _get_model_options_endpoint(agent_id: str) -> Response:
-    """The models this agent should OFFER in the picker right now.
-
-    Recomputed per request (the frontend calls it each time the picker opens). Two shapes:
-
-    * a DYNAMIC harness (codex) has no static catalog, so it returns the FULL per-agent
-      :class:`ModelOption`s (``options``) -- id, label, per-model efforts, fast support -- fetched
-      fresh from ``model/list`` on this open (D2), so a subscription-tier change shows up live.
-    * a static/catalog-backed harness (claude, pi) returns ``models`` -- the ids to offer, matched
-      back to the static catalog for labels/efforts (``null`` = offer the whole catalog). This
-      reflects an account-gated set (pi's authenticated models) on a fresh login without a refetch.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    resolver = build_resolver(agent_info)
-    dynamic_options = resolver.list_offered_options()
-    if dynamic_options is not None:
-        # Reconcile (D2): this fresh per-open fetch becomes the ONE per-agent set the chip-match and
-        # the switch-validation also read, so immediately after this open all three agree. A failed
-        # fetch (empty) is NOT stored -- it must not clobber the last-known set (seeded on connect or
-        # from an earlier open) that the chip is still matching against. The RAW list behind these
-        # mapped options is also written through to the codex sidecar inside the resolver's
-        # ``list_offered_options`` (where the raw ``model/list`` is still in hand), so the chip
-        # resolves offline after a restart.
-        if dynamic_options:
-            get_state().agent_manager.get_or_create_session(agent_info).note_offered_options(dynamic_options)
-        return _json_response(ModelOptionsResponse(options=dynamic_options).model_dump())
-    return _json_response(ModelOptionsResponse(models=resolver.list_offered_models()).model_dump())
-
-
-def _get_powered_by_endpoint(agent_id: str) -> Response:
-    """The agent's "Powered by" credit label -- a per-agent path decoupled from the model bar.
-
-    The label is a pure function of the agent's harness, so it must never blink with the live
-    model choice or wait on the catalog fetch. This resolves the harness backend-side and
-    returns its product name directly, so the frontend can render the credit from ``agentId``
-    alone, independent of ``model_choice`` and of ``GET /api/harnesses``. 404 for an unknown
-    agent (e.g. a proto-agent), which the frontend treats as "don't show the credit yet".
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    return _json_response(PoweredByResponse(label=get_catalog(agent_info.harness).powered_by_label).model_dump())
-
-
-def _workspace_fast_mode_decision_path() -> Path | None:
-    """Where this workspace records its fast-mode decision, or None outside a workspace."""
-    work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
-    if not work_dir:
-        return None
-    return get_workspace_fast_mode_decision_path(Path(work_dir))
-
-
-def _get_workspace_fast_mode_endpoint() -> Response:
-    """Return the workspace's fast-mode decision, or null if it has not answered.
-
-    The frontend uses this to decide whether a chat still owes the user the
-    fast-mode prompt.
-    """
-    decision_path = _workspace_fast_mode_decision_path()
-    decision = None if decision_path is None else read_workspace_fast_mode_decision(decision_path)
-    return _json_response(WorkspaceFastModeResponse(fast_mode=decision).model_dump())
-
-
-def _set_workspace_fast_mode_endpoint() -> Response:
-    """Record the user's answer to the fast-mode prompt for the whole workspace.
-
-    Every chat agent created from here on launches with this setting, and no chat
-    prompts again. Applying it to the *running* agent is a separate call to the
-    per-agent fast endpoint, so the two stay independently testable.
-    """
-    decision_path = _workspace_fast_mode_decision_path()
-    if decision_path is None:
-        error = ErrorResponse(detail="Cannot record a fast-mode decision outside a workspace")
-        return _json_response(error.model_dump(), status_code=500)
-
-    set_request = SetWorkspaceFastModeRequest.model_validate(request.get_json())
-    try:
-        write_workspace_fast_mode_decision(decision_path, set_request.enabled)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to record the workspace fast-mode decision")
-        error = ErrorResponse(detail="Failed to record the fast-mode decision")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(WorkspaceFastModeResponse(fast_mode=set_request.enabled).model_dump())
-
-
-def _activity_endpoint() -> Response:
-    """Report the workspace UI's current agent-tab activity for OOM prioritization.
-
-    The frontend posts a snapshot ({open, visible, messaged}) whenever a tab
-    opens/closes, the visible tab changes, or a message is sent. The agent manager
-    hands it to the chat OOM prioritizer, which re-tags each chat agent's
-    ``oom_score_adj`` so more-engaged chats are more protected from a memory shed
-    (workers and the primary agent are excluded and never re-tagged). Best-effort
-    and idempotent: the endpoint just records the snapshot and returns ok.
-    """
-    activity_request = ActivityRequest.model_validate(request.get_json())
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_manager.record_activity(
-        open_ids=activity_request.open,
-        visible_ids=activity_request.visible,
-        messaged_id=activity_request.messaged,
-    )
-    return _json_response(ActivityResponse(status="ok").model_dump())
-
-
-def _upload_attachment() -> Response:
-    """Store a file the user attached to a chat message under data/uploads/.
-
-    The frontend uploads each attachment here as soon as the user drops, pastes,
-    or picks it, then appends the returned absolute path to the message text it
-    sends to the agent. Returns the stored path and size so the composer can show
-    a preview and reference the file.
-    """
-    file_storage = request.files.get("file")
-    if file_storage is None or not file_storage.filename:
-        error = ErrorResponse(detail="No file provided in the 'file' field")
-        return _json_response(error.model_dump(), status_code=400)
-
-    uploads_directory = get_uploads_directory()
-    try:
-        stored_path = store_uploaded_file(uploads_directory, file_storage.filename, file_storage)
-    except AttachmentError as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=500)
-
-    size_bytes = stored_path.stat().st_size
-    response = AttachmentUploadResponse(path=str(stored_path), size=size_bytes)
-    return _json_response(response.model_dump(), status_code=201)
-
-
-def _serve_attachment(relative_path: str) -> Response:
-    """Serve a stored attachment for inline preview, confined to data/uploads/."""
-    resolved_path = resolve_upload_path(get_uploads_directory(), relative_path)
-    if resolved_path is None:
-        error = ErrorResponse(detail=f"Attachment '{relative_path}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    return send_file(resolved_path)
-
-
-def _delete_attachment(relative_path: str) -> Response:
-    """Delete a stored attachment when the user removes it before sending.
-
-    Idempotent: a path that is missing or escapes the uploads directory is a
-    no-op, so a double-remove or a stale id still reports success.
-    """
-    delete_upload(get_uploads_directory(), relative_path)
-    return _json_response({"status": "ok"})
-
-
-def _interrupt_agent_endpoint(agent_id: str) -> Response:
-    """Interrupt an agent's current turn by restarting it.
-
-    Runs ``mngr start <agent> --restart --no-resume``, which stops the agent
-    (ending any in-progress turn) and starts it fresh without sending a resume
-    message. Returns 404 if the agent is unknown, 400 if the agent carries the
-    ``is_primary=true`` label, 500 if the restart command fails, 200 otherwise.
-
-    Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
-    the services agent for the workspace, and restarting it would stop the
-    bootstrap, web, share-gateway, and other supervised services. The
-    frontend already hides ``is_primary=true`` agents from the visible agent
-    list; this is defense-in-depth for callers that hit the endpoint directly
-    (curl, scripted use, etc.).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    if agent_info.labels.get("is_primary") == "true":
-        error = ErrorResponse(
-            detail=(
-                f"Refusing to interrupt agent '{agent_info.name}': it carries "
-                "the is_primary=true label (services agent for this workspace)"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-
-    agent_name = agent_info.name
-
-    is_restarted, output = _restart_agent_process(agent_name)
-    if not is_restarted:
-        error = ErrorResponse(detail=f"Failed to interrupt agent '{agent_name}': {output}")
-        return _json_response(error.model_dump(), status_code=500)
-
-    # The restart abandons the session transcript mid-turn, so the
-    # transcript-derived activity state would stay pinned at THINKING /
-    # TOOL_RUNNING until the user sends another message. Reset it to IDLE
-    # now so the activity indicator clears immediately after the stop.
-    get_state().agent_manager.reset_activity_state(agent_id)
-
-    return _json_response(InterruptAgentResponse(status="ok").model_dump())
-
-
-def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
-    """Run ``mngr start <agent> --restart --no-resume``; return ``(is_restarted, output)``.
-
-    Stops the agent (ending any in-progress turn) and relaunches it fresh without
-    a resume prompt: conversation history is preserved (each harness resumes its
-    own on-disk session) and the in-harness queue is dropped by the SIGKILL.
-    ``output`` is stdout on success, stderr on failure (for the caller's message).
-    Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
-    clearer 400 before calling.
-    """
-    result = run_local_command_modern_version(
-        command=["mngr", "start", agent_name, "--restart", "--no-resume"],
-        cwd=None,
-        is_checked=False,
-        timeout=60.0,
-    )
-    is_restarted = result.returncode == 0
-    return is_restarted, (result.stdout.strip() if is_restarted else result.stderr.strip())
-
-
-def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Response | None:
-    """A 400 refusing a restart-based queue action on the primary services agent, or None.
-
-    Both queue actions restart the agent; restarting the ``is_primary=true``
-    services agent would tear down the workspace's supervised services. The
-    frontend hides primary agents, so this is defense-in-depth for direct callers.
-    """
-    if agent_info.labels.get("is_primary") == "true":
-        error = ErrorResponse(
-            detail=(
-                f"Refusing to {action} agent '{agent_info.name}': it carries the "
-                "is_primary=true label (services agent for this workspace)"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-    return None
-
-
-def _interrupt_capabilities(
-    agent_info: AgentInfo,
-) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
-    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
-
-    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
-    switch endpoint binds its ``send`` callback.
-    """
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-    return (
-        watcher,
-        lambda: _restart_agent_process(agent_info.name),
-        lambda: state.agent_manager.reset_activity_state(agent_info.id),
-    )
-
-
-def _flush_queue_endpoint(agent_id: str) -> Response:
-    """Shoulder tap: restart the agent and resend the whole queue as one turn.
-
-    Combining is required: after the restart the agent is idle, so sending the
-    messages one at a time would let the first open a turn and the rest re-queue.
-    Returns 404 for an unknown agent, 400 for the primary services agent, 500 if
-    the restart or the resend fails, 200 otherwise.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    refusal = _refuse_queue_action_on_primary(agent_info, "flush the queue of")
-    if refusal is not None:
-        return refusal
-
-    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-    # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
-    # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
-    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
-    if not watcher.get_queued_block():
-        return _json_response(SendMessageResponse(status="ok").model_dump())
-
-    try:
-        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
-    except AgentRestartError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-
-    if block:
-        agent_manager: AgentManager = get_state().agent_manager
-        is_sent = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
-        if not is_sent:
-            error = ErrorResponse(detail=f"Failed to resend queued messages to agent '{agent_info.name}'")
-            return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(SendMessageResponse(status="ok").model_dump())
-
-
-def _shoulder_tap_atomic_endpoint(agent_id: str) -> Response:
-    """Atomic shoulder tap: merge the queue into the live turn without restarting the agent.
-
-    The gentle counterpart to :func:`_flush_queue_endpoint`: rather than SIGKILL-restart the
-    agent and resend the queue, the agent's session delivers the harness's native tap and the
-    agent stays alive. HOW each harness taps lives with its implementation -- claude's cancel
-    chord in ``harnesses/claude/tap.py`` (``ClaudeAtomicShoulderTap``), pi's locked
-    ``pi_inbox`` flush sentinel in ``harnesses/pi_coding/model.py`` (``PiAtomicShoulderTap``),
-    codex's live-ledger interrupt+resend in ``harnesses/codex/session.py`` -- not here.
-
-    Returns 404 for an unknown agent, 400 for a harness whose catalog declares no atomic tap
-    or for the primary services agent, an error status when the tap failed (e.g. a claude
-    dialog block maps to 409), and 200 otherwise with the harness's own verdict (``tapped``,
-    ``no_open_turn``, or the benign ``send_in_flight`` no-op a raced send produces).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    if not get_catalog(agent_info.harness).native_atomic_shoulder_tap_possible:
-        error = ErrorResponse(
-            detail=(
-                f"Agent '{agent_info.name}' runs the {agent_info.harness.value} harness, which does not "
-                "support an atomic shoulder tap"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-    refusal = _refuse_queue_action_on_primary(agent_info, "shoulder-tap the queue of")
-    if refusal is not None:
-        return refusal
-
-    # The session dispatches to the harness's native tap (claude's chord executor, pi's locked
-    # inbox sentinel, codex's live-ledger interrupt+resend). A retryable refusal racing an
-    # in-flight send is a benign 200 no-op status, never an error dialog -- the pushed
-    # ``shoulder_tap_available`` flag already greys the button while anything is Sending.
-    state = get_state()
-    watcher = state.get_or_create_watcher(agent_info)
-    agent_manager = state.agent_manager
-    outcome = agent_manager.get_or_create_session(agent_info).shoulder_tap(
-        agent_info,
-        watcher,
-        press_chord=lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text),
-    )
-    if outcome.error_detail is not None:
-        error = ErrorResponse(detail=outcome.error_detail)
-        return _json_response(error.model_dump(), status_code=outcome.error_status_code)
-    return _json_response(ShoulderTapAtomicResponse(status=outcome.status, block=outcome.block).model_dump())
-
-
-def _drain_to_composer_endpoint(agent_id: str) -> Response:
-    """Interrupt to composer: interrupt the running turn and hand the queued block back, unsent.
-
-    Dispatches through the harness's registered interrupt-to-composer implementation (the base
-    restart-drain by default; native overrides for pi, codex, and claude's empty-queue chord),
-    which returns the concatenated block the frontend drops into the composer for the user to
-    edit and send, rather than resent. Unlike the flush there is NO empty-queue short-circuit: a
-    stop mid-turn with nothing queued still interrupts (block comes back empty). The endpoint
-    binds the harness-neutral capabilities -- watcher, restart, activity-settle, and the native
-    cancel keypress (routed through mngr's locked message API, like the tap) -- and the
-    implementation uses whichever it needs. Returns 404 for an unknown agent, 400 for the primary
-    services agent, 500 if the interrupt fails, 200 with ``{block}`` otherwise.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-    refusal = _refuse_queue_action_on_primary(agent_info, "interrupt the queue of")
-    if refusal is not None:
-        return refusal
-
-    agent_manager: AgentManager = get_state().agent_manager
-
-    watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
-    try:
-        block = agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
-            restart_process,
-            settle_activity,
-            lambda: agent_manager.press_key_chord_on_agent(AgentId(agent_info.id), TAP_CHORD),
-        )
-    except AgentRestartError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=500)
-    except OSError as e:
-        logger.opt(exception=e).error("Failed to record the interrupt for agent {}", agent_info.name)
-        error = ErrorResponse(detail=f"Failed to record the interrupt for agent '{agent_info.name}'")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(DrainToComposerResponse(block=block).model_dump())
-
-
-def _get_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
-    """Get events for a specific subagent session."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    watcher = get_state().get_or_create_watcher(agent_info)
-    events = watcher.get_all_events(session_id=subagent_session_id)
-
-    # Include metadata in the response
-    metadata = watcher.get_subagent_metadata(subagent_session_id)
-
-    return _json_response({"events": events, "metadata": metadata})
-
-
-def _stream_subagent_events(agent_id: str, subagent_session_id: str) -> Response:
-    """SSE stream for a subagent's new events, filtered by session_id."""
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    state = get_state()
-    state.get_or_create_watcher(agent_info)
-
-    event_queues = state.event_queues
-    event_queue = event_queues.register(agent_id)
-
-    return _sse_response(
-        _stream_filtered_events(
-            agent_id,
-            event_queues,
-            event_queue,
-            lambda event: event.get("session_id") == subagent_session_id,
-        )
-    )
-
-
-# Stores the user's "never show again" choice for the terminal lifecycle banner,
-# alongside the named layouts in the primary agent's workspace_layout dir.
-_TERMINAL_BANNER_FILENAME = "terminal_banner.json"
-
-# Serializes terminal-name allocation and tracks names handed out but not yet
-# materialized as live tmux sessions (session creation is lazy, on ttyd connect).
-_terminal_allocate_lock = threading.Lock()
-_recently_allocated_terminal_names: set[str] = set()
-
-
-def _primary_agent_layout_dir() -> Path | None:
-    """Return the workspace layout directory for this workspace's primary agent.
-
-    The system_interface always serves a single workspace (its own primary
-    agent); the layout lives at $MNGR_HOST_DIR/agents/<MNGR_AGENT_ID>/workspace_layout/.
-    Returns None if either env var is missing, which should only happen in
-    dev/test setups that don't care about persistence.
-    """
-    agent_id = os.environ.get("MNGR_AGENT_ID", "")
-    if not agent_id:
-        return None
-    return workspace_layouts.primary_agent_layout_dir(get_host_dir(), agent_id)
-
-
-def _client_activity_events_path() -> Path | None:
-    """Where the workspace-level client-activity event log lives, or None."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return None
-    return client_activity.get_events_path(layout_dir)
-
-
-def _parse_json_object_body() -> dict[str, Any] | Response:
-    """Parse the request body as a JSON object, or return a 400 error response."""
-    try:
-        body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError) as e:
-        _loguru_logger.opt(exception=e).warning("Request to {} carried invalid JSON", request.path)
-        error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(body, dict):
-        error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    return body
-
-
-def _default_layout_infos() -> list[dict[str, Any]]:
-    """The two default layout names, for dev/test setups with no layout dir."""
-    return [
-        workspace_layouts.LayoutInfo(slug=slug, display_name=slug, has_content=False).model_dump()
-        for slug in (workspace_layouts.DESKTOP_LAYOUT_SLUG, workspace_layouts.MOBILE_LAYOUT_SLUG)
-    ]
-
-
-def _list_layouts_endpoint() -> Response:
-    """List every named layout plus the last-active slug."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        # No primary agent configured (dev/test): expose the default names so
-        # the frontend can still pick an active layout; nothing persists.
-        return _json_response(
-            {"layouts": _default_layout_infos(), "last_active_slug": workspace_layouts.DESKTOP_LAYOUT_SLUG}
-        )
-    infos = workspace_layouts.list_layouts(layout_dir)
-    return _json_response(
-        {
-            "layouts": [info.model_dump() for info in infos],
-            "last_active_slug": workspace_layouts.get_last_active_slug(layout_dir),
-        }
-    )
-
-
-def _get_named_layout_endpoint(slug: str) -> Response:
-    """Get one named layout's saved content (null when the layout is still empty)."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return _json_response({"slug": slug, "display_name": slug, "layout": None})
-    try:
-        content = workspace_layouts.read_layout_content(layout_dir, slug)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    return _json_response({"slug": slug, "display_name": display_name, "layout": content})
-
-
-def _save_layout_as_endpoint() -> Response:
-    """Save the posted layout under a display name (creating or overwriting).
-
-    The server owns slugification: an exact display-name match overwrites
-    that layout, while a slug collision with a *different* display name is
-    rejected so two visually-distinct names never share a file.
-    """
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    display_name = body.get("display_name")
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(display_name, str) or not display_name.strip():
-        error = ErrorResponse(detail="'display_name' must be a non-empty string")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    try:
-        slug = workspace_layouts.register_layout(layout_dir, display_name.strip())
-    except workspace_layouts.LayoutNameError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    except workspace_layouts.LayoutConflictError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-    resolved_display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    get_state().broadcaster.broadcast_layout_saved(slug, resolved_display_name, client_id)
-    return _json_response({"slug": slug, "display_name": resolved_display_name})
-
-
-def _autosave_named_layout_endpoint(slug: str) -> Response:
-    """Persist the posted content to an existing named layout (the autosave path)."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    body = _parse_json_object_body()
-    if isinstance(body, Response):
-        return body
-    layout_content = body.get("layout")
-    client_id = str(body.get("client_id") or "")
-    if not isinstance(layout_content, dict):
-        error = ErrorResponse(detail="'layout' must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    try:
-        workspace_layouts.write_layout_content(layout_dir, slug, layout_content)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        # The layout was deleted while this client's autosave was in flight;
-        # the client hears about the deletion over the WebSocket.
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    get_state().broadcaster.broadcast_layout_saved(slug, display_name, client_id)
-    return _json_response({"status": "ok"})
-
-
-def _delete_named_layout_endpoint(slug: str) -> Response:
-    """Delete a named layout; the last remaining layout cannot be deleted."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    try:
-        fallback_slug = workspace_layouts.delete_layout(layout_dir, slug)
-    except workspace_layouts.LayoutNotFoundError:
-        error = ErrorResponse(detail=f"Layout '{slug}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    except workspace_layouts.LastLayoutDeletionError as e:
-        return _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
-    get_state().broadcaster.broadcast_layout_deleted(slug, fallback_slug)
-    return _json_response({"status": "ok", "fallback_layout_slug": fallback_slug})
-
-
-def _tmux_prefix() -> str:
-    """The mngr session-name prefix; agent sessions carry it, terminals do not."""
-    return os.environ.get("MNGR_PREFIX", "mngr-")
-
-
-def _list_tmux_sessions() -> tuple[TerminalSessionInfo, ...]:
-    """Enumerate every tmux session on the default socket, or () when none.
-
-    A missing tmux server (no sessions yet) returns a non-zero exit code, which
-    we treat as an empty list rather than an error.
-    """
-    result = run_local_command_modern_version(
-        command=["tmux", "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_path}"],
-        cwd=None,
-        is_checked=False,
-        timeout=5.0,
-    )
-    if result.returncode != 0:
-        return ()
-    return parse_tmux_sessions_output(result.stdout)
-
-
-def _list_terminals() -> Response:
-    """List the live user-terminal tmux sessions (excludes mngr agent sessions)."""
-    prefix = _tmux_prefix()
-    sessions = filter_user_terminal_sessions(_list_tmux_sessions(), prefix)
-    return _json_response(
-        {
-            "terminals": [session.model_dump() for session in sessions],
-            "prefix": prefix,
-        }
-    )
-
-
-def _allocate_terminal() -> Response:
-    """Reserve the next free ``terminal-<N>`` name for a new terminal tab.
-
-    The lock plus the in-memory ``_recently_allocated_terminal_names`` set make
-    consecutive allocations return distinct names even before the ttyd
-    connection has actually created the tmux session (creation is lazy, so two
-    rapid clicks would otherwise both see the same live-session set and collide).
-    """
-    prefix = _tmux_prefix()
-    with _terminal_allocate_lock:
-        live_names = {session.session_name for session in _list_tmux_sessions()}
-        # Drop reservations that have since become real sessions so the set
-        # cannot grow without bound.
-        _recently_allocated_terminal_names.difference_update(live_names)
-        taken = live_names | _recently_allocated_terminal_names
-        name = allocate_next_terminal_name(taken, prefix)
-        _recently_allocated_terminal_names.add(name)
-    return _json_response({"session_name": name})
-
-
-def _destroy_terminal(session_name: str) -> Response:
-    """Kill a user-terminal tmux session. Refuses to touch mngr agent sessions."""
-    prefix = _tmux_prefix()
-    if not is_destroyable_terminal_session(session_name, prefix):
-        error = ErrorResponse(detail=f"Refusing to destroy non-terminal session: {session_name!r}")
-        return _json_response(error.model_dump(), status_code=400)
-    # ``=`` forces an exact session-name match so tmux's prefix fallback can't
-    # target a different session.
-    result = run_local_command_modern_version(
-        command=["tmux", "kill-session", "-t", f"={session_name}"],
-        cwd=None,
-        is_checked=False,
-        timeout=5.0,
-    )
-    # tmux returns non-zero both for a genuine failure and for an already-absent
-    # session (nothing to kill). Distinguish the two by re-listing: if the
-    # session is gone, the destroy succeeded (or was idempotent); if it is still
-    # present, the kill really failed and we must surface it rather than telling
-    # the UI the terminal is gone when it is still running.
-    if result.returncode != 0:
-        still_live = any(session.session_name == session_name for session in _list_tmux_sessions())
-        if still_live:
-            _loguru_logger.warning("Failed to kill terminal session {}: {}", session_name, result.stderr.strip())
-            error = ErrorResponse(detail=f"Failed to destroy terminal {session_name!r}: {result.stderr.strip()}")
-            return _json_response(error.model_dump(), status_code=500)
-    with _terminal_allocate_lock:
-        _recently_allocated_terminal_names.discard(session_name)
-    return _json_response({"status": "ok"})
-
-
-def _get_terminal_banner_dismissed() -> Response:
-    """Whether the user has permanently dismissed the terminal lifecycle banner."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        return _json_response({"dismissed": False})
-    banner_file = layout_dir / _TERMINAL_BANNER_FILENAME
-    if not banner_file.exists():
-        return _json_response({"dismissed": False})
-    try:
-        data = json.loads(banner_file.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        _loguru_logger.opt(exception=e).warning(
-            "Failed to read terminal banner state at {}; treating as not dismissed", banner_file
-        )
-        return _json_response({"dismissed": False})
-    dismissed = bool(data.get("dismissed", False)) if isinstance(data, dict) else False
-    return _json_response({"dismissed": dismissed})
-
-
-def _set_terminal_banner_dismissed() -> Response:
-    """Persist the user's "never show again" choice for the terminal banner."""
-    layout_dir = _primary_agent_layout_dir()
-    if layout_dir is None:
-        error = ErrorResponse(detail="No primary agent configured for this workspace")
-        return _json_response(error.model_dump(), status_code=500)
-    try:
-        body = json.loads(request.get_data() or b"{}")
-    except (json.JSONDecodeError, ValueError) as e:
-        _loguru_logger.opt(exception=e).warning("terminal banner-dismissed received invalid JSON body")
-        error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
-    dismissed = bool(body.get("dismissed", False)) if isinstance(body, dict) else False
-    layout_dir.mkdir(parents=True, exist_ok=True)
-    (layout_dir / _TERMINAL_BANNER_FILENAME).write_text(json.dumps({"dismissed": dismissed}))
-    return _json_response({"dismissed": dismissed})
-
-
-def _resolve_terminal_id_for_tty(client_tty: str) -> str | None:
-    """Reverse-look-up the dockview terminal id bound to a tmux client tty.
-
-    ``system/apps/terminal/run_ttyd.sh`` records ``terminal_id -> $(tty)`` files under
-    ``$MNGR_AGENT_STATE_DIR/commands/ttyd/clients/`` when a tab attaches; this
-    finds the id whose recorded tty matches ``client_tty``. Returns None when
-    the mapping directory or a matching entry is absent.
-    """
-    if not client_tty:
-        return None
-    state_dir = os.environ.get("MNGR_AGENT_STATE_DIR", "")
-    if not state_dir:
-        return None
-    clients_dir = Path(state_dir) / "commands" / "ttyd" / "clients"
-    if not clients_dir.is_dir():
-        return None
-    for entry in clients_dir.iterdir():
-        if not entry.is_file():
-            continue
-        try:
-            recorded_tty = entry.read_text().strip()
-        except OSError:
-            continue
-        if recorded_tty == client_tty:
-            return entry.name
-    return None
-
-
-def _terminal_notify_endpoint() -> Response:
-    """Loopback endpoint the tmux hooks call when a terminal's session changes.
-
-    Body: ``{kind, client_tty, session_name, session_id}``. For a session
-    switch we resolve the affected dockview tab from ``client_tty``; for a
-    rename the frontend matches by ``session_id`` so ``terminal_id`` stays None.
-    Either way we re-broadcast as a ``terminal_session`` WS event.
-    """
-    client_host = request.remote_addr or ""
-    if client_host not in _LOOPBACK_CLIENT_HOSTS:
-        error = ErrorResponse(detail="terminal notify is only callable from loopback")
-        return _json_response(error.model_dump(), status_code=403)
-    try:
-        body = json.loads(request.get_data())
-    except (json.JSONDecodeError, ValueError) as e:
-        _loguru_logger.opt(exception=e).warning("terminal notify received invalid JSON body")
-        error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(body, dict):
-        error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-    kind = body.get("kind")
-    session_name = str(body.get("session_name") or "")
-    session_id = str(body.get("session_id") or "")
-    client_tty = str(body.get("client_tty") or "")
-    broadcaster: WebSocketBroadcaster = get_state().broadcaster
-    if kind == "session-changed":
-        # Resolve which dockview tab this tmux client belongs to. An
-        # unresolved tty (e.g. an mngr agent-session client, which never
-        # writes the ttyd clients map) means there is no terminal tab to
-        # update, so skip the broadcast entirely.
-        terminal_id = _resolve_terminal_id_for_tty(client_tty)
-        if terminal_id is None:
-            return _json_response({"ok": True, "broadcast": False})
-        broadcaster.broadcast_terminal_session(terminal_id, session_id, session_name)
-        return _json_response({"ok": True, "broadcast": True})
-    if kind == "session-renamed":
-        # A rename has no client context; the frontend matches the affected
-        # tab by ``session_id``.
-        broadcaster.broadcast_terminal_session(None, session_id, session_name)
-        return _json_response({"ok": True, "broadcast": True})
-    error = ErrorResponse(detail=f"Unknown terminal notify kind: {kind!r}")
-    return _json_response(error.model_dump(), status_code=400)
-
-
-def _browsers_passthrough() -> Response:
-    """Same-origin passthrough for the browser daemon's fleet API.
-
-    Browser panels live on their own service origin now, so the shell frontend
-    can no longer ``fetch()`` the daemon's ``/browsers`` endpoint directly
-    (sibling service origins are same-site but not same-origin, and the daemon
-    sends no CORS headers). This server-side hop forwards ``GET`` /
-    ``POST /api/browsers`` to the registered ``browser`` service's local
-    backend and relays the backend's body and status verbatim (GET returns
-    ``{"browsers": [...]}``; POST relays the daemon's create result, including
-    its 400/409/503 rejections). Returns a 503 JSON error when the service is
-    not registered or unreachable.
-    """
-    state = get_state()
-    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
-    if base_url is None:
-        error = ErrorResponse(detail="Browser service is not registered")
-        return _json_response(error.model_dump(), status_code=503)
-    backend_url = f"{base_url.rstrip('/')}/browsers"
-    try:
-        if request.method == "POST":
-            backend_response = state.http_client.post(
-                backend_url,
-                content=request.get_data(),
-                headers={"Content-Type": request.headers.get("Content-Type") or "application/json"},
-            )
-        else:
-            backend_response = state.http_client.get(backend_url)
-    except httpx.HTTPError as e:
-        _loguru_logger.warning("Browser service request to {} failed: {}", backend_url, e)
-        error = ErrorResponse(detail="Browser service is unreachable")
-        return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
-
-
-def _destroy_browser_passthrough(name: str) -> Response:
-    """Same-origin passthrough for retiring one browser in the fleet.
-
-    Companion to :func:`_browsers_passthrough` for the destroy control on a
-    browser pane's tab. The panels live on their own service origin, so the
-    shell can't ``DELETE`` the daemon's ``/browsers/<name>`` directly (no CORS);
-    this hop forwards ``DELETE /api/browsers/<name>`` to the registered
-    ``browser`` service and relays the daemon's body and status verbatim
-    (including its 404/409/503 rejections). Returns a 503 JSON error when the
-    service is not registered or unreachable.
-    """
-    state = get_state()
-    base_url = state.agent_manager.get_service_url(_BROWSER_SERVICE_NAME)
-    if base_url is None:
-        error = ErrorResponse(detail="Browser service is not registered")
-        return _json_response(error.model_dump(), status_code=503)
-    backend_url = f"{base_url.rstrip('/')}/browsers/{name}"
-    try:
-        backend_response = state.http_client.delete(backend_url)
-    except httpx.HTTPError as e:
-        _loguru_logger.warning("Browser service DELETE to {} failed: {}", backend_url, e)
-        error = ErrorResponse(detail="Browser service is unreachable")
-        return _json_response(error.model_dump(), status_code=503)
-    return Response(
-        backend_response.content,
-        status=backend_response.status_code,
-        content_type=backend_response.headers.get("content-type", "application/json"),
-    )
-
-
-def _get_screen_capture(agent_id: str) -> Response:
-    """Capture the tmux pane content for an agent.
-
-    Returns the visible screen content (and optionally scrollback) as plain
-    text. Useful for seeing what's on an agent's terminal when it has no
-    Claude session data (e.g., the agent crashed on startup).
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    prefix = os.environ.get("MNGR_PREFIX", "mngr-")
-    session_name = f"{prefix}{agent_info.name}"
-    include_scrollback = request.args.get("scrollback", "false").lower() == "true"
-    scrollback_flag = ["-S", "-"] if include_scrollback else []
-    command = ["tmux", "capture-pane", "-t", session_name, *scrollback_flag, "-p"]
-
-    result = run_local_command_modern_version(
-        command=command,
-        cwd=None,
-        is_checked=False,
-        timeout=5.0,
-    )
-    success = result.returncode == 0
-    if not success:
-        return _json_response(
-            {"screen": None, "error": f"tmux session not found: {session_name}"},
-            status_code=200,
-        )
-    return _json_response({"screen": result.stdout})
-
-
-def _serve_static_file(basename: str) -> Response:
-    config: Config = get_state().config
-    file_path_string = config.static_file_basename_to_path.get(basename)
-    if file_path_string is None:
-        error = ErrorResponse(detail=f"Static file '{basename}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-    file_path = Path(file_path_string)
-    if not file_path.is_file():
-        error = ErrorResponse(detail=f"Static file not found on disk: {file_path}")
-        return _json_response(error.model_dump(), status_code=404)
-    return send_file(file_path)
-
-
-def _random_name_endpoint() -> Response:
-    """Generate a random agent name."""
-    agent_manager: AgentManager = get_state().agent_manager
-    name = agent_manager.generate_random_name()
-    return _json_response(RandomNameResponse(name=name).model_dump())
-
-
-def _create_chat_agent() -> Response:
-    """Create a new chat agent in the primary agent's work directory.
-
-    One endpoint for every harness: the ``chat`` role is the same, and the request's
-    ``harness`` field (validated against :class:`HarnessType`, claude by default) picks
-    which harness template the server stacks under it.
-    """
-    agent_manager: AgentManager = get_state().agent_manager
-    body = request.get_json()
-
-    try:
-        create_request = CreateChatRequest(**body)
-        agent_id = agent_manager.create_chat_agent(create_request.name, create_request.harness)
-        return _json_response(CreateAgentResponse(agent_id=agent_id).model_dump(), status_code=201)
-    except (AgentCreationError, OSError, ValueError) as e:
-        error = ErrorResponse(detail=str(e))
-        return _json_response(error.model_dump(), status_code=400)
+        return send_from_directory(assets_directory, filename)
+    except NotFound:
+        return Response(status=404)
 
 
 def _ws_endpoint(websocket: Any) -> None:
-    """Unified WebSocket for agent state and app updates."""
-    state = get_state()
-    # Resolve the primary agent's layout dir once, at connect, and bind it to
-    # this connection for the lifetime of the loop. The resolver reads
-    # process-global env (MNGR_HOST_DIR / MNGR_AGENT_ID); capturing it here
-    # keeps every write this connection makes pointed at *this* server's
-    # workspace even if that env is later mutated (which only happens in tests,
-    # where several servers share one process -- a stray late write from a
-    # lingering connection would otherwise land in another server's log).
-    _run_ws_broadcast_loop(
-        websocket=websocket,
-        agent_manager=state.agent_manager,
-        ws_broadcaster=state.broadcaster,
-        layout_dir=_primary_agent_layout_dir(),
-    )
+    """The one WebSocket per window (contracts.md section 8)."""
+    _run_ws_broadcast_loop(websocket=websocket, shell=get_state().shell)
 
 
 def _handle_client_state_message(
     raw_message: str,
     client_queue: "queue.Queue[str | None]",
-    ws_broadcaster: WebSocketBroadcaster,
-    layout_dir: Path | None,
+    shell: ShellState,
     is_first_report: bool,
 ) -> bool:
-    """Process one incoming WebSocket message; returns True for a ``client_state``.
+    """Process one incoming WebSocket message; returns True for a well-formed ``client_state``.
 
-    ``client_state`` is the only message type clients send: it registers the
-    browser's client id, active layout, and device kind (on connect and on
-    every layout switch). Registration feeds the broadcaster's client
-    registry (used to target layout-mutating ops), the last-active-layout
-    record, and the client-activity event log (a ``layout_switch`` event when
-    the report names a different previous layout, else a ``client_connected``
-    event for the connection's first report).
+    ``client_state`` is the only message type clients send: it registers the browser's client
+    id, device kind, and active view (on connect and on every view switch). Registration feeds
+    the broadcaster's client registry (which targets layout ops), the client record, and the
+    client-activity log (a ``view_switch`` when the report names a different previous view).
     """
     try:
         parsed = json.loads(raw_message)
@@ -1523,95 +461,77 @@ def _handle_client_state_message(
     if not isinstance(parsed, dict) or parsed.get("type") != "client_state":
         _loguru_logger.warning("Ignored unexpected WebSocket message type from client: {!r}", parsed)
         return False
-    client_id = str(parsed.get("client_id") or "")
-    active_layout = str(parsed.get("active_layout") or "")
-    device_kind = str(parsed.get("device_kind") or "")
-    previous_layout = str(parsed.get("previous_layout") or "")
-    if not client_id or not active_layout:
+    try:
+        report = ClientStateReport.model_validate({key: value for key, value in parsed.items() if key != "type"})
+    except ValidationError as e:
+        _loguru_logger.warning("Ignored a malformed client_state report: {}", e.errors()[0]["msg"])
         return False
-    ws_broadcaster.set_client_info(client_queue, client_id, active_layout, device_kind)
+    shell.broadcaster.set_client_info(
+        client_queue, str(report.client_id), str(report.active_view), report.device_kind.value
+    )
+    # A state file the shell cannot write is a warning, not a dropped socket: the live
+    # registration above is what the layout ops need, and the next report retries the write.
+    try:
+        outcome = shell.clients.record_report(report, datetime.now(timezone.utc))
+    except ShellStateError as e:
+        _loguru_logger.opt(exception=e).warning("Could not record the client report for {}", report.client_id)
+    else:
+        # Only a report that moved the stored view is broadcast: a window following a push reports the
+        # view it was pushed to, which matches the record, so the chain ends after one hop.
+        if outcome.is_active_view_changed:
+            shell.broadcaster.broadcast_active_view_changed(str(report.client_id), str(report.active_view))
     if is_first_report:
         _loguru_logger.info(
-            "WS client registered: client_id={} layout={} device={} (conn {})",
-            client_id,
-            active_layout,
-            device_kind,
+            "WS client registered: client_id={} view={} device={} (conn {})",
+            report.client_id,
+            report.active_view,
+            report.device_kind.value,
             id(client_queue),
         )
-    elif previous_layout and previous_layout != active_layout:
+    elif report.previous_view and report.previous_view != report.active_view:
         _loguru_logger.info(
-            "WS client {} switched layout {} -> {} (conn {})",
-            client_id,
-            previous_layout,
-            active_layout,
+            "WS client {} switched view {} -> {} (conn {})",
+            report.client_id,
+            report.previous_view,
+            report.active_view,
             id(client_queue),
         )
-    else:
-        # A re-report on an already-registered connection with an unchanged
-        # layout; not worth a log line.
-        pass
-    if layout_dir is not None:
-        workspace_layouts.set_last_active_slug(layout_dir, active_layout)
-        events_path = client_activity.get_events_path(layout_dir)
-        if previous_layout and previous_layout != active_layout:
-            client_activity.append_layout_switch_event(
-                events_path, client_id, device_kind, previous_layout, active_layout
+        try:
+            shell.activity.append_view_switch(
+                str(report.client_id), report.device_kind.value, report.previous_view, str(report.active_view)
             )
-        elif is_first_report:
-            client_activity.append_client_connected_event(events_path, client_id, device_kind, active_layout)
-        else:
-            # A re-report on an already-registered connection with an
-            # unchanged layout; the registry update above is all it needs.
-            pass
+        except OSError as e:
+            _loguru_logger.opt(exception=e).warning("Could not log the view switch for {}", report.client_id)
+    else:
+        # A re-report on an already-registered connection with an unchanged view.
+        pass
     return True
 
 
-def _run_ws_broadcast_loop(
-    websocket: Any,
-    agent_manager: AgentManager,
-    ws_broadcaster: WebSocketBroadcaster,
-    layout_dir: Path | None,
-) -> None:
-    """Stream broadcaster messages to ``websocket`` until the client disconnects.
+def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
+    """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
-    Each WebSocket connection owns its own thread (flask-sock + the threaded
-    WSGI server), so this loop simply blocks on the per-client queue and
-    forwards messages. flask-sock's ``ping_interval`` keepalive closes a
-    half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the
-    broadcaster can also evict a hopelessly-behind client by pushing the
-    shutdown sentinel (``None``) into the queue.
+    Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
+    this loop blocks on the per-client queue and forwards messages. flask-sock's keepalive
+    closes a half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the broadcaster
+    can also evict a hopelessly-behind client by pushing the shutdown sentinel (``None``).
 
-    Incoming ``client_state`` registrations are drained non-blockingly on
-    each loop iteration (simple_websocket buffers frames on its own reader
-    thread, so ``receive(timeout=0)`` never blocks); worst-case processing
-    latency is one queue-poll interval (~1 s), well under any agent-driven
-    op that depends on the registration.
+    Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
+    ws_broadcaster = shell.broadcaster
     client_queue = ws_broadcaster.register()
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
-    # Overwritten by the paths below; every exit from the loop goes through one
-    # of them, so this default should never surface in a log line.
     disconnect_reason = "handler exited"
     try:
+        websocket.send(json.dumps({"type": "apps_updated", "apps": shell.inventory.serialized()}))
         websocket.send(
             json.dumps(
                 {
-                    "type": "agents_updated",
-                    "agents": agent_manager.get_agents_serialized(),
+                    "type": "projects_updated",
+                    "projects": [project_wire_json(project) for project in shell.projects.list_projects()],
                 }
             )
         )
-        websocket.send(
-            json.dumps(
-                {
-                    "type": "apps_updated",
-                    "apps": agent_manager.get_apps_serialized(),
-                }
-            )
-        )
-
-        for proto in agent_manager.get_proto_agents():
-            websocket.send(json.dumps({"type": "proto_agent_created", **proto}))
 
         is_client_registered = False
         shutdown = False
@@ -1619,11 +539,7 @@ def _run_ws_broadcast_loop(
             incoming = websocket.receive(timeout=0)
             while incoming is not None:
                 if _handle_client_state_message(
-                    str(incoming),
-                    client_queue,
-                    ws_broadcaster,
-                    layout_dir=layout_dir,
-                    is_first_report=not is_client_registered,
+                    str(incoming), client_queue, shell, is_first_report=not is_client_registered
                 ):
                     is_client_registered = True
                 incoming = websocket.receive(timeout=0)
@@ -1649,527 +565,31 @@ def _run_ws_broadcast_loop(
         ws_broadcaster.unregister(client_queue)
 
 
-def _proto_agent_logs_endpoint(websocket: Any, agent_id: str) -> None:
-    """WebSocket for streaming proto-agent creation logs."""
-    agent_manager: AgentManager = get_state().agent_manager
-    log_queue = agent_manager.get_log_queue(agent_id)
-    _run_proto_agent_logs_loop(websocket=websocket, log_queue=log_queue)
-
-
-def _run_proto_agent_logs_loop(
-    websocket: Any,
-    log_queue: "queue.Queue[str | None] | None",
-) -> None:
-    """Stream ``log_queue`` messages to ``websocket`` until the proto-agent finishes.
-
-    If ``log_queue`` is ``None`` the proto-agent does not exist; send a
-    structured not-found error and close the socket.
-    """
-    if log_queue is None:
-        try:
-            websocket.send(json.dumps({"done": True, "success": False, "error": "Proto-agent not found"}))
-        except ConnectionClosed:
-            pass
-        return
-
-    try:
-        finished = False
-        while not finished:
-            try:
-                message = log_queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-            if message is None:
-                finished = True
-            else:
-                websocket.send(message)
-    except ConnectionClosed:
-        pass
-
-
-def _build_destroy_command(agent_name: str) -> list[str]:
-    """Build the ``mngr destroy --force`` argv for one agent.
-
-    Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
-    """
-    return ["mngr", "destroy", agent_name, "--force"]
-
-
-def _destroy_agent(agent_id: str) -> Response:
-    """Destroy an agent by running mngr destroy --force.
-
-    Refuses to destroy agents carrying the ``is_primary=true`` label: that's
-    the services agent for the workspace, and destroying it would tear down
-    the bootstrap, web, share-gateway, and other supervised services
-    along with it. The frontend already hides ``is_primary=true`` agents
-    from the visible agent list; this is defense-in-depth for callers that
-    hit the endpoint directly (curl, scripted use, etc.).
-    """
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_state = agent_manager.get_agent_by_id(agent_id)
-    if agent_state is None:
-        error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
-        return _json_response(error.model_dump(), status_code=404)
-
-    if agent_state.labels.get("is_primary") == "true":
-        error = ErrorResponse(
-            detail=(
-                f"Refusing to destroy agent '{agent_state.name}': it carries "
-                "the is_primary=true label (services agent for this workspace)"
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-
-    agent_name = agent_state.name
-
-    result = run_local_command_modern_version(
-        command=_build_destroy_command(agent_name),
-        cwd=None,
-        is_checked=False,
-        timeout=_DESTROY_TIMEOUT_SECONDS,
-    )
-    success = result.returncode == 0
-    output = result.stdout.strip() if success else result.stderr.strip()
-    if not success:
-        error = ErrorResponse(detail=f"Failed to destroy agent '{agent_name}': {output}")
-        return _json_response(error.model_dump(), status_code=500)
-
-    # Remove the agent from the system_interface's tracked state immediately
-    # so the frontend reflects the destruction without waiting for mngr observe.
-    agent_manager.remove_agent(agent_id)
-
-    return _json_response(DestroyAgentResponse(status="ok").model_dump())
-
-
-def _start_agent(agent_id: str) -> Response:
-    """Ensure an agent is running so its terminal session is attachable.
-
-    Opening an agent's terminal attaches to that agent's tmux session; while
-    the agent is STOPPED that session does not exist, so the attach fails
-    immediately. The frontend calls this endpoint before opening a terminal
-    tab -- both for the chat-page "Open agent terminal" link and for terminal
-    tabs restored from a saved dockview layout.
-
-    This goes through the exact same in-process mngr start path that sending a
-    message to the agent uses (see ``agent_discovery.start_agent``), so opening
-    a terminal and messaging the agent succeed or fail together rather than
-    diverging. mngr's own lifecycle check makes the start a no-op for an
-    already-running agent, so this is cheap in the common case.
-    """
-    agent_info = _find_agent(agent_id)
-    if agent_info is None:
-        return _agent_not_found_response(agent_id)
-
-    try:
-        start_agent(agent_info.name)
-    except MngrError as e:
-        error = ErrorResponse(detail=f"Failed to start agent '{agent_info.name}': {e}")
-        return _json_response(error.model_dump(), status_code=500)
-
-    return _json_response(StartAgentResponse(status="ok").model_dump())
-
-
-def _resolve_requested_layout_slug(
-    args_raw: dict[str, Any],
-    layout_dir: Path | None,
-) -> tuple[str | None, Response | None]:
-    """Resolve a layout op's ``args.layout`` (or the last-active default) to a slug.
-
-    Returns ``(slug, None)`` on success and ``(None, error_response)`` when an
-    explicitly-named layout is unusable or unknown. With no layout dir
-    configured (dev/test), an explicit name is slugified without registry
-    validation and the default is None.
-    """
-    requested = args_raw.get("layout")
-    if isinstance(requested, str) and requested:
-        if layout_dir is None:
-            try:
-                return workspace_layouts.slugify_layout_name(requested), None
-            except workspace_layouts.LayoutNameError as e:
-                return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        try:
-            return workspace_layouts.resolve_layout_slug(layout_dir, requested), None
-        except workspace_layouts.LayoutNameError as e:
-            return None, _json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-        except workspace_layouts.LayoutNotFoundError:
-            known = ", ".join(info.display_name for info in workspace_layouts.list_layouts(layout_dir))
-            error = ErrorResponse(detail=f"Layout {requested!r} not found (known layouts: {known})")
-            return None, _json_response(error.model_dump(), status_code=404)
-    if layout_dir is None:
-        return None, None
-    return workspace_layouts.get_last_active_slug(layout_dir), None
-
-
-def _layout_broadcast_endpoint() -> Response:
-    """Unified loopback endpoint for the agent-facing ``system/scripts/layout.py`` helper.
-
-    Body: ``{op, args, agent_id}``.
-
-    Dispatch:
-
-    - ``list`` / ``inspect``: pure server-side queries that read the
-      ``agent_manager``'s in-memory service/agent registry plus the
-      persisted ``layout.json`` (for ``is_open`` flags / tree layout)
-      and return a structured payload. Bypass the mutex.
-    - ``refresh`` / ``reload_system_interface``: state-preserving
-      broadcasts that don't mutate serialized layout. Bypass the mutex.
-      ``reload_system_interface`` tells connected browsers to reload the
-      whole top-level page. Broadcast by
-      ``system/scripts/refresh_workspace_view.py`` for any interface
-      change, backend-only ones included, from whichever flow made it
-      (``update-system-interface``, ``update-app``, ``update-self``).
-    - All other ops (``open``, ``focus``, ``split``, ``close``, ``move``,
-      ``rename``, ``maximize``, ``restore``, ``replace-url``): acquire
-      the advisory mutex first; on contention return HTTP 409 with the
-      holder's metadata so the caller can decide whether to retry. On
-      success, broadcast the ``layout_op`` WS message and return.
-
-    The endpoint is locked to loopback clients (no authentication exists
-    between callers and the system interface inside the container).
-    """
-    client_host = request.remote_addr or ""
-    if client_host not in _LOOPBACK_CLIENT_HOSTS:
-        error = ErrorResponse(detail="layout broadcast is only callable from loopback")
-        return _json_response(error.model_dump(), status_code=403)
-
-    raw_body = request.get_data()
-    try:
-        body = json.loads(raw_body)
-    except (json.JSONDecodeError, ValueError) as e:
-        _loguru_logger.opt(exception=e).warning("layout broadcast received invalid JSON body")
-        error = ErrorResponse(detail="Invalid JSON in request body")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(body, dict):
-        error = ErrorResponse(detail="Request body must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-
-    op = body.get("op")
-    args_raw = body.get("args", {})
-    agent_id = body.get("agent_id") or request.headers.get("X-Mngr-Agent-Id") or ""
-    if not isinstance(op, str) or not is_known_op(op):
-        error = ErrorResponse(detail=f"Unknown layout op: {op!r}")
-        return _json_response(error.model_dump(), status_code=400)
-    if not isinstance(args_raw, dict):
-        error = ErrorResponse(detail="``args`` must be a JSON object")
-        return _json_response(error.model_dump(), status_code=400)
-
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_name_by_id = {a["id"]: a["name"] for a in agent_manager.get_agents_serialized()}
-    layout_dir = _primary_agent_layout_dir()
-
-    if op in {"list", "inspect"}:
-        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
-        if error_response is not None:
-            return error_response
-        layout_path = (
-            workspace_layouts.layout_content_path(layout_dir, slug)
-            if layout_dir is not None and slug is not None
-            else None
-        )
-        if op == "list":
-            entries = layout_list(
-                agent_manager.list_service_names(),
-                agent_manager.get_agents_serialized(),
-                layout_path,
-                agent_name_by_id,
-            )
-            # Log the caller for telemetry; v1 has no enforcement.
-            logger.info("layout op={} agent_id={} layout={} entries={}", op, agent_id, slug, len(entries))
-            return _json_response({"ok": True, "layout_slug": slug, "entries": entries})
-        summary = layout_inspect(layout_path, agent_name_by_id)
-        logger.info("layout op={} agent_id={} layout={} panels={}", op, agent_id, slug, len(summary.get("panels", [])))
-        return _json_response({"ok": True, "layout_slug": slug, "layout": summary})
-
-    if op == "context":
-        # Per-client activity summary: who is connected, on which layout,
-        # and what they recently asked for. The live registry overrides the
-        # event-log-derived current layout for connected clients (fresher,
-        # and correct even if an event write was skipped).
-        events_path = _client_activity_events_path()
-        events = client_activity.read_client_activity_events(events_path) if events_path is not None else []
-        connected_infos = get_state().broadcaster.get_connected_client_infos()
-        live_layout_by_client_id = {info["client_id"]: info["active_layout_slug"] for info in connected_infos}
-        clients = client_activity.summarize_client_activity(events, set(live_layout_by_client_id))
-        for client_summary in clients:
-            live_layout = live_layout_by_client_id.get(client_summary["client_id"])
-            if live_layout:
-                client_summary["current_layout"] = live_layout
-        logger.info("layout op={} agent_id={} clients={}", op, agent_id, len(clients))
-        return _json_response({"ok": True, "clients": clients})
-
-    if op == "load":
-        requested = args_raw.get("layout")
-        if not isinstance(requested, str) or not requested:
-            error = ErrorResponse(detail="'load' requires a layout name in args.layout")
-            return _json_response(error.model_dump(), status_code=400)
-        if layout_dir is None:
-            error = ErrorResponse(detail="No primary agent configured for this workspace")
-            return _json_response(error.model_dump(), status_code=500)
-        slug, error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
-        if error_response is not None:
-            return error_response
-        if slug is None:
-            # Unreachable: an explicit layout name (validated above) always
-            # resolves to a slug or an error response.
-            error = ErrorResponse(detail="Failed to resolve the requested layout")
-            return _json_response(error.model_dump(), status_code=500)
-        display_name = workspace_layouts.get_layout_display_name(layout_dir, slug)
-        # Target the explicitly-named client, else the client that most
-        # recently messaged the requesting agent, else every client.
-        explicit_client = args_raw.get("client")
-        if isinstance(explicit_client, str) and explicit_client:
-            target_client_id: str | None = explicit_client
-        else:
-            events_path = _client_activity_events_path()
-            events = client_activity.read_client_activity_events(events_path) if events_path is not None else []
-            target_client_id = client_activity.find_client_id_for_agent(events, agent_id)
-        get_state().broadcaster.broadcast_load_layout(slug, display_name, target_client_id)
-        logger.info("layout op={} agent_id={} layout={} target_client={}", op, agent_id, slug, target_client_id)
-        return _json_response({"ok": True, "layout": slug, "target_client_id": target_client_id})
-
-    if not is_broadcasting_op(op):
-        # Defensive: every non-list/inspect op should broadcast. Catch
-        # drift in the op-set definitions.
-        error = ErrorResponse(detail=f"Op {op!r} has no broadcast handler")
-        return _json_response(error.model_dump(), status_code=500)
-
-    # Terminal creation is the one path where the script returns a ref
-    # synchronously: the frontend's "New terminal" button gives each
-    # terminal a freshly-minted iframe panel id, so the server pre-mints
-    # one here, injects it into the broadcast args (the frontend uses it
-    # verbatim), and reports the resulting ``terminal:<hash>`` ref back
-    # in the HTTP response. Every other ref kind either dedups against
-    # the existing panel set or is discoverable via a subsequent
-    # ``inspect``.
-    # A browser pane must name a specific fleet browser. Reject a session-less
-    # ``service:browser`` open/split before it broadcasts, so an agent can't spawn
-    # the orphan "Open a browser from the + menu" placeholder pane. Guides the caller
-    # to the right form rather than erroring opaquely. The fleet's own pane-pull
-    # always carries ``?session=<name>``, so it is unaffected.
-    if op in {"open", "split"} and is_sessionless_browser_ref(args_raw.get("ref")):
-        error = ErrorResponse(
-            detail=(
-                "A browser pane needs a specific browser name: use "
-                "'service:browser?session=<name>', or the agentic-browser-fleet 'new'/'task' "
-                "commands, which open the pane for you. The bare 'service:browser' opens a "
-                "viewer bound to no browser."
-            )
-        )
-        return _json_response(error.model_dump(), status_code=400)
-
-    allocated_ref: str | None = None
-    if op in {"open", "split"} and args_raw.get("ref") == "service:terminal":
-        panel_id, allocated_ref = allocate_terminal_panel_id()
-        args_raw = {**args_raw, "panel_id": panel_id}
-
-    layout_mutex: LayoutMutex = get_state().layout_mutex
-    broadcaster: WebSocketBroadcaster = get_state().broadcaster
-    if is_mutating_op(op):
-        # Mutating ops are layout-targeted: they require an explicit target
-        # layout and are delivered only to connected clients that have it
-        # active (those clients apply the mutation and autosave it into the
-        # named layout's file). With no such client the op cannot take
-        # effect anywhere, so fail loudly rather than broadcasting into the
-        # void.
-        requested_layout = args_raw.get("layout")
-        if not isinstance(requested_layout, str) or not requested_layout:
-            error = ErrorResponse(detail=f"Layout op {op!r} requires a target layout (pass --layout)")
-            return _json_response(error.model_dump(), status_code=400)
-        target_layout_slug, layout_error_response = _resolve_requested_layout_slug(args_raw, layout_dir)
-        if layout_error_response is not None:
-            return layout_error_response
-        if target_layout_slug is None or not broadcaster.has_client_on_layout(target_layout_slug):
-            connected_clients = broadcaster.get_connected_client_infos()
-            _loguru_logger.warning(
-                "Layout op {!r} rejected (412): no connected client on layout {!r}; connected clients: {}",
-                op,
-                requested_layout,
-                connected_clients,
-            )
-            client_summary = (
-                ", ".join(
-                    f"{info['client_id']} (layout={info['active_layout_slug']}, device={info['device_kind']})"
-                    for info in connected_clients
-                )
-                or "none"
-            )
-            error = ErrorResponse(
-                detail=(
-                    f"No connected client has layout '{requested_layout}' active. Ask the user to switch "
-                    f"to it, or run `layout.py load {requested_layout!r}` first. "
-                    f"Connected clients: {client_summary}."
-                )
-            )
-            return _json_response(error.model_dump(), status_code=412)
-        broadcast_args = {key: value for key, value in args_raw.items() if key != "layout"}
-        holder = layout_mutex.try_acquire(agent_id, op, args_raw)
-        if holder is not None:
-            error_body = {
-                "detail": (
-                    f"Another layout op is in flight: agent_id={holder['agent_id']} "
-                    f"op={holder['operation']}. Retry after the mutex TTL elapses."
-                ),
-                "retry_after_ms": layout_mutex.retry_after_ms(),
-                "in_flight": holder,
-            }
-            return _json_response(error_body, status_code=409)
-        try:
-            broadcaster.broadcast_layout_op(
-                op, broadcast_args, requester_agent_id=agent_id, target_layout_slug=target_layout_slug
-            )
-        finally:
-            layout_mutex.release(agent_id, op)
-    else:
-        broadcaster.broadcast_layout_op(op, args_raw, requester_agent_id=agent_id)
-
-    logger.info("layout op={} agent_id={} args={}", op, agent_id, args_raw)
-    response_body: dict[str, Any] = {"ok": True}
-    if allocated_ref is not None:
-        response_body["ref"] = allocated_ref
-    return _json_response(response_body)
-
-
-def _handle_unhandled_exception(exc: Exception) -> Response | HTTPException:
-    # Let werkzeug's own HTTP errors (404 routing, 405, etc.) render normally;
-    # only genuine unhandled exceptions become a 500 JSON body. Returning the
-    # exception (not re-raising it) is how Flask keeps the real status code --
-    # a raise from inside the handler re-enters handle_exception and comes out
-    # as a 500.
-    if isinstance(exc, HTTPException):
-        return exc
-    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    logger.error("Unhandled exception on {} {}: {}\n{}", request.method, request.path, exc, "".join(tb))
-    return _json_response({"detail": f"Internal server error: {exc}"}, status_code=500)
-
-
 def create_application(state: SystemInterfaceState) -> Flask:
     """Assemble the Flask app around an already-built ``SystemInterfaceState``.
 
-    Pure assembler: it wires routes, plugins, and error handling onto the app
-    and attaches the injected ``state``. It constructs no collaborators and
-    starts nothing. The composition root (``main.build_production_state`` plus
-    ``main.main``) builds the real object graph and starts the agent manager;
-    tests build a ``SystemInterfaceState`` with fakes via
-    ``testing.build_test_state`` and pass it here.
+    Pure assembler: it wires routes and error handling onto the app and attaches the injected
+    ``state``. It constructs no collaborators and starts nothing. The composition root
+    (``main.build_production_state`` plus ``main.main``) builds the real object graph and
+    starts the shell; tests build a state via ``testing.build_test_state`` and pass it here.
     """
-    # static_folder=None disables Flask's default /static route; the system
-    # interface serves its own static assets explicitly below.
+    # static_folder=None disables Flask's default /static route; the shell serves its own
+    # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
-    application.config["SOCK_SERVER_OPTIONS"] = {
-        "ping_interval": _WS_PING_INTERVAL_SECONDS,
-        # Echo back whatever subprotocol a client offers so subprotocol-bearing
-        # WS clients can connect; see ``_ReflectClientSubprotocols``.
-        "subprotocols": _ReflectClientSubprotocols(),
-    }
     attach_state(application, state)
-
-    plugin_manager = get_plugin_manager()
-    plugin_manager.hook.register_event_broadcaster(broadcaster=state.event_queues.broadcast)
-
-    application.register_error_handler(Exception, _handle_unhandled_exception)
-
-    plugin_manager.hook.endpoint(app=application)
-
-    sock = Sock(application)
+    application.register_error_handler(Exception, handle_unhandled_exception)
+    sock = build_sock(application)
 
     application.add_url_rule("/", view_func=_index, methods=["GET"])
     application.add_url_rule("/favicon.ico", view_func=_favicon, methods=["GET"])
-    application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_agent, methods=["POST"])
-    application.add_url_rule("/api/random-name", view_func=_random_name_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/events", view_func=_get_events, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/stream", view_func=_stream_events, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/message", view_func=_send_message_endpoint, methods=["POST"])
-    application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/model", view_func=_set_model_choice_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/model-options", view_func=_get_model_options_endpoint, methods=["GET"]
-    )
-    application.add_url_rule("/api/agents/<agent_id>/powered-by", view_func=_get_powered_by_endpoint, methods=["GET"])
-    application.add_url_rule("/api/workspace/fast-mode", view_func=_get_workspace_fast_mode_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/workspace/fast-mode",
-        view_func=_set_workspace_fast_mode_endpoint,
-        methods=["POST"],
-        endpoint="_set_workspace_fast_mode",
-    )
-    application.add_url_rule("/api/activity", view_func=_activity_endpoint, methods=["POST"])
-    application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
-    application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
-    application.add_url_rule(
-        "/api/uploads/<path:relative_path>",
-        view_func=_delete_attachment,
-        methods=["DELETE"],
-        endpoint="_delete_attachment",
-    )
-    application.add_url_rule("/api/agents/<agent_id>/interrupt", view_func=_interrupt_agent_endpoint, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/flush-queue", view_func=_flush_queue_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/shoulder-tap-atomic",
-        view_func=_shoulder_tap_atomic_endpoint,
-        methods=["POST"],
-    )
-    application.add_url_rule(
-        "/api/agents/<agent_id>/drain-to-composer", view_func=_drain_to_composer_endpoint, methods=["POST"]
-    )
-    application.add_url_rule("/api/layouts", view_func=_list_layouts_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/layouts", view_func=_save_layout_as_endpoint, methods=["POST"], endpoint="_save_layout_as"
-    )
-    application.add_url_rule("/api/layouts/<slug>", view_func=_get_named_layout_endpoint, methods=["GET"])
-    application.add_url_rule(
-        "/api/layouts/<slug>",
-        view_func=_autosave_named_layout_endpoint,
-        methods=["POST"],
-        endpoint="_autosave_named_layout",
-    )
-    application.add_url_rule("/api/layouts/<slug>/delete", view_func=_delete_named_layout_endpoint, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/screen", view_func=_get_screen_capture, methods=["GET"])
-    application.add_url_rule("/api/agents/<agent_id>/destroy", view_func=_destroy_agent, methods=["POST"])
-    application.add_url_rule("/api/agents/<agent_id>/start", view_func=_start_agent, methods=["POST"])
-    application.add_url_rule("/api/terminals", view_func=_list_terminals, methods=["GET"])
-    application.add_url_rule("/api/terminals/allocate", view_func=_allocate_terminal, methods=["POST"])
-    application.add_url_rule(
-        "/api/terminals/banner-dismissed",
-        view_func=_get_terminal_banner_dismissed,
-        methods=["GET"],
-    )
-    application.add_url_rule(
-        "/api/terminals/banner-dismissed",
-        view_func=_set_terminal_banner_dismissed,
-        methods=["POST"],
-        endpoint="_set_terminal_banner_dismissed",
-    )
-    application.add_url_rule(
-        "/api/terminals/<session_name>/destroy",
-        view_func=_destroy_terminal,
-        methods=["POST"],
-    )
-    application.add_url_rule("/api/terminals/notify", view_func=_terminal_notify_endpoint, methods=["POST"])
-    application.add_url_rule("/api/browsers", view_func=_browsers_passthrough, methods=["GET", "POST"])
-    application.add_url_rule("/api/browsers/<string:name>", view_func=_destroy_browser_passthrough, methods=["DELETE"])
-    auth_endpoints.register_routes(application)
-    latchkey_endpoints.register_routes(application)
-    application.add_url_rule("/api/layout/broadcast", view_func=_layout_broadcast_endpoint, methods=["POST"])
-    application.add_url_rule(
-        "/api/agents/<agent_id>/subagents/<subagent_session_id>/events",
-        view_func=_get_subagent_events,
-        methods=["GET"],
-    )
-    application.add_url_rule(
-        "/api/agents/<agent_id>/subagents/<subagent_session_id>/stream",
-        view_func=_stream_subagent_events,
-        methods=["GET"],
-    )
+    application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(APP_CONTRACT_PATH, view_func=_serve_app_contract, methods=["GET"])
+    register_shell_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
-    sock.route("/api/proto-agents/<agent_id>/logs")(_proto_agent_logs_endpoint)
-    application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
 
-    assets_directory = STATIC_DIRECTORY / "assets"
-    if assets_directory.is_dir():
-        application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
-
+    # Registered unconditionally, even when the bundle is absent at startup: the directory can
+    # appear later (a rebuild), and a route decided at construction time can never notice.
+    application.add_url_rule("/assets/<path:filename>", view_func=_serve_asset, methods=["GET"])
     application.add_url_rule("/<path:path>", view_func=_index_catch_all, methods=["GET"])
 
     return application

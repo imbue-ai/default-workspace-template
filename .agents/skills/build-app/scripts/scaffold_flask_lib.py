@@ -6,16 +6,18 @@
 """Stand up a new Flask app (and its supervisord program entry).
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
-is available for WebSockets), writes a `[program:<name>]` block to its own
-`system/supervisord.conf.d/<name>.conf`, and runs `uv sync --all-packages` to
-materialize the workspace.
+is available for WebSockets) and its `app.toml` manifest, writes a
+`[program:<name>]` block to its own `system/supervisord.conf.d/<name>.conf`
+whose command registers the manifest and runs the app's own entry point,
+installs the app as its own uv tool environment (`uv tool install -e
+system/apps/<package>`), and runs `uv sync --all-packages` so the root lockfile
+covers the new workspace member (the `system/apps/*` member glob picks the
+package up automatically; the root pyproject.toml is not edited).
 
-No shared file is *authored*: the root pyproject.toml needs no entry (the
-`system/apps/*` workspace member glob already picks the package up, and
-`uv sync --all-packages` installs every member), and the supervisord program
-lives in its own file rather than being appended to a config shared with every
-other creation. That is what lets two agents scaffold two apps concurrently
-without editing the same file.
+No shared file is *authored*: the supervisord program lives in its own file
+rather than being appended to a config shared with every other creation. That is
+what lets two agents scaffold two apps concurrently without editing the same
+file.
 
 The one shared file still written is `uv.lock`, which `uv sync --all-packages`
 regenerates to add the new member. It is derived rather than authored, so
@@ -27,6 +29,7 @@ touches nothing shared.
 Usage:
     uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \\
         --name inbox-status --description "inbox status dashboard" \\
+        --icon-file icon.svg [--display-name "Inbox status"] \\
         [--port 8081] [--extra-dep "jinja2>=3.1"] [--extra-dep "anthropic>=0.40"]
 
 Run from the repo root (`/home/user/workspace`). Fails non-zero with a clear message on
@@ -37,6 +40,7 @@ import argparse
 import configparser
 import fnmatch
 import glob
+import importlib.util
 import os
 import re
 import subprocess
@@ -76,6 +80,8 @@ RESERVED_NAMES = frozenset(
 # prefix could collide with that coordinate label, so forward_port.py rejects
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
+# forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
+_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -83,6 +89,17 @@ LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 
 def _kebab_to_snake(name: str) -> str:
     return name.replace("-", "_")
+
+
+def _read_and_validate_icon(path: Path) -> str:
+    spec = importlib.util.spec_from_file_location("_forward_port", _FORWARD_PORT_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    markup, error = module.read_icon_file(path)
+    if error is not None:
+        sys.exit(f"error: {error}")
+    return markup
 
 
 def _validate_name(name: str) -> None:
@@ -298,10 +315,16 @@ app = Flask("{package}", static_folder=None)
 
 @app.route("/")
 def index() -> Response:
+    # The location beacon: post the path being viewed one hop up (to the
+    # workspace shell embedding this page) on each page load, so the shell can
+    # reopen this app's tab at the same place. Keep the line on every page you
+    # serve; the shell validates the sender's origin and ignores the rest.
     return Response(
         "<!doctype html><html><body>"
         "<h1>{name}</h1>"
         "<p>{description}</p>"
+        "<script>if (window.parent !== window) window.parent.postMessage("
+        '{{type: "shell:location", path: location.pathname + location.search}}, "*");</script>'
         "</body></html>",
         mimetype="text/html",
     )
@@ -406,8 +429,36 @@ def _lib_readme(name: str, description: str) -> str:
     return f"# {name}\n\n{description}\n"
 
 
+# The app_manifest library's limit (app_manifest.primitives.MAX_DISPLAY_NAME_LENGTH).
+# This script runs in its own PEP 723 environment and cannot import the library;
+# a drift test in scaffold_flask_lib_test.py keeps the two equal.
+MAX_DISPLAY_NAME_LENGTH = 64
+
+
+def _display_name(description: str, explicit: str | None) -> str:
+    """The manifest's ``display_name``: the explicit one, else the description when it fits."""
+    candidate = explicit if explicit is not None else description
+    candidate = candidate.strip()
+    if not candidate:
+        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
+    if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
+        sys.exit(
+            f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
+            "pass a shorter --display-name (the description can stay long)"
+        )
+    if '"' in candidate or "\\" in candidate:
+        sys.exit("error: the display name may not contain double quotes or backslashes")
+    return candidate
+
+
 def _write_lib(
-    repo_root: Path, name: str, description: str, port: int, extras: list[str]
+    repo_root: Path,
+    name: str,
+    description: str,
+    display_name: str,
+    port: int,
+    extras: list[str],
+    icon_markup: str,
 ) -> Path:
     package = _kebab_to_snake(name)
     lib_dir = repo_root / "system" / "apps" / package
@@ -418,16 +469,32 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
+    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name))
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
+    (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
     (src_dir / "runner.py").write_text(_lib_runner(name, package, description, port))
     return lib_dir
 
 
+# The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
+# ``priority = "user"`` is what puts a user-built app in the user band the
+# ``oom_tag_service.py user`` prefix below also names; ``instances = false``
+# makes it a single tab. No ``default_shortcut``: an app pins itself to a
+# project's rail only when the user asks.
+_MANIFEST_TEMPLATE = """\
+name = "{name}"
+display_name = "{display_name}"
+icon = "icon.svg"
+instances = false
+priority = "user"
+program = "{name}"
+"""
+
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:{port} --name {name} && uv run --all-packages {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -469,7 +536,7 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _write_supervisord_program(path: Path, name: str, port: int) -> None:
+def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -478,27 +545,52 @@ def _write_supervisord_program(path: Path, name: str, port: int) -> None:
     shed before any built-in app or service under memory pressure (see
     system/services/oom_priority/README.md).
 
-    `uv run --all-packages` rather than a bare `uv run`: a root-closure-scoped
-    `uv sync` prunes workspace members the root does not depend on -- which is
-    every scaffolded creation, since none is registered as a root dependency --
-    deleting the console script. `--all-packages` reinstates it, so the program
-    repairs its own environment on the restart that follows.
+    The app runs as its own tool's entry point (installed by _install_app_tool),
+    not through `uv run`, so the root venv is never on its path.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, port=port))
-
-
-def _run_uv_sync(repo_root: Path) -> None:
-    result = subprocess.run(
-        ["uv", "sync", "--all-packages"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
+    path.write_text(
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
     )
+
+
+def _run_checked(argv: list[str], repo_root: Path, description: str) -> None:
+    result = subprocess.run(argv, cwd=repo_root, capture_output=True, text=True)
     if result.returncode != 0:
         sys.stderr.write(result.stdout)
         sys.stderr.write(result.stderr)
-        sys.exit(f"error: `uv sync --all-packages` failed (exit {result.returncode})")
+        sys.exit(f"error: `{description}` failed (exit {result.returncode})")
+
+
+def _validate_manifest(repo_root: Path, package: str) -> None:
+    # The written manifest is checked against the app_manifest library's rules
+    # (from the root venv, where the library is a workspace member) so a
+    # scaffolded app never registers a manifest its readers would skip.
+    manifest_path = f"system/apps/{package}/app.toml"
+    _run_checked(
+        ["uv", "run", "app-manifest", "validate-manifest", manifest_path],
+        repo_root,
+        f"uv run app-manifest validate-manifest {manifest_path}",
+    )
+
+
+def _install_app_tool(repo_root: Path, package: str) -> None:
+    # Every Python app runs from its own uv tool environment, built from its own
+    # pyproject (see system/scripts/build_workspace.sh, which does the same for
+    # every app at image build). The install runs from the repo root so uv
+    # resolves the workspace's path dependencies.
+    _run_checked(
+        ["uv", "tool", "install", "-e", f"system/apps/{package}"],
+        repo_root,
+        f"uv tool install -e system/apps/{package}",
+    )
+
+
+def _run_uv_sync(repo_root: Path) -> None:
+    # The app is also a workspace member (the root pyproject's system/apps/*
+    # glob), so the root lockfile must learn about it or the next
+    # `uv sync --all-packages --frozen` (the update-self apply) refuses.
+    _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
 
 
 def _find_repo_root(start: Path) -> Path:
@@ -518,6 +610,12 @@ def main() -> None:
     parser.add_argument("--name", required=True, help="kebab-case app name")
     parser.add_argument("--description", required=True, help="one-line description")
     parser.add_argument(
+        "--display-name",
+        default=None,
+        help="what users see for the app (the manifest's display_name, at most 64 characters); defaults to the description",
+    )
+    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
+    parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
     parser.add_argument(
@@ -534,11 +632,12 @@ def main() -> None:
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip running `uv sync --all-packages` after generation (for tests/dry runs)",
+        help="skip the manifest check, the tool install and `uv sync --all-packages` after generation (for tests/dry runs)",
     )
     args = parser.parse_args()
 
     _validate_name(args.name)
+    icon_markup = _read_and_validate_icon(Path(args.icon_file))
     repo_root = (
         Path(args.repo_root).resolve()
         if args.repo_root
@@ -547,13 +646,16 @@ def main() -> None:
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port)
     program_path = _reserve_supervisord_program_path(repo_root, args.name)
+    display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
-        repo_root, args.name, args.description, port, list(args.extra_dep)
+        repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
     )
-    _write_supervisord_program(program_path, args.name, port)
+    _write_supervisord_program(program_path, args.name, package, port)
 
     if not args.skip_uv_sync:
+        _validate_manifest(repo_root, package)
+        _install_app_tool(repo_root, package)
         _run_uv_sync(repo_root)
 
     print(

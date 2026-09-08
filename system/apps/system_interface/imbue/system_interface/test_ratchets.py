@@ -32,9 +32,9 @@ def test_prevent_while_true() -> None:
 
 
 def test_prevent_time_sleep() -> None:
-    # +1 for testing.py's _wait_until_serving TCP-ready poll loop, used by the
-    # WebSocket/SSE tests that need a real Werkzeug listener.
-    rc.check_time_sleep(_DIR, snapshot(6))
+    # testing.py's _wait_until_serving TCP-ready poll loop, used by the WebSocket
+    # tests that need a real Werkzeug listener.
+    rc.check_time_sleep(_DIR, snapshot(1))
 
 
 def test_prevent_global_keyword() -> None:
@@ -53,45 +53,26 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # Bumped by one for the intentional catch-all wrapping the creation
-    # thread's body in agent_manager._run_creation. The thread runs with
-    # is_checked=False, so any exception that escapes is silently swallowed;
-    # without that catch-all a bug anywhere inside leaves the client's
-    # ChatPanel stuck on "Creating agent..." because proto_agent_completed
-    # never fires. Treat this one as load-bearing rather than sloppy.
-    # Bumped again for the credential-apply thread's top-level handler in
-    # auth._run_apply_in_background: same thread-boundary shape --
-    # anything escaping must surface as the FAILED restart phase in the
-    # sign-in modal instead of dying silently in a daemon thread.
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    rc.check_broad_exception_catch(_DIR, snapshot(0))
 
 
 def test_prevent_base_exception_catch() -> None:
-    rc.check_base_exception_catch(_DIR, snapshot(1))
+    rc.check_base_exception_catch(_DIR, snapshot(0))
 
 
 def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
-# 5 of these swallow a decode error the rule is aimed at. The sixth, in
-# session_parser._find_permission_request, is a misfire: it is not a decode of
-# something expected to be JSON, it is a probe asking whether a JSON value
-# begins at a given `{` at all, walked across every brace at or before the
-# request_id key. "No" is the ordinary answer for a brace in prose or shell
-# output, so the warning the rule asks for would report a problem on input that
-# has nothing wrong with it, on most lines of most tool results. The genuine
-# failure -- a permission request we cannot read -- is already visible: the card
-# says so, which is the bug this parser exists to fix.
 def test_prevent_silent_decode_error_catches() -> None:
-    rc.check_silent_decode_error_catches(_DIR, snapshot(5))
+    rc.check_silent_decode_error_catches(_DIR, snapshot(0))
 
 
 # --- Import style ---
 
 
 def test_prevent_inline_imports() -> None:
-    rc.check_inline_imports(_DIR, snapshot(2))
+    rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
@@ -147,22 +128,14 @@ def test_prevent_functools_partial() -> None:
 
 
 def test_prevent_num_prefix() -> None:
-    # Both hits are misfires, and both are the same one: tool_labels.py's module
-    # docstring quotes codex's own tool signatures verbatim, and two of ITS optional
-    # parameters are num-prefixed (`num_last_images_to_include`, `num_games`). Renaming
-    # them would make the documented signature wrong, and no identifier in our code is
-    # num-prefixed. The rule's regex (`\bnum_\w+`) scans raw source and cannot tell a
-    # docstring from a declaration; it lives in the vendored imbue_common, so narrowing
-    # it here would diverge the subtree from mngr. Should a real violation ever land,
-    # it will push this to 3 and be caught.
-    rc.check_num_prefix(_DIR, snapshot(2))
+    rc.check_num_prefix(_DIR, snapshot(0))
 
 
 # --- Documentation ---
 
 
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(4))
+    rc.check_trailing_comments(_DIR, snapshot(0))
 
 
 def test_prevent_init_docstrings() -> None:
@@ -171,7 +144,7 @@ def test_prevent_init_docstrings() -> None:
 
 @pytest.mark.timeout(10)
 def test_prevent_args_in_docstrings() -> None:
-    rc.check_args_in_docstrings(_DIR, snapshot(2))
+    rc.check_args_in_docstrings(_DIR, snapshot(0))
 
 
 @pytest.mark.timeout(10)
@@ -224,18 +197,15 @@ def test_prevent_logger_exception() -> None:
 
 
 def test_prevent_unittest_mock_imports() -> None:
-    rc.check_unittest_mock_imports(_DIR, snapshot(2))
+    rc.check_unittest_mock_imports(_DIR, snapshot(1))
 
 
 def test_prevent_monkeypatch_setattr() -> None:
     # No `monkeypatch.setattr` anywhere in the package. Collaborators are
     # constructor-injected end to end: the composition root (`main`) builds the
-    # real graph and is the sole caller of `AgentManager.start`, while
+    # real graph and is the sole caller of the shell's `start`, while
     # `create_application` takes an already-built `SystemInterfaceState` and
-    # tests assemble one with fakes via `testing.build_test_state` (e.g. a
-    # `RecordingMngrMessenger` for the message-send path). `ClaudeAuthService`
-    # and `WelcomeResender` likewise take their outside-world dependencies as
-    # constructor arguments, so tests construct isolated instances with fakes.
+    # tests assemble one via `testing.build_test_state`.
     rc.check_monkeypatch_setattr(_DIR, snapshot(0))
 
 
@@ -264,11 +234,11 @@ def test_prevent_direct_subprocess() -> None:
 
 
 def test_prevent_if_elif_without_else() -> None:
-    rc.check_if_elif_without_else(_DIR, snapshot(6))
+    rc.check_if_elif_without_else(_DIR, snapshot(1))
 
 
 def test_prevent_inline_functions() -> None:
-    rc.check_inline_functions(_DIR, snapshot(1))
+    rc.check_inline_functions(_DIR, snapshot(0))
 
 
 def test_prevent_underscore_imports() -> None:
@@ -276,18 +246,12 @@ def test_prevent_underscore_imports() -> None:
 
 
 def test_prevent_init_methods_in_non_exception_classes() -> None:
-    # The watchdog file-change handler's __init__ is counted toward the
-    # project's existing total: it lived in session_watcher.py and now lives
-    # in watcher_common.py as the shared WakeOnChangeHandler.
-    # +1 for layout_ops.LayoutMutex.__init__. The mutex holds runtime state
-    # (a ``threading.Lock`` and a holder dict mutated under that lock) that
-    # is not a natural fit for a Pydantic model, matching the precedent
-    # already set by session_watcher / event_queues entries here.
-    # +1 for oom_prioritizer.ChatOomPrioritizer.__init__. Same category: it
-    # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
-    # dict mutated under that lock, and injected callables -- runtime state
-    # that is not a natural fit for a Pydantic model.
-    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(6))
+    # liveness.py's ``_UnixSocketHttpConnection`` and ``_UnixSocketTransport``:
+    # both subclass stdlib classes (``http.client.HTTPConnection`` /
+    # ``xmlrpc.client.Transport``) whose construction contract is fixed by the
+    # stdlib, so a Pydantic model cannot stand in and the socket path has to
+    # arrive through ``__init__``.
+    rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(2))
 
 
 def test_prevent_cast_usage() -> None:
@@ -315,7 +279,7 @@ def test_prevent_exit_stack() -> None:
 
 
 def test_prevent_hardcoded_claude_dir() -> None:
-    rc.check_hardcoded_claude_dir(_DIR, snapshot(1))
+    rc.check_hardcoded_claude_dir(_DIR, snapshot(0))
 
 
 def test_prevent_hardcoded_guarded_binary() -> None:

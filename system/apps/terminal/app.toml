@@ -1,0 +1,17 @@
+name = "terminal"
+display_name = "Terminal"
+icon = "icon.svg"
+instances = true
+# The instances API port; ttyd serves the terminal pages on 7681.
+instances_url = "http://127.0.0.1:7682"
+critical = true
+priority = "terminal"
+
+[default_shortcut]
+action = "new"
+mode = "focus"
+
+[[actions]]
+id = "new"
+label = "New Terminal"
+params = [{name = "workdir", label = "Working directory", required = false}]

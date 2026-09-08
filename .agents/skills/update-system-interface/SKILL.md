@@ -1,12 +1,14 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (dockview shell, chat rendering, progress view) or backend (Flask server, agent discovery, layout ops). Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / chat interface / dockview.
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
+metadata:
+  author: imbue
 ---
 
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the chat panels, the progress view). A broken build here is
+(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This
@@ -16,9 +18,11 @@ This is the **system-interface specialization of the generic creation
 lifecycle.** It reuses the generic update orchestration -- the task file, the
 generic `harden-worker`, and the report poll -- from `update-creation` with
 `type=system-interface`, and adds the one thing the system interface needs
-that no other creation does: a `safe-reveal` go-live (pre-merge **preview**, then
-a reveal-or-roll-back script). The worker/orchestration core is shared; the
-preview and reveal are owned here.
+that no other creation does: a pre-merge **preview**, then a go-live through
+the general **update apply** (`update_self.py apply`), which lands the merge
+and reveals it as one atomic, rollback-on-failure motion. The
+worker/orchestration core is shared; the preview is owned here, and the apply
+is shared with `update-self`.
 
 ## The hard rule
 
@@ -27,11 +31,11 @@ not run `Edit`/`Write` on files under `system/apps/system_interface/` in this (t
 served) checkout, and do not rebuild or restart the live UI from uncommitted
 edits here. Every change is made in a separate, isolated clone of the source,
 built and tested there, and merged back only after it passes. The only things
-you do to the served tree are committing the merge and running this skill's
-`preview` / `reveal` / `unpreview` commands -- and `preview`/`unpreview` never
-modify the served tree at all (they only boot throwaway servers against the
-worker's separate, already-built work_dir, so even the pre-merge preview can't
-reach what the user is looking at).
+you do to the served tree are running this skill's `preview` / `unpreview`
+commands and the general apply (which lands the merge itself) -- and
+`preview`/`unpreview` never modify the served tree at all (they only boot
+throwaway servers against the worker's separate, already-built work_dir, so
+even the pre-merge preview can't reach what the user is looking at).
 
 That isolated clone is the generic harden worker -- its own git worktree and
 copy of the source, so a half-broken build can never reach the user. The worker
@@ -49,12 +53,12 @@ is just the mechanism for that safe, separate place to work.
    worktree-agent in this container that already built its own work_dir, so one
    command boots that folder and serves it -- wrapped in a labeled "preview"
    frame -- for the user to click around. The user approves or rejects.
-4. **On approval**, you **record the known-good revision, then merge** the
-   worker's branch.
-5. You **reveal** the merged change with one command (refresh dependencies,
-   rebuild/restart as needed, verify the live UI is healthy, auto-rollback on
-   failure), then **tear down the preview**. On rejection, you tear down the
-   preview and hand back -- nothing is merged.
+4. **On approval**, you run the general **apply**: one command that lands the
+   merge and reveals it (refresh dependencies, install the worker's built
+   bundle, restart the services agent, verify the live UI is healthy, auto-rollback on
+   failure -- with an interruption marker so even a hard kill is recoverable),
+   then **tear down the preview**. On rejection, you tear down the preview and
+   hand back -- nothing is merged.
 
 ## 1-2. Delegate via the generic update orchestration
 
@@ -129,7 +133,7 @@ specifics:
   for other creations). Instead, go to the preview below. On `stuck` or a
   dead-worker timeout, surface to the user per
   `.agents/skills/launch-task/references/worker-failure.md` -- do **not**
-  preview, merge, or reveal, and do not retry silently.
+  preview, merge, or apply, and do not retry silently.
 
 ## 3. Preview the change before merging
 
@@ -164,12 +168,11 @@ up, `preview` refuses rather than hijacking it -- surface that to the user and
 coordinate with the other pass (its stderr says how to tear down an abandoned
 one).
 
-Open it as a tab and ask the user to explore. `open` requires `--layout` and
-only applies on clients with that layout active, so try both named layouts --
-the one the user is not on fails fast and harmlessly:
+Open it as a tab and ask the user to explore. With no `--view`, the op goes
+to the view the connected client is looking at:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" si-preview; done
+python3 system/scripts/layout.py open si-preview
 ```
 
 **Self-verify against the real scenario before you ask the user.** The preview's
@@ -194,12 +197,12 @@ Then confirm with the user: a binary keep/discard *and*
 room for free-form notes (what looks off, what they'd change). Wait for their
 answer before doing anything else.
 
-## 4. On approval: record known-good, then merge
+## 4. On approval: take the lease and check freshness
 
 If the user **approves** the preview:
 
-1. **Take the editing lease** so no other chat's merge or reveal interleaves
-   with yours -- the reveal's auto-rollback restores a captured revision, so a
+1. **Take the editing lease** so no other chat's merge or apply interleaves
+   with yours -- the apply's auto-rollback restores a captured revision, so a
    foreign merge landing mid-motion could be swept away by it. Same advisory
    mechanics as `update-app`'s "One editor at a time": first check
    `tk ready` for another agent's `editing service system_interface` lease and
@@ -207,123 +210,153 @@ If the user **approves** the preview:
 
    ```bash
    LEASE_ID=$(tk create "editing service system_interface" -t chore \
-       -d "Held by $MNGR_AGENT_NAME across merge + reveal; released after teardown.")
+       -d "Held by $MNGR_AGENT_NAME across the apply; released after teardown.")
    ```
 
    and `tk start "$LEASE_ID"` (as its own command). Unlike a live service
-   edit, this lease deliberately spans the whole merge + reveal motion; it is
-   released at the end of Step 5, never held across the wait for the user's
-   preview verdict (that wait happens *before* this step).
+   edit, this lease deliberately spans the whole apply motion; it is released
+   at the end of Step 5, never held across the wait for the user's preview
+   verdict (that wait happens *before* this step).
 
 2. **Freshness check** -- the branch is only mergeable if
-   `system/apps/system_interface/` has not changed since the worker branched (for
-   example, another pass merged in the meantime):
+   `system/apps/system_interface/`, `system/apps/chat/frontend/`, the shared
+   `system/libs/workspace_ui/`, and the npm lockfile (the trees the shell's and
+   the chat's bundles are stamped over; the apply installs the worker's bundles
+   only as a pair, so a stale chat stamp costs the shell's bundle too) have not
+   changed since the worker branched (for example, another pass merged in the
+   meantime):
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/
+   git diff --name-only "$BASE" HEAD -- system/apps/system_interface/ system/apps/chat/frontend/ system/libs/workspace_ui/ system/package-lock.json
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale --
-   do **not** merge, and never hand-resolve a conflicted merge (the
+   do **not** apply, and never hand-resolve a conflicted merge (the
    principle in `.agents/shared/references/harden-contention.md`). Release
    the lease, re-brief the worker to rebase onto the current tree and
    re-verify, and come back through preview once it reports `done` again.
 
-3. **Capture the known-good revision** -- the served branch's current
-   `HEAD`, *before* you merge. This is what the reveal rolls back to if the
-   change breaks:
-   ```bash
-   ROLLBACK_TO=$(git rev-parse HEAD)
-   ```
-4. **Merge** the worker's branch (`mngr/update-$SLUG`) into the working branch
-   the live UI is served from. Commit the merge so the tree is clean (the reveal
-   refuses to run on a dirty tree, so a rollback can never clobber unrelated
-   work).
-
-If the user **rejects**, do not merge. Tear down the preview (see the end of the
-next section) and hand back with their feedback -- decide *with them* whether to
-re-brief the worker for another pass. Re-briefing is your judgment, not an
-automatic loop.
+If the user **rejects**, do not merge anything. Tear down the preview (see the
+end of the next section) and hand back with their feedback -- decide *with
+them* whether to re-brief the worker for another pass. Re-briefing is your
+judgment, not an automatic loop.
 
 Note: the built `static/` bundle is gitignored, so the merge brings only source
 and dependency-manifest (`pyproject.toml` / `package.json` / lockfile) changes,
-not the worker's build output. The reveal step rebuilds it.
+not the worker's build output. The apply installs the worker's already-built
+bundle (the very build the user just previewed), falling back to a live build.
 
-## 5. Reveal the change (after merge), then tear down the preview
+## 5. Apply the change, then tear down the preview
 
-Run the reveal sub-command with the known-good revision you captured:
+Run the general update apply -- the same script `update-self` lands releases
+with -- pointing it at the worker's branch and its already-built bundle. Resolve
+the work_dir again in the same invocation: Step 3's `WORK_DIR` is long gone,
+because each bash call starts a fresh shell and the user's verdict sat between
+them. A bundle path that does not resolve -- or one whose bundle was built from
+some other frontend source than the merged tree's (the build stamps each
+bundle with its source tree hash, and the apply checks it) -- is not an
+error: the apply says so on stderr and falls back to a live build, losing only
+the "what the user previewed is what ships" guarantee.
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py reveal \
-    --rollback-to "$ROLLBACK_TO"
+WORK_DIR=$(mngr ls --include 'name == "update-<slug>"' --format json \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
+python3 .agents/skills/update-self/scripts/update_self.py apply \
+    --merge-ref "mngr/update-$SLUG" \
+    --worker-bundle "system_interface=$WORK_DIR/system/apps/system_interface/imbue/system_interface/static" \
+    --worker-bundle "chat=$WORK_DIR/system/apps/chat/imbue/chat/static"
 ```
 
-That single command owns the whole reveal as one deterministic, self-healing
-motion -- you do not run `npm`/`uv`/`mngr` by hand. It:
-
-- **Classifies** what the merge changed (frontend source, frontend manifest,
-  backend source, backend manifest).
-- **Refreshes dependencies only if a manifest changed** -- `npm ci` for the
-  frontend, `uv tool install -e system/apps/system_interface --reinstall` for the
-  backend. This is essential: a plain restart does *not* re-resolve the
-  editable-installed tool's dependencies, so a backend dependency addition would
-  otherwise crash the service on restart.
-- **Pre-flights a backend change** by booting the merged code on a throwaway port
-  before touching the live service. If it can't boot, the live service is never
-  restarted -- the UI never goes down.
-- **Reveals**: rebuilds the gitignored `static/` bundle (frontend); restarts the
-  services agent so the editable backend re-imports the merged `.py` (backend).
-- **Rebuilds the user's view** afterwards, via
-  `system/scripts/refresh_workspace_view.py` -- for a backend-only change too,
-  since the restart leaves the open page rendering what it had already fetched.
-  Best-effort: it never fails a reveal that landed.
-- **Verifies** the live service is healthy by polling its loopback endpoint.
-- **Auto-rolls-back on any failure**: restores the tree to `--rollback-to` as a
-  forward revert commit, rebuilds/restarts from it, and re-confirms the UI is
-  healthy.
+That single command owns the whole go-live as one deterministic, self-healing
+motion -- you do not merge, or run `npm`/`uv`/`mngr`, by hand. It merges the
+worker's branch (an ordinary merge; the rollback point is captured internally),
+classifies what changed, snapshots the built bundle and the affected
+environments, refreshes dependencies on a manifest change, installs the
+worker's bundle (live build as fallback), pre-flights a backend change on a
+throwaway port before touching the live service, restarts, verifies the live
+UI to the frontend standard (scoped to a regression), refreshes every open
+view, and **auto-rolls-back the entire merge on any failure**, restoring the
+snapshots -- file copies that need neither `npm` nor a registry. A hard kill
+mid-apply is recoverable too: the apply writes a marker under
+`data/.state/update-apply/`, re-running the same `apply` resumes it, and the
+boot/cron `recover` path rolls a stale one back on its own.
 
 Interpret the exit code and report it to the user:
 
-- `0` -- revealed; the live UI is updated and healthy.
+- `0` -- applied; the live UI is updated and healthy. One variant to read for:
+  if the workspace's frontend was *already* broken when the apply started and
+  is still broken now, the change still lands and still exits `0`, but the final
+  line names the breakage instead of confirming health. Pass that finding on --
+  it is a separate problem, not something rolling this change back would have
+  fixed. (An apply that happened to fix it prints the ordinary healthy line.)
 - `2` -- the change was bad and was **automatically rolled back**; the live UI is
   healthy on the previous revision, but the requested change did **not** land.
-  Report this and diagnose before retrying.
-- `3` -- **emergency**: even rollback could not restore a healthy UI. The
-  interface may be down; escalate immediately.
-- `1` -- precondition error (e.g. a dirty tree); nothing was changed.
+  Report this and diagnose before retrying -- the worker branch and its report
+  are kept, so a diagnosed retry is a quick re-run of the same apply. This
+  carries the same variant as `0`: when the frontend was already broken
+  beforehand the rollback is never held to that standard, so the final line
+  says the backend is healthy and names what could not be confirmed instead of
+  claiming the UI is. Pass both problems on.
+- `3` -- **emergency**: even rollback could not restore a healthy UI (including
+  a rollback whose own git steps failed). The interface may be down; escalate
+  immediately. The pre-apply copies are kept under
+  `data/.state/update-apply/snapshots/`, and when the apply touched the
+  frontend the stderr names a copy per bundle (the shell's and the chat's) --
+  copying each back over its own served directory
+  (`system/apps/system_interface/imbue/system_interface/static/` and
+  `system/apps/chat/imbue/chat/static/`) needs neither `npm` nor a registry,
+  so pass both paths on with the escalation. Read the stderr rather than
+  assuming a path is there. This exit also leaves a durable
+  `data/.state/update-apply/emergency.json` (reason, the agent that drove the
+  apply, where the copies are) and the system interface shows a banner off it
+  until it is gone, so deleting that file once the workspace is verified
+  healthy is part of the repair -- see the update-self skill's exit-3 guidance.
+- `1` -- precondition error; nothing was changed. A dirty tree, a merge
+  conflict, another apply in flight, an interrupted apply of a *different*
+  merge (run `recover` first, per the stderr), or this merge having already
+  been landed and rolled back. A conflicted merge is aborted -- resolve it
+  through a fresh worker pass, never by hand; and a rolled-back merge cannot be
+  re-landed by re-running the apply (the rollback is a forward revert, so the
+  merge stays in history while its content does not), so that one also needs a
+  fresh worker pass off the current `HEAD`.
 
-Once you no longer need the preview (after a successful reveal, *or* after a
-rejection where nothing was merged), tear it down:
+Whenever Step 5 ends -- whatever its exit code: a successful apply, a rollback
+(`2`), an emergency (`3`), a precondition refusal (`1`), or a rejection where
+nothing was merged -- tear the preview down:
 
 ```bash
 python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-<slug>
 ```
 
-way to clean up after a `preview` that failed partway.
+`unpreview` is idempotent, so it is also the way to clean up after a `preview`
+that failed partway.
 
 `unpreview` only handles the *service* side; it does **not** touch the workspace
 layout. The `si-preview` tab you opened earlier with `layout.py open` is a
 separate concern (a layout panel, not a service), so you must close it yourself
 -- otherwise the user is left with a stale tab pointing at a now-deregistered
-service (again once per named layout, since `close` requires `--layout`):
+service:
 
 ```bash
-for L in desktop mobile; do python3 system/scripts/layout.py close --layout "$L" si-preview; done
+python3 system/scripts/layout.py close si-preview
 ```
 
-Do this whenever you tear the preview down -- after a successful reveal *or*
-after a rejection where nothing was merged. Once the preview is down and its tab
-is closed, the worker can be destroyed per `launch-task`. Close the
-`update-$SLUG` ticket the orchestration opened, and release the editing lease
-taken in Step 4 with `tk close "$LEASE_ID" "Merge and reveal finished."` (on a
-rejection no lease was taken -- Step 4 never ran).
+Do this on every one of those exits, not only the successful one. Once the
+preview is down and its tab is closed, the worker can be destroyed per
+`launch-task` (after a failed apply, keep it until the diagnosis is done -- its
+branch and report are the retry's input). Close the `update-$SLUG` ticket the
+orchestration opened, and release the editing lease taken in Step 4 with
+`tk close "$LEASE_ID" "Apply finished."` -- on every exit code, since a lease
+left open blocks the next pass (on a rejection no lease was taken -- Step 4
+never ran).
 
 Why this exists as a script and not a checklist: if the backend fails to start,
 the user loses their entire chat UI -- there is nowhere left to surface an error
 message. The recover-or-revert logic must therefore run identically every time
-and can never be skipped, which is exactly what belongs in a deterministic script
-rather than agent prose.
+and can never be skipped -- even across a crash or a hard kill of the apply
+itself -- which is exactly what belongs in a deterministic script rather than
+agent prose.
 
 `system/scripts/layout.py refresh` (the `manage-layout` skill) is unrelated -- it only
 reloads a single inner iframe/panel for arranging the workspace, not the
@@ -337,8 +370,8 @@ serve a half-broken UI," not "iterate in place fast." The worker's isolated clon
 merge; the pre-merge preview lets the user actually click around the change
 before anything lands -- and since the worker already built its own work_dir, the
 preview just boots that folder in place rather than re-cloning or rebuilding; and
-the reveal script's pre-flight, health probe, and autonomous rollback make it
-safe to reveal in one motion. Preview setup and teardown are deterministic, so
-they live as `preview`/`unpreview` sub-commands of the same script rather than as
-agent prose -- the only non-deterministic part, gating on the user's judgment,
-stays with you.
+the general apply's pre-flight, health probe, autonomous rollback, and
+interruption marker make it safe to go live in one motion. Preview setup and
+teardown are deterministic, so they live as `preview`/`unpreview` sub-commands
+of this skill's script rather than as agent prose -- the only non-deterministic
+part, gating on the user's judgment, stays with you.

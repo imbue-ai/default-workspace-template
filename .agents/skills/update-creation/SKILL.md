@@ -1,6 +1,8 @@
 ---
 name: update-creation
 description: "Change an existing skill, app, service, or shared script/reference (under .agents/shared/) -- extend it, refactor it, or just verify it still works. Invoke at turn-end when a skill ran but you had to do extra repeatable work by hand, or when you and the user discussed a change to it and applied it live."
+metadata:
+  author: imbue
 ---
 
 # Updating an existing creation
@@ -48,8 +50,8 @@ worker looks (`type-<TYPE>.md`) and the **go-live** strategy (Step 4):
 skill → cross-reference sweep is part of the edit, nothing else; app →
 refresh the tab (a background service has no tab -- restart it instead);
 system-interface → the `update-system-interface` wrapper owns a
-preview-before-merge and a `safe-reveal` go-live and calls into this flow for
-the orchestration core only (see that skill).
+preview-before-merge and a go-live through the atomic update apply, and calls
+into this flow for the orchestration core only (see that skill).
 
 ## Conventions
 
@@ -186,9 +188,10 @@ Then merge `mngr/update-$TARGET` and go live by creation:
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **service**: refresh the tab (`python3 system/scripts/layout.py refresh
   <service-name>`).
-- **system-interface**: do **not** merge or reveal here -- the
+- **system-interface**: do **not** merge or go live here -- the
   `update-system-interface` wrapper drives preview-before-merge and the
-  `safe-reveal` go-live. (That wrapper uses this flow for Steps 1-3 only.)
+  go-live through the atomic update apply. (That wrapper uses this flow for
+  Steps 1-3 only.)
 
 Then close the ticket:
 

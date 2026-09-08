@@ -22,6 +22,7 @@ This module is stdlib-only (see ``paths``): it is imported by the agent-tagging
 and subprocess-tagging Claude hooks, which run under a plain ``python3``.
 """
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -44,7 +45,7 @@ WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 
 # Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
-# at runtime from live activity (see the system_interface ``ChatOomPrioritizer``)
+# at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
 # anywhere within ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``:
 #
 #   300 CHAT_AGENT_FLOOR         a chat the user is engaged with right now
@@ -173,17 +174,20 @@ def chat_agent_oom_score_adj(
 
 
 # Supervisord service bands, keyed by the service key passed to
-# ``system/services/oom_priority/bin/oom_tag_service.py``. Every value sits strictly between PROTECTED (0)
-# and USER_AGENT (300), so a service is *less* expendable than any agent (an
-# agent's work revives on the next message, so it is shed first) but still
-# steerable relative to the other services.
+# ``system/services/oom_priority/bin/oom_tag_service.py`` and by the ``priority``
+# an app's manifest (``system/apps/<package>/app.toml``) declares. Every value
+# sits strictly between PROTECTED (0) and USER_AGENT (300), so a service is
+# *less* expendable than any agent (an agent's work revives on the next
+# message, so it is shed first) but still steerable relative to the other
+# services.
 #
 # The services are ordered from least- to most-expendable by how much losing one
 # hurts: the two authority paths into the workspace (owner-exec, then the
-# terminal) come first, then the UI, then the sharing stack, then the
-# runtime-state sync (github-sync, opt-in) and the host backup, then the job
-# scheduler and the app-watcher, and last the browser stack (its X display, then
-# the coordinator). ``user`` is the single band every *user-created* service shares;
+# terminal) come first, then the UI and the chat app, then the sharing stack,
+# then the runtime-state sync (github-sync, opt-in) and the host backup, then
+# the job scheduler and the app-watcher, then the browser stack (its X display,
+# then the coordinator), and last the file viewer.
+# ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
 #
@@ -214,6 +218,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "owner-exec": 5,
     "terminal": 10,
     "system_interface": 20,
+    # The chat app (the agent harness UI): just above the shell it is embedded
+    # in, and below every other service, since a shed chat app costs every open
+    # chat its page until it restarts.
+    "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
     "share-gateway": 35,
@@ -244,7 +252,19 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # below SHARED_BROWSER, where those Chromium processes live: a coordinator
     # ranked above them would be picked first every time and free nothing.
     "browser": 70,
+    # The file viewer: the files-app sidecar (a small Python HTTP server for
+    # the instances API) and dufs, the tiny static file server it runs as its
+    # child. Together they hold little memory and supervisord restarts them if
+    # shed, so this is the most expendable built-in service of all.
+    "files": 75,
     "user": USER_SERVICE,
+    # The shell of a workspace terminal tab (and everything run in it), tagged by the
+    # terminal app's session command. Not a supervisord program: the pane is a child of the
+    # tmux server, which sits at the protected default, so without this tag a runaway build
+    # in a terminal would outlive every service. It shares the user-service level: a user's
+    # interactive shell is worth as much as a user's own service, and both are shed before
+    # any built-in service but after every agent.
+    "terminal-session": USER_SERVICE,
 }
 
 # The shared-browser band: the absolute ceiling, one above AGENT_SUBPROCESS, so a
@@ -306,16 +326,13 @@ def shared_browser_oom_score_adj(self_assigned: int) -> int:
 # SERVICE_BANDS key, for the backstop listener (system/services/oom_priority/bin/oom_tag_backstop.py).
 # The OOM machinery itself (earlyoom, the listener) must stay PROTECTED -- it is
 # what keeps every other band meaningful. The one-shot programs stay PROTECTED
-# too: both run with ``autorestart=false``, so shedding one mid-run leaves its
-# work half-done with nothing to finish it, and neither is holding the memory
-# that shedding it would free -- env-converge's cost is a half-provisioned
-# rootfs, and eval-worker's memory lives in the agent and browser processes it
-# spawns, which carry far higher bands and are shed long before it.
+# too: they run with ``autorestart=false``, so shedding one mid-run leaves its
+# work half-done with nothing to finish it, and none is holding the memory that
+# shedding it would free -- env-converge's cost is a half-provisioned rootfs.
 _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
     "earlyoom": PROTECTED,
     "oom-tag-backstop": PROTECTED,
     "env-converge": PROTECTED,
-    "eval-worker": PROTECTED,
     # A one-shot (autorestart=false) that registers the VM-resident owner-exec
     # service origin and exits; shedding it mid-run would leave the registration
     # half-done, and it holds no memory worth reclaiming.
@@ -323,15 +340,23 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(program_name: str) -> int:
-    """The band a supervisord program is expected to occupy, by program name.
+def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
+    """The band a supervisord program is expected to occupy.
 
-    A built-in service's program name doubles as its SERVICE_BANDS key; the
-    handful of programs outside that map have explicit expected bands above.
-    Anything unrecognized is a user-created service and falls back to
-    ``USER_SERVICE``: an unknown process must default to being expendable, never
-    to the protected default it would otherwise inherit.
+    ``priority_by_program`` is the app registry's view (``app_registry``): the
+    ``priority`` band name each registered app's manifest declares, keyed by the
+    supervisord program that runs it. A program with a row resolves through that
+    name (``user``, or a band name that does not exist, is the user-service
+    band). A program without one falls back to the tables: a built-in service's
+    program name doubles as its SERVICE_BANDS key, and the handful of programs
+    outside that map have explicit expected bands above. Anything else is a
+    user-created service and lands at ``USER_SERVICE``: an unknown process must
+    default to being expendable, never to the protected default it would
+    otherwise inherit.
     """
+    priority = priority_by_program.get(program_name)
+    if priority is not None:
+        return SERVICE_BANDS.get(priority, USER_SERVICE)
     if program_name in SERVICE_BANDS:
         return SERVICE_BANDS[program_name]
     return _NON_SERVICE_PROGRAM_BANDS.get(program_name, USER_SERVICE)
@@ -365,3 +390,21 @@ def set_oom_score_adj(pid: int, adj: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def oom_tag_shell_prefix(adj: int) -> str:
+    """A shell statement that bands the running shell into ``adj``, for prefixing.
+
+    For the callers that cannot write ``/proc`` themselves because the process
+    they are banding does not exist yet: they hand a shell this statement plus
+    their own command, and everything the shell then spawns (or ``exec``s)
+    inherits the band.
+
+    The write is gated on ``test -w`` so that on a host without a writable
+    ``/proc/self/oom_score_adj`` (e.g. macOS, which has no ``/proc``) the prefix
+    is a clean no-op that emits nothing -- a bare ``> /proc/...`` redirect would
+    otherwise leak a shell "no such file or directory" error past ``2>/dev/null``.
+    It ends with ``;`` rather than ``&&`` so what follows runs whether or not the
+    tag applied.
+    """
+    return f"test -w /proc/self/oom_score_adj && echo {adj} > /proc/self/oom_score_adj 2>/dev/null; "
