@@ -12,6 +12,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
 import { writeUpParagraphs } from "../models/TemplateCatalog";
+import { TemplateArt } from "./TemplateArt";
 
 const DETAIL_WIDTH_PX = 640;
 const ART_FALLBACK_GLYPH_SIZE = 32;
@@ -122,17 +123,7 @@ export function TemplateDetailModal(): m.Component<TemplateDetailModalAttrs> {
         },
         [
           m("div", { class: "new-tab-template-detail max-h-[60vh] overflow-y-auto pr-1" }, [
-            m(
-              "div",
-              { class: "aspect-[3/2] w-full overflow-hidden rounded-lg bg-page" },
-              template.thumbnail_url === ""
-                ? m(
-                    "span",
-                    { class: "flex h-full w-full items-center justify-center text-faint" },
-                    m.trust(icon("box", { size: ART_FALLBACK_GLYPH_SIZE })),
-                  )
-                : m("img", { src: template.thumbnail_url, alt: "", class: "h-full w-full object-cover" }),
-            ),
+            m(TemplateArt, { template, frameClass: "w-full rounded-lg", glyphSize: ART_FALLBACK_GLYPH_SIZE }),
             (paragraphs.length > 0 ? paragraphs : [template.description]).map((paragraph) =>
               m("p", { class: "type-body mt-4 text-primary" }, paragraph),
             ),

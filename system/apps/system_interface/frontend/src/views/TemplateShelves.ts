@@ -11,6 +11,7 @@
 
 import m from "mithril";
 import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
+import { TemplateArt } from "./TemplateArt";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
@@ -51,13 +52,9 @@ export interface TemplateCardAttrs {
 
 /** One template as a card: its drawing (or a glyph when there is none or it failed to load), its title, its byline. */
 export function TemplateCard(): m.Component<TemplateCardAttrs> {
-  // Set once the drawing fails to load; the card shows the generic glyph from then on.
-  let isArtBroken = false;
-
   return {
     view(vnode) {
       const { template, isFill, onPick } = vnode.attrs;
-      const hasArt = template.thumbnail_url !== "" && !isArtBroken;
       return m(
         "button",
         {
@@ -69,31 +66,13 @@ export function TemplateCard(): m.Component<TemplateCardAttrs> {
           onclick: () => onPick(template),
         },
         [
-          // The drawings are all 3:2, so the frame matches and nothing is cropped; a missing one
-          // gets a quiet glyph on the page tint rather than a hole in the rail.
-          m(
-            "span",
-            {
-              class:
-                "block aspect-[3/2] overflow-hidden rounded-lg bg-page transition-[transform,box-shadow] " +
-                "duration-(--dur-slow) group-hover:scale-[1.02] group-hover:shadow-overlay",
-            },
-            hasArt
-              ? m("img", {
-                  src: template.thumbnail_url,
-                  alt: "",
-                  loading: "lazy",
-                  class: "h-full w-full object-cover",
-                  onerror: () => {
-                    isArtBroken = true;
-                  },
-                })
-              : m(
-                  "span",
-                  { class: "flex h-full w-full items-center justify-center text-faint" },
-                  m.trust(icon("box", { size: CARD_FALLBACK_GLYPH_SIZE })),
-                ),
-          ),
+          m(TemplateArt, {
+            template,
+            frameClass:
+              "rounded-lg transition-[transform,box-shadow] duration-(--dur-slow) group-hover:scale-[1.02] " +
+              "group-hover:shadow-overlay",
+            glyphSize: CARD_FALLBACK_GLYPH_SIZE,
+          }),
           m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),
           template.author === ""
             ? null
