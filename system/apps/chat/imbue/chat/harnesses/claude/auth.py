@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Callable
 from collections.abc import Mapping
 from enum import Enum
@@ -28,8 +27,6 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.harnesses.pty_auth import PtyAuthError
-from imbue.chat.harnesses.pty_auth import extract_hyperlink_value
-from imbue.chat.harnesses.pty_auth import extract_wrapped_value
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -62,19 +59,6 @@ _DISPLAY_SUFFIX_LENGTH: Final = 4
 # characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
 # suffix length mngr's `approve_api_key_for_claude` records).
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
-# The CLI's Ink renderer hard-wraps the visible OAuth URL at the terminal width (pexpect's
-# default PTY is 80 columns), so `_extract_oauth_url` re-assembles it from the drained
-# stream. Strict charset for that re-assembly: unlike `\S`, it excludes stray control bytes
-# left between render fragments.
-_OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
-_OAUTH_URL_STRICT_REGEX = re.compile(rf"https://{_OAUTH_URL_CHARSET}*oauth/authorize{_OAUTH_URL_CHARSET}*")
-_OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
-# The CLI's Ink input treats a rapid burst of characters as a paste; Enter
-# must arrive as its own later keystroke or it lands in the field as
-# content. The burst is over once the input echo goes quiet for
-# _CODE_ECHO_QUIET_SECONDS (deadline-capped so a silent PTY cannot stall
-# the submit).
-_CODE_ECHO_QUIET_SECONDS: Final = 0.3
 # How long `claude auth status --json` may take to answer.
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
@@ -373,26 +357,6 @@ def record_api_key_approval(managed_env: Mapping[str, str], claude_json_path_ove
     claude_json_path.parent.mkdir(parents=True, exist_ok=True)
     claude_json_path.write_text(json.dumps(data, indent=2) + "\n")
     logger.info("Recorded managed API-key approval in {}", claude_json_path)
-
-
-@pure
-def _extract_oauth_url_from_hyperlink(raw_output: str) -> str | None:
-    """Pull the OAuth URL from an OSC 8 hyperlink target in the raw stream."""
-    return extract_hyperlink_value(raw_output, _OAUTH_URL_STRICT_REGEX)
-
-
-@pure
-def _extract_oauth_url(raw_output: str) -> str | None:
-    """Pull the single OAuth URL out of `claude setup-token`'s PTY output.
-
-    Prefers the OSC 8 hyperlink target (complete by construction); falls
-    back to re-assembling the width-wrapped visible label when the CLI did
-    not emit a hyperlink.
-    """
-    from_hyperlink = _extract_oauth_url_from_hyperlink(raw_output)
-    if from_hyperlink is not None:
-        return from_hyperlink
-    return extract_wrapped_value(raw_output, _OAUTH_URL_STRICT_REGEX, _OAUTH_URL_CONTINUATION_REGEX)
 
 
 class ClaudeAuthService(MutableModel):
