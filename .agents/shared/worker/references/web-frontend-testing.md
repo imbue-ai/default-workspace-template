@@ -1,8 +1,9 @@
 # Testing a web frontend
 
 Shared testing guidance for any creation that serves a web UI -- a scaffolded
-app (`type-app.md`) or the system interface
-(`type-system-interface.md`). Apply it alongside the universal contract in
+app, or one of the workspace's critical apps (both `type-app.md`; the shell,
+the chat, and the terminal have their own section there). Apply it alongside
+the universal contract in
 `harden-creation.md`; your creation reference adds the specifics (where the app
 lives, its stack, its test entry points).
 

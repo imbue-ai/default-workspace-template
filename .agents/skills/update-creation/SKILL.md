@@ -45,13 +45,15 @@ exploratory work is NOT an update candidate.
 
 ## The type parameter
 
-`type` is `skill`, `app`, `service`, or `system-interface`. It drives where the
-worker looks (`type-<TYPE>.md`) and the **go-live** strategy (Step 4):
-skill → cross-reference sweep is part of the edit, nothing else; app →
-refresh the tab (a background service has no tab -- restart it instead);
-system-interface → the `update-system-interface` wrapper owns a
-preview-before-merge and a go-live through the atomic update apply, and calls
-into this flow for the orchestration core only (see that skill).
+`type` is `skill`, `app`, or `service`. It drives where the worker looks
+(`type-<TYPE>.md`) and the **go-live** strategy (Step 4): skill → cross-reference
+sweep is part of the edit, nothing else; app → refresh the tab (a background
+service has no tab -- restart it instead). A critical app (the shell, the chat,
+the terminal, or an app whose manifest says `critical = true`) is `type: app`
+too, but it reaches this flow only from `update-app`'s careful flow
+(`references/critical-app.md`), which calls into Steps 1-3 for the orchestration
+core, creates the worker at approval on the branch the lead already built up,
+and owns the go-live through the atomic update apply.
 
 ## Conventions
 
@@ -138,6 +140,16 @@ Set `ORIGIN: committed` and `type:` as appropriate. Fill in the real
 content; do not leave placeholders. The `## Change origin` marker is required --
 the worker fails loudly if it is missing.
 
+**One exception, and it lives here so you meet it where the format is defined:**
+a harden task dispatched from the careful flow for a critical app
+(`update-app/references/critical-app.md`) carries **no `## Change origin` marker
+and no worker gate** (see the critical-app handoff in
+`.agents/shared/worker/references/op-update.md`). That flow already got the
+user's approval through its live preview loop, so re-arming the gate would ask
+them to approve the same thing twice -- and writing the marker anyway, or
+telling the worker in the task body to follow it, puts the gate back. Every
+other task file needs it.
+
 ## Step 3: Launch the worker and poll
 
 **Commit any pending changes before you launch, and never harden inline.** The
@@ -157,8 +169,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/update-$TARGET/task.md
 ```
 
-Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
-`run_in_background: true`) and follow `.agents/shared/references/lead-proxy.md`.
+Then background-poll (`create_worker.py await --name update-$TARGET --task-file
+... --timeout 90m`, `run_in_background: true`) and follow
+`.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
 - Worker name: `update-$TARGET`; branch: `mngr/update-$TARGET`
@@ -188,10 +201,11 @@ Then merge `mngr/update-$TARGET` and go live by creation:
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **service**: refresh the tab (`python3 system/scripts/layout.py refresh
   <service-name>`).
-- **system-interface**: do **not** merge or go live here -- the
-  `update-system-interface` wrapper drives preview-before-merge and the
-  go-live through the atomic update apply. (That wrapper uses this flow for
-  Steps 1-3 only.)
+- **a critical app**: do **not** merge or go live here -- the careful flow
+  (`update-app/references/critical-app.md`) drives the live preview loop and
+  the go-live through the atomic update apply. (It uses this flow for Steps 1-3
+  only, and launches the worker with a `--branch` passthrough onto the branch
+  the lead already built up.)
 
 Then close the ticket:
 

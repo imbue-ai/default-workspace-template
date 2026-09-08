@@ -80,7 +80,7 @@ than agent prose:
     Land a prepared merge and make the live workspace consistent with it, as
     one atomic, idempotent, rollback-on-failure motion inside a single
     near-OOM-exempt process: merge (fast-forward for update-self, ordinary for
-    update-system-interface), pre-apply state snapshots, dependency refresh,
+    the careful flow for a critical app), pre-apply state snapshots, dependency refresh,
     provisioner run, frontend build (or the worker's already-built bundle),
     pre-flight, restart, health probes, the VERSION_HISTORY.md ledger entry,
     and ``env-converge upgrade``. On any failure it reverts the entire merge
@@ -762,7 +762,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Require a fast-forward landing (the update-self flow; the worker "
         "branched off this HEAD). Default is an ordinary merge "
-        "(update-system-interface).",
+        "(the careful flow for a critical app).",
     )
     apply_parser.add_argument(
         "--worker-bundle",

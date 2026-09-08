@@ -2,7 +2,7 @@
 
 Run via: ``uv run pytest .agents/shared/scripts/serve_isolated_instance_test.py``
 
-Like the ``reveal_system_interface.py`` tests, these inject a recording
+Like the ``preview_app.py`` tests, these inject a recording
 ``Runner`` (so no real ``uv``/``forward_port`` runs), a programmable
 ``HttpClient`` (so the health probe is deterministic), a fake ``Spawner`` (so no
 throwaway server is launched), and a no-op sleeper. We assert on the exact env
@@ -997,12 +997,12 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
 
 
 def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
-    page = wrapper_mod.build_wrapper_html("si-preview-app", "t", inner_path="/agent-1")
+    page = wrapper_mod.build_wrapper_html("chat-preview-app", "t", inner_path="/agent-1")
 
     assert 'var previewPath = "/agent-1";' in page
     assert "innerHost + previewPath" in page
     with pytest.raises(ValueError, match="start with"):
-        wrapper_mod.build_wrapper_html("si-preview-app", "t", inner_path="agent-1")
+        wrapper_mod.build_wrapper_html("chat-preview-app", "t", inner_path="agent-1")
 
 
 def test_wrapper_page_escapes_the_title() -> None:

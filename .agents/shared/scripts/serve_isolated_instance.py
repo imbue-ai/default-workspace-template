@@ -7,10 +7,10 @@ This is the shared substrate under two service flows:
   (``DATA_DIR`` pointed at a scratch dir) so an edit can be exercised -- writes,
   deletes, migrations -- without ever touching the user's live store. The agent
   reaches the instance directly on its loopback port.
-- ``update-system-interface`` boots an already-built work_dir (the lead's editing
-  worktree during its live loop, or a worker's work_dir for a final pre-merge
-  check) as a *preview* the user clicks around, and ``refresh``-es it in place as
-  the lead edits.
+- ``update-app``'s careful flow for a critical app boots an already-built
+  worktree (the lead's editing worktree during its live loop, or a worker's
+  work_dir for a final pre-merge check) as a *preview* the user clicks around,
+  through ``preview_app.py``, and ``refresh``-es it in place as the lead edits.
 
 Both are the same motion: launch the service on a free port, with environment
 overrides that isolate its writable state, wait until it is healthy, and
@@ -40,9 +40,9 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
-Run via bare ``python3`` (standard library only) -- like ``forward_port.py`` and
-``reveal_system_interface.py``, it orchestrates the environment, so it must not
-depend on any particular venv being synced.
+Run via bare ``python3`` (standard library only) -- like ``forward_port.py``, it
+orchestrates the environment, so it must not depend on any particular venv
+being synced.
 
 Usage:
     python3 serve_isolated_instance.py up --name <slug> --cwd <dir> \\
@@ -136,8 +136,8 @@ FORWARD_PORT_CMD = ("python3", "system/scripts/forward_port.py")
 # How to spell this script in a message an agent will copy: repo-root-relative,
 # like every other command it prints. The follow-up commands it names
 # (``refresh`` / ``down``) are sub-commands of *this* script, and the flows that
-# reach them arrive through an adapter (e.g. ``reveal_system_interface.py
-# preview``), so a bare verb would not be runnable.
+# reach them arrive through an adapter (e.g. ``preview_app.py up``), so a bare
+# verb would not be runnable.
 _SELF_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
 
 # The wrapper server ships beside this script and is stdlib-only, so it runs under

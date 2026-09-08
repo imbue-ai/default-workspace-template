@@ -12,7 +12,7 @@ verbatim at the end:
    shell's ``oom_score_adj`` to the most-expendable band; everything the shell
    spawns inherits it. The statement itself, and why it is guarded the way it
    is, belong to ``oom_priority.bands.oom_tag_shell_prefix``, which the
-   ``update-system-interface`` reveal uses too -- to tag its own hungry children
+   app previews (``preview_app.py``) use too -- to tag its own hungry children
    back up after banding itself out of this range.
 
 2. This agent's git commit identity, as ``GIT_AUTHOR_*`` / ``GIT_COMMITTER_*``

@@ -1,6 +1,6 @@
 ---
 name: update-app
-description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits, the workspace's own critical apps (the shell, the chat, the terminal) included: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow, and it routes a critical app to the careful flow in references/critical-app.md. For creating a brand-new app use build-app."
 metadata:
   author: imbue
 ---
@@ -26,13 +26,21 @@ refreshed. The live change loop below handles both.
 If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
-- **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
-  (it never edits the served tree directly; it previews in isolation and
-  applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
 
 ## Match the flow to the scope of the change
+
+**First, find the app and read its manifest.** Locate the code the change
+touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.toml`).
+If it says `critical = true` -- the shell (`system_interface`), the chat, the
+terminal, and any user app that declares it -- or if the change is under
+`system/libs/workspace_ui/` (the shared library both critical bundles are built
+from), **follow [`references/critical-app.md`](references/critical-app.md) and
+stop reading here.** A critical app is never edited in the served tree: that
+flow runs the same live loop against an isolated worktree, with a preview tab
+as the user's view, and goes live through the atomic update apply once a
+background worker has hardened the change. Everything below is for an app or
+service that is not critical.
 
 Not every change is a quick edit. Before you start, decide which of these
 the request is -- it changes what you do *before* touching code:
@@ -49,13 +57,27 @@ the request is -- it changes what you do *before* touching code:
   they **explicitly confirm** the shape, and only then build the real thing
   to a usable state. Never build heavy against an unconfirmed shape.
 
-  When a hand mock won't convince -- a redesign, or a data-touching change --
-  boot the *actually changed* service as a labeled preview tab beside the
-  live one via the shared `serve_isolated_instance.py` script (invocation
-  under "Protect the user's data while you verify"; it's the same preview
-  mechanism the system-interface flow uses). Keep the lighter hand mock for
-  quick look-and-feel loops. Either way, *reading* the live store to render a
-  preview is fine; never let a preview or verification *write* to it.
+  This is the demonstrative-prototype choice from
+  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+  a redesign, or a data-touching change -- boot the *actually changed* app as a
+  labeled preview tab beside the live one (Type 1 -- the real edit shown
+  through the real surface) with `preview_app.py` (invocation under "Protect
+  the user's data while you verify"; the same preview mechanism the careful
+  flow uses). Either way, *reading* the live store to render a preview is
+  fine; never let a preview or verification *write* to it.
+
+  **Does this change warrant a preview at all?** For an ordinary app a
+  preview is the exception, not the default. If the change *works*, a taste
+  mismatch is cheap to fix next round, so most changes can just go live and
+  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+  a data-touching change, a substantial visual shift. A routine tweak, a copy
+  change, or a behavior-only change behind an unchanged surface doesn't need one.
+  (A critical app leans the other way -- the careful flow previews by default,
+  because the live tab is off-limits. It still asks this same question before
+  the *final* pre-merge preview: a change the user cannot observe gives them
+  nothing to judge.)
 
   A new view or capability bolted onto an existing service is its own
   delivery with its own feedback gate (interactive-delivery phase 8):
@@ -192,6 +214,13 @@ the change is ready to show, surface it instead with
 `python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
 the view the user is looking at, and `--view <name>` targets one view (it
 fails fast and harmlessly when no client has that view active).
+**That `open` puts the tab on the user's screen the moment it returns** -- it is
+the act of showing them, so only run it on something you are ready for them to
+see, and never follow it by telling them to open the tab. What makes you ready
+is step 4: with no tab open yet you are still in the private window it asks for,
+so **run step 4's verification before this `open`, not after it** -- this is the
+one branch of the loop where the numbered order and that rule disagree, and the
+rule wins. (A tab that was already open gives you no such window; see step 4.)
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
@@ -224,6 +253,24 @@ would (not just "the process is up"):
 - **Daemon**: watch its log (`supervisorctl tail -f <name> stderr`) and
   confirm the new behavior actually fires.
 
+**Verify before the user can see it, not after.** This step belongs in the
+window where you are the only one looking -- before the tab exists, or against a
+throwaway instance of your own (below). An open tab closes the first of those
+before you get to step 3: the service you would be driving is the one already in
+front of them, and refreshing it changes what they can see, not whose it is. Once a
+surface is in front of the user, poking at it yourself is both redundant and
+wrong: they are the verifier for anything they can perceive, and driving a
+service they are watching means your test actions land in their view and, for
+anything wired to real data or real agents, in their state. `build-app` orders
+it this way for exactly this reason -- verify is its Step 3, surfacing the tab
+its Step 4.
+
+So if the change is already surfaced when you finish it, the honest sequence is
+apply -> restart -> refresh -> *tell them what changed*, and the checking you do
+against the live service is the cheap kind that cannot touch their view: a
+`curl`, a health probe, an exit code, a log line. Save the thorough pass for the
+turn-end harden worker, which runs against its own instance.
+
 ### Protect the user's data while you verify
 
 The service's persistent store -- `data/.apps/<name>/` (whatever `DATA_DIR`
@@ -236,7 +283,11 @@ where the data dies. Encode these, cheapest first:
 - **Read-only verification needs no ceremony.** Most changes (UI, copy, a
   backend read path) can be exercised by curl/Playwright against the live
   service without writing anything. Reading the live store -- including to
-  *render* a preview -- is fine; the danger is only writes.
+  *render* a preview -- is fine; the danger is only writes. That is the *data*
+  question, and answering it does not settle the timing one above. Read-only
+  still means a browser drive belongs in the private window: once a tab is open,
+  a read-only Playwright pass writes nothing but still lands in the user's view,
+  and the live service is yours only for a `curl` or a health probe.
 
 - **If exercising the change must write, mutate, or delete data, never
   point it at the live store.** Copy the store to a scratch path *outside*
@@ -260,6 +311,18 @@ where the data dies. Encode these, cheapest first:
   python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
   rm -rf /tmp/<name>-scratch      # deleting a copy can't harm real data
   ```
+
+  **To pick up a further edit, refresh in place -- don't tear down and re-`up`.**
+  A `down`/`up` cycle picks a new port, so a surfaced preview tab would point at
+  a dead one. `refresh` re-boots just the instance's own process on its existing
+  port, leaving the port, the service registration, and any tab untouched:
+
+  ```bash
+  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  ```
+
+  A change that only alters files the running process reads from disk on each
+  request needs no refresh at all. Reserve `down` for when you are finished.
 
   This is the point of the `DATA_DIR` + `<PACKAGE_UPPER>_PORT` overrides: the
   isolation you need is **data isolation, not code isolation**, and it's a
@@ -360,9 +423,10 @@ exactly as `build-app`'s Step 5 gates on the working site.)
 - **The service errored or produced a wrong result and you worked around
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.
-- **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
-  owns its own preview-before-merge and its go-live through the atomic update
-  apply; use it rather than this flow.
+- **A critical app** (the shell, the chat, the terminal, or a user app whose
+  manifest says so) never reaches this step from here: its live loop, harden
+  handoff, and go-live through the atomic update apply are all
+  [`references/critical-app.md`](references/critical-app.md)'s.
 
 `update-creation` and `heal-creation` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into

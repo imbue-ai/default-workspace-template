@@ -7,3 +7,5 @@ The workspace app model's contracts record the chat's `agent_events` health fiel
 `system/test_app_manifests.py` checks that every critical built-in's `[preview]` table names the app's own console script, and pins the chat, shell, and terminal tables' shapes.
 
 The workspace app model's contracts describe the manifest's `[preview]` table and the built-ins' tables, the preview shell's 403 on the relay verbs and its meta tag, `is_preview` on the inventory document, and where an isolated instance's copies and scratch space live.
+
+`AGENTS.md` says `layout.py open` puts a tab on the user's screen the moment it returns, and that `update-app` reads the app's manifest first and takes its careful flow for a critical app; `docs/system/workspace-internals.md` names the careful flow in place of the removed `update-system-interface` skill; `system/scripts/agent_rewrite_bash_command.py`'s note names app previews.
