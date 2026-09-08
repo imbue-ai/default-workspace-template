@@ -38,7 +38,6 @@ from imbue.system_interface.config import Config
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.template_catalog import TemplateCatalogFetcherInterface
-from imbue.system_interface.template_catalog import TemplateCatalogStore
 from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
@@ -239,11 +238,6 @@ def build_test_state(
         fetcher=template_catalog_fetcher,
     )
     return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
-
-
-def build_disabled_template_catalog_store(state_directory: Path) -> TemplateCatalogStore:
-    """A store with no URL: what a test state gets unless it injects a fetcher."""
-    return build_template_catalog_store(catalog_url="", state_directory=state_directory)
 
 
 def _find_free_port() -> int:
