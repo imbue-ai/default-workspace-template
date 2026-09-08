@@ -265,14 +265,31 @@ where the data dies. Encode these, cheapest first:
   isolation you need is **data isolation, not code isolation**, and it's a
   copy-plus-one-command setup, not a worktree. The live store is only ever
   *read* (once, to make the copy); the only delete lands on a disposable path
-  where real data never lived. If you want the user to *see* the throwaway
-  instance -- a redesign, or a risky change where a hand mock won't convince --
-  add `--service-name <name>-preview-app --preview-service-name <name>-preview
-  --preview-title "<change>"` to the `up` call to surface it as a labeled
-  "preview" tab (open it with
-  `python3 system/scripts/layout.py open <name>-preview`);
-  that is the same machinery the system-interface flow uses. Use judgment on
-  when that is worth it.
+  where real data never lived.
+
+  **An app with an `app.toml` needs none of that spelled out.** Its manifest's
+  `[preview]` table (the scaffold writes one; absent, the scaffold convention
+  applies) says how a throwaway instance boots, and one script boots it from a
+  worktree, on free ports, over a scratch copy of the directories the table
+  names, surfaced as the labeled `<name>-preview` tab:
+
+  ```bash
+  uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+      --app <name> --worktree <dir>          # prints <name>-preview
+  python3 system/scripts/layout.py open <name>-preview   # puts it in front of the user
+  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  ```
+
+  `--with <sibling>` boots a sibling app's preview from the same worktree first
+  and, for a shell preview, points the shell's copied registry at it;
+  `--instance-key <key>` names the instance the tab opens on, for an app whose
+  `open_path` takes one (a chat opens on a conversation). The worktree is the
+  app's code isolation when the change is one the user must see before it
+  lands; for a contained change exercised against a data copy, the raw
+  `serve_isolated_instance.py` call above, from the live tree, is still the
+  cheaper shape, and the only shape for a service with no manifest. Either way
+  the preview tab is the same labeled frame.
 
 - **Never "clean up" test data by deleting from the live store.** If you
   did leave a stray test record in it, leave it -- an additive junk record

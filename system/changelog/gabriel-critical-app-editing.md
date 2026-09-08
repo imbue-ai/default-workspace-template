@@ -5,3 +5,5 @@
 The workspace app model's contracts record the chat's `agent_events` health field and the observer's band; the chat, apps, and services READMEs describe the program.
 
 `system/test_app_manifests.py` checks that every critical built-in's `[preview]` table names the app's own console script, and pins the chat, shell, and terminal tables' shapes.
+
+The workspace app model's contracts describe the manifest's `[preview]` table and the built-ins' tables, the preview shell's 403 on the relay verbs and its meta tag, `is_preview` on the inventory document, and where an isolated instance's copies and scratch space live.
