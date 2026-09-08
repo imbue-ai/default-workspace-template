@@ -2,7 +2,7 @@
 
 A consuming app asserts its count is 0, which a rule that matches nothing passes exactly as
 quietly as one that works -- so nothing in either app would notice a pattern that stopped
-matching. These are the only tests that would.
+matching, or a spawn entry point the rules stopped naming. These are the only tests that would.
 
 The patterns are compiled here the way the ratchet machinery compiles them, from the rule's own
 ``pattern_string`` and ``is_multiline``, so what is searched is the real rule.
@@ -10,9 +10,12 @@ The patterns are compiled here the way the ratchet machinery compiles them, from
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
+from imbue.concurrency_group import concurrency_group, local_process, subprocess_utils
+from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.ratchet_testing.common_ratchets import RegexRatchetRule
 from imbue.imbue_common.ratchet_testing.core import RegexPattern
 
@@ -24,9 +27,37 @@ from detached_subprocess.ratchets import (
     find_undetached_background_spawns,
 )
 
+# The raw runner takes the detachment flag too, but it is RAW_SPAWN_RULE that watches it, so it
+# is the one entry point deliberately absent from BACKGROUND_SPAWN_NAMES.
+_RAW_RUNNER_NAME = "run_local_command_modern_version"
+# Where a spawn entry point can be defined: the two modules that spawn, and the class whose
+# methods are the API a service is meant to start processes through.
+_SPAWN_NAMESPACES = (concurrency_group, local_process, subprocess_utils, ConcurrencyGroup)
+
 
 def _matches(rule: RegexRatchetRule, source: str) -> bool:
     return RegexPattern(rule.pattern_string, multiline=rule.is_multiline).compiled.search(source) is not None
+
+
+def _spawn_entry_point_names() -> set[str]:
+    """Every public concurrency_group callable that can put its child in its own session.
+
+    Taking ``is_detached_from_terminal`` is what makes one: the flag exists only on the path
+    down to the subprocess runner, so it names the reachable spawn entry points without this
+    test having to keep a second list of them.
+    """
+    names: set[str] = set()
+    for namespace in _SPAWN_NAMESPACES:
+        for name, member in inspect.getmembers(namespace, callable):
+            if name.startswith("_"):
+                continue
+            try:
+                signature = inspect.signature(member)
+            except (TypeError, ValueError):
+                continue
+            if "is_detached_from_terminal" in signature.parameters:
+                names.add(name)
+    return names
 
 
 @pytest.mark.parametrize(
@@ -66,10 +97,23 @@ def test_the_raw_spawn_rule_leaves_the_sanctioned_path_and_prose_alone(source: s
     assert not _matches(RAW_SPAWN_RULE, source)
 
 
+def test_every_spawn_entry_point_that_can_detach_is_named_by_a_rule() -> None:
+    """The rules are only as wide as the list they are built from, and nothing else measures it.
+
+    ``BACKGROUND_SPAWN_RULE``'s pattern is joined out of ``BACKGROUND_SPAWN_NAMES``, so a name
+    dropped from that tuple takes its own pattern alternative with it and every count still
+    reads 0. Comparing against the real API is what notices -- in either direction: a dropped
+    name, or a new concurrency_group spawn entry point that neither rule watches yet.
+    """
+    assert _spawn_entry_point_names() == {_RAW_RUNNER_NAME, *BACKGROUND_SPAWN_NAMES}, (
+        "concurrency_group's spawn entry points and the names the rules watch have diverged; "
+        "either BACKGROUND_SPAWN_NAMES lost one, or a new one needs adding to it"
+    )
+
+
 @pytest.mark.parametrize("name", BACKGROUND_SPAWN_NAMES)
-def test_the_background_spawn_rule_catches_every_concurrency_group_entry_point(name: str) -> None:
-    """Parameterized over the shared tuple, so a name dropped from it fails here rather than
-    silently going unwatched in both apps."""
+def test_the_background_spawn_rule_catches_every_name_it_is_built_from(name: str) -> None:
+    """That the joined pattern really matches a call to each name, which the count cannot show."""
     assert _matches(BACKGROUND_SPAWN_RULE, f"    handle = group.{name}(command=cmd)")
 
 
