@@ -125,8 +125,8 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   /**
    * A paging arrow: a strip the full height of the rail at one end, fading from the page surface
    * at the edge to nothing over the cards, with the chevron at its outer side. The strip is the
-   * whole target, and it is a plain button rather than the shared recipe: that recipe's press
-   * cue is a translate, which would fight the strip's own positioning.
+   * whole target, and it is a plain button rather than the shared recipe: that recipe fixes a
+   * button's size, border, fill and radius, none of which a full-height gradient strip can carry.
    */
   function railArrow(shelf: ResolvedShelf, direction: -1 | 1): m.Vnode {
     const isRight = direction === 1;
