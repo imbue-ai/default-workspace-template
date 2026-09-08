@@ -163,15 +163,12 @@ def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
         )
     templates = _validated_entries(parsed.get("templates"), CatalogTemplate, "template", source)
     shelves = _validated_entries(parsed.get("shelves", []), CatalogShelf, "shelf", source)
-    try:
-        return TemplateCatalog(
-            format=_CATALOG_FORMAT,
-            generated_at=str(parsed.get("generated_at", "")),
-            templates=tuple(templates),
-            shelves=tuple(shelves),
-        )
-    except ValidationError as e:
-        raise TemplateCatalogFormatError(f"the catalog at {source} does not validate: {e.errors()[0]['msg']}") from e
+    return TemplateCatalog(
+        format=_CATALOG_FORMAT,
+        generated_at=str(parsed.get("generated_at", "")),
+        templates=tuple(templates),
+        shelves=tuple(shelves),
+    )
 
 
 def _validated_entries(raw_entries: Any, model: type[_EntryT], noun: str, source: str) -> list[_EntryT]:
