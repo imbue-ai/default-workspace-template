@@ -748,12 +748,12 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
+  function measured(rail: HTMLElement): RailExtent {
+    return { scrollLeft: rail.scrollLeft, clientWidth: rail.clientWidth, scrollWidth: rail.scrollWidth };
+  }
+
   function measureRail(shelfKey: string, rail: HTMLElement): void {
-    const extent: RailExtent = {
-      scrollLeft: rail.scrollLeft,
-      clientWidth: rail.clientWidth,
-      scrollWidth: rail.scrollWidth,
-    };
+    const extent = measured(rail);
     const previous = railExtentByShelf.get(shelfKey);
     if (
       previous !== undefined &&
@@ -803,10 +803,6 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       },
       m.trust(icon(isRight ? "chevron-right" : "chevron-left", { size: RAIL_ARROW_GLYPH_SIZE })),
     );
-  }
-
-  function measured(rail: HTMLElement): RailExtent {
-    return { scrollLeft: rail.scrollLeft, clientWidth: rail.clientWidth, scrollWidth: rail.scrollWidth };
   }
 
   function shelfView(shelf: ResolvedShelf): m.Vnode {
