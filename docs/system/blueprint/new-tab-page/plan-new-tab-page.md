@@ -254,7 +254,9 @@ terminal". With no matches at all the page says so under the field.
 - `src/style.css`: only the rail's hidden scrollbar, which no utility expresses.
 - Tests: `NewTabLauncher.test.ts` extended (tile order, the hidden tables, "See
   more", search results, the catalog states, the dialog's actions);
-  `TemplateCatalog.test.ts` and `startSomething.test.ts` for the pure helpers.
+  `TemplateCatalog.test.ts` and `startSomething.test.ts` for the pure helpers;
+  `TemplateArt.test.ts`, `TemplateShelves.test.ts`, and
+  `TemplateDetailModal.test.ts` for the template components.
 
 ### The app model (`system/libs/app_manifest`, `system/scripts/forward_port.py`)
 
@@ -281,13 +283,15 @@ terminal". With no matches at all the page says so under the field.
 
 ### `system/apps/system_interface/imbue/system_interface/test_e2e.py`
 
-- `_open_from_launcher` types the instance's title into the search field when its
-  row is not on the resting page (a machine row in a project view).
+- `_open_from_launcher` searches for the instance's app (typing its name into the
+  search field) when its row is not on the resting page (a machine row in a
+  project view).
 - The filter test drives the machine table through the search field.
 - New: the resting page hides the machine table in a project and shows the
-  catalog's shelves from a stub catalog server; a template card opens the dialog
-  and "Make it mine" creates a chat with the adopt message (against the stub
-  chat-like app's create body).
+  catalog's shelves from a fake catalog fetcher injected into the shell state
+  (answering the configured URL, or nothing for the failed-to-load case); a
+  template card opens the dialog and "Make it mine" creates a chat with the
+  adopt message (against the stub chat-like app's create body).
 
 ### Changelog entries
 
