@@ -134,7 +134,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
-from update_apply import apply_update, recover
+from update_apply import apply_update, confirm_last, recover, rollback_last
 from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
@@ -514,7 +514,16 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         runner=Runner(),
         http=HttpClient(),
         spawner=Spawner(),
+        keep_rollback_point=args.keep_rollback_point,
     )
+
+
+def _cmd_rollback_last(args: argparse.Namespace) -> int:
+    return rollback_last(_repo_root(args).resolve(), runner=Runner(), http=HttpClient())
+
+
+def _cmd_confirm_last(args: argparse.Namespace) -> int:
+    return confirm_last(_repo_root(args).resolve())
 
 
 def _cmd_run_status_start(args: argparse.Namespace) -> int:
@@ -782,7 +791,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         "`env-converge upgrade`, and refuses a merge ref that re-merges this "
         "target after a rollback of it without reverting the rollback first.",
     )
+    apply_parser.add_argument(
+        "--keep-rollback-point",
+        action="store_true",
+        help="Keep the pre-apply copies and record what the apply touched (the "
+        "careful flow for a critical app): the shell raises a notice offering "
+        "the previous version back until a person confirms the update, and the "
+        "next apply replaces the point.",
+    )
     apply_parser.set_defaults(func=_cmd_apply)
+
+    rollback_parser = sub.add_parser(
+        "rollback-last",
+        help="Take the kept rollback point back: forward-revert the merge, restore "
+        "the copies, restart only the touched programs, and record the outcome in "
+        "the notice.",
+        parents=[common],
+    )
+    rollback_parser.set_defaults(func=_cmd_rollback_last)
+
+    confirm_parser = sub.add_parser(
+        "confirm-last",
+        help="Close the notice: discard the kept copies and the rollback-point record.",
+        parents=[common],
+    )
+    confirm_parser.set_defaults(func=_cmd_confirm_last)
 
     recover_parser = sub.add_parser(
         "recover",
@@ -946,7 +979,7 @@ def _shed_protection_target(argv: Sequence[str]) -> Path | None:
         if subcommand is None and not token.startswith("-"):
             subcommand = token
         index += 1
-    if subcommand in ("apply", "recover"):
+    if subcommand in ("apply", "recover", "rollback-last"):
         return repo_root
     return None
 
