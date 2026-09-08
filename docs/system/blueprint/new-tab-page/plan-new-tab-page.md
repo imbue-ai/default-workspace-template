@@ -52,7 +52,8 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    for the built-ins, skipping any the machine has not registered. The second row
    holds every other openable app, in registry order, and is omitted when there
    is none. Every tile is the same pill it is today, running the app's primary
-   action.
+   action; the first row's tiles share the row's width between them, the second
+   row's take the width their icon and name need and wrap when the row runs out.
 3. **"In this project".** The active project's tab set, as today (recency-sorted,
    with the per-app filter menu). Omitted entirely when the project holds nothing,
    so a brand-new project's page goes straight from "Open new" to the offers. On
@@ -64,7 +65,7 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
 6. **"Start something".** A three-column grid of bordered white tiles, each with a
    glyph, a title, and a sentence. Six are shown at first; a "See more" button at
    the lower right reveals the next six, and stays until every tile is shown (with
-   seven tiles today it disappears after one press). Clicking a tile starts a new
+   eight tiles today it disappears after one press). Clicking a tile starts a new
    chat whose first message is the tile's prompt, except "Start from a template",
    which scrolls the page to the templates section. The tiles, in order:
 
@@ -77,6 +78,11 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    | Delegate a task | Hand something over and walk away. It comes back when the work is done. | chat seeded with a delegation prompt |
    | Make sense of a pile of stuff | Point at files, an export or an inbox and get something you can actually read. | chat seeded with a make-sense-of-data prompt |
    | Learn about Minds | Have Minds teach you about all of its different capabilities and features. | chat seeded with a tour prompt (behind "See more") |
+   | Edit Minds itself | Change the interface, theme, chats, etc--Minds can modify itself! | chat seeded with a change-Minds prompt (behind "See more") |
+
+   Each tile's glyph is drawn duotone in one of the Minds brand-palette hues (the
+   hue darkened for the stroke, a wash of it for the fill); the tile itself stays
+   a white card.
 
    The prompts are plain-language requests written so the mind's own skills
    (`build-app`, `latchkey`, `manage-scheduled-tasks`, `launch-task`,
@@ -301,9 +307,6 @@ terminal". With no matches at all the page says so under the field.
 
 ## Out of scope, and follow-ups
 
-- The intent tiles are monochrome (the design system's text colours and one
-  accent); the prototype's six brand hues for the tile glyphs are a later visual
-  pass, together with the other tweaks queued for this page.
 - "Most popular" is a curated shelf in the catalog file, not a measured one.
 - The catalog generator that reads `minds-template` repos is a separate task; the
   catalog URL moves from this branch to `main` when the branch merges.
