@@ -67,8 +67,7 @@ that service's origin (the shell and siblings stay 403). Matching is
 case-insensitive.
 
 The `[services.<name>]` key is the app's registered name (the `name` in its
-`app.toml`), and the file keeps this key whatever the workspace app model
-calls the thing it names. The chat app is one of them: its pages are served at
+`app.toml`). The chat app is one of them: its pages are served at
 their own registered origin (`chat-<rand>.<domain>`), framed by the shell, so a
 workspace-level grant admits the chat origin directly and a `[services.chat]`
 grant narrows a visitor to it. A visitor holding only a per-app grant reaches

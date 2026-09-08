@@ -21,8 +21,7 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 
 # The apps the template ships. Only these are checked: a workspace built from the
 # template may carry user-built apps (with a manifest whose priority is ``user``,
-# or scaffolded before manifests existed and not yet migrated), and this suite
-# runs there too.
+# or with no manifest at all), and this suite runs there too.
 _BUILT_IN_APP_PACKAGES = ("browser", "chat", "files", "system_interface", "terminal")
 
 

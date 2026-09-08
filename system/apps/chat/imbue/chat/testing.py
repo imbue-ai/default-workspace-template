@@ -213,7 +213,7 @@ def build_test_state(
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
-    # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
+    # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
@@ -278,8 +278,8 @@ class FakePexpectProcess:
     ) -> None:
         assert expect_script, "expect_script must have at least one entry"
         self._script = list(expect_script)
-        # Hardcoding this True made every "the CLI has exited" arm unreachable from tests --
-        # including the only success signal codex's device flow has, which is process exit.
+        # Scriptable so the "the CLI has exited" arms are reachable from tests: process exit
+        # is the only success signal codex's device flow has.
         self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)

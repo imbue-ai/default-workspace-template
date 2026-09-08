@@ -511,9 +511,9 @@ def _min_message_index(messages: list[str]) -> int:
 def test_hidden_tab_preserves_scroll_window(tmp_path: Path, page: Page) -> None:
     """Hiding a chat tab (and showing it again) must not move its loaded window.
 
-    Regression test for the scroll-jump bug: an inactive tab stays mounted while hidden with
-    ``display: none``, its scroll element reports every metric as 0, and the paging logic
-    used to map that to a jump to the very start of the conversation.
+    An inactive tab stays mounted while hidden with ``display: none`` and its scroll element
+    reports every metric as 0, which the paging logic must not read as a jump to the very
+    start of the conversation.
     """
     events = _make_long_conversation_events(150)
     probe = _stub_address("stub-1")
@@ -669,7 +669,7 @@ def test_a_new_chat_with_an_account_starts_at_once_and_shows_its_composer_when_i
     tmp_path: Path, page: Page
 ) -> None:
     """With an account signed in the create runs immediately on it; the page says so while the
-    create runs (no creation log), and the composer arrives when the agent registers."""
+    create runs, and the composer arrives when the agent registers."""
     with _running_e2e_server(tmp_path) as server:
         page.goto(server.shell_url)
         chat = _start_new_chat(page)

@@ -409,9 +409,8 @@ in a different view instead; the op then applies only on connected
 clients that have that view active.)
 `layout.py` POSTs to a loopback-only workspace_server endpoint that
 broadcasts a `layout_op` message over its WebSocket; the frontend docks
-a new iframe beside the requesting chat. A tab for `<name>` that is
-already open is a no-op (`open` prints `no change`; use
-`layout.py focus <name>` to bring it to the front).
+a new iframe beside the requesting chat, or brings the tab for `<name>`
+to the front when it is already open.
 The script briefly waits for the service to appear in
 `data/.state/apps.toml` so it's safe to run immediately after the
 `forward_port.py` call.

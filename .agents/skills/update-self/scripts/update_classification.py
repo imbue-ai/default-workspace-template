@@ -337,10 +337,9 @@ def read_app_tools(repo_root: Path) -> tuple[AppTool, ...]:
     """Every Python app that runs from its own tool in the tree at ``repo_root``, in directory order.
 
     The manifest is the discriminator: an app with both a ``pyproject.toml``
-    and an ``app.toml`` runs from its own uv tool environment (the build, the
-    scaffold, and this apply all install it that way), while an app scaffolded
-    before manifests existed has no ``app.toml``, still runs ``uv run <name>``
-    from the root venv, and is left alone (both forms are supported for good).
+    and an ``app.toml`` runs from its own uv tool environment, while an app
+    with no ``app.toml`` runs ``uv run <name>`` from the root venv and is left
+    alone.
 
     Read off the tree being applied (the merged tree, or the restored one on
     rollback), so an app a release adds is refreshed as it ships. An app whose

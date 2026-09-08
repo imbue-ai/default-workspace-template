@@ -26,7 +26,8 @@ The workspace shell reads the same fleet through the instances API of the worksp
 model (``/_instances``; see ``browser.instances``), mounted on this app because the
 daemon serves its own origin: one instance per browser, ``working`` while an agent holds
 it, ``idle`` otherwise, ``error`` once crashed; ``new`` creates, delete closes, location
-navigates the active tab. Every fleet event nudges the shell (``browser.bridged_fleet``).
+navigates the active tab. Every fleet event nudges the shell through the nudger the manager
+in ``browser.session`` holds.
 
 The service does NOT drive browsers. Agents drive with ``@playwright/cli`` over the
 gated CDP endpoint in cdp_proxy.py, which enforces the ownership lease per frame.
@@ -338,7 +339,7 @@ def close_browser(browser_id: str) -> Response:
 
 
 def stop_browser(browser_id: str) -> Response:
-    """Stop a browser's Chromium while keeping the browser (the instances API's stop does the same)."""
+    """Stop a browser's Chromium while keeping the browser, its profile, and its tabs."""
     if (gate := _require_ready()) is not None:
         return gate
     if not is_valid_browser_name(browser_id):
@@ -353,7 +354,7 @@ def stop_browser(browser_id: str) -> Response:
 
 
 def start_browser(browser_id: str) -> Response:
-    """Relaunch a stopped browser on its saved tabs (the viewer's Start button and the instances API's start)."""
+    """Relaunch a stopped browser on its saved tabs from its profile."""
     if (gate := _require_ready()) is not None:
         return gate
     if not is_valid_browser_name(browser_id):

@@ -31,10 +31,8 @@ instances, its memory-shedding `priority`, whether it is `critical`, and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
 in `system/supervisord.conf`) that registers the manifest and the app's port
-via `system/scripts/forward_port.py --manifest` -- from its program line, or
-from inside its entry point once its socket is bound (the terminal, files and
-chat apps do the latter) -- and then runs the
-app.
+via `system/scripts/forward_port.py --manifest`, from its program line or
+from inside its entry point once its socket is bound, and then runs the app.
 
 Every Python app with a manifest runs from its own uv tool environment,
 installed from its own `pyproject.toml` (`uv tool install -e
@@ -42,14 +40,13 @@ system/apps/<package>`, done by `system/scripts/build_workspace.sh` at image
 build, by the build-app scaffold for a new app, and by the update-self apply
 when an app's directory changes), so its program line runs the tool's entry
 point rather than `uv run`. The root venv is for the background services,
-agents, skills, and scripts. The manifest is the discriminator: an app
-scaffolded before manifests existed has no `app.toml`, still runs `uv run
-<name>` from the root venv, and keeps working that way for as long as it
-exists (both forms are supported; nothing rewrites an old app behind the
-user's back). Python packages here are picked up by the workspace's
-`system/apps/*` uv member glob, so one lockfile covers the whole tree and
-nothing in the root `pyproject.toml` needs editing for a new app; an app's own
-tool environment is what keeps it running while the root venv is rewritten.
+agents, skills, and scripts. The manifest is the discriminator: an app with
+no `app.toml` runs `uv run <name>` from the root venv, and both forms are
+supported (nothing converts an app from one form to the other without the
+user). Python packages here are picked up by the workspace's `system/apps/*`
+uv member glob, so one lockfile covers the whole tree and nothing in the root
+`pyproject.toml` needs editing for a new app; an app's own tool environment is
+what keeps it running while the root venv is rewritten.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

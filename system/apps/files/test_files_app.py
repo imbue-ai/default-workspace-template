@@ -143,7 +143,7 @@ def test_files_app_registers_runs_dufs_serves_instances_and_stops_with_dufs(
             (app.app_name, f"http://localhost:{app.dufs_port}", app.instances_url)
         ]
 
-        # dufs runs as the sidecar's child with today's command line.
+        # dufs runs as the sidecar's child with the built command line.
         assert wait_until(
             lambda: read_fake_dufs_argv(app.dufs_record_dir) is not None,
             _STARTUP_TIMEOUT_SECONDS,
@@ -159,7 +159,7 @@ def test_files_app_registers_runs_dufs_serves_instances_and_stops_with_dufs(
             "data",
         ]
 
-        # The phase's manual check: an empty list, two creates, a delete that frees the number,
+        # The instances round trip: an empty list, two creates, a delete that frees the number,
         # a create that reuses it, and a location report that lands in the store.
         assert _listed_keys_and_urls(app) == []
         first = _create(app, {"path": "/data/docs/"})

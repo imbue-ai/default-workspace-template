@@ -27,8 +27,7 @@ pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 # system_interface and chat run their own pytest config (the root config ignores
 # them) and carry the mngr-monorepo-style test_ratchets.py rather than the
 # dwt-standard test_<name>_ratchets.py set, so they are exempt from the meta
-# checks here -- exactly as the system interface was when it lived under apps/
-# (which the old scan never visited).
+# checks here.
 _META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 
 
@@ -402,12 +401,12 @@ def test_prevent_application_terminology() -> None:
     )
 
 
-# --- The service-to-app rename (the workspace app model, phase 11) ---
+# --- Apps are apps, not services ---
 #
 # The shell is a window manager over apps; "service" is a background program
 # with no tab. The shell's own code, its frontend, and the frontend library the
-# shell and the chat page share stopped calling an app a service in phase 11 of
-# the workspace app model, and this counts what is left so it never grows.
+# shell and the chat page share call an app an app, and this counts the
+# identifiers that still say "service" so the count never grows.
 # Identifiers only, never prose: Python names come from the tokenizer (so
 # docstrings and comments do not count), TypeScript names from the source with
 # its comments and string literals blanked. The remainder is the minds embed

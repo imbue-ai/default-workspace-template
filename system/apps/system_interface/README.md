@@ -2,12 +2,10 @@
 
 The workspace's shell: its window manager and app management. It serves one
 document (`/`, the dockview UI) that arranges tabs, keeps projects, and
-manages apps, and it knows every app, the chat app included, only through
-the workspace app model: a manifest, a registry row, an instances API, and
-the browser-side contract. Chats are the chat app's business
-(`system/apps/chat/`, its own package and supervised program); this package
-imports nothing from mngr or from the chat app, never runs the `mngr` binary,
-and names no app (`test_project_ratchets.py` holds all three).
+manages apps, and it knows every app only through the workspace app model: a
+manifest, a registry row, an instances API, and the browser-side contract.
+This package imports nothing from mngr or from any app, never runs the `mngr`
+binary, and names no app (`test_project_ratchets.py` holds all three).
 
 ## Model
 
@@ -67,9 +65,9 @@ dockview document editor, routes, state); the package root holds the process
 (`main.py`, `server.py`), the not-built placeholder, and the update-staleness
 check. The frontend (`frontend/`) is one member of the npm workspace rooted at
 `system/package.json`; the design system, the base helpers, and the contract
-modules it shares with the chat page live in `system/libs/workspace_ui`, and
-`src/relay.ts` is the shell's side of the embedder relay (it forwards the chat
-pages' `minds:` messages to the minds chrome unchanged).
+modules it shares with the app pages live in `system/libs/workspace_ui`, and
+`src/relay.ts` is the shell's side of the embedder relay (it forwards the
+framed pages' `minds:` messages to the minds chrome unchanged).
 
 ### How the shell learns about apps
 
@@ -172,10 +170,8 @@ messaged the requesting agent, else the one connected client; refused with the
 clients listed otherwise); `--view` edits that view and switches the client to
 it; `open` of an app with instances creates one through the relay inside the
 op (`--action`, `--param`; a bare URL is the browser's `new`). Only
-`maximize`, `restore`, `refresh`, and the interface reload still reach the
-browser as messages. The old spellings (`chat:`, `terminal:`, `service:`,
-`url:`, `subagent:`) are refused with an error naming the new form. See the
-`manage-layout` skill for end-to-end orientation.
+`maximize`, `restore`, `refresh`, and the interface reload reach the browser
+as messages. See the `manage-layout` skill for end-to-end orientation.
 
 ## Updating the running UI
 
@@ -200,20 +196,20 @@ The apply merges the worker's branch, classifies what changed and does only
 what is needed (a dependency refresh, the worker's already-built bundles or a
 live build, a pre-flight boot of the merged shell and chat on throwaway
 ports), restarts the services agent, then probes: the shell's `/api/health`,
-the instances API of every critical app that serves one (the chat's and the
-terminal's, at the URL each registers), and that the frontend really serves
-(the "not built" placeholder and an unserved `/assets` path are both HTTP 200,
-so the probe reads the `X-Frontend-Built` header and checks that the module
-script comes back as JavaScript). Only then does it ask every open view to
-reload, through `system/scripts/refresh_workspace_view.py` (a
-`reload_system_interface` op on the loopback-only op route, which reloads the
-top-level page and every child frame, plus the minds app's own refresh
-endpoint). On any failure it reverts the merge as a forward revert commit,
-restores the pre-apply snapshots it took before anything destructive ran, and
-re-confirms health; the exit code reports the outcome (`0` applied, `2` rolled
-back, `3` emergency, `1` precondition). The scripts under
-`.agents/skills/update-self/scripts/` and that skill's `SKILL.md` are the
-reference.
+the instances API of every critical app that serves one (at the manifest's
+`instances_url` when it declares one, else the app's registered URL), and that
+the frontend really serves (the "not built" placeholder and an unserved
+`/assets` path are both HTTP 200, so the probe reads the `X-Frontend-Built`
+header and checks that the module script comes back as JavaScript). Only then
+does it ask every open view to reload, through
+`system/scripts/refresh_workspace_view.py` (a `reload_system_interface` op on
+the loopback-only op route, which reloads the top-level page and every child
+frame, plus the minds app's own refresh endpoint). On any failure it reverts
+the merge as a forward revert commit, restores the pre-apply snapshots it took
+before anything destructive ran, and re-confirms health; the exit code reports
+the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
+The scripts under `.agents/skills/update-self/scripts/` and that skill's
+`SKILL.md` are the reference.
 
 ## When the bundle is missing
 
@@ -225,9 +221,9 @@ because the placeholder is a string in the backend rather than part of the
 bundle, it still works when nothing else does.
 
 The placeholder is the workspace's general recovery surface, so it hands over a
-**terminal** rather than a repair. It embeds the already-running `terminal`
-service (ttyd) in a frame, and suggests creating an agent to do the work if the
-reader would rather not:
+**terminal** rather than a repair. It embeds the already-running terminal app
+in a frame, and suggests creating an agent to do the work if the reader would
+rather not:
 
 ```
 env -u TMUX mngr create --connect --template chat --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
@@ -279,16 +275,16 @@ where a build dispatched from the server would fail too (no registry, no
 memory, a lockfile that does not resolve), and it would fail with nowhere to
 report it, on a page with no application to render the failure. It would also
 inherit the server's memory band and be protected ahead of the user's chats and
-agents. Nothing is spawned either way: ttyd is supervised, always running, and
-sits at a *lower* (more protected) memory band than this server, so the page
-points at something that outlives it.
+agents. Nothing is spawned either way: the terminal app is supervised, always
+running, and sits at a *lower* (more protected) memory band than this server,
+so the page points at something that outlives it.
 
 The terminal's origin label is minted per workspace, so the page cannot carry
 it; the server reads it from the app registry (`data/.state/apps.toml`) at
 render time and the page's own script derives the origin from the browser's
-location, mirroring `system/libs/workspace_ui/src/origin.ts`. When there is no terminal
-registered -- ttyd starts alongside the other services, not before them -- the
-frame stays hidden and the prose stands alone.
+location, mirroring `system/libs/workspace_ui/src/origin.ts`. When there is no
+terminal registered -- the terminal app starts alongside the other apps, not
+before them -- the frame stays hidden and the prose stands alone.
 
 The page returns to the interface on its own once a bundle exists, so a
 rollback (or a build run in that terminal) needs no further action. It polls the

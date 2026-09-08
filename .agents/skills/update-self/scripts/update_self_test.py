@@ -1770,10 +1770,9 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
     tmp_path: Path, capsys
 ) -> None:
-    # An app scaffolded before manifests existed has a pyproject but no
-    # app.toml; it still runs `uv run <name>` from the root venv, so the apply
-    # must neither install nor reinstall a tool for it (that is the
-    # migration's job), and its absence is expected rather than a note.
+    # An app with a pyproject but no app.toml runs `uv run <name>` from the
+    # root venv, so the apply must neither install nor reinstall a tool for
+    # it, and its absence is expected rather than a note.
     repo_root = _make_apply_repo(tmp_path)
     legacy = repo_root / update_layout.APPS_DIR / "legacy_dashboard"
     legacy.mkdir()
@@ -2026,7 +2025,7 @@ def test_apply_backend_change_preflights_restarts_and_probes(
 
 
 def _write_chat_program(repo_root: Path) -> None:
-    """Give the tree a chat program of its own, the way phase 10 of the workspace app model laid it out."""
+    """Give the tree a chat program of its own."""
     entry = repo_root / update_probes.CHAT_PROGRAM_ENTRY
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text("")
@@ -2877,10 +2876,10 @@ def test_preflight_stops_polling_once_the_backend_has_died(apply_repo: Path) -> 
 def test_preflight_drops_the_callers_agent_identity(
     apply_repo: Path, monkeypatch
 ) -> None:
-    # The apply runs inside an agent, so its environment carries MNGR_AGENT_ID
-    # -- under which the throwaway pre-flight boot would persist layout state
-    # as that agent, clobbering the live layout.json (the preview flow drops it
-    # for exactly this reason).
+    # The apply runs inside an agent, so its environment carries MNGR_AGENT_ID,
+    # which the chat app reads as its own primary agent's id; a throwaway
+    # pre-flight boot must never act as that agent (the preview flow drops it
+    # for the same reason).
     monkeypatch.setenv("MNGR_AGENT_ID", "the-lead-agent-id")
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _FakeSpawner()
@@ -3129,7 +3128,7 @@ def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_
         update_probes.CriticalInstanceApp("terminal", _TERMINAL_INSTANCES_URL),
     )
     assert "skipping the app at" in capsys.readouterr().err
-    # A tree from before the app model declares nothing.
+    # A tree with no apps directory declares nothing.
     assert update_probes.read_critical_instance_apps(tmp_path / "elsewhere") == ()
 
 
@@ -3184,8 +3183,8 @@ def test_recovery_holds_a_critical_app_to_health_where_the_restored_tree_runs_it
 def test_recovery_does_not_probe_an_app_the_restored_tree_does_not_declare(
     apply_repo: Path,
 ) -> None:
-    """Rolled back into a tree from before the app model, no manifest declares an
-    instances API, so the shell's health alone confirms the recovery: the shell
+    """Rolled back into a tree none of whose manifests declares an instances API,
+    the shell's health alone confirms the recovery: the shell
     failing its own probe after the forward restart rolls the apply back, and the
     recovery counts as recovered with the chat's instances API never asked."""
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
@@ -4750,8 +4749,7 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     # A tool that is not on PATH at all has no installation to target: it is
     # installed beside the mngr tool, whose bin directory the program lines
     # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
-    # left to it installs fine and is never found -- what a pre-arc workspace's
-    # first update hit, with the chat pre-flight's ``chat-app: not found``).
+    # left to it installs fine and is never found).
     assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_DIR"] == str(tools)
     assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
 
@@ -4759,7 +4757,7 @@ def test_the_refresh_targets_the_installation_actually_on_path(
 def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
     apply_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A workspace from before the app model has no chat tool at all; the merge's
+    """A tool the merge adds (here the chat's) is on no PATH yet; the merge's
     install of it must land where the merged program line will find it."""
     bin_dir = tmp_path / "root" / ".local" / "bin"
     bin_dir.mkdir(parents=True)
@@ -5114,8 +5112,8 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
 
 
 def _make_pre_split_tree(repo_root: Path) -> None:
-    """Shape the tree like one from before the chat's split: no npm workspace and no chat
-    bundle, just the shell's frontend directory."""
+    """Shape the tree like one without the npm workspace: no ``system/package.json`` and no
+    chat bundle, just the shell's frontend directory."""
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
     for bundle in update_layout.FRONTEND_BUNDLES:
         if bundle.frontend_dir != update_layout.FRONTEND_DIR:
@@ -5125,8 +5123,8 @@ def _make_pre_split_tree(repo_root: Path) -> None:
 def test_a_rollback_into_a_pre_split_tree_restores_the_shell_bundle_without_a_rebuild(
     apply_repo: Path,
 ) -> None:
-    # The first update to the release that split the chat out rolls back to a tree
-    # with no npm workspace and no chat bundle. The shell's bundle was copied aside,
+    # A rollback can land on a tree with no npm workspace and no chat bundle. The
+    # shell's bundle was copied aside,
     # and that is every bundle the restored tree serves -- so recovery puts it back
     # and rebuilds nothing, rather than running npm at a root the tree does not have.
     _make_pre_split_tree(apply_repo)
@@ -5174,8 +5172,8 @@ def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_bu
 ) -> None:
     # The forward build succeeds and writes the chat bundle; the apply then fails on the
     # chat probe. Nothing copied that bundle aside (it did not exist before), the tree
-    # restore only touches tracked paths, and a tree from before the split neither tracks
-    # nor ignores it -- so recovery must remove it, or the rolled-back tree is dirty and
+    # restore only touches tracked paths, and a tree without the chat frontend neither
+    # tracks nor ignores it -- so recovery must remove it, or the rolled-back tree is dirty and
     # the retry the rollback promises is refused.
     _make_pre_split_tree(apply_repo)
     _write_instances_app(apply_repo, "chat")
@@ -5210,8 +5208,8 @@ def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
     unbuilt_apply_repo: Path,
 ) -> None:
     # Nothing was copied aside (the tree never built a bundle), so recovery rebuilds --
-    # from the shell's own frontend directory, where a tree from before the split keeps
-    # its manifest and node_modules, not from the npm root the merged tree introduced.
+    # from the shell's own frontend directory, where a tree without the npm workspace
+    # keeps its manifest and node_modules, not from the merged tree's npm root.
     _make_pre_split_tree(unbuilt_apply_repo)
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
     runner.respond(
@@ -5833,7 +5831,7 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
 def test_recover_no_restart_removes_the_bundle_a_pre_split_tree_does_not_serve(
     apply_repo: Path,
 ) -> None:
-    # The boot path lands on the same pre-split tree as the live rollback: the chat
+    # The boot path lands on the same workspace-less tree as the live rollback: the chat
     # bundle the forward build wrote is neither tracked nor ignored there, so it has to
     # go, or the rolled-back tree is dirty and every later apply is refused.
     _make_pre_split_tree(apply_repo)

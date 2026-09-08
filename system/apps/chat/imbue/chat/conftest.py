@@ -36,13 +36,12 @@ def _isolate_chat_tests(
     No ``observe`` pipeline runs in tests because nothing calls
     ``AgentManager.start``: ``create_application`` takes an already-built state
     and never starts the manager, and ``testing.build_test_state`` only builds
-    one. ``main`` is the sole caller of ``start``. So this fixture no longer
-    needs to neuter ``start``.
+    one. ``main`` is the sole caller of ``start``.
 
     The accounts root is redirected for EVERY test, including the agent_manager ones
     below: a chat create resolves an account several calls down, so without this a test
-    run writes into the developer's own ``~/.minds`` -- which is not hypothetical, it
-    happened, and the leaked account then bound every subsequent create in the session.
+    run would write into the developer's own ``~/.minds``, and the leaked account would
+    then bind every subsequent create in the session.
 
     Skipped for ``agent_manager_test.py``: those tests deliberately exercise
     ``AgentManager.start`` / ``_start_observe`` (long-lived subprocess behavior,
@@ -72,7 +71,7 @@ def _isolate_chat_tests(
     return isolated
 
 
-# --- pytest-playwright fixture-scope overrides -------------------------------
+# The pytest-playwright fixture-scope overrides.
 #
 # pytest-playwright (installed as a plugin) ships these fixtures at SESSION
 # scope: `playwright` (the sync_playwright handle, which spawns the node
@@ -87,8 +86,8 @@ def _isolate_chat_tests(
 # cascades a teardown error into every sibling test in the batch
 # (test_install.py, test_help.py, test_release_vultr, etc.).
 #
-# The fix is to force the entire fixture chain down to function scope so
-# each test's playwright+chrome teardown finishes inside its own pytest
+# So the entire fixture chain is forced down to function scope, and each
+# test's playwright+chrome teardown finishes inside its own pytest
 # teardown. Cost: a second or so per test to re-spawn the driver+browser;
 # trivial for the tiny e2e suite here.
 #

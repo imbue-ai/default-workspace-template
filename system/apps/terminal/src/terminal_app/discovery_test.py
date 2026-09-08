@@ -12,7 +12,9 @@ _TERMINAL = AppName("terminal")
 _URL = AppUrl("http://localhost:7681")
 
 
-def test_server_registered_event_has_todays_shape_with_a_nanosecond_timestamp() -> None:
+def test_server_registered_event_carries_the_server_its_url_and_a_nanosecond_timestamp() -> (
+    None
+):
     event = build_server_registered_event(1_756_900_000_123_456_789, _TERMINAL, _URL)
 
     assert event.model_dump(mode="json") == {

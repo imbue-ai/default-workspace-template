@@ -76,19 +76,18 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # What makes THIS running process stale: the code it holds in memory and the
 # manifests its environment was resolved from. Deliberately NOT the frontend
 # (the served bundle is rebuilt on disk without a restart), docs, skills,
-# tests, the chat app (another process, restarted with this one by every
-# apply), the mngr settings file (read by the chat app's mngr, never by this
-# process), or anything else agents routinely commit. (The update apply itself restarts the
+# tests, the other apps (separate processes, restarted with this one by every
+# apply), the mngr settings file (never read by this process), or anything
+# else agents routinely commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
 # a tree moved by anything else.) Everything under the vendored mngr tree but
 # docs and tests counts -- a missed skew is the failure this whole detector
 # exists to prevent.
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the vendored mngr tree (only its shared libraries are
-# imported here, but a shell that stays generic over mngr's data is what the
-# whole model rests on, so the tree counts as a whole), and the instances and
-# manifest libraries. All are editable installs resolving straight into these
+# from: its own backend, the vendored mngr tree (its shared libraries are
+# imported here; the tree counts as a whole rather than module by module), and
+# the instances and manifest libraries. All are editable installs resolving straight into these
 # trees, so the moment one advances this process is running old code.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.

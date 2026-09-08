@@ -50,8 +50,8 @@ class InstanceRecord(FrozenModel):
     renameable: bool = Field(
         description="Whether the rename route is accepted for this instance"
     )
-    # Defaulted, unlike the other fields, so a list from an app built before the stop and
-    # start routes existed still reads; such an app's instances are not stoppable.
+    # Defaulted, unlike the other fields: a source that never mentions the stop and start
+    # routes lists instances that are not stoppable.
     stoppable: bool = Field(
         default=False,
         description="Whether the stop and start routes are accepted for this instance",

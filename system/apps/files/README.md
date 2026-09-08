@@ -25,8 +25,7 @@ section 4.3, served by the library's `JsonStoreInstanceSource` over
 `data/.apps/files/instances.json` (`files-app --store` overrides it): an
 instance is a `files-<N>` key and the path its page was last at, titled
 `File Viewer <N>`, `idle`, `referenced` (the shell deletes it once no project
-and no client layout references it, from phase 7 of the model on), never
-renamed.
+and no client layout references it), never renamed.
 
 - `new` (optional `path`) allocates the lowest free number and stores the path
   (default `/`) as the instance URL under the dufs origin.

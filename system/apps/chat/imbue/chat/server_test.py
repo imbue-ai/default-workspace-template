@@ -64,10 +64,9 @@ from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
 from imbue.mngr_codex.app_server_client import CodexModel
 
-# Generous: the first receive occasionally exceeded the previous 5.0s cap on a
-# loaded machine (~1-in-8 locally, failing as ``json.loads(None)``) even though
-# passing runs complete in well under a second -- the wait is pure scheduling
-# delay, so a bigger cap costs nothing when healthy.
+# Generous: the first receive can take several seconds on a loaded machine even
+# though passing runs complete in well under a second -- the wait is pure
+# scheduling delay, so a bigger cap costs nothing when healthy.
 _WS_RECEIVE_TIMEOUT = 15.0
 
 
@@ -78,7 +77,7 @@ def config() -> Config:
 
 @pytest.fixture
 def signed_in_account() -> str:
-    """One provider account, because creating a chat now requires one.
+    """One provider account, because creating a chat requires one.
 
     There is no shared login to fall back to -- `resolve_binding` raises rather than binding an
     agent to nothing -- so a create with no account is refused with a 400. Tests about naming,
@@ -368,7 +367,7 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
 
 def test_get_events_caps_initial_load_to_tail(client: FlaskClient, tmp_path: Path) -> None:
     """The no-`before` events response is capped to the most recent N events,
-    and older events remain reachable via the `before` backfill branch (issue I)."""
+    and older events remain reachable via the `before` backfill branch."""
     agent_state_dir = tmp_path / "agent_state"
     agent_state_dir.mkdir(parents=True)
     claude_config_dir = tmp_path / "claude_config"
@@ -637,7 +636,7 @@ def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_m
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
-    """The codex tap delivers the queue early through the ledger's ``shoulder_tap`` (Fix 3)."""
+    """The codex tap delivers the queue early through the ledger's ``shoulder_tap``."""
     agent_id = "codex-agent-3"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     ledger = _FakeCodexLedger(tap_status="tapped")
@@ -653,8 +652,8 @@ def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> N
 
 
 def test_shoulder_tap_codex_is_a_benign_200_when_a_send_is_in_flight(tmp_path: Path) -> None:
-    """A tap racing an in-flight send is a BENIGN 200 no-op (``send_in_flight``), never a 500 dialog
-    (Fix 3): the pushed availability flag already greys the button, so a raced tap just does nothing."""
+    """A tap racing an in-flight send is a BENIGN 200 no-op (``send_in_flight``), never a 500 dialog:
+    the pushed availability flag already greys the button, so a raced tap just does nothing."""
     agent_id = "codex-agent-4"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     ledger = _FakeCodexLedger(sending=True, tap_status="send_in_flight")
@@ -683,7 +682,7 @@ def test_shoulder_tap_codex_no_ledger_is_a_noop(tmp_path: Path) -> None:
 
 def test_shoulder_tap_codex_resend_failure_hands_the_block_back_to_the_composer(tmp_path: Path) -> None:
     """When the ledger's combined resend fails to submit, the endpoint returns the parked text as a
-    composer block (contract A1a) so the frontend places it, rather than swallowing it (Fix 3)."""
+    composer block (contract A1a) so the frontend places it, rather than swallowing it."""
     agent_id = "codex-agent-8"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     ledger = _FakeCodexLedger(tap_status="tapped", tap_returned_block="first\nsecond")
@@ -1499,8 +1498,8 @@ def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) 
 def test_shoulder_tap_atomic_rejects_non_atomic_harness(client: FlaskClient, tmp_path: Path) -> None:
     """A harness whose catalog reports no native tap gets a 400 with a clear message and no write.
 
-    All shipping harnesses now support the atomic tap, so this exercises the defensive branch
-    for a hypothetical future non-atomic harness by forcing the catalog flag off.
+    Every shipping harness supports the atomic tap, so this exercises the defensive branch
+    for a hypothetical non-atomic harness by forcing the catalog flag off.
     """
     agent_info = _agent_info(name="codex-agent", harness=HarnessType.CODEX, agent_state_dir=tmp_path)
     with (
@@ -1623,8 +1622,7 @@ def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
     holds: with a send in flight past the bounded wait it flushes nothing -- never pressing the
     chord or clearing the mirror (the codex/pi discipline). But that refusal is a benign 200
     no-op, not a 500: the backend availability flag greys the button whenever a send is in flight,
-    so a tap that still races one simply does nothing and the user retaps -- surfacing an error
-    there is the button-then-error bug we removed."""
+    so a tap that still races one simply does nothing and the user retaps."""
     state_dir, config_dir = _claude_tap_dirs(tmp_path)
     agent_id = "agent-00000000000000000000000000000042"
     agent_info = _agent_info(agent_id=agent_id, agent_state_dir=state_dir, claude_config_dir=config_dir)
@@ -1764,9 +1762,9 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
 
 
 def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_path: Path) -> None:
-    """Replaces the pi plan's pinned claude-empty-queue-restarts test: a claude stop mid-turn with
-    NOTHING queued now interrupts via the meta+q chord (routed through mngr), confirms the abort by
-    the interrupt sentinel, marks the stranded agent idle, and returns '' -- never restarting."""
+    """A claude stop mid-turn with NOTHING queued interrupts via the meta+q chord (routed through
+    mngr), confirms the abort by the interrupt sentinel, marks the stranded agent idle, and
+    returns '' -- never restarting."""
     state_dir, config_dir = _claude_tap_dirs(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
@@ -1835,7 +1833,7 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     client: FlaskClient, tmp_path: Path
 ) -> None:
     """A pi stop mid-turn with nothing queued still writes the retract sentinel (interrupting the
-    bare turn -- fixes the empty-queue no-op) and returns '', still without a restart."""
+    bare turn) and returns '', still without a restart."""
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     fake_watcher = _fake_queue_watcher("")
     with (
@@ -2240,9 +2238,9 @@ def test_get_events_seeds_pending_tool_state(tmp_path: Path, monkeypatch: pytest
 def test_stream_filtered_events_forwards_only_matching_events() -> None:
     """The shared stream loop yields only events that pass its predicate.
 
-    This is the wiring behind Bug 2: the main stream forwards main-session
-    events and drops subagent-session events, which share the same per-agent
-    queue. A queued ``None`` ends the stream, keeping the test deterministic.
+    The main stream forwards main-session events and drops subagent-session
+    events, which share the same per-agent queue. A queued ``None`` ends the
+    stream, keeping the test deterministic.
     """
     event_queues = AgentEventQueues()
     event_queue = event_queues.register("agent-1")

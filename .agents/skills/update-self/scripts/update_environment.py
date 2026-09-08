@@ -288,14 +288,13 @@ def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     """The environment for a ``uv tool`` call, aimed at ``executable``'s own
     installation when we can confirm which that is, else at the mngr tool's.
 
-    A tool the merge adds (the chat, terminal, and files apps, for a workspace
-    from before the app model) is on no PATH yet, and uv's own default tool
-    directory follows ``$HOME`` -- which at runtime is not the one
-    build_workspace.sh installed under, and whose bin directory is on nobody's
-    PATH. Left to that default the new tool installs fine and is never found: the
-    pre-flight's ``chat-app`` is ``not found`` and the apply rolls back. So a tool
-    with no installation of its own goes beside the mngr tool, whose bin
-    directory every program line resolves its entry point through.
+    A tool the merge adds (an app this workspace has never run) is on no PATH
+    yet, and uv's own default tool directory follows ``$HOME`` -- which at
+    runtime is not the one build_workspace.sh installed under, and whose bin
+    directory is on nobody's PATH. Left to that default the new tool installs
+    fine and is never found. So a tool with no installation of its own goes
+    beside the mngr tool, whose bin directory every program line resolves its
+    entry point through.
     """
     env = dict(os.environ)
     location = _installed_tool_location(executable, tool_name, runner)

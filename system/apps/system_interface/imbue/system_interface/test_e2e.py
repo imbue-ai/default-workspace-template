@@ -4,8 +4,7 @@ These tests start a real Flask server (threaded Werkzeug) over a registry of stu
 ``app_instances``' in-memory source over loopback, then use Playwright to drive the shell exactly
 as a user would. Every open goes through the New Tab page or a rail row, every verb through the
 shell's relay, and every assertion on state reads the shell's own API or files. The shell knows no
-app by name, so a stub app is every app; the chat app's own pages are driven by the chat package's
-suite, which frames them through this same shell.
+app by name, so a stub app is every app.
 """
 
 from __future__ import annotations
@@ -1294,7 +1293,7 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
             context.close()
 
 
-# ---------- phase 8: the layout file is the truth ----------
+# ---------- the layout file is the truth ----------
 
 
 @pytest.mark.timeout(120, func_only=False)

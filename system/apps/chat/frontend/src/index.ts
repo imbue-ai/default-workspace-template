@@ -1,6 +1,6 @@
 /**
  * The chat document: one page per chat (or per subagent view), served by the chat app at
- * `/<agent-id>` and framed by the workspace shell (workspace app model, phase 6).
+ * `/<agent-id>` and framed by the workspace shell.
  */
 
 import m from "mithril";

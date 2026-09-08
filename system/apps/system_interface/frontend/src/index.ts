@@ -23,7 +23,7 @@ function getEffectiveRoutePrefix(): string {
 function bootstrap(): void {
   m.route.prefix = getEffectiveRoutePrefix();
   initInventory();
-  // The child-frame boundary: the minds relay for the chat pages' permission cards, and the
+  // The child-frame boundary: the minds relay for the framed pages' `minds:` messages, and the
   // shell side of the app contract.
   initEmbedderRelay();
   const rootElement = document.getElementById("app");

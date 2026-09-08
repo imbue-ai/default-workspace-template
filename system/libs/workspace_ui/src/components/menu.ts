@@ -7,7 +7,7 @@
  *
  * Positioning is not part of the recipe -- callers say fixed/absolute in
  * `extra`, along with min-width and text size. The Tailwind scanner reads
- * utility names from the literals in this file (style.css's `@source` covers
+ * utility names from the literals in this file (base.css's `@source` covers
  * every .ts file): keep every utility name a contiguous literal. */
 
 export function menuCardClass(extra = ""): string {

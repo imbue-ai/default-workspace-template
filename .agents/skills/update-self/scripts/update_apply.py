@@ -531,13 +531,17 @@ class _RestoredFrontend(NamedTuple):
     is_npm_workspace: bool
 
 
+# CLEANUP: drop the non-workspace branch below, ``_remove_unserved_bundles``, and the
+# always-True arm of ``_is_recovery_npm_ci_needed`` once every workspace has updated
+# past the release that introduced the ``system/`` npm workspace: a rollback can then
+# only land on a tree that has it.
 def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     """The frontend layout of the tree the rollback restored.
 
-    A tree from before the chat's split has no npm workspace at ``system/`` and no chat
-    frontend: its one bundle builds from the shell's own frontend directory, with the
-    node_modules there. The forward apply never asks this (the merged tree always has the
-    workspace), but a rollback lands on whatever tree the workspace ran before.
+    A tree with no npm workspace at ``system/`` and no chat frontend builds its one
+    bundle from the shell's own frontend directory, with the node_modules there. The
+    forward apply never asks this (the merged tree always has the workspace), but a
+    rollback lands on whatever tree the workspace ran before.
 
     A frontend is told by its tracked manifest, not its directory: the rollback removes the
     tracked files, but the forward build leaves ignored files under a frontend's
@@ -560,7 +564,7 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
 def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> None:
     """Remove a bundle the forward build wrote that the restored tree does not serve.
 
-    The chat's, on a rollback into a tree from before the split: it has no copy to put
+    The chat's, on a rollback into a tree with no chat frontend: it has no copy to put
     back and nothing that tracks or ignores it there, so left standing it keeps the tree
     dirty and every later apply refused. Both rollback paths (the live one and the boot
     path's ``recover --no-restart``) land on such a tree the same way.
@@ -576,9 +580,9 @@ def _is_recovery_npm_ci_needed(
 ) -> bool:
     """Whether the restored tree's node_modules must be reinstalled before its rebuild:
     the workspace's when its copy could not be put back (the forward ``npm ci`` replaced
-    it), the pre-split frontend's always -- the forward ``npm ci`` at the workspace root
-    empties every member's node_modules, the shell frontend's included, and nothing
-    copied that one aside."""
+    it), the shell frontend's own (a tree without the workspace) always -- the forward
+    ``npm ci`` at the workspace root empties every member's node_modules, the shell
+    frontend's included, and nothing copied that one aside."""
     if layout.is_npm_workspace:
         return "node_modules" not in restored
     return True
@@ -628,7 +632,7 @@ def _recover_running_state(
                     f"`bash {PROVISIONER_SCRIPT}` once the cause (often no network) is fixed.\n"
                 )
         # Only the bundles the restored tree serves count, at the npm root that tree
-        # has: a rollback into a tree from before the chat's split has neither a chat
+        # has: a rollback into a tree without the npm workspace has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
         _remove_unserved_bundles(repo_root, frontend)
@@ -674,8 +678,8 @@ def _recover_running_state(
             sleeper,
         )
         # Every critical app with an instances API is probed beside the shell as
-        # the forward apply does, read off the restored tree: a tree from before
-        # the app model declares none and is confirmed by the shell alone.
+        # the forward apply does, read off the restored tree: a tree whose
+        # manifests declare none is confirmed by the shell alone.
         if healthy:
             for app in read_critical_instance_apps(repo_root):
                 app_failure = wait_instances_healthy(

@@ -5,7 +5,7 @@
  * What varies **by instance** (whether it can be renamed, deleted, stopped and started on its
  * own, whether its app can be stopped) is read off the inventory records here. What varies **by caller** -- what running
  * a verb actually does -- is not: the tab acts on a live, open panel (Close tab), while the
- * rail can be showing a backgrounded instance with no open panel at all (Remove from project).
+ * rail can be showing an instance with no open panel at all (Remove from project).
  * ``TabMenuActions`` is the seam: every verb's behavior is a callback the caller supplies,
  * and ``tabMenuEntries`` only decides which of those gets wrapped into a row, in what order.
  */
