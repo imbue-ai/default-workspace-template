@@ -6,7 +6,7 @@ The New Tab page is redesigned around starting things, after the `minds-new-tab`
 
 - "In this project" is shown only when the project holds something; "On this machine" is no longer on a project's resting page and is reached through the search field. The Everything view keeps its machine-wide table.
 
-- "Start something": six intent tiles (build an app, start from a template, connect your data, set up a routine, delegate a task, make sense of a pile of stuff), each starting a new chat seeded with a plain-language prompt; "See more" reveals the next page of tiles (a seventh, "Learn about Minds"). The prompt goes to whichever app declares an action with a `message` param, so the shell still names no app.
+- "Start something": six intent tiles (build an app, start from a template, connect your data, set up a routine, delegate a task, make sense of a pile of stuff), each starting a new chat seeded with a plain-language prompt, except "Start from a template", which scrolls the page to the templates section (also from search results) and is disabled when no catalog is configured; "See more" reveals the next page of tiles (a seventh, "Learn about Minds"). The prompt goes to whichever app declares an action with a `message` param, so the shell still names no app.
 
 - "Start from a template": the published-template catalog by category, each category a sideways rail of cards with paging arrows, followed by an "All templates" row. A card opens a detail dialog (the drawing, the write-up, what it needs, the repository) whose "Make it mine" starts a chat that adopts the template with `/use-template`, and whose other action asks for a new machine made from it.
 
