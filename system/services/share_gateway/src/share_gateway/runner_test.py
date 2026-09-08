@@ -44,6 +44,9 @@ def test_one_child_ignoring_sigterm_does_not_consume_every_child_s_grace() -> No
             grace_seconds=grace_seconds,
         )
         elapsed = time.monotonic() - started_at
+        # Sampled before the cleanup below, which would otherwise reap the very survivors
+        # that prove the SIGKILL escalation did not happen.
+        returncodes = [process.poll() for process in children]
     finally:
         for process in children:
             if process.poll() is None:
@@ -52,7 +55,9 @@ def test_one_child_ignoring_sigterm_does_not_consume_every_child_s_grace() -> No
             assert process.stdout is not None
             process.stdout.close()
 
-    assert all(process.poll() is not None for process in children)
+    assert all(returncode is not None for returncode in returncodes), (
+        "a child that ignores SIGTERM outlived the grace period, so it was never SIGKILLed"
+    )
     # Sits between the one shared period this must take and the four a per-child wait would.
     assert elapsed < 2 * grace_seconds, (
         f"stopping {len(children)} children took {elapsed:.2f}s, which is a per-child grace "
