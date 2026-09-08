@@ -62,12 +62,12 @@ class TemplateCatalogFormatError(TemplateCatalogError, ValueError):
 
 
 class RequiredAccount(FrozenModel):
-    """A service and the permission on it a template needs connected before it runs."""
+    """A latchkey scope and the permission on it a template needs connected before it runs."""
 
     model_config = ConfigDict(extra="ignore")
 
-    service: str = Field(description="The latchkey service, e.g. slack-api")
-    permission: str = Field(description="The permission on that service, e.g. slack-read-all")
+    scope: str = Field(description="The latchkey scope, e.g. slack-api")
+    permission: str = Field(description="The permission on that scope, e.g. slack-read-all")
 
 
 class TemplateChoice(FrozenModel):

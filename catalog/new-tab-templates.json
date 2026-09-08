@@ -96,27 +96,27 @@
       "updated_at": "2026-09-01T05:21:10Z",
       "required_accounts": [
         {
-          "service": "slack-api",
+          "scope": "slack-api",
           "permission": "slack-chat-write"
         },
         {
-          "service": "slack-api",
+          "scope": "slack-api",
           "permission": "slack-conversations-write"
         },
         {
-          "service": "slack-api",
+          "scope": "slack-api",
           "permission": "slack-auth-read"
         },
         {
-          "service": "slack-api",
+          "scope": "slack-api",
           "permission": "slack-users-read"
         },
         {
-          "service": "notion-mcp-api",
+          "scope": "notion-mcp-api",
           "permission": "notion-mcp-read-all"
         },
         {
-          "service": "notion-mcp-api",
+          "scope": "notion-mcp-api",
           "permission": "notion-mcp-update-page"
         }
       ],
@@ -251,15 +251,15 @@
       "updated_at": "2026-08-12T04:30:38Z",
       "required_accounts": [
         {
-          "service": "google-gmail-api",
+          "scope": "google-gmail-api",
           "permission": "google-gmail-read-all"
         },
         {
-          "service": "google-gmail-api",
+          "scope": "google-gmail-api",
           "permission": "google-gmail-write-all"
         },
         {
-          "service": "github-rest-api",
+          "scope": "github-rest-api",
           "permission": "github-read-all"
         }
       ],
@@ -442,19 +442,19 @@
       "updated_at": "2026-08-11T18:49:34Z",
       "required_accounts": [
         {
-          "service": "github-api",
+          "scope": "github-api",
           "permission": "github-read"
         },
         {
-          "service": "github-api",
+          "scope": "github-api",
           "permission": "github-write-pulls"
         },
         {
-          "service": "github-api",
+          "scope": "github-api",
           "permission": "github-write-issues"
         },
         {
-          "service": "github-graphql-api",
+          "scope": "github-graphql-api",
           "permission": "any"
         }
       ],
