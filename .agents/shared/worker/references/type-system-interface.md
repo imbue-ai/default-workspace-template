@@ -2,8 +2,7 @@
 
 `system/apps/system_interface` -- the live web workspace UI (the dockview shell
 that docks every app's pages, the sidebar, the New Tab launcher) and its Flask
-backend. The chat pages are the chat app's (`system/apps/chat`, its own package
-and process); the shell only docks them. This reference describes what the
+backend. This reference describes what the
 system interface *is*; for how to run and test a web frontend in isolation, see
 `.agents/shared/worker/references/web-frontend-testing.md`.
 

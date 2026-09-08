@@ -21,11 +21,11 @@ Users make "creations". There are conventions for the common kinds:
   name, icon, instances, priority, criticality, program), runs as a supervisord
   program from its own uv tool environment, registers its manifest and port
   via `forward_port.py --manifest`, and is served at its own browser origin: the
-  service name is prefixed as a hostname label on the workspace host, so
+  app's name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
   workspace host id looks like `host-<32hex>`; shared hostnames follow the
   same prefix rule on a longer base). Nothing proxies or rewrites app
-  traffic, so registered service names must be DNS-safe hostname labels
+  traffic, so registered app names must be DNS-safe hostname labels
   (lowercase letters/digits with single hyphens, not `localhost`, not
   starting with `host-` or `agent-`).
 - a **skill**: teaches the mind how to do work the user cares about (including
@@ -60,8 +60,8 @@ in that app's folder and is named `<app>-<role>`.
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
   chats), `terminal/`, `files/`, `browser/`, and every user-built app, each with an `app.toml` manifest; every
   Python app with a manifest is installed as its own uv tool and is also a
-  member of the uv workspace via the `system/apps/*` glob; an app scaffolded
-  before manifests existed keeps running from the root venv, indefinitely)
+  member of the uv workspace via the `system/apps/*` glob; an app with no
+  manifest runs from the root venv)
 - `system/services/` - Standalone background services (`app_watcher/`,
   `caretaker/`, `share_gateway/`, `host_backup/`, `env_converge/`,
   `oom_priority/`)

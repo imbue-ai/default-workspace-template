@@ -61,8 +61,8 @@ def is_same_session(record: TerminalSessionRecord, session: TmuxSession) -> bool
 
     tmux hands ids out afresh on every server, so a record's id alone would bind it to whatever
     session a later server gave that number; the creation time tells the two apart. A side that
-    knows no creation time (a record from before it was kept, a tmux that printed none) matches
-    on the id alone.
+    knows no creation time (a record that holds none, a tmux that printed none) matches on the
+    id alone.
     """
     if record.session_id is None or record.session_id != session.session_id:
         return False
@@ -83,6 +83,28 @@ def _find_session_of_record(
     record: TerminalSessionRecord, live_sessions: Sequence[TmuxSession]
 ) -> TmuxSession | None:
     return next((session for session in live_sessions if is_same_session(record, session)), None)
+
+
+@pure
+def _unclaimed_session_named(
+    name: TmuxSessionName,
+    live_sessions: Sequence[TmuxSession],
+    records: Sequence[TerminalSessionRecord],
+) -> TmuxSession | None:
+    """The live session tmux lists under ``name``, unless a terminal already holds it by id.
+
+    A session renamed inside tmux to another terminal's key stays with the terminal that holds
+    its id; its name is not a second way to claim it, or two terminals would share one session
+    and stopping either would kill the other's.
+    """
+    return next(
+        (
+            session
+            for session in live_sessions
+            if session.name == name and _find_record_of_session(session, records) is None
+        ),
+        None,
+    )
 
 
 @pure
@@ -142,7 +164,7 @@ def match_live_sessions(
 
     A live session is the terminal whose record holds its id, whatever tmux now calls it; a
     session no record holds by id falls back to the record of its name when that record's own
-    session is not live (one from before the app kept ids, or a session created on attach), and
+    session is not live (a record that holds no id, or a session created on attach), and
     one with no record at all is a hand-made terminal listed under its own name. A session
     carrying the old name of a terminal whose own session is live is skipped, whichever tmux
     lists first.
@@ -370,7 +392,14 @@ class TmuxSessionSource(InstanceSourceInterface):
                 return _live_instance_record(live, record)
             if record is None:
                 raise UnknownInstanceError(f"no terminal has the key {key!r}")
-            created = self._create_session_for(record)
+            try:
+                created = self._create_session_for(record)
+            except TmuxCommandError as e:
+                # tmux refuses a name a session already carries: one renamed inside tmux to this
+                # terminal's key, which belongs to the terminal holding its id, not to this one.
+                raise InstanceConflictError(
+                    f"could not start terminal {name!r}: {e}"
+                ) from e
         return _fresh_instance_record(created)
 
     def _terminal_name_or_raise(self, key: InstanceKey, verb: str) -> TmuxSessionName:
@@ -391,18 +420,18 @@ class TmuxSessionSource(InstanceSourceInterface):
         """
         with self._lock:
             live_sessions = self._user_sessions()
-            live_by_name = {session.name: session for session in live_sessions}
-            for record in self.store.list_records():
+            records = self.store.list_records()
+            for record in records:
                 own = _find_session_of_record(record, live_sessions)
                 if own is not None:
                     if record.session_created == own.created_epoch:
                         self._write_session_id_file(record)
                     else:
-                        # A record from before creation times were kept matched on the id alone;
-                        # it learns the time here, since the dispatch attaches only by both.
+                        # Matched on the id alone, since one side knows no creation time: the
+                        # record and its id file take the time tmux reports now (or none).
                         self._bind(record, own)
                     continue
-                live = live_by_name.get(record.name)
+                live = _unclaimed_session_named(record.name, live_sessions, records)
                 if live is not None:
                     self._adopt(record, live)
                     continue
@@ -423,8 +452,8 @@ class TmuxSessionSource(InstanceSourceInterface):
 
         None for an agent's session, a name that cannot be a key, or a session under the old
         name of a terminal whose own session is live (no terminal, as the listing has it). A
-        record without an id (from before the app kept them) or whose session was recreated on
-        attach takes the live session's id, and is no longer stopped.
+        record of that name whose own session is not live (it holds no id, or the dispatch
+        created the session on attach) takes the live session's id, and is no longer stopped.
         """
         if is_agent_session(session_name, self.agent_session_prefix):
             return None
@@ -489,12 +518,12 @@ class TmuxSessionSource(InstanceSourceInterface):
         record: TerminalSessionRecord | None,
         live_sessions: Sequence[TmuxSession],
     ) -> TmuxSession | None:
-        """The live session backing the terminal: the record's own session, else the one with its name."""
+        """The live session backing the terminal: the record's own session, else the one with its name that no terminal holds by id."""
         if record is not None:
             own = _find_session_of_record(record, live_sessions)
             if own is not None:
                 return own
-        return next((session for session in live_sessions if session.name == name), None)
+        return _unclaimed_session_named(name, live_sessions, self.store.list_records())
 
     def _user_sessions(self) -> list[TmuxSession]:
         """The live sessions that are terminals: not an agent's, and named so the name can be a key."""

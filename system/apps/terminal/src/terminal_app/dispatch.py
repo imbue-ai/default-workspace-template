@@ -37,9 +37,9 @@ read -r
 exit 1
 """
 
-# CLEANUP: agent.sh serves the chat UI's terminal back face (``?arg=_&arg=agent&arg=<name>``);
-# it belongs to the chat app (system/apps/chat, its own package since phase 10 of the workspace
-# app model) and can move there in the model's cleanup phase (phase 11).
+# CLEANUP: move agent.sh (the chat UI's terminal back face, ``?arg=_&arg=agent&arg=<name>``)
+# into the chat app (system/apps/chat), and stop installing it here, in the release after the
+# one that ships the workspace app model, once every workspace has restarted on it.
 _AGENT_SCRIPT: Final[str] = """#!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
 #
@@ -80,12 +80,13 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # The terminal app records the tmux session id and creation time of every
 # terminal it created under the sessions directory, named by key; attaching by
 # that id keeps the tab on its session even after someone renamed the session
-# inside tmux. When there is no id (a record from before the app kept them) or
-# the session is gone (a container restart cleared the tmux server, whose
-# successor hands the same ids out again), `tmux new-session -A`
-# attaches when a session of that name exists and creates it otherwise, so the
-# tab comes back as a fresh shell. A created session runs the login shell
-# through the memory-shedding tag, as the app's own creates do.
+# inside tmux. When the id file is missing or lacks the id or the creation
+# time, or the session under that id is gone or was created at another time (a
+# container restart cleared the tmux server, whose successor hands the same ids
+# out again), `tmux new-session -A` attaches when a session of that name exists
+# and creates it otherwise, so the tab comes back as a fresh shell. A created
+# session runs the login shell through the memory-shedding tag, as the app's
+# own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 TAB_ID="${2:-}"

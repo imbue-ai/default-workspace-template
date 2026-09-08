@@ -325,7 +325,7 @@ def test_a_registered_apps_priority_resolves_its_program_through_the_band_table(
 
 def test_a_program_without_a_registry_row_keeps_its_by_name_band() -> None:
     # The services that never register (share-gateway, cron, ...) and the
-    # non-service programs resolve exactly as before the registry lookup.
+    # non-service programs resolve by name.
     registry = {"files": "files"}
     assert bands.supervisord_program_band("share-gateway", registry) == bands.SERVICE_BANDS["share-gateway"]
     assert bands.supervisord_program_band("env-converge", registry) == bands.PROTECTED

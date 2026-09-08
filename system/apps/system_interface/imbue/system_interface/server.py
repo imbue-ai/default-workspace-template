@@ -149,9 +149,9 @@ _NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_
 # to say so, on a page with no application to render the failure. It would also
 # inherit the server's memory band, which puts it ahead of the user's chats and
 # agents in a shed. A shell is the general case of every repair rather than one
-# of them, and ttyd is already running and already *more* protected than this
-# server, so the page is pointing at something that outlives it rather than
-# starting anything.
+# of them, and the terminal app is already running and already *more* protected
+# than this server, so the page is pointing at something that outlives it
+# rather than starting anything.
 #
 # Nothing here is part of the compiled bundle -- this is a string in the
 # backend -- so the script below ships whether or not the frontend has ever
@@ -226,19 +226,19 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
   // no terminal registered to offer.
   var terminalLabel = __TERMINAL_LABEL__;
 
-  // Mirrors deriveServiceOrigin/workspaceHostCoordinate in
-  // system/libs/workspace_ui/src/origin.ts, which is canonical: a service origin is its label
+  // Mirrors deriveAppOrigin/workspaceHostCoordinate in
+  // system/libs/workspace_ui/src/origin.ts, which is canonical: an app origin is its label
   // prefixed onto the workspace COORDINATE -- the first host-<hex> (or, on a
   // workspace-keyed share domain, bare 32-hex share) label and everything
   // after it -- and never onto this page's host verbatim, which
-  // would nest the service under the shell's own label and route back here.
+  // would nest the app under the shell's own label and route back here.
   //
   // It differs from origin.ts in one way, deliberately: no coordinate label
   // means no origin, rather than falling back to the host unchanged. The shell
   // can assume it is running inside a workspace; this page cannot (a direct
   // hit on the loopback port has no coordinate), and a made-up origin would
   // show the reader a broken frame instead of the prose that still helps them.
-  function serviceOrigin(label) {
+  function appOrigin(label) {
     var labels = window.location.host.split(".");
     for (var index = 0; index < labels.length; index++) {
       // The port rides on whichever label is last, so it is stripped before
@@ -280,7 +280,7 @@ _FRONTEND_NOT_BUILT_TEMPLATE = """<!doctype html>
     });
   }
 
-  var origin = terminalLabel ? serviceOrigin(terminalLabel) : null;
+  var origin = terminalLabel ? appOrigin(terminalLabel) : null;
   if (origin) {
     document.getElementById("terminal").src = origin;
     document.getElementById("terminal-slot").hidden = false;

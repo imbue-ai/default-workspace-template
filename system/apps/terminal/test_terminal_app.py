@@ -166,7 +166,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
         ), _read_log(app)
         assert is_port_accepting(app.instances_port), _read_log(app)
 
-        # The launcher script's work: dispatch scripts, the patched web client, the discovery event.
+        # The startup work: dispatch scripts, the patched web client, the discovery event.
         assert sorted(path.name for path in app.paths.commands_dir.iterdir()) == [
             "agent.sh",
             "index.html",
@@ -188,7 +188,7 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
             (app.app_name, f"http://localhost:{app.ttyd_port}", app.instances_url)
         ]
 
-        # ttyd runs as the sidecar's child with today's command line, the patched client included.
+        # ttyd runs as the sidecar's child, the patched client on its command line.
         assert wait_until(
             lambda: read_fake_ttyd_argv(app.ttyd_record_dir) is not None,
             _STARTUP_TIMEOUT_SECONDS,

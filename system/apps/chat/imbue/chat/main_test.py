@@ -48,3 +48,9 @@ def test_registration_defaults_to_the_manifest_and_is_skippable() -> None:
     assert _parse_args([]).manifest == MANIFEST_PATH
     assert _parse_args([]).no_register is False
     assert _parse_args(["--no-register"]).no_register is True
+
+
+def test_preflight_is_off_by_default_and_a_flag_of_its_own() -> None:
+    """``--preflight`` is the update apply's throwaway boot; a plain boot never takes it."""
+    assert _parse_args([]).preflight is False
+    assert _parse_args(["--preflight"]).preflight is True

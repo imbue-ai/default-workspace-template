@@ -67,6 +67,15 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Skip the registration (a throwaway boot that must not re-point the live chat row)",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help=(
+            "Boot without side effects, for the update apply's pre-flight check: no account "
+            "reconciliation (it reaps sign-in processes), no agent manager (no mngr observe, "
+            "no sweep, no memory prioritizer, no nudges to the shell), and no registration"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -86,7 +95,7 @@ def build_production_state(
     """
     broadcaster = WebSocketBroadcaster()
     agent_manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH))
-    # The codex ledger owns live user-turns (Fix 1); route each committed user-turn it emits onto
+    # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
@@ -164,24 +173,34 @@ def _reconcile_account_store() -> None:
 
 
 def main() -> None:
-    """Run the chat app: register with the shell, start ``mngr observe``, and serve."""
+    """Run the chat app: register with the shell, start ``mngr observe``, and serve.
+
+    Under ``--preflight`` the app only imports, builds, and serves: the update apply boots
+    the merged chat this way on a throwaway port to learn whether it can start at all
+    (mngr and the harness plugins import here, so a broken plugin table or a missing
+    dependency surfaces here first) without touching the live workspace.
+    """
     args = _parse_args(None)
     config = load_config()
-    _reconcile_account_store()
+    if args.preflight:
+        logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
+    else:
+        _reconcile_account_store()
     application = build_application(config, args)
     state = state_of(application)
 
-    # The chat app tells the shell when its instance list changes (contracts.md section
-    # 5). Installed here, at the process entry point, so a manager a test builds nudges
-    # nobody; on a thread of its own, so an agent event never waits on the shell.
-    state.agent_manager.set_nudger(
-        ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
-    )
+    if not args.preflight:
+        # The chat app tells the shell when its instance list changes (contracts.md section
+        # 5). Installed here, at the process entry point, so a manager a test builds nudges
+        # nobody; on a thread of its own, so an agent event never waits on the shell.
+        state.agent_manager.set_nudger(
+            ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
+        )
 
-    # Start the ``mngr observe`` pipeline now that the app is assembled. This is
-    # the one place observe is started; ``build_application`` only constructs, so
-    # tests that build an app never spawn it.
-    state.agent_manager.start()
+        # Start the ``mngr observe`` pipeline now that the app is assembled. This is
+        # the one place observe is started; ``build_application`` only constructs, so
+        # tests that build an app never spawn it.
+        state.agent_manager.start()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover
@@ -200,7 +219,7 @@ def main() -> None:
     # Registered once the socket is bound and just before serving, so the shell's first
     # fetch after the registration finds the app answering (a 503 until the agent list is
     # known, never a refused connection).
-    if not args.no_register:
+    if not (args.no_register or args.preflight):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
     server.serve_forever()
 

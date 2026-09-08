@@ -1,5 +1,5 @@
 """Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, and a pre-arc ``workspace_layout`` directory and its registry for
+layout.py, and an old-format ``workspace_layout`` directory and its registry for
 migrate_workspace_layouts.py."""
 
 from __future__ import annotations
@@ -213,8 +213,8 @@ def _legacy_content(
     }
 
 
-# The old panel params, one per kind the pre-arc frontend saved (``PanelParams`` in its
-# ``liveSurfaces.ts``): the address each maps to is what the migration tests assert.
+# The old panel params, one per kind the old frontend saved: the address each maps to is what
+# the migration tests assert.
 _LEGACY_PANELS: dict[str, dict[str, Any]] = {
     "chat-agent-aaa": {
         "panelType": "chat",
@@ -269,11 +269,10 @@ _LEGACY_PANELS: dict[str, dict[str, Any]] = {
 
 
 def _write_legacy_layout_dir(layout_dir: Path) -> None:
-    """A pre-arc ``workspace_layout`` directory in the shape today's retired writers left: two
-    projects (one with every panel kind and the overrides map, one hand-edited with the legacy
-    unpinned list, the old sessionless files viewer as a member, and a corrupt mobile file), an
-    Everything view showing only an ad-hoc page,
-    and the three per-ref side stores."""
+    """An old-format ``workspace_layout`` directory in the shape the old shell left: two projects
+    (one with every panel kind and the overrides map, one hand-edited with the legacy unpinned
+    list, the old sessionless files viewer as a member, and a corrupt mobile file), an
+    Everything view showing only an ad-hoc page, and the three per-ref side stores."""
     projects_dir = layout_dir / "projects"
     projects_dir.mkdir(parents=True)
     (layout_dir / "projects_meta.json").write_text(

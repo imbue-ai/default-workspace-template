@@ -218,10 +218,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "owner-exec": 5,
     "terminal": 10,
     "system_interface": 20,
-    # The chat app (the agent harness UI, its own program since phase 10 of the
-    # workspace app model): just above the shell it is embedded in, and below
-    # every other service, since a shed chat app costs every open chat its page
-    # until it restarts.
+    # The chat app (the agent harness UI): just above the shell it is embedded
+    # in, and below every other service, since a shed chat app costs every open
+    # chat its page until it restarts.
     "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.

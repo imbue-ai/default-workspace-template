@@ -1465,7 +1465,18 @@ class _FakeHttp(update_runtime.HttpClient):
         return self._page_responder(url)
 
 
+def _instances_page(url: str) -> update_runtime.FetchedPage:
+    """An instances API answering as one does: 200 with a JSON body."""
+    return update_runtime.FetchedPage(
+        status=200,
+        body='{"instances": []}',
+        headers={"content-type": "application/json"},
+    )
+
+
 def _built_app_page(url: str) -> update_runtime.FetchedPage:
+    if url.endswith(update_probes.INSTANCES_PATH):
+        return _instances_page(url)
     if url.endswith(".js"):
         return update_runtime.FetchedPage(
             status=200,
@@ -1519,6 +1530,10 @@ class _FakeSpawner(update_runtime.Spawner):
     last: _FakeSpawned | None = None
     # A boot that never starts, as subprocess reports one: not an exit code.
     spawn_error: OSError | None = None
+    # When set, only the boot whose argv starts with this executable has exited
+    # (with ``output``); every other boot stays up, as the shell's does while the
+    # chat's fails.
+    exited_argv0: str | None = None
 
     def spawn(
         self, argv: Sequence[str], cwd: str, env: dict, output_path: Path
@@ -1526,9 +1541,13 @@ class _FakeSpawner(update_runtime.Spawner):
         if self.spawn_error is not None:
             raise self.spawn_error
         self.raw_spawns.append(list(argv))
-        self.spawns.append(_unwrap_expendable(list(argv)))
+        unwrapped = _unwrap_expendable(list(argv))
+        self.spawns.append(unwrapped)
         self.envs.append(dict(env))
-        self.last = _FakeSpawned(output=self.output, exited=self.exited)
+        is_exited = self.exited
+        if self.exited_argv0 is not None:
+            is_exited = unwrapped[0] == self.exited_argv0
+        self.last = _FakeSpawned(output=self.output, exited=is_exited)
         return self.last
 
 
@@ -1751,10 +1770,9 @@ def test_read_app_tools_lists_every_python_app_in_the_tree() -> None:
 def test_read_app_tools_leaves_a_pre_manifest_app_to_the_root_venv(
     tmp_path: Path, capsys
 ) -> None:
-    # An app scaffolded before manifests existed has a pyproject but no
-    # app.toml; it still runs `uv run <name>` from the root venv, so the apply
-    # must neither install nor reinstall a tool for it (that is the
-    # migration's job), and its absence is expected rather than a note.
+    # An app with a pyproject but no app.toml runs `uv run <name>` from the
+    # root venv, so the apply must neither install nor reinstall a tool for
+    # it, and its absence is expected rather than a note.
     repo_root = _make_apply_repo(tmp_path)
     legacy = repo_root / update_layout.APPS_DIR / "legacy_dashboard"
     legacy.mkdir()
@@ -2006,6 +2024,76 @@ def test_apply_backend_change_preflights_restarts_and_probes(
     assert not runner.ran("npm", "run", "build")
 
 
+def _write_chat_program(repo_root: Path) -> None:
+    """Give the tree a chat program of its own."""
+    entry = repo_root / update_probes.CHAT_PROGRAM_ENTRY
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("")
+
+
+def test_apply_preflights_the_chat_app_beside_the_shell_when_the_tree_runs_one(
+    apply_repo: Path, monkeypatch
+) -> None:
+    # The chat is the process that imports mngr and the harness plugins, so a
+    # merged tree whose chat cannot boot must be rejected before the restart,
+    # not rolled back after it.
+    monkeypatch.setenv("MNGR_AGENT_ID", "the-lead-agent-id")
+    _write_chat_program(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.spawns == [
+        [update_layout.TOOL_NAME],
+        [update_layout.CHAT_TOOL_NAME, "--preflight"],
+    ]
+    chat_env = spawner.envs[1]
+    assert chat_env["CHAT_HOST"] == "127.0.0.1"
+    assert chat_env["CHAT_PORT"].isdigit()
+    assert "MNGR_AGENT_ID" not in chat_env
+    assert runner.ran(*_RESTART)
+
+
+def test_a_failed_chat_preflight_never_restarts_the_live_service(
+    apply_repo: Path,
+) -> None:
+    _write_chat_program(apply_repo)
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner(
+        output="ModuleNotFoundError: No module named 'imbue.mngr_claude'",
+        exited_argv0=update_layout.CHAT_TOOL_NAME,
+    )
+
+    def shell_boots_and_the_chat_does_not(url: str) -> int | None:
+        if _is_live(url):
+            return 200
+        chat_port = spawner.envs[-1].get("CHAT_PORT") if spawner.envs else None
+        return None if chat_port is not None and f":{chat_port}/" in url else 200
+
+    code = _apply(
+        runner, _FakeHttp(shell_boots_and_the_chat_does_not), spawner, apply_repo
+    )
+
+    assert code == 2
+    assert not runner.ran(*_RESTART)
+    assert runner.ran("git", "checkout", _ROLLBACK, "--")
+    assert spawner.last is not None and spawner.last.terminated
+
+
+def test_apply_skips_the_chat_preflight_for_a_tree_without_a_chat_program(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    spawner = _FakeSpawner()
+
+    code = _apply(runner, _FakeHttp(_all_healthy), spawner, apply_repo)
+
+    assert code == 0
+    assert spawner.spawns == [[update_layout.TOOL_NAME]]
+
+
 def test_apply_vendored_source_change_restarts_without_building(
     apply_repo: Path,
 ) -> None:
@@ -2187,6 +2275,77 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
     assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
     assert not runner.ran("uv", "run", "env-converge")
     assert not _marker_exists(apply_repo)
+
+
+_ROLLBACK_OF_TARGET = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _target_landed_then_rolled_back(runner: _RecordingRunner, target_ref: str) -> None:
+    """Shape git's answers as after a rolled-back apply of ``target_ref``: the target is an
+    ancestor of HEAD with a rollback commit on top, while the new merge ref is not yet landed."""
+    runner.respond(
+        ("git", "merge-base", "--is-ancestor", target_ref), _Result(returncode=0)
+    )
+    runner.respond(
+        ("git", "log", "--format=%H %s", f"{target_ref}..HEAD"),
+        _Result(
+            stdout=f"{_ROLLBACK_OF_TARGET} Roll back update apply (restore to abc123def456)\n"
+            "1111111111111111111111111111111111111111 Tidy a note\n"
+        ),
+    )
+
+
+def test_a_re_merge_of_a_rolled_back_target_is_refused_until_the_rollback_is_reverted(
+    apply_repo: Path,
+) -> None:
+    # After a rollback (a forward revert) git counts the target's content as already
+    # merged, so a fresh worker pass that plainly re-merges it lands only what the
+    # target gained since; the apply would probe the old release plus a few files,
+    # find it healthy, and record the update as landed. The apply refuses instead,
+    # naming the rollback commit the worker must revert first.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
+    runner.respond(
+        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
+        _Result(stdout="Tidy a note\n"),
+    )
+
+    with pytest.raises(update_runtime.ApplyPreconditionError) as raised:
+        _apply(
+            runner,
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+            target_ref="minds-v0.4.2",
+        )
+
+    assert f"git revert --no-edit {_ROLLBACK_OF_TARGET[:12]}" in str(raised.value)
+    assert not runner.ran("git", "merge")
+    assert not _marker_exists(apply_repo)
+
+
+def test_a_re_merge_that_reverts_the_rollback_first_is_applied(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
+    runner.respond(
+        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
+        _Result(
+            stdout='Revert "Roll back update apply (restore to abc123def456)"\nTidy a note\n'
+        ),
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert runner.ran("git", "merge")
 
 
 def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
@@ -2717,10 +2876,10 @@ def test_preflight_stops_polling_once_the_backend_has_died(apply_repo: Path) -> 
 def test_preflight_drops_the_callers_agent_identity(
     apply_repo: Path, monkeypatch
 ) -> None:
-    # The apply runs inside an agent, so its environment carries MNGR_AGENT_ID
-    # -- under which the throwaway pre-flight boot would persist layout state
-    # as that agent, clobbering the live layout.json (the preview flow drops it
-    # for exactly this reason).
+    # The apply runs inside an agent, so its environment carries MNGR_AGENT_ID,
+    # which the chat app reads as its own primary agent's id; a throwaway
+    # pre-flight boot must never act as that agent (the preview flow drops it
+    # for the same reason).
     monkeypatch.setenv("MNGR_AGENT_ID", "the-lead-agent-id")
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
     spawner = _FakeSpawner()
@@ -2757,22 +2916,98 @@ def test_failed_post_restart_health_rolls_back_and_restarts_into_known_good(
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
-def test_an_unhealthy_chat_after_the_restart_rolls_back(
+# The critical apps that serve instances, as a workspace tree declares them: the chat
+# (its instances API at the app URL, which only the registry knows) and the terminal
+# (a sidecar port its manifest declares).
+_CHAT_ROW_URL = "http://localhost:8010"
+_TERMINAL_INSTANCES_URL = "http://127.0.0.1:7682"
+
+
+def _write_instances_app(
+    repo_root: Path,
+    name: str,
+    *,
+    instances_url: str | None = None,
+    is_critical: bool = True,
+) -> None:
+    """Give the tree an app whose manifest serves instances (a manifest alone: the
+    tool list reads only apps with a pyproject, the probes only the manifests)."""
+    app_dir = repo_root / update_layout.APPS_DIR / name
+    app_dir.mkdir(parents=True, exist_ok=True)
+    declared = "" if instances_url is None else f'instances_url = "{instances_url}"\n'
+    (app_dir / update_layout.MANIFEST_FILENAME).write_text(
+        f'name = "{name}"\ndisplay_name = "{name}"\ninstances = true\n'
+        f"critical = {str(is_critical).lower()}\n{declared}"
+    )
+
+
+def _write_registry(repo_root: Path, url_by_name: dict[str, str]) -> None:
+    registry = repo_root / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        "".join(
+            f'[[apps]]\nname = "{name}"\nurl = "{url}"\n\n'
+            for name, url in url_by_name.items()
+        )
+    )
+
+
+def _instances_url(base: str) -> str:
+    return f"{base}{update_probes.INSTANCES_PATH}"
+
+
+def _shell_catch_all_page(url: str) -> update_runtime.FetchedPage:
+    """The shell's SPA catch-all: 200 as HTML for any path on the shell's own origin,
+    the instances API included; every other server answers as the built app does."""
+    if _is_live(url):
+        return update_runtime.FetchedPage(
+            status=200, body="<!doctype html>", headers={"content-type": "text/html"}
+        )
+    return _built_app_page(url)
+
+
+def test_the_apply_probes_the_instances_api_of_every_critical_app_that_serves_one(
+    apply_repo: Path,
+) -> None:
+    """After the restart the shell's health route is polled, then the instances API of
+    every critical app with one: the chat's at the URL its registry row names, the
+    terminal's at the port its manifest declares. A non-critical app is not held to it."""
+    _write_instances_app(apply_repo, "chat")
+    _write_instances_app(apply_repo, "terminal", instances_url=_TERMINAL_INSTANCES_URL)
+    _write_instances_app(
+        apply_repo, "files", instances_url="http://127.0.0.1:8301", is_critical=False
+    )
+    _write_registry(
+        apply_repo, {"chat": _CHAT_ROW_URL, "files": "http://localhost:8300"}
+    )
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    http = _FakeHttp(_all_healthy)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert _instances_url(_CHAT_ROW_URL) in http.page_urls
+    assert _instances_url(_TERMINAL_INSTANCES_URL) in http.page_urls
+    assert not any(url.startswith("http://127.0.0.1:8301") for url in http.page_urls)
+    assert not any(url.startswith("http://localhost:8300") for url in http.page_urls)
+
+
+def test_an_unhealthy_critical_app_after_the_restart_rolls_back(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The chat app restarts with the shell and is probed beside it: a chat that does
-    not come back healthy fails the apply like the shell would, and the rollback's
-    own probe of it (the restored tree runs the chat too) is what makes the rollback
-    count as recovered."""
-    _write_chat_program(apply_repo)
+    """A critical app restarts with the shell and is probed beside it: one whose
+    instances API does not come back fails the apply like the shell would, and the
+    rollback's own probe of it (the restored tree runs it too) is what makes the
+    rollback count as recovered."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
     restarts = {"seen": 0}
 
-    def responder(url: str) -> int | None:
-        if url == chat_health:
-            return 200 if restarts["seen"] >= 2 else 500
-        return 200
+    def page_responder(url: str) -> update_runtime.FetchedPage:
+        if url == _instances_url(_CHAT_ROW_URL) and restarts["seen"] < 2:
+            return update_runtime.FetchedPage(status=503, body="", headers={})
+        return _built_app_page(url)
 
     def count_restarts(argv: list[str]) -> None:
         if tuple(argv[:4]) == _RESTART:
@@ -2780,108 +3015,204 @@ def test_an_unhealthy_chat_after_the_restart_rolls_back(
 
     runner.on_command = count_restarts
 
-    code = _apply(runner, _FakeHttp(responder), _FakeSpawner(), apply_repo)
+    code = _apply(
+        runner, _FakeHttp(_all_healthy, page_responder), _FakeSpawner(), apply_repo
+    )
 
     assert code == 2
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
-    assert f"did not become healthy after restart (probed {chat_health})" in (
-        capsys.readouterr().err
-    )
-
-
-def test_the_chat_health_url_comes_from_the_registry_row_else_the_default(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
-    default_url = f"{update_probes.DEFAULT_CHAT_URL}{update_probes.CHAT_HEALTH_PATH}"
-
-    # No registry yet (a fresh workspace): the default, and a note saying so.
-    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
-    assert "could not read the app registry" in capsys.readouterr().err
-
-    registry.parent.mkdir(parents=True)
-    registry.write_text(
-        '[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n\n'
-        '[[apps]]\nname = "chat"\nurl = "http://localhost:8123/"\n'
-    )
     assert (
-        update_probes.chat_health_url(tmp_path, _LIVE_BASE)
-        == "http://localhost:8123/api/health"
-    )
-    assert capsys.readouterr().err == ""
-
-    # A registry with no chat row, and a corrupt one, both degrade to the default.
-    registry.write_text('[[apps]]\nname = "terminal"\nurl = "http://127.0.0.1:7682"\n')
-    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
-    registry.write_text("[[apps\n")
-    assert update_probes.chat_health_url(tmp_path, _LIVE_BASE) == default_url
-    assert "TOMLDecodeError" in capsys.readouterr().err
+        "the chat app did not become healthy after restart "
+        f"({_instances_url(_CHAT_ROW_URL)} answered HTTP 503)"
+    ) in capsys.readouterr().err
 
 
-def test_a_chat_row_naming_the_shells_origin_is_the_pre_split_registration(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The row the shell wrote for the chat before the chat ran as its own program names
-    the shell's own URL; probing it would pass on the shell's health, so it is not the
-    chat's address, whichever loopback spelling either side uses."""
-    registry = tmp_path / update_layout.APPS_REGISTRY_PATH
-    registry.parent.mkdir(parents=True)
-    default_url = f"{update_probes.DEFAULT_CHAT_URL}{update_probes.CHAT_HEALTH_PATH}"
-
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:8000"\n')
-    assert (
-        update_probes.chat_health_url(tmp_path, "http://127.0.0.1:8000") == default_url
-    )
-    assert "names the shell's own origin" in capsys.readouterr().err
-
-    # A row at another port on the same host is the chat's own registration.
-    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://localhost:8010/"\n')
-    assert (
-        update_probes.chat_health_url(tmp_path, "http://127.0.0.1:8000")
-        == "http://localhost:8010/api/health"
-    )
-    assert capsys.readouterr().err == ""
-
-
-def _write_chat_program(repo_root: Path) -> None:
-    entry = repo_root / update_probes.CHAT_PROGRAM_ENTRY
-    entry.parent.mkdir(parents=True, exist_ok=True)
-    entry.write_text("")
-
-
-def test_recovery_holds_the_chat_to_health_where_the_restored_tree_runs_it(
+def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
     apply_repo: Path,
 ) -> None:
-    """A rollback into a tree whose chat is its own program is confirmed like the forward
-    apply: a shell that answers over a chat that never comes back is not a recovery."""
-    _write_chat_program(apply_repo)
+    """Right after the restart the chat's row still names the shell's own port (the
+    chat re-registers at the end of its boot), where the shell's SPA catch-all answers
+    200 as HTML. That is not the instances API answering: the poll keeps re-reading the
+    registry and passes once the row names the chat and it answers as JSON."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _LIVE_BASE})
+    polls = {"count": 0}
+
+    def page_responder(url: str) -> update_runtime.FetchedPage:
+        polls["count"] += 1
+        if polls["count"] == 3:
+            _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+        return _shell_catch_all_page(url)
+
+    http = _FakeHttp(_all_healthy, page_responder)
+    (app,) = update_probes.read_critical_instance_apps(apply_repo)
+
+    failure = update_probes.wait_instances_healthy(
+        http, apply_repo, app, 10, 0.0, _no_sleep
+    )
+
+    assert failure is None
+    assert http.page_urls[:3] == [_instances_url(_LIVE_BASE)] * 3
+    assert http.page_urls[3] == _instances_url(_CHAT_ROW_URL)
+
+
+def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
+    apply_repo: Path,
+) -> None:
+    _write_instances_app(apply_repo, "chat")
+    (app,) = update_probes.read_critical_instance_apps(apply_repo)
+    http = _FakeHttp(_all_healthy, _shell_catch_all_page)
+
+    # No registry at all: the app never registered.
+    failure = update_probes.wait_instances_healthy(
+        http, apply_repo, app, 3, 0.0, _no_sleep
+    )
+    assert (
+        failure
+        == f"the app registry at {update_layout.APPS_REGISTRY_PATH} never listed 'chat'"
+    )
+    assert http.page_urls == []
+
+    # A registry that is there but will not parse: the poll waits on it as if the
+    # app had not registered, and the finding names the broken file, not a
+    # registration that never happened.
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    (apply_repo / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
+    failure = update_probes.wait_instances_healthy(
+        http, apply_repo, app, 2, 0.0, _no_sleep
+    )
+    assert failure is not None
+    assert failure.startswith(
+        f"the app registry at {update_layout.APPS_REGISTRY_PATH} could not be read "
+        "(TOMLDecodeError: "
+    )
+    assert http.page_urls == []
+
+    # A row that stays on the shell's port: the catch-all's HTML is named as such.
+    _write_registry(apply_repo, {"chat": _LIVE_BASE})
+    failure = update_probes.wait_instances_healthy(
+        http, apply_repo, app, 2, 0.0, _no_sleep
+    )
+    assert failure is not None
+    assert failure.startswith(
+        f"{_instances_url(_LIVE_BASE)} answered 200 but as 'text/html'"
+    )
+
+    # A server that does not answer at all.
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    silent = _FakeHttp(_all_healthy, lambda url: None)
+    failure = update_probes.wait_instances_healthy(
+        silent, apply_repo, app, 2, 0.0, _no_sleep
+    )
+    assert failure == f"{_instances_url(_CHAT_ROW_URL)} did not answer"
+
+
+def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_api(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The fixture tree already carries the shell (critical, no instances) and the browser.
+    repo_root = _make_apply_repo(tmp_path)
+    _write_instances_app(repo_root, "terminal", instances_url=_TERMINAL_INSTANCES_URL)
+    _write_instances_app(repo_root, "chat")
+    _write_instances_app(
+        repo_root, "files", instances_url="http://127.0.0.1:8301", is_critical=False
+    )
+    broken = repo_root / update_layout.APPS_DIR / "broken"
+    broken.mkdir()
+    (broken / update_layout.MANIFEST_FILENAME).write_text("name = [\n")
+
+    apps = update_probes.read_critical_instance_apps(repo_root)
+
+    assert apps == (
+        update_probes.CriticalInstanceApp("chat", None),
+        update_probes.CriticalInstanceApp("terminal", _TERMINAL_INSTANCES_URL),
+    )
+    assert "skipping the app at" in capsys.readouterr().err
+    # A tree with no apps directory declares nothing.
+    assert update_probes.read_critical_instance_apps(tmp_path / "elsewhere") == ()
+
+
+def test_the_instances_probe_url_is_the_manifests_else_the_registry_rows(
+    tmp_path: Path,
+) -> None:
+    terminal = update_probes.CriticalInstanceApp("terminal", _TERMINAL_INSTANCES_URL)
+    chat = update_probes.CriticalInstanceApp("chat", None)
+
+    # The manifest's declaration wins whatever the registry says; a chat with no row is
+    # not reachable yet, and a corrupt or absent registry reads the same way.
+    assert update_probes.instances_probe_url(tmp_path, terminal) == _instances_url(
+        _TERMINAL_INSTANCES_URL
+    )
+    assert update_probes.instances_probe_url(tmp_path, chat) is None
+    _write_registry(
+        tmp_path, {"terminal": "http://127.0.0.1:7681", "chat": _CHAT_ROW_URL + "/"}
+    )
+    assert update_probes.instances_probe_url(tmp_path, terminal) == _instances_url(
+        _TERMINAL_INSTANCES_URL
+    )
+    assert update_probes.instances_probe_url(tmp_path, chat) == _instances_url(
+        _CHAT_ROW_URL
+    )
+    (tmp_path / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
+    assert update_probes.instances_probe_url(tmp_path, chat) is None
+
+
+def test_recovery_holds_a_critical_app_to_health_where_the_restored_tree_runs_it(
+    apply_repo: Path,
+) -> None:
+    """A rollback into a tree that declares the app is confirmed like the forward
+    apply: a shell that answers over an instances API that never comes back is not a
+    recovery."""
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
 
-    def chat_never_healthy(url: str) -> int | None:
-        return 500 if url == chat_health else 200
+    def chat_never_healthy(url: str) -> update_runtime.FetchedPage:
+        if url == _instances_url(_CHAT_ROW_URL):
+            return update_runtime.FetchedPage(status=503, body="", headers={})
+        return _built_app_page(url)
 
-    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+    code = _apply(
+        runner, _FakeHttp(_all_healthy, chat_never_healthy), _FakeSpawner(), apply_repo
+    )
 
     assert code == 3
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
 
 
-def test_recovery_does_not_probe_a_chat_the_restored_tree_does_not_run(
+def test_recovery_does_not_probe_an_app_the_restored_tree_does_not_declare(
     apply_repo: Path,
 ) -> None:
-    """Rolled back into a tree from before the chat's split, there is no chat process to
-    answer, so the shell's health alone confirms the recovery."""
+    """Rolled back into a tree none of whose manifests declares an instances API,
+    the shell's health alone confirms the recovery: the shell
+    failing its own probe after the forward restart rolls the apply back, and the
+    recovery counts as recovered with the chat's instances API never asked."""
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
-    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
+    restarts = {"seen": 0}
 
-    def chat_never_healthy(url: str) -> int | None:
-        return 500 if url == chat_health else 200
+    def shell_unhealthy_until_recovery(url: str) -> int | None:
+        if _is_live(url) and restarts["seen"] < 2:
+            return 500
+        return 200
 
-    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+    def chat_never_healthy(url: str) -> update_runtime.FetchedPage:
+        if url == _instances_url(_CHAT_ROW_URL):
+            return update_runtime.FetchedPage(status=503, body="", headers={})
+        return _built_app_page(url)
+
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+    http = _FakeHttp(shell_unhealthy_until_recovery, chat_never_healthy)
+
+    code = _apply(runner, http, _FakeSpawner(), apply_repo)
 
     assert code == 2
     assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
+    assert _instances_url(_CHAT_ROW_URL) not in http.page_urls
 
 
 _PROVISIONER_DIFF = "M\tsystem/scripts/setup_system.sh\n"
@@ -4415,10 +4746,74 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     }
     assert envs[update_layout.MNGR_DIR]["UV_TOOL_DIR"] == str(tools)
     assert envs[update_layout.MNGR_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
-    # Targeting is per executable, not global: the other tool is not on PATH
-    # here, so its install is left to uv's own default rather than aimed at the
-    # directory that happens to hold mngr.
-    assert "UV_TOOL_DIR" not in envs[update_layout.SYSTEM_INTERFACE_DIR]
+    # A tool that is not on PATH at all has no installation to target: it is
+    # installed beside the mngr tool, whose bin directory the program lines
+    # resolve through (uv's default under $HOME is on nobody's PATH, so a tool
+    # left to it installs fine and is never found).
+    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_DIR"] == str(tools)
+    assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
+
+
+def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
+    apply_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A tool the merge adds (here the chat's) is on no PATH yet; the merge's
+    install of it must land where the merged program line will find it."""
+    bin_dir = tmp_path / "root" / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
+    (bin_dir / update_layout.MNGR_EXECUTABLE).write_text(
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    )
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+    _write_app(apply_repo, "chat", "chat", "chat-app", True)
+    runner = _apply_runner(
+        "A\tsystem/apps/chat/imbue/chat/main.py\n" + _BACKEND_MANIFEST_DIFF, apply_repo
+    )
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(
+        bin_dir / update_layout.MNGR_EXECUTABLE
+    )
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    chat_install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"] and argv[4] == "system/apps/chat"
+    )
+    assert chat_install_env["UV_TOOL_DIR"] == str(tools)
+    assert chat_install_env["UV_TOOL_BIN_DIR"] == str(bin_dir)
+    assert (
+        f"installing 'chat' beside the mngr tool ({bin_dir})" in capsys.readouterr().err
+    )
+
+
+def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With neither the tool's own executable nor mngr an installed uv tool on
+    PATH there is no installation to aim at, so the install is left to uv's own
+    tool directory and the refresh says so, naming both."""
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    assert not runner.executables
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    shell_install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"]
+        and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
+    )
+    assert "UV_TOOL_DIR" not in shell_install_env
+    assert "UV_TOOL_BIN_DIR" not in shell_install_env
+    assert (
+        f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
+        f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
+    ) in capsys.readouterr().err
 
 
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
@@ -4717,8 +5112,8 @@ def test_the_recovery_rebuild_does_not_run_npm_ci_over_a_restored_node_modules(
 
 
 def _make_pre_split_tree(repo_root: Path) -> None:
-    """Shape the tree like one from before the chat's split: no npm workspace and no chat
-    bundle, just the shell's frontend directory."""
+    """Shape the tree like one without the npm workspace: no ``system/package.json`` and no
+    chat bundle, just the shell's frontend directory."""
     (repo_root / update_layout.NPM_ROOT_DIR / "package.json").unlink()
     for bundle in update_layout.FRONTEND_BUNDLES:
         if bundle.frontend_dir != update_layout.FRONTEND_DIR:
@@ -4728,8 +5123,8 @@ def _make_pre_split_tree(repo_root: Path) -> None:
 def test_a_rollback_into_a_pre_split_tree_restores_the_shell_bundle_without_a_rebuild(
     apply_repo: Path,
 ) -> None:
-    # The first update to the release that split the chat out rolls back to a tree
-    # with no npm workspace and no chat bundle. The shell's bundle was copied aside,
+    # A rollback can land on a tree with no npm workspace and no chat bundle. The
+    # shell's bundle was copied aside,
     # and that is every bundle the restored tree serves -- so recovery puts it back
     # and rebuilds nothing, rather than running npm at a root the tree does not have.
     _make_pre_split_tree(apply_repo)
@@ -4777,17 +5172,32 @@ def test_a_rollback_into_a_pre_split_tree_removes_the_chat_bundle_the_forward_bu
 ) -> None:
     # The forward build succeeds and writes the chat bundle; the apply then fails on the
     # chat probe. Nothing copied that bundle aside (it did not exist before), the tree
-    # restore only touches tracked paths, and a tree from before the split neither tracks
-    # nor ignores it -- so recovery must remove it, or the rolled-back tree is dirty and
+    # restore only touches tracked paths, and a tree without the chat frontend neither
+    # tracks nor ignores it -- so recovery must remove it, or the rolled-back tree is dirty and
     # the retry the rollback promises is refused.
     _make_pre_split_tree(apply_repo)
+    _write_instances_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
-    chat_health = update_probes.chat_health_url(apply_repo, _LIVE_BASE)
+    restarts = {"seen": 0}
 
-    def chat_never_healthy(url: str) -> int | None:
-        return 500 if url == chat_health else 200
+    def chat_unhealthy_until_recovery(url: str) -> update_runtime.FetchedPage:
+        if url == _instances_url(_CHAT_ROW_URL) and restarts["seen"] < 2:
+            return update_runtime.FetchedPage(status=503, body="", headers={})
+        return _built_app_page(url)
 
-    code = _apply(runner, _FakeHttp(chat_never_healthy), _FakeSpawner(), apply_repo)
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy, chat_unhealthy_until_recovery),
+        _FakeSpawner(),
+        apply_repo,
+    )
 
     assert code == 2
     assert (apply_repo / update_layout.FRONTEND_BUILD_INDEX).exists()
@@ -4798,8 +5208,8 @@ def test_a_rollback_into_a_pre_split_tree_rebuilds_at_the_shell_frontend(
     unbuilt_apply_repo: Path,
 ) -> None:
     # Nothing was copied aside (the tree never built a bundle), so recovery rebuilds --
-    # from the shell's own frontend directory, where a tree from before the split keeps
-    # its manifest and node_modules, not from the npm root the merged tree introduced.
+    # from the shell's own frontend directory, where a tree without the npm workspace
+    # keeps its manifest and node_modules, not from the merged tree's npm root.
     _make_pre_split_tree(unbuilt_apply_repo)
     runner = _apply_runner(_FRONTEND_MANIFEST_DIFF + _FRONTEND_DIFF, unbuilt_apply_repo)
     runner.respond(
@@ -5421,7 +5831,7 @@ def test_recover_no_restart_restores_disk_state_only(apply_repo: Path) -> None:
 def test_recover_no_restart_removes_the_bundle_a_pre_split_tree_does_not_serve(
     apply_repo: Path,
 ) -> None:
-    # The boot path lands on the same pre-split tree as the live rollback: the chat
+    # The boot path lands on the same workspace-less tree as the live rollback: the chat
     # bundle the forward build wrote is neither tracked nor ignored there, so it has to
     # go, or the rolled-back tree is dirty and every later apply is refused.
     _make_pre_split_tree(apply_repo)

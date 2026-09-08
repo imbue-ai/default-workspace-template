@@ -428,8 +428,8 @@ def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_one
     session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
 ) -> None:
-    # terminal-1 survived (by id, under another name); terminal-2 survived under its name from
-    # before ids were kept; terminal-3 was lost to a container restart; terminal-4 was stopped.
+    # terminal-1 survived (by id, under another name); terminal-2 survived under its name, its
+    # record holding no id; terminal-3 was lost to a container restart; terminal-4 was stopped.
     fake_tmux.set_sessions([_session("renamed", "$5"), _session("terminal-2", "$6")])
     session_store.save_record(
         make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
@@ -702,8 +702,8 @@ def test_startup_gives_a_record_without_a_creation_time_its_live_sessions_time(
     session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
 ) -> None:
-    # A store from before creation times were kept: the record matches its session by id alone,
-    # and the dispatch attaches only by id and creation time together.
+    # A record with no creation time matches its session by id alone, and the dispatch attaches
+    # only by id and creation time together.
     fake_tmux.set_sessions([_session("renamed", "$3")])
     session_store.save_record(
         make_terminal_record(
@@ -735,3 +735,35 @@ def test_a_record_without_a_creation_time_still_matches_its_session_by_id(
     assert [(record.key, record.status) for record in session_source.list_instances()] == [
         ("terminal-1", InstanceStatus.IDLE)
     ]
+
+
+def test_a_session_renamed_to_another_terminals_key_stays_with_the_terminal_that_holds_its_id(
+    fake_tmux: FakeTmux,
+    session_store: JsonTerminalSessionStore,
+    session_source: TmuxSessionSource,
+) -> None:
+    # terminal-1's session was renamed inside tmux to terminal-2's key while terminal-2's own
+    # session is gone: the name must not let terminal-2 claim terminal-1's session, at startup
+    # or on a start, or the two would share one shell and stopping either would kill it. tmux
+    # refuses a second session of that name, so terminal-2 stays stopped and a start says why.
+    fake_tmux.set_sessions([_session("terminal-2", "$5")])
+    session_store.save_record(
+        make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
+    )
+    session_store.save_record(
+        make_terminal_record(name="terminal-2", title=None, workdir="/srv", session_id="$8")
+    )
+
+    session_source.recreate_remembered_sessions()
+
+    assert fake_tmux.creates() == [expected_new_session_call("terminal-2", "/srv")]
+    assert fake_tmux.session_names() == ["terminal-2"]
+    assert [(record.key, record.status) for record in session_source.list_instances()] == [
+        ("terminal-1", InstanceStatus.IDLE),
+        ("terminal-2", InstanceStatus.STOPPED),
+    ]
+    assert session_store.list_records()[0].session_id == "$5"
+
+    with pytest.raises(InstanceConflictError, match="duplicate session"):
+        session_source.start_instance(InstanceKey("terminal-2"))
+    assert session_store.list_records()[0].session_id == "$5"

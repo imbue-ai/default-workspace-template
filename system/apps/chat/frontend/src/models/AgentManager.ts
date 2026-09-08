@@ -7,7 +7,7 @@
 import m from "mithril";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getTerminalOriginLabel } from "../document-meta";
-import { deriveServiceOrigin } from "@imbue/workspace-ui/src/origin";
+import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
@@ -310,11 +310,12 @@ export function removeAgentActivityListener(listener: AgentActivityListener): vo
 /** The terminal app's origin, where the chat's terminal back face is served from: derived
  *  from the label the chat app read out of the registry into the page. */
 export function getTerminalUrl(): string {
-  return deriveServiceOrigin(getTerminalOriginLabel() || "terminal");
+  return deriveAppOrigin(getTerminalOriginLabel() || "terminal");
 }
 
-/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The ttyd
- *  dispatch reads ``$1`` ("_") then ``$2`` ("agent") then ``$3`` (the agent name).
+/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The terminal
+ *  app's dispatch takes the URL's ``arg`` values in order: a placeholder ("_", which lands in
+ *  ``$0``), the dispatch key ("agent"), then the agent name.
  *
  *  Only the back face of that agent's chat attaches one: two live ttyd clients on one tmux
  *  window keep resizing it out from under each other. */

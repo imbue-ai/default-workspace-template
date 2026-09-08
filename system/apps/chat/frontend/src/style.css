@@ -241,9 +241,9 @@
 
 /* The chat card and its two faces.
    A chat and its agent's terminal are one conversation rendered two ways, so they are the front
-   and back of one surface rather than two places. The mockup's FlipSurface, ported: perspective
-   on the frame, preserve-3d on the turner, both faces backface-hidden with the back pre-turned
-   so it reads correctly once around. */
+   and back of one surface rather than two places: perspective on the frame, preserve-3d on the
+   turner, both faces backface-hidden with the back pre-turned so it reads correctly once
+   around. */
 .chat-flip {
   position: relative;
   flex: 1 1 auto;
@@ -286,9 +286,9 @@
 }
 
 /* The switch that turns the card over. Only the row around it is styled here -- the switch
-   itself is the shared one from `modelCardStyles`, at its own size. Overriding that size with
-   CSS is what broke it: the knob's offset comes from a Tailwind utility, so a `transform` here
-   simply lost to it and left the knob sitting outside the track. */
+   itself is the shared one from `modelCardStyles`, at its own size: the knob's offset is a
+   Tailwind utility, which a `transform` here would lose to, leaving the knob outside the
+   track. */
 .terminal-view-toggle {
   display: inline-flex;
   align-items: center;
@@ -378,8 +378,8 @@
 }
 
 /* Progress view (the per-turn task timeline rendered from tk tickets).
-   The timeline's structure lives as utilities in views/ProgressBlock.ts and
-   views/icons.ts. What stays here is what utilities cannot carry: the
+   The timeline's structure lives as utilities in views/ProgressBlock.ts and the
+   library's components/icons.ts. What stays here is what utilities cannot carry: the
    narration classes (they style markdown-rendered children, and the live
    one's shimmer is a keyframe + background-clip machine) and the expanded
    panel's markdown/tool-block child rules. */

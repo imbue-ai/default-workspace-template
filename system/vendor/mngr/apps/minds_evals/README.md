@@ -164,6 +164,30 @@ the trial gave up). They stay there; the
 recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which supplies
 its own credentials rather than reading a developer's.
 
+## Browsing results
+
+```
+just minds-evals-view                                  # apps/minds_evals/jobs on :8080
+just minds-evals-view /path/to/other/jobs 8090
+```
+
+The backend is stock harbor; only the frontend is ours. `apps/minds_evals/viewer/` is a verbatim
+copy of harbor's own `apps/viewer`, vendored so that eval-specific annotations can be rendered
+without forking harbor's Python -- `harbor.viewer.create_app` accepts the static directory as an
+argument, which is the whole seam. See `viewer/VENDORED_FROM.md` for the tag it came from and how
+to re-vendor.
+
+The recipe builds first when the sources are newer than the last build, bootstrapping a pinned bun
+into `apps/minds_evals/.bun` on first use: about ten seconds once, two after, and nothing on a
+no-op. Neither the toolchain nor the build output is committed.
+
+Two properties are worth knowing. The vendored tag must match the harbor pin in `pyproject.toml`,
+because a newer frontend calls endpoints an older backend does not serve; `viewer_contract_test.py`
+checks every URL in the vendored client against the routes harbor actually registers, since nothing
+else connects the hand-written TypeScript to the Python. And a job directory stays fully readable by
+stock `harbor view`, which renders none of our annotations but everything else -- that fallback holds
+as long as annotations live in ATIF `extra`, which upstream ignores.
+
 ## Diagnosing a trial that went wrong
 
 Five artifacts answer "what happened", in the order worth reading:

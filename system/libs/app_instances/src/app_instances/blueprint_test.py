@@ -330,8 +330,7 @@ def test_stop_and_start_map_unknown_and_not_stoppable(
 def test_the_default_source_refuses_stop_and_start(
     renameable_store: JsonStoreInstanceSource, recording_nudger: RecordingNudger
 ) -> None:
-    # A source that never mentions the verbs (an app built before them) answers the
-    # interface's default refusal.
+    # A source that never mentions the verbs answers the interface's default refusal.
     client = build_instances_app(renameable_store, recording_nudger).test_client()
     created = client.post("/_instances", json={"action": "new", "params": {}})
     assert created.status_code == HTTP_CREATED

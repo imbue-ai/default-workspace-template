@@ -217,7 +217,7 @@ class CdpClient:
         await self.send("Target.closeTarget", {"targetId": target_id})
 
     async def navigate(self, target_id: str, url: str) -> None:
-        """Point one tab at ``url`` (the instances API's location verb).
+        """Point one tab at ``url``, raising CdpError when Chromium refuses.
 
         ``Page.navigate`` is a page-domain call, so it needs a session on the target: attach
         flattened, navigate through that session, detach. Chromium reports a navigation it

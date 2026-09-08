@@ -373,6 +373,25 @@ minds-evals-run dataset job_name concurrency="4" *harbor_args="":
     echo ">> ${cmd[*]}"
     "${cmd[@]}"
 
+# Browse a harbor job or task directory with the vendored viewer
+# (apps/minds_evals/viewer, a copy of harbor's own frontend -- see its
+# VENDORED_FROM.md). The backend is stock harbor; only the frontend is ours,
+# which is how eval-specific annotations get rendered without forking harbor's
+# Python. Which of the two viewer modes to serve is read off the folder, the
+# same way `harbor view` reads it. Builds first if the sources are newer than
+# the last build, bootstrapping bun into the project on first use; expect ~10s
+# once and ~2s after.
+[group("minds evals")]
+minds-evals-view folder="apps/minds_evals/jobs" port="8080":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apps/minds_evals/scripts/build_viewer.sh
+    # --project selects the standalone minds_evals venv, where harbor lives; it
+    # leaves cwd at the repo root, so the root-relative folder path stays correct.
+    uv run --project apps/minds_evals python -m imbue.minds_evals.viewer_server \
+        --folder "{{folder}}" --port "{{port}}"
+
+
 # Create an independent default-workspace-template checkout nested in the
 # current mngr checkout at .external_worktrees/default-workspace-template -- the
 # CLAUDE.md convention for developing default_workspace_template alongside mngr. Defaults the default_workspace_template branch

@@ -88,12 +88,14 @@ from update_probes import (
     HEALTH_ATTEMPTS,
     HEALTH_INTERVAL_SECONDS,
     HEALTH_PATH,
-    chat_health_url,
     describe_frontend_failure,
     has_chat_program,
     preflight,
+    preflight_chat,
+    read_critical_instance_apps,
     refresh_workspace_view,
     wait_healthy,
+    wait_instances_healthy,
 )
 from update_runtime import (
     ApplyFailed,
@@ -236,6 +238,53 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     """
     log = git_out(runner, repo_root, ["log", "--format=%s", f"{merge_ref}..HEAD"])
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
+
+
+def _refuse_a_re_merge_that_drops_a_rolled_back_target(
+    target_ref: str, merge_ref: str, repo_root: Path, runner: Runner
+) -> None:
+    """Refuse to apply ``merge_ref`` when it re-merges a target the tree landed and
+    then rolled back, unless it first reverts that rollback.
+
+    The rollback is a forward revert, so git already counts the target's content as
+    merged: a plain re-merge lands only what the target gained since the failed
+    attempt, and the apply would then probe the old release plus a few files, find
+    it healthy (the manifests it probes by are not even in the tree), and record
+    the update as landed. Reverting the rollback commit on the worker's branch is
+    what puts the content back (the update-self worker reference says how); its
+    presence in ``HEAD..merge_ref`` is what lets the apply proceed.
+    """
+    if not _is_merge_landed(target_ref, repo_root, runner):
+        return
+    since_target = git_out(
+        runner, repo_root, ["log", "--format=%H %s", f"{target_ref}..HEAD"]
+    )
+    rollback = next(
+        (
+            commit
+            for commit, _separator, subject in (
+                line.partition(" ") for line in since_target.splitlines()
+            )
+            if subject.startswith(_ROLLBACK_SUBJECT_PREFIX)
+        ),
+        None,
+    )
+    if rollback is None:
+        return
+    reverts = git_out(runner, repo_root, ["log", "--format=%s", f"HEAD..{merge_ref}"])
+    if any(
+        line.startswith(f'Revert "{_ROLLBACK_SUBJECT_PREFIX}')
+        for line in reverts.splitlines()
+    ):
+        return
+    raise ApplyPreconditionError(
+        f"{target_ref} was landed and then rolled back by {rollback[:12]}, so git "
+        f"already counts its content as merged and {merge_ref} would land only what "
+        "the target gained since: the tree would be the previous release plus a few "
+        "files, which the probes cannot tell from a good update. Revert that rollback "
+        f"on the worker's branch first (`git revert --no-edit {rollback[:12]}`, per the "
+        "update-self worker reference), then re-run. Nothing was changed."
+    )
 
 
 def _expected_frontend_tree_hash(
@@ -482,13 +531,17 @@ class _RestoredFrontend(NamedTuple):
     is_npm_workspace: bool
 
 
+# CLEANUP: drop the non-workspace branch below, ``_remove_unserved_bundles``, and the
+# always-True arm of ``_is_recovery_npm_ci_needed`` once every workspace has updated
+# past the release that introduced the ``system/`` npm workspace: a rollback can then
+# only land on a tree that has it.
 def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
     """The frontend layout of the tree the rollback restored.
 
-    A tree from before the chat's split has no npm workspace at ``system/`` and no chat
-    frontend: its one bundle builds from the shell's own frontend directory, with the
-    node_modules there. The forward apply never asks this (the merged tree always has the
-    workspace), but a rollback lands on whatever tree the workspace ran before.
+    A tree with no npm workspace at ``system/`` and no chat frontend builds its one
+    bundle from the shell's own frontend directory, with the node_modules there. The
+    forward apply never asks this (the merged tree always has the workspace), but a
+    rollback lands on whatever tree the workspace ran before.
 
     A frontend is told by its tracked manifest, not its directory: the rollback removes the
     tracked files, but the forward build leaves ignored files under a frontend's
@@ -511,7 +564,7 @@ def _restored_frontend_layout(repo_root: Path) -> _RestoredFrontend:
 def _remove_unserved_bundles(repo_root: Path, frontend: _RestoredFrontend) -> None:
     """Remove a bundle the forward build wrote that the restored tree does not serve.
 
-    The chat's, on a rollback into a tree from before the split: it has no copy to put
+    The chat's, on a rollback into a tree with no chat frontend: it has no copy to put
     back and nothing that tracks or ignores it there, so left standing it keeps the tree
     dirty and every later apply refused. Both rollback paths (the live one and the boot
     path's ``recover --no-restart``) land on such a tree the same way.
@@ -527,9 +580,9 @@ def _is_recovery_npm_ci_needed(
 ) -> bool:
     """Whether the restored tree's node_modules must be reinstalled before its rebuild:
     the workspace's when its copy could not be put back (the forward ``npm ci`` replaced
-    it), the pre-split frontend's always -- the forward ``npm ci`` at the workspace root
-    empties every member's node_modules, the shell frontend's included, and nothing
-    copied that one aside."""
+    it), the shell frontend's own (a tree without the workspace) always -- the forward
+    ``npm ci`` at the workspace root empties every member's node_modules, the shell
+    frontend's included, and nothing copied that one aside."""
     if layout.is_npm_workspace:
         return "node_modules" not in restored
     return True
@@ -579,7 +632,7 @@ def _recover_running_state(
                     f"`bash {PROVISIONER_SCRIPT}` once the cause (often no network) is fixed.\n"
                 )
         # Only the bundles the restored tree serves count, at the npm root that tree
-        # has: a rollback into a tree from before the chat's split has neither a chat
+        # has: a rollback into a tree without the npm workspace has neither a chat
         # bundle to restore nor a workspace to build it from.
         frontend = _restored_frontend_layout(repo_root)
         _remove_unserved_bundles(repo_root, frontend)
@@ -624,23 +677,26 @@ def _recover_running_state(
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
-        # The chat is probed beside the shell as the forward apply does, but only
-        # where the restored tree runs it as its own program: a tree from before
-        # the split has no chat process to answer.
-        if healthy and has_chat_program(repo_root):
-            chat_health = chat_health_url(repo_root, base_url)
-            healthy = wait_healthy(
-                http,
-                chat_health,
-                HEALTH_ATTEMPTS,
-                HEALTH_INTERVAL_SECONDS,
-                sleeper,
-            )
-            if not healthy:
-                sys.stderr.write(
-                    "recovery: the chat app did not become healthy after the restart "
-                    f"(probed {chat_health})\n"
+        # Every critical app with an instances API is probed beside the shell as
+        # the forward apply does, read off the restored tree: a tree whose
+        # manifests declare none is confirmed by the shell alone.
+        if healthy:
+            for app in read_critical_instance_apps(repo_root):
+                app_failure = wait_instances_healthy(
+                    http,
+                    repo_root,
+                    app,
+                    HEALTH_ATTEMPTS,
+                    HEALTH_INTERVAL_SECONDS,
+                    sleeper,
                 )
+                if app_failure is not None:
+                    healthy = False
+                    sys.stderr.write(
+                        f"recovery: the {app.name} app did not become healthy after the "
+                        f"restart ({app_failure})\n"
+                    )
+                    break
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return _NOT_RECOVERED
@@ -825,6 +881,12 @@ def apply_update(
             "Re-running the apply cannot re-land it: re-dispatch a fresh worker "
             "pass off the current HEAD instead. Nothing was changed."
         )
+    # The fresh worker pass that follows such a rollback has the same trap one step
+    # later: its re-merge of the target lands nothing unless it reverts the rollback.
+    if target_ref is not None and not is_merge_landed:
+        _refuse_a_re_merge_that_drops_a_rolled_back_target(
+            target_ref, merge_ref, repo_root, runner
+        )
     write_marker(marker, repo_root, now)
 
     def _advance(phase: str) -> None:
@@ -1001,6 +1063,21 @@ def apply_update(
                 detail=preflight_output or "(the pre-flight boot wrote nothing at all)",
                 detail_heading="pre-flight boot output",
             )
+        # The chat is pre-flighted beside the shell, only where the merged tree runs it
+        # as its own program: it is the process that imports mngr and the harness
+        # plugins, so it is where a bad plugin table or a missing dependency fails.
+        if has_chat_program(repo_root):
+            chat_preflight_output = preflight_chat(
+                repo_root, http, spawner, sleeper, expend
+            )
+            if chat_preflight_output is not None:
+                raise ApplyFailed(
+                    "merged chat app failed to boot in a pre-flight check; live "
+                    "service not restarted",
+                    detail=chat_preflight_output
+                    or "(the pre-flight boot wrote nothing at all)",
+                    detail_heading="chat pre-flight boot output",
+                )
 
         if plan.frontend:
             _install_or_build_bundles(
@@ -1057,21 +1134,22 @@ def apply_update(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
-        # The chat app restarts with the shell (both are the services agent's) and is the
-        # process that imports mngr, so its health is the update's too. The URL comes from
-        # the registry, so the failure names it: a stale row is a cause worth seeing.
-        chat_health = chat_health_url(repo_root, resolved_base)
-        if not wait_healthy(
-            http,
-            chat_health,
-            HEALTH_ATTEMPTS,
-            HEALTH_INTERVAL_SECONDS,
-            sleeper,
-        ):
-            raise ApplyFailed(
-                f"the chat app did not become healthy after restart (probed {chat_health})",
-                live_service_restarted=True,
+        # Every critical app that serves instances restarts with the shell (all are
+        # the services agent's programs), so each one's instances API answering is
+        # the update's health too: the chat is the process that imports mngr, and
+        # the terminal is what the not-built placeholder hands over. Which apps
+        # those are comes from the merged tree's manifests; where each is reached
+        # follows the registry as the app re-registers, and the failure names what
+        # the last poll found.
+        for app in read_critical_instance_apps(repo_root):
+            app_failure = wait_instances_healthy(
+                http, repo_root, app, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
             )
+            if app_failure is not None:
+                raise ApplyFailed(
+                    f"the {app.name} app did not become healthy after restart ({app_failure})",
+                    live_service_restarted=True,
+                )
 
         # Scoped to a *regression*: only a frontend that was serving before
         # this apply has to be serving after it. Ahead of the view refresh,

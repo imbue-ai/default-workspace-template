@@ -66,11 +66,10 @@ def submit_credentials() -> Response:
 
     Kept as its own endpoint because it is a cross-repo contract: the Electron chrome POSTs
     here after the user visits the Imbue keys page, and mngr's deployment test drives it.
-    What changed is the destination -- the paste now mints an account of its own instead of
-    overwriting the workspace's shared login, so the account existing is the signed-in-with-
+    The paste mints an account of its own, so the account existing is the signed-in-with-
     Imbue flag and no running agent has to be restarted to see it.
 
-    The strict parse still rejects unmanaged keys and mixed-mode pastes with a 400 before
+    The strict parse rejects unmanaged keys and mixed-mode pastes with a 400 before
     anything is written.
     """
     try:

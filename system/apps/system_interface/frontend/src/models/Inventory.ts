@@ -17,7 +17,7 @@
 import { addressFor, parseAddress } from "@imbue/workspace-ui/src/addresses";
 import m from "mithril";
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
-import { deriveServiceOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
+import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
@@ -106,7 +106,7 @@ export interface ProjectInfo {
   shortcuts: ProjectShortcut[];
 }
 
-// The transient layout ops that still reach the browser as messages (contracts.md section 12): the
+// The transient layout ops that reach the browser as messages (contracts.md section 12): the
 // verbs that change what is on screen without changing the saved document. Every other op is
 // applied by the shell to the layout file and arrives here as a ``layout_updated``.
 export type LayoutOpName = "maximize" | "restore" | "refresh" | "reload_system_interface";
@@ -114,7 +114,7 @@ export type LayoutOpName = "maximize" | "restore" | "refresh" | "reload_system_i
 export interface LayoutOpEvent {
   op: LayoutOpName;
   args: Record<string, unknown>;
-  /** The address of the instance that invoked the helper (its own chat), "" when unknown. */
+  /** The address of the instance that invoked the helper (its own instance), "" when unknown. */
   requester: string;
 }
 
@@ -221,7 +221,7 @@ export function instancePageUrl(
   const origin =
     workspaceHostCoordinate(host) === host
       ? app.url.replace(/\/$/, "")
-      : deriveServiceOrigin(labelForApp(app), host, protocol).replace(/\/$/, "");
+      : deriveAppOrigin(labelForApp(app), host, protocol).replace(/\/$/, "");
   const path = instance.url.split("{tab}").join(encodeURIComponent(tabId));
   return `${origin}${path.startsWith("/") ? path : `/${path}`}`;
 }

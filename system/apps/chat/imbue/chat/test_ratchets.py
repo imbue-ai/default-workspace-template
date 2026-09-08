@@ -53,17 +53,17 @@ def test_prevent_bare_except() -> None:
 
 
 def test_prevent_broad_exception_catch() -> None:
-    # Bumped by one for the intentional catch-all wrapping the creation
-    # thread's body in agent_manager._run_creation. The thread runs with
-    # is_checked=False, so any exception that escapes is silently swallowed;
-    # without that catch-all a bug anywhere inside leaves the client's
-    # ChatPanel stuck on "Creating agent..." because proto_agent_completed
+    # One for the intentional catch-all wrapping the creation thread's body in
+    # agent_manager._run_creation. The thread runs with is_checked=False, so any
+    # exception that escapes is silently swallowed; without that catch-all a bug
+    # anywhere inside leaves the chat's page on "Starting the chat..." forever,
+    # because the provisional chat is never settled and proto_agent_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
-    # Bumped again for the credential-apply thread's top-level handler in
-    # auth._run_apply_in_background: same thread-boundary shape --
-    # anything escaping must surface as the FAILED restart phase in the
-    # sign-in modal instead of dying silently in a daemon thread.
-    # Bumped again for antigravity's flush worker in watcher._run_flush_worker:
+    # One for auth_flows._credentials_restored_on_error, which puts the previous
+    # credential back on any failure of the write inside it and re-raises: a
+    # half-written credential in a live account's folder would break every agent
+    # bound to it, silently, at its next turn.
+    # One for antigravity's flush worker in watcher._run_flush_worker:
     # same thread-boundary shape. The worker is the ONLY thing that ever delivers
     # a held message, so an escaping exception would strand every queued message
     # for the life of the process; it logs and keeps looping instead.
@@ -78,15 +78,15 @@ def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
-# 5 of these swallow a decode error the rule is aimed at. The sixth, in
-# session_parser._find_permission_request, is a misfire: it is not a decode of
+# All but one of these swallow a decode error the rule is aimed at. The exception,
+# in tool_output.find_permission_request, is a misfire: it is not a decode of
 # something expected to be JSON, it is a probe asking whether a JSON value
 # begins at a given `{` at all, walked across every brace at or before the
 # request_id key. "No" is the ordinary answer for a brace in prose or shell
 # output, so the warning the rule asks for would report a problem on input that
 # has nothing wrong with it, on most lines of most tool results. The genuine
 # failure -- a permission request we cannot read -- is already visible: the card
-# says so, which is the bug this parser exists to fix.
+# says so.
 def test_prevent_silent_decode_error_catches() -> None:
     rc.check_silent_decode_error_catches(_DIR, snapshot(4))
 
@@ -280,13 +280,10 @@ def test_prevent_underscore_imports() -> None:
 
 
 def test_prevent_init_methods_in_non_exception_classes() -> None:
-    # The watchdog file-change handler's __init__ is counted toward the
-    # project's existing total: it lived in session_watcher.py and now lives
-    # in watcher_common.py as the shared WakeOnChangeHandler.
-    # +1 for oom_prioritizer.ChatOomPrioritizer.__init__. Same category: it
-    # holds a ``threading.Lock``, mutable presence sets, a recency-timestamp
-    # dict mutated under that lock, and injected callables -- runtime state
-    # that is not a natural fit for a Pydantic model.
+    # Among them the watchdog file-change handler (watcher_common.WakeOnChangeHandler)
+    # and oom_prioritizer.ChatOomPrioritizer, which holds a ``threading.Lock``, the
+    # presence tracker, recency-timestamp dicts mutated under that lock, and injected
+    # callables -- runtime state that is not a natural fit for a Pydantic model.
     rc.check_init_methods_in_non_exception_classes(_DIR, snapshot(5))
 
 

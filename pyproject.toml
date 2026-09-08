@@ -21,6 +21,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.0",
+    # Supplies the browser/context/page fixtures that app suites' browser tests
+    # build on; the root conftest.py points them at Fortress.
+    "pytest-playwright>=0.4",
     "ruff>=0.4",
     "pyright>=1.1",
     "inline-snapshot>=0.31",
@@ -70,16 +73,11 @@ package = false
 # so a newly scaffolded or adopted app joins the workspace without editing
 # this list. An app with an app.toml manifest does not RUN from this
 # workspace's venv: it is installed as its own uv tool from its own pyproject
-# (system/scripts/build_workspace.sh, the build-app scaffold, and the
-# update-self apply all do that), and its supervisord program runs the tool's
-# entry point. An app scaffolded before manifests existed has no app.toml and
-# still runs `uv run <name>` from this venv. Both kinds are members, and stay
-# so: one lockfile covers the whole tree, such a pre-manifest app's entries in
-# this file keep resolving, and a user-built app never has to edit this file.
-# The cost is that `uv sync --all-packages` also installs the manifest apps
-# here, unused, which uv's shared cache makes nearly free. Membership keeps
-# every environment on the same versions; an app's own tool environment keeps
-# it running while this venv is rewritten or broken.
+# (see system/scripts/build_workspace.sh), and its supervisord program runs the
+# tool's entry point. An app with no app.toml runs `uv run <name>` from this
+# venv. Both kinds are members: one lockfile keeps every environment on the
+# same versions, and a user-built app never has to edit this file; an app's own
+# tool environment keeps it running while this venv is rewritten or broken.
 members = ["system/libs/*", "system/services/*", "system/apps/*"]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python package.
 exclude = ["system/libs/workspace_ui"]
@@ -96,8 +94,7 @@ tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 app-instances = { workspace = true }
-# The two apps other members name: the chat's test suite boots the shell beside it (the
-# chat is framed by the shell), and the shell's system tests boot the chat.
+# Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
 imbue-common = { path = "system/vendor/mngr/libs/imbue_common", editable = true }
@@ -141,6 +138,13 @@ norecursedirs = [
     "{arch}",
 ]
 timeout_func_only = true
+# The sub-projects register these through imbue_common's conftest hooks; the
+# root-level tests (system/*.py, system/scripts/, .agents/) have no conftest,
+# so the same markers are declared here for them.
+markers = [
+    "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
+    "release: marks tests as being required for release (but not for merging PRs)",
+]
 addopts = [
     "--timeout=10",
     "--ignore=system/vendor/mngr",

@@ -3,9 +3,9 @@
  * messaging boundaries (see test_embed_ratchets.py).
  *
  * The patched ttyd client (mngr_ttyd's vendored web client) never takes focus on its
- * own -- an embedded pane deciding to focus itself is how a background terminal
- * reconnect-looping against a dead tmux session used to steal the composer's focus
- * several times a second. Instead, the HOST decides when the user navigated to a pane
+ * own -- an embedded pane that focused itself would let a background terminal
+ * reconnect-looping against a dead tmux session steal the composer's focus several
+ * times a second. Instead, the HOST decides when the user navigated to a pane
  * (a tab activation, the chat card flipping to its terminal face) and asks the client
  * to focus via this message. The shell sends it to every pane it activates, knowing
  * nothing about which app is behind it: a pane that is not the patched ttyd client

@@ -1,5 +1,6 @@
-"""Liveness and frontend probes: the pre-flight boot of the merged backend, the health
-poll, the served-bundle check, and the view refresh that follows a change.
+"""Liveness and frontend probes: the pre-flight boots of the merged shell and chat app,
+the shell's health poll, the instances-API poll of every critical app that serves one,
+the served-bundle check, and the view refresh that follows a change.
 """
 
 from __future__ import annotations
@@ -11,17 +12,20 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Callable
-from urllib.parse import urlsplit
+from typing import Callable, NamedTuple
 
 from update_banding import ExpendWrapper, as_expendable
 from update_layout import (
+    APPS_DIR,
     APPS_REGISTRY_PATH,
     CHAT_DIR,
+    CHAT_TOOL_NAME,
+    MANIFEST_FILENAME,
     SYSTEM_INTERFACE_DIR,
     TOOL_NAME,
 )
 from update_runtime import (
+    FetchedPage,
     FrontendProbe,
     HttpClient,
     Runner,
@@ -48,21 +52,20 @@ _ASSET_REFERENCE_PATTERN = re.compile(r"/assets/([A-Za-z0-9._-]+\.js)")
 # and whether the built frontend is being served.
 HEALTH_PATH = "/api/health"
 
-# The chat app's own probe route, polled after the restart beside the shell's:
-# the chat is the process that imports mngr and its harness plugins, so a missing
-# backend dependency or a broken plugin-config parse takes IT down, and a shell
-# that came up fine over a chat that did not is still a broken workspace.
+# The chat app's own probe route, polled by its pre-flight boot: ``--preflight`` runs no
+# agent manager, so the instances API is not there to ask, and health is the boot
+# having imported mngr and the harness plugins and bound its socket.
 CHAT_HEALTH_PATH = "/api/health"
-CHAT_APP_NAME = "chat"
-# Where the chat app listens when the registry does not say (the manifest's app
-# URL; the registry row is authoritative once the chat has registered).
-DEFAULT_CHAT_URL = "http://127.0.0.1:8010"
-# The chat program's entry point: present in a tree whose chat runs as its own
-# process, absent from one where the shell still served the chat itself.
+# The chat program's entry point; a tree without it has no chat program to pre-flight.
 CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
-# The names one loopback server answers to, folded together when two base URLs are
-# compared for being the same origin.
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+# The instances API (the workspace app model, contracts section 4), polled after the
+# restart on every critical app that serves instances: the route the shell reads, so
+# it is the one that says the app is usable rather than merely bound. It answers 503
+# while the app is initialising (the chat, until its first agent list arrives) and
+# hangs when the app's own machinery is stuck -- both of which a plain health route
+# would pass over.
+INSTANCES_PATH = "/_instances"
 
 SERVE_PATH = "/"
 
@@ -109,65 +112,178 @@ def wait_healthy(
 
 
 def has_chat_program(repo_root: Path) -> bool:
-    """Whether the tree runs the chat as its own program, so its health is probeable.
-
-    A tree from before the chat's split has no such program: the shell served the
-    chat itself, and the registry's chat row names the shell.
-    """
+    """Whether the tree runs the chat as its own program, so it can be pre-flighted."""
     return (repo_root / CHAT_PROGRAM_ENTRY).is_file()
 
 
-def chat_health_url(repo_root: Path, shell_base_url: str) -> str:
-    """The chat app's health URL: its registry row's ``url``, else the default port.
+class CriticalInstanceApp(NamedTuple):
+    """An app the apply holds to its instances API after the restart: one whose
+    manifest says ``critical = true`` and ``instances = true``.
 
-    Read off the registry rather than assumed, so a workspace whose chat listens
-    elsewhere is probed where it actually is; an unreadable registry (a fresh
-    workspace, a hand edit) degrades to the default rather than failing the apply.
-
-    A row that names the shell's own origin is not the chat's: the shell registered
-    the chat's manifest at its own URL before the chat ran as its own program, and
-    the row keeps saying so until the restarted chat re-registers at the end of its
-    boot. The shell answers long before that, so probing such a row would pass on
-    the shell's health and miss a chat that never came up.
+    ``instances_url`` is the manifest's own declaration when it makes one (the
+    terminal's sidecar port); ``None`` means the API lives at the app URL, which
+    only the registry knows.
     """
-    registry_path = repo_root / APPS_REGISTRY_PATH
-    try:
-        rows = tomllib.loads(registry_path.read_text()).get("apps", [])
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        sys.stderr.write(
-            f"note: could not read the app registry at {registry_path} "
-            f"({type(exc).__name__}: {exc}); probing the chat app at {DEFAULT_CHAT_URL}.\n"
+
+    name: str
+    instances_url: str | None
+
+
+def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, ...]:
+    """Every critical app with an instances API in the tree at ``repo_root``, in
+    directory order.
+
+    Read off the tree being applied (the merged tree, or the restored one on
+    rollback) rather than the registry: right after the restart the registry
+    still holds whatever rows the programs wrote before it, so the manifests are
+    what say which apps the tree runs. A tree with no manifests probes nothing
+    but the shell. A manifest that will not parse or
+    names no app is skipped with a note: this runs on the rollback path too, where
+    an exception would escape the apply's last line of defense.
+    """
+    apps_dir = repo_root / APPS_DIR
+    if not apps_dir.is_dir():
+        return ()
+    apps: list[CriticalInstanceApp] = []
+    for directory in sorted(apps_dir.iterdir()):
+        manifest_path = directory / MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = tomllib.loads(manifest_path.read_text())
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            sys.stderr.write(
+                f"note: skipping the app at {directory} for the post-restart probes: "
+                f"its {MANIFEST_FILENAME} could not be read ({exc}).\n"
+            )
+            continue
+        name = manifest.get("name")
+        if not isinstance(name, str) or not name:
+            sys.stderr.write(
+                f"note: skipping the app at {directory} for the post-restart probes: "
+                f"its {MANIFEST_FILENAME} names no app.\n"
+            )
+            continue
+        if (
+            manifest.get("critical") is not True
+            or manifest.get("instances") is not True
+        ):
+            continue
+        declared_url = manifest.get("instances_url")
+        apps.append(
+            CriticalInstanceApp(
+                name=name,
+                instances_url=(
+                    declared_url
+                    if isinstance(declared_url, str) and declared_url
+                    else None
+                ),
+            )
         )
-        return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
+    return tuple(apps)
+
+
+def _read_registry_rows(repo_root: Path) -> list:
+    """The registry's ``apps`` rows; raises whatever reading or parsing it raised."""
+    return tomllib.loads((repo_root / APPS_REGISTRY_PATH).read_text()).get("apps", [])
+
+
+def registry_app_url(repo_root: Path, app_name: str) -> str | None:
+    """The ``url`` of the registry row named ``app_name``, or ``None`` when the
+    registry is missing, unreadable, or has no such row -- all of which read as
+    "the app has not registered yet" to a poll, never as a failure (the registry
+    is rewritten under the poll as apps register). What a poll that gave up saw
+    is :func:`_describe_missing_registry_url`'s to tell."""
+    try:
+        rows = _read_registry_rows(repo_root)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
     for row in rows:
         if (
             isinstance(row, dict)
-            and row.get("name") == CHAT_APP_NAME
+            and row.get("name") == app_name
             and isinstance(row.get("url"), str)
+            and row["url"]
         ):
-            row_url = row["url"].rstrip("/")
-            if _is_same_origin(row_url, shell_base_url):
-                sys.stderr.write(
-                    f"note: the app registry's chat row names the shell's own origin ({row_url}), "
-                    f"a registration from before the chat ran as its own program; probing the "
-                    f"chat app at {DEFAULT_CHAT_URL}.\n"
-                )
-                return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
-            return f"{row_url}{CHAT_HEALTH_PATH}"
-    return f"{DEFAULT_CHAT_URL}{CHAT_HEALTH_PATH}"
+            return row["url"]
+    return None
 
 
-def _is_same_origin(url: str, other: str) -> bool:
-    """Whether two base URLs name one server, with the loopback spellings folded together."""
-    return _origin_key(url) == _origin_key(other)
+def instances_probe_url(repo_root: Path, app: CriticalInstanceApp) -> str | None:
+    """Where ``app``'s instances API is reached right now: the manifest's own
+    ``instances_url``, else the registry row's ``url``; ``None`` while the app has
+    no row yet."""
+    base = app.instances_url or registry_app_url(repo_root, app.name)
+    if base is None:
+        return None
+    return f"{base.rstrip('/')}{INSTANCES_PATH}"
 
 
-def _origin_key(url: str) -> tuple[str, str, int | None]:
-    parsed = urlsplit(url.rstrip("/"))
-    host = (parsed.hostname or "").lower()
-    if host in _LOOPBACK_HOSTS:
-        host = "127.0.0.1"
-    return (parsed.scheme.lower(), host, parsed.port)
+def is_instances_answer(page: FetchedPage | None) -> bool:
+    """Whether a response is the instances API answering: 200 with a JSON body.
+
+    The body's type is what tells the app from a stale registry row: until the
+    restarted app re-registers at the end of its boot, its row can still name
+    another server, and the shell's SPA catch-all, for one, answers 200 on any
+    path -- as HTML.
+    """
+    return (
+        page is not None and page.status == 200 and "json" in page.content_type.lower()
+    )
+
+
+def wait_instances_healthy(
+    http: HttpClient,
+    repo_root: Path,
+    app: CriticalInstanceApp,
+    attempts: int,
+    interval: float,
+    sleeper: Callable[[float], None],
+) -> str | None:
+    """Poll ``app``'s instances API until it answers, re-reading the registry on
+    every attempt so the poll follows the app's own re-registration. Returns
+    ``None`` once it answered, else what the last attempt found."""
+    last_finding = ""
+    for index in range(attempts):
+        url = instances_probe_url(repo_root, app)
+        if url is None:
+            last_finding = _describe_missing_registry_url(repo_root, app.name)
+        else:
+            page = http.get_page(url, timeout=5.0)
+            if is_instances_answer(page):
+                return None
+            last_finding = _describe_instances_non_answer(url, page)
+        if index < attempts - 1:
+            sleeper(interval)
+    return last_finding
+
+
+def _describe_missing_registry_url(repo_root: Path, app_name: str) -> str:
+    """Why the registry names no URL for ``app_name``: a registry that does not
+    exist or has no row for it means the app never registered, while one that is
+    there but will not read or parse is named as such, so the failure points at
+    the broken file rather than at a registration that was never the problem."""
+    try:
+        _read_registry_rows(repo_root)
+    except FileNotFoundError:
+        pass
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return (
+            f"the app registry at {APPS_REGISTRY_PATH} could not be read "
+            f"({type(exc).__name__}: {exc})"
+        )
+    return f"the app registry at {APPS_REGISTRY_PATH} never listed '{app_name}'"
+
+
+def _describe_instances_non_answer(url: str, page: FetchedPage | None) -> str:
+    if page is None:
+        return f"{url} did not answer"
+    if page.status != 200:
+        return f"{url} answered HTTP {page.status}"
+    return (
+        f"{url} answered 200 but as '{page.content_type}' rather than JSON, so it is "
+        "not the app's instances API (a registry row that still names another server)"
+    )
 
 
 def preflight(
@@ -177,26 +293,80 @@ def preflight(
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
 ) -> str | None:
-    """Boot the merged backend on a throwaway port and probe it, without
+    """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
     response; otherwise what went wrong -- the tail of what the throwaway boot
     wrote, or, for a boot that could not be spawned at all, a line saying so."""
     port = find_free_port()
+    return _preflight_boot(
+        argv=[TOOL_NAME],
+        cwd=repo_root / SYSTEM_INTERFACE_DIR,
+        env_overrides={
+            "SYSTEM_INTERFACE_HOST": "127.0.0.1",
+            "SYSTEM_INTERFACE_PORT": str(port),
+        },
+        health_url=f"http://127.0.0.1:{port}{HEALTH_PATH}",
+        what="the merged backend",
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+        expend=expend,
+    )
+
+
+def preflight_chat(
+    repo_root: Path,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+    expend: ExpendWrapper = as_expendable,
+) -> str | None:
+    """Boot the merged chat app on a throwaway port in its side-effect-free mode and
+    probe it, the way :func:`preflight` boots the shell. The chat is the process that
+    imports mngr and the harness plugins, so a broken plugin table or a missing
+    dependency in its tool environment shows up here, before the live restart, rather
+    than in the post-restart probe and its rollback. ``--preflight`` keeps the boot
+    from reconciling the live account store, starting ``mngr observe``, or registering."""
+    port = find_free_port()
+    return _preflight_boot(
+        argv=[CHAT_TOOL_NAME, "--preflight"],
+        # The repo root, where supervisord runs the chat from (its paths are relative to it).
+        cwd=repo_root,
+        env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
+        health_url=f"http://127.0.0.1:{port}{CHAT_HEALTH_PATH}",
+        what="the merged chat app",
+        http=http,
+        spawner=spawner,
+        sleeper=sleeper,
+        expend=expend,
+    )
+
+
+def _preflight_boot(
+    argv: list[str],
+    cwd: Path,
+    env_overrides: dict[str, str],
+    health_url: str,
+    what: str,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+    expend: ExpendWrapper,
+) -> str | None:
+    """Spawn a throwaway boot, wait for its health route, and always terminate it."""
     env = dict(os.environ)
-    env["SYSTEM_INTERFACE_HOST"] = "127.0.0.1"
-    env["SYSTEM_INTERFACE_PORT"] = str(port)
-    # The caller is an agent, so its environment carries MNGR_AGENT_ID -- under
-    # which the throwaway boot would persist layout state as if it were that
-    # agent, clobbering the live layout.json. The preview flow
-    # (reveal_system_interface.py) drops it for the same reason; the pre-flight
-    # is just as much a throwaway boot and gets the same guard.
+    env.update(env_overrides)
+    # The caller is an agent, so its environment carries MNGR_AGENT_ID, which
+    # the chat app reads as its own primary agent's id; a throwaway boot must
+    # never act as the calling agent. The preview flow (reveal_system_interface.py)
+    # drops it for the same reason.
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"
         try:
             spawned = spawner.spawn(
-                expend([TOOL_NAME]),
-                cwd=str(repo_root / SYSTEM_INTERFACE_DIR),
+                expend(argv),
+                cwd=str(cwd),
                 env=env,
                 output_path=output_path,
             )
@@ -204,11 +374,11 @@ def preflight(
             # Not booting and failing is the same verdict as failing to boot,
             # and reaching this with the console script missing is exactly what
             # a tool reinstall that half-succeeded leaves behind.
-            return f"the merged backend could not be launched ({type(exc).__name__}: {exc})"
+            return f"{what} could not be launched ({type(exc).__name__}: {exc})"
         try:
             if wait_healthy(
                 http,
-                f"http://127.0.0.1:{port}{HEALTH_PATH}",
+                health_url,
                 _PREFLIGHT_ATTEMPTS,
                 _PREFLIGHT_INTERVAL_SECONDS,
                 sleeper,

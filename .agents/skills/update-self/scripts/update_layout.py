@@ -72,6 +72,9 @@ MNGR_TOOL_NAME = "imbue-mngr"
 MNGR_EXECUTABLE = "mngr"
 
 TOOL_NAME = "system-interface"
+# The chat app's console script (``[project.scripts]`` of system/apps/chat), the process that
+# imports mngr and the harness plugins; the apply pre-flights it beside the shell.
+CHAT_TOOL_NAME = "chat-app"
 
 # uv records how a tool was installed here, inside the tool's own directory.
 RECEIPT = "uv-receipt.toml"
@@ -90,8 +93,7 @@ MNGR_PLUGIN_KEY = "mngr"
 # ``app.toml`` manifest is a Python app that runs from its own uv tool
 # environment (see build_workspace.sh); the manifest names it and says whether
 # it is critical (a snapshot-and-rollback target in the apply). An app with a
-# pyproject but no manifest was scaffolded before manifests existed and still
-# runs ``uv run <name>`` from the root venv; both forms are supported for good.
+# pyproject but no manifest runs ``uv run <name>`` from the root venv.
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"

@@ -19,9 +19,10 @@ import type { ProjectInfo } from "../models/Inventory";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
 
-// Members are carried but never read: the modal is display metadata (name,
-// color, glyph) plus the delete, and taking an object out of a project is a
-// verb on the object's own rail row rather than anything reachable from here.
+// The tab set and shortcuts are carried but never read: the modal is display
+// metadata (name, color, glyph) plus the delete, and taking an instance out of
+// a project is a verb on its own rail row rather than anything reachable from
+// here.
 const PROJECT: ProjectInfo = {
   id: "research",
   name: "Research",
@@ -104,7 +105,7 @@ describe("ProjectSettingsModal delete confirmation", () => {
     expect(tree).toContain("removes the view only");
     expect(tree).toContain("keeps running");
     expect(tree).toContain("Everything");
-    // The old, now-inaccurate warning about stopping terminals and browsers is gone.
+    // Deleting a project stops nothing, so the confirmation names nothing being shut down.
     expect(tree).not.toContain("shut down");
   });
 });

@@ -63,7 +63,7 @@ export interface SidebarTabRow {
   instanceKey: string;
   label: string;
   // Whether the instance has a tab in the dock right now. Open rows read as primary text,
-  // backgrounded ones (listed, just not docked) as tertiary.
+  // undocked ones (listed, with no tab) as tertiary.
   isOpen: boolean;
   status: InstanceStatus;
   renameable: boolean;
@@ -298,8 +298,8 @@ export function effectiveShortcuts(project: ProjectInfo | null, apps: readonly A
   });
 }
 
-/** What a shortcut row reads: the action's label while it always creates ("New Chat"), the
- *  app's name while it focuses ("Chat"). */
+/** What a shortcut row reads: the action's label while it always creates ("New Terminal"), the
+ *  app's name while it focuses ("Terminal"). */
 export function shortcutLabel(resolved: ResolvedShortcut): string {
   return resolved.mode === "new" ? resolved.action.label : resolved.app.display_name;
 }
@@ -424,7 +424,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   /** The rail's own ``TabMenuActions`` for one row. Rename opens the rail's inline editor,
-   *  which works for a backgrounded row too. */
+   *  which works for a row with no open tab too. */
   function railMenuActions(row: SidebarTabRow, attrs: SidebarAttrs): TabMenuActions {
     const app = getApp(row.appName);
     return {

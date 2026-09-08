@@ -32,7 +32,6 @@ from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.tmux import SubprocessTmux
 
 # The terminal's fixed wiring, all relative to the repo root every supervised program runs from.
-# ``test_app_manifests.py`` checks the program registers with this manifest by importing it here.
 MANIFEST_PATH: Final[Path] = Path("system/apps/terminal/app.toml")
 APP_NAME: Final[AppName] = AppName("terminal")
 APP_URL: Final[AppUrl] = AppUrl("http://localhost:7681")
@@ -46,7 +45,7 @@ TTYD_EXECUTABLE: Final[str] = "ttyd"
 # The tagging wrapper every terminal session runs its shell through (the terminal-session band).
 OOM_TAG_SCRIPT: Final[Path] = Path("system/services/oom_priority/bin/oom_tag_service.py")
 
-# The mngr session-name prefix; agent sessions carry it, terminals do not (as the shell reads it).
+# The mngr session-name prefix; agent sessions carry it, terminals do not.
 ENV_AGENT_SESSION_PREFIX: Final[str] = "MNGR_PREFIX"
 DEFAULT_AGENT_SESSION_PREFIX: Final[str] = "mngr-"
 ENV_AGENT_STATE_DIR: Final[str] = "MNGR_AGENT_STATE_DIR"

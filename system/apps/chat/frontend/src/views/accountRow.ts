@@ -1,16 +1,15 @@
 /**
  * One account row in a provider flyout: the chat's model card lists its accounts with it.
  *
- * What a row CLICK does is the caller's; the trailing controls are always the same four: the
- * default star, a rename pencil, a sign-out bin, and the tick marking the current account.
- * Those controls carry the only fiddly logic here
- * (arming, an inline field, three ways out of an edit), so they live in one place rather than
- * being typed out twice and drifting.
+ * What a row CLICK does is the caller's; the trailing controls are the row's own: the default
+ * star, a rename pencil, a sign-out bin, and the tick marking the current account. Those
+ * controls carry the only fiddly logic here (arming, an inline field, three ways out of an
+ * edit).
  *
- * State stays with the CALLER. Each menu already owns the lifecycle its controls hang off --
+ * State stays with the CALLER. The menu already owns the lifecycle its controls hang off --
  * an open removal confirmation belongs to the flyout it was opened from and has to be
- * cleared when that flyout closes -- and a module-level store here could not see either
- * menu closing.
+ * cleared when that flyout closes -- and a module-level store here could not see the menu
+ * closing.
  */
 
 import m from "mithril";
@@ -41,7 +40,7 @@ export interface AccountRowOptions {
   isCurrent: boolean;
   /** The account a new chat launches on; its star is filled and always shown. */
   isDefault: boolean;
-  /** Classes for the row button -- the two menus style a non-current row differently. */
+  /** Classes for the row button. */
   rowClass: string;
   /** Anything else the row button needs: a tooltip, `aria-disabled`, and so on. */
   rowAttrs?: m.Attributes;

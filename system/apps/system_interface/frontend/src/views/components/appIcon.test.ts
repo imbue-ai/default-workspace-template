@@ -15,7 +15,7 @@ vi.mock("../../models/Inventory", () => ({
   getApp: (name: string) => registry.apps.find((app) => app.name === name),
 }));
 
-import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, serviceIconMarkup } from "./appIcon";
+import { MAX_ICON_LENGTH, appIconMarkup, sanitizeIconMarkup, appIconMarkupByName } from "./appIcon";
 
 const FALLBACK = '<svg class="generic-glyph"></svg>';
 
@@ -287,7 +287,7 @@ describe("appIconMarkup", () => {
   });
 });
 
-describe("serviceIconMarkup", () => {
+describe("appIconMarkupByName", () => {
   beforeEach(() => {
     registry.apps = [
       {
@@ -302,7 +302,7 @@ describe("serviceIconMarkup", () => {
   });
 
   it("draws the registered app's icon", () => {
-    const markup = serviceIconMarkup("notes", 16, FALLBACK);
+    const markup = appIconMarkupByName("notes", 16, FALLBACK);
     expect(markup).not.toBe(FALLBACK);
     expect(parsed(markup).querySelector("path")?.getAttribute("d")).toBe("M6 6h12v12H6z");
   });
@@ -312,7 +312,7 @@ describe("serviceIconMarkup", () => {
     // glyph: an unnamed app is the common case, and a list of them all wearing
     // the caller's fallback tells the reader nothing.
     for (const name of ["plain", "broken"]) {
-      const markup = serviceIconMarkup(name, 16, FALLBACK);
+      const markup = appIconMarkupByName(name, 16, FALLBACK);
       expect(markup).not.toBe(FALLBACK);
       expect(parsed(markup).textContent?.trim()).toBe(name.charAt(0).toUpperCase());
     }
@@ -322,7 +322,7 @@ describe("serviceIconMarkup", () => {
     // Monochrome currentColor strokes on a transparent background, like every
     // glyph in icons.ts. Colour is the projects' identity language, not the
     // apps' -- an app told apart by its letter needs no palette of its own.
-    const root = parsed(serviceIconMarkup("plain", 16, FALLBACK));
+    const root = parsed(appIconMarkupByName("plain", 16, FALLBACK));
     expect(root.getAttribute("stroke")).toBe("currentColor");
     expect(root.getAttribute("fill")).toBe("none");
     expect(root.getAttribute("viewBox")).toBe("0 0 24 24");
@@ -331,17 +331,17 @@ describe("serviceIconMarkup", () => {
   });
 
   it("is stable: the same app monograms identically every time", () => {
-    expect(serviceIconMarkup("plain", 16, FALLBACK)).toBe(serviceIconMarkup("plain", 16, FALLBACK));
+    expect(appIconMarkupByName("plain", 16, FALLBACK)).toBe(appIconMarkupByName("plain", 16, FALLBACK));
   });
 
   it("keeps the caller's glyph for a name the machine does not register", () => {
     // Nothing to monogram, and inventing one would dress a dead ref up as a
     // real app.
-    expect(serviceIconMarkup("never-registered", 16, FALLBACK)).toBe(FALLBACK);
+    expect(appIconMarkupByName("never-registered", 16, FALLBACK)).toBe(FALLBACK);
   });
 
   it("falls back when the row addresses no service at all", () => {
-    expect(serviceIconMarkup(null, 16, FALLBACK)).toBe(FALLBACK);
+    expect(appIconMarkupByName(null, 16, FALLBACK)).toBe(FALLBACK);
   });
 });
 
@@ -415,7 +415,7 @@ describe("a hostile icon, taken all the way into the document", () => {
       const host = document.createElement("div");
       document.body.appendChild(host);
       try {
-        host.innerHTML = serviceIconMarkup("hostile", 16, FALLBACK);
+        host.innerHTML = appIconMarkupByName("hostile", 16, FALLBACK);
         expect(host.querySelectorAll(FORBIDDEN_SELECTOR)).toHaveLength(0);
         for (const element of [host, ...Array.from(host.querySelectorAll("*"))]) {
           for (const attribute of Array.from(element.attributes)) {

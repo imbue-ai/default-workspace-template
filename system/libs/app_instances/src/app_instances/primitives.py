@@ -40,7 +40,7 @@ TITLE_NUMBER_PLACEHOLDER: Final[str] = "{n}"
 # How much of an offending value an error message quotes.
 _ERROR_VALUE_PREVIEW_LENGTH: Final[int] = 80
 
-# The workspace's naming scheme, as the shell applies it to chats (its ``naming.py``): a user
+# The workspace's naming scheme, as the chat app applies it to chats (its ``naming.py``): a user
 # types a human-readable title, and the true name every path, session, and key is built from is
 # a deterministic canonical form of it. Everything that is neither a safe-name character nor a
 # space is stripped; spaces survive so each run of them becomes one dash.

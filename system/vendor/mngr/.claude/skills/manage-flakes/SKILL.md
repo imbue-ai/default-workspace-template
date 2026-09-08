@@ -11,8 +11,9 @@ Take the set of flaky tests the caller hands you and make the MIND Linear backlo
 
 - A list of flaky tests in the shape the CLI's `list-flakes` emits -- at least `test`, `sample_failure_lines`, `is_marked_flaky`, `branches`, `last_seen`. (A single-flake caller assembles one such record.)
 - Whether the set is **full-window** (every flake in a CI window, e.g. `detect-flakes`) or **partial** (e.g. one incidental flake from `report-incidental-flakes`). This flag gates closing -- see step 4.
+- Whether the run is **autonomous** -- stated by the caller, or passed to this skill directly as `--autonomous`. This gates the approval pause in step 5, and nothing else.
 
-Precondition: `latchkey services info linear` reports `"valid"`.
+Precondition: Linear is reachable through latchkey -- check with `uv run python scripts/flake_reconcile.py list-tickets`, which is read-only. (Do not test this with `latchkey services info linear`: its `credentialStatus` field exists in latchkey 2.x but not in 3.x, so it reads as unset on a current CLI.)
 
 ## The CLI
 
@@ -74,7 +75,22 @@ When you re-scope a ticket, give it a new `flake-cluster` slug matching its new 
 
 ### 5. Show the plan, then apply
 
-Summarize every intended CREATE / UPDATE / CLOSE / state change for the user and **get approval before the first write**. On approval, execute and report what changed (each command prints the affected ticket).
+Summarize every intended CREATE / UPDATE / CLOSE / state change.
+
+**Interactively:** **get approval before the first write.** On approval, execute and report what changed (each command prints the affected ticket).
+
+**Autonomously (`--autonomous`):** do not pause -- but do not skip the narration either. Write the same plan you would have shown to `flake-sweep-summary.md` at the repo root, *then* apply it, *then* append what actually changed, including anything that failed. Stating the plan before acting is load-bearing rather than ceremony: it is the only record of intent if a write goes wrong, and narrating a plan first measurably improves how faithfully it gets followed. Every other rule still applies -- closes remain restricted to full-window sweeps (step 4), and a human's or agent's state move is still never clobbered.
+
+## Run summary (autonomous runs)
+
+`flake-sweep-summary.md` is read verbatim into a GitHub job summary and a Slack post, so write it
+for someone who sees nothing else. Markdown, in this order:
+
+- one line: the window swept, how many flaky tests, how many clusters;
+- the planned CREATE / UPDATE / CLOSE / state changes -- written *before* applying them;
+- what actually changed, with ticket identifiers, plus anything that failed;
+- what a human should look at: unmarked flakes that can turn CI red, clusters you were unsure of,
+  and open tickets you deliberately left alone.
 
 ## Ticket body
 

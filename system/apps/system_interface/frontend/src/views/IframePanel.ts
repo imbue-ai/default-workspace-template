@@ -216,9 +216,9 @@ function reloadFrame(iframe: HTMLIFrameElement): void {
   }
 }
 
-/** Reload every frame of one app, backgrounded ones included: a page stays live whether or
- *  not a view is showing it, and "refresh the app" has always meant the app rather than one
- *  pane. Cross-origin frames reload by ``src`` reassignment. Answers how many were reloaded. */
+/** Reload every frame of one app, docked or not: a page stays live whether or not a view is
+ *  showing it, and a refresh of an app means the app rather than one pane. Cross-origin frames
+ *  reload by ``src`` reassignment. Answers how many were reloaded. */
 export function reloadIframesForApp(appName: string): number {
   const iframes = document.querySelectorAll<HTMLIFrameElement>(
     `iframe[${IFRAME_PANEL_APP_ATTR}="${CSS.escape(appName)}"]`,
