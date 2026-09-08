@@ -34,11 +34,12 @@ REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 cd "$REPO_ROOT"
 uv sync --all-packages --frozen --no-install-workspace --no-install-local
 
-# Frontend npm dependencies (exact, from the lockfile).
+# Frontend npm dependencies (exact, from the lockfile): one npm workspace for the shell,
+# the chat page, and their shared library.
 # --no-audit: the audit is a per-install round trip to the registry that cannot
 # affect the outcome here -- the tree is pinned by the lockfile, so nothing the
 # audit reports changes what gets installed -- and when the registry's audit
 # endpoint is slow that round trip stalls the install for minutes.
 # --no-fund: funding output is noise in a build log.
-cd "$REPO_ROOT/system/apps/system_interface/frontend"
+cd "$REPO_ROOT/system"
 npm ci --no-audit --no-fund

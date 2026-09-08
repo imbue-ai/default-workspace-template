@@ -206,6 +206,13 @@ jobs:
         if: steps.evals-diff.outputs.changed == 'true'
         uses: extractions/setup-just@v4
 
+      # The vendored viewer (apps/minds_evals/viewer) is source, not a committed bundle, so
+      # nothing else here would notice if it stopped building. The script bootstraps its own
+      # pinned bun, which is why no node toolchain is set up above.
+      - name: Build the vendored harbor viewer
+        if: steps.evals-diff.outputs.changed == 'true'
+        run: apps/minds_evals/scripts/build_viewer.sh
+
       - name: Run minds_evals typecheck and tests
         if: steps.evals-diff.outputs.changed == 'true'
         run: just test-minds-evals

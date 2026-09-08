@@ -113,9 +113,12 @@ _PICK_ROUND_SECONDS: Final[int] = 20
 # ~8-10.5 minutes there (the build-minds-snapshot job measured a healthy run
 # overshooting the old 600s budget at 625s, and the job failed on roughly
 # alternating main runs from exactly this deadline). The build's duration is
-# network-bound (apt/pip mirrors), so headroom -- not a tighter deadline -- is
-# what keeps this signal meaningful.
-_CREATE_FORM_TIMEOUT_SECONDS: Final[int] = 900
+# network-bound (apt/pip mirrors, the pi extension npm installs), so headroom
+# -- not a tighter deadline -- is what keeps this signal meaningful. The
+# snapshot script gives `docker build` itself 900 seconds
+# (MNGR__PROVIDERS__DOCKER__BUILD_TIMEOUT_SECONDS); this budget sits above
+# that so the container boot after the build still fits.
+_CREATE_FORM_TIMEOUT_SECONDS: Final[int] = 1200
 _SYSTEM_INTERFACE_TIMEOUT_SECONDS: Final[int] = 180
 _CREATE_OUTCOME_POLL_INTERVAL_MS: Final[int] = 500
 
@@ -972,6 +975,10 @@ def create_workspace_via_electron(
 
 _FLOW_SHOT_DIR: Final[Path] = Path("/tmp/minds-electron-flow")
 _CHAT_INPUT_SELECTOR: Final[str] = "textarea.message-input-textbox"
+# A chat renders inside its own frame at the chat app's origin: the page's URL path is the
+# chat's agent id, which is how the frame is found among the workspace frame's children.
+_CHAT_PAGE_URL_PATTERN: Final[re.Pattern[str]] = re.compile(r"/agent-[0-9a-f]+/?$")
+_CHAT_FRAME_POLL_INTERVAL_MS: Final[int] = 500
 # Terminal panels are cross-origin iframes at the terminal service's own
 # origin (service-per-origin): the terminal's origin label is ``terminal-<rand>``
 # (a random per-service suffix), so the origin is
@@ -1127,20 +1134,46 @@ def _agent_id_for_coordinate(content_page: Page, backend_origin: str, coordinate
     raise WorkspaceFlowError(f"No workspace with host id {coordinate!r} in /api/v1/workspaces")
 
 
+def _find_chat_frame(workspace: Page | Frame) -> Frame | None:
+    """The first chat page's frame currently inside the workspace, or None while it has opened none."""
+    candidates = workspace.frames if isinstance(workspace, Page) else workspace.child_frames
+    return next((frame for frame in candidates if _CHAT_PAGE_URL_PATTERN.search(frame.url.split("?", 1)[0])), None)
+
+
+def _chat_frame(workspace: Page | Frame, timeout_seconds: float) -> Frame:
+    """The first chat page's frame inside the workspace, once the workspace has opened one.
+
+    Raises WorkspaceFlowError when no chat frame appears within ``timeout_seconds``.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    chat = _find_chat_frame(workspace)
+    while chat is None and time.monotonic() < deadline:
+        workspace.wait_for_timeout(_CHAT_FRAME_POLL_INTERVAL_MS)
+        chat = _find_chat_frame(workspace)
+    if chat is None:
+        raise WorkspaceFlowError(f"No chat frame opened inside the workspace within {timeout_seconds:.0f}s")
+    return chat
+
+
 def _send_message_and_await_reply(page: Page | Frame, token: str) -> None:
     """Type a unique-token prompt into the dockview chat and wait for the reply to echo it."""
-    logger.info("Waiting up to {}s for the first chat's input", _CHAT_INPUT_TIMEOUT_SECONDS)
-    page.wait_for_selector(_CHAT_INPUT_SELECTOR, state="visible", timeout=_CHAT_INPUT_TIMEOUT_SECONDS * 1000)
+    logger.info("Waiting up to {}s for the first chat's frame and its input", _CHAT_INPUT_TIMEOUT_SECONDS)
+    input_deadline = time.monotonic() + _CHAT_INPUT_TIMEOUT_SECONDS
+    chat = _chat_frame(page, _CHAT_INPUT_TIMEOUT_SECONDS)
+    # Playwright reads a zero timeout as "wait forever", so the remainder is floored.
+    input_wait_seconds = max(input_deadline - time.monotonic(), 1.0)
+    logger.info("Chat frame at {}; waiting up to {:.0f}s for its input", chat.url, input_wait_seconds)
+    chat.wait_for_selector(_CHAT_INPUT_SELECTOR, state="visible", timeout=input_wait_seconds * 1000)
     prompt = f"Reply with exactly this token and nothing else: {token}"
-    page.fill(_CHAT_INPUT_SELECTOR, prompt)
-    page.press(_CHAT_INPUT_SELECTOR, "Enter")
+    chat.fill(_CHAT_INPUT_SELECTOR, prompt)
+    chat.press(_CHAT_INPUT_SELECTOR, "Enter")
     logger.info("Sent chat message with token {}", token)
     # The user turn should render (optimistic pending bubble or a committed user
     # message) almost immediately -- proves the chat round-trips through the proxy.
-    page.wait_for_selector(".pending-message, .message.message-user", state="attached", timeout=30_000)
+    chat.wait_for_selector(".pending-message, .message.message-user", state="attached", timeout=30_000)
     _flow_screenshot(page, "03-message-sent")
     logger.info("Waiting up to {}s for the agent reply to echo the token", _CHAT_REPLY_TIMEOUT_SECONDS)
-    page.wait_for_function(
+    chat.wait_for_function(
         """(token) => {
             const list = document.querySelector('.message-list');
             if (!list) return false;

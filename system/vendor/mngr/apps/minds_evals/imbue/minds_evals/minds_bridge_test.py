@@ -1,5 +1,6 @@
 import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Final
@@ -13,7 +14,9 @@ from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import WorkspaceCreateError
 from imbue.minds_evals.minds_bridge import AGENTS_PATH
 from imbue.minds_evals.minds_bridge import AUTH_MODE_API_KEY
+from imbue.minds_evals.minds_bridge import CHAT_APP_FALLBACK_URL
 from imbue.minds_evals.minds_bridge import CLAUDE_AUTH_STATUS_PATH
+from imbue.minds_evals.minds_bridge import WORKSPACE_APPS_REGISTRY
 from imbue.minds_evals.minds_bridge import WaitHeartbeat
 from imbue.minds_evals.minds_bridge import WorkspaceSignIn
 from imbue.minds_evals.minds_bridge import _WAIT_HEARTBEAT_SECONDS
@@ -21,6 +24,7 @@ from imbue.minds_evals.minds_bridge import authenticate_workspace
 from imbue.minds_evals.minds_bridge import build_box_env
 from imbue.minds_evals.minds_bridge import build_create_payload
 from imbue.minds_evals.minds_bridge import build_credential_lines
+from imbue.minds_evals.minds_bridge import chat_url_shell_snippet
 from imbue.minds_evals.minds_bridge import create_chat_agent
 from imbue.minds_evals.minds_bridge import create_workspace_and_wait
 from imbue.minds_evals.minds_bridge import describe_agents_listing
@@ -44,6 +48,7 @@ from imbue.minds_evals.minds_bridge import start_proxy
 from imbue.minds_evals.minds_bridge import start_reverse_tunnel
 from imbue.minds_evals.minds_bridge import wait_for_auth_endpoint
 from imbue.minds_evals.minds_bridge import workspace_curl
+from imbue.minds_evals.minds_bridge import workspace_curl_command
 from imbue.minds_evals.mock_environment_test import MockBoxEnvironment
 from imbue.minds_evals.mock_environment_test import ScriptedExecRule
 from imbue.minds_evals.mock_environment_test import curl_stdout
@@ -193,6 +198,53 @@ def test_parse_curl_response_separates_the_status_from_the_body() -> None:
     # text, since it is the only account of the failure a trial log would otherwise get.
     unparseable = parse_curl_response("<html>nope</html>\n502")
     assert (unparseable.status, unparseable.body, unparseable.text) == (502, None, "<html>nope</html>")
+
+
+def test_workspace_curl_targets_the_chat_app_at_the_url_the_registry_holds() -> None:
+    # Every route the bridge calls is the chat app's, which registers its own port in the
+    # workspace's registry at startup; the call reads that row in the same bridged exec as the curl,
+    # and falls back to the template's default port for a workspace whose registry has no row yet.
+    command = workspace_curl_command(AGENTS_PATH, None)
+
+    assert WORKSPACE_APPS_REGISTRY in command
+    assert "'chat'" in command
+    assert "chat_url={}".format(CHAT_APP_FALLBACK_URL) in command
+    assert command.endswith('"$chat_url"{}'.format(AGENTS_PATH))
+    assert "-X POST" not in command
+
+    posted = workspace_curl_command("/api/agents/create-chat", '{"name": "x"}')
+    assert "-X POST" in posted and '-d \'{"name": "x"}\'' in posted
+
+
+def _resolved_chat_url(repo_root: Path) -> str:
+    """What the snippet leaves in ``$chat_url`` when run from the workspace repo root, as the bridged
+    exec runs it (``mngr exec`` runs its command in the workspace agent's work_dir)."""
+    result = subprocess.run(
+        ["bash", "-c", "{}; printf '%s' \"$chat_url\"".format(chat_url_shell_snippet())],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def test_chat_url_shell_snippet_reads_the_registry_row_and_otherwise_falls_back(tmp_path: Path) -> None:
+    # The snippet silences every failure and falls back, so only running it shows that the embedded
+    # program survives its quoting and actually reads the row: the fallback must be the answer for a
+    # missing registry and a registry without the row, and nothing else.
+    assert _resolved_chat_url(tmp_path) == CHAT_APP_FALLBACK_URL
+
+    registry = tmp_path / WORKSPACE_APPS_REGISTRY
+    registry.parent.mkdir(parents=True)
+    registry.write_text('[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n')
+    assert _resolved_chat_url(tmp_path) == CHAT_APP_FALLBACK_URL
+
+    registry.write_text(
+        '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\n\n'
+        '[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:8017"\n'
+    )
+    assert _resolved_chat_url(tmp_path) == "http://127.0.0.1:8017"
 
 
 def test_workspace_curl_keeps_only_a_failure_that_said_something(tmp_path: Path) -> None:
@@ -348,7 +400,7 @@ def test_create_chat_agent_leaves_out_an_account_it_was_not_given(tmp_path: Path
 
 
 def test_create_chat_agent_retries_only_while_the_endpoint_is_not_answering(tmp_path: Path) -> None:
-    # A system_interface that is still coming up answers nothing at all; that is the one case worth
+    # A chat app that is still coming up answers nothing at all; that is the one case worth
     # waiting out, since the workspace is still on its way up.
     created = json.dumps({"agent_id": "chat-1"})
     environment = MockBoxEnvironment(
@@ -361,7 +413,7 @@ def test_create_chat_agent_retries_only_while_the_endpoint_is_not_answering(tmp_
 
 
 def test_create_chat_agent_gives_up_when_the_endpoint_never_answers(tmp_path: Path) -> None:
-    # A workspace whose system_interface never comes up answers nothing, however long it is asked.
+    # A workspace whose chat app never comes up answers nothing, however long it is asked.
     # The retry has to end at the deadline rather than spin, and the trial's only account of why is
     # what the attempts left behind -- so a later attempt that says nothing must not erase the one
     # that did.
@@ -391,7 +443,7 @@ def test_create_chat_agent_gives_up_on_a_refusal(tmp_path: Path) -> None:
 
 def test_create_chat_agent_gives_up_on_an_answer_that_is_not_json(tmp_path: Path) -> None:
     # The endpoint's own refusals are all JSON, so an answer that is not is something else
-    # answering -- an unhandled traceback page, or a proxy in front of the system_interface. It is
+    # answering -- an unhandled traceback page, or a proxy in front of the chat app. It is
     # still the call being answered, so it is final, and the page is what a trial log reports.
     environment = MockBoxEnvironment(
         tmp_path, [_create_chat_rule(ok_result(curl_stdout("<html>Internal Server Error</html>", status=500)))]

@@ -57,7 +57,11 @@ pytestmark = [pytest.mark.release, pytest.mark.minds_services, pytest.mark.docke
 
 _CREATE_TIMEOUT_SECONDS = 1200
 _IN_CONTAINER_TIMEOUT_SECONDS = 120
-_SYSTEM_INTERFACE_READY_ATTEMPTS = 60
+# Every route this test drives (sign-in, accounts, create-chat) belongs to the workspace's chat
+# app, which runs as its own program at its own port, reachable only from inside the container.
+# 8010 is the port the template's chat app registers by default, so a fresh workspace answers there.
+_CHAT_APP_URL = "http://localhost:8010"
+_CHAT_APP_READY_ATTEMPTS = 60
 # How long to wait for a freshly created chat to be registered by mngr.
 _CHAT_CREATE_ATTEMPTS = 24
 _CHAT_REPLY_ATTEMPTS = 60
@@ -168,14 +172,14 @@ def _find_container_name(host_id: str) -> str:
     return names[0]
 
 
-def _wait_for_system_interface(container_name: str) -> None:
+def _wait_for_chat_app(container_name: str) -> None:
     poll = (
-        f"for i in $(seq 1 {_SYSTEM_INTERFACE_READY_ATTEMPTS}); do "
-        "code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/claude-auth/status); "
+        f"for i in $(seq 1 {_CHAT_APP_READY_ATTEMPTS}); do "
+        f"code=$(curl -s -o /dev/null -w '%{{http_code}}' {_CHAT_APP_URL}/api/claude-auth/status); "
         '[ "$code" = "200" ] && exit 0; sleep 5; done; exit 1'
     )
-    result = _exec_in_container(container_name, poll, timeout=_SYSTEM_INTERFACE_READY_ATTEMPTS * 5 + 120)
-    assert result.returncode == 0, "The workspace's system_interface never answered its claude-auth status endpoint"
+    result = _exec_in_container(container_name, poll, timeout=_CHAT_APP_READY_ATTEMPTS * 5 + 120)
+    assert result.returncode == 0, "The workspace's chat app never answered its claude-auth status endpoint"
 
 
 def _await_env_and_require_workspace_prereqs(env: SharedEnvHandle, template_ref: DefaultWorkspaceTemplateRef) -> Path:
@@ -201,7 +205,7 @@ def _local_docker_workspace(source_worktree: Path, host_name: str) -> Iterator[s
     try:
         _agent_id, host_id = _create_docker_workspace(template_path, host_name)
         container_name = _find_container_name(host_id)
-        _wait_for_system_interface(container_name)
+        _wait_for_chat_app(container_name)
         yield container_name
     finally:
         destroy = _run(
@@ -221,11 +225,11 @@ def _submit_credentials_via_workspace_endpoint(container_name: str, credential_b
     # logged; a redacted stand-in is logged instead.
     submit = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/claude-auth/submit-credentials "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/claude-auth/submit-credentials "
         f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=600,
         logged_command=(
-            "curl -s -X POST http://localhost:8000/api/claude-auth/submit-credentials "
+            f"curl -s -X POST {_CHAT_APP_URL}/api/claude-auth/submit-credentials "
             "-H 'Content-Type: application/json' -d '<credential blob redacted>'"
         ),
     )
@@ -247,7 +251,7 @@ def _create_chat_on_account(container_name: str, account_id: str) -> str:
     payload = json.dumps({"account_id": account_id})
     created = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/agents/create-chat "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/agents/create-chat "
         f"-H 'Content-Type: application/json' -d {shlex.quote(payload)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
@@ -330,8 +334,7 @@ def _sign_in_paste_lane(container_name: str, lane_id: str, api_key: str, key_pro
     start = json.dumps({"lane_id": lane_id, "method_id": "api_key"})
     started = _exec_in_container(
         container_name,
-        "curl -s -X POST http://localhost:8000/api/accounts "
-        f"-H 'Content-Type: application/json' -d {shlex.quote(start)}",
+        f"curl -s -X POST {_CHAT_APP_URL}/api/accounts -H 'Content-Type: application/json' -d {shlex.quote(start)}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
     assert started.returncode == 0, f"start-flow curl failed for {lane_id}: {started.stderr}"
@@ -341,7 +344,7 @@ def _sign_in_paste_lane(container_name: str, lane_id: str, api_key: str, key_pro
     body = {"api_key": api_key} | ({"key_provider": key_provider} if key_provider else {})
     submitted = _exec_in_container(
         container_name,
-        f"curl -s -X POST http://localhost:8000/api/accounts/flow/{flow['flow_id']} "
+        f"curl -s -X POST {_CHAT_APP_URL}/api/accounts/flow/{flow['flow_id']} "
         f"-H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}",
         timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
     )
@@ -556,7 +559,7 @@ def test_every_paste_lane_binds_a_chat_to_its_own_account(
         # by the lane -- two of these run on pi and would otherwise be indistinguishable.
         listed = _exec_in_container(
             container_name,
-            "curl -s http://localhost:8000/api/accounts",
+            f"curl -s {_CHAT_APP_URL}/api/accounts",
             timeout=_IN_CONTAINER_TIMEOUT_SECONDS,
         )
         assert listed.returncode == 0, f"accounts curl failed: {listed.stderr}"

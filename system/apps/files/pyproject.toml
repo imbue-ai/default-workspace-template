@@ -1,0 +1,23 @@
+[project]
+name = "files-app"
+version = "0.1.0"
+description = "The file viewer app: runs dufs unchanged and serves the instances API from a JSON store beside it, so a file browser reopens at the folder it was showing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "app-instances",
+    "app-manifest",
+    "click>=8.1",
+    "imbue-common",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+files-app = "files_app.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/files_app"]

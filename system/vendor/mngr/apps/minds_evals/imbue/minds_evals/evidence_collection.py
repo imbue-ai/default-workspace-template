@@ -107,7 +107,6 @@ WORKSPACE_STAGING_DIR: Final[str] = "/tmp/minds-evals-verification"
 # Where the workspace repo lives in a stock workspace (supervisord's `directory=` and the app
 # scaffold both hard-code it). Probed rather than assumed, but tried first so the common case is free.
 DEFAULT_WORKSPACE_REPO_ROOT: Final[str] = "/home/user/workspace"
-APPS_REGISTRY_RELATIVE_PATH: Final[str] = "data/.state/apps.toml"
 SUPERVISORD_CONF_RELATIVE_PATH: Final[str] = "system/supervisord.conf"
 # Throwaway "isolated instance" servers record the registry rows they registered here, one state
 # file per instance. Reading that record is how a delivered app is told from a preview.
@@ -420,9 +419,32 @@ def parse_service_states(services_text: str) -> dict[str, str]:
 
 # The forward_port.py call an app's supervisord program block chains before its own start command.
 # Either flag order is accepted: the app scaffold writes --url first, the isolated-instance runner
-# writes --name first, and a hand-written block may do either.
-_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py[^\n]*?--name\s+([\w-]+)")
+# writes --name first, and a hand-written block may do either. An app with a manifest registers
+# through ``--manifest <app.toml>`` with no ``--name`` (the name lives in the manifest); its program
+# is named after the app, so the block's own program name is the registration.
+# A call's flags run to the next shell chain operator (``&&``, ``;``, ``||``: the chain to the
+# following call or to the app's own start command, whose flags must not be read as the
+# registration's) or to the end of the line.
+_FORWARD_PORT_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py(?P<flags>[^\n&;|]*)")
+_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name\s+([\w-]+)")
+_FORWARD_PORT_MANIFEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"--manifest\s+\S+")
 _PROGRAM_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
+
+
+@pure
+def _registrations_in_block(block: str, program_name: str) -> list[str]:
+    """The registry names the forward_port.py calls in one program block register, in call order."""
+    registrations: list[str] = []
+    for call in _FORWARD_PORT_CALL_PATTERN.finditer(block):
+        flags = call.group("flags")
+        name_match = _FORWARD_PORT_NAME_PATTERN.search(flags)
+        if name_match is not None:
+            registrations.append(name_match.group(1))
+        elif _FORWARD_PORT_MANIFEST_PATTERN.search(flags) is not None:
+            registrations.append(program_name)
+        else:
+            pass
+    return registrations
 
 
 @pure
@@ -440,8 +462,9 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     for index, match in enumerate(matches):
         block_end = matches[index + 1].start() if index + 1 < len(matches) else len(supervisord_conf)
         block = supervisord_conf[match.end() : block_end]
-        for registration in _FORWARD_PORT_NAME_PATTERN.findall(block):
-            program_by_registration.setdefault(registration, match.group(1).strip())
+        program_name = match.group(1).strip()
+        for registration in _registrations_in_block(block, program_name):
+            program_by_registration.setdefault(registration, program_name)
     return program_by_registration
 
 
@@ -454,17 +477,19 @@ def resolve_preexisting_registrations(
     Both arguments are read from the same pre-turn-1 snapshot, because neither alone is complete:
 
     - ``registry_names`` is the app registry as it actually stood. A measurement rather than an
-      inference, and the only source that sees a template app which registers from inside the script
-      its supervisord program runs rather than from a ``forward_port.py`` call in the config itself.
-      The terminal does exactly that, as do the owner-exec and vm-exec daemons, and counting one as
-      a deliverable is the failure this resolution exists to prevent.
+      inference, and the only source that sees a template app which registers from inside the
+      program it runs (its own entry point, or a launcher script) rather than from a
+      ``forward_port.py`` call in the config itself. The terminal does exactly that, as do the
+      owner-exec and vm-exec daemons, and counting one as a deliverable is the failure this
+      resolution exists to prevent.
     - ``config_registrations`` is what the workspace's own ``system/supervisord.conf`` registers,
-      joined through its ``forward_port.py --name`` invocations. It covers a template app whose
-      service is slow enough that it had not registered its port yet when the snapshot was taken:
-      the file is on disk from the moment the workspace is cloned, whatever its services are doing.
-      Directory names under ``system/apps/`` would not do -- a registry name is a caller-supplied
-      ``--name`` flag, and a multi-port app registers extra origin-label rows that correspond to no
-      directory at all.
+      joined through its ``forward_port.py`` invocations (``--name``, or the block's own program
+      name for a ``--manifest`` registration). It covers a template app whose service is slow
+      enough that it had not registered its port yet when the snapshot was taken: the file is on
+      disk from the moment the workspace is cloned, whatever its services are doing. Directory
+      names under ``system/apps/`` would not do -- a registry name is what the app hands
+      ``forward_port.py`` (a ``--name`` flag, or the name in its ``--manifest``), and a multi-port
+      app registers extra origin-label rows that correspond to no directory at all.
 
     The registry is therefore the half that must be readable; the config half only ever adds names,
     and contributes nothing when the probe came back without it.
@@ -606,7 +631,7 @@ def workspace_state_command() -> str:
         services_marker=_SECTION_MARKER.format("services"),
         supervisord_marker=_SECTION_MARKER.format("supervisord"),
         instances_marker=_SECTION_MARKER.format("isolated_instances"),
-        registry_path=APPS_REGISTRY_RELATIVE_PATH,
+        registry_path=minds_bridge.WORKSPACE_APPS_REGISTRY,
         supervisord_path=SUPERVISORD_CONF_RELATIVE_PATH,
         instances_path=ISOLATED_INSTANCES_RELATIVE_PATH,
         instance_file=shlex.quote(ISOLATED_INSTANCE_FILENAME),
