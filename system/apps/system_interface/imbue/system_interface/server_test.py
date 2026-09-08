@@ -23,6 +23,8 @@ from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
+from imbue.system_interface.testing import catalog_document
+from imbue.system_interface.testing import catalog_template_document
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
 from imbue.system_interface.testing import serve_app
@@ -53,21 +55,10 @@ def test_templates_catalog_route_answers_the_catalog_with_resolved_thumbnails(co
     catalog_url = config.system_interface_template_catalog_url
     fetcher = FakeTemplateCatalogFetcher(
         body_by_url={
-            catalog_url: json.dumps(
-                {
-                    "format": 1,
-                    "templates": [
-                        {
-                            "slug": "inbox",
-                            "title": "Inbox",
-                            "description": "Mail.",
-                            "repository_url": "https://github.com/x/inbox",
-                            "thumbnail": "thumbnails/x--inbox.svg",
-                        }
-                    ],
-                    "shelves": [{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}],
-                }
-            ).encode()
+            catalog_url: catalog_document(
+                catalog_template_document("inbox"),
+                shelves=[{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}],
+            )
         }
     )
     test_client = create_application(build_test_state(config=config, template_catalog_fetcher=fetcher)).test_client()
@@ -79,7 +70,7 @@ def test_templates_catalog_route_answers_the_catalog_with_resolved_thumbnails(co
     assert body["is_stale"] is False
     assert body["catalog"]["shelves"][0]["slugs"] == ["inbox"]
     (template,) = body["catalog"]["templates"]
-    assert template["thumbnail_url"] == catalog_url.rsplit("/", 1)[0] + "/thumbnails/x--inbox.svg"
+    assert template["thumbnail_url"] == catalog_url.rsplit("/", 1)[0] + "/thumbnails/someone--inbox.svg"
 
 
 def test_templates_catalog_route_says_when_nothing_could_be_loaded(config: Config) -> None:
