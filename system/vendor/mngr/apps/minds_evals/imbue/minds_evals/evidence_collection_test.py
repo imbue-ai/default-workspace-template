@@ -316,9 +316,8 @@ def test_parse_supervised_registrations_accepts_either_flag_order() -> None:
 
 
 def test_parse_supervised_registrations_reads_a_manifest_registration_as_the_programs_own_name() -> None:
-    # From the workspace app model on, an app with a manifest registers through
-    # `--manifest <app.toml>` and no `--name`; the manifest's name is the program's name, and a
-    # multi-port block may mix both forms.
+    # An app with a manifest registers through `--manifest <app.toml>` and no `--name`; the
+    # manifest's name is the program's name, and a multi-port block may mix both forms.
     conf = (
         "[program:files]\n"
         'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml '

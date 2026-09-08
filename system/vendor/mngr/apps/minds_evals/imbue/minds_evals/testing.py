@@ -86,8 +86,7 @@ TEMPLATE_SUPERVISORD_CONF: Final[str] = "".join(
 )
 TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interface", "browser"})
 # The template apps that register from inside the program they run, which only the registry half
-# sees; the registry also marks `owner-exec` `internal`. The chat app runs as its own program
-# and registers from its entry point like the terminal.
+# sees; the registry also marks `owner-exec` `internal`.
 SELF_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "files", "chat", "owner-exec"})
 TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SELF_REGISTERED_APPS
 
