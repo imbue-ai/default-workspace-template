@@ -36,7 +36,7 @@ from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
 
 # The one document format this reader understands; a catalog naming another is refused.
-CATALOG_FORMAT: Final[int] = 1
+_CATALOG_FORMAT: Final[int] = 1
 
 # Where the shipped catalog lives: the raw file on the template repository.
 # CLEANUP: point this at ``main`` (and update ``catalog/README.md`` and
@@ -50,14 +50,14 @@ DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
 CATALOG_CACHE_FILENAME: Final[str] = "template_catalog.json"
 
 # A fetched copy is reused this long before the next request refetches it.
-FRESH_FOR_SECONDS: Final[float] = 6 * 60 * 60.0
+_FRESH_FOR_SECONDS: Final[float] = 6 * 60 * 60.0
 # After a failed fetch, requests keep answering what is held for this long before trying again.
-RETRY_AFTER_FAILURE_SECONDS: Final[float] = 60.0
-FETCH_TIMEOUT_SECONDS: Final[float] = 10.0
-FETCH_SLOW_SECONDS: Final[float] = 3.0
+_RETRY_AFTER_FAILURE_SECONDS: Final[float] = 60.0
+_FETCH_TIMEOUT_SECONDS: Final[float] = 10.0
+_FETCH_SLOW_SECONDS: Final[float] = 3.0
 
 
-EntryT = TypeVar("EntryT", bound=FrozenModel)
+_EntryT = TypeVar("_EntryT", bound=FrozenModel)
 
 
 class TemplateCatalogError(Exception):
@@ -124,7 +124,7 @@ class TemplateCatalog(FrozenModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    format: int = Field(description="The document format; only CATALOG_FORMAT is read")
+    format: int = Field(description="The document format; only format 1 is read")
     generated_at: str = Field(default="", description="When the catalog was produced, ISO 8601")
     templates: tuple[CatalogTemplate, ...] = Field(description="Every template, in catalog order")
     shelves: tuple[CatalogShelf, ...] = Field(default=(), description="The browsing rows, in order")
@@ -165,15 +165,15 @@ def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
     anything but a format-1 object, and skips a template or shelf that does not validate."""
     if not isinstance(parsed, dict):
         raise TemplateCatalogFormatError(f"the catalog at {source} is not a JSON object")
-    if parsed.get("format") != CATALOG_FORMAT:
+    if parsed.get("format") != _CATALOG_FORMAT:
         raise TemplateCatalogFormatError(
-            f"the catalog at {source} has format {parsed.get('format')!r}; this workspace reads format {CATALOG_FORMAT}"
+            f"the catalog at {source} has format {parsed.get('format')!r}; this workspace reads format {_CATALOG_FORMAT}"
         )
     templates = _validated_entries(parsed.get("templates"), CatalogTemplate, "template", source)
     shelves = _validated_entries(parsed.get("shelves", []), CatalogShelf, "shelf", source)
     try:
         return TemplateCatalog(
-            format=CATALOG_FORMAT,
+            format=_CATALOG_FORMAT,
             generated_at=str(parsed.get("generated_at", "")),
             templates=tuple(templates),
             shelves=tuple(shelves),
@@ -182,10 +182,10 @@ def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
         raise TemplateCatalogFormatError(f"the catalog at {source} does not validate: {e.errors()[0]['msg']}") from e
 
 
-def _validated_entries(raw_entries: Any, model: type[EntryT], noun: str, source: str) -> list[EntryT]:
+def _validated_entries(raw_entries: Any, model: type[_EntryT], noun: str, source: str) -> list[_EntryT]:
     if not isinstance(raw_entries, list):
         raise TemplateCatalogFormatError(f"the catalog at {source} carries no {noun} list")
-    entries: list[EntryT] = []
+    entries: list[_EntryT] = []
     for raw_entry in raw_entries:
         try:
             entries.append(model.model_validate(raw_entry))
@@ -235,12 +235,12 @@ class HttpTemplateCatalogFetcher(TemplateCatalogFetcherInterface):
     def fetch(self, url: str) -> bytes | None:
         started_at = time.monotonic()
         try:
-            response = httpx.get(url, timeout=FETCH_TIMEOUT_SECONDS, follow_redirects=True)
+            response = httpx.get(url, timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=True)
         except httpx.HTTPError as e:
             logger.warning("Failed to fetch the template catalog from {}: {}", url, e)
             return None
         elapsed = time.monotonic() - started_at
-        if elapsed > FETCH_SLOW_SECONDS:
+        if elapsed > _FETCH_SLOW_SECONDS:
             logger.warning("Fetched the template catalog from {} slowly, in {:.1f}s", url, elapsed)
         if response.is_error:
             logger.warning("Fetching the template catalog from {} answered {}", url, response.status_code)
@@ -258,10 +258,10 @@ class TemplateCatalogStore(MutableModel):
     cache_path: Path = Field(frozen=True, description="Where the last good copy is written")
     fetcher: TemplateCatalogFetcherInterface = Field(frozen=True, description="How the document is fetched")
     fresh_for_seconds: float = Field(
-        default=FRESH_FOR_SECONDS, frozen=True, description="How long a fetched copy is reused"
+        default=_FRESH_FOR_SECONDS, frozen=True, description="How long a fetched copy is reused"
     )
     retry_after_failure_seconds: float = Field(
-        default=RETRY_AFTER_FAILURE_SECONDS, frozen=True, description="How long a failed fetch is not retried"
+        default=_RETRY_AFTER_FAILURE_SECONDS, frozen=True, description="How long a failed fetch is not retried"
     )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
