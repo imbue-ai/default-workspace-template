@@ -148,7 +148,7 @@ All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http:/
 | `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?, "from_view_id"?}` | `204` |
 | `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}` |
 
-Loopback-only routes (these, and `/api/layout/broadcast`) reject non-loopback peers with `403`.
+`POST /api/apps/<name>/changed`, `POST /api/tabs/<tab_id>/instance`, `POST /api/client-activity`, and `POST /api/layout/broadcast` are loopback-only and reject non-loopback peers with `403`; `GET /api/health` is not.
 
 The shell coalesces `changed` nudges per app: the first nudge starts a 250 ms window, one refetch runs when it closes, and a broadcast follows only when the fetched list differs from the last broadcast list for that app.
 The reconciliation sweep refetches every running app's list every 30 seconds.
