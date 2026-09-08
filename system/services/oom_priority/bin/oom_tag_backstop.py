@@ -8,9 +8,13 @@ program whose command omits the prefix would keep the inherited
 ``oom_score_adj`` of 0 and sit as protected as sshd/supervisord -- an unknown
 process must default to being expendable, not protected. Subscribed to
 ``PROCESS_STATE_RUNNING`` (fired at boot and on every restart), it resolves each
-program's expected band (``bands.supervisord_program_band``: a built-in's own
-band, the user-service band for anything unrecognized) and raises the process up
-to it.
+program's expected band (``bands.supervisord_program_band``: the ``priority``
+the program's app manifest declares, read from the registry row whose
+``program`` names it; a built-in's own band by name otherwise; the user-service
+band for anything unrecognized) and raises the process up to it. The registry
+(``data/.state/apps.toml``, or ``MINDS_APPS_FILE``) is re-read on every event,
+since apps register on their own start and the boot-time burst of events is
+what tags them.
 
 The RUNNING event fires only after a program has stayed up ``startsecs`` (~1s),
 so the process may already have spawned children that inherited its untagged
@@ -35,14 +39,14 @@ Self-contained beyond the stdlib-only ``oom_priority`` package (imported via a
 """
 
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "src")
 )
 
-from oom_priority import bands
+from oom_priority import app_registry, bands
 from oom_priority.proctree import list_descendant_pids
 
 
@@ -80,18 +84,22 @@ def handle_running_event(
     read_adj: Callable[[int], int | None] = bands.read_oom_score_adj,
     write_adj: Callable[[int, int], bool] = bands.set_oom_score_adj,
     list_descendants: Callable[[int], list[int]] = list_descendant_pids,
+    priority_by_program: Mapping[str, str] | None = None,
 ) -> None:
     """Backstop-tag the program a ``PROCESS_STATE_RUNNING`` payload describes.
 
     The collaborators are injectable so the policy (which pids get which band)
-    is testable without a real process tree.
+    is testable without a real process tree or registry; ``priority_by_program``
+    defaults to the live registry's rows.
     """
     fields = parse_token_fields(payload)
     program_name = fields.get("processname", "")
     pid_text = fields.get("pid", "")
     if not program_name or not pid_text.isdigit():
         return
-    band = bands.supervisord_program_band(program_name)
+    if priority_by_program is None:
+        priority_by_program = app_registry.read_priority_by_program(app_registry.registry_path())
+    band = bands.supervisord_program_band(program_name, priority_by_program)
     if band <= bands.PROTECTED:
         return
     pid = int(pid_text)

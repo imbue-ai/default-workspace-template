@@ -34,7 +34,7 @@ The daemon address is discovered from ``data/.state/apps.toml`` (the same
 registry ``layout.py`` reads), overridable via ``MINDS_BROWSER_SERVICE_URL``,
 falling back to ``http://127.0.0.1:8081``. Browser panes are pulled into the
 agent's view via ``system/scripts/layout.py`` (anchored at ``$BROWSER_FLEET_ANCHOR`` if
-set -- a parent passes its chat ref to sub-agents -- else the caller's own chat).
+set -- a parent passes its chat address to sub-agents -- else the caller's own chat).
 """
 
 import argparse
@@ -162,43 +162,37 @@ def _stream(path: str, body: dict[str, Any]) -> Iterator[dict[str, Any]]:
 # --- pane pull-in (reuse system/scripts/layout.py) ----------------------------------
 
 
-def _layout(*args: str, quiet: bool = False, no_wait: bool = False) -> bool:
+def _layout(*args: str, quiet: bool = False) -> bool:
     """Run ``system/scripts/layout.py`` with the given args from the repo root. True on success.
     ``quiet`` suppresses layout.py's raw stderr so the caller can substitute its own
-    message (used by the pane-pull, which has a friendlier failure note). ``no_wait`` posts the
-    op without waiting for it to settle in ``inspect`` -- the pane-pull is optimistic and a
-    browser pane can take well over layout.py's 5s settle cap to register (its viewer must
-    load), which otherwise reports a false failure even though the pane does open."""
+    message (used by the pane-pull, which has a friendlier failure note)."""
     root = _repo_root()
     layout = root / "system" / "scripts" / "layout.py"
     if not layout.exists():
         return False
-    env = os.environ.copy()
-    if no_wait:
-        env["MINDS_LAYOUT_NO_WAIT_STABLE"] = "1"
     result = subprocess.run(
-        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True, env=env
+        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
     )
     if result.returncode != 0 and not quiet:
         _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
     return result.returncode == 0
 
 
-def _resolve_active_layout() -> tuple[bool, str | None]:
-    """Resolve the layout to surface a browser pane into, via ``layout.py context``.
+def _resolve_active_view() -> tuple[bool, str | None]:
+    """Resolve the view to surface a browser pane into, via ``layout.py context``.
 
-    ``split`` requires a ``--layout`` (mutating ops only apply on clients that have that
-    named layout active), so the pane-pull must name the layout the human is actually
-    viewing. ``context`` is a read-only query over the client-activity log.
+    ``split`` edits the arrangement of the view it is given (``--view``) and keeps the client
+    on it, so the pane-pull names the view the human is actually looking at rather than
+    switching them elsewhere. ``context`` is a read-only query over the client-activity log.
 
-    Returns ``(reachable, layout)``:
-    * ``reachable`` is False when the layout server can't be reached at all -- an isolated
+    Returns ``(reachable, view)``:
+    * ``reachable`` is False when the shell can't be reached at all -- an isolated
       ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
       silently: there is no screen of ours to surface into.
-    * When reachable, ``layout`` is the active layout to target -- the current layout of
-      the connected client that most recently messaged THIS agent (matched by name, since
-      the context summary carries ``agent_name`` not id), else the most-recently-active
-      connected client's layout, else None (reachable but nothing to place it on).
+    * When reachable, ``view`` is the view to target -- the active view of the connected
+      client that most recently messaged THIS agent (its chat instance is addressed by the
+      agent id), else the most-recently-active connected client's view, else None
+      (reachable but nothing to place it on).
     """
     root = _repo_root()
     script = root / "system" / "scripts" / "layout.py"
@@ -213,19 +207,20 @@ def _resolve_active_layout() -> tuple[bool, str | None]:
         clients = json.loads(result.stdout or "[]")
     except json.JSONDecodeError:
         return (True, None)
-    # ``context`` lists clients most-recently-active first; keep connected ones reporting a layout.
+    # ``context`` lists clients most-recently-active first; keep connected ones reporting a view.
     connected = [
         client
         for client in clients
-        if isinstance(client, dict) and client.get("is_connected") and client.get("current_layout")
+        if isinstance(client, dict) and client.get("is_connected") and client.get("active_view")
     ]
-    my_name = os.environ.get("MNGR_AGENT_NAME")
-    if my_name:
+    my_id = os.environ.get("MNGR_AGENT_ID")
+    if my_id:
+        my_address = f"app:chat?instance={my_id}"
         for client in connected:
-            if any(msg.get("agent_name") == my_name for msg in client.get("recent_messages", [])):
-                return (True, str(client["current_layout"]))
+            if any(msg.get("address") == my_address for msg in client.get("recent_messages", [])):
+                return (True, str(client["active_view"]))
     if connected:
-        return (True, str(connected[0]["current_layout"]))
+        return (True, str(connected[0]["active_view"]))
     return (True, None)
 
 
@@ -233,32 +228,31 @@ def _pull_in_pane(browser_name: str) -> None:
     """Surface browser ``browser_name`` as its OWN pane beside the requesting agent's chat,
     optimistically.
 
-    Resolves the layout the requester's client is viewing via ``layout.py context`` (see
-    ``_resolve_active_layout``). If the layout server is unreachable -- an isolated
-    ``launch-task`` sub-agent in its own container -- we **skip silently**: there is no
-    screen of ours to surface into. Otherwise we split the browser into that layout next
-    to the agent's own chat (``--relative-to self``), or the parent's chat when a parent
-    handed a sub-agent its ref via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each
-    browser its own pane; splitting an already-open one just focuses it, so this is safe
-    to call repeatedly.
+    Resolves the view the requester's client is looking at via ``layout.py context`` (see
+    ``_resolve_active_view``). If the shell is unreachable -- an isolated ``launch-task``
+    sub-agent in its own container -- we **skip silently**: there is no screen of ours to
+    surface into. Otherwise we split the browser into that view next to the agent's own
+    chat (``--relative-to self``), or the parent's chat when a parent handed a sub-agent
+    its address via ``$BROWSER_FLEET_ANCHOR``. ``--new-group`` makes each browser its own
+    pane; splitting an already-open one just focuses it, so this is safe to call repeatedly.
 
-    If the split can't land (no target layout, or the human isn't currently viewing it),
+    If the split can't land (no target view, or the human isn't currently viewing it),
     we fall back to one neutral line offering the manual "+"-menu route -- the browser is
     up and fully drivable from the CLI either way; the pane is only a live-view convenience.
     """
-    reachable, layout = _resolve_active_layout()
+    reachable, view = _resolve_active_view()
     if not reachable:
-        return  # isolated sub-agent / no layout server -- nothing of ours to surface into
-    ref = f"service:browser?session={browser_name}"
-    if layout is not None:
+        return
+    address = f"app:browser?instance={browser_name}"
+    if view is not None:
         # A parent may hand a sub-agent its chat as an anchor; otherwise anchor on our own.
         anchor = os.environ.get(_ENV_ANCHOR)
         if anchor and _layout(
-            "split", ref, "--relative-to", anchor, "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", anchor, "--direction", "right", "--new-group", "--view", view, quiet=True
         ):
             return
         if _layout(
-            "split", ref, "--relative-to", "self", "--direction", "right", "--new-group", "--layout", layout, quiet=True, no_wait=True
+            "split", address, "--relative-to", "self", "--direction", "right", "--new-group", "--view", view, quiet=True
         ):
             return
     # Reachable but couldn't place the pane. Not an error -- offer the manual route
@@ -270,11 +264,18 @@ def _pull_in_pane(browser_name: str) -> None:
 # --- commands -----------------------------------------------------------------
 
 
+def _stopped_hint(browser_name: str) -> str:
+    """How to bring a stopped browser back (the daemon sends the same in its ``hint``)."""
+    return f"start it from its tab, or with `layout.py start app:browser?instance={browser_name}`"
+
+
 def _owner_label(browser: dict[str, Any], me: str | None) -> str:
     if browser.get("crashed") or browser.get("lifecycle") == "crashed":
         return "crashed (gone -- start a new one)"
     if browser.get("lifecycle") == "init":
         return "starting (Chromium launching -- ready shortly)"
+    if browser.get("lifecycle") == "stopped":
+        return f"stopped ({_stopped_hint(browser['id'])})"
     if browser["controller"] == "agent":
         name = browser.get("owner_name") or browser.get("owner_agent_id") or "?"
         return "you" if browser.get("owner_agent_id") == me else f"agent {name}"
@@ -345,6 +346,8 @@ def cmd_new(args: argparse.Namespace) -> int:
     # `new` mints the first free `browser-<N>`; pass `new <name>` to choose one. A duplicate or invalid
     # name is rejected by the daemon (409 / 400) with a clear message.
     body: dict[str, Any] = {"name": args.name} if args.name else {}
+    if args.url:
+        body["url"] = args.url
     status, payload = _request("POST", "/browsers", body)
     if status == 200:
         # Surface the new browser's pane right away, so "open a new browser" visibly
@@ -508,6 +511,9 @@ def _render_action(payload: dict[str, Any], browser_name: str, kind: str) -> int
         _err(f"browser {browser_name} crashed (Chromium was killed -- e.g. out of memory) and is gone. "
              f"Start a fresh one with `new` (it gets a new name); browser {browser_name} won't come back.")
         return _EXIT_ERROR
+    if status == "stopped":
+        _err(payload.get("hint") or f"browser {browser_name} is stopped; {_stopped_hint(browser_name)}")
+        return _EXIT_ERROR
     if status == "closed":
         _err(f"browser {browser_name} was closed and is gone. Start a fresh one with `new` (it gets a new name).")
         return _EXIT_ERROR
@@ -575,6 +581,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_ls.set_defaults(func=cmd_ls)
     p_new = sub.add_parser("new", help="Start a new browser and print its name. Pass an optional name to choose one.")
     p_new.add_argument("name", nargs="?", default=None, help="Optional name (lowercase letters/digits/dashes, e.g. 'research-1'); a duplicate is rejected.")
+    p_new.add_argument("--url", default=None, help="The page the new browser opens on (an absolute http(s) URL); the home page when omitted.")
     p_new.set_defaults(func=cmd_new)
 
     p_close = sub.add_parser("close", help="Close an entire browser (all tabs) and retire its name. For one tab, use `tab <name> close`.")

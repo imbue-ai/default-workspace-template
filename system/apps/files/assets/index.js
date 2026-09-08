@@ -137,7 +137,7 @@ async function ready() {
   // the payload carries nothing but the path. The wildcard target is fine for
   // the same reason: the path is already visible to any embedder.
   if (window.parent !== window) {
-    window.parent.postMessage({ type: "minds-location", path: location.pathname + location.search }, "*");
+    window.parent.postMessage({ type: "shell:location", path: location.pathname + location.search }, "*");
   }
 
   $pathsTable = document.querySelector(".paths-table");
