@@ -37,13 +37,12 @@ RAW_SPAWN_RULE = RegexRatchetRule(
         "not call run_local_command_modern_version, subprocess.Popen/run, or os.system directly "
         "-- extend run_detached_command instead. Importing the attached runner counts as much as "
         "calling it: handing it to something else as a value (a default argument, a callback) "
-        "spawns just as attached, and is how the sign-in probe slipped past a call-only rule."
+        "spawns just as attached."
     ),
     # The import alternative is anchored to the start of a line and to the `from ... import`
     # prefix so it reads code and not prose: the modules that spawn also name the runner in
     # comments, which a bare name pattern would misfire on. What follows `import` is left open
-    # (up to a trailing `#`) so an alias spelling -- `... as _run`, which reaches the attached
-    # runner exactly as the sign-in probe's default argument did -- still matches.
+    # (up to a trailing `#`) so an alias spelling -- `... as _run` -- still matches.
     pattern_string=(
         r"^from \S+ import [^#\n]*\brun_local_command_modern_version\b"
         r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\("
