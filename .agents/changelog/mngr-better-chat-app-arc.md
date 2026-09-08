@@ -76,3 +76,5 @@ When the apply's instances poll gives up without the registry ever naming a URL 
 The apply test for a rollback into a tree from before the app model now drives the rollback for real: the shell fails its own health probe after the forward restart, the recovery restarts into the manifest-less tree, and the test asserts the apply is recovered (exit 2) with the chat's instances API never asked, rather than passing on a forward apply that never rolled back.
 
 In the apply's test of which apps the post-restart probes read off a tree, the note that the fixture tree already holds the shell and the browser sits on its own line above the call rather than trailing a wrapped one.
+
+The apply's tool-environment refresh has a test for the case where neither the tool's own executable nor `mngr` is an installed uv tool on PATH: the install is left to uv's own tool directory with no `UV_TOOL_DIR` or `UV_TOOL_BIN_DIR` set, and the refresh's note names both executables.

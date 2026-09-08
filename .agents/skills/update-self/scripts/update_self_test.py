@@ -4722,6 +4722,31 @@ def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
     )
 
 
+def test_a_tool_with_no_installation_anywhere_is_left_to_uv(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With neither the tool's own executable nor mngr an installed uv tool on
+    PATH there is no installation to aim at, so the install is left to uv's own
+    tool directory and the refresh says so, naming both."""
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    assert not runner.executables
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    shell_install_env = next(
+        env
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:4] == ["uv", "tool", "install", "-e"]
+        and argv[4] == update_layout.SYSTEM_INTERFACE_DIR
+    )
+    assert "UV_TOOL_DIR" not in shell_install_env
+    assert "UV_TOOL_BIN_DIR" not in shell_install_env
+    assert (
+        f"could not identify the uv tool behind '{update_layout.TOOL_NAME}' (not an "
+        f"installed uv tool on PATH) nor the one behind '{update_layout.MNGR_EXECUTABLE}'"
+    ) in capsys.readouterr().err
+
+
 def test_the_refresh_survives_a_tool_with_no_receipt(apply_repo: Path) -> None:
     # No readable receipt means the tool is not installed (or predates
     # receipts); the refresh must still run as the plain install it would
