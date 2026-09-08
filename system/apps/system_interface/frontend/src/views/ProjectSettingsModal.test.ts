@@ -13,22 +13,23 @@ vi.hoisted(() => {
 // apiUrl reads the base path from a <meta> tag, which vitest's node
 // environment has no document for; identity keeps the asserted URLs the bare
 // /api paths (mirrors Projects.test.ts).
-vi.mock("../base-path", () => ({ apiUrl: (path: string) => path }));
+vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
 import type { ProjectSettingsModalAttrs } from "./ProjectSettingsModal";
 
-// Members are carried but never read: the modal is display metadata (name,
-// color, glyph) plus the delete, and taking an object out of a project is a
-// verb on the object's own rail row rather than anything reachable from here.
+// The tab set and shortcuts are carried but never read: the modal is display
+// metadata (name, color, glyph) plus the delete, and taking an instance out of
+// a project is a verb on its own rail row rather than anything reachable from
+// here.
 const PROJECT: ProjectInfo = {
-  project_id: "research",
+  id: "research",
   name: "Research",
   color: "#4f8ef7",
   glyph: 3,
-  has_content: true,
-  members: [],
+  tabs: [],
+  shortcuts: [],
 };
 
 type VnodeLike = {
@@ -104,7 +105,7 @@ describe("ProjectSettingsModal delete confirmation", () => {
     expect(tree).toContain("removes the view only");
     expect(tree).toContain("keeps running");
     expect(tree).toContain("Everything");
-    // The old, now-inaccurate warning about stopping terminals and browsers is gone.
+    // Deleting a project stops nothing, so the confirmation names nothing being shut down.
     expect(tree).not.toContain("shut down");
   });
 });

@@ -2,7 +2,8 @@
 """Print the plugin paths ``system/config/mngr_plugins.toml`` assigns to one tool.
 
 One path per line, relative to the workspace root, for ``build_workspace.sh``
-to feed ``uv tool install --with-editable`` and ``mngr plugin add --path``.
+to feed ``uv tool install --with-editable`` (keyed by an app's manifest name)
+and ``mngr plugin add --path`` (keyed by ``mngr``).
 The update-self apply reads the same file itself.
 """
 
@@ -26,7 +27,11 @@ def plugin_paths_for_tool(manifest_text: str, tool: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", required=True, help="mngr or system-interface")
+    parser.add_argument(
+        "--tool",
+        required=True,
+        help="The tool to list plugins for: mngr, or an app's manifest name (e.g. system_interface).",
+    )
     parser.add_argument(
         "--repo-root",
         default=".",

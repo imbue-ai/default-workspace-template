@@ -80,7 +80,7 @@ class AsyncLoopBridge:
 
         Blocks the calling Flask thread (correct under thread-per-connection) and
         re-raises whatever the coroutine raised, so existing error types
-        (FleetFullError, KeyError, BrowserStartupError, PlaywrightError) propagate
+        (FleetFullError, UnknownBrowserError, BrowserStartupError, PlaywrightError) propagate
         unchanged. On ``timeout`` the scheduled coroutine is CANCELLED on the loop
         before the ``TimeoutError`` propagates, so a partly-applied state mutation
         can't keep running after the route already returned an error.

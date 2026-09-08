@@ -1,0 +1,18 @@
+[project]
+name = "detached-subprocess"
+version = "0.1.0"
+description = "The one way a workspace service shells out: children in their own session, out of reach of the service's controlling terminal"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "concurrency-group",
+    # The ratchet rules the apps apply to their own source trees.
+    "imbue-common",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/detached_subprocess"]

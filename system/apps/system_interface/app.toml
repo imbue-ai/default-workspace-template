@@ -1,0 +1,7 @@
+# The workspace's own shell (window manager plus app management). Internal: it
+# hosts every other app's tabs, so it is never offered as a tab itself.
+name = "system_interface"
+display_name = "Workspace"
+internal = true
+critical = true
+priority = "system_interface"

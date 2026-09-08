@@ -15,7 +15,10 @@ Provisioning and utility scripts:
   `.claude/settings.json`.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
-  interface changes), `migrate_claude_auth.py` (one-time auth migration).
+  interface changes), `migrate_claude_auth.py` (one-time auth migration),
+  `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent
+  projects and layouts into the shell's state files; see
+  `docs/system/README.md`).
 - Boot recovery: `minds_start_services_agent.sh`, `minds_lima_autostart.sh`.
 - The changelog gate: `check_changelog_entries.py`.
 

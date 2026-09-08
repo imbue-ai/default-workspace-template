@@ -7,12 +7,12 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
 import type { ProjectMembershipDialogAttrs } from "./ProjectMembershipDialog";
 
 function project(id: string, name: string): ProjectInfo {
-  return { project_id: id, name, color: "#4f8ef7", glyph: 1, has_content: true, members: [] };
+  return { id, name, color: "#4f8ef7", glyph: 1, tabs: [], shortcuts: [] };
 }
 
 const PROJECTS = [project("alpha", "Alpha"), project("beta", "Beta"), project("gamma", "Gamma")];
@@ -81,9 +81,9 @@ function makeDialog(attrs: ProjectMembershipDialogAttrs): { render: () => unknow
 
 function makeAttrs(overrides: Partial<ProjectMembershipDialogAttrs> = {}): ProjectMembershipDialogAttrs {
   return {
-    memberLabel: "Chat 1",
+    instanceLabel: "Chat 1",
     projects: PROJECTS,
-    memberProjectIds: ["alpha"],
+    showingProjectIds: ["alpha"],
     onConfirm: vi.fn(),
     onCancel: vi.fn(),
     ...overrides,

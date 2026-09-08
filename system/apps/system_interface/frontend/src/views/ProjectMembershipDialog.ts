@@ -1,37 +1,35 @@
 /**
- * Dialog for filing one machine object into more projects, reached from the
- * object menu's "Add to project..." row.
+ * Dialog for filing one instance's address into more projects' tab sets, reached
+ * from the tab menu's "Add to project..." row.
  *
  * A checkbox list of every project on the machine: the ones already showing
- * the object render checked and fixed (adding never removes -- taking the
- * object out of a project is its rail row's "Remove from project"), and
- * confirming adds the object to the newly checked rest. Everything is not
- * offered: it is the home, lists the whole machine, and an object leaves it
+ * the instance render checked and fixed (adding never removes -- taking the
+ * instance out of a project is its rail row's "Remove from project"), and
+ * confirming adds the address to the newly checked rest. Everything is not
+ * offered: it is the home, lists the whole machine, and an instance leaves it
  * only by being deleted.
  *
- * Built on the shared Modal shell (views/components/Modal.ts): its backdrop-mousedown
- * dismissal, and Escape through the shell's `onEscape` rather than a key
- * handler on any one control, because focus sits on a checkbox row as easily
- * as anywhere.
+ * Built on the shared Modal shell (components/Modal.ts): its backdrop-mousedown dismissal, and
+ * Escape through the shell's `onEscape` rather than a key handler on any one control, because
+ * focus sits on a checkbox row as easily as anywhere.
  */
 
 import m from "mithril";
-import { Modal } from "./components/Modal";
-import type { ProjectInfo } from "../models/Projects";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { MODAL_MESSAGE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
+import type { ProjectInfo } from "../models/Inventory";
 import { squiggleMarkup } from "./squiggles";
-import { Button } from "./components/Button";
-import { MODAL_MESSAGE_CLASS } from "./components/Modal";
 
 const ROW_GLYPH_SIZE = 16;
 
 export interface ProjectMembershipDialogAttrs {
-  // What the object is currently called, for the dialog copy.
-  memberLabel: string;
+  // What the instance is currently titled, for the dialog copy.
+  instanceLabel: string;
   // Every project on the machine (Everything is never in here).
   projects: readonly ProjectInfo[];
-  // Projects currently showing the object, by id.
-  memberProjectIds: readonly string[];
-  // Fired with the newly checked project ids. The caller adds the object to
+  // Projects whose tab set already holds the instance, by id.
+  showingProjectIds: readonly string[];
+  // Fired with the newly checked project ids. The caller files the address into
   // each and closes.
   onConfirm: (selectedProjectIds: string[]) => void;
   onCancel: () => void;
@@ -41,11 +39,11 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
   const selected = new Set<string>();
 
   function projectRow(attrs: ProjectMembershipDialogAttrs, project: ProjectInfo): m.Vnode {
-    // A project already showing the object is settled: its box stays checked
+    // A project already showing the instance is settled: its box stays checked
     // and fixed, saying "already here" rather than offering a removal this
     // dialog does not do.
-    const isFixed = attrs.memberProjectIds.includes(project.project_id);
-    const isChecked = isFixed || selected.has(project.project_id);
+    const isFixed = attrs.showingProjectIds.includes(project.id);
+    const isChecked = isFixed || selected.has(project.id);
     return m(
       "label",
       {
@@ -61,9 +59,9 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
           "aria-label": project.name,
           onchange(e: Event) {
             if ((e.target as HTMLInputElement).checked) {
-              selected.add(project.project_id);
+              selected.add(project.id);
             } else {
-              selected.delete(project.project_id);
+              selected.delete(project.id);
             }
           },
         }),
@@ -81,7 +79,6 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-
       return m(
         Modal,
         {
@@ -106,7 +103,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
         [
           m("p", { class: MODAL_MESSAGE_CLASS }, [
             "Choose the projects that should also show ",
-            m("strong", attrs.memberLabel),
+            m("strong", attrs.instanceLabel),
             ".",
           ]),
           attrs.projects.length === 0

@@ -5,9 +5,9 @@ The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
 substrate every service flow shares). They hand it the system-interface
 specifics -- boot ``uv run system-interface`` from the worker's already-built
-``--work-dir`` on a free port, with layout persistence neutered (drop
-MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/agents``, and register the inner app plus the labeled
+``--work-dir`` on a free port, with MNGR_AGENT_ID dropped (so the throwaway
+boot never acts as the calling agent) but the live app registry read, so the
+real chats still render, probe ``/api/health``, and register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
 happens, and the served tree and the worker's folder are never touched. The
@@ -30,8 +30,8 @@ Usage:
     python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
 
 Environment:
-    MNGR_AGENT_ID  Dropped for the preview boot so it cannot clobber the live
-                   layout.
+    MNGR_AGENT_ID  Dropped for the preview boot so it never acts as the calling
+                   agent.
 
 Exit codes:
     0  Success (preview is up / torn down).
@@ -83,10 +83,9 @@ _INSTANCE_STATE_FILENAME = "instance.json"
 # shared script injects the free port into PORT and 127.0.0.1 into HOST.
 PREVIEW_PORT_ENV = "SYSTEM_INTERFACE_PORT"
 PREVIEW_HOST_ENV = "SYSTEM_INTERFACE_HOST"
-# ``/api/agents`` exercises the mngr plugin discovery path, so a 200 there is a
-# strong "the backend actually works" signal; handed to the shared preview
-# script as its ``--health-path``.
-HEALTH_PATH = "/api/agents"
+# The shell's own probe route (contracts.md section 5): a 200 there says the
+# backend is serving; handed to the shared preview script as its ``--health-path``.
+HEALTH_PATH = "/api/health"
 
 
 class Runner:
@@ -130,10 +129,10 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     ``up`` motion: validate the worker's app dir, require that the worker built
     its frontend bundle, then hand the shared script the system-interface
     specifics -- boot ``uv run system-interface`` from the worker's
-    already-built app dir on a free port; neuter layout persistence by dropping
-    MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``) while
-    keeping discovery, so the real conversations still render; probe
-    ``/api/agents``; register the inner app and the labeled wrapper frame.
+    already-built app dir on a free port; drop MNGR_AGENT_ID (so the preview
+    never acts as the calling agent) while reading the live app registry, so
+    the real chats still render; probe ``/api/health``; register the inner app
+    and the labeled wrapper frame.
     ``work_dir`` must still exist -- run this before the worker is destroyed.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir
@@ -154,7 +153,7 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
             f"preview: no frontend build in {work_dir} "
             f"({FRONTEND_BUILD_INDEX} is missing), so the preview would serve the "
             "'Frontend not built' placeholder. The worker must build the frontend "
-            "(cd system/apps/system_interface/frontend && npm ci && npm run build) before "
+            "(cd system && npm ci && npm run build) before "
             "its work_dir can be previewed -- re-brief it to build, then retry.\n"
         )
         return 1

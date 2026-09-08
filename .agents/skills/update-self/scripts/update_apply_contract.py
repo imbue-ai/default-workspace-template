@@ -140,7 +140,8 @@ class ApplyMarker:
     merge_ref: str
     target_ref: str | None
     ff_only: bool
-    worker_bundle: str | None
+    # The worker's already-built bundles, by the app they belong to (every app's, or none).
+    worker_bundles: dict[str, str] | None
     phase: str
     pid: int
     started_at: float
@@ -164,7 +165,7 @@ class ApplyMarker:
             "merge_ref": self.merge_ref,
             "target_ref": self.target_ref,
             "ff_only": self.ff_only,
-            "worker_bundle": self.worker_bundle,
+            "worker_bundles": self.worker_bundles,
             "phase": self.phase,
             "pid": self.pid,
             "started_at": self.started_at,
@@ -191,7 +192,7 @@ class ApplyMarker:
             merge_ref=str(raw["merge_ref"]),
             target_ref=raw.get("target_ref"),
             ff_only=bool(raw.get("ff_only", False)),
-            worker_bundle=raw.get("worker_bundle"),
+            worker_bundles=raw.get("worker_bundles"),
             phase=str(raw.get("phase", PHASE_STARTED)),
             pid=int(raw.get("pid", 0)),
             started_at=float(raw.get("started_at", 0.0)),

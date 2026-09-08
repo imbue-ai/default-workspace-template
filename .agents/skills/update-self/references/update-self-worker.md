@@ -35,6 +35,21 @@ git fetch upstream --tags
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```
 
+**A retry after a rolled-back apply of this same target must revert the
+rollback first.** The apply rolls back as a *forward revert*, so `HEAD` carries
+a `Roll back update apply (restore to ...)` commit whose parent is the landed
+merge: git then counts the target's content as already merged, and a plain
+`git merge "$TARGET_REF"` lands only what the target gained since -- a tree
+that is the old release plus a few files, which the apply's probes cannot tell
+from a good update. Check for one, and put the content back on your branch
+before merging (a `both added` conflict on a file the target changed since is
+resolved by taking the target's version):
+
+```bash
+ROLLBACK=$(git log --format=%H --grep='^Roll back update apply' "$BASE"..HEAD | head -1)
+if [ -n "$ROLLBACK" ]; then git revert --no-edit "$ROLLBACK"; fi
+```
+
 ## 2. Reason about the diff, then trial-merge
 
 Preview the impacted classes and read the upstream diff for genuine
@@ -160,19 +175,22 @@ live-applicable, rebuild-only, or `stuck`.
   workspace can start); fix it before running anything else.
 - **Suites, lint, ratchets** for each project in `projects_to_validate`: root
   `.` (`uv run pytest` + `uv run ruff check`); `system/apps/system_interface`
-  its own `uv run pytest` (and `npm run lint && npm run test` when the
-  frontend merged); `system/vendor/mngr` its own `uv run pytest`.
+  and `system/apps/chat` each its own `uv run pytest` (and, when any frontend
+  or the shared `system/libs/workspace_ui` merged, `npm run lint && npm run
+  test` at `system/`, the npm workspace root); `system/vendor/mngr` its own
+  `uv run pytest`.
 - **Isolated-service boots** for each impacted service, against a scratch
   data copy via `.agents/shared/scripts/serve_isolated_instance.py` (see
   `update-app`), never the live store. This runs on the host's global
   toolchain, so it does not exercise a global-dependency bump.
 - **Playwright** for a web surface (system interface or a user service) only
   when the merge needed nontrivial merge work there. For the system interface,
-  build it in your worktree (`uv sync --all-packages`, then `cd
-  system/apps/system_interface/frontend && npm ci && npm run build`) and drive
-  it per `.agents/shared/worker/references/web-frontend-testing.md`. That
-  bundle is what the lead's apply installs live (`--worker-bundle`) -- name its
-  location in your report.
+  build the frontends in your worktree (`uv sync --all-packages`, then `cd
+  system && npm ci && npm run build`: one npm workspace emits the shell's bundle
+  and the chat app's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those two bundles
+  are what the lead's apply installs live (`--worker-bundle`, one per app,
+  installed only as a pair) -- name both locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -238,9 +256,10 @@ Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
     service; the lead attaches the rollback offer to each nontrivial one.
   - **Customization survival** -- each touched creation classified per 4b,
     with evidence paths for anything not plainly intact.
-  - **Built system-interface bundle** -- when you built it, the absolute path
-    (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`);
-    omit when you did not build.
+  - **Built frontend bundles** -- when you built them, the absolute paths of
+    both (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`
+    and `<your work_dir>/system/apps/chat/imbue/chat/static`); omit when you did
+    not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file.
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
