@@ -30,7 +30,8 @@ every parser:
   the two in sync.
 
 - **Error snippets.** A failed call must stay glanceable without a fetch, so
-  :func:`error_snippet` keeps its first line resident.
+  :func:`error_snippet` keeps its first line resident -- except for a call a Claude Code hook
+  refused, which gets no snippet (the workspace steering the agent is not a fault to flag).
 """
 
 import json
