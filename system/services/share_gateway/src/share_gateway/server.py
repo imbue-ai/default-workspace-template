@@ -31,11 +31,10 @@ from share_gateway.hostnames import service_for_host
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
-from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
-from share_gateway.session_cookie import verify_session_cookie_value
+from share_gateway.session_cookie import verify_session_from_cookies
 
 _PENDING_LOGIN_TTL_SECONDS = 600.0
 
@@ -176,8 +175,7 @@ def build_gateway_app(
             preflight = Response(status=204)
             preflight.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
             return _apply_health_cors(preflight)
-        session_value = request.cookies.get(SESSION_COOKIE_NAME, "")
-        identity = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
+        identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             # Bare liveness: the gateway (hence the tunnel) is up. No detail
             # without a session -- the workspace host id is a capability, but
@@ -238,8 +236,7 @@ def build_gateway_app(
             return Response(status=200)
 
         cookie_header = request.headers.get("Cookie", "")
-        session_value = request.cookies.get(SESSION_COOKIE_NAME, "")
-        identity = verify_session_cookie_value(signing_secret, session_value, workspace_domain)
+        identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
