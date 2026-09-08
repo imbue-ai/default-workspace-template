@@ -210,6 +210,7 @@ source = { editable = "system/libs/app_instances" }
 dependencies = [
     { name = "app-manifest" },
     { name = "click" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "httpx" },
     { name = "imbue-common" },
@@ -222,6 +223,7 @@ dependencies = [
 requires-dist = [
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "click", specifier = ">=8.1" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
@@ -458,6 +460,7 @@ source = { editable = "system/apps/browser" }
 dependencies = [
     { name = "app-instances" },
     { name = "app-manifest" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "oom-priority" },
@@ -474,6 +477,7 @@ dependencies = [
 requires-dist = [
     { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "oom-priority", editable = "system/services/oom_priority" },
@@ -1062,6 +1066,7 @@ version = "0.1.0"
 source = { editable = "system/services/env_converge" }
 dependencies = [
     { name = "click" },
+    { name = "detached-subprocess" },
     { name = "imbue-common" },
     { name = "loguru" },
 ]
@@ -1069,6 +1074,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
@@ -1555,6 +1561,7 @@ version = "0.1.0"
 source = { editable = "system/services/host_backup" }
 dependencies = [
     { name = "click" },
+    { name = "detached-subprocess" },
     { name = "imbue-common" },
     { name = "loguru" },
 ]
@@ -1562,6 +1569,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
@@ -3333,6 +3341,7 @@ version = "0.1.0"
 source = { editable = "system/services/share_gateway" }
 dependencies = [
     { name = "cryptography" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "httpx" },
     { name = "pyjwt" },
@@ -3342,6 +3351,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=42" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pyjwt", specifier = ">=2.8" },
@@ -3482,6 +3492,7 @@ dependencies = [
     { name = "app-instances" },
     { name = "app-manifest" },
     { name = "click" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "httpx" },
     { name = "imbue-common" },
@@ -3494,6 +3505,7 @@ requires-dist = [
     { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "click", specifier = ">=8.1" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },

@@ -40,7 +40,6 @@ set -- a parent passes its chat address to sub-agents -- else the caller's own c
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 import tomllib
@@ -49,6 +48,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.mngr.cli.output_helpers import write_human_line, write_stderr_line
 
 _DEFAULT_URL = "http://127.0.0.1:8081"
@@ -170,9 +170,7 @@ def _layout(*args: str, quiet: bool = False) -> bool:
     layout = root / "system" / "scripts" / "layout.py"
     if not layout.exists():
         return False
-    result = subprocess.run(
-        [sys.executable, str(layout), *args], cwd=str(root), capture_output=True, text=True
-    )
+    result = run_detached_subprocess([sys.executable, str(layout), *args], cwd=root)
     if result.returncode != 0 and not quiet:
         _err(result.stderr.strip() or f"layout {' '.join(args)} failed")
     return result.returncode == 0
@@ -198,9 +196,7 @@ def _resolve_active_view() -> tuple[bool, str | None]:
     script = root / "system" / "scripts" / "layout.py"
     if not script.exists():
         return (False, None)
-    result = subprocess.run(
-        [sys.executable, str(script), "context", "--json"], cwd=str(root), capture_output=True, text=True
-    )
+    result = run_detached_subprocess([sys.executable, str(script), "context", "--json"], cwd=root)
     if result.returncode != 0:
         return (False, None)  # unreachable (isolated sub-agent / no daemon)
     try:

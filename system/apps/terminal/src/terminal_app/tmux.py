@@ -1,9 +1,11 @@
-import subprocess
 import time
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Final
 
+from detached_subprocess.runner import run_detached_command
+from imbue.concurrency_group.errors import ProcessSetupError
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
@@ -172,19 +174,17 @@ class SubprocessTmux(TmuxInterface):
                 f"tmux could not kill session {target!r}: {completed.stderr.strip()}"
             )
 
-    def _run(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def _run(self, arguments: Sequence[str]) -> FinishedProcess:
         command = [self.tmux_executable, *arguments]
         started_at = time.monotonic()
         try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=TMUX_TIMEOUT_SECONDS
-            )
-        except subprocess.TimeoutExpired as e:
+            completed = run_detached_command(command, timeout=TMUX_TIMEOUT_SECONDS)
+        except ProcessSetupError as e:
+            raise TmuxCommandError(f"cannot run {self.tmux_executable}: {e}") from e
+        if completed.is_timed_out:
             raise TmuxCommandError(
                 f"tmux did not finish {arguments[0]} within {TMUX_TIMEOUT_SECONDS}s"
-            ) from e
-        except OSError as e:
-            raise TmuxCommandError(f"cannot run {self.tmux_executable}: {e}") from e
+            )
         elapsed = time.monotonic() - started_at
         if elapsed > TMUX_SLOW_SECONDS:
             logger.warning("Ran tmux {} slowly, in {:.1f}s", arguments[0], elapsed)

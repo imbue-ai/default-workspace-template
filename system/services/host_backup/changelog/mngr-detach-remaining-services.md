@@ -1,0 +1,1 @@
+The backup service now runs restic, findmnt and btrfs in their own sessions. A child that inherits the service's controlling terminal can stop the whole service when it is killed, which leaves backups silently not running.

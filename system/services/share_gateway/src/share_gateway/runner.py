@@ -21,33 +21,32 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from werkzeug.serving import BaseWSGIServer
-from werkzeug.serving import make_server
+from detached_subprocess.runner import run_detached_command, spawn_detached_process
+from imbue.concurrency_group.errors import ProcessSetupError
+from werkzeug.serving import BaseWSGIServer, make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.assignment import RelayAssignment
-from share_gateway.assignment import load_assignment
-from share_gateway.log import log as _log
-from share_gateway.caddyfile import build_label_to_name
-from share_gateway.caddyfile import read_registered_apps
-from share_gateway.caddyfile import render_caddyfile
-from share_gateway.certs import CertProvisioningError
-from share_gateway.certs import ensure_share_certificate
+from share_gateway.assignment import RelayAssignment, load_assignment
+from share_gateway.caddyfile import (
+    build_label_to_name,
+    read_registered_apps,
+    render_caddyfile,
+)
+from share_gateway.certs import CertProvisioningError, ensure_share_certificate
 from share_gateway.frpc_config import render_frpc_toml
-from share_gateway.handoff import JwksCache
-from share_gateway.handoff import SingleUseJtiRegistry
-from share_gateway.materials import ShareMaterials
-from share_gateway.materials import load_or_create_auth_label
-from share_gateway.materials import load_or_create_signing_secret
-from share_gateway.materials import read_share_materials
-from share_gateway.server import PendingLoginRegistry
-from share_gateway.server import build_gateway_app
+from share_gateway.handoff import JwksCache, SingleUseJtiRegistry
+from share_gateway.log import log as _log
+from share_gateway.materials import (
+    ShareMaterials,
+    load_or_create_auth_label,
+    load_or_create_signing_secret,
+    read_share_materials,
+)
+from share_gateway.server import PendingLoginRegistry, build_gateway_app
 
 POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
@@ -100,8 +99,13 @@ def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:
 
 
 def _start_child(argv: list[str], name: str) -> subprocess.Popen[bytes]:
+    """A managed child (caddy, frpc), in its own session.
+
+    ``_stop_child`` signals it by handle, which is what makes detaching safe: supervisord's
+    group kill no longer reaches it, and that explicit stop is now its only path down.
+    """
     _log(f"Starting {name}: {' '.join(argv[:3])}...")
-    return subprocess.Popen(argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
+    return spawn_detached_process(argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
 
 
 def _reload_caddy(caddyfile_text: str) -> bool:
@@ -125,17 +129,15 @@ def _reload_caddy(caddyfile_text: str) -> bool:
 def _reload_frpc(config_path: Path) -> bool:
     """Hot-reload one frpc's proxies from its on-disk config via its admin API; False on failure."""
     try:
-        result = subprocess.run(
-            ["frpc", "reload", "-c", str(config_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        result = run_detached_command(["frpc", "reload", "-c", str(config_path)], timeout=15)
+    except ProcessSetupError as exc:
         _log(f"frpc reload failed: {exc}")
         return False
+    if result.is_timed_out:
+        _log("frpc reload failed: did not finish within 15s")
+        return False
     if result.returncode != 0:
-        _log(f"frpc reload rejected ({result.returncode}): {result.stdout.decode(errors='replace')[:300]}")
+        _log(f"frpc reload rejected ({result.returncode}): {(result.stdout + result.stderr)[:300]}")
         return False
     return True
 
