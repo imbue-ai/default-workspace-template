@@ -478,8 +478,8 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
 
 def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
     # Every config the scan reads, which is what `_local_supervisord_configs` returns: the main
-    # file plus its drop-ins. Reading only the main one here would assert over a file that
-    # declares almost nothing, and pass by finding nothing to disagree with.
+    # file plus its drop-ins. Reading only the main one would check the parser against a file
+    # that declares a single program, which is not the config the scan is given.
     system_dir = Path(__file__).resolve().parents[4] / "system"
     configs = [system_dir / "supervisord.conf", *sorted((system_dir / "supervisord.conf.d").glob("*.conf"))]
     ports = [
