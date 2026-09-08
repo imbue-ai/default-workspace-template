@@ -1,5 +1,6 @@
 /**
- * Pure geometry for the combo card's side flyout.
+ * Pure geometry for the combo card's side flyout: where it sits (`placeFlyout`), and the
+ * wedge a pointer on its way to it is allowed to cross (`isInSafeTriangle`).
  *
  * The flyout's BASE sits level with the row that opened it and the list grows UPWARD. That is
  * not the ordinary top-align-and-cap-downward rule, and the reason is that this card
@@ -38,6 +39,53 @@ export interface FlyoutPlacement {
   /** A cap, not a height: the content decides, up to this. */
   maxHeight: number;
   side: "trailing" | "leading";
+}
+
+/** A viewport point -- where the pointer is, or where it was. */
+export interface FlyoutPoint {
+  x: number;
+  y: number;
+}
+
+/** The flyout edge a pointer travelling towards it must cross: the side FACING the card,
+ *  and that side's full vertical span. */
+export interface SafeTriangleBase {
+  edgeX: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * The safe triangle: is `point` inside the wedge between `apex` and the open flyout's near edge?
+ *
+ * A hover menu has one hard problem. The flyout opens beside the card, so the pointer has to
+ * travel diagonally to reach it -- and on the way it crosses the card's OTHER rows, each of
+ * which would otherwise take the hover and replace the flyout being aimed at. Waiting longer
+ * before switching does not fix it: the pointer is genuinely resting on those rows.
+ *
+ * What tells travel apart from a change of mind is direction, and the triangle is direction
+ * made testable. Its apex is the last point the pointer occupied on the row that opened the
+ * flyout; its base is the flyout's near edge. Every path from that point to that edge stays
+ * inside it, and a pointer heading anywhere else leaves it almost at once.
+ *
+ * Kept here beside `placeFlyout`, and pure for the same reason: the caller measures.
+ */
+export function isInSafeTriangle(point: FlyoutPoint, apex: FlyoutPoint, base: SafeTriangleBase): boolean {
+  const vertices: readonly FlyoutPoint[] = [apex, { x: base.edgeX, y: base.top }, { x: base.edgeX, y: base.bottom }];
+  // Inside iff `point` sits on the same side of all three edges, walked in order -- so the
+  // cross products never disagree in sign. A degenerate triangle (an apex already on the
+  // edge, or a flyout of no height) contains only its own line, which reads as "not
+  // travelling" and simply leaves the rows unprotected.
+  let anyPositive = false;
+  let anyNegative = false;
+  for (let index = 0; index < vertices.length; index++) {
+    const from = vertices[index];
+    const to = vertices[(index + 1) % vertices.length];
+    const cross = (to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x);
+    if (cross > 0) anyPositive = true;
+    if (cross < 0) anyNegative = true;
+  }
+  return !(anyPositive && anyNegative);
 }
 
 export function placeFlyout(input: FlyoutPlacementInput): FlyoutPlacement {
