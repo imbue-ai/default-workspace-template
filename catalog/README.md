@@ -7,7 +7,7 @@ beside it under `thumbnails/`.
 
 The workspace does not ship this file. Its shell (`system/apps/system_interface`)
 fetches it from a fixed URL -- by default the raw GitHub URL of this file on the
-`josh/new-tab-base` branch, set by `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` --
+`mngr/new-tab-page` branch, set by `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` --
 reuses a fetched copy for six hours, and keeps the last copy that parsed under
 `data/.state/system_interface/template_catalog.json` so a machine that cannot
 reach GitHub keeps showing what it last saw. A workspace on an older template
