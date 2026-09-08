@@ -9,6 +9,7 @@ from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
 from share_gateway.session_cookie import verify_session_cookie_value
 from share_gateway.session_cookie import verify_session_from_cookies
+from share_gateway.testing import set_cookies_by_name
 
 _DOMAIN = "host-aaaa.bbbb.us1.imbueminds.com"
 _SECRET = "signing-secret-77f1"
@@ -40,8 +41,7 @@ def test_set_session_cookie_sets_a_plain_copy_and_a_partitioned_copy() -> None:
     with app.test_request_context():
         response = Response(status=302)
         set_session_cookie(response, "cookie-value", _DOMAIN)
-        set_cookies = response.headers.getlist("Set-Cookie")
-    by_name = {header.split("=", 1)[0]: header for header in set_cookies}
+        by_name = set_cookies_by_name(response)
     assert set(by_name) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
     for header in by_name.values():
         assert "=cookie-value;" in header
