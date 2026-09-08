@@ -67,6 +67,7 @@ import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
+from typing import Any
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -526,33 +527,9 @@ def _read_manifest(
             )
         copied_actions: list[dict[str, object]] = []
         for action in actions:
-            if not (
-                isinstance(action, dict)
-                and isinstance(action.get("id"), str)
-                and isinstance(action.get("label"), str)
-            ):
-                return (
-                    {},
-                    None,
-                    f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
-                )
-            copied_action: dict[str, object] = {
-                "id": action["id"],
-                "label": action["label"],
-            }
-            params = action.get("params")
-            if params is not None:
-                if not isinstance(params, list) or not all(
-                    isinstance(param, dict) and isinstance(param.get("name"), str)
-                    for param in params
-                ):
-                    return (
-                        {},
-                        None,
-                        f"manifest {str(path)!r}: every action param needs a string 'name'",
-                    )
-                if params:
-                    copied_action["params"] = [param["name"] for param in params]
+            copied_action, action_error = _copied_action(action, path)
+            if copied_action is None:
+                return {}, None, action_error
             copied_actions.append(copied_action)
         fields["actions"] = copied_actions
 
@@ -561,6 +538,39 @@ def _read_manifest(
         return {}, None, f"manifest {str(path)!r}: icon must be a string path"
     icon_path = path.parent / icon if icon is not None else None
     return fields, icon_path, None
+
+
+def _copied_action(
+    action: Any, path: Path
+) -> tuple[dict[str, object] | None, str | None]:
+    """One manifest action (any value a TOML array can hold) as the registry row
+    carries it: ``id``, ``label``, and ``params`` (the param names) when it declares
+    any. Returns ``(copied, None)``, or ``(None, error)`` when the action is not
+    shaped as the manifest requires."""
+    if not (
+        isinstance(action, dict)
+        and isinstance(action.get("id"), str)
+        and isinstance(action.get("label"), str)
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
+        )
+    copied: dict[str, object] = {"id": action["id"], "label": action["label"]}
+    params = action.get("params")
+    if params is None:
+        return copied, None
+    if not isinstance(params, list) or not all(
+        isinstance(param, dict) and isinstance(param.get("name"), str)
+        for param in params
+    ):
+        return (
+            None,
+            f"manifest {str(path)!r}: every action param needs a string 'name'",
+        )
+    if params:
+        copied["params"] = [param["name"] for param in params]
+    return copied, None
 
 
 def _upsert(
