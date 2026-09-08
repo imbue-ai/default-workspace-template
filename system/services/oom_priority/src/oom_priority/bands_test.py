@@ -54,6 +54,7 @@ _BUILTIN_SERVICE_ORDER = (
     "app-watcher",
     "xvfb",
     "browser",
+    "files",
 )
 
 

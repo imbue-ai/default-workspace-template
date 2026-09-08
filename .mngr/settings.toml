@@ -32,8 +32,8 @@ host_env__extend = [
     # mode as "currently unavailable" -- so without this, /fast is refused in
     # the container even though the same account gets fast mode on the laptop.
     "CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1",
-    # Lock Claude Code to the version pinned in agent_types.claude.version and the
-    # Dockerfile's CLAUDE_CODE_VERSION; disable the auto-updater + background
+    # Lock Claude Code to the version pinned in agent_types.claude.version and
+    # setup_system.sh's CLAUDE_CODE_VERSION; disable the auto-updater + background
     # feedback pings so the installed binary cannot silently drift. Tracks the
     # FIXME on ClaudeAgentConfig.version in libs/mngr_claude/.../plugin.py.
     "DISABLE_AUTOUPDATER=1",
@@ -95,7 +95,25 @@ yes = true
 
 # Agent type defaults -- apply to all claude agents created from this repo
 [agent_types.claude]
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
+# Dialogs mngr may answer on the user's behalf when one is holding the TUI's input at send
+# time. Anything not listed here that needs a real answer refuses the send with an error
+# naming what is in the way, rather than mngr guessing; anything Esc closes harmlessly is
+# dismissed regardless of this list.
+#
+# Answer every dialog mngr knows a sensible answer for, and fall back to pressing "1" on one
+# it cannot name. A named dialog is answered by cycling the selector onto its own chosen option
+# -- never by pressing Enter on whatever happens to be highlighted -- so that half grants no
+# power to guess. The alternative, an explicit list, silently stops covering each dialog added
+# upstream: the model and effort switch confirmations were listed here, so a usage-limit or
+# LSP-install prompt blocked sends until someone noticed and added it.
+#
+# The "and unknown" half IS a guess, chosen deliberately: a workspace chat has no good way to
+# show a dialog nobody has named, so refusing there strands the message until someone opens
+# the terminal tab. It is bounded -- the digit only goes to a pane actually showing a numbered
+# selector, and if the surface does not clear, the send still refuses rather than pressing on.
+# Narrow it to ALL_KNOWN_DIALOGS to go back to refusing anything unnamed.
+sensibly_deal_with_dialogs = ["ALL_KNOWN_AND_UNKNOWN_DIALOGS"]
 auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
@@ -122,9 +140,25 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true}
+# tui = "fullscreen" pins the input bar and any dialog to the pane instead of letting them
+# scroll out of view, so what mngr captures at send time is what is actually holding the
+# input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
+# the workspace terminal panel keeps its scrollback either way.
+# model = "opus[1m]" is the ONE model pin left in this file, and it is claude-only on
+# purpose. Two things make it safe here and unsafe everywhere else: every Anthropic account
+# that can reach Claude Code has Opus, so the slug cannot be rejected the way a codex slug
+# can (see agent_types.codex); and the `first` create template turns fast mode on for the
+# introductory agent, which needs a model that actually supports it -- so the model and the
+# fast-mode default have to be chosen together rather than left to whatever the account
+# happens to default to.
+#
+# Do NOT copy this to another harness. codex, pi, opencode and antigravity all pin nothing:
+# their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
+# so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
+# an empty model bar.
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
-# directly. The wrapper (system/services/oom_priority/bin/claude_oom_launch.py) sets its own
+# directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
 # agent-pid registry, then execs the real claude with the args mngr appends
 # (assemble_command splices --settings / --resume / --session-id after this
@@ -135,11 +169,11 @@ settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerou
 # spawned. ${MNGR_AGENT_WORK_DIR:-.} mirrors
 # the OOM Claude hooks' path form; the "main" type overrides command below so
 # its sleeping window-0 is unaffected.
-command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_oom_launch.py"
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py claude"
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
-# sync with CLAUDE_CODE_VERSION in the Dockerfile.
-version = "2.1.207"
+# sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
+version = "2.1.227"
 # Do not provision a per-agent Claude config dir: every claude in the workspace
 # shares one config dir so auth, plugins, marketplaces, and sessions are
 # configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
@@ -187,13 +221,17 @@ command = "sleep infinity"
 # (system/scripts/setup_system.sh, CODEX_VERSION), so check_installation is off -- do not
 # reinstall/verify at provision.
 #
-# model / effort are the lateral of agent_types.claude's opus[1m] + effortLevel="high".
-# gpt-5.6-sol is the account's default slug (so no ChatGPT-account slug rejection),
-# pinned for reproducibility. model_reasoning_effort="medium": Opus-high and Sol-medium
-# are each their vendor's balanced *default* (both with tiers of headroom above), and
-# Sol is unusually capable at lower effort -- so medium is the honest match for
-# opus-high, and avoids xhigh's latency / rate-limit blowout. Bump to "high" only if
-# this agent routinely takes on unusually hard, long-horizon work.
+# NO model or effort is pinned, deliberately -- and claude is now the only agent type that
+# pins one. A codex slug is not a property of the workspace, it is a property of the ACCOUNT:
+# which models a ChatGPT plan may use varies by tier, so a slug that is one account's default
+# is another account's hard 400 ("The 'gpt-5.6-sol' model is not supported when using Codex
+# with a ChatGPT account"). That failure is doubly bad because it is not just a refused turn:
+# the model bar matches the live model against the account's own list, so an unusable pin
+# also shows as a shrug and hides every model the account CAN use.
+#
+# Leaving it unset lets codex pick its account's default, which the model bar then reads back
+# from model_state.json like every other harness. Claude keeps its pin because its auth is
+# single-account and its slugs do not vary by plan in the same way.
 #
 # sandbox_mode = danger-full-access disables codex's own OS sandbox. On Linux codex
 # sandboxes exec via bubblewrap, but the bundled bwrap cannot set up its network
@@ -203,10 +241,15 @@ command = "sleep infinity"
 # --dangerously-skip-permissions -- so codex's nested sandbox is both redundant and
 # broken here. Turning it off lets exec actually run.
 [agent_types.codex]
-auto_dismiss_dialogs = true
+# Launch through the OOM band wrapper, exactly as claude does above -- without it an
+# agent runs unbanded and earlyoom sheds it by kernel score instead of by our tiering.
+# The wrapper execs `codex` in place, so process detection still matches `codex`.
+# Note codex uses this base for BOTH its visible `--remote` TUI and its `app-server`
+# daemon, so both are banded (the daemon is where turns run, so it is the one that
+# matters for memory).
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py codex"
+auto_dismiss_dialogs_at_startup = true
 auto_allow_permissions = true
-model = "gpt-5.6-sol"
-model_reasoning_effort = "medium"
 sandbox_mode = "danger-full-access"
 check_installation = false
 # config_overrides is dumped verbatim into codex's own config.toml, so these are codex's
@@ -223,17 +266,30 @@ check_installation = false
 #   they close that hole (`code_mode_only` implies `code_mode`; it is Stage::UnderDevelopment,
 #   which only warns -- the suppress flag silences that). `code_mode_host` picks where the JS
 #   runs (standalone host vs embedded V8), unrelated to whether code mode is on.
+# - unified_exec = false: closes a TOTAL bypass of the PreToolUse guards. The unified-exec
+#   surface adds `write_stdin` (and a tty option to the shell tool); `write_stdin` fires NO
+#   PreToolUse event at all, so an agent can start a shell with one guarded call and then type
+#   anything into it -- `git rebase`, a piped `head`, a batched `tk start` -- with every guard
+#   skipped. Measured on codex-cli 0.147.0: the typed command ran and the hook log held a single
+#   `Bash`/`bash` entry. It is NOT closable via the tools table below: `ToolsToml` accepts only
+#   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
+#   silently ignored (verified -- the bypass still worked). With this flag the model reports
+#   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
 #   goals/plan UI (we drive tk), its interactive request-user-input tool, and web search --
 #   so they never appear in the transcript.
-config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
+config_overrides = { features = { memories = false, code_mode_only = true, code_mode_host = true, suppress_unstable_features_warning = true, goals = false, unified_exec = false }, tools = { update_plan = { enabled = false }, experimental_request_user_input = { enabled = false }, web_search = { enabled = false } } }
 # Codex-only instructions, appended to every codex agent's system prompt.
 append_system_prompt__extend = ["""# Codex-specific instructions
 
 Do NOT use your built-in `update_plan` tool, your `create_goal`/`get_goal`/`update_goal` tools, or your `request_user_input` tool. Their output and effects never reach the user's workspace chat -- a plan or goal recorded there is invisible to the user, and a `request_user_input` prompt blocks on a terminal nobody is watching (and submits empty answers when it times out). Track every plan and step with `tk` step records, and when you need something from the user, write it as an ordinary chat message and stop -- their reply comes back as your next turn.
 
-The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.""", """# The /welcome command
+The pytest-timeout note in the shared instructions (`PYTEST_MAX_DURATION_SECONDS`) refers to your shell/exec tool's timeout.
+
+Run every shell command as its own `exec_command`. Do NOT start a long-lived interactive shell and feed commands into its stdin: commands delivered that way bypass this workspace's command guards, so a mistake they would have caught reaches the repo instead.""", """# The /welcome command
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
@@ -260,10 +316,13 @@ Then stop. If the user's next message asks for suggestions or says they are not 
 # model bar reads the live values via the pi lifecycle extension.
 #
 # auto_allow_permissions MUST be true -- pi has no approval gate and its config
-# validator rejects false. auto_dismiss_dialogs adds pi's `--approve` (trust
+# validator rejects false. auto_dismiss_dialogs_at_startup adds pi's `--approve` (trust
 # project-local files for the run) so an unattended agent is not blocked on the
-# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs.
+# first-run trust dialog, matching agent_types.codex's auto_dismiss_dialogs_at_startup.
 [agent_types.pi-coding]
+# Launch through the OOM band wrapper -- see the codex block above. The wrapper execs
+# `pi` in place, and mngr's own prelude/`-e <extension>` splice after this base.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py pi"
 auto_allow_permissions = true
 # Share the one ~/.pi/agent/npm dir (symlink) instead of copying it per agent. pi loads
 # its extensions as TypeScript through jiti, whose transpile cache is keyed by absolute
@@ -274,7 +333,7 @@ auto_allow_permissions = true
 # -- and never has to write to -- the shared tree. The boot warm-up in seed_home_skeleton.sh
 # fills the cache once so even the FIRST agent after a boot is fast.
 share_home_npm_dir = true
-auto_dismiss_dialogs = true
+auto_dismiss_dialogs_at_startup = true
 check_installation = false
 # Harness-only instructions, appended to every pi agent's system prompt.
 append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words.""", """# The /welcome command
@@ -293,9 +352,87 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
+# the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
+# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# opencode binary is baked into the image (system/scripts/setup_system.sh,
+# OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
+# provision.
+#
+# No model is pinned -- as with every agent type but claude now. OpenCode is a
+# many-provider, many-auth harness: its model is a `provider/model` slug that comes
+# from the user's own opencode.json (synced from ~/.config/opencode by the plugin)
+# or the authenticated provider's default -- forcing a slug here could name a
+# provider the user has not authenticated. The chat model bar reads the live value
+# from the harness's own model_state.json instead. "Effort" for opencode is its
+# variant system (provider.<p>.models.<m>.variants.<name>), likewise user-config
+# driven, so it is not pinned here either.
+#
+# auto_allow_permissions injects a wildcard permission-allow into the per-agent
+# opencode.json so the container agent runs unattended, matching
+# agent_types.codex's auto_allow_permissions posture.
+[agent_types.opencode]
+auto_allow_permissions = true
+check_installation = false
+# Launch through the OOM band wrapper, like every other harness. opencode is the one
+# harness whose `command` is not a launch PREFIX but the binary itself: the plugin passes
+# it through as MNGR_OPENCODE_BIN and opencode_launch.sh invokes it for BOTH the server
+# and the attached TUI, so both Bun processes land in the band (the same two-pids-per-agent
+# shape codex has). That script word-splits the value for exactly this reason.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py opencode"
+# Harness-only instructions, appended to every opencode agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+
+# the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
+# claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
+# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
+# version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
+# auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
+# matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
+# auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
+# build -- agy has no version field of its own, so NEVER sets AGY_CLI_DISABLE_AUTO_UPDATE
+# in the agent env and the pin in the installer script stays the only version authority.
+#
+# NO model is pinned, deliberately. agy is single-auth, so a slug WOULD be safe to force,
+# but the model bar is uniform across harnesses now: the harness writes its live model to
+# model_state.json over the session and the harness-agnostic code matches that against the
+# catalog. Pinning a slug here would add a second, competing source of truth that goes
+# stale the moment someone runs /model in the agent's terminal.
+#
+# settings_overrides is folded (last) into the per-agent settings.json -- the agy analog of
+# agent_types.codex's config_overrides. These turn off surfaces a headless chat does not
+# use: enableTerminalSandbox=false keeps run_command unrestricted (the container is already
+# the isolation boundary, same intent as codex's danger-full-access; agy's terminal sandbox
+# is opt-in anyway, so this is belt-and-suspenders), and telemetry / tips / feedback-survey
+# / notifications off keep the surface quiet.
+[agent_types.antigravity]
+auto_allow_permissions = true
+auto_dismiss_dialogs_at_startup = true
+check_installation = false
+update_policy = "NEVER"
+# Launch through the OOM band wrapper, like every other harness. agy takes it as a plain
+# prefix (its `command` is the base of assemble_command, which the plugin then wraps in
+# `env HOME=<per-agent>`), so this is the same shape as claude and pi -- one exec, one pid.
+command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/agent_oom_launch.py agy"
+settings_overrides = { enableTerminalSandbox = false, enableTelemetry = false, showTips = false, showFeedbackSurvey = false, notifications = false }
+# Harness-only instructions, appended to every antigravity agent's system prompt.
+append_system_prompt__extend = ["""Do not use any built-in tools related to memory or task planning -- their output does not reach the user's workspace chat. Use the `tk` utility for any todos; it is the only task tracker in this workspace. Don't ever use tools for asking user questions or anything that would block the terminal -- just use your words."""]
+
 # --- Provider configurations ---
 
 # all disabled for now, since we don't want the agents to be able to launch mngr agents anywhere except within their own containers
+
+# Applies to mngr commands run from the workspace root INSIDE the container
+# (project config is cwd-based), where `local` is the only enabled provider.
+# The in-container `mngr observe` discovery poll is purely a reconciliation
+# sweep -- creates/destroys/renames arrive through the incremental discovery
+# log, and local agent process death through observe's PID watchers -- so it
+# only catches out-of-band changes (e.g. a tmux session killed by hand) and
+# can run rarely: each poll costs file reads plus tmux forks, which is what
+# makes it matter at idle (~3x as expensive under gVisor).
+[providers.local]
+discovery_poll_interval_seconds = 60.0
 
 [providers.modal]
 is_enabled = false
@@ -575,9 +712,9 @@ idle_mode = "disabled"
 # minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
 # defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
 # timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
-# lands at 86400s (24h), Modal's hard cap. Eval workers instead stack the
-# `modal_eval` overlay below for a shorter timeout, leaving this global template
-# untouched.
+# lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
+# instead stack the `modal_eval` overlay below for a shorter timeout, leaving
+# this global template untouched.
 setting__extend = [
     "providers.modal.is_enabled=true",
     "providers.modal.default_cpu=2.0",
@@ -603,13 +740,14 @@ extra_provision_command__extend = [
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
 ]
 
-# Short-timeout overlay for eval-worker Modal sandboxes. Always stacked on top of
-# `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
+# Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
+# of `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
 # overlays `docker`: it reuses the entire `modal` body and only shortens the sandbox
-# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s), since eval runs
-# are short-lived and self-terminate at their per-case budget. The eval harness selects
-# it via the MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates
-# use plain `modal` (24h). Keeping it separate leaves the global `modal` template alone.
+# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s). An eval trial
+# tears its own workspaces down when it finishes, so this timeout is the backstop for
+# the case where the driver dies without doing so. The eval harness selects it via the
+# MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates use plain
+# `modal` (24h). Keeping it separate leaves the global `modal` template alone.
 [create_templates.modal_eval]
 setting__extend = ["providers.modal.default_sandbox_timeout=10710"]
 

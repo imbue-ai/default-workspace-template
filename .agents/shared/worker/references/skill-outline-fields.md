@@ -25,6 +25,8 @@ The outline contains:
   that chains them. Note any step you keep inlined (e.g. it hands the next a
   live handle) and any subflow beyond the natural steps -- those need a specific
   invariant.
+- For a skill built with `data-pipeline-builder`: how it will allow the user to update
+  their data, or add new data later.
 - 2-3 evaluation scenarios you plan to hand-craft, plus any edge cases you chose
   not to handle (and why).
 - **A measured cost/time estimate, whenever a step costs money or takes

@@ -1,0 +1,1 @@
+`eval-worker` is dropped from `_NON_SERVICE_PROGRAM_BANDS`, following the removal of the supervisord program of that name. The remaining `PROTECTED` one-shots are `env-converge` and `vm-exec-register`; every built-in program in `supervisord.conf` still names its band outright, which is what `test_every_built_in_supervisord_program_has_an_explicit_band` requires.

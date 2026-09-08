@@ -35,14 +35,21 @@ from typing import Final
 # each parser, matching the frontend's discriminated union.
 SPECIAL_EVENT_TYPE: Final[str] = "special"
 
-# How far a tool call's input preview and a tool result's output are clipped for the
-# wire, shared by every harness's parser. Defined once here (not per-parser) because
-# they are part of the event contract and MUST agree across harnesses: e.g. codex's
-# tool_labels reasons about "the 200-char preview", so a drift between the two parsers
-# would silently break its labels. (A backend cap the frontend relies on, so widening
-# or exempting a tool output is a change to this one value / its call sites.)
-MAX_TOOL_INPUT_PREVIEW_LENGTH: Final[int] = 200
-MAX_TOOL_OUTPUT_LENGTH: Final[int] = 2000
+# The wire is PAYLOAD-FREE: events carry identity, prose, labels, and small derived
+# stamps -- never raw tool inputs, tool outputs, or thinking. Those stay on disk and are
+# served whole, on demand, by the per-event detail endpoint (statelessly re-read; never
+# cached backend-side). This is what makes full residency of a whole conversation cheap.
+# What the default chat render needs from
+# a payload is stamped at parse time instead: the labels (derived from the FULL input),
+# ``input_chars`` / ``output_chars`` (so the frontend knows whether there is anything to
+# fetch), ``error_snippet`` (a failed call stays glanceable without a fetch), ``tk_stamp``
+# and ``tk_command`` (the step progress view's facts), ``permission_request`` (the card's
+# structured object), and ``has_thinking``.
+MAX_ERROR_SNIPPET_LENGTH: Final[int] = 200
+# Ceiling on the resident tk stamp. tk decoration is a handful of short lines per call;
+# the cap only guards against pathological output that happens to be full of step-id
+# tokens.
+MAX_TK_STAMP_LENGTH: Final[int] = 4000
 
 
 class SpecialEventKind(StrEnum):

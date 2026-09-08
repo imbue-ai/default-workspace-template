@@ -73,9 +73,9 @@ class ModelOption(FrozenModel):
     in_picker: bool = True
     # The raw model id the harness reports in its live state file, matched against a
     # live read (:func:`match_option`). ``None`` means "same as ``id``" -- for a harness
-    # whose reported id equals its switch id (codex, pi). Claude reports a suffix-free
-    # API id (``claude-opus-4-8``) that differs from the ``[1m]``-suffixed switch id, so
-    # its options set this explicitly.
+    # whose reported id equals its switch id (codex, pi). Claude reports an API id
+    # (``claude-opus-5``) that differs from the ``[1m]``-suffixed switch id, so its
+    # options set this explicitly.
     harness_reported_model_id: str | None = None
 
 
@@ -133,6 +133,12 @@ class SwitchMode(StrEnum):
     # choice reads as instant while never showing a value the daemon has not accepted. The frontend
     # derives ``optimistic = switch_mode === "eager_then_reconcile"``, so this yields no overlay.
     ON_CHANGE = "on_change"
+    # Display-only: the bar REFLECTS the harness's model and cannot drive it. The frontend
+    # renders the slots non-interactive (a readonly trigger + "use the agent terminal"
+    # tooltip) and never opens a picker. antigravity uses it: agy's `/model` is an
+    # interactive TUI picker with no scriptable one-shot form, and its `--model` flag applies
+    # only at launch, so there is no mid-session switch to offer.
+    READ_ONLY = "read_only"
 
 
 class PickerMode(StrEnum):
@@ -162,9 +168,11 @@ class HarnessCatalog(FrozenModel):
     switch_mode: SwitchMode
     # How the model picker renders (list vs search); orthogonal to switch_mode.
     picker_mode: PickerMode
-    # The harness's product name, shown as a non-clickable "Powered by <label>" credit beside
-    # the composer's "Open agent terminal" button (e.g. "Claude Code", "Codex", "Pi Coding").
-    powered_by_label: str
+    # The exact, non-clickable credit text shown beside the composer's "Open agent terminal"
+    # button (e.g. "Powered by Codex", "Powered by Pi Coding"). The harness declares the WHOLE
+    # string, prefix included, so a harness that wants no credit at all declares "" -- the
+    # frontend then renders nothing. Claude does this today.
+    powered_by_text: str
     # Whether this harness can flush a queued "shoulder tap" atomically -- merging the parked
     # messages into the currently-running turn without a restart. True only for codex, whose
     # patched binary watches shoulder_tap_atomic.jsonl and ABA-gates the flush on the live turn
@@ -201,7 +209,7 @@ def read_model_identity(state_path: Path) -> ModelIdentity | None:
 
     Reads the uniform ``{"model", "effort", "fast"}`` schema every harness writes. Returns
     None when the file is absent, unparseable, or records no model yet (the bar shows
-    logo-only). Unknown keys are ignored, so an older writer emitting a different effort/tier
+    no slots). Unknown keys are ignored, so an older writer emitting a different effort/tier
     schema still lights the model chip (``model`` is unchanged) with effort None / fast off
     rather than crashing.
     """
@@ -223,10 +231,14 @@ def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> M
     that is None) exactly, then the catalog option id exactly (a provision-time seed
     writes the configured option id, e.g. claude's ``opus[1m]``, before the harness has
     reported anything), then -- for drift tolerance -- by a single prefix pass so a
-    dated variant (``claude-haiku-4-5-<date>``) still matches its suffix-free key. Effort
-    and fast validity are then checked against the matched option: an effort the option
-    does not declare, or fast on a model without fast, is a shrug. Uses the full declared
-    effort set, so a live-read hidden level (``ultra``) still matches.
+    dated variant (``claude-haiku-4-5-<date>``) still matches its suffix-free key. Uses
+    the full declared effort set, so a live-read hidden level (``ultra``) still matches.
+
+    Fast is deliberately NOT a matching condition. A recorded fast survives longer than
+    the model it was chosen for -- it lives in launch settings, while the model does not
+    -- so an agent can genuinely come back as "model without fast, fast=true". That is a
+    stale flag, not an unknown model, and shrugging at it hid a model the catalog knows
+    perfectly well. :func:`resolve_model_choice` drops the flag instead.
     """
     by_key = {option.harness_reported_model_id or option.id: option for option in options}
     matched = by_key.get(identity.model_id)
@@ -239,9 +251,25 @@ def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> M
     declared = {choice.level for choice in matched.efforts}
     if identity.effort is not None and identity.effort not in declared:
         return None
-    if identity.fast and not matched.supports_fast:
-        return None
     return matched
+
+
+def resolve_model_choice(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> ModelChoice:
+    """The live selection as the browser should see it: matched option plus a usable identity.
+
+    Fast is dropped when the matched model does not support it. The flag outlives the model it
+    was chosen for -- it is kept in launch settings so it survives a restart, whereas the model
+    is re-read from the session -- so any path that changes the model without clearing it leaves
+    a combination no live session ever had. Treating that as an unknown model was wrong twice
+    over: the model IS known, and the bar went blank rather than showing it.
+
+    Harness-agnostic on purpose. Both harnesses can produce the pairing and neither should carry
+    its own repair for it.
+    """
+    matched = match_option(identity, options)
+    if matched is not None and identity.fast and not matched.supports_fast:
+        identity = ModelIdentity(model_id=identity.model_id, effort=identity.effort, fast=False)
+    return ModelChoice(identity=identity, matched=matched)
 
 
 def to_options(entries: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[ModelOption, ...]:
@@ -318,9 +346,7 @@ class HarnessModelResolver(ABC):
         return None
 
     @abstractmethod
-    def switch(
-        self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]
-    ) -> SwitchResult:
+    def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
         """Apply the ``axes`` of ``identity`` the caller says a click changed.
 
         ``axes`` is which of model/effort/fast to actually send -- computed on the

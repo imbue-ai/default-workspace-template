@@ -1,0 +1,2 @@
+- Discourage agents from asking users to execute Latchkey commands directly.
+- Encourage agents to check existing access first before doing any other file sharing operations.

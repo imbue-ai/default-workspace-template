@@ -6,7 +6,12 @@ Provisioning and utility scripts:
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
   `_provision_guard.sh`, and the boot-convergence units in `env.d/`.
-- Claude Code hooks (`claude_*.sh` / `claude_*.py`), wired in
+- Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
+  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
+  spawns their `*_check.py` checkers from `.pi/extensions/`. See
+  `tool-call-policies.md` for what each one enforces.
+- Claude Code features with no counterpart on the other harnesses
+  (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
   `.claude/settings.json`.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
@@ -17,7 +22,6 @@ Provisioning and utility scripts:
 Cohesive machinery lives in packages instead: the recurring-job/automation
 scripts in `system/libs/automations/`, the Caretaker check in
 `system/services/caretaker/`, the OOM entry points in
-`system/services/oom_priority/bin/`, the eval worker in
-`system/services/eval_worker/`, the terminal tmux helpers in
+`system/services/oom_priority/bin/`, the terminal tmux helpers in
 `system/apps/terminal/`, and the github-sync git hook in
 `system/libs/github_sync/git_hooks/`.

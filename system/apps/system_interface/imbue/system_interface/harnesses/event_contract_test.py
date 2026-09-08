@@ -11,6 +11,9 @@ event's keys checked against the shared requirement.
 import json
 from typing import Any
 
+from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedStep
+from imbue.system_interface.harnesses.antigravity.agy_transcript import DecodedToolCall
+from imbue.system_interface.harnesses.antigravity.session_parser import parse_step as agy_parse_step
 from imbue.system_interface.harnesses.claude.session_parser import parse_lines as claude_parse_lines
 from imbue.system_interface.harnesses.codex.session_parser import parse_lines as codex_parse_lines
 from imbue.system_interface.harnesses.pi_coding.session_parser import parse_record
@@ -40,17 +43,23 @@ _TOOL_RESULT_REQUIRED = {
     "source",
     "tool_call_id",
     "tool_name",
-    "output",
+    "output_chars",
     "is_error",
     "message_uuid",
 }
-_TOOL_CALL_REQUIRED = {"tool_call_id", "tool_name", "input_preview", "header_label", "caption_label"}
+_TOOL_CALL_REQUIRED = {"tool_call_id", "tool_name", "input_chars", "header_label", "caption_label"}
 
 _REQUIRED_BY_TYPE = {
     "assistant_message": _ASSISTANT_REQUIRED,
     "user_message": _USER_REQUIRED,
     "tool_result": _TOOL_RESULT_REQUIRED,
 }
+
+
+# The payload fields the wire must NEVER carry (the payload-free contract): raw tool
+# inputs, raw outputs, and thinking text stay on disk, served only by the detail endpoint.
+_FORBIDDEN_PAYLOAD_EVENT_FIELDS = {"output", "thinking"}
+_FORBIDDEN_PAYLOAD_TOOL_CALL_FIELDS = {"input_preview", "input"}
 
 
 def _assert_contract(events: list[dict[str, Any]], harness: str) -> None:
@@ -63,9 +72,13 @@ def _assert_contract(events: list[dict[str, Any]], harness: str) -> None:
         seen_types.add(str(event["type"]))
         missing = required - event.keys()
         assert not missing, f"{harness} {event['type']} is missing contract fields: {sorted(missing)}"
+        forbidden = _FORBIDDEN_PAYLOAD_EVENT_FIELDS & event.keys()
+        assert not forbidden, f"{harness} {event['type']} carries payloads on the wire: {sorted(forbidden)}"
         for tool_call in event.get("tool_calls") or ():
             tc_missing = _TOOL_CALL_REQUIRED - tool_call.keys()
             assert not tc_missing, f"{harness} tool_call is missing contract fields: {sorted(tc_missing)}"
+            tc_forbidden = _FORBIDDEN_PAYLOAD_TOOL_CALL_FIELDS & tool_call.keys()
+            assert not tc_forbidden, f"{harness} tool_call carries payloads on the wire: {sorted(tc_forbidden)}"
     assert seen_types == set(_REQUIRED_BY_TYPE), (
         f"{harness}: fixture must exercise all three core types, got {seen_types}"
     )
@@ -182,10 +195,10 @@ def test_pi_events_satisfy_the_contract() -> None:
     _assert_contract(events, "pi")
 
 
-def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_truncation() -> None:
-    """The two structured facts the chat reads out of a tool result survive the output cap
-    on EVERY harness (claude always did; codex and pi silently lost both -- a step past
-    2000 chars spun forever, unfixable frontend-side because the data was gone)."""
+def test_codex_and_pi_stamp_tk_decoration_and_permission_objects_resident() -> None:
+    """The two structured facts the chat reads out of a tool result are stamped resident on
+    EVERY harness, however large the raw output -- the output itself never reaches the
+    wire, so a fact left unstamped would be gone for the frontend."""
     filler = "x" * 3000
     tk_output = filler + "\nUpdated cod-step-abcd -> closed\ntk-step cod-step-abcd summary: done"
     permission_output = filler + '\n{"request_id": "req-1", "payload": {"kind": "predefined"}, "rationale": "need it"}'
@@ -199,8 +212,8 @@ def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_trun
         0,
         {"c1": "exec"},
     )[0]
-    assert "Updated cod-step-abcd -> closed" in codex_tk["output"]
-    assert "tk-step cod-step-abcd summary: done" in codex_tk["output"]
+    assert "Updated cod-step-abcd -> closed" in codex_tk["tk_stamp"]
+    assert "tk-step cod-step-abcd summary: done" in codex_tk["tk_stamp"]
 
     codex_permission = codex_parse_lines(
         {
@@ -212,7 +225,7 @@ def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_trun
         {"c2": "exec"},
     )[0]
     assert codex_permission["permission_request"]["request_id"] == "req-1"
-    assert '"request_id": "req-1"' in codex_permission["output"]
+    assert "output" not in codex_permission
 
     pi_tk = parse_record(
         {
@@ -227,7 +240,7 @@ def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_trun
             },
         }
     )[0]
-    assert "Updated cod-step-abcd -> closed" in pi_tk["output"]
+    assert "Updated cod-step-abcd -> closed" in pi_tk["tk_stamp"]
 
     pi_permission = parse_record(
         {
@@ -245,15 +258,11 @@ def test_codex_and_pi_preserve_tk_decoration_and_permission_objects_through_trun
     assert pi_permission["permission_request"]["request_id"] == "req-1"
 
 
-def test_codex_error_marker_survives_the_permission_rebuild() -> None:
-    """`is_error` probes the UNTRUNCATED head: the permission-request rebuild replaces the
-    head with "...", so probing the truncated output would render a failed script as a
-    clean success."""
+def test_codex_error_marker_and_snippet_stamp_from_the_full_output() -> None:
+    """`is_error` and the resident snippet both read the FULL output, so a failed script
+    whose failure marker sits ahead of a large body still reads as a failure at a glance."""
     filler = "x" * 3000
-    output = (
-        "Script failed: boom\n" + filler
-        + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
-    )
+    output = "Script failed: boom\n" + filler + '\n{"request_id": "req-9", "payload": {"kind": "predefined"}}'
     event = codex_parse_lines(
         {
             "timestamp": "2026-01-01T00:00:05Z",
@@ -265,4 +274,36 @@ def test_codex_error_marker_survives_the_permission_rebuild() -> None:
     )[0]
     assert event["permission_request"]["request_id"] == "req-9"
     assert event["is_error"] is True
-    assert not event["output"].startswith("Script failed")
+    assert event["error_snippet"] == "Script failed: boom"
+
+
+def test_antigravity_events_satisfy_the_contract() -> None:
+    """agy decodes from a protobuf ``steps`` row rather than JSONL, so its fixture is built
+    from :class:`DecodedStep` directly -- the decoder has its own tests. One step per core
+    type; the tool step yields BOTH the call and (once terminal) its result."""
+    base = DecodedStep(
+        conv_id="c1",
+        idx=0,
+        step_type_name="USER_INPUT",
+        status_name="DONE",
+        source_name="USER_EXPLICIT",
+        created_at="2026-01-01T00:00:00Z",
+        is_terminal=True,
+    )
+    user_step = base.model_copy_update(("user_text", "hi"))
+    assistant_step = base.model_copy_update(
+        ("idx", 1), ("step_type_name", "PLANNER_RESPONSE"), ("assistant_text", "hello")
+    )
+    tool_step = base.model_copy_update(
+        ("idx", 2),
+        ("step_type_name", "RUN_COMMAND"),
+        (
+            "tool_call",
+            DecodedToolCall(
+                call_id="t1", name="run_command", args='{"CommandLine": "ls"}', tool_summary="", tool_action=""
+            ),
+        ),
+        ("tool_result_text", "a.txt"),
+    )
+    events = [event for step in (user_step, assistant_step, tool_step) for event in agy_parse_step(step)]
+    _assert_contract(events, "antigravity")

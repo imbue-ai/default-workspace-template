@@ -1,6 +1,8 @@
 ---
 name: update-app
 description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+metadata:
+  author: imbue
 ---
 
 # Changing an existing app or service
@@ -28,7 +30,8 @@ If you're doing something *other* than editing an existing app or service:
   dockview shell, chat panels, progress view) -> `update-system-interface`,
   this flow's system-interface specialization: it runs the same live loop, but
   against an isolated worktree (never the served tree), with the preview tab as
-  the user's view, and reveals only when known-good.
+  the user's view, and goes live through the atomic update apply only when
+  known-good.
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
 
 ## Match the flow to the scope of the change
@@ -381,8 +384,8 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
-  owns its own live preview loop and safe-reveal go-live; use it rather
-  than this flow.
+  owns its own live preview loop and its go-live through the atomic update
+  apply; use it rather than this flow.
 
 `update-creation` and `heal-creation` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into

@@ -1,6 +1,8 @@
 ---
 name: assist
 description: Diagnose and fix a problem the user is hitting in this workspace, and escalate built-in (non-user) issues to imbue. Invoked as `/assist <description>` by the minds "get help -> have an agent help" flow (also usable directly when the user describes something broken).
+metadata:
+  author: imbue
 ---
 
 # Assisting with a problem

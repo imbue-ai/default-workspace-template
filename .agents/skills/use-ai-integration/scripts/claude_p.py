@@ -102,6 +102,27 @@ class WorkspaceAICredentials:
 ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
 
 
+def _default_account_dir() -> str:
+    """The most recently used provider account's folder, or "" when there is none.
+
+    Read straight from the index rather than imported from the system-interface package:
+    this script runs from whatever environment the caller has, which is frequently not
+    that venv. The format is one JSON object with an `accounts` list and an `mru` id.
+    """
+    root = os.path.join(os.path.expanduser("~"), ".minds", "accounts")
+    try:
+        with open(os.path.join(root, "index.json"), encoding="utf-8") as f:
+            index = json.load(f)
+        rows = [a for a in index.get("accounts", []) if a.get("lane") == "anthropic"]
+        if not rows:
+            return ""
+        chosen = next((a for a in rows if a.get("id") == index.get("mru")), rows[0])
+        path = os.path.join(root, str(chosen["id"]))
+        return path if os.path.isdir(path) else ""
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
 def _read_env_file(path: str) -> dict[str, str]:
     """Parse simple ``KEY=VALUE`` lines from an env file; {} if absent/unreadable."""
     values: dict[str, str] = {}
@@ -133,9 +154,15 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     """
     snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
     settings_env: dict[str, object] = {}
-    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR
-    # when explicitly set, else ~/.claude (the workspace never sets the var).
-    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or os.path.expanduser(
+    # Resolve the config dir the way claude itself does: $CLAUDE_CONFIG_DIR when
+    # explicitly set, else ~/.claude.
+    #
+    # Inside an agent the var IS set -- mngr sources the agent's env file into every
+    # process in its tmux session, so a skill script, a worker, and the agent itself all
+    # see the account the chat is bound to. Outside one -- a supervisord service, a cron
+    # job -- nothing sets it and ~/.claude holds no credential, so fall back to the
+    # workspace's default account rather than to nothing.
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "") or _default_account_dir() or os.path.expanduser(
         "~/.claude"
     )
     settings_path = os.path.join(config_dir, "settings.json")

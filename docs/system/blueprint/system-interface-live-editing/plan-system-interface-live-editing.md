@@ -1,5 +1,15 @@
 # Live editing flow for the system interface
 
+> **Status.** The live loop, the FOLLOW-mode preview, and the strict health gate
+> landed as planned. The go-live half did not: while this plan was in flight,
+> [`safe-update-apply`](../safe-update-apply/plan-safe-update-apply.md) moved the
+> reveal out of `reveal_system_interface.py` into the general
+> `update_self.py apply` (snapshots, an apply marker, `recover`), which restarts
+> the whole services agent on every apply by design. Where this plan,
+> `live-testing-findings.md`, or `fix-plan.md` says `reveal --rollback-to` or
+> "restart only the `system_interface` program", read the apply instead; the
+> settled health verdict and the FOLLOW-mode pre-flight were ported into it.
+
 Rework the system-interface editing flow so it mirrors `update-service`'s "live loop first, ratify at turn-end" pattern, collapsing the difference onto three system-interface-specific adjustments. Also clarify the mock guidance shared by all interactive deliveries along the way.
 
 ## Overview

@@ -1,6 +1,8 @@
 ---
 name: welcome
 description: Greet the user with a short, friendly welcome message when a new project/agent is first started. Invoked automatically as the first message from the minds desktop client.
+metadata:
+  author: imbue
 ---
 
 # Welcome the user

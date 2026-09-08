@@ -1,9 +1,9 @@
 The README was updated to describe the live-editing flow (edit an isolated
-worktree, build, refresh a labeled preview tab in place, then merge and reveal),
-and to note that refreshing a live preview on its existing port and tearing it
-down are the shared `serve_isolated_instance.py`'s own `refresh` / `down` --
-addressed by the instance name `preview` prints (`si-preview-<slug>`) -- rather
-than sub-commands of `reveal_system_interface.py`.
+worktree, build, refresh a labeled preview tab in place, then merge and apply),
+and to note that refreshing a live preview on its existing port is the shared
+`serve_isolated_instance.py`'s own `refresh`, addressed by the instance name
+`preview` prints (`si-preview-<slug>`), rather than a sub-command of
+`reveal_system_interface.py`.
 
 A second system interface on the same host no longer breaks its own agent view.
 `mngr observe` is single-writer per mngr host dir, so a preview booted against
@@ -54,7 +54,7 @@ answered 200 on an instance whose agent view was dead and could not serve as the
 health gate.
 
 **Only the authoritative instance manages chat OOM scores.** A `FOLLOW`-mode
-instance -- the preview, the reveal pre-flight -- is now built without the
+instance -- the preview, the update apply's pre-flight -- is now built without the
 capability to write `oom_score_adj` at all, and it neither seeds nor runs the
 staleness sweep. Otherwise two instances would fight over the same `/proc`
 entries, and the preview would lose on the merits anyway: the open/visible

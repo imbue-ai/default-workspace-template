@@ -21,9 +21,11 @@ from __future__ import annotations
 import fcntl
 import os
 import socket
+import socketserver
 import sys
 import threading
 import time
+import xmlrpc.client
 from collections.abc import Generator
 from collections.abc import Iterator
 from collections.abc import Sequence
@@ -32,6 +34,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from xmlrpc.server import SimpleXMLRPCDispatcher
+from xmlrpc.server import SimpleXMLRPCRequestHandler
 
 import httpx
 import pexpect
@@ -49,15 +53,16 @@ from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.system_interface.agent_discovery import MngrMessenger
+from imbue.system_interface.agent_discovery import SendFailure
 from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.event_queues import AgentEventQueues
+from imbue.system_interface.harnesses.auth_flows import AuthFlowService
 from imbue.system_interface.harnesses.claude.auth import ClaudeAuthService
-from imbue.system_interface.harnesses.claude.auth import RestartProgress
 from imbue.system_interface.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.system_interface.harnesses.signed_in import SignedIn
 from imbue.system_interface.layout_ops import LayoutMutex
-from imbue.system_interface.welcome_resend import WelcomeResender
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -106,6 +111,91 @@ def build_agent_details(
 # this binary explicitly via ``executable_path`` (see the
 # ``browser_type_launch_args`` fixture override in ``conftest.py``).
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+
+
+class _FakeSupervisorRequestHandler(SimpleXMLRPCRequestHandler):
+    """XML-RPC request handler usable over a unix socket."""
+
+    # TCP_NODELAY is meaningless (and an error) on a unix socket.
+    disable_nagle_algorithm = False
+
+    def address_string(self) -> str:
+        # A unix socket has no peer address; the base implementation indexes
+        # into an empty client_address and dies mid-request.
+        return "unix-socket"
+
+
+class _UnixSocketXmlRpcServer(socketserver.ThreadingUnixStreamServer, SimpleXMLRPCDispatcher):
+    """A minimal XML-RPC server over a unix socket."""
+
+    # Read by SimpleXMLRPCRequestHandler on every request.
+    logRequests = False
+
+    def __init__(self, socket_path: str) -> None:
+        SimpleXMLRPCDispatcher.__init__(self, allow_none=False, encoding=None)
+        socketserver.ThreadingUnixStreamServer.__init__(self, socket_path, _FakeSupervisorRequestHandler)
+
+
+# supervisord's own fault codes (supervisor.xmlrpc.Faults), restated for the fake.
+_SUPERVISOR_FAULT_BAD_NAME = 10
+_SUPERVISOR_FAULT_ALREADY_STARTED = 60
+_SUPERVISOR_FAULT_NOT_RUNNING = 70
+
+
+class FakeSupervisorServer:
+    """A supervisord-shaped XML-RPC server over a unix socket.
+
+    Implements exactly the slice of the supervisor RPC namespace the liveness
+    module uses -- ``getAllProcessInfo`` / ``startProcess`` / ``stopProcess``
+    -- over ``statename_by_program``, with the same fault codes supervisord
+    answers, so both the probes and the stop/start actions are tested against
+    the real transport rather than a faked-out client.
+    """
+
+    def __init__(self, socket_path: Path) -> None:
+        self.socket_path = socket_path
+        self.statename_by_program: dict[str, str] = {}
+        # Lets tests assert on the sweep's RPC economy (e.g. that a registry
+        # with no supervised rows makes no supervisord call at all).
+        self.get_all_process_info_call_count = 0
+        self._server = _UnixSocketXmlRpcServer(str(socket_path))
+        self._server.register_function(self._get_all_process_info, "supervisor.getAllProcessInfo")
+        self._server.register_function(self._start_process, "supervisor.startProcess")
+        self._server.register_function(self._stop_process, "supervisor.stopProcess")
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
+
+    # The dispatch protocol hands every RPC argument over as a marshallable
+    # value, so the handlers take ``object`` and stringify -- exactly what the
+    # wire delivers.
+    def _get_all_process_info(self) -> list[dict[str, str]]:
+        self.get_all_process_info_call_count += 1
+        return [{"name": program, "statename": statename} for program, statename in self.statename_by_program.items()]
+
+    def _start_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_ALREADY_STARTED, f"ALREADY_STARTED: {program}")
+        self.statename_by_program[program] = "RUNNING"
+        return True
+
+    def _stop_process(self, name: object, _wait: object) -> bool:
+        program = str(name)
+        if program not in self.statename_by_program:
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_BAD_NAME, f"BAD_NAME: {program}")
+        if self.statename_by_program[program] not in ("RUNNING", "STARTING"):
+            raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
+        self.statename_by_program[program] = "STOPPED"
+        return True
 
 
 @contextmanager
@@ -161,11 +251,16 @@ class RecordingMngrMessenger(MngrMessenger):
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
     succeeds: bool = True
+    # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
+    failure_reason: str = "The agent could not be reached."
+    failure_kind: str = "unknown"
     press_succeeds: bool = True
 
-    def send_to_agent(self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]) -> bool:
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
         self.sent.append((str(agent_id), message))
-        return self.succeeds
+        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
@@ -177,7 +272,7 @@ def build_test_state(
     config: Config | None = None,
     agent_manager: AgentManager | None = None,
     claude_auth_service: ClaudeAuthService | None = None,
-    welcome_resender: WelcomeResender | None = None,
+    auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
@@ -195,8 +290,15 @@ def build_test_state(
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns (Fix 1) onto the event fan-out.
-    manager.set_transcript_broadcaster(event_queues.broadcast_all_ignored)
-    return SystemInterfaceState(
+    manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    state = SystemInterfaceState(
+        # Never the production probe: it shells out to whatever claude/codex/agy/pi this
+        # machine happens to have, over the network, from any test that reaches a sign-in
+        # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
+        # that cares about the verdict injects its own service.
+        auth_flows=auth_flows
+        if auth_flows is not None
+        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
@@ -205,15 +307,12 @@ def build_test_state(
         event_queues=event_queues,
         layout_mutex=LayoutMutex(),
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        welcome_resender=welcome_resender
-        if welcome_resender is not None
-        else WelcomeResender(
-            resolve_agent=manager.get_agent_info_by_id,
-            send_message_fn=manager.send_message_to_agent,
-        ),
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
     )
+    # Match production: eviction drops a destroyed/stopped agent's watcher.
+    manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
+    return state
 
 
 class FakeFinishedProcess:
@@ -248,9 +347,17 @@ class FakePexpectProcess:
     against their wall-clock deadline.
     """
 
-    def __init__(self, expect_script: Sequence[tuple[int, str]], drain_chunks: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        expect_script: Sequence[tuple[int, str]],
+        drain_chunks: Sequence[str] = (),
+        is_alive: bool = True,
+    ) -> None:
         assert expect_script, "expect_script must have at least one entry"
         self._script = list(expect_script)
+        # Hardcoding this True made every "the CLI has exited" arm unreachable from tests --
+        # including the only success signal codex's device flow has, which is process exit.
+        self._is_alive = is_alive
         self._call_idx = 0
         self._drain_chunks = list(drain_chunks)
         self.sendline_calls: list[str] = []
@@ -285,31 +392,18 @@ class FakePexpectProcess:
         self.send_calls.append(s)
 
     def isalive(self) -> bool:
-        return True
+        return self._is_alive
+
+    def exit(self) -> None:
+        """Let the scripted CLI finish. `terminate` does not: the production teardown calls
+        it on paths where the process was already gone, so it cannot mean "now exited"."""
+        self._is_alive = False
 
     def terminate(self, force: bool = False) -> None:
         self.terminate_calls += 1
 
     def close(self) -> None:
         self.close_calls += 1
-
-
-def wait_for_background_apply(service: ClaudeAuthService) -> RestartProgress:
-    """Join the service's background credential-apply thread; return its final progress.
-
-    Tests that trigger an apply (submit paths, switch-flavored oauth
-    completions) call this so post-apply state -- the settings write, the
-    recorded mngr calls, the welcome-resend hook -- is stable before
-    asserting on it. Callers assert on the returned progress themselves
-    (most expect DONE; failure tests expect FAILED).
-    """
-    thread = service._restart_thread
-    assert thread is not None, "no background apply was started"
-    thread.join(timeout=10)
-    assert not thread.is_alive(), "background apply did not finish in time"
-    progress = service.current_restart_progress()
-    assert progress is not None
-    return progress
 
 
 def _find_free_port() -> int:

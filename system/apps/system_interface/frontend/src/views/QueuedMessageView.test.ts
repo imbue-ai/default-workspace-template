@@ -38,6 +38,13 @@ function flatten(node: unknown): AnyVnode[] {
     return node.flatMap(flatten);
   }
   const vnode = node as AnyVnode;
+  // A closure-component vnode (e.g. m(Button, ...)) carries no markup of its
+  // own -- its view runs only when mithril renders it -- so expand it and
+  // flatten what it renders.
+  if (typeof vnode.tag === "function") {
+    const component = (vnode.tag as (v: AnyVnode) => { view: (v: AnyVnode) => unknown })(vnode);
+    return flatten(component.view(vnode));
+  }
   return [vnode, ...flatten(vnode.children)];
 }
 
@@ -63,8 +70,8 @@ function allByClass(node: unknown, className: string): AnyVnode[] {
   });
 }
 
-function queuedMessage(queued_id: string, content: string): QueuedMessage {
-  return { queued_id, content, timestamp: "2026-08-07T00:00:00.000Z" };
+function queuedMessage(queued_id: string, content: string, is_sending = false): QueuedMessage {
+  return { queued_id, content, timestamp: "2026-08-07T00:00:00.000Z", is_sending };
 }
 
 describe("renderQueuedMessages", () => {
@@ -96,13 +103,13 @@ describe("renderQueuedMessages", () => {
   it("gives the shoulder-tap button the exact hover tooltip text", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const button = findByClass(renderQueuedMessages("agent-1"), "queued-action--flush");
-    expect(button?.attrs?.["data-tooltip"]).toBe("Gently interrupt your agent to send queued messages early");
+    expect(button?.attrs?.["aria-label"]).toBe("Gently interrupt your agent to send queued messages early");
   });
 
   it("shows an info affordance next to the label with the explanatory tooltip", () => {
     mocks.queued = [queuedMessage("q1", "hi")];
     const info = findByClass(renderQueuedMessages("agent-info"), "queued-info");
-    expect(info?.attrs?.["data-tooltip"]).toBe(
+    expect(info?.attrs?.["aria-label"]).toBe(
       "Messages below are sent when your agent takes a breather mid-work or finishes a turn.",
     );
   });
@@ -141,15 +148,28 @@ describe("renderQueuedMessages", () => {
     // the frontend computes nothing, it just obeys the backend flag.
     mocks.queued = [queuedMessage("q1", "hi")];
     mocks.available = false;
-    expect(findByClass(renderQueuedMessages("agent-unavail"), "queued-action--flush")?.attrs?.disabled).toBe(true);
+    const button = findByClass(renderQueuedMessages("agent-unavail"), "queued-action--flush");
+    expect(button?.attrs?.["aria-disabled"]).toBe("true");
+    // aria-disabled, never disabled: a disabled button suppresses the hover/focus events
+    // the explanatory tooltip needs, and it matters most exactly while greyed.
+    expect(button?.attrs?.disabled).toBeUndefined();
+  });
+
+  it("ignores clicks while the backend reports the tap unavailable", async () => {
+    // aria-disabled does not block DOM clicks, so the click-time guard must.
+    mocks.queued = [queuedMessage("q1", "hi")];
+    mocks.available = false;
+    const button = findByClass(renderQueuedMessages("agent-unavail"), "queued-action--flush");
+    await (button?.attrs?.onclick as () => Promise<void>)();
+    expect(mocks.shoulderTap).not.toHaveBeenCalled();
   });
 
   it("greys the button while this tap's own request is in flight, then re-enables it", async () => {
     const agent = "agent-inflight-tap";
     mocks.queued = [queuedMessage("q1", "hi")];
     mocks.available = true;
-    // Available and nothing in flight -> the button is live.
-    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
+    // Available and nothing in flight -> the button is live, no greying attr at all.
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.["aria-disabled"]).toBeUndefined();
 
     let resolveTap: () => void = () => {};
     mocks.shoulderTap.mockImplementationOnce(
@@ -159,11 +179,40 @@ describe("renderQueuedMessages", () => {
     const pending = (button?.attrs?.onclick as () => Promise<void>)();
 
     // The tap is running -> the button greys so it cannot double-fire.
-    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(true);
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.["aria-disabled"]).toBe("true");
 
     resolveTap();
     await pending;
     // Settled -> the button is live again.
-    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.disabled).toBe(false);
+    expect(findByClass(renderQueuedMessages(agent), "queued-action--flush")?.attrs?.["aria-disabled"]).toBeUndefined();
+  });
+
+  // A published entry is not necessarily a PARKED one. The backend flags an entry it is about
+  // to type, or is typing, as ``is_sending`` -- agy's send to an idle agent, codex's
+  // shoulder-tap resend. Those bubbles already render as "Sending…"; the group chrome around
+  // them was the only thing still claiming they were queued.
+  it("renders no queued-group chrome when every entry is sending", () => {
+    mocks.queued = [queuedMessage("q1", "beep", true)];
+
+    const rendered = renderQueuedMessages("agent-1");
+
+    expect(findByClass(rendered, "queued-header")).toBeUndefined();
+    expect(findByClass(rendered, "queued-action--flush")).toBeUndefined();
+    expect(findByClass(rendered, "queued-group")).toBeUndefined();
+    expect(renderedText(rendered)).not.toContain("Queued messages");
+    // Still visible, and still reading as Sending -- suppressing the chrome must not
+    // suppress the message (contract A1a).
+    expect(renderedText(rendered)).toContain("beep");
+    expect(renderedText(rendered)).toContain("Sending");
+  });
+
+  it("still shows the chrome when only some entries are sending", () => {
+    mocks.queued = [queuedMessage("q1", "beep", true), queuedMessage("q2", "boop")];
+
+    const rendered = renderQueuedMessages("agent-1");
+
+    expect(findByClass(rendered, "queued-header")).toBeDefined();
+    expect(findByClass(rendered, "queued-action--flush")).toBeDefined();
+    expect(renderedText(rendered)).toContain("Queued messages");
   });
 });

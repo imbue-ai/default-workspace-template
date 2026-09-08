@@ -1,0 +1,1 @@
+The sidebar tab list's hover-revealed one-click "remove from project" button is gone for rows that have a kebab menu: the menu's "Remove from project" entry already covers the verb, and the bare hover control was too easy to hit by accident. Only a menu-less legacy `url:` member row keeps the one-click remove, since that is its only verb.

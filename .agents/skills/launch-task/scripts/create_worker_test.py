@@ -931,14 +931,16 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
         ("mngr", "create"),
         subprocess.CalledProcessError(returncode=1, cmd=["mngr"]),
     )
-    with pytest.raises(subprocess.CalledProcessError):
-        create_worker_mod.launch(
-            name="demo-worker",
-            template="worker",
-            runtime_dir=runtime,
-            task_file=task,
-            runner=runner,
-        )
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+    assert rc == 2
+    # Nothing past the create runs: no sync, no task message.
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "create"]]
 
 
 def _launch_argv(runtime: Path, task: Path) -> list[str]:
@@ -1271,7 +1273,9 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
     """A worker observed idle for the consecutive-poll threshold with no report
     ends the poll early with the idle code and a message pointing at the
     worker's own worktree -- not the silent full-length timeout."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
     idle_polls: list[str] = []
@@ -1302,7 +1306,9 @@ def test_await_returns_idle_code_when_worker_idle_without_report(
 def test_await_transient_idle_does_not_end_the_poll(tmp_path: Path) -> None:
     """Idle observations must be consecutive: a worker seen active again resets
     the counter, and a report that then appears wins normally."""
-    report = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
     report.parent.mkdir(parents=True)
     out = io.StringIO()
 
@@ -1694,6 +1700,8 @@ def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
 
     assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
     assert _destroy_argvs(runner) == []
+    # The idle poll goes through the injected runner, not a real `mngr list`.
+    assert any(c.argv[:2] == ["mngr", "list"] for c in runner.calls)
     payload = json.loads(result_json.read_text())
     assert payload["timed_out"] is True
     assert payload["branch"] == "mngr/demo-worker"
@@ -1809,3 +1817,33 @@ def test_main_destroy_invokes_mngr(tmp_path: Path) -> None:
     rc = create_worker_mod.main(["destroy", "--name", "demo-worker"], runner=runner)
     assert rc == 0
     assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+
+
+# --- launch: a refused mngr create ------------------------------------------
+
+
+def test_a_refused_mngr_create_is_reported_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # mngr's own refusal (a duplicate name, a dirty tree) has to come back as
+    # an exit code and a message, not a traceback.
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "create"),
+        subprocess.CalledProcessError(returncode=1, cmd=["mngr", "create"]),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    argvs = [c.argv for c in runner.calls]
+    assert not any(argv[:2] == ["mngr", "rsync"] for argv in argvs)
+    assert not any(argv[:2] == ["mngr", "message"] for argv in argvs)
+    assert "`mngr create demo-worker` failed" in capsys.readouterr().err

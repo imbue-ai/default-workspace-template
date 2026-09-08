@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_block_pipe_tail_head.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_prevent_commit_rewrite.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_latchkey_request_standalone.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_tk_standalone.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_require_steps_pretool.sh\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_rewrite_bash_command.py\" --codex"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_open_tickets_reminder.sh\" --codex"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/agent_open_tickets_stop_nudge.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
