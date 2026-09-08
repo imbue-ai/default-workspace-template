@@ -11,6 +11,7 @@ import {
   NewTabLauncher,
   adoptTemplateMessage,
   appsInRows,
+  appsInSection,
   buildLauncherSections,
   createMachineFromTemplateMessage,
   filterRowsByApp,
@@ -167,6 +168,12 @@ describe("row helpers", () => {
     expect(appsInRows([...MACHINE, MACHINE[0]]).map((entry) => entry.name)).toEqual(["terminal", "chat", "files"]);
   });
 
+  it("lists a table's action-row apps ahead of its instance-row apps, each once", () => {
+    const apps = appsInSection(MACHINE, [tile("notes"), tile("chat")]);
+    expect(apps.map((entry) => entry.name)).toEqual(["notes", "chat", "terminal", "files"]);
+    expect(apps[0].displayName).toBe("Notes");
+  });
+
   it("formats recency coarsely", () => {
     const now = 10 * 24 * 60 * 60 * 1000;
     expect(formatRecency(null, now)).toBe("—");
@@ -311,6 +318,23 @@ describe("NewTabLauncher", () => {
     expect(root.querySelector('[data-address="app:terminal?instance=t1"]')).toBeNull();
     expect(root.querySelector('[data-launch="chat:new"]')).not.toBeNull();
     expect(root.querySelector('[data-address="app:chat?instance=c1"]')).not.toBeNull();
+  });
+
+  it("lets the filter uncheck an app the machine table shows only as an action row", () => {
+    mount({});
+    type("notes");
+    const machine = root.querySelector<HTMLElement>('[data-section="on-machine"]')!;
+    expect(machine.querySelector('[data-launch="notes:new"]')).not.toBeNull();
+    expect(machine.querySelectorAll(".new-tab-launcher-row").length).toBe(1);
+    machine.querySelector<HTMLElement>("button[aria-expanded]")!.click();
+    m.redraw.sync();
+    const notesLabel = Array.from(root.querySelectorAll("label")).find((label) =>
+      label.textContent!.includes("Notes"),
+    )!;
+    notesLabel.querySelector("input")!.dispatchEvent(new Event("change"));
+    m.redraw.sync();
+    expect(root.querySelector('[data-launch="notes:new"]')).toBeNull();
+    expect(root.querySelector('[data-section="on-machine"]')!.textContent).toContain("No tabs match this filter.");
   });
 
   it("starts a seeded chat from a Start something tile", () => {

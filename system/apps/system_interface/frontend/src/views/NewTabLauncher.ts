@@ -202,6 +202,20 @@ export function appsInRows(rows: readonly LauncherRow[]): { name: string; displa
   return Array.from(seen, ([name, displayName]) => ({ name, displayName }));
 }
 
+/** The apps a table's filter can uncheck: every app the table shows, once each, in table order --
+ *  the action rows' apps (they render first), then the instance rows'. */
+export function appsInSection(
+  rows: readonly LauncherRow[],
+  actionTiles: readonly LaunchTile[],
+): { name: string; displayName: string }[] {
+  const apps = actionTiles.map((tile) => ({ name: tile.app.name, displayName: tile.app.display_name }));
+  const seen = new Set(apps.map((app) => app.name));
+  for (const app of appsInRows(rows)) {
+    if (!seen.has(app.name)) apps.push(app);
+  }
+  return apps;
+}
+
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
@@ -411,7 +425,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  function filterMenu(section: LauncherSection): m.Vnode {
+  function filterMenu(section: LauncherSection, actionTiles: readonly LaunchTile[]): m.Vnode {
     const hidden = hiddenAppsBySection[section.key];
     const isPristine = hidden.size === 0;
     return m(
@@ -430,7 +444,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         },
       },
       [
-        appsInRows(section.rows).map((app) => filterMenuRow(section, app)),
+        appsInSection(section.rows, actionTiles).map((app) => filterMenuRow(section, app)),
         m("div", { class: menuDividerClass() }),
         m(
           "button",
@@ -512,7 +526,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     const visibleActions = actionTiles.filter((tile) => !hiddenApps.has(tile.app.name));
     const nothingHere =
       section.key === "on-machine" ? "Nothing else is running on this machine." : "Nothing is in this project yet.";
-    const emptyMessage = section.rows.length === 0 ? nothingHere : "No tabs match this filter.";
+    const emptyMessage =
+      section.rows.length === 0 && actionTiles.length === 0 ? nothingHere : "No tabs match this filter.";
 
     return m("section", { class: "new-tab-launcher-section mt-6", "data-section": section.key }, [
       m("div", { class: "relative mb-1 flex h-6 items-center justify-between px-2" }, [
@@ -531,7 +546,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           },
           m.trust(launcherIcon("filter", GLYPH_SIZE)),
         ),
-        openFilterFor === section.key ? filterMenu(section) : null,
+        openFilterFor === section.key ? filterMenu(section, actionTiles) : null,
       ]),
       visibleActions.map((tile) => actionRow(tile, attrs)),
       visible.length === 0 && visibleActions.length === 0
