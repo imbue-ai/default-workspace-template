@@ -182,11 +182,11 @@ terminal". With no matches at all the page says so under the field.
   eyebrow until it answers, "Failed to load templates." if it answers 503, and
   retries on the next launcher mount after a failure. A card whose drawing does
   not load shows a generic glyph in the frame instead.
-- The shipped catalog is the prototype's export, converted: the 44 published
+- The shipped catalog is the prototype's export, converted: the 42 published
   templates with a repository (the six playable samples have none to adopt and are
-  left out), one entry per slug (the newer of two repos publishing the same slug),
-  the prototype's shelves that still hold something, and a hand-picked "Most
-  popular" shelf first. The conversion script lives beside the catalog
+  left out, as is one whose title does not belong on a first-run surface), one
+  entry per slug (the newer of two repos publishing the same slug), the prototype's
+  shelves that still hold something, and a hand-picked "Most popular" shelf first. The conversion script lives beside the catalog
   (`catalog/build_catalog_from_export.py`) so a refreshed export drops in.
 
 ### The chat's `message` param
