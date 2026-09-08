@@ -4,9 +4,10 @@ Programs live one per file under ``system/supervisord.conf.d/``, reached via the
 ``[include] files`` glob in ``system/supervisord.conf``. Several readers depend
 on that -- the OOM band checks in ``system/services/oom_priority``, the
 ``build-app`` scaffolder's port pre-flight and duplicate-name guard,
-``migrate-workspace``'s port scan, and (cross-repo) the minds recovery probe.
-All of them use ``configparser`` plus a hand-rolled expansion of the glob,
-because ``configparser`` does not follow supervisord's ``[include]``.
+``migrate-workspace``'s port scan, and (cross-repo) the minds evals evidence
+capture, which joins each registered app to the program that supervises it. All
+of them expand the glob by hand, because neither ``configparser`` nor a plain
+``cat`` follows supervisord's ``[include]``.
 
 That makes the glob a real contract, and one that fails *open*: a reader that
 misses the drop-ins still parses a valid config, just an empty one, and its
@@ -31,6 +32,11 @@ _DROPIN_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 _MAIN_CONFIG_PROGRAMS: frozenset[str] = frozenset()
 
 _SECTION_RE = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE)
+
+# The one cross-repo reader of this config, vendored here as part of every release.
+_VENDORED_EVALS_CAPTURE = (
+    _REPO_ROOT / "system/vendor/mngr/apps/minds_evals/imbue/minds_evals/evidence_collection.py"
+)
 
 
 def _expand_include_patterns(parser: configparser.ConfigParser) -> list[Path]:
@@ -101,57 +107,49 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
     )
 
 
-def test_a_program_free_main_config_implies_an_include_aware_vendored_probe() -> None:
+def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> None:
     """The cross-repo release gate, as a check this repo's CI can actually see.
 
-    The minds desktop client's recovery probe reads ``system/supervisord.conf``
-    with ``configparser`` to source the system interface's inner port. An
-    include-blind probe meeting a main config that declares no programs finds no
-    port, degrades its port-listening and curl checks to UNKNOWN, and
-    misdiagnoses a healthy workspace as unresponsive.
+    The minds evals evidence capture reads a workspace's ``system/supervisord.conf`` from outside
+    the container and joins every registered app to the ``[program:*]`` block whose
+    ``forward_port.py`` call registers it. A capture that stops at that one file sees only the
+    programs the main config still declares, and reports every app declared in a drop-in as having
+    nothing supervising it -- silently, since an app-free workspace gives the same empty answer.
 
-    Provisioning is tag-pinned and ``update-self`` is ceilinged to the running
-    app's template ref, so landing this on ``main`` harms nobody. What binds is
-    the release cut: a ``minds-v<N>`` template tag must not carry a program-free
-    main config unless the mngr commit tagged ``minds-v<N>`` carries the
-    include-aware probe. ``system/vendor/mngr`` is synced as part of that same
+    Provisioning is tag-pinned and ``update-self`` is ceilinged to the running app's template ref,
+    so landing this on ``main`` harms nobody. What binds is the release cut: a ``minds-v<N>``
+    template tag must not declare programs in drop-ins unless the mngr commit tagged ``minds-v<N>``
+    carries the include-aware capture. ``system/vendor/mngr`` is synced as part of that same
     release, so the vendored copy is the artifact this repo can check.
 
-    This is deliberately a conditional: it says nothing while a program is
-    declared in the main config, and becomes a permanent regression guard once
-    the vendored probe follows the globs.
+    Deliberately a conditional: it says nothing about a template that declares every program in the
+    main config, and is a permanent regression guard for one that does not.
     """
-    if _programs_declared_in(_parse_main_config()):
+    if not list(_DROPIN_DIR.glob("*.conf")):
         return
 
-    # A missing probe -- or a missing vendored subtree around it -- is a failure,
-    # not a pass: the path lives in another repo's tree, so an upstream rename
-    # would otherwise retire this gate silently, leaving a program-free main
-    # config unguarded, which is the one outcome it exists to prevent.
-    vendored_probe = (
-        _REPO_ROOT
-        / "system/vendor/mngr/apps/minds/imbue/minds/desktop_client/recovery_probe_script.txt"
-    )
-    assert vendored_probe.is_file(), (
-        f"{vendored_probe.relative_to(_REPO_ROOT)} is not in the vendored mngr subtree, "
-        "so the release gate below cannot read the recovery probe. If the probe moved "
-        "upstream, re-point this test at its new path -- do not drop the check."
+    # A missing capture -- or a missing vendored subtree around it -- is a failure, not a pass: the
+    # path lives in another repo's tree, so an upstream rename would otherwise retire this gate
+    # silently, leaving the drop-ins unguarded, which is the one outcome it exists to prevent.
+    assert _VENDORED_EVALS_CAPTURE.is_file(), (
+        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} is not in the vendored mngr subtree, "
+        "so the release gate below cannot read the evals evidence capture. If it moved upstream, "
+        "re-point this test at its new path -- do not drop the check."
     )
 
-    source = vendored_probe.read_text()
-    # The mechanism, not the word: the probe must read the [include] files
-    # setting and glob its patterns, which is what following the directive means.
-    follows_includes = 'parser.get("include"' in source and "glob.glob(" in source
+    source = _VENDORED_EVALS_CAPTURE.read_text()
+    # The mechanism, not the word: the capture must read the [include] files setting out of the
+    # config and expand its patterns the way supervisord does, %(here)s included.
+    follows_includes = "files[[:space:]]*=" in source and "%(here)s" in source
     assert follows_includes, (
-        f"{vendored_probe.relative_to(_REPO_ROOT)} does not follow supervisord's "
-        "[include] globs, but system/supervisord.conf declares no programs -- so "
-        "that probe would find no system_interface program and report the "
-        "workspace unresponsive.\n\n"
-        "This is the release gate, not a broken test. To satisfy it: land "
-        "imbue-ai/mngr-internal#171 (the include-aware probe), then re-sync "
-        "system/vendor/mngr. Do NOT relax this assertion -- the alternative is "
-        "shipping a template tag that misdiagnoses every workspace on the "
-        "matching minds release."
+        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} does not follow supervisord's "
+        "[include] globs, but this template declares programs in "
+        f"{_DROPIN_DIR.relative_to(_REPO_ROOT)} -- so the evals capture would find no program for "
+        "them and report every one of those apps as unsupervised.\n\n"
+        "This is the release gate, not a broken test. To satisfy it: land the include-aware "
+        "capture in mngr, then re-sync system/vendor/mngr. Do NOT relax this assertion -- the "
+        "alternative is shipping a template tag that misgrades every eval run on the matching "
+        "minds release."
     )
 
 
