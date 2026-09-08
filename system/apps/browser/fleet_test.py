@@ -69,11 +69,9 @@ def test_render_event_exit_codes(event: dict, expected: int | None) -> None:
     assert fleet._render_event(event, browser_name="alex-smith") == expected
 
 
-def test_parser_accepts_task_flags() -> None:
-    parser = fleet._build_parser()
-    args = parser.parse_args(["task", "alex-smith", "do it", "--reclaim", "--no-wait", "--max-wait", "30"])
-    assert args.name == "alex-smith" and args.prompt == "do it"
-    assert args.reclaim is True and args.no_wait is True and args.max_wait == 30.0
+def test_parser_accepts_the_ownership_verbs() -> None:
+    # The CLI owns browsers; it does not drive them. Driving is playwright-cli against the
+    # gated CDP URL that `new` / `acquire` print.
     assert fleet._build_parser().parse_args(["ls"]).func is fleet.cmd_ls
     new = fleet._build_parser().parse_args(["new"])
     assert new.func is fleet.cmd_new and new.name is None  # name optional, defaults to None
@@ -112,19 +110,16 @@ def test_render_action_exit_codes(payload: dict, kind: str, expected: int) -> No
     assert fleet._render_action(payload, browser_name="alex-smith", kind=kind) == expected
 
 
-def test_parser_accepts_direct_verbs() -> None:
+def test_parser_rejects_the_removed_drive_verbs() -> None:
     p = fleet._build_parser()
     # The browser arg is a NAME (string), not an int: it must NOT be int-coerced.
-    assert p.parse_args(["state", "alex-smith"]).name == "alex-smith"
-    assert p.parse_args(["open", "alex-smith", "https://x"]).func is fleet.cmd_open
-    click = p.parse_args(["click", "alex-smith", "18"])
-    assert click.func is fleet.cmd_click and click.name == "alex-smith" and click.index == 18
-    typed = p.parse_args(["input", "alex-smith", "3", "hello there"])
-    assert typed.func is fleet.cmd_input and typed.text == "hello there"
-    assert p.parse_args(["screenshot", "riley-jones"]).func is fleet.cmd_screenshot
-    tab = p.parse_args(["tab", "alex-smith", "switch", "1"])
-    assert tab.func is fleet.cmd_tab and tab.action == "switch" and tab.index == 1
     assert p.parse_args(["acquire", "alex-smith", "--reclaim"]).reclaim is True
+    # Driving moved to playwright-cli wholesale; these verbs must be gone rather than
+    # lingering as a second, half-maintained way to do the same thing.
+    for gone in (["state", "alex-smith"], ["click", "alex-smith", "18"], ["scroll", "alex-smith"],
+                 ["task", "alex-smith", "do it"], ["lock", "alex-smith"], ["screenshot", "alex-smith"]):
+        with pytest.raises(SystemExit):
+            p.parse_args(gone)
     assert p.parse_args(["ls", "--include-tabs"]).include_tabs is True
     close = p.parse_args(["close", "morgan-lee"])
     assert close.func is fleet.cmd_close and close.name == "morgan-lee"
@@ -133,57 +128,57 @@ def test_parser_accepts_direct_verbs() -> None:
 def test_pull_in_pane_opens_each_browser_in_its_own_pane(monkeypatch: pytest.MonkeyPatch) -> None:
     # A user-started agent surfaces each browser as its OWN pane (--new-group), beside
     # its own chat (--relative-to self), not tabbed into an existing browser pane. The
-    # split carries the resolved --layout, and the session ref keys on the NAME.
+    # split carries the resolved --view, and the instance address keys on the NAME.
     calls: list[tuple] = []
-    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (True, "desktop"))
+    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (True, "everything"))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: calls.append(a) or True)
     monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
     fleet._pull_in_pane("alex-smith")
     assert calls and "--new-group" in calls[0] and "right" in calls[0] and "self" in calls[0]
-    assert "--layout" in calls[0] and "desktop" in calls[0]
-    assert any("session=alex-smith" in arg for arg in calls[0])
+    assert "--view" in calls[0] and "everything" in calls[0]
+    assert "app:browser?instance=alex-smith" in calls[0]
 
 
 def test_pull_in_pane_warns_cleanly_when_it_cant_show_a_pane(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Reachable layout server, but the split never lands (human isn't viewing that layout):
-    # we attempt it, then warn in one clean line -- never crash, never leak layout.py's raw
+    # Reachable shell, but the split never lands (human isn't viewing that view): we
+    # attempt it, then warn in one clean line -- never crash, never leak layout.py's raw
     # error (the browser is still running).
-    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (True, "desktop"))
+    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (True, "everything"))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: False)  # layout never lands
     monkeypatch.delenv("BROWSER_FLEET_ANCHOR", raising=False)
     fleet._pull_in_pane("riley-jones")  # must not raise
 
 
-def test_pull_in_pane_skips_silently_when_layout_server_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An isolated launch-task sub-agent can't reach the layout server: _resolve_active_layout
+def test_pull_in_pane_skips_silently_when_the_shell_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An isolated launch-task sub-agent can't reach the shell: _resolve_active_view
     # returns (False, None). We must NOT attempt the split and NOT print anything.
     attempted: list[tuple] = []
     printed: list[str] = []
-    monkeypatch.setattr(fleet, "_resolve_active_layout", lambda: (False, None))
+    monkeypatch.setattr(fleet, "_resolve_active_view", lambda: (False, None))
     monkeypatch.setattr(fleet, "_layout", lambda *a, **k: attempted.append(a) or True)
     monkeypatch.setattr(fleet, "_out", lambda msg: printed.append(msg))
     fleet._pull_in_pane("riley-jones")
     assert attempted == [] and printed == []
 
 
-def test_resolve_active_layout_prefers_client_that_messaged_this_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Two connected clients on different layouts; pick the one whose recent messages named
-    # OUR agent (context exposes agent_name, not id).
+def test_resolve_active_view_prefers_client_that_messaged_this_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Two connected clients on different views; pick the one whose recent messages went to
+    # OUR chat instance (addressed by agent id).
     stdout = (
-        '[{"is_connected": true, "current_layout": "mobile",'
-        '  "recent_messages": [{"agent_name": "someone-else"}]},'
-        ' {"is_connected": true, "current_layout": "desktop",'
-        '  "recent_messages": [{"agent_name": "riley-jones"}]}]'
+        '[{"is_connected": true, "active_view": "alpha",'
+        '  "recent_messages": [{"address": "app:chat?instance=agent-other"}]},'
+        ' {"is_connected": true, "active_view": "everything",'
+        '  "recent_messages": [{"address": "app:chat?instance=agent-riley"}]}]'
     )
-    monkeypatch.setenv("MNGR_AGENT_NAME", "riley-jones")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-riley")
     monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 0, stdout, ""))
-    assert fleet._resolve_active_layout() == (True, "desktop")
+    assert fleet._resolve_active_view() == (True, "everything")
 
 
-def test_resolve_active_layout_unreachable_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_active_view_unreachable_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     # A non-zero context exit (isolated sub-agent / no daemon) -> (False, None): skip silently.
     monkeypatch.setattr(fleet.subprocess, "run", lambda *a, **k: fleet.subprocess.CompletedProcess([], 1, "", "boom"))
-    assert fleet._resolve_active_layout() == (False, None)
+    assert fleet._resolve_active_view() == (False, None)
 
 
 def test_cmd_new_pulls_a_pane_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,6 +203,7 @@ def test_cmd_new_sends_chosen_name_and_maps_errors(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(fleet, "_request", fake_request)
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
+    monkeypatch.setattr(fleet, "_print_attach", lambda name: None)  # polls the daemon otherwise
     args = fleet._build_parser().parse_args(["new", "my-browser"])
     assert fleet.cmd_new(args) == fleet._EXIT_OK
     assert sent == [{"name": "my-browser"}]
@@ -245,3 +241,31 @@ def test_cmd_handoff_not_owner_still_tells_agent_to_stop(monkeypatch: pytest.Mon
     monkeypatch.setattr(fleet, "_pull_in_pane", lambda name: None)
     args = fleet._build_parser().parse_args(["handoff", "alex-smith"])
     assert fleet.cmd_handoff(args) == fleet._EXIT_PREEMPTED
+
+
+def test_attach_url_waits_only_while_the_browser_is_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `new` returns before Chromium is up, so the attach URL has to be polled -- but ONLY
+    # while the daemon says "starting". Anything else will never become an attach URL, and
+    # waiting on it burns the full timeout on a browser that is never coming up.
+    calls: list[int] = []
+    slept: list[float] = []
+    monkeypatch.setattr(fleet.time, "sleep", lambda s: slept.append(s))
+
+    def starting_then_ready(*_a: object, **_k: object) -> tuple[int, dict]:
+        calls.append(1)
+        if len(calls) < 3:
+            return 200, {"ok": False, "status": "starting"}
+        return 200, {"ok": True, "attach_url": "http://127.0.0.1:8083/browser-1/tok"}
+
+    monkeypatch.setattr(fleet, "_request", starting_then_ready)
+    assert fleet._attach_url("browser-1") == "http://127.0.0.1:8083/browser-1/tok"
+    assert len(calls) == 3 and len(slept) == 2  # waited across the launch, then got it
+
+
+def test_attach_url_bails_immediately_on_anything_but_starting(monkeypatch: pytest.MonkeyPatch) -> None:
+    for status, payload in [(404, {"error": "no browser"}), (200, {"ok": False, "status": "crashed"})]:
+        calls: list[int] = []
+        monkeypatch.setattr(fleet.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("must not sleep")))
+        monkeypatch.setattr(fleet, "_request", lambda *a, s=status, p=payload, **k: (calls.append(1), (s, p))[1])
+        assert fleet._attach_url("browser-1") == ""
+        assert len(calls) == 1

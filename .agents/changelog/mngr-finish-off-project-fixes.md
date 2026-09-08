@@ -1,0 +1,1 @@
+Review integration of the projects follow-up work (PR #451, branch preston/projects-followup-ideas), which adds the manage-projects skill documenting the project/view layer for agents; see .agents/changelog/preston-projects-followup-ideas.md for the full description. No agent-facing changes beyond that merge.

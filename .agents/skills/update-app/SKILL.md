@@ -1,6 +1,8 @@
 ---
 name: update-app
 description: "Use immediately whenever the user asks you to update, change, fix, restyle, extend, restart, or otherwise modify an existing app or background service -- load this BEFORE touching its code. Applies to any change to an app's or service's backend or frontend logic, or how it runs. Covers both apps (a tab the user can open) and background services (host-backup, share-gateway, and other supervisord programs with no tab). This is the front door for app and service edits: it owns the live change loop (apply the change so it takes effect, refresh the user's view, verify) and hands the change to the turn-end hardening flow. For creating a brand-new app use build-app; for the workspace UI itself use update-system-interface."
+metadata:
+  author: imbue
 ---
 
 # Changing an existing app or service
@@ -25,9 +27,9 @@ If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, chat panels, progress view) -> `update-system-interface`
+  dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
-  reveals only when known-good).
+  applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
 
 ## Match the flow to the scope of the change
@@ -140,6 +142,22 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
+- **Dependency or entry-point change to an app** (its `pyproject.toml`):
+  an app with an `app.toml` manifest runs from its own uv tool environment,
+  an editable install of `system/apps/<package>/` that picks up source
+  edits on its own but not a new dependency or console script. Reinstall
+  the tool, then restart (an app with no `app.toml` runs from the root
+  venv: for it, only the `uv sync --all-packages` below is needed):
+
+  ```bash
+  uv tool install -e system/apps/<package> --reinstall
+  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
+  supervisorctl restart <name>
+  ```
+
+  (Background services under `system/services/` run from the root venv
+  instead: `uv sync --all-packages`, then restart.)
+
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
   markup. Skip straight to the refresh.
@@ -171,10 +189,10 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead by opening it on each named
-layout -- `open` requires `--layout` and only applies on clients with that
-layout active, so the layout the user is not on fails fast and harmlessly:
-`for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>; done`.
+the change is ready to show, surface it instead with
+`python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
+the view the user is looking at, and `--view <name>` targets one view (it
+fails fast and harmlessly when no client has that view active).
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 
@@ -253,7 +271,7 @@ where the data dies. Encode these, cheapest first:
   add `--service-name <name>-preview-app --preview-service-name <name>-preview
   --preview-title "<change>"` to the `up` call to surface it as a labeled
   "preview" tab (open it with
-  `for L in desktop mobile; do python3 system/scripts/layout.py open --layout "$L" <name>-preview; done`);
+  `python3 system/scripts/layout.py open <name>-preview`);
   that is the same machinery the system-interface flow uses. Use judgment on
   when that is worth it.
 
@@ -327,8 +345,8 @@ exactly as `build-app`'s Step 5 gates on the working site.)
   it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
   background service) at turn-end instead.
 - **The workspace UI (`system/apps/system_interface`)** -> `update-system-interface`
-  owns its own preview-before-merge and safe-reveal go-live; use it rather
-  than this flow.
+  owns its own preview-before-merge and its go-live through the atomic update
+  apply; use it rather than this flow.
 
 `update-creation` and `heal-creation` also stand on their own as turn-end
 skills; this skill's turn-end step is just the service-shaped entry into

@@ -262,7 +262,7 @@
 
 ### Hooks + CLAUDE.md (`system/scripts/`, `CLAUDE.md`)
 
-- `claude_open_tickets_stop_nudge.sh` and `claude_open_tickets_reminder.sh`:
+- `agent_open_tickets_stop_nudge.sh` and `agent_open_tickets_reminder.sh`:
   **unchanged.** Carryover means there is no auto-close to perform; the existing
   reminder (lists this agent's still-open steps) and soft stop nudge keep working
   as they do today.
@@ -271,7 +271,7 @@
   ticket-nesting-in-chat-view sections; rewrite the plan-declaration examples and
   the `launch-task` example to the literal-id (no `$(...)` capture) style; keep
   the standalone-command rule and the close-before-reply guidance.
-- Keep `claude_tk_standalone*` (the standalone-command enforcement, which buys
+- Keep `agent_tk_standalone*` (the standalone-command enforcement, which buys
   clean hiding of pure tk calls).
 - **Remove `claude_tk_close_reoutput_nudge.sh`** and its single
   `.claude/settings.json` PreToolUse wiring. Under close-time ejection its advice

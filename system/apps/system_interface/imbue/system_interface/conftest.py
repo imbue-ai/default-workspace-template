@@ -1,6 +1,6 @@
 import json
 import os
-import shutil
+import socket
 import subprocess
 import tempfile
 from collections.abc import Generator
@@ -15,48 +15,25 @@ from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
-from imbue.system_interface.agent_manager import AgentManager
 from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
+from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 
 @pytest.fixture(autouse=True)
 def _isolate_system_interface_tests(
-    request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path_factory: pytest.TempPathFactory,
-) -> Path | None:
-    """Isolate server_test.py-style tests from the developer's live mngr state.
+) -> None:
+    """Keep every shell test away from the live workspace's registry and shell.
 
-    Overrides MNGR_HOST_DIR / MNGR_AGENT_ID / MNGR_AGENT_WORK_DIR /
-    MNGR_AGENT_STATE_DIR to point at a fresh tmp dir, so anything that reads
-    these (e.g. system_interface endpoints, ``AgentManager.build``) gets an
-    empty world rather than the developer's running agents.
-
-    No ``observe`` pipeline runs in tests because nothing calls
-    ``AgentManager.start``: ``create_application`` takes an already-built state
-    and never starts the manager, and ``testing.build_test_state`` only builds
-    one. ``main`` is the sole caller of ``start``. So this fixture no longer
-    needs to neuter ``start``.
-
-    Skipped for ``agent_manager_test.py``: those tests deliberately exercise
-    ``AgentManager.start`` / ``_start_observe`` (long-lived subprocess behavior,
-    watchdog behavior, etc.) and need the real observe semantics with the
-    developer's actual MNGR_HOST_DIR. They do their own per-test
-    ``monkeypatch.setenv`` for the cases they care about.
-
-    CI doesn't have MNGR_HOST_DIR set and doesn't have running docker
-    containers, so this only bites local developer runs; the fixture closes
-    that gap.
+    The shell's inventory reads the app registry from the working directory otherwise, which
+    in a workspace is the live one; and a test app's own posts (a tab rebind, a nudge) would
+    reach the workspace's real shell. A port nothing listens on refuses them at once; the
+    pipeline and e2e tests serve a shell of their own and point at it.
     """
-    if "agent_manager_test.py" in request.node.nodeid:
-        return None
-    isolated = tmp_path_factory.mktemp("mngr-host-isolation")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(isolated))
-    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(isolated / "work"))
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(isolated / "agents" / "test-agent"))
-    return isolated
+    monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
+    monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", "http://127.0.0.1:1")
 
 
 # --- pytest-playwright fixture-scope overrides -------------------------------
@@ -217,33 +194,46 @@ def broadcaster() -> WebSocketBroadcaster:
 
 
 @pytest.fixture
-def agent_manager(
-    broadcaster: WebSocketBroadcaster,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> AgentManager:
-    """Create an AgentManager without starting the observe subprocess.
-
-    ``MNGR_HOST_DIR`` is forced to a per-test ``tmp_path`` so the
-    activity-state marker watcher does not try to attach to the developer's
-    real ``~/.mngr/agents/<id>/`` directories.
-    """
-    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    return AgentManager.build(broadcaster)
+def listening_port() -> Iterator[int]:
+    """A loopback port with a live listener behind it, for TCP liveness probes."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    try:
+        yield listener.getsockname()[1]
+    finally:
+        listener.close()
 
 
 @pytest.fixture
-def false_binary() -> str:
-    """Cross-platform path to a binary that exits immediately with failure.
+def closed_port() -> int:
+    """A loopback port with nothing behind it.
 
-    Used by tests that exercise the observe watchdog's error path without
-    relying on a real mngr installation.
+    Bind-then-close: the port existed a moment ago, so nothing else is likely
+    to have claimed it before the probe runs.
     """
-    path = shutil.which("false")
-    assert path is not None, "Could not find 'false' binary on this system"
-    return path
+    probe_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe_socket.bind(("127.0.0.1", 0))
+    port = probe_socket.getsockname()[1]
+    probe_socket.close()
+    return port
+
+
+@pytest.fixture
+def fake_supervisor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeSupervisorServer]:
+    """A supervisord-shaped RPC server on a per-test unix socket.
+
+    ``MINDS_SUPERVISOR_SOCKET`` is pointed at it, so both the liveness probes
+    and the stop/start endpoints reach the fake instead of the developer's (or
+    CI's absent) real supervisord.
+    """
+    server = FakeSupervisorServer(tmp_path / "supervisor.sock")
+    monkeypatch.setenv("MINDS_SUPERVISOR_SOCKET", str(server.socket_path))
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
 
 
 @pytest.fixture

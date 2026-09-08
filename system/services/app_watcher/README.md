@@ -11,6 +11,6 @@ Uses inotify when available on Linux, and falls back to mtime polling
 changes made outside the sandbox raise no in-sandbox inotify events, so
 polling bounds the worst-case discovery latency.
 
-(The terminal's `run_ttyd.sh` separately writes a `server_registered` event
-to `events/servers/events.jsonl`; that is a different, hand-written stream,
-not this service.)
+(The terminal app separately writes a `server_registered` event to
+`events/servers/events.jsonl` when it starts; that is a different,
+hand-written stream, not this service.)

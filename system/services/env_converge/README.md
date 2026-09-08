@@ -18,7 +18,13 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   operation, and boot-time probes capture `npm ls -g`, `uv tool list`, and
   `cargo install --list` + `rustup toolchain list` (rust is agent-installed,
   not in the base image, so an absent cargo captures as an empty state).
-  Agents install things normally; nothing needs to be declared.
+  Agents install things normally; nothing needs to be declared. The one
+  exception: on a rootfs that has never completed a converge (no identity
+  stamp -- a rebuild or restore whose record has not been replayed yet),
+  capture is skipped entirely (`capture_skipped_fresh_rootfs` event; `--force`
+  overrides), because there the record is authoritative and a capture --
+  especially the hook firing off the units' own apt installs -- would clobber
+  the record before the replay reads it.
 - **Cargo is a non-critical source.** Unlike npm globals (which live on the
   rootfs and exist in a restored workspace only via the record), `~/.cargo/bin`
   binaries ride the backup as real files -- so the cargo record matters for
@@ -60,7 +66,15 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 - **Removal stickiness**: on a rootfs carrying the identity stamp
   (`/var/lib/minds/env-converge/rootfs-id`), capture runs before the replay so
   deliberate uninstalls stick; on a fresh rootfs (rebuild / restore) the
-  record wins, then capture + stamp.
+  record wins, then capture + stamp. The slow phase snapshots the record into
+  memory before the units run (so nothing that fires the capture hook can
+  change what gets replayed), and on the fresh path the final capture
+  preserves recorded entries the replay could not install (transient failure,
+  name gone from the snapshot): they stay in the record and replay again on
+  the next fresh boot, and the converge exits 3 so the failure is visible. A
+  later stamped boot's capture-first reconciles away entries that stay
+  uninstalled. A failed multi-package apt/npm batch falls back to one install
+  per entry, so a single unavailable name cannot sink the rest.
 
 ## On-disk shape
 
@@ -73,7 +87,9 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 
 - `uv run env-converge run [--phase fast|slow|all]` -- converge (exit 3 when
   some recorded packages were unavailable).
-- `uv run env-converge capture` -- re-capture actual state into the record.
+- `uv run env-converge capture` -- re-capture actual state into the record
+  (skipped on a rootfs without the identity stamp, where the record is
+  authoritative and pending replay; `--force` overrides).
 - `uv run env-converge upgrade` -- advance to the repo's committed snapshot
   timestamp: re-render sources, `apt-get full-upgrade`, re-run units,
   re-capture, and print the version deltas. Bundled into the update-self flow.
