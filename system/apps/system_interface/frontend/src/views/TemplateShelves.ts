@@ -2,7 +2,8 @@
  * The "Start from a template" cards and rails of the New Tab page: a card is a template's drawing
  * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
  * cards that shows three and a half at a time, pages one visible width with the arrows overlaying
- * its ends, and scrolls freely with the trackpad. Picking a card is the launcher's business (it
+ * its ends (each a full-height strip that fades the rail out under it), and scrolls freely with
+ * the trackpad. Picking a card is the launcher's business (it
  * opens the detail dialog), so both components only report the pick.
  *
  * The rail arithmetic (which arrows to show, where a page lands) is exported as pure functions so
@@ -12,7 +13,6 @@
 import m from "mithril";
 import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
-import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 const CARD_FALLBACK_GLYPH_SIZE = 20;
@@ -122,18 +122,23 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
     }
   }
 
+  /**
+   * A paging arrow: a strip the full height of the rail at one end, fading from the page surface
+   * at the edge to nothing over the cards, with the chevron at its outer side. The strip is the
+   * whole target, and it is a plain button rather than the shared recipe: that recipe's press
+   * cue is a translate, which would fight the strip's own positioning.
+   */
   function railArrow(shelf: ResolvedShelf, direction: -1 | 1): m.Vnode {
     const isRight = direction === 1;
     return m(
-      Button,
+      "button",
       {
-        variant: "secondary",
-        icon: true,
-        sm: true,
-        round: true,
-        extra:
-          "new-tab-template-rail-arrow absolute top-1/2 z-(--z-content) -translate-y-1/2 shadow-overlay " +
-          (isRight ? "right-1" : "left-1"),
+        type: "button",
+        class:
+          "new-tab-template-rail-arrow absolute inset-y-0 z-(--z-content) flex w-16 cursor-pointer items-center " +
+          "from-surface to-transparent text-secondary hover:text-primary focus-visible:outline-2 " +
+          "focus-visible:outline-offset-[-2px] focus-visible:outline-accent " +
+          (isRight ? "right-0 justify-end bg-linear-to-l pr-2" : "left-0 justify-start bg-linear-to-r pl-2"),
         "aria-label": isRight ? "Show more templates" : "Show previous templates",
         "data-rail-page": isRight ? "next" : "previous",
         onclick: (event: MouseEvent) => {
