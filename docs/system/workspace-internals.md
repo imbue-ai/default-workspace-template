@@ -21,11 +21,11 @@ Users make "creations". There are conventions for the common kinds:
   name, icon, instances, priority, criticality, program), runs as a supervisord
   program from its own uv tool environment, registers its manifest and port
   via `forward_port.py --manifest`, and is served at its own browser origin: the
-  service name is prefixed as a hostname label on the workspace host, so
+  app's name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
   workspace host id looks like `host-<32hex>`; shared hostnames follow the
   same prefix rule on a longer base). Nothing proxies or rewrites app
-  traffic, so registered service names must be DNS-safe hostname labels
+  traffic, so registered app names must be DNS-safe hostname labels
   (lowercase letters/digits with single hyphens, not `localhost`, not
   starting with `host-` or `agent-`).
 - a **skill**: teaches the mind how to do work the user cares about (including

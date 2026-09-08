@@ -10,17 +10,20 @@ Finish the apply, retarget the external callers, document sharing, rename servic
 
 Modified:
 
-- `.agents/skills/update-self/scripts/update_apply.py` and `update_environment.py`: `supervisorctl reread && supervisorctl update` after the merge and before the health probes; the health probes use `/api/health` on the shell and `GET /_instances` on every `critical` app with `instances = true`; snapshot and restore cover the tool directory and bundle of every `critical` app.
+- `.agents/skills/update-self/scripts/update_apply.py` and `update_probes.py`: after the restart the probes are `/api/health` on the shell and `GET /_instances` on every app whose manifest in the tree being applied says `critical = true` and `instances = true` (`read_critical_instance_apps`; the chat and the terminal). Each is reached at the manifest's `instances_url` when it declares one, else at the registry row's `url` re-read on every poll (`wait_instances_healthy`), so the probe follows an app that re-registers at the end of its boot; a missing row is "not up yet", and only a 200 with a JSON body counts (a stale row that still names the shell's port gets the shell's SPA catch-all, 200 as HTML). The hard-coded chat port and the shell-origin guard are gone; the chat's pre-flight boot keeps `/api/health`, since `--preflight` runs no agent manager. Snapshot and restore cover the tool directory of every `critical` app the merge reinstalls and both bundles (landed in phases 1 and 10).
+- No `supervisorctl reread && supervisorctl update` step (decided 2026-09-07): the apply's `mngr start --restart system-services` kills the services agent's whole tmux session, bootstrap re-runs in its extra window and execs a fresh supervisord that reads the merged `system/supervisord.conf`, so a program the update adds starts on its own; the step would have started it early only for the restart to restart it again.
 - `.agents/skills/update-self/scripts/update_probes.py`, `.agents/skills/update-system-interface/scripts/reveal_system_interface.py`: `/api/health`.
 - `system/scripts/forward_port.py`: unchanged. `--icon-file` and `--program` stay: a pre-manifest app registers with them for as long as it exists (phase 9 decided both app forms are supported indefinitely).
 - `system/services/share_gateway/README.md`: the chat origin under workspace-level grants and the `[services.chat]` narrowing; the grants example gains it.
 - `system/apps/system_interface/README.md`: rewritten around the glossary (the Projects section goes; a Model section points at the meta spec), the not-built and staleness sections kept.
 - `docs/system/workspace-internals.md`, `system/apps/README.md`, `system/libs/README.md`, `system/services/README.md`, `README.md` (root), `CLAUDE.md`: apps, instances, manifests, tool environments.
-- The shell's code and frontend: `service` becomes `app` in identifiers and comments where it meant an app; `AppEntry` is the inventory entry; `serviceName` becomes `appName`.
+- The shell's code and frontend, and the shared `system/libs/workspace_ui` library: `service` becomes `app` in identifiers and comments where it meant an app (`deriveServiceOrigin` is `deriveAppOrigin`, `serviceIconMarkup` is `appIconMarkupByName`, the placeholder page's `serviceOrigin` is `appOrigin`); `AppEntry` is the inventory entry. What stays: the minds embed contract's `serviceName` payload and `SERVICE_NAME_PATTERN` (a vendored wire contract), `HTTP_SERVICE_UNAVAILABLE`, the `system-services` agent, the `system/services/` directory, and the grants file's `[services.<name>]` key.
 - `system/services/oom_priority/README.md`: the `priority` lookup and the `chat` band.
 - `docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md`: the phases marked done and any drift folded in.
 
-Deleted: `system/apps/system_interface/imbue/system_interface/agent_discovery.py` if any stub remained; nothing under the old `workspace_layout/` directories (a later release).
+Deleted: `system/apps/system_interface/imbue/system_interface/agent_discovery.py` if any stub remained (it was already gone); nothing under the old `workspace_layout/` directories (a later release).
+
+Kept for the release after this one, with their `# CLEANUP:` comments saying so: the `system/apps/terminal/notify_terminal_session.py` symlink (a running tmux server keeps the hook command it read at start, so the old path must outlive every workspace's next container restart) and `agent.sh` in the terminal's dispatch directory (the chat's terminal back face, which moves into the chat app once every dispatch directory has been rewritten without it).
 
 ## Pre-deploy checklist (manual, recorded in the PR)
 
@@ -32,7 +35,7 @@ Deleted: `system/apps/system_interface/imbue/system_interface/agent_discovery.py
 ## Tests
 
 - Apply tests for the reread step, the per-app probes, and the per-app snapshot and restore.
-- A repo-wide ratchet in `system/test_meta_ratchets.py` counting `service` in shell identifiers, set to the residue and never rising.
+- A repo-wide ratchet in `system/test_meta_ratchets.py` (`test_prevent_service_identifiers_in_the_shell`) counting identifier tokens containing `service` in the shell package, its frontend, and the shared library, excluding tests, the vendored embed contract, and the tokens listed above, pinned at the residue.
 
 ## Changelog entries
 

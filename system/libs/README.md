@@ -11,6 +11,11 @@ details.
 - `app_instances/` - The instances API every multi-instance app serves: the
   Flask blueprint over a pluggable instance source, the JSON store, the nudge to
   the shell, and the sidecar launcher that wraps a third-party server.
+- `workspace_ui/` - The frontends' shared JavaScript library (source only,
+  a member of the npm workspace at `system/package.json`): the design
+  system's token layer, the shared components, the address and view helpers,
+  and the browser-side app contract and embed modules the shell and the chat
+  page both build from.
 - `automations/` - The machinery that runs automations (skills on a
   schedule): the durable recurring-job runner, the cron env wrapper, and the
   automation-agent waker (see the manage-scheduled-tasks skill).

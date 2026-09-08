@@ -35,7 +35,8 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 - `/api/ws`: the chat pages' socket, carrying `agents_updated` and the
   proto-agent events.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls after a restart.
+  polls on the `--preflight` boot (after the restart it polls `/_instances`, the
+  route that answers only once the agent manager has its first list).
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 

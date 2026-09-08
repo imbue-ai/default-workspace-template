@@ -23,3 +23,5 @@ A terminal's session is identified by its tmux id together with its creation tim
 A rename that finds a live session of the terminal's name which the record does not hold (one the dispatch created on attach) adopts it the way a start or the tmux hook does: the record takes its id and creation time and is no longer stopped, so a container restart recreates the terminal.
 
 At startup, a remembered terminal whose record holds a session id but no creation time (a store from before creation times were kept) and whose session is still live takes the session's creation time into the record and its id file, so `session.sh` attaches by id from then on instead of falling back to the name.
+
+The two `# CLEANUP:` comments the terminal carries for the workspace app model (the `notify_terminal_session.py` symlink at its old path, and `agent.sh` in the dispatch directory, which belongs to the chat app) now say the release after the one that ships the model is when each goes: a running tmux server keeps the hook command it read at start, so the old path must outlive every workspace's next container restart. Nothing else changes.

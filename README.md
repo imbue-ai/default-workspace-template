@@ -23,8 +23,8 @@ you'll want to make:
 
 ## What's here
 
-- `apps/` - Everything you can open as a tab: the built-in apps (the
-  terminal, the browser) and the apps your mind builds for you. (A shortcut
+- `apps/` - Everything you can open as a tab: the built-in apps (chat, the
+  terminal, the file viewer, the browser) and the apps your mind builds for you. (A shortcut
   to `system/apps/`.)
 - `skills/` - Everything your mind knows how to do: the built-in skills and
   the ones it has learned for you. (A shortcut to `.agents/skills/`.)
