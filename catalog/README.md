@@ -33,7 +33,7 @@ of a template.
       "thumbnail": "thumbnails/kanjun--inbox-digest-review.svg",
       "version": "v1",
       "updated_at": "2026-07-16T20:48:42Z",
-      "required_accounts": [{"service": "slack-api", "permission": "slack-read-all"}],
+      "required_accounts": [{"scope": "slack-api", "permission": "slack-read-all"}],
       "required_secrets": [],
       "needs_ai": false,
       "apt_packages": [],

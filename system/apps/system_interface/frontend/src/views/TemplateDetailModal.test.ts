@@ -10,13 +10,13 @@ import { TemplateDetailModal, templateRequirements } from "./TemplateDetailModal
 import type { TemplateDetailModalAttrs } from "./TemplateDetailModal";
 
 describe("templateRequirements", () => {
-  it("lists accounts by service with their permissions joined, then the model, keys, and packages", () => {
+  it("lists accounts by scope with their permissions joined, then the model, keys, and packages", () => {
     const template = catalogTemplateRecord("digest", {
       required_accounts: [
-        { service: "slack-api", permission: "slack-read-all" },
-        { service: "gmail-api", permission: "gmail-read" },
-        { service: "slack-api", permission: "slack-write" },
-        { service: "slack-api", permission: "slack-read-all" },
+        { scope: "slack-api", permission: "slack-read-all" },
+        { scope: "gmail-api", permission: "gmail-read" },
+        { scope: "slack-api", permission: "slack-write" },
+        { scope: "slack-api", permission: "slack-read-all" },
       ],
       needs_ai: true,
       required_secrets: ["OPENWEATHER_API_KEY"],
@@ -68,7 +68,7 @@ describe("TemplateDetailModal", () => {
     mountDetail({
       template: catalogTemplateRecord("digest", {
         what_it_is: "Reads your inbox\nevery morning.\n\nWrites a digest.",
-        required_accounts: [{ service: "slack-api", permission: "slack-read-all" }],
+        required_accounts: [{ scope: "slack-api", permission: "slack-read-all" }],
         needs_ai: true,
       }),
     });

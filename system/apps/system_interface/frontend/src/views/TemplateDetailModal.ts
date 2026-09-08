@@ -26,18 +26,18 @@ export interface TemplateRequirement {
 
 /**
  * Everything a template needs, in the order it costs the adopter: accounts to connect (one line
- * per service, its permissions behind it), then a model, then keys, then system packages.
+ * per scope, its permissions behind it), then a model, then keys, then system packages.
  */
 export function templateRequirements(template: CatalogTemplate): TemplateRequirement[] {
-  const permissionsByService = new Map<string, string[]>();
+  const permissionsByScope = new Map<string, string[]>();
   for (const account of template.required_accounts) {
-    const permissions = permissionsByService.get(account.service) ?? [];
+    const permissions = permissionsByScope.get(account.scope) ?? [];
     if (!permissions.includes(account.permission)) permissions.push(account.permission);
-    permissionsByService.set(account.service, permissions);
+    permissionsByScope.set(account.scope, permissions);
   }
   const requirements: TemplateRequirement[] = [];
-  for (const [service, permissions] of permissionsByService) {
-    requirements.push({ label: `Connect ${service}`, detail: permissions.join(", ") });
+  for (const [scope, permissions] of permissionsByScope) {
+    requirements.push({ label: `Connect ${scope}`, detail: permissions.join(", ") });
   }
   if (template.needs_ai) {
     requirements.push({ label: "An AI model", detail: "it reasons over what it reads" });

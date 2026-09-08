@@ -71,7 +71,10 @@ def _catalog_template(entry: dict[str, Any], thumbnails_source: Path) -> dict[st
         else "",
         "version": entry["version"],
         "updated_at": entry["updated_at"],
-        "required_accounts": entry["required_accounts"],
+        "required_accounts": [
+            {"scope": account["service"], "permission": account["permission"]}
+            for account in entry["required_accounts"]
+        ],
         "required_secrets": entry["required_secrets"],
         "needs_ai": entry["needs_ai"],
         "apt_packages": entry["apt_packages"],

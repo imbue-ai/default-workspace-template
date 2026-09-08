@@ -17,7 +17,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { matchesQuery } from "./search";
 
 export interface CatalogRequiredAccount {
-  service: string;
+  scope: string;
   permission: string;
 }
 
