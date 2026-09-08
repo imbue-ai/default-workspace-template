@@ -2,7 +2,8 @@
 
 The two tk rules live here rather than in any harness: every harness asks the same two
 questions of a command it has already located, so the answers must not be able to differ
-between them.
+between them. The resident error snippet is shared the same way, so its rule (and the
+hook-block exception to it) is tested here too.
 """
 
 from imbue.chat.harnesses.tool_output import error_snippet
