@@ -665,9 +665,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
       },
       [
+        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones.
         m(
           "span",
-          { class: "flex shrink-0 items-center " + (isDisabled ? "text-faint" : "text-secondary") },
+          { class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : "") },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
