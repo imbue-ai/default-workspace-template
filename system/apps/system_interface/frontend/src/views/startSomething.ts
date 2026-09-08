@@ -14,7 +14,7 @@
 import { matchesQuery } from "../models/TemplateCatalog";
 
 export interface StartOption {
-  /** Stable marker (``data-start``) and React-style key. */
+  /** Stable marker (``data-start``) and vnode key. */
   key: string;
   title: string;
   description: string;
