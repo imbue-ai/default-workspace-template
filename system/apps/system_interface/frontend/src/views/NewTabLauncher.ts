@@ -75,6 +75,8 @@ const SEE_MORE_LABEL = "See more";
 const SEARCH_PLACEHOLDER = "Search apps, chats, and templates";
 const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
 const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
+const NO_CHAT_APP_REASON = "No app on this machine can start a chat";
+const TEMPLATES_NOT_OFFERED_REASON = "No template catalog is configured on this machine";
 
 const SECTION_HEADING_CLASS = "type-section text-faint";
 
@@ -296,7 +298,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   let query = "";
   let startShownCount = START_PAGE_SIZE;
   let detailTemplate: CatalogTemplate | null = null;
-  let templatesSectionElement: HTMLElement | null = null;
+  // Set by the "Start from a template" tile; the templates section scrolls itself into view on
+  // its next create or update and clears it (from search, the section mounts only after the
+  // click empties the query).
+  let isScrollToTemplatesPending = false;
   // Each rail's last measured extent, by shelf key: what decides which paging arrows it shows.
   const railExtentByShelf = new Map<string, RailExtent>();
   // Drawings that failed to load, by slug: their cards show the generic glyph instead.
@@ -618,11 +623,15 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   function startTile(option: StartOption, attrs: NewTabLauncherAttrs): m.Vnode {
     const isChatAvailable = promptTargetOfTiles(attrs.tiles) !== null;
-    const isDisabled = option.prompt !== null && (!isChatAvailable || attrs.isAwaitingCreate === true);
+    const isCatalogOffered = attrs.catalog.kind !== "disabled";
+    const isDisabled =
+      option.prompt === null ? !isCatalogOffered : !isChatAvailable || attrs.isAwaitingCreate === true;
+    const disabledReason =
+      option.prompt === null ? TEMPLATES_NOT_OFFERED_REASON : isChatAvailable ? null : NO_CHAT_APP_REASON;
     const pick = (): void => {
       if (option.prompt === null) {
         query = "";
-        templatesSectionElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+        isScrollToTemplatesPending = true;
         return;
       }
       startChat(attrs, option.prompt);
@@ -638,7 +647,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
           (isDisabled ? "cursor-not-allowed text-faint" : "cursor-pointer text-primary hover:bg-fill-hover"),
         onclick: isDisabled ? undefined : pick,
-        ...(isDisabled && !isChatAvailable ? hoverTooltipAttrs("No app on this machine can start a chat") : {}),
+        ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
       },
       [
         m(
@@ -853,15 +862,17 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "section",
       {
         class: "new-tab-templates mt-10",
-        oncreate: (vnode: m.VnodeDOM) => {
-          templatesSectionElement = vnode.dom as HTMLElement;
-        },
-        onremove: () => {
-          templatesSectionElement = null;
-        },
+        oncreate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
+        onupdate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
       },
       [m("h2", { class: `${SECTION_HEADING_CLASS} px-2` }, TEMPLATES_TITLE), body],
     );
+  }
+
+  function scrollToTemplatesIfPending(section: HTMLElement): void {
+    if (!isScrollToTemplatesPending) return;
+    isScrollToTemplatesPending = false;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ---------- search results ----------
