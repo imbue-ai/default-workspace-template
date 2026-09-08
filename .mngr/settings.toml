@@ -500,9 +500,13 @@ host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
 # so setup_system.sh provisions an identical toolchain everywhere. Set here
 # (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep.
-default_image_url_aarch64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+# mngr users keep. Served from imbue's artifact mirror rather than
+# cloud.debian.org, which prunes old releases: the same image release the
+# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
+# is the manifest; bump both together, uploading the new release with
+# `minds-admin artifacts upload` before landing the bump here).
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
