@@ -282,7 +282,7 @@ A stopped app's tabs render a placeholder with a Start button; instances of a st
 The agent-facing helper speaks addresses.
 Every op targets exactly one client, the requester's by default or `--client <id>`, and is applied by the shell to that client's layout file, so no browser needs to be connected for it to land; `--view <name>` names the view whose layout the op edits and switches that client to it.
 Only the verbs with nothing to store (maximize, restore, refresh, the interface reload) travel to the browser as messages.
-`open app:<name>` runs the app's default action (its `default_shortcut` action, else the first one its manifest declares) in focus mode; `open app:<name> --action <id>` runs a named action; `open app:<name>?instance=<key>` docks an existing instance.
+`open app:<name>` runs the app's default action (its `default_shortcut` action, else the first one its manifest declares) through the relay and docks the fresh instance it made, whatever the client already shows; `open app:<name> --action <id>` runs a named action; `open app:<name>?instance=<key>` docks an existing instance.
 `list` prints apps and instances with status from the inventory.
 `rename`, `delete`, `stop`, and `start` take an instance address and call through to the app.
 `replace-url <address> <path-or-url>` navigates an instance through the app's location route, the same fact a page reports for itself; the shell reloads a docked frame only when the instance's listed URL differs from what that frame last reported, so a page's own reports never reload it and an agent's navigation does.
