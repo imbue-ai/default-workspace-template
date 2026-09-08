@@ -157,7 +157,6 @@ def _running_e2e_server(
     stub_instances: tuple[str, ...] = (_FIXTURE_KEY,),
     is_second_app_offered: bool = False,
     project_names: tuple[str, ...] = (STARTER_PROJECT_NAME,),
-    stub_app_name: str = _STUB_APP_NAME,
     is_stub_taking_message: bool = False,
     is_catalog_offered: bool = False,
     catalog_document: bytes | None = None,
@@ -166,11 +165,10 @@ def _running_e2e_server(
 
     ``project_names`` are created through the shell's API before the browser lands, so the
     client's first view is the first of them (or Everything when there are none). Nothing is
-    auto-opened: the first landing is the New Tab page. ``stub_app_name`` registers the stub under
-    another name, and ``is_stub_taking_message`` declares a ``message`` param on its ``new`` action,
-    which is what makes it the app the page's seeded prompts go to. With ``is_catalog_offered`` the shell has
-    a template catalog URL, answered by ``catalog_document`` -- or by nothing, so the page sees the
-    catalog fail to load.
+    auto-opened: the first landing is the New Tab page. ``is_stub_taking_message`` declares a
+    ``message`` param on the stub's ``new`` action, which is what makes it the app the page's seeded
+    prompts go to. With ``is_catalog_offered`` the shell has a template catalog URL, answered by
+    ``catalog_document`` -- or by nothing, so the page sees the catalog fail to load.
     """
     base_url = f"http://127.0.0.1:{port}"
     registry_path = tmp_path / "registry" / "apps.toml"
@@ -181,7 +179,7 @@ def _running_e2e_server(
     stub_url = f"http://{LOOPBACK_HOST}:{stub_port}"
     rows = [
         registry_row_toml(
-            stub_app_name,
+            _STUB_APP_NAME,
             stub_url,
             is_multi_instance=True,
             actions=(("new", _STUB_NEW_ACTION_LABEL),),
@@ -234,7 +232,7 @@ def _running_e2e_server(
             stub_port,
             build_instances_app(
                 stub_source,
-                ShellNudger(app_name=AppName(stub_app_name), shell_url=base_url),
+                ShellNudger(app_name=AppName(_STUB_APP_NAME), shell_url=base_url),
             ),
         )
         second_server = (
