@@ -88,13 +88,14 @@ from update_probes import (
     HEALTH_ATTEMPTS,
     HEALTH_INTERVAL_SECONDS,
     HEALTH_PATH,
-    chat_health_url,
     describe_frontend_failure,
     has_chat_program,
     preflight,
     preflight_chat,
+    read_critical_instance_apps,
     refresh_workspace_view,
     wait_healthy,
+    wait_instances_healthy,
 )
 from update_runtime import (
     ApplyFailed,
@@ -625,23 +626,26 @@ def _recover_running_state(
             HEALTH_INTERVAL_SECONDS,
             sleeper,
         )
-        # The chat is probed beside the shell as the forward apply does, but only
-        # where the restored tree runs it as its own program: a tree from before
-        # the split has no chat process to answer.
-        if healthy and has_chat_program(repo_root):
-            chat_health = chat_health_url(repo_root, base_url)
-            healthy = wait_healthy(
-                http,
-                chat_health,
-                HEALTH_ATTEMPTS,
-                HEALTH_INTERVAL_SECONDS,
-                sleeper,
-            )
-            if not healthy:
-                sys.stderr.write(
-                    "recovery: the chat app did not become healthy after the restart "
-                    f"(probed {chat_health})\n"
+        # Every critical app with an instances API is probed beside the shell as
+        # the forward apply does, read off the restored tree: a tree from before
+        # the app model declares none and is confirmed by the shell alone.
+        if healthy:
+            for app in read_critical_instance_apps(repo_root):
+                app_failure = wait_instances_healthy(
+                    http,
+                    repo_root,
+                    app,
+                    HEALTH_ATTEMPTS,
+                    HEALTH_INTERVAL_SECONDS,
+                    sleeper,
                 )
+                if app_failure is not None:
+                    healthy = False
+                    sys.stderr.write(
+                        f"recovery: the {app.name} app did not become healthy after the "
+                        f"restart ({app_failure})\n"
+                    )
+                    break
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return _NOT_RECOVERED
@@ -1006,12 +1010,15 @@ def apply_update(
         # as its own program: it is the process that imports mngr and the harness
         # plugins, so it is where a bad plugin table or a missing dependency fails.
         if has_chat_program(repo_root):
-            chat_preflight_output = preflight_chat(repo_root, http, spawner, sleeper, expend)
+            chat_preflight_output = preflight_chat(
+                repo_root, http, spawner, sleeper, expend
+            )
             if chat_preflight_output is not None:
                 raise ApplyFailed(
                     "merged chat app failed to boot in a pre-flight check; live "
                     "service not restarted",
-                    detail=chat_preflight_output or "(the pre-flight boot wrote nothing at all)",
+                    detail=chat_preflight_output
+                    or "(the pre-flight boot wrote nothing at all)",
                     detail_heading="chat pre-flight boot output",
                 )
 
@@ -1070,21 +1077,22 @@ def apply_update(
                 "backend did not become healthy after restart",
                 live_service_restarted=True,
             )
-        # The chat app restarts with the shell (both are the services agent's) and is the
-        # process that imports mngr, so its health is the update's too. The URL comes from
-        # the registry, so the failure names it: a stale row is a cause worth seeing.
-        chat_health = chat_health_url(repo_root, resolved_base)
-        if not wait_healthy(
-            http,
-            chat_health,
-            HEALTH_ATTEMPTS,
-            HEALTH_INTERVAL_SECONDS,
-            sleeper,
-        ):
-            raise ApplyFailed(
-                f"the chat app did not become healthy after restart (probed {chat_health})",
-                live_service_restarted=True,
+        # Every critical app that serves instances restarts with the shell (all are
+        # the services agent's programs), so each one's instances API answering is
+        # the update's health too: the chat is the process that imports mngr, and
+        # the terminal is what the not-built placeholder hands over. Which apps
+        # those are comes from the merged tree's manifests; where each is reached
+        # follows the registry as the app re-registers, and the failure names what
+        # the last poll found.
+        for app in read_critical_instance_apps(repo_root):
+            app_failure = wait_instances_healthy(
+                http, repo_root, app, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
             )
+            if app_failure is not None:
+                raise ApplyFailed(
+                    f"the {app.name} app did not become healthy after restart ({app_failure})",
+                    live_service_restarted=True,
+                )
 
         # Scoped to a *regression*: only a frontend that was serving before
         # this apply has to be serving after it. Ahead of the view refresh,

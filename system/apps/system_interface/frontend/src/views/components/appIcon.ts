@@ -6,7 +6,7 @@
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
  * untrusted: every surface that draws an app goes through
- * `appIconMarkup`/`serviceIconMarkup` here, and nothing inlines a registry
+ * `appIconMarkup`/`appIconMarkupByName` here, and nothing inlines a registry
  * string on its own.
  *
  * The gate is `sanitizeIconMarkup`, and it is deliberately the only one:
@@ -332,15 +332,15 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
 }
 
 /**
- * The same, for surfaces that hold a service name rather than the app row --
+ * The same, for surfaces that hold an app name rather than the app row --
  * ones that address an app by the name in its address.
  *
  * An unknown name (an app that has since been deregistered, a ref from a
  * hand-edited layout) has no icon to draw and takes the fallback.
  */
-export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
-  if (serviceName === null) return fallbackMarkup;
-  const app = getApp(serviceName);
+export function appIconMarkupByName(appName: string | null, sizePx: number, fallbackMarkup: string): string {
+  if (appName === null) return fallbackMarkup;
+  const app = getApp(appName);
   // A name the machine no longer registers keeps the caller's generic glyph:
   // there is no app to monogram, and inventing one would dress up a dead ref as
   // a real app.

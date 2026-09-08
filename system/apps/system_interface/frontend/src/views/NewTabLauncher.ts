@@ -15,7 +15,7 @@
 
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
-import { serviceIconMarkup } from "./components/appIcon";
+import { appIconMarkupByName } from "./components/appIcon";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -134,7 +134,7 @@ const GLYPH_SIZE = 15;
 
 /** The glyph one row (or tile) wears: the app's own icon, or its monogram. */
 function appGlyph(appName: string): string {
-  return serviceIconMarkup(appName, GLYPH_SIZE, launcherIcon("app", GLYPH_SIZE));
+  return appIconMarkupByName(appName, GLYPH_SIZE, launcherIcon("app", GLYPH_SIZE));
 }
 
 const STARTING_TITLE = "Starting…";

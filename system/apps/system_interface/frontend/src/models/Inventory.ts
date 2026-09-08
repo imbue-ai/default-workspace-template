@@ -17,7 +17,7 @@
 import { addressFor, parseAddress } from "@imbue/workspace-ui/src/addresses";
 import m from "mithril";
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
-import { deriveServiceOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
+import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
@@ -217,7 +217,7 @@ export function instancePageUrl(
   const origin =
     workspaceHostCoordinate(host) === host
       ? app.url.replace(/\/$/, "")
-      : deriveServiceOrigin(labelForApp(app), host, protocol).replace(/\/$/, "");
+      : deriveAppOrigin(labelForApp(app), host, protocol).replace(/\/$/, "");
   const path = instance.url.split("{tab}").join(encodeURIComponent(tabId));
   return `${origin}${path.startsWith("/") ? path : `/${path}`}`;
 }

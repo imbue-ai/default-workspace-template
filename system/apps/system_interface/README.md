@@ -3,36 +3,121 @@
 The workspace's shell: its window manager and app management. It serves one
 document (`/`, the dockview UI) that arranges tabs, keeps projects, and
 manages apps, and it knows every app, the chat app included, only through
-the workspace app model (`docs/system/blueprint/workspace-app-model/`): a
-manifest, a registry row, an instances API, and the browser-side contract.
-Chats are the chat app's business (`system/apps/chat/`, its own package and
-supervised program since phase 10 of that model); this package imports
-nothing from mngr or from the chat app, and never runs the `mngr` binary
-(`test_project_ratchets.py` holds both).
+the workspace app model: a manifest, a registry row, an instances API, and
+the browser-side contract. Chats are the chat app's business
+(`system/apps/chat/`, its own package and supervised program); this package
+imports nothing from mngr or from the chat app, never runs the `mngr` binary,
+and names no app (`test_project_ratchets.py` holds all three).
 
-Beside the document the process serves `/api/health`
-(`{"status", "is_frontend_built"}`, the probe the update apply polls), the
-browser-side contract module at `/_static/app_contract.js`, the shell's
-routes (apps, instances relay, projects, layouts, tabs, client activity),
-and the WebSocket (`/api/ws`: `apps_updated`, `projects_updated`,
-`layout_updated`, `active_view_changed`, `layout_op`, `tab_rebound`; contracts.md
-section 8). The frontend (`frontend/`, one member of the
-npm workspace rooted at `system/package.json`) builds `index.html` and the
-contract library into `imbue/system_interface/static/`; the design system,
-the base helpers, and the contract modules it shares with the chat page live
-in `system/libs/workspace_ui`. The shell's side of the contract is
-`src/relay.ts`, which also relays the chat pages' permission cards to the
-minds chrome.
+## Model
 
-## Usage
+The shell speaks the vocabulary of the workspace app model. The meta spec,
+`docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md`, is
+the reference; `contracts.md` beside it holds every route, message, and file
+format. In brief:
 
-```bash
-system-interface
-```
+- An **app** is a supervised program with a manifest (`app.toml`), a row in
+  the registry (`data/.state/apps.toml`), and its own browser origin. It is the
+  unit you install, stop, start, and share.
+- An **instance** is something an app owns, lists, and reports status for:
+  a chat, a terminal session, a file viewer, a browser. An app that declares
+  none has exactly one, itself. Every tab shows an instance, and an
+  **address** (`app:<name>` or `app:<name>?instance=<key>`) is the whole of
+  what the shell knows about what a tab shows.
+- A **view** is a project or Everything. A **project** is a shared tab set (a
+  list of addresses), a name, a color, a glyph, and its rail **shortcuts**
+  (`(app, action)` rows in focus or new mode); Everything is the unfiltered
+  view of the whole machine.
+- A **layout** is one client's arrangement of one view. A **client** is one
+  browser context, identified by a stored id, with a device kind. Truth is
+  shared, arrangement is scoped.
+- **Status** (`working`, `idle`, `attention`, `stopped`, `error`), titles,
+  icons, and recency all come from the apps. The shell stores no titles, no
+  recency, and no locations of its own.
 
-Opens at http://127.0.0.1:8000 by default.
+## What the process serves
 
-## Development
+The `system-interface` tool (the shell's own uv tool environment, run by
+supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
+
+- `/` and the SPA catch-all: the dockview UI, built into
+  `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
+- `/api/health`: `{"status", "is_frontend_built"}`, the probe the update
+  apply and the preview flow poll.
+- `/_static/app_contract.js`: the browser-side contract module every app page
+  imports (source in `system/libs/workspace_ui/src/app_contract.ts`).
+- The shell routes of contracts sections 5 and 6: the app registry and the
+  per-app Stop and Start (`/api/apps/<name>/...`), the instance relay
+  (`.../instances`, `.../instances/<key>/rename|delete|location|stop|start`),
+  projects (`/api/projects/...`), layouts (`/api/layouts/<view>`), clients,
+  tabs (`/api/tabs/<tab_id>/instance`), client activity, the inventory
+  (`/api/inventory`), and the loopback-only op route (`/api/layout/broadcast`).
+- The WebSocket (`/api/ws`): `apps_updated`, `projects_updated`,
+  `layout_updated`, `active_view_changed`, `tab_rebound`, `layout_op`
+  (contracts section 8).
+
+Its state lives under `data/.state/system_interface/`: `projects.json`,
+`layouts/<view>/<client>.json` with a per-device seed beside each,
+`clients.json`, the migration marker, and the client-activity event log
+(`events/client_activity/events.jsonl`, what `layout.py context` reads).
+
+The backend is the `imbue/system_interface/shell/` subpackage (inventory,
+relay, projects, layouts, clients, client activity, layout ops, the pure
+dockview document editor, routes, state); the package root holds the process
+(`main.py`, `server.py`), the not-built placeholder, and the update-staleness
+check. The frontend (`frontend/`) is one member of the npm workspace rooted at
+`system/package.json`; the design system, the base helpers, and the contract
+modules it shares with the chat page live in `system/libs/workspace_ui`, and
+`src/relay.ts` is the shell's side of the embedder relay (it forwards the chat
+pages' `minds:` messages to the minds chrome unchanged).
+
+### How the shell learns about apps
+
+The **inventory** (`shell/inventory.py`) watches the registry, probes each
+app's liveness (supervisord for rows with a `program`, a TCP connect
+otherwise), fetches each app's instance list from its instances API, refetches
+on the app's nudge (`POST /api/apps/<name>/changed`, coalesced over a short
+window) and on a periodic sweep, and pushes the diffed result to every browser
+as `apps_updated`.
+
+Every verb an instance accepts goes through the **relay** to the app that owns
+it, so the tab menu and the rail row offer exactly what the record allows
+(`renameable`, `stoppable` read with the record's status; the app's
+`instances`, `program`, and `critical` flags), from one definition
+(`frontend/src/views/tabMenu.ts`). Stop and Start of the whole app act on its
+supervisord program and are refused for critical apps; a single-instance app
+offers them on its tab, every other app on the rail's per-app row menu
+(`frontend/src/views/Sidebar.ts`). A framed page reaches the shell only
+through the contract module (`shell:open`, `shell:focused`, `shell:location`);
+a page that reports the path it is showing gets it stored on its own record
+and reopens there.
+
+### Views, layouts, and the New Tab page
+
+Every open in a project files the address into its tab set, whichever way it
+was opened; "Remove from project" unfiles it. Each client keeps its own
+arrangement of each view: the browser saves the user's gestures with a save
+id and the stamp it was based on (a save over a newer arrangement is refused
+with 409 and the window refetches), the shell writes the file for agent ops
+and its own pruning, and every write is announced as `layout_updated` so the
+client's other windows mirror it. The active view lives on the client record.
+A saved tab whose address the machine no longer lists is pruned on the next
+observation; an instance whose record says `lifetime = "referenced"` is
+deleted through its app once nothing references it.
+
+The rail shows the view's identity (the switcher; right-click for project
+settings), its shortcut rows (seeded from every app's `default_shortcut`;
+Everything's rail is every app's primary action), the "All apps" popover, a
+search pill, and the view's tab list. The New Tab page is the only empty
+state: tiles for every app's primary action, "In this project", and "On this
+machine". A fresh install lands there with no project.
+
+A workspace that predates the app model is carried over once by
+`system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at every
+boot behind its marker and the update apply runs before its restart; `plan
+--json` shows what a run would write.
+
+## Running and developing
 
 ```bash
 # Backend, from the repo root (the registry path and the state directory
@@ -44,45 +129,65 @@ uv run system-interface
 cd system/apps/system_interface/frontend
 npm install
 npm run dev
+
+# Build the bundle into imbue/system_interface/static/
+npm run build
 ```
 
-## Design system (optional convention for the default UI)
+The build's `postbuild` step stamps the output with three `git rev-parse`
+tree hashes (this frontend directory, the shared `system/libs/workspace_ui`,
+and the workspace's `package-lock.json`), each as *committed*, not as the
+files just built. The update apply compares that stamp against the merged
+tree, so commit before building a bundle that will be handed to the apply.
 
 The frontend styles in the markup: Tailwind utilities over a semantic token
-layer (`system/libs/workspace_ui/src/base.css`), with shared primitives (Button, Modal, the
-input/badge recipes) for repeated looks. When you extend or maintain the
-*default* look, prefer them over new one-offs so it stays coherent. This is a
-convention, not an enforced rule — if a user wants their interface restyled to
-their own taste, build that and ignore the tokens freely. See
-[`frontend/style_guide.md`](frontend/style_guide.md) for the guide.
+layer (`system/libs/workspace_ui/src/base.css`), with shared primitives
+(Button, Modal, the input and badge recipes) for repeated looks. Prefer them
+when extending the default look; see [`frontend/style_guide.md`](frontend/style_guide.md).
+It is a convention, not a rule: a user who wants their interface restyled gets
+that, tokens or not.
 
-## Updating the running UI (canonical flow)
+## Driving the workspace layout from an agent
+
+An agent inside the workspace rearranges the dockview through
+`system/scripts/layout.py` (`list / inspect / where / context / views / load /
+open / focus / split / close / move / rename / delete / stop / start /
+maximize / restore / replace-url / refresh / shortcuts / shortcut set /
+shortcut remove`), which speaks addresses:
+
+```bash
+python3 system/scripts/layout.py list
+python3 system/scripts/layout.py context
+python3 system/scripts/layout.py open app:files?instance=files-2 --view Everything
+python3 system/scripts/layout.py open terminal
+python3 system/scripts/layout.py rename app:terminal?instance=terminal-3 "Build log"
+python3 system/scripts/layout.py inspect --view Everything
+```
+
+The document ops (`open`, `focus`, `split`, `close`, `move`) are applied by
+the shell to the target client's layout file and announced as
+`layout_updated`, so an op lands whether or not a browser is connected. Every
+op targets exactly one client (`--client <id>`, else the client that last
+messaged the requesting agent, else the one connected client; refused with the
+clients listed otherwise); `--view` edits that view and switches the client to
+it; `open` of an app with instances creates one through the relay inside the
+op (`--action`, `--param`; a bare URL is the browser's `new`). Only
+`maximize`, `restore`, `refresh`, and the interface reload still reach the
+browser as messages. The old spellings (`chat:`, `terminal:`, `service:`,
+`url:`, `subagent:`) are refused with an error naming the new form. See the
+`manage-layout` skill for end-to-end orientation.
+
+## Updating the running UI
 
 The deployed system interface is the live web UI the user is looking at, so
 changes are not applied in place. The canonical flow is the
-`update-system-interface` agent skill: a change is delegated to a worker, tested
-in isolation (including Playwright against an isolated instance) and run through
-the review gates; then **previewed** to the user as a tab before merging; and,
-once approved, applied. See
-`.agents/skills/update-system-interface/SKILL.md`.
-
-`reveal_system_interface.py` owns the deterministic preview setup/teardown, as
-sub-commands:
-
-- `preview --slug <name> --work-dir <worker-work-dir>` boots the worker's
-  already-built work_dir (a local worktree-agent folder in this same container)
-  on a free port and registers it as the `si-preview-app` service, then boots a
-  small wrapper page that embeds it in a labeled "preview" frame and registers
-  that as the user-facing `si-preview` service -- so the proxied tab reads as a
-  clearly-marked proposed change rather than a nested clone of the live UI. No
-  fetch, no re-checkout, no rebuild, and without merging or touching the served
-  tree. (Resolve the work_dir from
-  `mngr ls --include 'name=="<name>"' --format json` -> `agents[0].work_dir`.)
-- `unpreview --slug <name>` tears that down -- kill both servers, deregister both
-  services (idempotent).
-
-Going live, after approval, is the general **update apply** -- shared with the
-`update-self` flow:
+`update-system-interface` agent skill: a change is delegated to a worker,
+tested in isolation, **previewed** to the user as a tab
+(`reveal_system_interface.py preview --slug <name> --work-dir <dir>` boots the
+worker's already-built work_dir on a free port and registers it, with a
+labeled wrapper page, as the `si-preview` app; `unpreview` tears it down),
+and, once approved, applied through the general **update apply** shared with
+the `update-self` flow:
 
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py apply \
@@ -91,56 +196,24 @@ python3 .agents/skills/update-self/scripts/update_self.py apply \
     --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static"
 ```
 
-It merges the worker's branch (capturing the rollback point internally),
-classifies what changed and does only what is needed: refreshes dependencies
-if a manifest changed (`npm ci`, plus the vendored mngr tool, the shell's and
-the chat app's tool environments and the workspace venv -- the same
-environments `build_workspace.sh` builds),
-installs the worker's already-built `static/` bundles (live build as fallback),
-and/or pre-flights the merged code on a throwaway port before restarting the
-services agent so the editable backend re-imports the merged `.py` (backend).
-It then polls the loopback endpoint to confirm health and checks that the
-frontend really serves, and only after those does it ask every open view of the
-workspace to reload -- unconditionally, since a backend-only change leaves the
-open page rendering what it had already fetched, but last, so an apply that
-regressed the frontend rolls back instead of asking every open view to reload
-into it. If anything fails, it reverts the entire merge as a forward revert
-commit, restores the pre-apply snapshots, restarts only if the failed apply had
-already restarted the service, and re-confirms the UI is healthy -- so the
-served interface can never be left broken. The exit code reports the outcome
-(`0` applied, `2` rolled back, `3` emergency, `1` precondition error). A
-persistent marker under `data/.state/update-apply/` makes even a hard kill
-mid-apply recoverable (`update_self.py recover`, run automatically at boot and
-from a recovery cron).
-
-Two properties are load-bearing there. It **snapshots `static/` (and the
-affected environments) before anything destructive runs**, because the
-destructive steps delete before they produce (`npm ci` removes `node_modules`;
-the build empties the bundle directory; the env refreshes rebuild the venv and
-tool environments) -- so a rollback restores a *copy* rather than re-running
-the build that just failed, and a broken build environment cannot take the UI
-down with it. And it **checks that the frontend actually serves**, not just
-that the backend answers: the "not built" placeholder and an unserved
-`/assets` path are both HTTP 200s, so after the shell's `/api/health` and the
-chat app's both answer 200 the probe reads the `X-Frontend-Built` header the
-shell sends with `/` and checks that the shell's module script comes back as
-JavaScript.
-
-The apply's reload of every open view is delegated to
-`system/scripts/refresh_workspace_view.py`, the shared
-helper every flow that restarts the services agent uses. It fires two channels,
-because neither reaches every viewer: a `reload_system_interface` op, and the Minds
-app's own refresh endpoint (which lands even when the page's WebSocket never came
-back from the restart).
-
-The `reload_system_interface` op goes to the loopback-only
-`/api/layout/broadcast` endpoint, which relays a `layout_op` WebSocket message;
-the dockview shell (`DockviewWorkspace.ts`) reloads the top-level page -- shell
-chrome plus every child chat iframe -- so the browser picks up the new hashed
-assets. That reaches every attached browser, including anyone the workspace was
-shared with over a Cloudflare tunnel. This is distinct from
-`system/scripts/layout.py refresh`, which only reloads a single inner
-iframe/panel for arranging the workspace.
+The apply merges the worker's branch, classifies what changed and does only
+what is needed (a dependency refresh, the worker's already-built bundles or a
+live build, a pre-flight boot of the merged shell and chat on throwaway
+ports), restarts the services agent, then probes: the shell's `/api/health`,
+the instances API of every critical app that serves one (the chat's and the
+terminal's, at the URL each registers), and that the frontend really serves
+(the "not built" placeholder and an unserved `/assets` path are both HTTP 200,
+so the probe reads the `X-Frontend-Built` header and checks that the module
+script comes back as JavaScript). Only then does it ask every open view to
+reload, through `system/scripts/refresh_workspace_view.py` (a
+`reload_system_interface` op on the loopback-only op route, which reloads the
+top-level page and every child frame, plus the minds app's own refresh
+endpoint). On any failure it reverts the merge as a forward revert commit,
+restores the pre-apply snapshots it took before anything destructive ran, and
+re-confirms health; the exit code reports the outcome (`0` applied, `2` rolled
+back, `3` emergency, `1` precondition). The scripts under
+`.agents/skills/update-self/scripts/` and that skill's `SKILL.md` are the
+reference.
 
 ## When the bundle is missing
 
@@ -271,150 +344,3 @@ changed path is backend code this process imports, a manifest its environment
 was resolved from, or the vendored mngr. The banner
 informs only; acting on it stays with the agent.
 
-## The shell: apps, instances, projects, and views
-
-The shell is a generic window manager over the workspace app model
-(`docs/system/blueprint/workspace-app-model/contracts.md`). It knows nothing
-about chats, terminals, files, or browsers by name: every one is an **app**
-with a manifest (`app.toml`), a row in the registry (`data/.state/apps.toml`),
-and an instances API (`GET /_instances` at the app's URL) that lists the
-app's **instances** with their titles, statuses, and what verbs they accept.
-The backend for all of this is the `imbue/system_interface/shell/`
-subpackage; the package root holds the process (`main.py`, `server.py`), its
-state, and the update-staleness check.
-
-Everything is addressed as `app:<name>` (a single-instance app, or the app
-itself) or `app:<name>?instance=<key>` (one instance). The shell keeps an
-**inventory** (`shell/inventory.py`): it watches the registry, probes each
-app's liveness (supervisord for rows with a `program`, a TCP connect
-otherwise), fetches each app's instance list, refetches on the app's nudge
-(`POST /api/apps/<name>/changed`, coalesced) and on a periodic sweep, and
-pushes the diffed result to every browser as `apps_updated`. Titles, status
-dots, icons, and recency all come from those records; there are no
-shell-side name, recency, or location stores any more.
-
-The workspace shows one **view** at a time: a project, or Everything. A
-project is a shared **tab set** (a list of addresses) plus its rail
-**shortcuts**, kept in `data/.state/system_interface/projects.json`;
-Everything is the unfiltered view of the whole machine and is not a project.
-Every open in a project files the address into its tab set, whichever way it
-was opened (a launcher row, a rail shortcut, a layout op, a page's own
-`shell:open`); "Remove from project" unfiles it and nothing else. Each client
-keeps its own arrangement of each view (`layouts/<view>/<client>.json`, with
-a per-device seed beside it); the browser saves the user's own gestures into
-it with a save id and the stamp it was based on (a save over a newer
-arrangement is refused with 409 and the window refetches), the shell writes
-it for agent ops and its own pruning, and every write is announced as
-`layout_updated` so the client's other windows mirror it. The active view
-lives on the client record (`clients.json`), read on boot and pushed as
-`active_view_changed` when it moves. A saved tab whose address the machine no
-longer lists is pruned on the next observation. An instance whose
-record says `lifetime = "referenced"` is deleted through its app once nothing
-references it any more. First landing after a fresh install is the New Tab
-page with no project. A workspace that predates the app model is carried over
-once by `system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at
-every boot behind its marker (`data/.state/system_interface/migrated.json`)
-and the update apply runs before its restart: it writes `projects.json` and
-each view's per-device seeds from the old `workspace_layout/` store, seeds the
-files and terminal apps' stores so those tabs stay listed, and never touches
-the old files or an output that already exists. `plan --json` shows what a run
-would write; `--force run` rewrites the projects file and the seeds.
-
-Verbs go through the shell's **relay** to the app that owns the instance:
-create (`POST /api/apps/<name>/instances`), rename, delete, the location
-report, and the instance's own stop and start
-(`.../instances/<key>/rename|delete|location|stop|start`), so the tab menu and
-the rail row offer exactly what the record allows (`renameable`, `stoppable`
-read with the record's status, the app's `instances`, `program`, and
-`critical` flags), from one definition (`frontend/src/views/tabMenu.ts`).
-Stop and Start of the whole app (`POST /api/apps/<name>/stop|start`) act on
-its supervisord program and are refused for critical apps; a single-instance
-app offers them on its tab, and every other app on the rail's per-app row
-menu (`frontend/src/views/Sidebar.ts`), never on an instance's tab. A framed page reaches the shell only through the
-contract module (`shell:open`, `shell:focused`, `shell:location`, ...); an
-app that reports the path it is showing gets it stored on its own record and
-reopens there.
-
-The rail down the left edge shows the view's identity (the switcher, and
-right-click for project settings), its shortcut rows (a project's stored
-shortcuts, seeded from every app's `default_shortcut`; Everything's rail is
-every app's primary action), the "All apps" popover (pin an action to the
-project's rail), a search pill, and the view's tab list. The New Tab page is
-the only empty state: tiles for every app's primary action, "In this
-project" (the tab set), and "On this machine" (everything else), each with an
-app filter and a last-active column.
-
-An app page's sends (the chat's messages) and a client's view switches are
-logged to `data/.state/system_interface/events/client_activity/events.jsonl`
-so agents can attribute a request to a client via `layout.py context`; the
-shell records the reporting page's address and never names an app.
-
-## Driving the workspace layout from an agent
-
-An agent running inside the workspace container can rearrange the dockview
-through `system/scripts/layout.py`. The subcommand surface is `list / inspect
-/ where / context / views / load / open / focus / split / close / move /
-rename / delete / maximize / restore / replace-url / refresh / shortcuts /
-shortcut set / shortcut remove`.
-
-```bash
-# Every app with its instances, statuses, and which clients dock each.
-python3 system/scripts/layout.py list
-
-# Which browser clients exist, their device kind, current view, and recent
-# messages (to attribute a request to a client and a view).
-python3 system/scripts/layout.py context
-
-# Open an instance in the view the connected client is looking at, or name
-# the view. A bare app with instances creates a fresh one and prints the
-# new address to stdout.
-python3 system/scripts/layout.py open app:files?instance=files-2 --view Everything
-python3 system/scripts/layout.py open terminal
-
-# Retitle or delete an instance through its app.
-python3 system/scripts/layout.py rename app:terminal?instance=terminal-3 "Build log"
-python3 system/scripts/layout.py delete app:terminal?instance=terminal-3
-
-# Inspect the grid tree of a view: arrangements, sizes, the active panel.
-python3 system/scripts/layout.py inspect --view Everything
-```
-
-The dock ops POST `{op, args, requester}` (the requester being the caller's own address, which
-is what `self` resolves to and what the op is attributed to a client from) to the loopback-only
-`/api/layout/broadcast` endpoint (the path is historical). The client's layout
-file is the truth of the arrangement: `open`, `focus`, `split`, `close`, and
-`move` are applied by the shell to the target client's file
-(`shell/dockview_document.py` is the pure editor over dockview's document) and
-announced as `layout_updated`, which the client's windows apply without
-reloading any page, so an op lands whether or not a browser is connected.
-Every op targets exactly one client: `--client <id>`, else the client that
-last messaged the requesting agent, else the one connected client, and is
-refused with the connected clients listed (HTTP 412) when nothing settles it.
-`--view` edits that view's file and switches the client to it. `open` of an
-app with instances creates the instance through the relay inside the op
-(`--action`, `--param`; a bare URL is the browser's `new` with `url`) and
-answers with the address. Only `maximize`, `restore`, `refresh`, and the
-interface reload still reach the browser as `layout_op` messages, to the target
-client's windows. `rename`, `delete`, `stop`, `start`, and `replace-url` call the
-relay routes under `/api/apps/<name>/instances/<key>/`; `list` and `views` read
-`GET /api/inventory`; the `shortcut` subcommands use the project routes. A bare
-word is `app:<word>`; the old spellings (`chat:`, `terminal:`, `service:`,
-`url:`, `subagent:`) are refused with an error naming the new form. See the
-`manage-layout` skill for end-to-end orientation.
-
-## Building
-
-```bash
-cd system/apps/system_interface/frontend
-npm run build
-```
-
-This compiles the frontend into `imbue/system_interface/static/`. The
-`postbuild` step stamps the output with three `git rev-parse` tree hashes --
-this frontend directory, the shared `system/libs/workspace_ui`, and the
-workspace's `package-lock.json`, each as *committed*, not as the files just
-built. A build from a tree with uncommitted changes is stamped as its last
-commit, so the
-update apply's stamp check (which compares it against the merged tree) cannot
-tell that bundle from one built at that commit. Commit before building a
-bundle that will be handed to the apply.

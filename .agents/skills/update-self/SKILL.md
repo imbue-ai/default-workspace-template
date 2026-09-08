@@ -415,7 +415,11 @@ mngr and the harness plugins), installs or builds the frontend
 bundle, runs the workspace layout migration
 (`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
 there is reported and left to the next boot's run), restarts the services
-agent (every apply), probes the live UI, refreshes every open view, writes the
+agent (every apply; the fresh supervisord it brings up reads the merged program
+table, so a program the update adds starts on its own), probes the shell's health
+route and the instances API of every critical app that serves one (the chat, the
+terminal; each at the URL its manifest or its fresh registry row names), probes the
+live UI, refreshes every open view, writes the
 `docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
 reverting the entire merge and restoring the snapshots on any other failure.
 Exit codes:

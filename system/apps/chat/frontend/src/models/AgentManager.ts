@@ -7,7 +7,7 @@
 import m from "mithril";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
 import { getTerminalOriginLabel } from "../document-meta";
-import { deriveServiceOrigin } from "@imbue/workspace-ui/src/origin";
+import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
@@ -310,7 +310,7 @@ export function removeAgentActivityListener(listener: AgentActivityListener): vo
 /** The terminal app's origin, where the chat's terminal back face is served from: derived
  *  from the label the chat app read out of the registry into the page. */
 export function getTerminalUrl(): string {
-  return deriveServiceOrigin(getTerminalOriginLabel() || "terminal");
+  return deriveAppOrigin(getTerminalOriginLabel() || "terminal");
 }
 
 /** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The ttyd

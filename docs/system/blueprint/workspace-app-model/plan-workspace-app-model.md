@@ -333,6 +333,8 @@ Taking the minimum size across viewers of a session is deferred, and the `shell:
 
 The browser daemon already lists, creates, and closes sessions; it gains the `/_instances` routes as an adapter over them, reports `working` while an agent holds control and `idle` otherwise, and nudges the shell on fleet changes.
 An instance's URL is `/?session=<name>`.
+A browser is `stoppable`: stop ends its Chromium after checkpointing its tabs and keeps the browser, its profile, and its tab list, reported as `stopped` (the viewer shows a stopped overlay with a Start button); start relaunches it on those tabs from the same profile; a stopped browser does not count toward the fleet cap and is restored as stopped after a daemon restart.
+The daemon checkpoints every browser's tabs before Chromium is signalled (the browser program is stopped without its process group), so a restart never loses a tab list.
 
 ### 7.3 Files
 
@@ -348,7 +350,7 @@ The chat app moves wholesale to `system/apps/chat/`: the harness watchers, trans
 It runs from its own uv tool environment (3.1), installed with the mngr harness plugins the way the shell's tool is today, so the plugin table in `system/config/mngr_plugins.toml` names `chat` instead of `system-interface`; the `system-interface` tool no longer needs any mngr plugin.
 Its instances are the workspace's chat agents, listed from `mngr observe`, excluding the primary services agent; keys are agent ids, URLs are `/<agent-id>`, titles are display names, rename goes through `mngr rename`, delete through `mngr destroy`, and status maps thinking and tool-running to `working`, a pending permission to `attention`, and a stopped agent to `stopped`.
 Its `new` action creates a provisional instance: the chat backend already mints the agent id before it runs `mngr create`, so the instance is keyed by that future id, and the tab never changes address.
-Creation starts at once on the most recently used account; with nothing signed in the chat waits, and its page at `/<agent-id>` shows the account chooser, whose sign-in launches the chat under the same id.
+Creation starts at once on the pinned default account (a star in the provider menu; `AccountIndex.default_account`), else the most recently used one, else the oldest; with nothing signed in the chat waits, and its page at `/<agent-id>` shows the account chooser, whose sign-in launches the chat under the same id.
 While the create runs the page shows the composer over an empty transcript (a message typed then is held and delivered when the agent lands); a failed create shows the reason in the tab with a retry; the transcript takes over when the agent registers.
 A provisional instance is `referenced`, so one whose tab is closed before the agent exists is deleted by the shell like any other unreferenced instance.
 A subagent view is a chat instance too, keyed `<agent-id>.<session-id>`, `referenced`, created on demand by the `subagent` action when the user opens one from the parent chat's page, which then docks it with `shell:open`; agents and sub-agents are just chats.
@@ -373,7 +375,9 @@ The chat app keeps its dynamic retagging of chat agents, fed by `shell:shown` an
 
 ### 8.3 Updates
 
-The update apply learns three things: to refresh the tool environment of every Python program whose directory changed (3.1), to `supervisorctl reread` and `update` after a merge so a newly added program starts, and to treat every app whose manifest says `critical = true` as a snapshot-and-rollback target alongside the shell.
+The update apply learns three things: to refresh the tool environment of every Python program whose directory changed (3.1), to hold every app whose manifest says `critical = true` and `instances = true` to its instances API after the restart (beside the shell's health route), and to treat every app whose manifest says `critical = true` as a snapshot-and-rollback target alongside the shell.
+A program the merge adds needs no `supervisorctl reread` step: the apply restarts the services agent, whose bootstrap window execs a fresh supervisord that reads the merged program table (decided in phase 11).
+The apply also pre-flights the merged chat app beside the shell (`chat-app --preflight`, a boot that reconciles no accounts, runs no agent manager, and registers nothing), since the chat is the process that imports mngr and the harness plugins.
 Full per-app generalization of the apply is deferred.
 
 ### 8.4 External callers
@@ -410,6 +414,7 @@ The old files are left in place and ignored, and are deleted in a later release.
 ## 10. Phases
 
 One pull request, built as ordered commits, each leaving the repository green.
+Every phase below landed between 2026-09-02 and 2026-09-07; each phase file records what landed and where it departs from the sketch here (the terminal's revision after the phase 10 live test, phase 8's layout-file-as-truth, phase 9's dropped app rewrite, phase 11's dropped reread step).
 Each phase names what must be exercised by hand in a dev workspace before the next starts.
 Tests follow the code: the instances library and each app backend get unit tests, the shell's Playwright harness (`test_e2e.py`) learns to drive app iframes, the contract module and the mngr-free shell get ratchets, and the migration gets a fixture built from a real pre-arc workspace.
 
