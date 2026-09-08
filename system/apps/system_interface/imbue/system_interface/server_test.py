@@ -183,8 +183,8 @@ def test_not_built_placeholder_renders_without_a_terminal_to_offer(
 ) -> None:
     """A workspace with no registered terminal still gets a usable page.
 
-    ttyd registers itself alongside the other services rather than before them,
-    so the placeholder can be served in the window where there is nothing to
+    The terminal app registers itself alongside the other apps rather than before
+    them, so the placeholder can be served in the window where there is nothing to
     offer -- and this page exists precisely for states where things are missing.
     It must degrade to the prose rather than fail to render or show an empty
     frame pointed at nowhere.

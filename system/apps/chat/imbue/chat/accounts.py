@@ -15,8 +15,8 @@ into it, and only then commits a row. That ordering means an interrupted sign-in
 folder with no row -- which `reconcile` removes at boot -- rather than a row
 pointing at a half-authenticated folder the UI would offer as usable.
 
-Concurrency: four operations mutate the index (commit, delete, set-mru, set-default) and they are served
-concurrently by Flask. An atomic rename prevents a *torn* file, not a *lost update*, so every
+Concurrency: the operations that mutate the index are served concurrently by Flask. An
+atomic rename prevents a *torn* file, not a *lost update*, so every
 mutation takes `_index_lock` across the whole read-modify-write -- an flock, because the
 server is not the only process that writes here.
 """
@@ -46,7 +46,7 @@ logger = _loguru_logger
 # Bumped when the on-disk shape changes. Code that finds a higher version than it knows
 # should refuse rather than guess -- without this there is no way for an older build (a
 # revert, a rolled-back workspace) to tell "no accounts yet" from "accounts it cannot read".
-# Version 2 added `default_account`.
+# A version-1 index has no `default_account`.
 INDEX_VERSION: Final = 2
 
 _INDEX_FILENAME: Final = "index.json"

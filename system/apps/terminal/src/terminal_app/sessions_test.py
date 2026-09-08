@@ -428,8 +428,8 @@ def test_startup_recreates_lost_sessions_adopts_live_ones_and_leaves_stopped_one
     session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
 ) -> None:
-    # terminal-1 survived (by id, under another name); terminal-2 survived under its name from
-    # before ids were kept; terminal-3 was lost to a container restart; terminal-4 was stopped.
+    # terminal-1 survived (by id, under another name); terminal-2 survived under its name, its
+    # record holding no id; terminal-3 was lost to a container restart; terminal-4 was stopped.
     fake_tmux.set_sessions([_session("renamed", "$5"), _session("terminal-2", "$6")])
     session_store.save_record(
         make_terminal_record(name="terminal-1", title=None, workdir=None, session_id="$5")
@@ -702,8 +702,8 @@ def test_startup_gives_a_record_without_a_creation_time_its_live_sessions_time(
     session_source: TmuxSessionSource,
     terminal_paths: TerminalPaths,
 ) -> None:
-    # A store from before creation times were kept: the record matches its session by id alone,
-    # and the dispatch attaches only by id and creation time together.
+    # A record with no creation time matches its session by id alone, and the dispatch attaches
+    # only by id and creation time together.
     fake_tmux.set_sessions([_session("renamed", "$3")])
     session_store.save_record(
         make_terminal_record(

@@ -6,8 +6,8 @@
  * "null", not as an absent message. (With `responseType: "json"` and a
  * non-JSON body, `xhr.response` is null and reading `xhr.responseText` throws,
  * which is exactly a proxy's plain-text 503.) An emptiness check alone lets
- * that through, which is how "Error: null" reached the user. A parsed object
- * body lands here as "[object Object]" the same way. ("undefined" is
+ * that through. A parsed object body lands here as "[object Object]" the same
+ * way. ("undefined" is
  * unreachable from mithril itself -- `new Error(undefined).message` is "" --
  * and is listed only so any other producer of this shape is covered too.)
  */
@@ -64,8 +64,8 @@ export function describeRequestError(error: unknown): string {
  * names the situation and stops there -- it does not know what a button is -- so the mapping from
  * a kind to what the user is offered lives here, in the workspace.
  *
- * Anything unrecognised (an older backend, a kind added later) reads as "unknown", which callers
- * treat exactly as they behaved before kinds existed.
+ * Anything unrecognised (an older backend, a kind added later) reads as "unknown", for which
+ * callers offer nothing kind-specific.
  */
 export type SendFailureKind = "input_blocked" | "not_ready" | "agent_unreachable" | "unknown";
 

@@ -123,8 +123,8 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 
 # Cap on the `mngr destroy` subprocess. A destroy measured ~16s idle on this
 # class of host (mngr CLI startup + discovery + teardown + inline worktree gc)
-# and degrades under load, so the old 30s cap SIGTERMed real destroys mid-
-# teardown (a partial destroy the user saw as a 500). Every internal mngr
+# and degrades under load, so a tight cap would SIGTERM real destroys mid-
+# teardown (a partial destroy the user sees as a 500). Every internal mngr
 # cleanup step is itself bounded, so destroy cannot hang indefinitely: a
 # generous cap only converts spurious kills into patience. ``mngr stop`` rides
 # the same CLI startup and host-lock path, so it shares the bound.
@@ -280,7 +280,7 @@ def _build_chat_destroy_command(mngr_binary: str, agent_name: str) -> list[str]:
     """Build the ``mngr destroy --force`` argv for one agent.
 
     Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
+    against the live CLI without a subprocess.
     """
     return [mngr_binary, "destroy", agent_name, "--force"]
 
@@ -1616,7 +1616,7 @@ class AgentManager:
         carrying each agent's real lifecycle ``state`` (``AgentDetails.state``)
         rather than a hardcoded literal -- while the before/after key diff starts
         and stops the per-agent tracking (activity, model choice, the resident
-        watcher), exactly as the discovery membership delta used to.
+        watcher).
         """
         with self._lock:
             before_details = dict(self._agent_details_by_id)

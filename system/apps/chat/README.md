@@ -22,16 +22,17 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 - `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
   manager (`instances.py`): every non-primary agent is an explicit, renameable,
   stoppable instance keyed by its agent id (stop is `mngr stop`, start the same
-  ensure-started path a send takes); a chat still being created is a referenced
-  provisional instance under the id mngr will give it; a subagent view is a
-  referenced instance keyed `<agent-id>.<session-id>`. Status comes from the
-  activity state, a pending permission request, and the lifecycle. The API
-  answers `503` until the agent list has been read from mngr once.
+  ensure-started path a send takes); a chat that is not an agent yet is a
+  referenced provisional instance under the id mngr will give it, whether it is
+  waiting for an account (`attention`), being created (`working`), or failed
+  (`error`); a subagent view is a referenced instance keyed
+  `<agent-id>.<session-id>`. An agent's status comes from the activity state, a
+  pending permission request, and the lifecycle. The API answers `503` until
+  the agent list has been read from mngr once.
 - Every `/api/agents/...` route (events, streams, sends, model choice, the
   queue actions, presence, destroy, start, stop), `/api/agents/create-chat`,
   `/api/harnesses`, `/api/uploads`, `/api/claude-auth`, `/api/accounts`,
-  `/api/lanes`, and `/api/latchkey`, verbatim as the shell served them before
-  phase 10.
+  `/api/lanes`, and `/api/latchkey`.
 - `/api/ws`: the chat pages' socket, carrying `agents_updated` and the
   proto-agent events.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply

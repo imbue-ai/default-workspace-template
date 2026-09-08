@@ -849,8 +849,8 @@ class PixelfluxVideoPipe:
         """Block until the conductor wakes this pipe (a resume or a close) or ``timeout`` passes.
 
         The paused sender drains nothing, so this waits on the condition alone rather than
-        through ``next_packet``, whose "something is pending, return now" rule turned a paused
-        loop with an undelivered control or cursor message into a busy loop.
+        through ``next_packet``, which returns at once while a control or cursor message is
+        pending and would make a paused loop spin.
         """
         with self._condition:
             if self._paused and not self._closed:

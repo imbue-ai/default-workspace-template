@@ -696,8 +696,7 @@ def _forward_port_calls_in(block: str, program: str | None) -> list[AppPort]:
         name = name_match.group("name") if name_match is not None else program
         if url_match is None or name is None:
             continue
-        # A program that registers two manifests at one port (the shell registers the
-        # chat app's beside its own) is one row here; the registry scan names them both.
+        # A program line that registers the same name at one port twice is one row here.
         if any(
             port.name == name and port.port == int(url_match.group("port"))
             for port in ports
@@ -720,8 +719,7 @@ def parse_supervisord_ports(text: str) -> list[AppPort]:
     A call names its app with ``--name``, or registers through the app's manifest
     (``--manifest system/apps/<package>/app.toml``), in which case the name is the
     enclosing ``[program:<name>]``: an app's supervisord program is its registered
-    name (the build-app scaffold writes the block that way, and every built-in
-    matches), and a program name is exactly the wiring a collision is about.
+    name, and a program name is exactly the wiring a collision is about.
     """
     headers = list(_PROGRAM_HEADER_RE.finditer(text))
     ports = _forward_port_calls_in(

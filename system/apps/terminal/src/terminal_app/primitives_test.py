@@ -44,7 +44,9 @@ def test_tmux_session_name_rejects_what_tmux_or_the_key_rule_refuses(
 @pytest.mark.parametrize(
     "value", ["term-3f9c2b1e-6d4a-4a5e-9f21-0a1b2c3d4e5f", "tab-0123456789abcdef"]
 )
-def test_terminal_tab_id_accepts_todays_and_tomorrows_ids(value: str) -> None:
+def test_terminal_tab_id_accepts_the_shells_ids_and_other_key_shaped_ids(
+    value: str,
+) -> None:
     assert TerminalTabId(value) == value
 
 
@@ -84,7 +86,7 @@ def test_derive_terminal_title_matches_the_frontends_derived_name_rule(
     assert derive_terminal_title(TmuxSessionName(name)) == expected
 
 
-def test_instance_url_carries_todays_ttyd_arguments_with_the_tab_placeholder() -> None:
+def test_instance_url_carries_the_ttyd_arguments_with_the_tab_placeholder() -> None:
     assert (
         instance_url_for_session(TmuxSessionName("terminal-2"), None)
         == "/?arg=_&arg=session&arg=terminal-2&arg={tab}"

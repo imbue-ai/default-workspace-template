@@ -63,7 +63,7 @@ def test_window_reference_exceeds_max_rate() -> None:
 # --- pause, resume, and the paused wait (over a fake capture) -------------------------
 
 _WAIT_SECONDS = 0.2
-# A wait that returned at once, as the spinning loop's did, is far below this.
+# A wait that returns at once is far below this.
 _MIN_BLOCKED_SECONDS = 0.15
 
 

@@ -526,7 +526,7 @@ body > .dv-tab.dv-dragged .dv-default-tab {
   background: currentColor;
 }
 
-/* Working -- green, matching the chat's activity indicator. */
+/* Working -- green. */
 .dv-tab-process-dot[data-status="working"] {
   color: var(--c-accent);
 }

@@ -351,7 +351,7 @@ def _send_message_endpoint(agent_id: str) -> Response:
     # The agent's session owns the whole send lifecycle (contract A1/A2): the file session
     # records the message as *Sending* around mngr's blocking delivery (greying the tap button
     # for the duration); the codex session hands it to its live ledger, passing ``message_id``
-    # only as the correlation token the committed item echoes back (Fix 2).
+    # only as the correlation token the committed item echoes back.
     session = agent_manager.get_or_create_session(agent_info)
     try:
         outcome = session.send(send_message_request.message, message_id)
@@ -501,8 +501,8 @@ def _set_model_choice_endpoint(agent_id: str) -> Response:
     if req.fast and not option.supports_fast:
         return json_response(ErrorResponse(detail=f"'{req.model_id}' does not support fast mode").model_dump(), 400)
 
-    # The live read is harness-neutral (shared reader), so the resolver -- which now owns
-    # only the switch/offer side -- is built inline from agent_info rather than cached.
+    # The live read is harness-neutral (shared reader), so the resolver -- which owns only
+    # the switch/offer side -- is built inline from agent_info rather than cached.
     resolver = build_resolver(agent_info)
 
     identity = ModelIdentity(model_id=req.model_id, effort=req.effort, fast=req.fast)
@@ -572,7 +572,7 @@ def _build_fast_mode_answered_label_command(agent_name: str) -> list[str]:
     """Build the ``mngr label`` argv that latches the fast-mode prompt as answered.
 
     Pure: argv assembly only, so the repo<->mngr CLI contract is testable
-    against the live CLI without a subprocess (see ``server_test.py``).
+    against the live CLI without a subprocess.
     """
     return ["mngr", "label", agent_name, "-l", "fast_mode_prompt_answered=true"]
 
@@ -766,7 +766,7 @@ def _flush_queue_endpoint(agent_id: str) -> Response:
     watcher, restart_process, settle_activity = _interrupt_capabilities(agent_info)
     # Empty-queue short-circuit lives HERE (not in the shared restart-drain): a flush with
     # nothing queued would resend nothing, so it is a clean no-op. The stop button, by contrast,
-    # still interrupts an empty-queue turn -- so the restart-drain no longer short-circuits.
+    # interrupts an empty-queue turn too, so the restart-drain itself never short-circuits.
     if not watcher.get_queued_block():
         return json_response(SendMessageResponse(status="ok").model_dump())
 

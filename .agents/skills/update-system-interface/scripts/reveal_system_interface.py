@@ -5,9 +5,9 @@ The ``preview`` / ``unpreview`` subcommands are thin system-interface adapters
 over the shared ``serve_isolated_instance.py`` motion (the previewable-instance
 substrate every service flow shares). They hand it the system-interface
 specifics -- boot ``uv run system-interface`` from the worker's already-built
-``--work-dir`` on a free port, with layout persistence neutered (drop
-MNGR_AGENT_ID so it can't clobber the live ``layout.json``) but agent discovery
-kept, probe ``/api/health``, and register the inner app plus the labeled
+``--work-dir`` on a free port, with MNGR_AGENT_ID dropped (so the throwaway
+boot never acts as the calling agent) but the live app registry read, so the
+real chats still render, probe ``/api/health``, and register the inner app plus the labeled
 "preview" wrapper frame the user opens. The shared script owns the ports, the
 process/service teardown, and the state file; no fetch, checkout, or rebuild
 happens, and the served tree and the worker's folder are never touched. The
@@ -30,8 +30,8 @@ Usage:
     python3 reveal_system_interface.py unpreview --slug <name> [--repo-root PATH]
 
 Environment:
-    MNGR_AGENT_ID  Dropped for the preview boot so it cannot clobber the live
-                   layout.
+    MNGR_AGENT_ID  Dropped for the preview boot so it never acts as the calling
+                   agent.
 
 Exit codes:
     0  Success (preview is up / torn down).
@@ -129,10 +129,10 @@ def preview(slug: str, work_dir: str, repo_root: Path, *, runner: Runner) -> int
     ``up`` motion: validate the worker's app dir, require that the worker built
     its frontend bundle, then hand the shared script the system-interface
     specifics -- boot ``uv run system-interface`` from the worker's
-    already-built app dir on a free port; neuter layout persistence by dropping
-    MNGR_AGENT_ID (so the preview can't clobber the live ``layout.json``) while
-    keeping discovery, so the real conversations still render; probe
-    ``/api/health``; register the inner app and the labeled wrapper frame.
+    already-built app dir on a free port; drop MNGR_AGENT_ID (so the preview
+    never acts as the calling agent) while reading the live app registry, so
+    the real chats still render; probe ``/api/health``; register the inner app
+    and the labeled wrapper frame.
     ``work_dir`` must still exist -- run this before the worker is destroyed.
     """
     # Sanity-check the work_dir before disturbing anything: a wrong --work-dir

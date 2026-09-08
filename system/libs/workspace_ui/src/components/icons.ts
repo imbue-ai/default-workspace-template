@@ -1,4 +1,4 @@
-// Single source of truth for every icon in the app.
+// Single source of truth for every icon in the workspace frontends.
 //
 // Icons are authored once here and consumed everywhere as SVG *strings*, which
 // works for both rendering paths in this codebase: Mithril views wrap them with

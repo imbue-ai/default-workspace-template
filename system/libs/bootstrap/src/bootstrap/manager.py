@@ -56,10 +56,9 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # is visible here at the next boot.
 UPDATE_APPLY_MARKER = STATE_DIR / "update-apply" / "marker.json"
 UPDATE_APPLY_SCRIPT = Path(".agents/skills/update-self/scripts/update_self.py")
-# The one-shot carry-over of a pre-workspace-app-model workspace's projects and layouts into
-# the shell's state files (docs/system/blueprint/workspace-app-model/phase_09_migration.md).
-# Standard-library only, guarded by its own marker, and never destructive, so it runs at
-# every boot and costs nothing once done.
+# The one-shot carry-over of a workspace's projects and layouts from the old per-agent files
+# into the shell's state files. Standard-library only, guarded by its own marker, and never
+# destructive, so it runs at every boot and costs nothing once done.
 WORKSPACE_LAYOUT_MIGRATION_SCRIPT = Path("system/scripts/migrate_workspace_layouts.py")
 # The migration reads and writes a handful of small JSON files; anything past this is a hang.
 _WORKSPACE_LAYOUT_MIGRATION_TIMEOUT_SECONDS = 60.0
@@ -782,8 +781,8 @@ def _recover_interrupted_update() -> str:
 
 
 def _migrate_workspace_layouts_best_effort() -> None:
-    """Carry a pre-workspace-app-model workspace's projects and layouts into the shell's state
-    files, before the shell starts and reads them.
+    """Carry a workspace's projects and layouts from the old per-agent files into the shell's
+    state files, before the shell starts and reads them.
 
     Best-effort: a failure is logged loudly but never blocks boot. The shell then lands on
     its New Tab page with every chat still listed in Everything, the old files are untouched,
@@ -846,9 +845,9 @@ def main() -> None:
     # re-engage afterwards is woken further down, once the venv is converged.
     update_dri_agent = _recover_interrupted_update()
 
-    # Carry a pre-workspace-app-model workspace's projects and layouts into the shell's
-    # state files, AFTER the rollback (the restored tree's script is the one to run) and
-    # before supervisord starts the shell that reads them.
+    # Carry the old per-agent projects and layouts into the shell's state files, AFTER the
+    # rollback (the restored tree's script is the one to run) and before supervisord starts
+    # the shell that reads them.
     _migrate_workspace_layouts_best_effort()
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the

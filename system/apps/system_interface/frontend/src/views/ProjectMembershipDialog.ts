@@ -39,7 +39,7 @@ export function ProjectMembershipDialog(): m.Component<ProjectMembershipDialogAt
   const selected = new Set<string>();
 
   function projectRow(attrs: ProjectMembershipDialogAttrs, project: ProjectInfo): m.Vnode {
-    // A project already showing the object is settled: its box stays checked
+    // A project already showing the instance is settled: its box stays checked
     // and fixed, saying "already here" rather than offering a removal this
     // dialog does not do.
     const isFixed = attrs.showingProjectIds.includes(project.id);

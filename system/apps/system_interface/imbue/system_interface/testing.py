@@ -220,7 +220,7 @@ class ServedApp:
 def serve_app(app: Flask) -> Iterator[ServedApp]:
     """Serve ``app`` on an ephemeral loopback port via a real threaded Werkzeug server.
 
-    Used by the WebSocket/SSE tests, which the Flask test client cannot drive
+    Used by the WebSocket tests, which the Flask test client cannot drive
     (flask-sock needs a real listener). The server runs in a daemon thread and
     is shut down on exit.
     """

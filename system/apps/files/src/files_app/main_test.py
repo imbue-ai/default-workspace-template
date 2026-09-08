@@ -38,7 +38,9 @@ def test_the_source_is_wired_as_the_files_row_of_the_contract(tmp_path: Path) ->
     assert source.is_location_tracked is True
 
 
-def test_the_dufs_command_line_is_the_one_supervisord_used_to_run() -> None:
+def test_the_dufs_command_line_allows_everything_binds_loopback_and_serves_data_with_the_vendored_assets() -> (
+    None
+):
     assert build_dufs_argv(dufs_executable="dufs", port=8300) == snapshot(
         [
             "dufs",

@@ -1,9 +1,10 @@
 /**
  * The shared modal shell: a dimmed overlay, a centered card, and the
  * header / body / actions regions the workspace's dialogs share. It renders the
- * `.modal-*` class tree (see the "Modal primitive" block in style.css) and wires
- * the one backdrop-dismissal helper (views/modalBackdrop.ts) so every modal
- * dismisses on a primary mousedown that STARTS on the overlay.
+ * `.modal-*` class tree (its enter animations are the "Modal enter animations"
+ * block in base.css) and wires the one backdrop-dismissal helper
+ * (modalBackdrop.ts) so every modal dismisses on a primary mousedown that STARTS
+ * on the overlay.
  *
  * Escape handling is opt-in through `onEscape` (the shell owns the listener;
  * a dialog that wants no Escape simply omits it). Autofocus stays with each

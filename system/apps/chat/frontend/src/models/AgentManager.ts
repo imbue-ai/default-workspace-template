@@ -313,8 +313,9 @@ export function getTerminalUrl(): string {
   return deriveAppOrigin(getTerminalOriginLabel() || "terminal");
 }
 
-/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The ttyd
- *  dispatch reads ``$1`` ("_") then ``$2`` ("agent") then ``$3`` (the agent name).
+/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The terminal
+ *  app's dispatch takes the URL's ``arg`` values in order: a placeholder ("_", which lands in
+ *  ``$0``), the dispatch key ("agent"), then the agent name.
  *
  *  Only the back face of that agent's chat attaches one: two live ttyd clients on one tmux
  *  window keep resizing it out from under each other. */

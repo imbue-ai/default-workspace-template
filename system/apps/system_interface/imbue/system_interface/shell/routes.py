@@ -1188,7 +1188,7 @@ def _is_machine_wide(op: str, args_raw: dict[str, Any]) -> bool:
 def _op_transient(
     shell: ShellState, op: str, args_raw: dict[str, Any], requester: Address | None
 ) -> ResponseReturnValue:
-    """The four verbs with nothing to store: sent to the target client's windows as a ``layout_op`` message."""
+    """The verbs with nothing to store: sent to the target client's windows as a ``layout_op`` message."""
     if is_addressed_op(op):
         refusal = _refuse_unregistered_address(shell, args_raw)
         if refusal is not None:

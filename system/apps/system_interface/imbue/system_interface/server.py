@@ -145,9 +145,9 @@ _NOT_BUILT_REPAIR_COMMAND: Final[str] = "env -u TMUX " + _NOT_BUILT_REPAIR_MNGR_
 # to say so, on a page with no application to render the failure. It would also
 # inherit the server's memory band, which puts it ahead of the user's chats and
 # agents in a shed. A shell is the general case of every repair rather than one
-# of them, and ttyd is already running and already *more* protected than this
-# server, so the page is pointing at something that outlives it rather than
-# starting anything.
+# of them, and the terminal app is already running and already *more* protected
+# than this server, so the page is pointing at something that outlives it
+# rather than starting anything.
 #
 # Nothing here is part of the compiled bundle -- this is a string in the
 # backend -- so the script below ships whether or not the frontend has ever

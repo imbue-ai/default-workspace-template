@@ -13,7 +13,7 @@ from imbue.imbue_common.pure import pure
 from pydantic import Field
 
 # The file viewer's fixed wiring, all relative to the repo root every supervised program runs
-# from. ``test_app_manifests.py`` checks the program registers with this manifest by importing it.
+# from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/files/app.toml")
 APP_NAME: Final[AppName] = AppName("files")
 APP_URL: Final[AppUrl] = AppUrl("http://localhost:8300")
@@ -46,7 +46,7 @@ class FilesAppArguments(FrozenModel):
 
 @pure
 def build_dufs_argv(dufs_executable: str, port: int) -> list[str]:
-    """Today's dufs command line, exactly as the supervisord program used to spell it."""
+    """The dufs command line: every operation allowed, bound to loopback on ``port``, the vendored frontend as assets, serving ``data/``."""
     return [
         dufs_executable,
         "--allow-all",

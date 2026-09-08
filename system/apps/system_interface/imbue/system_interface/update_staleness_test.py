@@ -55,13 +55,13 @@ _IRRELEVANT_PATHS = (
 @pytest.mark.parametrize(
     ("path", "is_relevant"),
     [
-        # The mngr settings file: read by the chat app's mngr, which is another process.
+        # The mngr settings file: never read by this process.
         (".mngr/settings.toml", False),
         # Every manifest the served environment was resolved from.
         ("pyproject.toml", True),
         ("uv.lock", True),
         ("system/apps/system_interface/pyproject.toml", True),
-        # ... but not the manifests of the chat app's own dependencies, which another process runs.
+        # ... but not the manifests of another app's dependencies, which another process runs.
         ("system/services/oom_priority/pyproject.toml", False),
         ("system/libs/tk_command_parsing/pyproject.toml", False),
         # The backend this process is running.
@@ -69,14 +69,13 @@ _IRRELEVANT_PATHS = (
         # ... but not its tests, which no running process holds.
         ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
         ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
-        # Workspace libraries the chat app imports and this process does not.
+        # Workspace libraries another app imports and this process does not.
         ("system/services/oom_priority/src/oom_priority/bands.py", False),
         ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
         # The vendored mngr tree, which counts as a whole (this process imports
-        # only its shared libraries, but stays generic over mngr's data). Broader
-        # than `.py` on purpose.
+        # its shared libraries). Broader than `.py` on purpose.
         ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
         ("system/vendor/mngr/libs/mngr/imbue/mngr/help/topics.toml", True),
         # ... except its documentation and its tests, which nothing holds in

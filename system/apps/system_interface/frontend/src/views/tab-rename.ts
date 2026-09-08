@@ -1,5 +1,5 @@
 /**
- * What a typed title becomes before it is filed as an object's name.
+ * What a typed title becomes before it is filed as an instance's title.
  *
  * Every rename path -- the tab's own double-click editor and the rail row's
  * editor alike -- hands the app's rename route (through the shell's relay) a

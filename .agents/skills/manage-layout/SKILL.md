@@ -36,11 +36,9 @@ A bare word is shorthand for `app:<word>` (`open files`). The literal `self`
 resolves to your own chat panel; most useful as `--relative-to=self` on
 `split` / `move`. Your own chat's address is `app:chat?instance=$MNGR_AGENT_ID`.
 
-The old `chat:` / `terminal:` / `service:` / `url:` / `subagent:` spellings are
-refused by name, with the address to use instead. `layout.py list` prints
-every address on the machine, with each instance's title and status, so you
-never have to guess: find the row whose title the user said, and use its
-address.
+`layout.py list` prints every address on the machine, with each instance's
+title and status, so you never have to guess: find the row whose title the
+user said, and use its address.
 
 A bare `https://` URL is also an `open` target: `open https://example.com`
 starts a new browser on that page (the browser app's `new` action with the URL

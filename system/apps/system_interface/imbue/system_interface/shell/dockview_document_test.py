@@ -286,7 +286,7 @@ def test_an_open_into_a_launcher_only_view_fills_the_pane_rather_than_splitting_
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )
-    # An agent's ``open`` with no chat docked: no anchor, to the right of the active group.
+    # An agent's ``open`` with no requester docked: no anchor, to the right of the active group.
     opened = add_panel(launcher_only, _TERMINAL_1, _TAB_A, "Terminal 1", _placement(None, Direction.RIGHT))
     assert opened.dockview is not None
     assert [leaf["data"]["views"] for leaf in _leaves(opened.dockview)] == [[str(_TAB_A)]]

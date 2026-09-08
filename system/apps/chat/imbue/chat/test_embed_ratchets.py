@@ -41,8 +41,8 @@ _RETIRED_ADDRESS_RULE = RatchetRuleInfo(
     rule_name="retired panel refs (chat:, terminal:, service:, url:, subagent:) in the chat frontend",
     rule_description=(
         "Everything is addressed as app:<name> or app:<name>?instance=<key> (contracts.md section 1); "
-        "the per-kind refs of the old workspace are gone. Do not spell one here -- build the address "
-        "with the library's addressFor instead."
+        "there are no per-kind address spellings. Do not spell one here -- build the address with the "
+        "library's addressFor instead."
     ),
 )
 

@@ -23,7 +23,7 @@ _SESSIONS_DIR = Path("/home/user/workspace/data/.state/terminal/sessions")
 _OOM_TAG_SCRIPT = Path("/home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py")
 
 
-def test_dispatch_snippet_is_todays_apart_from_the_commands_directory() -> None:
+def test_dispatch_snippet_runs_the_keyed_script_under_the_commands_directory() -> None:
     assert render_dispatch_snippet(_COMMANDS_DIR) == snapshot("""\
 
 KEY="${1:-}"
@@ -41,7 +41,7 @@ exit 1
 """)
 
 
-def test_agent_script_is_todays_verbatim() -> None:
+def test_agent_script_attaches_to_the_prefixed_agent_session() -> None:
     assert render_agent_script() == snapshot("""\
 #!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
@@ -61,7 +61,7 @@ exec tmux attach -t "$TARGET_SESSION":0
 """)
 
 
-def test_workdir_script_is_todays_verbatim() -> None:
+def test_workdir_script_opens_a_shell_in_the_directory() -> None:
     assert render_workdir_script() == snapshot("""\
 #!/bin/bash
 cd "$1" 2>/dev/null && exec bash
@@ -82,12 +82,13 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 # The terminal app records the tmux session id and creation time of every
 # terminal it created under the sessions directory, named by key; attaching by
 # that id keeps the tab on its session even after someone renamed the session
-# inside tmux. When there is no id (a record from before the app kept them) or
-# the session is gone (a container restart cleared the tmux server, whose
-# successor hands the same ids out again), `tmux new-session -A`
-# attaches when a session of that name exists and creates it otherwise, so the
-# tab comes back as a fresh shell. A created session runs the login shell
-# through the memory-shedding tag, as the app's own creates do.
+# inside tmux. When the id file is missing or lacks the id or the creation
+# time, or the session under that id is gone or was created at another time (a
+# container restart cleared the tmux server, whose successor hands the same ids
+# out again), `tmux new-session -A` attaches when a session of that name exists
+# and creates it otherwise, so the tab comes back as a fresh shell. A created
+# session runs the login shell through the memory-shedding tag, as the app's
+# own creates do.
 set -euo pipefail
 SESSION_NAME="${1:-}"
 TAB_ID="${2:-}"
@@ -216,7 +217,7 @@ def test_install_ttyd_web_client_falls_back_when_the_asset_is_missing_or_broken(
         assert not destination.exists(), name
 
 
-def test_ttyd_argv_is_todays_command_line() -> None:
+def test_ttyd_argv_carries_the_port_the_client_and_the_dispatch() -> None:
     argv = build_ttyd_argv("ttyd", 7681, _COMMANDS_DIR / "index.html", _COMMANDS_DIR)
 
     assert argv[:9] == [

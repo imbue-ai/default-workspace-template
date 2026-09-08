@@ -1,8 +1,8 @@
 /**
  * Exponential reconnect backoff with a cap and jitter.
  *
- * Used by the WebSocket (AgentManager) and SSE (StreamingMessage) reconnect
- * paths so a down backend is retried with growing delays instead of a fixed
+ * Used by the WebSocket and SSE reconnect paths so a down backend is retried
+ * with growing delays instead of a fixed
  * hammering interval. Jitter spreads reconnects across clients so a backend
  * restart does not trigger a synchronized thundering herd.
  */

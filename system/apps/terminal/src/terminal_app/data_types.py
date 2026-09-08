@@ -67,10 +67,9 @@ class TerminalSessionRecord(FrozenModel):
     workdir: Workdir | None = Field(
         description="The directory a newly created session starts in; None for the default"
     )
-    # Both fields default so a store written before they existed still reads.
     session_id: TmuxSessionId | None = Field(
         default=None,
-        description="tmux's immutable id of the session backing this terminal; None when the app never created or adopted one",
+        description="tmux's immutable id of the session backing this terminal; None while no session does (stopped, or never created or adopted)",
     )
     session_created: int | None = Field(
         default=None,
@@ -92,11 +91,7 @@ class TerminalStoreDocument(FrozenModel):
 
 
 class TerminalPaths(FrozenModel):
-    """Where the terminal app keeps its machine state (the dispatch scripts and the pty-to-tab records), all under one directory.
-
-    The store of remembered terminals is app data rather than machine state and lives under
-    ``data/.apps/terminal/`` instead (contracts.md section 17).
-    """
+    """Where the terminal app keeps its machine state (dispatch scripts, pty-to-tab records, session id files), all under one directory."""
 
     state_dir: Path = Field(
         description="The app's state directory (data/.state/terminal under the repo root), absolute so the dispatch scripts can embed it"

@@ -25,7 +25,7 @@ READ_OPS: Final[frozenset[str]] = frozenset({"inspect", "context"})
 LOAD_OP: Final[str] = "load"
 # Ops the shell applies to the target client's layout file (the file is the truth of the arrangement).
 DOCUMENT_OPS: Final[frozenset[str]] = frozenset({"open", "focus", "split", "close", "move"})
-# Ops that change what is on screen without changing the saved document: they alone still reach the
+# Ops that change what is on screen without changing the saved document: they alone reach the
 # browser as a ``layout_op`` message.
 TRANSIENT_OPS: Final[frozenset[str]] = frozenset({"maximize", "restore", "refresh", "reload_system_interface"})
 KNOWN_OPS: Final[frozenset[str]] = READ_OPS | {LOAD_OP} | DOCUMENT_OPS | TRANSIENT_OPS

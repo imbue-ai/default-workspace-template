@@ -83,8 +83,8 @@ a band name that does not exist). A program with no row -- the services that
 never register, such as `share-gateway` or `cron` -- resolves by *program
 name*: a built-in's own `SERVICE_BANDS` key, or `_NON_SERVICE_PROGRAM_BANDS`
 for the infrastructure and the one-shots, and `USER_SERVICE` for anything
-unrecognized. The `oom_tag_service.py <key>` prefix keeps passing band keys
-by name and is unchanged. It only ever raises,
+unrecognized. The `oom_tag_service.py <key>` prefix passes band keys by name.
+It only ever raises,
 never lowers, so a process already tagged higher (a Chromium process the
 browser sweep has remapped into its band) and the `PROTECTED` programs
 (earlyoom, the listener itself, and the one-shots env-converge and

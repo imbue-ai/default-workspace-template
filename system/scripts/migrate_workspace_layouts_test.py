@@ -1,4 +1,4 @@
-"""The layout migration over a pre-arc fixture: every mapping row, the pruning, the shortcut
+"""The layout migration over an old-format fixture: every mapping row, the pruning, the shortcut
 derivation, the app stores, the marker, idempotency, --force, and the reader round trips (the
 shell's stores, the dockview editor, the instances library's store, the terminal's store)."""
 

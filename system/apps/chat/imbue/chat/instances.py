@@ -2,9 +2,11 @@
 
 Every non-primary agent is an ``explicit``, renameable instance keyed by its agent id, with
 its status derived from the activity state, the pending permission requests, and the
-lifecycle. A chat still being created (a proto agent) is a ``referenced`` provisional
-instance under the id mngr will give it, and a subagent view is a ``referenced`` instance
-keyed ``<agent-id>.<session-id>`` that the parent's page creates on demand.
+lifecycle. A chat that is not an agent yet (a proto agent) is a ``referenced`` provisional
+instance under the id mngr will give it, whose status is its phase: waiting for an account
+(``attention``), being created (``working``), or failed (``error``). A subagent view is a
+``referenced`` instance keyed ``<agent-id>.<session-id>`` that the parent's page creates on
+demand.
 """
 
 import re
@@ -208,9 +210,9 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
     agent_starter: Callable[[str], None] = Field(
         frozen=True, description="Ensures the named agent is running; raises MngrError when it cannot"
     )
-    # The subagent views the parent pages asked for, by key. In memory, as the phase file
-    # says: a restart forgets them, and the parent's page recreates one on demand. A record
-    # whose parent chat is gone is dropped the next time the list is read.
+    # The subagent views the parent pages asked for, by key. In memory: a restart forgets
+    # them, and the parent's page recreates one on demand. A record whose parent chat is
+    # gone is dropped the next time the list is read.
     _description_by_subagent_key: dict[InstanceKey, str] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 

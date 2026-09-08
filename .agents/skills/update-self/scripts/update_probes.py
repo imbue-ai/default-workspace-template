@@ -1,5 +1,6 @@
-"""Liveness and frontend probes: the pre-flight boot of the merged backend, the health
-poll, the served-bundle check, and the view refresh that follows a change.
+"""Liveness and frontend probes: the pre-flight boots of the merged shell and chat app,
+the shell's health poll, the instances-API poll of every critical app that serves one,
+the served-bundle check, and the view refresh that follows a change.
 """
 
 from __future__ import annotations
@@ -55,8 +56,7 @@ HEALTH_PATH = "/api/health"
 # agent manager, so the instances API is not there to ask, and health is the boot
 # having imported mngr and the harness plugins and bound its socket.
 CHAT_HEALTH_PATH = "/api/health"
-# The chat program's entry point: present in a tree whose chat runs as its own
-# process, absent from one where the shell still served the chat itself.
+# The chat program's entry point; a tree without it has no chat program to pre-flight.
 CHAT_PROGRAM_ENTRY = f"{CHAT_DIR}/imbue/chat/main.py"
 
 # The instances API (the workspace app model, contracts section 4), polled after the
@@ -112,11 +112,7 @@ def wait_healthy(
 
 
 def has_chat_program(repo_root: Path) -> bool:
-    """Whether the tree runs the chat as its own program, so it can be pre-flighted.
-
-    A tree from before the chat's split has no such program: the shell served the
-    chat itself.
-    """
+    """Whether the tree runs the chat as its own program, so it can be pre-flighted."""
     return (repo_root / CHAT_PROGRAM_ENTRY).is_file()
 
 
@@ -140,8 +136,8 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
     Read off the tree being applied (the merged tree, or the restored one on
     rollback) rather than the registry: right after the restart the registry
     still holds whatever rows the programs wrote before it, so the manifests are
-    what say which apps the tree runs. A tree from before the app model has no
-    manifests and probes nothing but the shell. A manifest that will not parse or
+    what say which apps the tree runs. A tree with no manifests probes nothing
+    but the shell. A manifest that will not parse or
     names no app is skipped with a note: this runs on the rollback path too, where
     an exception would escape the apply's last line of defense.
     """
@@ -226,10 +222,10 @@ def instances_probe_url(repo_root: Path, app: CriticalInstanceApp) -> str | None
 def is_instances_answer(page: FetchedPage | None) -> bool:
     """Whether a response is the instances API answering: 200 with a JSON body.
 
-    The body's type is what tells the app from a stale registry row: the chat's
-    row keeps naming the shell's own port until the restarted chat re-registers
-    at the end of its boot, and the shell's SPA catch-all answers 200 there --
-    as HTML.
+    The body's type is what tells the app from a stale registry row: until the
+    restarted app re-registers at the end of its boot, its row can still name
+    another server, and the shell's SPA catch-all, for one, answers 200 on any
+    path -- as HTML.
     """
     return (
         page is not None and page.status == 200 and "json" in page.content_type.lower()
@@ -360,10 +356,10 @@ def _preflight_boot(
     """Spawn a throwaway boot, wait for its health route, and always terminate it."""
     env = dict(os.environ)
     env.update(env_overrides)
-    # The caller is an agent, so its environment carries MNGR_AGENT_ID -- under
-    # which a throwaway boot would persist state as if it were that agent (the
-    # shell its layout.json). The preview flow (reveal_system_interface.py) drops
-    # it for the same reason; every pre-flight boot gets the same guard.
+    # The caller is an agent, so its environment carries MNGR_AGENT_ID, which
+    # the chat app reads as its own primary agent's id; a throwaway boot must
+    # never act as the calling agent. The preview flow (reveal_system_interface.py)
+    # drops it for the same reason.
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:
         output_path = Path(scratch) / "preflight-boot.log"

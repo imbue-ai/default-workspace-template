@@ -118,8 +118,8 @@ def test_deleting_an_unknown_account_raises(tmp_path: Path) -> None:
 
 def test_resolve_answers_an_explicit_id_only(tmp_path: Path) -> None:
     """ "Which account should a new agent use" is `binding.resolve_binding`'s question, not
-    this one -- it needs to know which lanes the build has. Two functions answering it
-    differently is how the launcher and a new project's starter chat diverged."""
+    this one -- it needs to know which lanes the build has, and two functions answering it
+    differently would land two launches on different providers."""
     first = _add(tmp_path, "anthropic", "Anthropic")
     second = _add(tmp_path, "google", "Google")
 

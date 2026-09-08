@@ -28,8 +28,8 @@ manifest field is authoritative on every call, so a re-registration with a
 changed manifest updates the row. Only what is copied from files is checked
 here (the name rule, the icon markup, the value types); the manifest's other
 rules are the ``app_manifest`` library's job, applied by ``validate-manifest``
-and by every reader of the registry. ``--name --url`` without a manifest keeps
-registering rows for things with no app directory (owner-exec, the VM exec
+and by every reader of the registry. ``--name --url`` without a manifest
+registers rows for things with no app directory (owner-exec, the VM exec
 service, previews, isolated test servers).
 
 Icons
@@ -578,8 +578,8 @@ def _upsert(
 
     # No existing entry -- append with a freshly-minted label. The ``icon``,
     # ``internal``, ``program``, and manifest keys are omitted entirely when
-    # there is nothing to say, so the common row keeps the shape it has always
-    # had (a missing key reads as "no icon" / "not internal" / "not supervised").
+    # there is nothing to say (a missing key reads as "no icon" / "not
+    # internal" / "not supervised").
     entry: dict[str, object] = {
         "name": name,
         "url": url,

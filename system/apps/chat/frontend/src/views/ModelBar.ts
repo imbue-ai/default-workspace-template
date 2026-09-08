@@ -411,11 +411,9 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     );
   }
 
-  /** A row of the flyout that is still fetching its contents. */
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
-   *  start brings back. Lives on the chat's own page because the agent is the chat app's
-   *  instance; the shell offers only the app-level Stop of a whole app. No confirmation -- it is
-   *  one message away from undone. The agent list catches up through the observe stream. */
+   *  start brings back. No confirmation -- it is one message away from undone. The agent list
+   *  catches up through the observe stream. */
   function stopAgentRow(targetAgentId: string): m.Vnode {
     return m(
       "button",
@@ -441,6 +439,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     );
   }
 
+  /** A row of the flyout that is still fetching its contents. */
   function loadingRow(): m.Vnode {
     return m("div", { class: `${css.FLYOUT_EMPTY} flex items-center gap-2` }, [
       m("span", { class: "pv-spinner" }),

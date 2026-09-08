@@ -2,8 +2,7 @@
 
 The prioritizer's recency state is in memory, so without a durable stamp a restart of this
 process would hand every chat a fresh grace period before it can be shed. The stamps are
-chat-owned state (contracts.md section 17), so they live under ``data/.apps/chat/`` rather
-than in the shell's client-activity log.
+chat-owned state (contracts.md section 17), so they live under ``data/.apps/chat/``.
 """
 
 import json

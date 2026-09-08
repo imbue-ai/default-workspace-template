@@ -4,8 +4,8 @@
  * The flyout's BASE sits level with the row that opened it and the list grows UPWARD. That is
  * not the ordinary top-align-and-cap-downward rule, and the reason is that this card
  * opens from the composer at the BOTTOM of the panel: a list capped by the space below its row
- * had roughly three rows to work with, which is what pi's thousand-model catalog was being
- * squeezed into. Growing up gives it the whole window instead.
+ * would have roughly three rows to work with, far too few for a thousand-model catalog.
+ * Growing up gives it the whole window instead.
  *
  * The search field belongs at the bottom of that column for the same reason -- it stays put,
  * next to the row you came from, while the list extends away from your hand.

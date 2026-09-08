@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Carry a pre-arc workspace's projects, arrangements, titles, recency, and file-viewer
-locations into the workspace app model's state files, once.
+"""Carry a workspace's projects, arrangements, titles, recency, and file-viewer locations
+from the old per-agent layout files into the shell's state files, once.
 
-Before the workspace app model (docs/system/blueprint/workspace-app-model/), the system
-interface kept its projects and layouts under the state directory of the agent it ran as
-(``$MNGR_HOST_DIR/agents/<agent-id>/workspace_layout/``; that agent is the services agent,
-which the bootstrap runs as too) and named things by per-kind refs (``chat:<agent-id>``,
-``terminal:<name>``, ``service:files?instance=files-2``, ...).
-The shell now reads ``data/.state/system_interface/`` and names everything by address
+The old layout store lives under the state directory of the agent the system interface ran
+as (``$MNGR_HOST_DIR/agents/<agent-id>/workspace_layout/``; that agent is the services
+agent, which the bootstrap runs as too) and names things by per-kind refs
+(``chat:<agent-id>``, ``terminal:<name>``, ``service:files?instance=files-2``, ...).
+The shell reads ``data/.state/system_interface/`` and names everything by address
 (``app:<name>``, ``app:<name>?instance=<key>``). This script maps the one onto the other:
 
 - ``projects_meta.json`` becomes ``projects.json`` (tab sets and rail shortcuts);
@@ -68,9 +67,8 @@ LAYOUTS_DIRNAME = "layouts"
 STORE_FILENAME = "instances.json"
 STORE_VERSION = 1
 
-# The old store's directory under an agent's state directory, and its files, as the retired
-# ``projects``, ``member_titles``, ``member_last_used``, and ``member_locations`` modules wrote
-# them.
+# The old store's directory under an agent's state directory, and its files, as the old shell
+# wrote them.
 AGENTS_DIRNAME = "agents"
 LEGACY_LAYOUT_DIRNAME = "workspace_layout"
 LEGACY_META_FILENAME = "projects_meta.json"
@@ -89,7 +87,7 @@ DEFAULT_PROJECT_COLOR = "#F0603A"
 DEFAULT_PROJECT_GLYPH = 0
 GLYPH_COUNT = 10
 
-# The rail rows every project had before shortcuts were data (contracts.md section 2's
+# The old store's built-in rail rows, which every project had (contracts.md section 2's
 # ``default_shortcut`` column), in rail order, keyed as the old overrides map keyed them.
 BUILT_IN_SHORTCUTS = (
     ("chat", "new", "new"),
@@ -128,7 +126,7 @@ UNMIGRATED_DOCKVIEW_KEYS = frozenset({"floatingGroups", "popoutGroups"})
 ADDRESS_SCHEME = "app:"
 
 # The built-in apps whose every tab is an instance: a bare ``service:<name>`` of one of these
-# named the old sessionless viewer (or a pin), never something a tab can show now.
+# named the old sessionless viewer (or a pin), never something a tab can show.
 INSTANCE_ONLY_APPS = frozenset({"chat", "terminal", "files", "browser"})
 # The one app whose old panels named their instance by a ``?session=`` parameter of the URL.
 BROWSER_APP = "browser"
@@ -273,11 +271,11 @@ def _address(app: str, key: str | None) -> str | None:
 
 
 def address_for_ref(ref: str) -> str | None:
-    """The address a member ref names, or None for a ref nothing can show any more.
+    """The address a member ref names, or None for a ref that maps to nothing.
 
-    The table of the phase 9 spec: chats by agent id, terminals by session name, browsers by
-    session, app instances by key, a bare ``service:<name>`` as the single-instance app's one
-    address; ``url:`` and ``subagent:`` refs (and anything unparseable) map to nothing.
+    Chats by agent id, terminals by session name, browsers by session, app instances by key, a
+    bare ``service:<name>`` as the single-instance app's one address; ``url:`` and
+    ``subagent:`` refs (and anything unparseable) map to nothing.
     """
     scheme, separator, body = ref.partition(":")
     if not separator or not body:

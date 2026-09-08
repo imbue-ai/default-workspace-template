@@ -1,4 +1,4 @@
-"""Test doubles and scratch servers for the instances library and for the shell's tests in later phases.
+"""Test doubles and scratch servers for the instances library and for the shell's tests.
 
 ``python -m app_instances.testing stub --port <port>`` serves the stub app for manual checks;
 ``python -m app_instances.testing sidecar --manifest <path> --app-url <url> --instances-url <url> --store <file> -- <child argv>``
@@ -260,7 +260,7 @@ class RecordedShellRequests(MutableModel):
 
 @contextmanager
 def serve_recording_shell() -> Iterator[RecordedShellRequests]:
-    """A loopback server that records every request and answers 404, as the shell does before phase 7."""
+    """A loopback server that records every request and answers 404."""
     port = free_port()
     recorded = RecordedShellRequests(base_url=f"http://{LOOPBACK_HOST}:{port}")
     app = Flask(__name__)

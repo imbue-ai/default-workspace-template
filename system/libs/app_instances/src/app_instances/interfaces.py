@@ -39,7 +39,7 @@ class InstanceSourceInterface(MutableModel, ABC):
         """Record where the instance's page now is, or navigate it there; raises LocationNotTrackedError, InvalidInstanceValueError (a form of location this app does not take), UnknownInstanceError, or InstanceConflictError (the app cannot navigate there right now)."""
 
     # The stop and start verbs default to refused, so a source whose instances have nothing
-    # to stop (the JSON store, an app built before the verbs existed) need not mention them;
+    # to stop (the JSON store) need not mention them;
     # a source that lists a ``stoppable`` instance overrides both.
     def stop_instance(self, key: InstanceKey) -> InstanceRecord:
         """Stop what backs the instance while keeping the instance, answering it as ``stopped``; a no-op for one already stopped. Raises NotStoppableError, UnknownInstanceError, or InstanceConflictError (it cannot be stopped right now)."""

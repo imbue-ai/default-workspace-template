@@ -1,18 +1,8 @@
-"""What is left of the claude login modal's backend: reading and parsing claude's auth state.
+"""Reading and parsing claude's auth state, and the vocabulary of a claude credential.
 
-Sign-in moved to the provider chooser, which is harness-agnostic and writes into a
-per-account folder (`accounts.py`, `harnesses/auth_flows.py`). The pieces that made this
-module the *writer* of the workspace's one shared credential went with it:
-
-* `write_managed_auth_env` -- the shared `settings.json` env block. An account's own
-  settings.json is written by `auth_flows.write_claude_env` now.
-* `restart_all_claude_agents` and its snapshot/resume machinery -- a shared credential had
-  to be pushed into every running agent, since claude reads settings-env at process start.
-  An account is chosen at create time instead, so nothing needs restarting.
-* the setup-token PTY flow -- `harnesses/pty_auth.py` drives every harness's terminal
-  sign-in now, and `lanes.py` says which patterns each one needs.
-
-What remains is the read side, still used by two callers:
+Sign-in itself is the provider chooser's: harness-agnostic, driven by `harnesses/pty_auth.py`
+and `lanes.py`, writing into a per-account folder (`accounts.py`, `harnesses/auth_flows.py`).
+This module is the read side:
 
 * `get_auth_status` backs `GET /api/claude-auth/status`, which mngr's own deployment test
   drives, and answers "what is this claude authenticated as" for a given environment.
@@ -72,42 +62,23 @@ _DISPLAY_SUFFIX_LENGTH: Final = 4
 # characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
 # suffix length mngr's `approve_api_key_for_claude` records).
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
-# Fires on the first sight of the OAuth URL in the PTY stream. This is only a
-# *trigger*: the CLI's Ink renderer hard-wraps the visible URL at the terminal
-# width (pexpect's default PTY is 80 columns) and pexpect can match mid
-# render-frame, so the buffer may hold just a prefix. The actual URL is
-# recovered by `_extract_oauth_url` after draining the stream.
-# Strict charset for re-assembling a width-wrapped URL from visible text:
-# unlike `\S`, it excludes stray control bytes left between render fragments.
+# The CLI's Ink renderer hard-wraps the visible OAuth URL at the terminal width (pexpect's
+# default PTY is 80 columns), so `_extract_oauth_url` re-assembles it from the drained
+# stream. Strict charset for that re-assembly: unlike `\S`, it excludes stray control bytes
+# left between render fragments.
 _OAUTH_URL_CHARSET = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _OAUTH_URL_STRICT_REGEX = re.compile(rf"https://{_OAUTH_URL_CHARSET}*oauth/authorize{_OAUTH_URL_CHARSET}*")
 _OAUTH_URL_CONTINUATION_REGEX = re.compile(rf"^{_OAUTH_URL_CHARSET}+$")
-# The long-lived token `claude setup-token` prints on completion. Like the
-# URL regex, only a trigger -- extraction re-assembles the possibly
-# width-wrapped token from the drained stream.
-# Printed by the CLI when Anthropic rejects a pasted code (wrong, expired, or
-# from an earlier attempt's state) or its own polling hits an error; the CLI
-# then parks on a "Press Enter to retry." prompt, so without failing fast the
-# session would just time out with a misleading message.
-# Printed plainly (outside the Ink renderer) by `claude auth login` right
-# before it exits 0 / 1 respectively, so no screen replay is needed to
-# detect completion of the credentials-based browser sign-ins.
 # The CLI's Ink input treats a rapid burst of characters as a paste; Enter
 # must arrive as its own later keystroke or it lands in the field as
 # content. The burst is over once the input echo goes quiet for
 # _CODE_ECHO_QUIET_SECONDS (deadline-capped so a silent PTY cannot stall
 # the submit).
 _CODE_ECHO_QUIET_SECONDS: Final = 0.3
-# Real setup tokens are ~110 characters. A much shorter extraction is a
-# wrapped fragment, not the token -- keep waiting rather than storing it.
-# A fused `mngr start --restart` call stops, starts, readiness-waits, and
-# (for previously-RUNNING agents) messages a whole batch of agents. It runs
-# on the background restart thread, so the generous ceiling costs nothing
-# in the request path.
+# How long `claude auth status --json` may take to answer.
 _CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
 
 
-# Sent (via `mngr message`) to agents that were RUNNING when the auth-change
 class ClaudeAuthError(PtyAuthError):
     """Raised when an auth flow operation cannot complete."""
 
@@ -425,13 +396,11 @@ def _extract_oauth_url(raw_output: str) -> str | None:
 
 
 class ClaudeAuthService(MutableModel):
-    """Stateful entry point for the in-mind Claude auth flows.
+    """The read side of claude's auth: what `claude auth status` reports for an environment.
 
-    Holds the injected `command_runner` / `pexpect_spawner` dependencies
-    and the in-flight setup-token subprocess. One instance is created per
-    application and stored on `app.state`; the subprocess held between
-    `start_setup_token` and its poll/submit calls rides that instance.
-    Tests construct isolated instances with deterministic fakes.
+    Holds the injected `command_runner`. One instance is created per application and
+    stored on the app's `ChatState`; tests construct isolated instances with a
+    deterministic fake runner.
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}

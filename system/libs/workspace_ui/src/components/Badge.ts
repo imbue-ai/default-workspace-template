@@ -21,7 +21,7 @@ export interface BadgeOptions {
 }
 
 // Border colour comes from the tone, never the base -- same
-// one-utility-per-property rule as the button builder in views/Button.ts.
+// one-utility-per-property rule as the button builder in Button.ts.
 const BADGE_BASE =
   "badge inline-flex items-center gap-1 px-2 py-0.5 " +
   `${TEXT_HELPER_SIZE} font-normal leading-[1.4] whitespace-nowrap ` +
