@@ -354,6 +354,28 @@ describe("NewTabLauncher", () => {
     expect(attrs.onRunAction).not.toHaveBeenCalled();
   });
 
+  it("scrolls to the templates from the Start from a template tile, even when picked from search", () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    mount({});
+    type("template");
+    expect(root.querySelector(".new-tab-templates")).toBeNull();
+    root.querySelector<HTMLElement>('[data-start="template"]')!.click();
+    m.redraw.sync();
+    expect(sectionKeys()).toEqual(["in-project"]);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.instances[0]).toBe(root.querySelector(".new-tab-templates"));
+    m.redraw.sync();
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the Start from a template tile when no catalog is offered", () => {
+    mount({ catalog: { kind: "disabled" } });
+    const templateTile = root.querySelector<HTMLElement>('[data-start="template"]')!;
+    expect(templateTile.getAttribute("aria-disabled")).toBe("true");
+    expect(root.querySelector<HTMLElement>('[data-start="build-app"]')!.getAttribute("aria-disabled")).toBeNull();
+  });
+
   it("reveals the intents a page at a time behind See more, until every one is shown", () => {
     mount({});
     expect(root.querySelectorAll(".new-tab-start-tile").length).toBe(START_PAGE_SIZE);
