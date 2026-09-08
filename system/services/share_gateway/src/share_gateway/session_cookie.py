@@ -8,24 +8,25 @@ mint sessions.
 The same value is set twice, under two names, because no single cookie works
 in both places a visitor reaches a shared workspace from:
 
-- ``imbue_machine_session`` is a plain ``SameSite=None; Secure`` cookie: the
-  one a browser sends when the workspace is the top-level site (a share link
-  opened directly, including on Safari).
-- ``imbue_machine_session_partitioned`` adds ``Partitioned`` (CHIPS) so the
-  hosted minds chrome can embed the workspace in a cross-site iframe: browsers
-  only send a third-party cookie from an iframe when it is partitioned by the
-  embedding site.
+- ``imbue_machine_session`` is a ``SameSite=Lax; Secure`` cookie: the one a
+  browser sends when the workspace is the top-level site (a share link opened
+  directly, including on Safari). Lax covers that whole flow -- the broker's
+  post-login bounce to the callback is a top-level GET navigation, which may
+  set a Lax cookie, and everything the page then loads is same-site -- while
+  keeping the cookie off subresource requests and fetches that a foreign site
+  aims at a workspace origin. The Origin policy exempts plain GETs, so this
+  cookie is what stops a foreign page from making the browser attach the
+  owner's session to such a GET.
+- ``imbue_machine_session_partitioned`` is ``SameSite=None; Secure;
+  Partitioned`` (CHIPS) so the hosted minds chrome can embed the workspace in
+  a cross-site iframe: browsers only send a third-party cookie from an iframe
+  when it is partitioned by the embedding site. A Lax cookie is not even
+  stored from inside that iframe, so the two copies never overlap.
 
 Safari 18.5 through 26.1 rejects a cookie carrying ``Partitioned`` outright
 instead of storing it unpartitioned (WebKit bug 292975), so a lone
 partitioned cookie leaves an iOS visitor with no session at all. Verification
 accepts whichever copy the browser sends.
-
-The plain copy is an ordinary ``SameSite=None`` cookie, so browsers that still
-allow third-party cookies attach it to cross-site GET subresources too. That
-is bounded by the existing controls: ``frame-ancestors`` limits embedding to
-the workspace's own origins and the chrome, the Origin policy rejects non-GETs
-with a foreign Origin, and nothing but ``/_health`` answers cross-origin reads.
 
 The payload carries an ``owner`` flag (the visitor is the workspace owner, per
 the broker's handoff), which rides along for the owner-only in-workspace exec
@@ -106,6 +107,7 @@ def verify_session_from_cookies(
 def set_session_cookie(response: Response, cookie_value: str, workspace_domain: str) -> None:
     """Attach both copies of the workspace session cookie (see the module docstring)."""
     for cookie_name in _SESSION_COOKIE_NAMES:
+        is_partitioned = cookie_name == PARTITIONED_SESSION_COOKIE_NAME
         response.set_cookie(
             cookie_name,
             cookie_value,
@@ -114,8 +116,8 @@ def set_session_cookie(response: Response, cookie_value: str, workspace_domain: 
             path="/",
             secure=True,
             httponly=True,
-            samesite="None",
-            partitioned=cookie_name == PARTITIONED_SESSION_COOKIE_NAME,
+            samesite="None" if is_partitioned else "Lax",
+            partitioned=is_partitioned,
         )
 
 
