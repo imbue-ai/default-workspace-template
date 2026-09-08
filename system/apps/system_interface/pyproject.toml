@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "app-instances",
     "app-manifest",
-    # The staleness tracker runs git through concurrency_group's subprocess helper.
+    # The process error the staleness tracker's git read catches.
     "concurrency-group",
     # The one way this service shells out: children in their own session.
     "detached-subprocess",
