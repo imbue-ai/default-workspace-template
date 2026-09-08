@@ -463,7 +463,10 @@ def _find_service_identifiers_in_the_shell() -> list[str]:
                 continue
             if _PRUNED_DIR_NAMES.intersection(path.relative_to(_REPO_ROOT).parts):
                 continue
-            if _is_test_source(path) or path.name in _SERVICE_IDENTIFIER_EXEMPT_FILENAMES:
+            if (
+                _is_test_source(path)
+                or path.name in _SERVICE_IDENTIFIER_EXEMPT_FILENAMES
+            ):
                 continue
             identifiers = (
                 _python_identifiers(path)
@@ -471,8 +474,13 @@ def _find_service_identifiers_in_the_shell() -> list[str]:
                 else _typescript_identifiers(path)
             )
             for lineno, name in identifiers:
-                if "service" in name.lower() and name not in _SERVICE_IDENTIFIER_EXEMPT_TOKENS:
-                    violations.append(f"{path.relative_to(_REPO_ROOT)}:{lineno}: {name}")
+                if (
+                    "service" in name.lower()
+                    and name not in _SERVICE_IDENTIFIER_EXEMPT_TOKENS
+                ):
+                    violations.append(
+                        f"{path.relative_to(_REPO_ROOT)}:{lineno}: {name}"
+                    )
     return violations
 
 
