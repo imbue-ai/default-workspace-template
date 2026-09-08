@@ -98,8 +98,10 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    the card. The rail shows three and a half cards, so the cut-off card says there
    is more; a right arrow overlaying that card pages the rail one visible width to
    the right, a left arrow appears once the rail has scrolled and pages it back,
-   and each hides at its end. The rail also scrolls freely with the trackpad.
-   Clicking a card opens the template's detail dialog.
+   and each hides at its end (each arrow is a full-height strip at the rail's end
+   that fades the rail out under it, so the whole edge is the target). The rail
+   also scrolls freely with the trackpad. Clicking a card opens the template's
+   detail dialog.
 
 ### The template detail dialog
 
