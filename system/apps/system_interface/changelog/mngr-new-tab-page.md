@@ -2,7 +2,7 @@ The New Tab page is redesigned around starting things, after the `minds-new-tab`
 
 - A search field leads the page. Typing swaps the sections for results: the machine's instances and "Open new" actions that match, the matching "Start something" tiles, and the matching templates, each shown only when it has matches.
 
-- "Open new" lays its tiles out in two rows: the apps whose manifests declare a `launcher_rank`, lowest first (the built-ins: chat, file viewer, browser, terminal), sharing the row's width, then every other app on a second row of content-sized tiles that wrap when the row runs out.
+- "Open new" lays its tiles out four to a row, each a quarter of the row wide: the apps whose manifests declare a `launcher_rank`, lowest first (the built-ins: chat, file viewer, browser, terminal), then every other app, wrapping onto further rows.
 
 - "In this project" is shown only when the project holds something; "On this machine" is no longer on a project's resting page and is reached through the search field. The Everything view keeps its machine-wide table.
 

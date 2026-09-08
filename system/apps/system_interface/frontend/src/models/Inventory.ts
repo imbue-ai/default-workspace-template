@@ -74,7 +74,7 @@ export interface AppRecord {
   has_instances: boolean;
   actions: AppAction[];
   default_shortcut: DefaultShortcut | null;
-  /** Where the app's tile sits on the New Tab page's leading row, lowest first; null for the second row. */
+  /** The app's place among the New Tab page's leading tiles, lowest first; null puts it after every ranked app. */
   launcher_rank: number | null;
   is_running: boolean;
   /** Whether ``instances`` is the app's own answer; false until its list has been fetched once. */
