@@ -11,8 +11,9 @@
  * Nothing here knows what any app is: the tables carry the apps' own names and icons, the kind
  * filter is by app, the leading tile row is the apps that declare a ``launcher_rank`` in their
  * manifests, and a seeded prompt goes to whichever app declares an action with a ``message`` param
- * (contracts.md sections 2 and 3). The list building, filtering, ordering, and paging are exported
- * as pure functions so they can be tested without a DOM.
+ * (contracts.md sections 2 and 3). The list building, filtering, and ordering are exported as pure
+ * functions so they can be tested without a DOM. The template cards and their rails are
+ * ``TemplateShelves.ts``, and the card's detail dialog ``TemplateDetailModal.ts``.
  *
  * Every marker an e2e suite finds the page by is kept: ``.new-tab-launcher``,
  * ``.new-tab-launcher-tile[data-launch]``, ``.new-tab-launcher-row[data-address]``, and
@@ -21,7 +22,7 @@
 
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
-import type { CatalogTemplate, ResolvedShelf, TemplateCatalogState } from "../models/TemplateCatalog";
+import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
 import { matchesQuery } from "../models/search";
 import { serviceIconMarkup } from "./components/appIcon";
@@ -36,6 +37,7 @@ import {
 } from "./startSomething";
 import type { StartOption } from "./startSomething";
 import { TemplateDetailModal } from "./TemplateDetailModal";
+import { TemplateCard, TemplateShelves } from "./TemplateShelves";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -217,27 +219,6 @@ export function formatRecency(lastActiveMs: number | null, nowMs: number): strin
   return `${Math.floor(age / WEEK_MS)}w ago`;
 }
 
-/** What a rail measures about itself, read off the scroll container. */
-export interface RailExtent {
-  scrollLeft: number;
-  clientWidth: number;
-  scrollWidth: number;
-}
-
-/** Whether a rail can page left (it has scrolled) or right (there is more past its edge). */
-export function railPaging(extent: RailExtent): { canPageLeft: boolean; canPageRight: boolean } {
-  return {
-    canPageLeft: extent.scrollLeft > 1,
-    canPageRight: extent.scrollLeft + extent.clientWidth < extent.scrollWidth - 1,
-  };
-}
-
-/** Where one page of the rail lands: a visible width along, clamped to the rail's ends. */
-export function railPageTarget(extent: RailExtent, direction: -1 | 1): number {
-  const farthest = Math.max(0, extent.scrollWidth - extent.clientWidth);
-  return Math.min(farthest, Math.max(0, extent.scrollLeft + direction * extent.clientWidth));
-}
-
 const XMLNS = "http://www.w3.org/2000/svg";
 
 const LAUNCHER_PATHS = {
@@ -257,8 +238,6 @@ function launcherIcon(glyph: keyof typeof LAUNCHER_PATHS, size: number): string 
 
 const GLYPH_SIZE = 15;
 const START_GLYPH_SIZE = 24;
-const CARD_FALLBACK_GLYPH_SIZE = 20;
-const RAIL_ARROW_GLYPH_SIZE = 16;
 
 /** The glyph one row (or tile) wears: the app's own icon, or its monogram. */
 function appGlyph(appName: string): string {
@@ -293,10 +272,6 @@ const ROW_CLASS =
   "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
   "text-(length:--font-size-row) hover:bg-fill-hover ";
 
-// A card is sized so the rail shows exactly three and a half: with three 24px gaps before the
-// half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
-const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)]";
-
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   const hiddenAppsBySection: Record<LauncherSectionKey, Set<string>> = {
     "in-project": new Set(),
@@ -311,10 +286,6 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // its next create or update and clears it (from search, the section mounts only after the
   // click empties the query).
   let isScrollToTemplatesPending = false;
-  // Each rail's last measured extent, by shelf key: what decides which paging arrows it shows.
-  const railExtentByShelf = new Map<string, RailExtent>();
-  // Drawings that failed to load, by slug: their cards show the generic glyph instead.
-  const brokenThumbnails = new Set<string>();
 
   const closeFilterMenu = (): void => {
     openFilterFor = null;
@@ -708,137 +679,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   // ---------- "Start from a template" ----------
 
-  function templateCard(template: CatalogTemplate, isFill: boolean): m.Vnode {
-    const hasArt = template.thumbnail_url !== "" && !brokenThumbnails.has(template.slug);
-    return m(
-      "button",
-      {
-        key: template.slug,
-        type: "button",
-        "data-template": template.slug,
-        class:
-          "new-tab-template-card group shrink-0 snap-start cursor-pointer text-left " +
-          (isFill ? "w-full" : CARD_WIDTH_CLASS),
-        onclick: () => {
-          detailTemplate = template;
-        },
-      },
-      [
-        // The drawings are all 3:2, so the frame matches and nothing is cropped; a missing one
-        // gets a quiet glyph on the page tint rather than a hole in the rail.
-        m(
-          "span",
-          {
-            class:
-              "block aspect-[3/2] overflow-hidden rounded-lg bg-page transition-[transform,box-shadow] " +
-              "duration-(--dur-slow) group-hover:scale-[1.02] group-hover:shadow-overlay",
-          },
-          hasArt
-            ? m("img", {
-                src: template.thumbnail_url,
-                alt: "",
-                loading: "lazy",
-                class: "h-full w-full object-cover",
-                onerror: () => {
-                  brokenThumbnails.add(template.slug);
-                },
-              })
-            : m(
-                "span",
-                { class: "flex h-full w-full items-center justify-center text-faint" },
-                m.trust(icon("box", { size: CARD_FALLBACK_GLYPH_SIZE })),
-              ),
-        ),
-        m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),
-        template.author === ""
-          ? null
-          : m("span", { class: "type-helper block truncate text-faint" }, `by ${template.author}`),
-      ],
-    );
-  }
-
-  function measured(rail: HTMLElement): RailExtent {
-    return { scrollLeft: rail.scrollLeft, clientWidth: rail.clientWidth, scrollWidth: rail.scrollWidth };
-  }
-
-  function measureRail(shelfKey: string, rail: HTMLElement): void {
-    const extent = measured(rail);
-    const previous = railExtentByShelf.get(shelfKey);
-    if (
-      previous !== undefined &&
-      previous.scrollLeft === extent.scrollLeft &&
-      previous.clientWidth === extent.clientWidth &&
-      previous.scrollWidth === extent.scrollWidth
-    ) {
-      return;
-    }
-    railExtentByShelf.set(shelfKey, extent);
-    // Measured outside an event handler (on mount, or after a layout change): redraw so the
-    // arrows follow. A repeat measurement is equal and returns above, so this cannot loop.
-    m.redraw();
-  }
-
-  function scrollRailTo(rail: HTMLElement, left: number): void {
-    if (typeof rail.scrollTo === "function") {
-      rail.scrollTo({ left, behavior: "smooth" });
-    } else {
-      rail.scrollLeft = left;
-    }
-  }
-
-  function railArrow(shelf: ResolvedShelf, direction: -1 | 1): m.Vnode {
-    const isRight = direction === 1;
-    return m(
-      "button",
-      {
-        type: "button",
-        "aria-label": isRight ? "Show more templates" : "Show previous templates",
-        "data-rail-page": isRight ? "next" : "previous",
-        class: buttonClass("secondary", {
-          icon: true,
-          sm: true,
-          round: true,
-          extra:
-            "new-tab-template-rail-arrow absolute top-1/2 z-(--z-content) -translate-y-1/2 shadow-overlay " +
-            (isRight ? "right-1" : "left-1"),
-        }),
-        onclick: (event: MouseEvent) => {
-          const rail = (event.currentTarget as HTMLElement).parentElement?.querySelector<HTMLElement>(
-            ".new-tab-template-rail",
-          );
-          if (!rail) return;
-          scrollRailTo(rail, railPageTarget(railExtentByShelf.get(shelf.key) ?? measured(rail), direction));
-        },
-      },
-      m.trust(icon(isRight ? "chevron-right" : "chevron-left", { size: RAIL_ARROW_GLYPH_SIZE })),
-    );
-  }
-
-  function shelfView(shelf: ResolvedShelf): m.Vnode {
-    const paging = railPaging(railExtentByShelf.get(shelf.key) ?? { scrollLeft: 0, clientWidth: 0, scrollWidth: 0 });
-    return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
-      m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
-      // The scroller takes the column's padding as its own so a hovered card's lift has room
-      // inside the scroll box, and the arrows overlay its ends.
-      m("div", { class: "relative mt-2" }, [
-        paging.canPageLeft ? railArrow(shelf, -1) : null,
-        m(
-          "div",
-          {
-            class: "new-tab-template-rail snap-x overflow-x-auto scroll-pl-2 px-2 pt-1 pb-3",
-            oncreate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
-            onupdate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
-            onscroll: (event: Event) => measureRail(shelf.key, event.currentTarget as HTMLElement),
-          },
-          m(
-            "div",
-            { class: "flex items-start gap-6" },
-            shelf.templates.map((template) => templateCard(template, false)),
-          ),
-        ),
-        paging.canPageRight ? railArrow(shelf, 1) : null,
-      ]),
-    ]);
+  function openDetail(template: CatalogTemplate): void {
+    detailTemplate = template;
   }
 
   function templatesStatus(message: string): m.Vnode {
@@ -856,11 +698,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         body = templatesStatus(TEMPLATES_FAILED_MESSAGE);
         break;
       case "loaded":
-        body = m(
-          "div",
-          { class: "mt-3" },
-          resolveShelves(catalog.catalog).map((shelf) => shelfView(shelf)),
-        );
+        body = m(TemplateShelves, { shelves: resolveShelves(catalog.catalog), onPick: openDetail });
         break;
     }
     return m(
@@ -914,7 +752,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             m(
               "div",
               { class: "grid grid-cols-4 gap-6 px-2" },
-              templates.map((template) => templateCard(template, true)),
+              templates.map((template) =>
+                m(TemplateCard, { key: template.slug, template, isFill: true, onPick: openDetail }),
+              ),
             ),
           ]),
     ];
