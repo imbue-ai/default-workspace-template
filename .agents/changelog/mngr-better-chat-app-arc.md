@@ -78,3 +78,5 @@ The apply test for a rollback into a tree from before the app model now drives t
 In the apply's test of which apps the post-restart probes read off a tree, the note that the fixture tree already holds the shell and the browser sits on its own line above the call rather than trailing a wrapped one.
 
 The apply's tool-environment refresh has a test for the case where neither the tool's own executable nor `mngr` is an installed uv tool on PATH: the install is left to uv's own tool directory with no `UV_TOOL_DIR` or `UV_TOOL_BIN_DIR` set, and the refresh's note names both executables.
+
+The apply refuses (exit 1, nothing changed) a merge ref that re-merges a target the tree landed and then rolled back without first reverting the rollback commit, naming that commit: git counts the reverted content as already merged, so such a merge lands only what the target gained since, and the probes could not tell the old release plus a few files from a good update. A merge ref that carries the revert (the worker reference's retry step) is applied as usual.

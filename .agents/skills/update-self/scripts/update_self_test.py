@@ -2278,6 +2278,77 @@ def test_re_applying_a_rolled_back_merge_refuses_instead_of_claiming_success(
     assert not _marker_exists(apply_repo)
 
 
+_ROLLBACK_OF_TARGET = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _target_landed_then_rolled_back(runner: _RecordingRunner, target_ref: str) -> None:
+    """Shape git's answers as after a rolled-back apply of ``target_ref``: the target is an
+    ancestor of HEAD with a rollback commit on top, while the new merge ref is not yet landed."""
+    runner.respond(
+        ("git", "merge-base", "--is-ancestor", target_ref), _Result(returncode=0)
+    )
+    runner.respond(
+        ("git", "log", "--format=%H %s", f"{target_ref}..HEAD"),
+        _Result(
+            stdout=f"{_ROLLBACK_OF_TARGET} Roll back update apply (restore to abc123def456)\n"
+            "1111111111111111111111111111111111111111 Tidy a note\n"
+        ),
+    )
+
+
+def test_a_re_merge_of_a_rolled_back_target_is_refused_until_the_rollback_is_reverted(
+    apply_repo: Path,
+) -> None:
+    # After a rollback (a forward revert) git counts the target's content as already
+    # merged, so a fresh worker pass that plainly re-merges it lands only what the
+    # target gained since; the apply would probe the old release plus a few files,
+    # find it healthy, and record the update as landed. The apply refuses instead,
+    # naming the rollback commit the worker must revert first.
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
+    runner.respond(
+        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
+        _Result(stdout="Tidy a note\n"),
+    )
+
+    with pytest.raises(update_runtime.ApplyPreconditionError) as raised:
+        _apply(
+            runner,
+            _FakeHttp(_all_healthy),
+            _FakeSpawner(),
+            apply_repo,
+            target_ref="minds-v0.4.2",
+        )
+
+    assert f"git revert --no-edit {_ROLLBACK_OF_TARGET[:12]}" in str(raised.value)
+    assert not runner.ran("git", "merge")
+    assert not _marker_exists(apply_repo)
+
+
+def test_a_re_merge_that_reverts_the_rollback_first_is_applied(
+    apply_repo: Path,
+) -> None:
+    runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    _target_landed_then_rolled_back(runner, "minds-v0.4.2")
+    runner.respond(
+        ("git", "log", "--format=%s", f"HEAD..{_MERGE_REF}"),
+        _Result(
+            stdout='Revert "Roll back update apply (restore to abc123def456)"\nTidy a note\n'
+        ),
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    assert runner.ran("git", "merge")
+
+
 def test_re_applying_an_already_applied_merge_is_still_a_no_op_not_a_refusal(
     apply_repo: Path,
 ) -> None:

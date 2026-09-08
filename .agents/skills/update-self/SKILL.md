@@ -436,8 +436,10 @@ Exit codes:
 - **`3` -- emergency.** Even the rollback could not restore health; escalate,
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
-  pass, another apply in flight, or this merge already landed and rolled
-  back). Re-dispatch a fresh worker pass off the current `HEAD`.
+  pass, another apply in flight, this merge already landed and rolled back, or
+  a re-merge of a rolled-back target that does not revert the rollback commit
+  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
+  names the commit to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
