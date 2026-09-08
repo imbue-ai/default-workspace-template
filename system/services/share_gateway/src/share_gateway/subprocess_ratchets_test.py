@@ -2,7 +2,7 @@
 
 share-gateway runs caddy and frpc from a background process group on the workspace's tmux
 terminal -- see ``detached_subprocess.runner`` for the mechanism. Its two long-lived
-children are detached too: ``_stop_child`` signals them by handle, so supervisord's group
+children are detached too: ``_stop_children`` signals them by handle, so supervisord's group
 kill was never their only way down.
 
 The rules themselves live in ``detached_subprocess.ratchets``; every supervisord program in this
