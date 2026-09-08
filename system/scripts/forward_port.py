@@ -23,15 +23,15 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``instances``,
 ``instances_url``, ``critical``, ``priority``, ``program`` (default: the name),
 ``internal``, ``launcher_rank``, ``default_shortcut``, and ``actions`` (id,
-label, and the names of the params); the icon is read from the file the manifest
-names, relative to the manifest. Every
-manifest field is authoritative on every call, so a re-registration with a
-changed manifest updates the row. Only what is copied from files is checked
-here (the name rule, the icon markup, the value types); the manifest's other
-rules are the ``app_manifest`` library's job, applied by ``validate-manifest``
-and by every reader of the registry. ``--name --url`` without a manifest keeps
-registering rows for things with no app directory (owner-exec, the VM exec
-service, previews, isolated test servers).
+label, and the names of the params); the icon is read from the file the
+manifest names, relative to the manifest. Every manifest field is authoritative
+on every call, so a re-registration with a changed manifest updates the row.
+Only what is copied from files is checked here (the name rule, the icon markup,
+the value types); the manifest's other rules are the ``app_manifest`` library's
+job, applied by ``validate-manifest`` and by every reader of the registry.
+``--name --url`` without a manifest keeps registering rows for things with no
+app directory (owner-exec, the VM exec service, previews, isolated test
+servers).
 
 Icons
 -----
