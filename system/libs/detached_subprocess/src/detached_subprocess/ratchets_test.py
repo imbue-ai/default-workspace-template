@@ -35,6 +35,9 @@ def _matches(rule: RegexRatchetRule, source: str) -> bool:
         "    result = run_local_command_modern_version(command=cmd, timeout=1.0)",
         "from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version",
         "from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version as _run",
+        # The continuation line of a parenthesized import, which is how the name arrives when a
+        # formatter is not holding every import to one line.
+        "from imbue.concurrency_group.subprocess_utils import (\n    run_local_command_modern_version,\n)",
         "    process = subprocess.Popen(cmd)",
         "    subprocess.run(cmd, check=True)",
         "    subprocess.call(cmd)",
@@ -56,6 +59,7 @@ def test_the_raw_spawn_rule_catches_every_spelling_it_names(source: str) -> None
         "    except subprocess.CalledProcessError:",
         "    stdout=subprocess.PIPE,",
         "# the runner sends SIGTERM, which is what run_local_command_modern_version does on timeout",
+        "    run_local_command_modern_version_wrapper,",
     ],
 )
 def test_the_raw_spawn_rule_leaves_the_sanctioned_path_and_prose_alone(source: str) -> None:
