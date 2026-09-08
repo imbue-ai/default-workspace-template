@@ -38,14 +38,6 @@ from imbue.system_interface.shell.state_files import write_json_atomic
 # The one document format this reader understands; a catalog naming another is refused.
 _CATALOG_FORMAT: Final[int] = 1
 
-# Where the shipped catalog lives: the raw file on the template repository.
-# CLEANUP: point this at ``main`` (and update ``catalog/README.md`` and
-# ``system/changelog/mngr-new-tab-page.md``, which name the branch too) once the new-tab-page
-# work has merged to ``main``.
-DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
-    "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/josh/new-tab-base/catalog/new-tab-templates.json"
-)
-
 # The last good copy, under the shell's state directory.
 CATALOG_CACHE_FILENAME: Final[str] = "template_catalog.json"
 

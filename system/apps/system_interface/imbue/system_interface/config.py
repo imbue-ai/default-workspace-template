@@ -1,6 +1,14 @@
+from typing import Final
+
 from pydantic_settings import BaseSettings
 
-from imbue.system_interface.template_catalog import DEFAULT_TEMPLATE_CATALOG_URL
+# Where the shipped catalog lives: the raw file on the template repository.
+# CLEANUP: point this at ``main`` (and update ``catalog/README.md`` and
+# ``system/changelog/mngr-new-tab-page.md``, which name the branch too) once the new-tab-page
+# work has merged to ``main``.
+DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
+    "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/josh/new-tab-base/catalog/new-tab-templates.json"
+)
 
 
 class Config(BaseSettings):
