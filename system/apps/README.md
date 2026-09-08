@@ -12,7 +12,8 @@ Built-in apps:
   workspace chrome. Do not use it as a template for new apps.
 - `chat/` - The chat app: the agent harness UI, one page per chat, rendered
   inside a tab's iframe at its own origin. The `chat` package (`chat-app`)
-  runs `mngr observe` over the workspace's agents, serves the chat pages,
+  follows the workspace's agent observer (the `agent-observer` program, one `mngr
+  observe` per workspace), serves the chat pages,
   their API, and the instances API on port 8010, and owns the provider
   accounts. Its frontend and the shell's are two builds of one npm workspace
   (`system/package.json`) sharing the `system/libs/workspace_ui` library.

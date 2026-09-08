@@ -1,0 +1,1 @@
+`SERVICE_BANDS` gains `agent-observer` at the chat's band (25): the observer is the writer of the agent lifecycle event file every chat instance follows, so shedding it freezes every chat's agent view until supervisord brings it back, which is worth exactly what shedding the chat is.

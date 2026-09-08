@@ -222,6 +222,11 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # in, and below every other service, since a shed chat app costs every open
     # chat its page until it restarts.
     "chat": 25,
+    # The agent observer ('mngr observe', the writer of the lifecycle event file
+    # every chat instance follows): the chat's band, because shedding it freezes
+    # every chat's agent view until supervisord brings it back, so it is worth
+    # exactly what the chat is.
+    "agent-observer": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
     "share-gateway": 35,
@@ -340,7 +345,9 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
+def supervisord_program_band(
+    program_name: str, priority_by_program: Mapping[str, str]
+) -> int:
     """The band a supervisord program is expected to occupy.
 
     ``priority_by_program`` is the app registry's view (``app_registry``): the

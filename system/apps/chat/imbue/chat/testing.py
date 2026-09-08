@@ -124,6 +124,21 @@ def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
         release_observe_lock(fd)
 
 
+def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
+    """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
+
+    A real ``mngr`` spawned from a test inherits ``PYTEST_CURRENT_TEST`` and refuses any
+    config that does not opt in, so the profile written here is the only one it may load.
+    """
+    profile_dir = host_dir / "profiles" / "isolated"
+    profile_dir.mkdir(parents=True)
+    (host_dir / "config.toml").write_text('profile = "isolated"\n')
+    (profile_dir / "settings.toml").write_text(
+        "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
+    )
+    (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
 def is_e2e_browser_installed() -> bool:
     """True when a Chromium the e2e suite can launch is present on this host.
 

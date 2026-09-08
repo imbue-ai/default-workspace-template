@@ -1,0 +1,1 @@
+`service-processes.md` describes the `agent-observer` program: the workspace's one `mngr observe`, a manifest-less supervised service with no app directory, which every chat instance follows and which a chat never starts on its own.
