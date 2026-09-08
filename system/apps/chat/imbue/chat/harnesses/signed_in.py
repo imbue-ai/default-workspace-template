@@ -18,13 +18,13 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.binding import account_env
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.concurrency_group.errors import ProcessError
-from detached_subprocess.runner import run_detached_command
 
 logger = _loguru_logger
 

@@ -29,13 +29,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.frozen_model import FrozenModel
-from detached_subprocess.runner import run_detached_command
 
 logger = _loguru_logger
 
@@ -87,8 +87,9 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # The imported-source prefixes are every workspace tree this process runs code
 # from: its own backend, the vendored mngr tree (its shared libraries are
 # imported here; the tree counts as a whole rather than module by module), and
-# the instances and manifest libraries. All are editable installs resolving straight into these
-# trees, so the moment one advances this process is running old code.
+# the instances, manifest, and detached-subprocess libraries. All are editable installs
+# resolving straight into these trees, so the moment one advances this process is running old
+# code.
 # ``test_every_imported_workspace_package_is_covered`` holds this list to the
 # app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
@@ -97,12 +98,14 @@ _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
     "system/libs/app_instances/",
     "system/libs/app_manifest/",
+    "system/libs/detached_subprocess/",
 )
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/libs/app_instances/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
+        "system/libs/detached_subprocess/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
     }

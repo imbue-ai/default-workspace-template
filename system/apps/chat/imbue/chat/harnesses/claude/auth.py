@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
@@ -35,7 +36,6 @@ from imbue.imbue_common.pure import pure
 from imbue.mngr.utils.env_utils import parse_env_file
 from imbue.mngr_claude.claude_config import find_user_config_in_unisolated_mode
 from imbue.mngr_claude.claude_config import get_claude_config_dir
-from detached_subprocess.runner import run_detached_command
 
 logger = _loguru_logger
 

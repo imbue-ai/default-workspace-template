@@ -30,6 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger
 
 from imbue.chat.agent_discovery import AgentInfo
@@ -59,7 +60,6 @@ from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
-from detached_subprocess.runner import run_detached_command
 
 # The single-slot switch mailbox this resolver writes: switch() atomically OVERWRITES
 # it with one JSON intent, so a newer pick replaces an unconsumed older one (buffer of

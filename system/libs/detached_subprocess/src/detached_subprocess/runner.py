@@ -43,14 +43,14 @@ could reach the terminal.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from collections.abc import Mapping
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from imbue.concurrency_group.event_utils import MutableEvent
-from imbue.concurrency_group.subprocess_utils import FinishedProcess
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.concurrency_group.subprocess_utils import (
+    FinishedProcess,
+    run_local_command_modern_version,
+)
 
 
 def run_detached_command(
