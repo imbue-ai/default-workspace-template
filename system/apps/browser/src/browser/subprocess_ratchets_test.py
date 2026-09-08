@@ -75,7 +75,8 @@ def test_the_waived_file_still_spawns_only_the_shared_audio_daemon() -> None:
     attached = [
         call
         for call in ast.walk(module)
-        if isinstance(call, ast.Call) and called_name(call) in ("run", "Popen", "call", "check_call", "check_output")
+        if isinstance(call, ast.Call)
+        and called_name(call) in ("run", "Popen", "call", "check_call", "check_output")
         and isinstance(call.func, ast.Attribute)
         and isinstance(call.func.value, ast.Name)
         and call.func.value.id == "subprocess"
@@ -87,7 +88,9 @@ def test_the_waived_file_still_spawns_only_the_shared_audio_daemon() -> None:
         "deliberately."
     )
     first_argument = attached[0].args[0]
-    assert isinstance(first_argument, ast.List) and isinstance(first_argument.elts[0], ast.Constant)
+    assert isinstance(first_argument, ast.List) and isinstance(
+        first_argument.elts[0], ast.Constant
+    )
     assert first_argument.elts[0].value == "pulseaudio", (
         "the one attached spawn session.py is waived for must still be the shared audio daemon"
     )

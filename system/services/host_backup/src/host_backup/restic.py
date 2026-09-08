@@ -58,9 +58,7 @@ def run_restic(
     """Run `restic <args...>` with `env_overrides` merged onto `os.environ`."""
     env = dict(os.environ)
     env.update(env_overrides)
-    return run_detached_subprocess(
-        ["restic", *args], timeout=timeout_seconds, env=env
-    )
+    return run_detached_subprocess(["restic", *args], timeout=timeout_seconds, env=env)
 
 
 def probe_repo(
