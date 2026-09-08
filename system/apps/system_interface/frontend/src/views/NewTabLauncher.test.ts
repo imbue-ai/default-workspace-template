@@ -147,9 +147,12 @@ describe("search helpers", () => {
     expect(searchRows(MACHINE, "nothing here")).toEqual([]);
   });
 
-  it("finds the actions a query can answer with", () => {
+  it("finds the actions a query can answer with, by the row text they render as", () => {
     expect(searchTiles(TILES, "term").map((t) => t.app.name)).toEqual(["terminal"]);
     expect(searchTiles(TILES, "new").map((t) => t.app.name).length).toBe(TILES.length);
+    // What the row displays is what a query finds: "open term" reaches "Open new terminal".
+    expect(searchTiles(TILES, "open term").map((t) => t.app.name)).toEqual(["terminal"]);
+    expect(searchTiles(TILES, "open").length).toBe(TILES.length);
   });
 });
 

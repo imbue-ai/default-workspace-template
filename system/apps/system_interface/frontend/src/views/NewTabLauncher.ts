@@ -161,9 +161,17 @@ export function searchRows(rows: readonly LauncherRow[], query: string): Launche
   return rows.filter((row) => matchesQuery(query, row.label, row.appDisplayName, row.appName));
 }
 
-/** The "Open new" tiles a query finds, as the actions a search can answer with. */
+/** What a tile reads as when a search restates it as a row: "Open new terminal". */
+export function actionRowLabel(tile: LaunchTile): string {
+  return `Open new ${tile.app.display_name.toLowerCase()}`;
+}
+
+/** The "Open new" tiles a query finds, as the actions a search can answer with: by the row text the
+ *  match renders as, the app's names, or the action's own label. */
 export function searchTiles(tiles: readonly LaunchTile[], query: string): LaunchTile[] {
-  return tiles.filter((tile) => matchesQuery(query, tile.app.display_name, tile.app.name, tile.action.label));
+  return tiles.filter((tile) =>
+    matchesQuery(query, actionRowLabel(tile), tile.app.display_name, tile.app.name, tile.action.label),
+  );
 }
 
 /** Drop the rows whose app the user unchecked in this table's filter. The state is the set of
@@ -504,7 +512,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           { class: "text-faint flex w-5 shrink-0 items-center justify-center" },
           m.trust(launcherIcon("plus", GLYPH_SIZE)),
         ),
-        m("span", { class: "min-w-0 flex-1 truncate" }, `Open new ${tile.app.display_name.toLowerCase()}`),
+        m("span", { class: "min-w-0 flex-1 truncate" }, actionRowLabel(tile)),
         m("span", { class: "text-faint w-24 shrink-0 truncate" }, tile.app.display_name),
         m("span", { class: "w-28 shrink-0" }),
       ],
