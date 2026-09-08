@@ -45,14 +45,16 @@ def test_set_session_cookie_sets_a_plain_copy_and_a_partitioned_copy() -> None:
     assert set(by_name) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
     for header in by_name.values():
         assert "=cookie-value;" in header
-        assert "SameSite=None" in header
         assert "Secure" in header
         assert "HttpOnly" in header
         assert f"Domain={_DOMAIN}" in header
-    # The plain copy is what a top-level visit (Safari included) keeps; only
-    # the iframe copy carries the CHIPS attribute.
+    # The plain copy is what a top-level visit (Safari included) keeps: Lax,
+    # so a foreign site's subresource requests never carry it. Only the iframe
+    # copy is SameSite=None, and only it carries the CHIPS attribute.
+    assert "SameSite=Lax" in by_name[SESSION_COOKIE_NAME]
     assert "Partitioned" not in by_name[SESSION_COOKIE_NAME]
-    assert by_name[PARTITIONED_SESSION_COOKIE_NAME].endswith("; Partitioned")
+    assert "SameSite=None" in by_name[PARTITIONED_SESSION_COOKIE_NAME]
+    assert "Partitioned" in by_name[PARTITIONED_SESSION_COOKIE_NAME]
 
 
 def test_verify_session_from_cookies_accepts_whichever_copy_verifies() -> None:

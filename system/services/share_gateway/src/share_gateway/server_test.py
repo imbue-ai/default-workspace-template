@@ -275,10 +275,12 @@ def test_callback_sets_both_domain_cookies_and_redirects_to_next(tmp_path: Path)
         assert f"Domain={_DOMAIN}" in header
         assert "HttpOnly" in header
         assert "Secure" in header
-        assert "SameSite=None" in header
-    # The plain copy is the one a top-level (phone) visit keeps; only the
-    # cross-site iframe copy carries Partitioned.
+    # The plain copy is the one a top-level (phone) visit keeps, and Lax keeps
+    # it off a foreign site's subresource requests; only the cross-site iframe
+    # copy is SameSite=None and carries Partitioned.
+    assert "SameSite=Lax" in set_cookies[SESSION_COOKIE_NAME]
     assert "Partitioned" not in set_cookies[SESSION_COOKIE_NAME]
+    assert "SameSite=None" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
     assert "Partitioned" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
 
     plain_value = _cookie_value(set_cookies[SESSION_COOKIE_NAME])
