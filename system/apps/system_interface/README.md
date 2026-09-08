@@ -354,7 +354,7 @@ prompt goes to whichever app declares an action with a `message` param (the
 chat app's `new`), so the shell still names no app. The template catalog is a
 JSON document the shell fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`
 (`catalog/README.md` at the repo root describes it), reuses for six hours,
-keeps the last good copy of under `data/.state/system_interface/`, and serves
+keeps the last good copy under `data/.state/system_interface/`, and serves
 to the page at `GET /api/templates-catalog`; the design is
 `docs/system/blueprint/new-tab-page/plan-new-tab-page.md`.
 
