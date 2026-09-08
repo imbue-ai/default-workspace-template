@@ -110,7 +110,9 @@ actions:
   `minds-api` skill does that) and to walk the user through anything it needs.
 
 Both close the dialog; the new chat replaces the launcher in the pane, as any tile
-does.
+does. Both stand down exactly as the prompt tiles do: disabled, with the same tooltip,
+when no app on the machine takes a `message`, and disabled while the pane is already
+waiting on a create.
 
 ### Search
 

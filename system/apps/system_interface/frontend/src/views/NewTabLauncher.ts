@@ -308,6 +308,15 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     return query.trim() !== "";
   }
 
+  /** Whether anything that starts a seeded chat (a prompt tile, the detail dialog's actions) stands
+   *  down right now, and the reason a tooltip gives when there is one to give: no app on the
+   *  machine takes a first message, or this pane is already waiting on a create (which the page
+   *  says under "Open new", so it needs no tooltip). */
+  function promptStartDisabling(attrs: NewTabLauncherAttrs): { isDisabled: boolean; reason: string | null } {
+    if (promptTargetOfTiles(attrs.tiles) === null) return { isDisabled: true, reason: NO_CHAT_APP_REASON };
+    return { isDisabled: attrs.isAwaitingCreate === true, reason: null };
+  }
+
   function startChat(attrs: NewTabLauncherAttrs, message: string): void {
     const target = promptTargetOfTiles(attrs.tiles);
     if (target === null) return;
@@ -602,12 +611,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   // ---------- "Start something" ----------
 
   function startTile(option: StartOption, attrs: NewTabLauncherAttrs): m.Vnode {
-    const isChatAvailable = promptTargetOfTiles(attrs.tiles) !== null;
     const isCatalogOffered = attrs.catalog.kind !== "disabled";
-    const isDisabled =
-      option.prompt === null ? !isCatalogOffered : !isChatAvailable || attrs.isAwaitingCreate === true;
-    const disabledReason =
-      option.prompt === null ? TEMPLATES_NOT_OFFERED_REASON : isChatAvailable ? null : NO_CHAT_APP_REASON;
+    const promptStart = promptStartDisabling(attrs);
+    const isDisabled = option.prompt === null ? !isCatalogOffered : promptStart.isDisabled;
+    const disabledReason = option.prompt === null ? TEMPLATES_NOT_OFFERED_REASON : promptStart.reason;
     const pick = (): void => {
       if (option.prompt === null) {
         query = "";
@@ -779,6 +786,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     view(vnode) {
       const attrs = vnode.attrs;
       const nowMs = attrs.nowMs ?? Date.now();
+      const promptStart = promptStartDisabling(attrs);
 
       return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl pb-12" }, [
@@ -789,6 +797,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           ? null
           : m(TemplateDetailModal, {
               template: detailTemplate,
+              isStartDisabled: promptStart.isDisabled,
+              startDisabledReason: promptStart.reason,
               onClose: () => {
                 detailTemplate = null;
               },

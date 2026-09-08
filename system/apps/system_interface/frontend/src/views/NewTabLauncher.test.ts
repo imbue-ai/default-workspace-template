@@ -392,6 +392,21 @@ describe("NewTabLauncher", () => {
     });
   });
 
+  it("stands the detail's actions down when no app takes a first message, and keeps the dialog open", () => {
+    const attrs = mount({ tiles: [tile("terminal")] });
+    root.querySelector<HTMLElement>('[data-template="orchard"]')!.click();
+    m.redraw.sync();
+    const adopt = document.querySelector<HTMLElement>(".new-tab-template-adopt")!;
+    const createMachine = document.querySelector<HTMLElement>(".new-tab-template-create-machine")!;
+    expect(adopt.getAttribute("aria-disabled")).toBe("true");
+    expect(createMachine.getAttribute("aria-disabled")).toBe("true");
+    adopt.click();
+    createMachine.click();
+    m.redraw.sync();
+    expect(attrs.onRunAction).not.toHaveBeenCalled();
+    expect(document.querySelector(".new-tab-template-detail")).not.toBeNull();
+  });
+
   it("swaps the page for search results: the machine, the intents, and the templates that match", () => {
     const attrs = mount({});
     type("term");

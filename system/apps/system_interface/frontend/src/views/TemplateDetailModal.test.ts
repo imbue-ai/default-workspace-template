@@ -57,6 +57,8 @@ describe("TemplateDetailModal", () => {
             required_accounts: [{ service: "slack-api", permission: "slack-read-all" }],
             needs_ai: true,
           }),
+          isStartDisabled: false,
+          startDisabledReason: null,
           onClose: vi.fn(),
           onAdopt: vi.fn(),
           onCreateMachine: vi.fn(),
@@ -79,6 +81,8 @@ describe("TemplateDetailModal", () => {
       view: () =>
         m(TemplateDetailModal, {
           template: catalogTemplateRecord("plain", { description: "Just a thing." }),
+          isStartDisabled: false,
+          startDisabledReason: null,
           onClose: vi.fn(),
           onAdopt: vi.fn(),
           onCreateMachine: vi.fn(),
@@ -89,5 +93,29 @@ describe("TemplateDetailModal", () => {
       "Just a thing.",
     ]);
     expect(detail.querySelector("h4")).toBeNull();
+  });
+
+  it("stands both actions down when told to, so neither callback fires", () => {
+    const onAdopt = vi.fn();
+    const onCreateMachine = vi.fn();
+    m.mount(root, {
+      view: () =>
+        m(TemplateDetailModal, {
+          template: catalogTemplateRecord("plain"),
+          isStartDisabled: true,
+          startDisabledReason: "No app on this machine can start a chat",
+          onClose: vi.fn(),
+          onAdopt,
+          onCreateMachine,
+        }),
+    });
+    const adopt = root.querySelector<HTMLElement>(".new-tab-template-adopt")!;
+    const createMachine = root.querySelector<HTMLElement>(".new-tab-template-create-machine")!;
+    expect(adopt.getAttribute("aria-disabled")).toBe("true");
+    expect(createMachine.getAttribute("aria-disabled")).toBe("true");
+    adopt.click();
+    createMachine.click();
+    expect(onAdopt).not.toHaveBeenCalled();
+    expect(onCreateMachine).not.toHaveBeenCalled();
   });
 });
