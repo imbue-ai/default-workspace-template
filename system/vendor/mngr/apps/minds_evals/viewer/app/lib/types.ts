@@ -207,6 +207,10 @@ export interface Step {
   tool_calls: ToolCall[] | null;
   observation: Observation | null;
   metrics: StepMetrics | null;
+  // ATIF's open metadata slot. Producers namespace what they put here, and nothing in the format
+  // constrains its shape, so readers must treat every level as unknown. Optional, because a step
+  // the viewer synthesizes for itself has no producer to have written one.
+  extra?: Record<string, unknown> | null;
 }
 
 export interface TrajectoryAgent {

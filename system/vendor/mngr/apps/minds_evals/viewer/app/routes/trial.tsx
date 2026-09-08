@@ -73,6 +73,11 @@ import {
 } from "~/components/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { ConfigJsonViewer } from "~/components/config-json-viewer";
+import {
+  harnessAnnotation,
+  isStepBoundary,
+  StepBoundaryDivider,
+} from "~/components/trajectory/harness-annotation";
 import { CodeBlock } from "~/components/ui/code-block";
 import { Markdown } from "~/components/ui/markdown";
 import {
@@ -559,16 +564,21 @@ function formatCompactCount(value: number): string {
 const MESSAGE_PREVIEW_LINES = 6;
 const STEP_SCROLL_GAP_PX = 16;
 const stepVariants = cva(
-  "group -mx-6 scroll-mt-4 px-6 py-4 transition-colors duration-300",
+  "group -mx-6 scroll-mt-4 border-l-2 border-transparent px-6 py-4 transition-colors duration-300",
   {
     variants: {
-      tone: {
-        default: "",
-        muted: "bg-muted/70 dark:bg-muted/50",
+      // Who produced the step, which is the only thing a reader scrolling a two-hundred-step
+      // trajectory needs at a glance. The agent speaks for most of it and stays unmarked; the
+      // simulated user and the harness's own annotations are the exceptions worth finding.
+      source: {
+        agent: "",
+        user: "border-step-user bg-step-user-surface",
+        system: "bg-muted/70 dark:bg-muted/50",
+        harness: "border-step-harness bg-step-harness-surface",
       },
     },
     defaultVariants: {
-      tone: "default",
+      source: "agent",
     },
   }
 );
@@ -648,7 +658,10 @@ const toolInlineCodeBackgroundVariants = cva("", {
     tone: "default",
   },
 });
-type StepTone = NonNullable<VariantProps<typeof stepVariants>["tone"]>;
+type StepTone = NonNullable<
+  VariantProps<typeof stepContentBlockVariants>["tone"]
+>;
+type StepSource = NonNullable<VariantProps<typeof stepVariants>["source"]>;
 const TOOL_ARG_PREVIEW_KEYS = [
   "cmd",
   "command",
@@ -1711,36 +1724,50 @@ function TrajectoryStepsContent({
   return (
     <div>
       {steps.map((trajectoryStep, idx) => {
-        const tone: StepTone = idx % 2 === 1 ? "muted" : "default";
+        const annotation = harnessAnnotation(trajectoryStep);
+        const boundary = isStepBoundary(annotation) ? annotation : null;
+        // A harness annotation is carried on a `system` step, since ATIF has no source for it.
+        const source: StepSource =
+          boundary !== null ? "harness" : trajectoryStep.source;
+        const tone: StepTone = source === "system" ? "muted" : "default";
 
         return (
           <div
             key={trajectoryStep.step_id}
             ref={(element) => setStepRef?.(idx, element)}
             className={cn(
-              stepVariants({ tone }),
+              stepVariants({ source }),
               highlightedStepIndex === idx &&
                 "bg-primary/10 dark:bg-primary/20"
             )}
           >
-            <div className="mb-3">
-              <StepHeader
+            {boundary !== null ? (
+              <StepBoundaryDivider
                 step={trajectoryStep}
-                agentName={agentName}
-                prevTimestamp={
-                  idx > 0 ? steps[idx - 1]?.timestamp ?? null : null
-                }
-                startTimestamp={steps[0]?.timestamp ?? null}
+                annotation={boundary}
               />
-            </div>
-            <StepContent
-              step={trajectoryStep}
-              jobName={jobName}
-              trialName={trialName}
-              selectedStep={selectedStep}
-              expandAll={expandAll}
-              tone={tone}
-            />
+            ) : (
+              <>
+                <div className="mb-3">
+                  <StepHeader
+                    step={trajectoryStep}
+                    agentName={agentName}
+                    prevTimestamp={
+                      idx > 0 ? steps[idx - 1]?.timestamp ?? null : null
+                    }
+                    startTimestamp={steps[0]?.timestamp ?? null}
+                  />
+                </div>
+                <StepContent
+                  step={trajectoryStep}
+                  jobName={jobName}
+                  trialName={trialName}
+                  selectedStep={selectedStep}
+                  expandAll={expandAll}
+                  tone={tone}
+                />
+              </>
+            )}
           </div>
         );
       })}
