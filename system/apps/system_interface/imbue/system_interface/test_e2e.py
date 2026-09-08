@@ -4,8 +4,7 @@ These tests start a real Flask server (threaded Werkzeug) over a registry of stu
 ``app_instances``' in-memory source over loopback, then use Playwright to drive the shell exactly
 as a user would. Every open goes through the New Tab page or a rail row, every verb through the
 shell's relay, and every assertion on state reads the shell's own API or files. The shell knows no
-app by name, so a stub app is every app; the chat app's own pages are driven by the chat package's
-suite, which frames them through this same shell.
+app by name, so a stub app is every app.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
 from app_manifest.primitives import AppName
 from playwright.sync_api import Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect
 from pydantic import Field
 
@@ -436,8 +436,28 @@ def _open_rail_switcher(page: Page) -> None:
 
 
 def _switch_view_via_rail(page: Page, view_name: str) -> None:
-    _open_rail_switcher(page)
-    page.locator(".project-rail-menu [role='menuitem']", has_text=view_name).first.click()
+    """Pick a view from the rail's switcher, re-opening it when a click did not land.
+
+    The rail's menu closes on outside mousedown and window blur and re-renders on every
+    inventory or projects broadcast, so on a loaded runner the item click occasionally
+    lands on a menu that has just closed or been rebuilt and the view stays put, with the
+    menu gone either way. The retry keys on the switch itself: the rail header names the
+    active view as soon as the shell moves (before the incoming layout is fetched), so a
+    header still naming the old view after a click is a miss, as is a menu that closed
+    before the click could reach it.
+    """
+    menu = page.locator(".project-rail-menu")
+    header = page.locator(".project-rail-header")
+    for attempt in range(3):
+        try:
+            if menu.count() == 0:
+                _open_rail_switcher(page)
+            menu.locator("[role='menuitem']", has_text=view_name).first.click(timeout=5000)
+            expect(header).to_contain_text(view_name, timeout=5000)
+            return
+        except (AssertionError, PlaywrightTimeoutError):
+            if attempt == 2:
+                raise
 
 
 def _collapse_rail(page: Page) -> None:
@@ -506,18 +526,18 @@ def _surface_report(page: Page, address: str, stamp: str | None = None) -> dict[
 
 
 def _wait_for_surface_shown(page: Page, address: str, stamp: str | None = None) -> dict[str, Any]:
-    """The surface report once the address's page is on screen. A surface is created hidden and put
-    where its pane is on the next animation frame, so a report taken as soon as the tab appears can
-    run a frame early."""
-    reports: list[dict[str, Any]] = []
+    """The surface report once a surface holding ``address`` is on screen.
 
-    def _is_shown() -> bool:
-        reports.append(_surface_report(page, address, stamp))
-        return reports[-1]["shownCount"] == 1
-
-    if not poll_until(_is_shown, timeout=15.0, poll_interval=0.1):
-        pytest.fail(f"the page for {address} never came on screen: {reports[-1]}")
-    return reports[-1]
+    The live layer places a page's surface on the animation frame after the dock has laid
+    its pane out (a zero-sized pane keeps it hidden), so a report taken the instant the tab
+    appears can find the element present but not yet shown; the wait is for that frame.
+    """
+    page.wait_for_function(
+        f"([address, stamp]) => ({_SURFACE_REPORT_JS.strip()})([address, stamp]).shownCount >= 1",
+        arg=[address, stamp],
+        timeout=15000,
+    )
+    return _surface_report(page, address, stamp)
 
 
 # ---------- the shell ----------
@@ -797,19 +817,7 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
 
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        page.wait_for_function(
-            f"""
-            () => {{
-              const iframe = document.querySelector({json.dumps(frame_selector)});
-              if (iframe === null) return false;
-              const surface = iframe.closest('.si-live-surface');
-              const box = surface.getBoundingClientRect();
-              return getComputedStyle(surface).display !== 'none' && box.width > 0 && box.height > 0;
-            }}
-            """,
-            timeout=15000,
-        )
-        on_return = _surface_report(page, address)
+        on_return = _wait_for_surface_shown(page, address)
         assert on_return["count"] == 1, f"the page forked into a second copy: {on_return}"
         assert on_return["stamps"] == ["the-original-element"], (
             f"the element was re-created on the way back: {on_return}"
@@ -1423,7 +1431,7 @@ def test_mobile_client_saves_its_own_arrangement(tmp_path: Path, page: Page) -> 
             context.close()
 
 
-# ---------- phase 8: the layout file is the truth ----------
+# ---------- the layout file is the truth ----------
 
 
 @pytest.mark.timeout(120, func_only=False)

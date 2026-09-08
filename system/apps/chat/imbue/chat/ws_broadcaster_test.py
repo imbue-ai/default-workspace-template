@@ -200,7 +200,7 @@ def test_broadcast_after_disconnect_does_not_touch_dead_queue() -> None:
 def test_broadcast_warns_once_per_disconnect_not_per_dropped_message(
     loguru_records: list[str],
 ) -> None:
-    """The flood-prevention fix: at most one warning per stuck client, not per drop."""
+    """At most one warning per stuck client, not one per dropped message."""
     broadcaster = WebSocketBroadcaster()
     broadcaster.register()
 
@@ -237,7 +237,7 @@ def test_evicted_client_receives_shutdown_sentinel() -> None:
         broadcaster.broadcast({"index": index})
 
     # The handler thread, blocked on ``get``, would receive this sentinel and
-    # break out of its loop -- the thread-based replacement for task cancel.
+    # break out of its loop.
     assert stuck_queue.get_nowait() is None
 
 

@@ -5,8 +5,8 @@
  * embed contract (see `@minds/embed-contract` and minds'
  * `docs/embed-contract.md`); this module owns the one workspace-side endpoint
  * and hands out narrow send/subscribe helpers. Raw `postMessage` /
- * `message`-listener usage anywhere else in this app is forbidden by the
- * system_interface ratchet suite, so the whole boundary stays auditable here.
+ * `message`-listener usage anywhere else is forbidden by each frontend's embed
+ * ratchets, so the whole boundary stays auditable here.
  *
  * The page behaves identically embedded (iframe under the minds chrome) and
  * top-level (a direct share visit): with no embedder, outbound sends simply
@@ -22,13 +22,11 @@ import {
 } from "@minds/embed-contract";
 import * as embedContract from "@minds/embed-contract";
 
-// These types can postdate the vendored embed_contract snapshot (they arrive
-// with the next mngr release sync; this repo does not edit system/vendor by
-// hand). A named import of a missing export fails the rollup build, so probe
-// the namespace and fall back to the literal. A stale vendored endpoint's
-// validator drops the (to it) unknown type until the sync lands -- permission
-// cards keep the transcript-driven flip in the meantime, and share settings
-// simply goes live with no code change here once the sync lands.
+// A named import of an export the vendored embed_contract snapshot lacks fails
+// the rollup build (this repo does not edit system/vendor by hand; the snapshot
+// moves with the mngr release sync), so these probe the namespace and fall
+// back to the literal. A snapshot without the export drops the type it does
+// not know at its validator.
 export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions" =
   "PERMISSION_RESOLUTIONS" in embedContract ? embedContract.PERMISSION_RESOLUTIONS : "minds:permission-resolutions";
 // Workspace -> embedder: open the minds shell's Share tab focused on one app.
@@ -39,9 +37,7 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // One replaceable handler per embedder->workspace type, registered by the
-// feature that owns it (dockview registers close-active-tab at boot; the
-// permission cards register the resolution relay at boot; the Claude sign-in
-// modal registers/clears the mint ack around its handshake).
+// feature that owns it.
 const handlerByType: Partial<Record<string, EmbedderMessageHandler>> = {};
 
 // Created on first use rather than at import time so importing this module

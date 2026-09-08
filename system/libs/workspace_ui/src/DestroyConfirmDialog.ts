@@ -1,6 +1,6 @@
 /**
- * Confirmation dialog for a tab's irreversible verb: deleting a chat agent, a
- * terminal, or a browser session off the machine.
+ * Confirmation dialog for an irreversible verb: deleting an instance off the
+ * machine, or removing something that cannot simply be put back.
  */
 
 import m from "mithril";
@@ -9,18 +9,13 @@ import { Button } from "./components/Button";
 
 interface DestroyConfirmDialogAttrs {
   agentName: string;
-  // Dialog heading. Defaults to "Delete chat"; terminal tabs pass
-  // "Delete terminal" so the same dialog serves both.
+  // Dialog heading. Defaults to "Delete chat".
   title?: string;
   // Extra copy under the main question, for consequences the caller has to
-  // spell out. Tab destroys use it to say that the tab leaves every project
-  // (unlike closing it, which only affects the project on screen) and, for a
-  // chat, that the agent's transcript stays readable afterwards.
+  // spell out.
   details?: string;
-  // The question itself, for a verb that is not "destroy". An app is only ever
-  // unregistered -- the workspace has no way to stop the program behind it, and
-  // registering it again is one command -- so neither the destroy wording nor
-  // the "cannot be undone" the default carries is true of one.
+  // The question itself, for a verb whose consequences are not the default's
+  // "cannot be undone".
   question?: m.Children;
   // Label on the confirming button, likewise defaulting to the destroy verb.
   confirmLabel?: string;

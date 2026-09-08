@@ -25,7 +25,7 @@ import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
 import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
 import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
 import { matchesQuery } from "../models/search";
-import { serviceIconMarkup } from "./components/appIcon";
+import { appIconMarkupByName } from "./components/appIcon";
 import {
   START_OPTIONS,
   START_PAGE_SIZE,
@@ -255,7 +255,7 @@ const START_GLYPH_SIZE = 24;
 
 /** The glyph one row (or tile) wears: the app's own icon, or its monogram. */
 function appGlyph(appName: string): string {
-  return serviceIconMarkup(appName, GLYPH_SIZE, launcherIcon("app", GLYPH_SIZE));
+  return appIconMarkupByName(appName, GLYPH_SIZE, launcherIcon("app", GLYPH_SIZE));
 }
 
 const STARTING_TITLE = "Starting…";

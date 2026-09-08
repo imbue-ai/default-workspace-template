@@ -1,10 +1,10 @@
 /**
- * Per-service origin derivation. Every workspace service owns a full browser
+ * Per-app origin derivation. Every workspace app owns a full browser
  * origin (no path-prefix proxying), and that origin is a pure function of the
- * workspace's host COORDINATE by ONE rule: prefix the service's unguessable
- * ``<name>-<rand>`` origin LABEL (minted per service in
+ * workspace's host COORDINATE by ONE rule: prefix the app's unguessable
+ * ``<name>-<rand>`` origin LABEL (minted per app in
  * ``system/scripts/forward_port.py``) as a single hostname label onto the
- * coordinate. A service registered as ``foo`` (label ``foo-x7k9q2w1``) lives at:
+ * coordinate. An app registered as ``foo`` (label ``foo-x7k9q2w1``) lives at:
  *
  * - locally: ``http://foo-x7k9q2w1.host-<32hex>.localhost:8421/``
  * - on legacy shared hostnames (same rule, longer coordinate):
@@ -25,19 +25,19 @@
  * origin to the shell's own label origin, and on a share only ``*.<domain>``
  * is served, so the shell always runs at ``<shell-label>.<coordinate>``.
  * Deriving relative to ``window.location.host`` verbatim would therefore nest
- * every service under the shell's label (``foo.<shell-label>.host-<hex>...``),
+ * every app under the shell's label (``foo.<shell-label>.host-<hex>...``),
  * which routes back to the shell -- a dockview inside a dockview. Stripping to
- * the coordinate first keeps every service origin a single label deep.
+ * the coordinate first keeps every app origin a single label deep.
  *
- * Nothing about an origin is ever persisted: saved layouts carry the
- * ``serviceName`` and the URL is re-derived from that name's CURRENT label at
+ * Nothing about an origin is ever persisted: saved layouts carry the app's
+ * name in a tab's address, and the URL is re-derived from that name's CURRENT label at
  * render time, so a layout stays portable across hosts and shares.
  */
 
 /** A label that starts a workspace coordinate: ``host-<hex>`` (``agent-`` is
  *  the legacy spelling of the same coordinate), or a bare 32-hex label -- the
  *  share label leading a workspace-keyed share domain
- *  (``<share-label>.<user-hash>.<region>.<domain>``). Service labels can never
+ *  (``<share-label>.<user-hash>.<region>.<domain>``). App labels can never
  *  match either form: ``host-``/``agent-`` prefixes are reserved in
  *  forward_port.py, and a minted label is always ``<name>-<rand>`` (the hyphen
  *  plus non-hex name keeps it out of the bare 32-hex shape). */
@@ -47,7 +47,7 @@ const WORKSPACE_COORDINATE_LABEL = /^(?:(?:host|agent)-[a-f0-9]+|[a-f0-9]{32})$/
  *  everything after it (``host-<hex>.localhost:8421`` locally,
  *  ``host-<hex>.<user>.<region>.<domain>`` on a legacy share,
  *  ``<share-label>.<user-hash>.<region>.<domain>`` on a workspace-keyed
- *  share), with any leading service label(s) stripped. Returns ``host``
+ *  share), with any leading app label(s) stripped. Returns ``host``
  *  unchanged when it carries no coordinate label (a non-workspace host), so
  *  the derivation degrades safely. */
 export function workspaceHostCoordinate(host: string): string {
@@ -57,12 +57,12 @@ export function workspaceHostCoordinate(host: string): string {
 }
 
 /** Derive the origin URL (with trailing slash) whose first hostname label is
- *  ``hostLabel`` (a service's ``<name>-<rand>`` origin label). ``host`` and
+ *  ``hostLabel`` (an app's ``<name>-<rand>`` origin label). ``host`` and
  *  ``protocol`` default to the shell's own ``window.location`` but are
- *  parameters so the derivation is unit-testable without a DOM. The service
+ *  parameters so the derivation is unit-testable without a DOM. The app
  *  label is prefixed onto the workspace COORDINATE (``host`` minus any leading
- *  service label), never onto ``host`` verbatim. */
-export function deriveServiceOrigin(
+ *  app label), never onto ``host`` verbatim. */
+export function deriveAppOrigin(
   hostLabel: string,
   host: string = window.location.host,
   protocol: string = window.location.protocol,

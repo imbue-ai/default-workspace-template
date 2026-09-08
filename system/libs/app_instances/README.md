@@ -48,8 +48,7 @@ The shell is the only caller of the API, over loopback, at the registry row's
   `attention`, `stopped`, `error`), `InstanceLifetime` (`explicit`,
   `referenced`), `InstanceRecord` (the wire record; `model_dump(mode="json")`
   is what the API emits, with `last_active` anchored to UTC; `stoppable`
-  defaults to false so a list from an app built before the stop and start
-  routes still reads), and the request
+  defaults to false), and the request
   bodies `CreateRequest`, `RenameRequest`, `LocationRequest`.
 - `app_instances.primitives`: `InstanceKey` (`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`),
   `InstanceKeyPrefix`, `InstanceUrl` (rooted with a single slash, at most 2048
@@ -61,7 +60,7 @@ The shell is the only caller of the API, over loopback, at the registry row's
   navigates to a URL), `InstanceTitle` (non-blank, trimmed, at most
   256 characters), `TitleTemplate` (must contain `{n}`),
   `render_title_template(template, number)`, which fills the placeholder in,
-  and the workspace's naming rule as the shell applies it to chats:
+  and the workspace's naming rule as the chat app applies it to chats:
   `canonical_name_from_title` ("My Build" to "My-Build"; "" when nothing
   usable remains) and `is_name_conflict(candidate_title, taken_names)`
   (canonical forms compared case-insensitively), for an app whose keys are
@@ -85,8 +84,7 @@ The shell is the only caller of the API, over loopback, at the registry row's
   store's file handling, for an app that keeps a document shape of its own.
 - `app_instances.nudge`: `post_to_shell(url, body)` is every post an app
   makes to the shell: JSON body (or none) with a two-second timeout, an
-  unreachable or refusing shell logged at debug level (until phase 7 of the
-  model the shell answers `404`, which is expected), a warning when the post
+  unreachable or refusing shell logged at debug level, a warning when the post
   took over half a second. `ShellNudger(app_name, shell_url)` posts
   `POST <shell>/api/apps/<name>/changed` through it; an app's own posts to the
   shell's tab routes (the terminal's) go through it too. `ThreadedNudger(inner)`
@@ -124,11 +122,10 @@ The shell is the only caller of the API, over loopback, at the registry row's
   which builds one for a fixture (cwd at the repo root, the registry and an
   unreachable shell in the environment), `serve_recording_shell()` (a fake
   shell that records every request's method, path, and JSON body and answers
-  `404`), and `run_stub_app(port)` for the shell's tests in later phases; as a
+  `404`), and `run_stub_app(port)` for the shell's tests; as a
   module it serves the stub app (`python -m app_instances.testing stub --port
   <port>`) or runs the sidecar over a JSON store (`... sidecar --manifest ...
   --app-url ... --instances-url ... --store ... -- <child argv>`).
 
-The terminal app (`system/apps/terminal`, phase 3) and the files app
-(`system/apps/files`, phase 4, the sidecar around dufs) are its users; phase 5
-(browser) of the model follows.
+The terminal, files (the sidecar around dufs), browser, and chat apps are its
+users.

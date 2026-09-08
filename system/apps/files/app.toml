@@ -2,8 +2,7 @@ name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
 instances = true
-# The instances API port (served by the files sidecar from phase 4 of the
-# workspace app model on); dufs itself stays on 8300.
+# The instances API port; dufs serves the file viewer pages on 8300.
 instances_url = "http://127.0.0.1:8301"
 critical = false
 priority = "files"

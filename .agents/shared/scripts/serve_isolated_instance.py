@@ -82,8 +82,8 @@ STATE_FILENAME = "instance.json"
 INNER_LOG_FILENAME = "instance.log"
 WRAPPER_LOG_FILENAME = "wrapper.log"
 
-# forward_port.py is stdlib-only (it runs under a plain python3 from every
-# supervisord program line), so it needs no venv here either.
+# forward_port.py is stdlib-only (the supervisord program lines that register an
+# app run it under a plain python3), so no venv is needed here either.
 FORWARD_PORT_CMD = ("python3", "system/scripts/forward_port.py")
 
 # The wrapper server ships beside this script and is stdlib-only, so it runs under

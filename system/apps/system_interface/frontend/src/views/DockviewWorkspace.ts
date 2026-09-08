@@ -166,7 +166,7 @@ const DELETE_INSTANCE_DETAILS =
   "It leaves every project that shows it, not just this one. The app itself keeps running.";
 
 // How long an open waits for an address the inventory does not list yet. A create the page
-// itself ran (a chat's own create route) lands in the inventory on the next nudge; a create
+// itself ran (an app's own create route) lands in the inventory on the next nudge; a create
 // the relay ran is in the ``apps_updated`` the shell pushes before it answers, which can still
 // reach this window after the answer does.
 const AWAIT_ADDRESS_TIMEOUT_MS = 4000;
@@ -452,8 +452,8 @@ export function requestInstanceLifecycle(appName: string, key: string, title: st
   });
 }
 
-/** Ask the embedding minds chrome to open its Share tab for an app. A critical app (the shell
- *  itself, the chat) has no share surface. */
+/** Ask the embedding minds chrome to open its Share tab for an app. A critical app has no share
+ *  surface. */
 function shareActionForApp(app: AppRecord): (() => void) | null {
   if (app.critical) return null;
   return () => sendToEmbedder(OPEN_SHARE_SETTINGS, { serviceName: app.name });
@@ -1116,7 +1116,7 @@ export function refreshProjects(): void {
 }
 
 /**
- * The active view's tab list: every instance it holds, open or backgrounded.
+ * The active view's tab list: every instance it holds, docked or not.
  *
  * A project lists its tab set, resolved against the inventory (an address the machine no
  * longer lists is skipped: the shell prunes it from the tab set on the same observation).
@@ -1182,7 +1182,7 @@ export function removeAddressFromView(address: string): void {
     .finally(() => m.redraw());
 }
 
-/** Reload what a row is showing when it has an open tab; opens it fresh when it is backgrounded. */
+/** Reload what a row is showing when it has an open tab; opens it fresh when it has none. */
 export function refreshAddress(address: string): void {
   const panelId = panelIdForAddress(address);
   if (panelId === null) {
@@ -1205,8 +1205,8 @@ export function renameAddress(address: string, title: string): void {
     .finally(() => m.redraw());
 }
 
-/** Reload whatever a tab is showing: every frame of the app, backgrounded ones included --
- *  "refresh the app" has always meant the app rather than this pane. */
+/** Reload whatever a tab is showing: every frame of the app, docked or not -- a refresh of an
+ *  app means the app rather than this pane. */
 function refreshPanelContent(panelId: string): void {
   const params = panelParams.get(panelId);
   if (params === undefined || params.kind === "launcher") return;
@@ -1389,7 +1389,7 @@ export function removeShortcutFromView(appName: string, actionId: string): void 
 
 // ---------- Panels ----------
 
-/** The panel currently showing ``address``, or null when the instance is backgrounded or gone. */
+/** The panel currently showing ``address``, or null when the instance is not docked or is gone. */
 function panelIdForAddress(address: string): string | null {
   for (const [panelId, params] of panelParams) {
     if (params.kind === "instance" && params.address === address) return panelId;
@@ -1449,7 +1449,7 @@ function addPanelForAddress(address: string, placement: AddPanelPlacementOptions
 
 /**
  * File a freshly-opened address into the view it was opened in (the uniform rule: every open
- * in a project files, subagents included). Idempotent, and Everything takes no tab set.
+ * in a project files, whichever way it was opened). Idempotent, and Everything takes no tab set.
  * Best-effort: failing to reach the shell must never stop a tab from opening.
  */
 function fileIntoActiveProject(address: string): void {

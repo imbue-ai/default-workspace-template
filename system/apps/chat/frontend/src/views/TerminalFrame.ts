@@ -1,6 +1,6 @@
 import m from "mithril";
 
-/** The chat's terminal back face: a plain ttyd frame, with the flags a terminal page needs. */
+/** The chat's terminal back face: a frame on the terminal app, with the flags a terminal page needs. */
 export const TerminalFrame: m.Component<{ url: string; title: string }> = {
   view(vnode) {
     return m("iframe", {

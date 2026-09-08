@@ -4,7 +4,7 @@
  * deleted.
  *
  * Reached from the sidebar's switcher header context menu, and only ever for a
- * real project. Creating no longer goes through here: the switcher's "New
+ * real project. Creating does not go through here: the switcher's "New
  * project" mints "Project N" with the next unused glyph on the spot, so the
  * user lands on the new project's New Tab page instead of on a form. Everything
  * never reaches here either -- it is a view rather than a project, with no
@@ -13,9 +13,9 @@
  * Deleting is confirm-gated in place -- a second, red button inside this same
  * dialog rather than a second stacked dialog -- because the modal already owns
  * the screen and the name being deleted is right there in the preview.
- * Deleting a project is itself a pure view operation now: it removes the
- * project's own view and tab set and nothing more, so there is no longer
- * any consequence for the confirmation to enumerate beyond that.
+ * Deleting a project is itself a pure view operation: it removes the
+ * project's own view and tab set and nothing more, so the confirmation has
+ * no other consequence to enumerate.
  *
  * Built on the shared Modal shell (views/components/Modal.ts): a backdrop mousedown to
  * dismiss, Enter in the name field to save, and Escape through the shell's

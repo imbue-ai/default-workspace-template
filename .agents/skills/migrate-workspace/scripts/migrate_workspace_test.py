@@ -479,10 +479,8 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
 def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
     conf = Path(__file__).resolve().parents[4] / "system" / "supervisord.conf"
     ports = migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
-    # The terminal and the files app register from inside their own processes (the registry
-    # scan covers them), so the config itself names the other two. The shell's line also
-    # registers the chat app's manifest at the shell's own port; the registry scan is what
-    # names that row, and the config scan reports the shell once, not twice.
+    # The chat, the terminal and the files app register from inside their own processes
+    # (the registry scan covers them), so the config itself names the other two.
     assert {(port.name, port.port) for port in ports} >= {
         ("system_interface", 8000),
         ("browser", 8081),

@@ -255,7 +255,7 @@ def make_terminal_record(
 
     A record with a session id remembers the creation time the fake tmux stamps on that id unless
     ``session_created`` names another (a stale record from an earlier server) or
-    ``is_session_created_known`` is false (a record from before creation times were kept).
+    ``is_session_created_known`` is false (a record that knows none).
     """
     if session_created is None and is_session_created_known and session_id is not None:
         session_created = fake_created_epoch(session_id)

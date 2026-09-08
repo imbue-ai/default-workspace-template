@@ -6,7 +6,7 @@
  * registry carries it verbatim on the app's row, and the server hands it to
  * this UI on `AppEntry.icon`. That markup is authored by a skill, so it is
  * untrusted: every surface that draws an app goes through
- * `appIconMarkup`/`serviceIconMarkup` here, and nothing inlines a registry
+ * `appIconMarkup`/`appIconMarkupByName` here, and nothing inlines a registry
  * string on its own.
  *
  * The gate is `sanitizeIconMarkup`, and it is deliberately the only one:
@@ -27,9 +27,8 @@
  *   rejected whole -- the caller then draws its built-in glyph.
  *
  * This is defense in depth, not the only defense: `forward_port.py` validates
- * on the way into the registry and `agent_manager.py` backstops on the way
- * out. It is the last of the three because it is the one that runs against the
- * DOM the markup is about to enter.
+ * on the way into the registry. This gate is the last one because it is the
+ * one that runs against the DOM the markup is about to enter.
  *
  * Sizing and color live here too, since both are decided from the same parsed
  * tree. The icon is rendered at the caller's pixel size on the caller's own
@@ -44,9 +43,9 @@ import { getApp } from "../../models/Inventory";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
-// The same cap `forward_port.py` (MAX_ICON_LENGTH) and `agent_manager.py`
-// enforce. Repeated here because this module is the last thing between the
-// markup and the DOM, and it must not depend on either having run.
+// The same cap `forward_port.py` (MAX_ICON_LENGTH) enforces. Repeated here
+// because this module is the last thing between the markup and the DOM, and it
+// must not depend on the registration having run.
 export const MAX_ICON_LENGTH = 16384;
 
 // Elements refused outright. Everything here either runs code, navigates,
@@ -332,18 +331,18 @@ export function appMonogramMarkup(appName: string, sizePx: number): string {
 }
 
 /**
- * The same, for surfaces that hold a service name rather than the app row --
+ * The same, for surfaces that hold an app name rather than the app row --
  * ones that address an app by the name in its address.
  *
- * An unknown name (an app that has since been deregistered, a ref from a
+ * An unknown name (an app that has since been deregistered, an address from a
  * hand-edited layout) has no icon to draw and takes the fallback.
  */
-export function serviceIconMarkup(serviceName: string | null, sizePx: number, fallbackMarkup: string): string {
-  if (serviceName === null) return fallbackMarkup;
-  const app = getApp(serviceName);
+export function appIconMarkupByName(appName: string | null, sizePx: number, fallbackMarkup: string): string {
+  if (appName === null) return fallbackMarkup;
+  const app = getApp(appName);
   // A name the machine no longer registers keeps the caller's generic glyph:
-  // there is no app to monogram, and inventing one would dress up a dead ref as
-  // a real app.
+  // there is no app to monogram, and inventing one would dress up a dead name
+  // as a real app.
   if (app === undefined) return fallbackMarkup;
   return appIconMarkup(app.icon, sizePx, fallbackMarkup, app.name);
 }

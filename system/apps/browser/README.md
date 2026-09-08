@@ -37,19 +37,20 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   /browsers` (409 with the reason while the fleet is full or Chromium is not
   installed), delete is the same close as `DELETE /browsers/<name>`, and a
   location report with an absolute `http(s)` URL navigates the live browser's
-  active tab (409 while an agent holds it or while it is launching or crashed;
-  a rooted path is 400) and checkpoints the manifest so a restart restores the
-  new page. Reads, delete, and location answer 503 until the restore finishes,
+  active tab (409 while an agent holds it, while it is launching, stopped, or
+  crashed, or when Chromium refuses the navigation; a rooted path is 400) and checkpoints
+  the manifest so a restart restores the new page. Reads, delete, and location
+  answer 503 until the restore finishes,
   like the daemon's own state-changing routes; create does not wait, like `POST
   /browsers`. A failure of the daemon itself underneath a verb (its loop not
   answering in time, a startup error) is a 500 with a detail body. Every fleet
   event that changes the list or a status (a registration, a launch reaching
   `running` or failing, a close, a crash, every ownership write) nudges the shell
   (`POST <shell>/api/apps/browser/changed`) from a daemon thread, so a slow shell
-  never stalls the event loop. The existing
-  `/browsers` routes stay for the CLI; the shell reaches the daemon only
-  through the instances API. Every browser is `stoppable`: `POST
-  /_instances/<name>/stop` ends its Chromium (refreshing its tab list first)
+  never stalls the event loop. The `/browsers` routes serve the CLI; the shell
+  reaches the daemon only through the instances API. Every browser is
+  `stoppable`: `POST /_instances/<name>/stop` ends its Chromium (refreshing its
+  tab list first)
   but keeps the browser, its profile, and its tabs, and lists it as `stopped`;
   `.../start` relaunches it on those tabs from the same profile (409 while it
   is still launching, or when the fleet is full). A stopped browser does not
@@ -76,11 +77,10 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   its own persistent Chromium profile under `$MNGR_HOST_DIR/browser-profiles/`
   (Tier A -- on the workspace volume), so cookies/logins/history come back; Chromium
   does this itself, we just point `user_data_dir` at a durable dir. A tiny manifest
-  (`data/.apps/browser/instances.json`, the app's instance records; a workspace from
-  before the move still has it at `data/.state/browser-fleet.json`, which the daemon
-  reads until its first write to the new path) records which browsers existed and
-  their tab URLs. It is checkpointed every ten seconds and once more when the daemon
-  is stopped: supervisord signals the daemon alone (`stopasgroup=false`), so that
+  (`data/.apps/browser/instances.json`, the app's instance records) records which
+  browsers existed and their tab URLs. It is checkpointed every ten seconds and
+  once more when the daemon is stopped: supervisord signals the daemon alone
+  (`stopasgroup=false`), so that
   final checkpoint runs while every Chromium can still be asked for its tabs, and only
   then does the daemon close each browser. Each browser also keeps the tab list its
   last successful query returned, and reports that list whenever Chromium cannot

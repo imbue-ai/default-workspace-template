@@ -21,7 +21,6 @@ import pytest
 from imbue.chat.harnesses.claude import auth
 from imbue.chat.testing import FakeFinishedProcess
 
-_FAKE_URL = "https://claude.com/cai/oauth/authorize?code=true&state=abc"
 _FAKE_TOKEN = "sk-ant-oat01-" + "FAKETOKEN0" * 9 + "12345"
 
 
@@ -344,21 +343,6 @@ def test_status_managed_env_outranks_credentials_fold(isolated_claude_config: Pa
 
     service = auth.ClaudeAuthService(command_runner=_runner)
     assert service.get_auth_status().auth_mode is auth.AuthMode.API_KEY
-
-
-# ----- token/URL extraction -----
-
-
-def test_extract_oauth_url_prefers_osc8_hyperlink_target_over_garbled_label() -> None:
-    """The CLI's visible wrapped label render is garbled; the OSC 8 target
-    (id-parameterized, BEL-terminated) carries the intact URL."""
-    full_url = _FAKE_URL + "&redirect_uri=https%3A%2F%2Fx&state=S123"
-    raw = f"\x1b]8;id=1abc;{full_url}\x07\x1b[38;5;246m{full_url[:80]}\x1b[39m\x1b]8;;\x07"
-    assert auth._extract_oauth_url(raw) == full_url
-
-
-def test_extract_oauth_url_returns_none_when_no_url_present() -> None:
-    assert auth._extract_oauth_url("no links here") is None
 
 
 # ----- repo<->mngr CLI contract -----

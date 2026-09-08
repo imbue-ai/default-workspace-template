@@ -107,9 +107,9 @@ _BROWSER_APP_NAME = "browser"
 _BROWSER_NEW_ACTION = "new"
 _BROWSER_URL_PARAM = "url"
 
-# The spellings addresses replaced. Each is refused by name, with the address to use
-# instead, so an agent working from an old note gets the new form rather than a five
-# second registration wait for an app called ``chat:alice``.
+# Spellings refused by name, each with the address to use instead, so an agent working
+# from an old note gets the address rather than a five second registration wait for an
+# app called ``chat:alice``.
 _RETIRED_PREFIXES = (
     "chat-terminal:",
     "chat:",

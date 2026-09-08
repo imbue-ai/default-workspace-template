@@ -1,6 +1,6 @@
 ---
 name: update-system-interface
-description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview; the chat pages themselves are the chat app's (system/apps/chat).
+description: Canonical flow for changing the system interface (the web workspace UI at system/apps/system_interface) -- its frontend (the dockview shell, the sidebar, the New Tab launcher) or backend (Flask server, the inventory over the app registry, layout ops) -- and the shared frontend library at system/libs/workspace_ui. Use whenever the user wants to edit, fix, restyle, or add to the workspace UI / dockview.
 metadata:
   author: imbue
 ---
@@ -8,8 +8,7 @@ metadata:
 # Updating the system interface
 
 `system/apps/system_interface` is the live web UI the user is looking at right now
-(the dockview shell, the sidebar, the New Tab launcher; the chat pages it docks are
-the chat app's, `system/apps/chat`). A broken build here is
+(the dockview shell, the sidebar, the New Tab launcher). A broken build here is
 served straight to the user, so you never edit the served copy directly: you
 make every change in an **isolated worktree clone**, verify it builds and passes
 there, and only merge it back into the served tree once it's known-good. This

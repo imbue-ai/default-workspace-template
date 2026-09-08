@@ -5,8 +5,8 @@ supervised as the `terminal` program in `system/supervisord.conf`, which runs
 the `terminal-app` entry point of this package (installed as its own uv tool by
 `system/scripts/build_workspace.sh`, like every Python app with a manifest).
 
-`terminal-app` does what the old launcher script did, then runs ttyd as the
-sidecar's child (`app_instances.sidecar.run_sidecar_app`):
+`terminal-app` prepares the workspace for ttyd, then runs it as the sidecar's
+child (`app_instances.sidecar.run_sidecar_app`):
 
 1. Writes the ttyd dispatch scripts into `data/.state/terminal/commands/`
    (`dispatch.py`): `session.sh` attaches to a `terminal-N` tmux session by the
@@ -46,16 +46,16 @@ restart brings up hands the same ids out again, so the creation time tells a
 terminal's session apart from a later server's under the same id; a side that
 knows no creation time matches on the id alone), so a session renamed inside
 tmux keeps its key and its title; a session no record holds falls back to
-the record of its name when that record's own session is not live (one from
-before the app kept ids, or a session the dispatch created on attach; a session
+the record of its name when that record's own session is not live (a record
+that holds no id, or a session the dispatch created on attach; a session
 that only carries the old name of a terminal whose own session is live is
 skipped, whichever tmux lists first), and one with no record at all lists under
 its own name. The URL is `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]`; the
 shell substitutes the tab id, and `session.sh` receives it as its second
 argument. A terminal created through `new` always carries a workdir: the
 `workdir` param when the create gave one, else the directory the app runs from
-(the workspace root under supervisord); only records written before that default
-lack one.
+(the workspace root under supervisord); a record of a hand-made session holds
+none, and a session recreated for it starts in the default.
 
 - `new` (optional `workdir`) allocates the lowest free `terminal-<N>` over the
   live and remembered names and creates the tmux session at once (`tmux
@@ -109,9 +109,9 @@ attach), and re-points the tab through the shell's
 key and no title (the shell tab's title is the record's) and so only nudges.
 Either event nudges the shell, since the instance list may have changed.
 
-`notify_terminal_session.py` at this folder's root is a symlink into `bin/` for
-tmux servers that started before the helper moved (a server keeps the hook
-commands it read at start).
+`notify_terminal_session.py` at this folder's root is a symlink into `bin/`, for
+a tmux server whose hook commands name that path (a server keeps the hook
+commands it read at start; see the `CLEANUP` note in `terminal_tmux.conf`).
 
 ## Tests
 

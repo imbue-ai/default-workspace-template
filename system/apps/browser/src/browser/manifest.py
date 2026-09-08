@@ -27,11 +27,11 @@ from browser.primitives import APP_NAME
 
 # Relative to the daemon's cwd (= repo root). Override for tests / alternate layouts.
 _MANIFEST_PATH = Path(os.environ.get("BROWSER_MANIFEST_PATH", str(app_store_path(APP_NAME))))
-# Where the manifest lived before phase 5 of the workspace app model moved it under the
-# app's own data directory. A workspace upgraded across that move has its saved fleet
-# only at the old path until the daemon's first write to the new one, so reads fall back.
-# CLEANUP: drop this path and the fallback in read_manifest once every workspace has
-# booted a daemon from a release carrying phase 5 (the first checkpoint writes the new path).
+# The manifest's former path. A workspace upgraded across the move has its saved fleet only
+# there until the daemon's first write to the new path, so reads fall back to it.
+# CLEANUP: drop this path and the fallback in read_manifest once every workspace has booted
+# a daemon from the release that ships the workspace app model (its first checkpoint writes
+# the new path).
 _LEGACY_MANIFEST_PATH = Path("data/.state/browser-fleet.json")
 # v2: browser ids are now random NAME strings (not sequential ints), and the
 # ``next_id`` high-water mark is gone. ``read_manifest`` rejects any other version
@@ -47,7 +47,7 @@ class ManifestEntry(MutableModel):
     tabs: list[str] = []  # ordered tab URLs; blank/about:/chrome: are dropped before saving
     active_tab: int = 0
     # A stopped browser is restored as stopped (registered with its tabs, no Chromium) rather
-    # than relaunched. Defaulted so a manifest from before the flag still reads.
+    # than relaunched; an entry without the flag is a browser to relaunch.
     stopped: bool = False
 
 

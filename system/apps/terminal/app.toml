@@ -2,8 +2,7 @@ name = "terminal"
 display_name = "Terminal"
 icon = "icon.svg"
 instances = true
-# The instances API port (served by the terminal app from phase 3 of the
-# workspace app model on); ttyd itself stays on 7681.
+# The instances API port; ttyd serves the terminal pages on 7681.
 instances_url = "http://127.0.0.1:7682"
 critical = true
 priority = "terminal"

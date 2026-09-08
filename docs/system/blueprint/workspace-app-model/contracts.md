@@ -4,20 +4,19 @@ This file holds every cross-cutting schema, route, message, and file format the 
 Each phase file links here rather than restating a shape, so the implementer never reconciles two copies.
 The vocabulary is the glossary in [plan-workspace-app-model.md](plan-workspace-app-model.md), and the phase files are `phase_01_*.md` through `phase_11_*.md` plus [mngr_side_changes.md](mngr_side_changes.md).
 
-Every rule below is normative.
-Where a phase changes a contract mid-arc (the shared-process phases 6 to 9), the phase file says so and this file describes the end state.
+Every rule below is normative and describes the current contract; where a phase file's account differs, this file is the truth.
 
 ## 1. Identifiers and addresses
 
-- An **app name** obeys `system/scripts/forward_port.py`'s existing rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not starting with `host-` or `agent-`.
+- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not starting with `host-` or `agent-`.
 - An **instance key** matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
   It is unique within its app and never changes for the life of the instance.
   Keys ride addresses, URLs, and JSON keys unencoded; a key never needs percent-encoding because its alphabet is URL-safe.
 - An **address** is `app:<name>` for a single-instance app or `app:<name>?instance=<key>` for an instance.
   The parser splits at the first `?`, requires the remainder to be exactly `instance=<key>`, and rejects anything else.
   `app:<name>` for an app with `instances = true` is not an address of an instance; it names the app for `open` and `--action`.
-- A **view id** is a project id (the slugified project name, as today) or the literal `everything`.
-- A **client id** is the uuid the browser keeps in local storage under `si-client-id`, as today.
+- A **view id** is a project id (the slugified project name) or the literal `everything`.
+- A **client id** is the uuid the browser keeps in local storage under `si-client-id`.
 - A **tab id** is `tab-<16 hex>`, minted by the shell when a panel is created, kept in the client's layout record, and never reused.
 - A **save id** is `save-<16 hex>`, minted by a window for each layout save it makes.
 
@@ -30,17 +29,17 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 |---|---|---|---|---|
 | `name` | string | yes | | An app name (section 1). Must equal the `--name` passed at registration. |
 | `display_name` | string | yes | | Non-empty, at most 64 characters. What users see. |
-| `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s existing `validate_icon` at registration. |
+| `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s `validate_icon` at registration. |
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
 | `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
 | `critical` | bool | no | `false` | No Stop verb; snapshot-and-rollback target in the apply. |
-| `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands` (which gains `chat`), or `user`. |
+| `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
 | `internal` | bool | no | `false` | Hidden from every open surface. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launcher_rank` | integer | no | absent | At least 1. Where the app's tile sits on the New Tab page's leading "Open new" row, lowest first; an app without one follows on the second row. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
-| `handles` | table | no | absent | Must be absent or empty in this arc. |
+| `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.
 
@@ -52,21 +51,20 @@ Built-in manifests:
 | `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
 | `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
 | `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional, from phase 8) |
+| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
 
-The `terminal` and `files` manifests keep `icon` pointing at the existing `icon.svg` files (the terminal gains one, drawn in the house style; today it registers with `--no-icon`).
-While the chat app was a second document of the shell's process (phases 6 to 9), its manifest also declared `program = "system_interface"` and `priority = "system_interface"`; phase 10 dropped both (the program is `chat`, the band is `chat`). (Phase 6 also declared `internal = true`, which phase 7 dropped when the shell started listing apps from the inventory.)
+Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
 ## 3. The registry (`data/.state/apps.toml`)
 
-Written only by `system/scripts/forward_port.py`, which becomes stdlib-only: `tomllib` to read and a private writer that emits the flat shape below.
+Written only by `system/scripts/forward_port.py`, which is stdlib-only: `tomllib` to read and a private writer that emits the flat shape below.
 The writer supports exactly the value types the registry uses: strings (emitted as basic strings with `\\`, `"`, and control characters escaped), booleans, integers, and arrays of inline tables whose values are strings, booleans, or arrays of strings.
 
 Each `[[apps]]` row:
 
 | Key | Source | Notes |
 |---|---|---|
-| `name`, `url`, `label`, `icon`, `internal`, `program` | as today | `label` stays the unguessable origin label and is never an identifier. |
+| `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `icon`, `internal`, and `program` from the manifest when one is given) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
 | `display_name` | manifest | Absent on manifest-less rows; the shell then uses `name`. |
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
@@ -77,11 +75,11 @@ Each `[[apps]]` row:
 | `launcher_rank` | manifest | Integer; absent reads as none. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
-`--name --url` without `--manifest` keeps today's behaviour for manifest-less registrations (`--internal`, `--no-icon`, `--program`, `--icon-file` unchanged; a pre-manifest app registers this way for as long as it exists, so phase 11 keeps every flag).
-`--remove` is unchanged.
-The script validates only what it copies from files; the shell validates every row against the `AppManifest` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
+`--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way.
+`--remove` deletes the row.
+The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.
 
-The app watcher and the minds side read the same keys they read today and ignore the new ones.
+The app watcher and the minds side read `name`, `url`, `label`, and `icon` and ignore the manifest keys.
 
 ## 4. The instances API
 
@@ -110,7 +108,7 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 - `lifetime` is `explicit` (exists until deleted) or `referenced` (the shell deletes it when no project tab set and no client layout references its address).
 - `last_active` is an RFC 3339 UTC timestamp or `null`.
 - `renameable` says whether `POST /_instances/<key>/rename` is accepted.
-- `stoppable` says whether `POST /_instances/<key>/stop` and `.../start` are accepted: the app can end what backs this one instance (a chat's agent, a browser's Chromium, a terminal's session) while keeping the instance, and bring it back. A list from an app built before the field existed reads as `false`.
+- `stoppable` says whether `POST /_instances/<key>/stop` and `.../start` are accepted: the app can end what backs this one instance (a chat's agent, a browser's Chromium, a terminal's session) while keeping the instance, and bring it back. Absent reads as `false`.
 - `title` is non-blank after trimming surrounding whitespace and at most 256 characters; a rename body that breaks this is a bad title.
 
 ### 4.2 Routes
@@ -119,13 +117,13 @@ JSON in and out; every error body is `{"detail": "<message>"}`.
 |---|---|---|---|
 | `GET /_instances` | | `200 {"instances": [record, ...]}` | `503 {"detail"}` while the app is initialising |
 | `POST /_instances` | `{"action": "<id>", "params": {...}}` | `201 {"instance": record}` | `400` unknown action or bad params, `409` the app cannot create now (with a detail the shell shows verbatim), `503` initialising |
-| `DELETE /_instances/<key>` | | `204` | none: an unknown key is `204` (idempotent) |
+| `DELETE /_instances/<key>` | | `204` | an unknown key is `204` (idempotent); `503` initialising (the browser; see section 4.3) |
 | `POST /_instances/<key>/rename` | `{"title": "<text>"}` | `200 {"instance": record}` | `400` not renameable or bad title, `404` unknown key, `409` title collision |
-| `POST /_instances/<key>/location` | `{"path": "<path>"}` | `200 {"instance": record}` | `400` bad path or the app does not track location, `404` unknown key, `409` the app cannot navigate there now (the browser; see section 4.3) |
-| `POST /_instances/<key>/stop` | | `200 {"instance": record}`, the record now `stopped`; idempotent | `400` not stoppable, `404` unknown key, `409` the app cannot stop it now (with a detail) |
-| `POST /_instances/<key>/start` | | `200 {"instance": record}`; idempotent for a live instance | `400` not stoppable, `404` unknown key, `409` the app cannot start it now (with a detail) |
+| `POST /_instances/<key>/location` | `{"path": "<path>"}` | `200 {"instance": record}` | `400` bad path or the app does not track location, `404` unknown key, `409` the app cannot navigate there now (the browser; see section 4.3), `503` initialising (the browser) |
+| `POST /_instances/<key>/stop` | | `200 {"instance": record}`, the record now `stopped`; idempotent | `400` not stoppable, `404` unknown key, `409` the app cannot stop it now (with a detail), `503` initialising (the browser) |
+| `POST /_instances/<key>/start` | | `200 {"instance": record}`; idempotent for a live instance | `400` not stoppable, `404` unknown key, `409` the app cannot start it now (with a detail), `503` initialising (the browser) |
 
-`path` obeys the same rule as `url`, minus the placeholder: rooted with a single slash, at most 2048 characters, no control characters; or, for an app that navigates to other sites' pages (the browser), an absolute `http` or `https` URL with a host, under the same length and character rules.
+`path` obeys the same rule as `url`, minus the placeholder: rooted with a single slash, at most 2048 characters, no control characters; or, for an app that navigates to other sites' pages (the browser), an absolute `http` or `https` URL with a host, at most 2048 characters, with no whitespace and no control characters (the URL form is stricter than the path form by the whitespace rule).
 Each app takes the form that fits it and answers `400` for the other.
 An app that accepts a location stores it as the instance's `url` (with the `{tab}` placeholder re-added if the app uses one) and nudges; an app that navigates to it keeps its instance `url` as it was and records the destination in its own state.
 A `<key>` that fails the key rule of section 1 is `400` on every keyed route, `DELETE` included, before the app is consulted; the shell only ever sends keys it listed, so this names a caller bug rather than an absent instance.
@@ -136,9 +134,9 @@ Every mutating route, `DELETE` of an unknown key included, nudges the shell; the
 
 | App | Key | `url` | `title` | `status` | `lifetime` | `renameable` | Create | Delete | Location | `stoppable`, Stop, Start |
 |---|---|---|---|---|---|---|---|---|---|---|
-| terminal | the allocated `terminal-<N>` (a hand-made tmux session lists under its own name); a key never changes, and the app matches a remembered terminal to its live session by tmux's session id together with the session's creation time (an id is unique only for one server's lifetime, and a container restart's server hands the same ids out again), so a session renamed inside tmux keeps its key | `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]` (the leading `_` lands in `$0` of the `bash -c` dispatch snippet, as today's frontend sends it; `workdir` always rides as the last argument: the one the create gave, else the directory the app runs from; only records written before that default lack it) | the stored title, else `Terminal <N>` for `terminal-<N>` and the name verbatim (see phase 3); a rename changes the title alone, and neither the key nor the tmux session name | `idle`, or `stopped` when the store holds the terminal and tmux has no session for it (the user stopped it, or the app could not recreate it) | `explicit` | true | allocates the lowest free `terminal-<N>`, creates the tmux session at once (`new-session -d`, running the login shell in the `terminal-session` memory band) and records it with the session id and creation time; `params.workdir` optional. At startup the app recreates the session of every remembered terminal tmux lost, except one the user stopped | kills the session and drops the record | `400` | true for every terminal; stop kills the session and keeps the record as stopped (a hand-made session gains a record), start recreates the session in the record's workdir; a live terminal's start is a no-op |
+| terminal | the allocated `terminal-<N>` (a hand-made tmux session lists under its own name); a key never changes, and the app matches a remembered terminal to its live session by tmux's session id together with the session's creation time (an id is unique only for one server's lifetime, and a container restart's server hands the same ids out again), so a session renamed inside tmux keeps its key; the name fallback for a record whose own session is gone never claims a session another terminal holds by id | `/?arg=_&arg=session&arg=<key>&arg={tab}[&arg=<workdir>]` (the leading `_` lands in `$0` of the `bash -c` dispatch snippet; `workdir` rides as the last argument for every terminal created through `new`: the one the create gave, else the directory the app runs from; a hand-made session's record holds none, so its URL carries none) | the stored title, else `Terminal <N>` for `terminal-<N>` and any other name verbatim; a rename changes the title alone, and neither the key nor the tmux session name | `idle`, or `stopped` when the store holds the terminal and tmux has no session for it (the user stopped it, or the app could not recreate it) | `explicit` | true | allocates the lowest free `terminal-<N>`, creates the tmux session at once (`new-session -d`, running the login shell in the `terminal-session` memory band) and records it with the session id and creation time; `params.workdir` optional. At startup the app recreates the session of every remembered terminal tmux lost, except one the user stopped | kills the session and drops the record | `400` | true for every terminal; stop kills the session and keeps the record as stopped (a hand-made session gains a record), start recreates the session in the record's workdir; a live terminal's start is a no-op |
 | files | `files-<N>` | the stored path | `File Viewer <N>` | `idle` | `referenced` | false | allocates the lowest free number, stores `params.path` or `/` | drops the record | records the path | false: nothing backs a file viewer, so stop and start are `400` |
-| browser | browser name | `/?session=<key>` | `Browser <N>` or the legacy name | `working` while an agent holds control, else `idle` (a browser still launching included); `error` for a crashed browser; `stopped` while the user has it stopped | `explicit` | false | `POST /browsers`; `params.url` (optional, an absolute `http(s)` URL; from phase 8, `400` before it) is the first page the new browser opens on, so `layout.py open <url>` is one create rather than a create and a location the launching browser would refuse | `DELETE /browsers/<key>` | navigates the live browser's active tab to the absolute URL in `path` (a rooted path is `400` for this app) and checkpoints its fleet manifest; `409` while an agent holds the browser or while it is launching, stopped, or crashed | true for every browser; stop ends its Chromium after refreshing its tab list and keeps the browser, its profile, and its tabs (`409` while it is still launching); start relaunches it on those tabs from the same profile (`409` when the fleet is full); a stopped browser does not count toward the fleet cap, is restored as stopped after a daemon restart, and refuses the fleet CLI's verbs with status `stopped` |
+| browser | browser name | `/?session=<key>` | `Browser <N>` for `browser-<N>`, any other name verbatim | `working` while an agent holds control, else `idle` (a browser still launching included); `error` for a crashed browser; `stopped` while the user has it stopped. Every route but create and rename is `503` until the daemon's init gate opens (while it restores the saved browsers): list, delete, location, stop, and start (rename is `400`, gate or no gate); a create during restore queues behind the relaunches and the shell's next fetch picks the browser up | `explicit` | false | `POST /browsers`; `params.url` (optional, an absolute `http(s)` URL) is the first page the new browser opens on, so `layout.py open <url>` is one create rather than a create and a location the launching browser would refuse | `DELETE /browsers/<key>`; `503` before the init gate opens | navigates the live browser's active tab to the absolute URL in `path` (a rooted path is `400` for this app) and checkpoints its fleet manifest; `409` while an agent holds the browser or while it is launching, stopped, or crashed; `503` before the init gate opens | true for every browser; stop ends its Chromium after refreshing its tab list and keeps the browser, its profile, and its tabs (`409` while it is still launching); start relaunches it on those tabs from the same profile (`409` when the fleet is full); both `503` before the init gate opens; a stopped browser does not count toward the fleet cap, is restored as stopped after a daemon restart, and refuses the fleet CLI's verbs with status `stopped` |
 | chat | agent id, or `<agent-id>.<session-id>` for a subagent | `/<key>` | the agent's display name; `Subagent: <description>` for a subagent (the session id when the create gave no description); the minted display name for a provisional instance (`New chat` when there is none yet) | a dead lifecycle (stopped or done; unknown is not evidence of death and counts as alive) `stopped`; else pending permission `attention`; else thinking or tool-running `working`; else `idle`; a provisional chat by its phase: `attention` while it waits for an account, `working` while its create runs, `error` when the create failed; subagent `idle` | `explicit` for agents, `referenced` for provisional and subagent instances | true for agents, false otherwise | `new` mints the agent id and a provisional record: with `account_id`, or with any signed-in account (the most recently used), the create starts at once; with nothing signed in the chat waits for an account and its page shows the provider chooser, whose sign-in launches it under the same id (`POST /api/agents/create-chat` with `agent_id`); a failed create keeps the record in the `failed` phase with the reason, and the page can try again on the same account; `subagent` requires `parent` (a listed chat) and `session`, takes an optional `description`, and returns an existing record when one exists | `mngr destroy` for an agent; drops the record for a subagent; drops a provisional chat that is waiting for an account or failed, and is a no-op for a create in flight | `400` | true for an agent, false for a provisional or subagent instance; stop is `mngr stop` (the chat's transcript and name stay, and the record answers `stopped` at once), start is the in-process ensure-started path a send takes to revive a stopped agent |
 
 ## 5. Shell routes apps and scripts call
@@ -152,7 +150,7 @@ All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http:/
 | `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?, "from_view_id"?}` | `204` |
 | `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}` |
 
-Loopback-only routes reject non-loopback peers with `403`, as `/api/layout/broadcast` does today.
+`POST /api/apps/<name>/changed`, `POST /api/tabs/<tab_id>/instance`, `POST /api/client-activity`, and `POST /api/layout/broadcast` are loopback-only and reject non-loopback peers with `403`; `GET /api/health` is not.
 
 The shell coalesces `changed` nudges per app: the first nudge starts a 250 ms window, one refetch runs when it closes, and a broadcast follows only when the fetched list differs from the last broadcast list for that app.
 The reconciliation sweep refetches every running app's list every 30 seconds.
@@ -160,9 +158,9 @@ An app whose fetch fails keeps its last known list with every instance's status 
 
 ## 6. Shell routes the browser calls
 
-Unchanged routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (the app-level verbs, supervisord via the shell; the tab menu offers them only on a single-instance app's tab, and the rail's per-app row menu offers them for every stoppable app), `/api/ws`.
-`/plugins/<basename>` is the chat app's route since phase 10, served from the chat's own origin.
-`POST /api/layout/broadcast` keeps its path and is the agent-facing op route of section 12 (loopback only).
+Page and app routes: `GET /` and the SPA catch-all, `/assets/<path>`, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start` (the app-level verbs, supervisord via the shell; the tab menu offers them only on a single-instance app's tab, and the rail's per-app row menu offers them for every stoppable app), `/api/ws`.
+`/plugins/<basename>` is the chat app's route, served from the chat's own origin; the shell has none.
+`POST /api/layout/broadcast` is the agent-facing op route of section 12 (loopback only).
 
 Instance verbs are relayed by the shell, so browsers never reach an `instances_url`:
 
@@ -204,7 +202,7 @@ Everything (`view_id = everything`) accepts layout reads and writes and rejects 
 
 ## 7. Shell state files
 
-All under `data/.state/system_interface/`, written atomically (temp file plus rename) under one process-wide lock, exactly as the projects module does today.
+All under `data/.state/system_interface/`, written atomically (temp file plus rename) under one process-wide lock.
 
 - `projects.json`: `{"version": 1, "projects": [project, ...]}` in creation order.
 - `layouts/<view_id>/<client_id>.json`: a `layout` (section 6).
@@ -213,7 +211,7 @@ All under `data/.state/system_interface/`, written atomically (temp file plus re
   An op on a view the client has no file for first materializes the client's copy from the seed of its device kind.
 - The client layout file is the truth of the arrangement: the browser writes it through the save route for the user's own gestures, and the shell writes it for agent ops and its own bookkeeping, and every write is followed by a `layout_updated` broadcast (section 8).
 - `clients.json`: `{"version": 1, "clients": {"<client_id>": {"device_kind", "active_view", "last_seen"}}}`.
-- `migrated.json`: written by the migration (phase 9): `{"version": 1, "migrated_at", "source": "<old layout dir>"}`.
+- `migrated.json`: written by the migration (section 16): `{"version": 1, "migrated_at", "source": "<old layout dir>"}`.
 
 A client unseen for 90 days is dropped from `clients.json` together with every `layouts/*/<client_id>.json`, by a sweep that runs at shell start and daily.
 
@@ -242,9 +240,9 @@ Outbound (shell to browser):
 `is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed.
 A single-instance app carries one synthesized record: key `""`, url `/`, title `display_name`, status `idle` while running and `stopped` otherwise, lifetime `explicit`, renameable `false`, stoppable `false` (the app-level Stop and Start are its verbs).
 
-Retired messages: `agents_updated`, `proto_agent_*`, `terminal_session`, `load_layout` (folded into `active_view_changed`), `project_saved`, `project_deleted`, `project_updated`, `project_members_changed`, `project_panel_removed`, `member_title_changed`, `member_last_used_changed`, `member_location_changed`.
-
-`agents_updated` and `proto_agent_*` outlived phase 7 as a marked carve-out until phase 10 gave the chat app a socket of its own: the chat pages read `/api/ws` on the chat's origin, which sends `agents_updated`, `proto_agent_created` (a provisional chat's whole record, sent again when its phase changes) and `proto_agent_completed` (`{"agent_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched). Phase 8 replaced `load_layout` with `active_view_changed`, and moved `open`, `focus`, `split`, `close`, and `move` off the socket altogether: the shell applies them to the layout file and the file's `layout_updated` is what the windows see.
+The shell's socket carries nothing about chats.
+The chat pages read `/api/ws` on the chat's origin, which sends `agents_updated`, `proto_agent_created` (a provisional chat's whole record, sent again when its phase changes) and `proto_agent_completed` (`{"agent_id", "success", "error"}`; `success` false with a reason is a failed create, false with `null` a chat discarded before it launched).
+The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel on the socket: the shell applies them to the layout file and the file's `layout_updated` is what the windows see.
 
 ## 9. The inventory document
 
@@ -278,37 +276,37 @@ Unknown types are ignored; shipped types never change meaning.
 | shell to app | `shell:close-request` | `{}` |
 | app to shell | `shell:focused` | `{}` |
 | app to shell | `shell:location` | `{"path"}`; the shell resolves the frame to its tab, remembers the path as that tab's last reported path, and relays it to the owning app's location route |
-| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory (phase 6 carried a `title` hint, which phase 7 dropped) |
+| app to shell | `shell:open` | `{"address"}`; the address must name the posting frame's app; the shell docks the instance beside the posting tab, or focuses the tab already showing it in this client, and titles the tab from the inventory |
 
 The shell clears the tab's last reported path when it points the frame at a url itself; a page's own navigation, and the report it posts while loading (before the frame's `load` event), leave it standing.
 The shell reloads a docked tab's frame when the instance's listed `url` differs from the tab's last reported path (with `{tab}` substituted), which is what makes an agent's `replace-url` land and a page's own reports inert.
 
-The dufs frontend keeps its inline beacon, now posting `{"type": "shell:location", "path": ...}` to `window.parent`; the ratchet allowlist names the vendored dufs asset.
-The vendored ttyd client keeps its focus listener (`ttyd-focus`, outbound from the shell), unchanged.
+The dufs frontend carries an inline beacon posting `{"type": "shell:location", "path": ...}` to `window.parent`; the vendored asset (`system/apps/files/assets/index.js`) lies outside the ratchet's scan of the shell frontend and the shared library.
+The vendored ttyd client carries a focus listener for `ttyd-focus`, a payload-free message the shell posts into a terminal frame from `terminalFocus.ts`, which the shell's ratchet allowlists.
 
 ## 11. The embedder relay
 
 In the shell's embed module: a `message` listener that forwards any message whose `type` starts with `minds:` from a child frame in the workspace origin family to `window.parent` unchanged, and forwards any message from `window.parent` to every child frame the shell created, unchanged.
-The shell keeps its own handling of `minds:close-active-tab` and forwards it as well.
+The shell handles `minds:close-active-tab` itself and forwards it as well.
 The shell inspects no payloads.
 
 ## 12. `layout.py` and the op route
 
 Subcommands: `list`, `inspect`, `where`, `context`, `views`, `load`, `open`, `focus`, `split`, `close`, `move`, `rename`, `delete`, `stop`, `start`, `maximize`, `restore`, `replace-url`, `refresh`, `shortcuts`, `shortcut set`, `shortcut remove`.
 
-The script posts `{op, args, requester}` to `POST /api/layout/broadcast` on the shell (loopback only; the path is historical): `requester` is the caller's own chat as an address (`app:chat?instance=$MNGR_AGENT_ID`), which is what `self` names and how the shell attributes the op to a client; the shell itself names no app.
+The script posts `{op, args, requester}` to `POST /api/layout/broadcast` on the shell (loopback only): `requester` is the caller's own chat as an address (`app:chat?instance=$MNGR_AGENT_ID`), which is what `self` names and how the shell attributes the op to a client; the shell itself names no app.
 The client's layout file is the truth of the arrangement, so the shell applies every arrangement op to that file itself and no browser needs to be connected for an op to land.
 
 - **The target client.** Every op that reads or changes one client's arrangement resolves to exactly one client: `--client <id>`, else the client that most recently messaged the requester's instance (the client-activity log), else the one connected client. When none of those settles it, the op fails with `412` and a detail that lists the connected clients and their views and asks for `--client`; the shell never guesses across clients and never applies an op to every client. A `--client` with no record is `404`. `context`, `views`, `list`, and the relay verbs `rename`, `delete`, `stop`, `start`, and `replace-url` reach the whole machine and take no `--client`; `refresh <app>` and the interface reload are machine-wide too.
-- **The target view.** `--view <name>` (a project's name or id, or Everything; `--layout` stays as an alias) names the view whose arrangement the op edits; without it the op edits the client's active view. A `--view` that differs from the client's active view also switches the client to it (the record is written and `active_view_changed` is broadcast), so the user sees what the agent arranged.
+- **The target view.** `--view <name>` (a project's name or id, or Everything; `--layout` is an alias) names the view whose arrangement the op edits; without it the op edits the client's active view. A `--view` that differs from the client's active view also switches the client to it (the record is written and `active_view_changed` is broadcast), so the user sees what the agent arranged.
 - **Document ops.** `open`, `focus`, `split`, `close`, and `move` are applied by the shell to the client's layout of the view: the file is read (materialized from the seed of the client's device kind when the client has none), edited by the pure editor (`shell/dockview_document.py`), written, and `layout_updated` is broadcast; a project view files an opened address into its tab set and a close runs the referenced-instance cleanup, exactly as a browser's save does. Placement follows the document's tree, never the screen: the anchor is the requester's own chat panel when the document holds it, else the document's active group, else its first group; a direction finds the nearest enclosing branch of the matching orientation and the sibling on that side, and tabs into that group unless `--new-group`; a split takes `--ratio` of the anchor group's own extent. A launcher (New Tab) panel in the document counts as empty and is dropped from the group an op docks into.
 - **Creates.** `open <address> [--action <id>] [--param name=value]...` (and `split` of the same forms): `app:<name>` of an app with instances runs the create through the shell's relay inside the op, `--action` or the app's `default_shortcut.action` or its first declared action with every `--param`, then docks the record it made; the app's refusal (a `400`, `409`, or `503`) is the op's error, verbatim. `app:<name>?instance=<key>` docks a listed instance (`404` when nothing lists it). A bare `https://` or `http://` URL means `open app:browser --action new --param url=<url>`. A bare word that is an app name means `app:<word>`. An `open` of an address the document already shows focuses it. An op names the address it made in its answer, which `open` prints to stdout.
-- **Transient verbs.** `maximize`, `restore`, `refresh`, and `reload_system_interface` change what is on screen without changing the saved document, so they alone still travel as a `layout_op` message (section 8) to the resolved client's windows; `refresh app:<name>` and the interface reload go to every window.
+- **Transient verbs.** `maximize`, `restore`, `refresh`, and `reload_system_interface` change what is on screen without changing the saved document, so they alone travel as a `layout_op` message (section 8) to the resolved client's windows; `refresh app:<name>` and the interface reload go to every window.
 - **Answers.** A document op answers `{"ok", "view_id", "client_id", "layout", "created_address"?}` with `layout` in the shape `inspect` prints, so the script prints its diff from the answer and exits; nothing polls.
 - `rename <address> <title>`, `delete <address>`, `stop <address>`, and `start <address>` call the shell's relay routes; `replace-url <address> <path-or-url>` calls the relay's location route.
 - `list` reads `GET /api/inventory` and prints, per app: `name`, `display_name`, `is_running`, `actions`, and `instances` with `key`, `address`, `title`, `status`, `docked_in` (client ids; `--view` narrows it to clients whose active view is that view). `views` reads the same document and prints every view with `tabs` (addresses) and `clients` (ids with device kind); `context` prints every client with `active_view`, `device_kind`, `is_connected`, and recent activity. `shortcuts` for Everything derives the fixed rail from the inventory's apps.
-- Exit codes stay `0`, `1`, `3`.
-- The old spellings (`chat:`, `terminal:`, `service:`, `url:`, `subagent:`, `chat-terminal:`) are errors that name the new form.
+- Exit codes are `0`, `1`, `3`.
+- The spellings `chat:`, `terminal:`, `service:`, `url:`, `subagent:`, and `chat-terminal:` are refused with an error that names the address to use instead.
 
 ## 13. Deep links
 
@@ -317,28 +315,28 @@ Honoured by the shell on page load for the requesting client, then stripped from
 - `?view=<view_id>`: switch to the view.
 - `&open=<address>`: dock or focus the instance in that view.
 - `&action=<app>:<action_id>`: run the action.
-- `&follow=<client_id>`: reserved; ignored in this arc.
+- `&follow=<client_id>`: reserved for follow mode (deferred); stripped and ignored.
 
 Unknown or stale targets are ignored silently.
 The browser applies these itself through the paths a click takes, before it reports its first `client_state`; the `view` wins over the stored active view.
-The minds chrome does not yet forward a deep link's query to the shell frame; that lands with the switcher (deferred, see the meta spec).
+The minds chrome does not forward a deep link's query to the shell frame; that lands with the switcher (deferred, see the meta spec).
 
 ## 14. Tool environments
 
 - The manifest is the discriminator: every directory under `system/apps/` with both a `pyproject.toml` and an `app.toml` is a Python app that runs from its own uv tool: `uv tool install -e system/apps/<package> [--with-editable <plugin path>]...`, with the plugin list from `system/config/mngr_plugins.toml` where the app's manifest `name` appears in a plugin's `tools`.
-- A directory with a `pyproject.toml` and no manifest is a pre-manifest app (scaffolded before this arc); it keeps running `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely (phase 9 decided against rewriting a user's app during an update), so no code path ever handles a third.
+- A directory with a `pyproject.toml` and no manifest is a pre-manifest app; it runs `uv run <name>` from the root venv, untouched by the build and the apply. There are exactly these two forms, both supported indefinitely, so no code path ever handles a third.
 - The tool's entry point is named after the program and is what the supervisord line runs.
 - `system/scripts/build_workspace.sh` loops over the manifest directories.
 - The update apply reinstalls the tool of every manifest app whose directory changed in the merge (excluding paths under `frontend/` and `static/`), and of every manifest app when a shared backend manifest changed, and snapshots the tool directory of every `critical` app before it does.
-- `system/apps/*` stays in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject keeps resolving, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
+- `system/apps/*` is in the root workspace's member glob, so one lockfile covers the tree, a pre-manifest app's `{ workspace = true }` source in the root pyproject resolves, and a user-built app needs no root-pyproject edit; `uv sync --all-packages` therefore also installs the manifest apps into the root venv, unused, which uv's shared cache makes nearly free. Membership and the tool environments answer different questions: the lock keeps every environment on the same versions, and a tool environment keeps its app running while the root venv is rewritten or broken.
 - The `app_manifest` and `app_instances` libraries are workspace members that apps depend on by path, so a tool install pulls them in editable.
-- Services stay in the root venv and keep `uv run <name>`.
+- Services run from the root venv under `uv run <name>`.
 
 ## 15. Memory priority
 
-`oom_priority.bands.SERVICE_BANDS` gains `"chat": 25`.
-The backstop listener resolves a program's band by finding the registry row whose `program` equals the program name and reading its `priority`; a program with no row, or a row with `priority = "user"`, gets `USER_SERVICE`, and the existing `_NON_SERVICE_PROGRAM_BANDS` table keeps covering the programs that are not apps.
-The `oom_tag_service.py <key>` prefix keeps working unchanged for every program line.
+`oom_priority.bands.SERVICE_BANDS` carries `"chat": 25`, between `system_interface` (20) and `share-gateway` (35).
+The backstop listener resolves a program's band by finding the registry row whose `program` equals the program name and reading its `priority`: a `SERVICE_BANDS` key gives that band, and `user` (or an unknown name) gives `USER_SERVICE`. A program with no row falls back to `SERVICE_BANDS` by program name, then to `_NON_SERVICE_PROGRAM_BANDS` (the programs that are not apps), then to `USER_SERVICE`.
+The `oom_tag_service.py <key>` prefix on a program line tags the program into its band at launch; the backstop covers what the prefix cannot.
 
 ## 16. Migration table
 

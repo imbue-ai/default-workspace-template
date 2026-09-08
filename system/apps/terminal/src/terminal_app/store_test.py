@@ -65,7 +65,7 @@ def test_remove_record_forgets_a_terminal_and_tolerates_an_absent_one(
     assert session_store.list_records() == []
 
 
-def test_store_reads_records_written_before_the_session_id_and_stopped_flag_existed(
+def test_store_reads_records_that_lack_the_session_id_and_the_stopped_flag(
     session_store: JsonTerminalSessionStore,
 ) -> None:
     session_store.store_path.parent.mkdir(parents=True)

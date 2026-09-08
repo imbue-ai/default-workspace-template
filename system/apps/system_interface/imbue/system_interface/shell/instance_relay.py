@@ -13,7 +13,7 @@ from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import instances_url_of
 
 # The relay answers with whatever the app answers, so its bound must outlive the slowest verb
-# an app runs under it: a chat's delete is a synchronous ``mngr destroy`` that may take two
+# an app runs under it: a delete that tears down a whole agent synchronously may take two
 # minutes under load. A relay that gave up sooner would report a delete that then completes
 # as the app being unreachable.
 RELAY_TIMEOUT_SECONDS: Final[float] = 150.0

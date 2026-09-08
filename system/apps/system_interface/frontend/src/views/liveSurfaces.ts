@@ -301,8 +301,8 @@ export function reconcileLiveSurfaces(): void {
     }
   }
   if (!visibilityChanged) return;
-  // A page that just appeared or disappeared is told so (the frames redraw and send shown or
-  // hidden), and a chat's presence follows.
+  // A page that just appeared or disappeared is told so: the frames redraw and send shown or
+  // hidden.
   m.redraw();
   onVisibilityChanged?.();
 }

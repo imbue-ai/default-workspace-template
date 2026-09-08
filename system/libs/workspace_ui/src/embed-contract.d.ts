@@ -13,8 +13,7 @@ declare module "@minds/embed-contract" {
   export const BRING_APP_TO_FRONT: "minds:bring-app-to-front";
   export const CLOSE_ACTIVE_TAB: "minds:close-active-tab";
   export const OPEN_AI_KEYS_ACK: "minds:open-ai-keys-ack";
-  // The verdicts message (contract v3, which also retired v2's
-  // permission-request-resolved). The vendored snapshot may predate it --
+  // The verdicts message (contract v3). The vendored snapshot may lack it --
   // consumers probe the namespace before reading it (see embed.ts) rather
   // than named-importing, which would fail the build.
   export const PERMISSION_RESOLUTIONS: "minds:permission-resolutions";

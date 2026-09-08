@@ -69,7 +69,7 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Several tests in this module spin up real watchdog FSEvents observers
-# (via ``_start_app_watcher``). On macOS the FSEvents emitter thread
+# (the activity and model-state watchers). On macOS the FSEvents emitter thread
 # occasionally stalls during shutdown, tripping pytest-timeout. Mark the
 # whole file as flaky so offload retries it automatically -- mirrors
 # ``ws_broadcaster_test.py``.

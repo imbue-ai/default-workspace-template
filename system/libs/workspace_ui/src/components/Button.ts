@@ -13,7 +13,7 @@ import { TEXT_BODY_SIZE } from "./typography";
  * read as a button, or DOM built outside mithril.
  *
  * The Tailwind scanner reads utility names from the literals in this file
- * (style.css's `@source` covers every .ts file): keep every utility name a
+ * (base.css's `@source` covers every .ts file): keep every utility name a
  * contiguous literal -- never build one by string interpolation. */
 
 export type ButtonVariant =

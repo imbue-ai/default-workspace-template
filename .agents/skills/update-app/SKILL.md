@@ -27,8 +27,7 @@ If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, the sidebar, the New Tab launcher; the chat pages themselves
-  are the chat app's, `system/apps/chat`) -> `update-system-interface`
+  dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
@@ -147,9 +146,8 @@ process restarts:
   an app with an `app.toml` manifest runs from its own uv tool environment,
   an editable install of `system/apps/<package>/` that picks up source
   edits on its own but not a new dependency or console script. Reinstall
-  the tool, then restart (an app scaffolded before manifests existed has
-  no `app.toml` and still runs from the root venv: for it, only the
-  `uv sync --all-packages` below is needed):
+  the tool, then restart (an app with no `app.toml` runs from the root
+  venv: for it, only the `uv sync --all-packages` below is needed):
 
   ```bash
   uv tool install -e system/apps/<package> --reinstall

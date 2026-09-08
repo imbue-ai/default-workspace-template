@@ -38,8 +38,8 @@ def registry_path() -> Path:
 def read_priority_by_program(path: Path) -> dict[str, str]:
     """The ``priority`` of every registry row that names a ``program``, by that program.
 
-    A missing registry is empty (nothing has registered yet, or the workspace
-    predates the registry). An unreadable or unparseable one is logged as a
+    A missing registry is empty (nothing has registered yet). An unreadable or
+    unparseable one is logged as a
     warning and also reads as empty, so a corrupt file demotes an app to the
     by-name and user-service fallbacks rather than taking the listener down.
     """

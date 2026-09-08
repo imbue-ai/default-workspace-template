@@ -1,9 +1,10 @@
 """The append-only client-activity log: which client sent which message, and which view it switched to.
 
 Lives at ``<state dir>/events/client_activity/events.jsonl`` with the ``message`` and
-``view_switch`` shapes of contracts.md section 5. The chat app posts a ``message`` on every
-send and the shell records a ``view_switch`` on every client report that names a different
-previous view, so an agent can work out which client (and view) a request came from.
+``view_switch`` shapes of contracts.md section 5. An app posts a ``message`` whenever a user
+sends one to an instance, and the shell records a ``view_switch`` on every client report that
+names a different previous view, so an agent can work out which client (and view) a request
+came from.
 """
 
 import json

@@ -409,11 +409,17 @@ installed instead of a live build; the apply installs them only as a pair (one
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
 affected environments, re-runs `system/scripts/setup_system.sh` when a file it
-reads changed, pre-flights the merged backend, installs or builds the frontend
+reads changed, pre-flights the merged backend (the shell, and the chat app in its
+side-effect-free `--preflight` mode, since the chat is the process that imports
+mngr and the harness plugins), installs or builds the frontend
 bundle, runs the workspace layout migration
 (`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
 there is reported and left to the next boot's run), restarts the services
-agent (every apply), probes the live UI, refreshes every open view, writes the
+agent (every apply; the fresh supervisord it brings up reads the merged program
+table, so a program the update adds starts on its own), probes the shell's health
+route and the instances API of every critical app that serves one (the chat, the
+terminal; each at the URL its manifest or its fresh registry row names), probes the
+live UI, refreshes every open view, writes the
 `docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
 reverting the entire merge and restoring the snapshots on any other failure.
 Exit codes:
@@ -430,8 +436,10 @@ Exit codes:
 - **`3` -- emergency.** Even the rollback could not restore health; escalate,
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
-  pass, another apply in flight, or this merge already landed and rolled
-  back). Re-dispatch a fresh worker pass off the current `HEAD`.
+  pass, another apply in flight, this merge already landed and rolled back, or
+  a re-merge of a rolled-back target that does not revert the rollback commit
+  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
+  names the commit to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it

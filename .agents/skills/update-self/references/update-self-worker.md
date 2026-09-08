@@ -35,6 +35,21 @@ git fetch upstream --tags
 BASE=$(git merge-base HEAD "$TARGET_REF")
 ```
 
+**A retry after a rolled-back apply of this same target must revert the
+rollback first.** The apply rolls back as a *forward revert*, so `HEAD` carries
+a `Roll back update apply (restore to ...)` commit whose parent is the landed
+merge: git then counts the target's content as already merged, and a plain
+`git merge "$TARGET_REF"` lands only what the target gained since -- a tree
+that is the old release plus a few files, which the apply's probes cannot tell
+from a good update. Check for one, and put the content back on your branch
+before merging (a `both added` conflict on a file the target changed since is
+resolved by taking the target's version):
+
+```bash
+ROLLBACK=$(git log --format=%H --grep='^Roll back update apply' "$BASE"..HEAD | head -1)
+if [ -n "$ROLLBACK" ]; then git revert --no-edit "$ROLLBACK"; fi
+```
+
 ## 2. Reason about the diff, then trial-merge
 
 Preview the impacted classes and read the upstream diff for genuine

@@ -22,20 +22,22 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 - `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
   manager (`instances.py`): every non-primary agent is an explicit, renameable,
   stoppable instance keyed by its agent id (stop is `mngr stop`, start the same
-  ensure-started path a send takes); a chat still being created is a referenced
-  provisional instance under the id mngr will give it; a subagent view is a
-  referenced instance keyed `<agent-id>.<session-id>`. Status comes from the
-  activity state, a pending permission request, and the lifecycle. The API
-  answers `503` until the agent list has been read from mngr once.
+  ensure-started path a send takes); a chat that is not an agent yet is a
+  referenced provisional instance under the id mngr will give it, whether it is
+  waiting for an account (`attention`), being created (`working`), or failed
+  (`error`); a subagent view is a referenced instance keyed
+  `<agent-id>.<session-id>`. An agent's status comes from the activity state, a
+  pending permission request, and the lifecycle. The API answers `503` until
+  the agent list has been read from mngr once.
 - Every `/api/agents/...` route (events, streams, sends, model choice, the
   queue actions, presence, destroy, start, stop), `/api/agents/create-chat`,
   `/api/harnesses`, `/api/uploads`, `/api/claude-auth`, `/api/accounts`,
-  `/api/lanes`, and `/api/latchkey`, verbatim as the shell served them before
-  phase 10.
+  `/api/lanes`, and `/api/latchkey`.
 - `/api/ws`: the chat pages' socket, carrying `agents_updated` and the
   proto-agent events.
 - `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls after a restart.
+  polls on the `--preflight` boot (after the restart it polls `/_instances`, the
+  route that answers only once the agent manager has its first list).
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
 
@@ -70,6 +72,14 @@ uv run pytest
 
 `--no-register` boots the app without re-pointing the live chat row in the
 registry, for a throwaway boot on another port (`CHAT_PORT`).
+
+`--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
+the app imports, builds, and serves `/api/health` but reconciles no accounts (the
+boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
+session sweep, memory prioritizer, or nudges to the shell), and registers nothing.
+The apply boots the merged chat this way on a free port before restarting the live
+services, since this is the process that imports mngr and the harness plugins, and
+refuses the update when it cannot come up.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

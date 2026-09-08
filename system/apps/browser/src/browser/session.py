@@ -1568,10 +1568,10 @@ class LiveBrowser(MutableModel):
         return await self._transition(to="human", pinned=False, expect=("human", None, True))
 
     async def navigate_active_tab(self, url: str) -> None:
-        """Point the tab the pane shows at ``url`` (the instances API's location verb).
+        """Point the tab the pane shows at ``url``.
 
-        Refused while an agent holds the browser (agents are never preempted, and the shell's
-        relay is no exception) and while Chromium is not up. Runs under ``_lock`` like every
+        Refused while an agent holds the browser (agents are never preempted) and while
+        Chromium is not up. Runs under ``_lock`` like every
         other direct browser action; the CDP calls are bounded so a stalled renderer cannot
         wedge the loop.
         """
@@ -1663,8 +1663,8 @@ class LiveBrowser(MutableModel):
         """Snapshot for ``GET /browsers``: id, lifecycle, owner, and the tab list.
 
         ``lifecycle`` (init/running/crashed/stopped) is the explicit state the whole
-        system reads; ``crashed`` is kept as a derived convenience for existing consumers
-        (the CLI ``ls`` owner label). A browser still in ``init`` has no Chromium yet, so
+        system reads; ``crashed`` is also reported as a derived flag, which the CLI ``ls``
+        owner label reads. A browser still in ``init`` has no Chromium yet, so
         its tab list is empty (the round-trip would have nothing to read); so has a
         stopped one, whose last known tabs the manifest keeps instead."""
         return {
@@ -2329,13 +2329,13 @@ class BrowserSessionManager(MutableModel):
         stranded; only an explicit ``close`` forgets it.
 
         Crashed (not explicitly-closed) browsers are PRESERVED too, carried forward with
-        their last-known entry (the last manifest's, as they were before the tab cache;
-        ``tab_urls`` now answers from that cache too). Dropping them here
-        was silent data loss: a crash excluded the browser from the manifest, so the next
-        restart swept its profile -- deleting every login -- contradicting "logins persist
-        across restarts". Keeping the entry means its profile survives and it relaunches
-        fresh from that profile next boot (logged back in). Only an explicit ``close`` (which
-        pops it from ``_browsers`` and forgets its profile) removes it."""
+        their last-known entry (the last manifest's; ``tab_urls`` answers from the tab
+        cache for one too). Dropping them here was silent data loss: a crash excluded the
+        browser from the manifest, so the next restart swept its profile -- deleting every
+        login -- contradicting "logins persist across restarts". Keeping the entry means its
+        profile survives and it relaunches fresh from that profile next boot (logged back
+        in). Only an explicit ``close`` (which pops it from ``_browsers`` and forgets its
+        profile) removes it."""
         entries = [await self._entry_for(browser) for browser in self.live_browsers()]
         live_ids = {entry.id for entry in entries}
         crashed_ids = {name for name, browser in self._browsers.items() if browser._crashed and name not in live_ids}
@@ -2356,13 +2356,13 @@ class BrowserSessionManager(MutableModel):
         return fleet_manifest.Manifest(browsers=entries)
 
     def _spawn_save(self) -> None:
-        """Schedule a manifest checkpoint (fire-and-forget, strong-ref'd). For sync
-        callers like the crash hook."""
+        """Schedule a manifest checkpoint (fire-and-forget, strong-ref'd) for an event that
+        changed what the manifest records, so the verb answers without waiting on the write."""
         async def _do() -> None:
             try:
                 await self._save_manifest()
             except (OSError, *_BROWSER_ERRORS) as e:
-                logger.debug("crash-triggered manifest checkpoint ignored ({})", e)
+                logger.debug("scheduled manifest checkpoint failed ({})", e)
 
         task = asyncio.create_task(_do())
         self._bg_save_tasks.add(task)
