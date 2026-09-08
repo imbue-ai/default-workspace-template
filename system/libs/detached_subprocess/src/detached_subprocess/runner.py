@@ -4,8 +4,9 @@ A service that adopts this spawns every subprocess written in its own source thr
 three entry points -- :func:`run_detached_command` for a command that runs to completion in a
 service built on ``ConcurrencyGroup``, :func:`run_detached_subprocess` for the same in a service
 that is not, :func:`spawn_detached_process` for a child that outlives the call -- and a ratchet
-(``subprocess_ratchets_test.py``) that keeps it that way. Every supervisord program whose Python
-source is in this repo does.
+that keeps it that way (``subprocess_ratchets_test.py``, or ``test_subprocess_ratchets.py`` in
+the chat app and the system interface). Every supervisord program whose Python source is in this
+repo does.
 
 Two things sit outside that. ``bootstrap`` is the foreground process group that owns the
 terminal rather than a child of it, so its children are foreground and cannot be stopped this

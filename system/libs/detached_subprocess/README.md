@@ -9,7 +9,7 @@ process group on that terminal. A child that then reads the terminal or changes 
 SIGTTOU addressed to the whole group, which stops the service mid-call: its socket keeps
 accepting connections and nothing ever answers them.
 
-`run_detached_command` puts each child in its own session, so it inherits no controlling
+Every entry point here puts its child in its own session, so the child inherits no controlling
 terminal and there is no group for a terminal signal to travel through.
 
 - `runner.py` -- the three entry points. `run_detached_command` runs a command to completion in a
@@ -18,7 +18,9 @@ terminal and there is no group for a terminal signal to travel through.
   `subprocess.CompletedProcess` and the stdlib's exceptions; `spawn_detached_process` starts a
   child that outlives the call and hands back its handle.
 - `ratchets.py` -- the two rules that keep a service's spawns going through those. Each consuming
-  project applies them to its own source tree from its own `subprocess_ratchets_test.py`.
+  project applies them to its own source tree from its own `subprocess_ratchets_test.py` -- named
+  `test_subprocess_ratchets.py` in the chat app and the system interface, which are exempt from
+  `system/test_meta_ratchets.py` and follow the mngr monorepo's naming.
 
 Only `run_detached_command` needs mngr; the other two are a few lines of stdlib. What the library
 carries is less the code than the name and the rules: one place to point a ratchet at, and one
