@@ -3003,6 +3003,21 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
     )
     assert http.page_urls == []
 
+    # A registry that is there but will not parse: the poll waits on it as if the
+    # app had not registered, and the finding names the broken file, not a
+    # registration that never happened.
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    (apply_repo / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
+    failure = update_probes.wait_instances_healthy(
+        http, apply_repo, app, 2, 0.0, _no_sleep
+    )
+    assert failure is not None
+    assert failure.startswith(
+        f"the app registry at {update_layout.APPS_REGISTRY_PATH} could not be read "
+        "(TOMLDecodeError: "
+    )
+    assert http.page_urls == []
+
     # A row that stays on the shell's port: the catch-all's HTML is named as such.
     _write_registry(apply_repo, {"chat": _LIVE_BASE})
     failure = update_probes.wait_instances_healthy(
