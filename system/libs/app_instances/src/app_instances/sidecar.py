@@ -91,7 +91,9 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
         )
     started_at = time.monotonic()
     try:
-        completed = run_detached_subprocess(command, timeout=REGISTRATION_TIMEOUT_SECONDS)
+        completed = run_detached_subprocess(
+            command, timeout=REGISTRATION_TIMEOUT_SECONDS
+        )
     except subprocess.TimeoutExpired as e:
         raise SidecarError(
             f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"
