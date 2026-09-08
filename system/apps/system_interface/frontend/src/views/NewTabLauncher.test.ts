@@ -6,15 +6,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { appRecord } from "../testing/records";
+import type { CatalogTemplate, TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
 import {
   NewTabLauncher,
+  adoptTemplateMessage,
   appsInRows,
   buildLauncherSections,
+  createMachineFromTemplateMessage,
   filterRowsByApp,
   formatRecency,
+  promptTargetOfTiles,
+  railPageTarget,
+  railPaging,
+  restingSections,
+  searchRows,
+  searchTiles,
   sortRowsByRecency,
+  splitLaunchTiles,
 } from "./NewTabLauncher";
-import type { LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
+import type { LaunchTile, LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
+import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
 
 function row(
   address: string,
@@ -33,10 +44,66 @@ function row(
   };
 }
 
+function tile(name: string, overrides: Partial<LaunchTile["app"]> = {}): LaunchTile {
+  const app = appRecord(name, overrides);
+  return { app, action: app.actions[0] ?? { id: "new", label: `New ${name}`, params: [] } };
+}
+
+/** The chat app as its manifest declares it: ranked first, its ``new`` action taking a message. */
+function chatTile(): LaunchTile {
+  return tile("chat", {
+    critical: true,
+    launcher_rank: 10,
+    actions: [
+      { id: "new", label: "New Chat", params: ["account_id", "message"] },
+      { id: "subagent", label: "Open subagent", params: ["parent", "session"] },
+    ],
+  });
+}
+
+function template(slug: string, overrides: Partial<CatalogTemplate> = {}): CatalogTemplate {
+  return {
+    slug,
+    title: slug[0].toUpperCase() + slug.slice(1),
+    description: `What ${slug} does.`,
+    what_it_is: "",
+    author: "someone",
+    repository_url: `https://github.com/someone/${slug}`,
+    thumbnail_url: `https://example.com/${slug}.svg`,
+    version: "v1",
+    updated_at: "",
+    required_accounts: [],
+    required_secrets: [],
+    needs_ai: false,
+    apt_packages: [],
+    choices: [],
+    ...overrides,
+  };
+}
+
+const CATALOG: TemplateCatalog = {
+  generated_at: "",
+  templates: [template("inbox-digest"), template("weekend-radar"), template("orchard")],
+  shelves: [
+    { key: "popular", title: "Most popular", slugs: ["inbox-digest", "weekend-radar"] },
+    { key: "work", title: "Reimagine your work", slugs: ["orchard", "missing-slug"] },
+  ],
+};
+const LOADED: TemplateCatalogState = { kind: "loaded", catalog: CATALOG, isStale: false };
+
 const MACHINE = [
-  row("app:terminal?instance=t1", "terminal", 1_000),
-  row("app:chat?instance=c1", "chat", 5_000),
-  row("app:files", "files", null),
+  row("app:terminal?instance=t1", "terminal", 1_000, { label: "Terminal 1" }),
+  row("app:chat?instance=c1", "chat", 5_000, { label: "Chat 1" }),
+  row("app:files", "files", null, { label: "File Viewer" }),
+];
+
+// Registry order, with the built-ins' manifest ranks: the leading row sorts them chat, files, browser, terminal.
+const TILES = [
+  tile("terminal", { launcher_rank: 40 }),
+  tile("notes"),
+  chatTile(),
+  tile("files", { launcher_rank: 20 }),
+  tile("browser", { launcher_rank: 30 }),
 ];
 
 describe("buildLauncherSections", () => {
@@ -51,6 +118,54 @@ describe("buildLauncherSections", () => {
     const sections = buildLauncherSections(MACHINE, [MACHINE[1]], true);
     expect(sections.map((section) => section.key)).toEqual(["on-machine"]);
     expect(sections[0].rows.length).toBe(3);
+  });
+});
+
+describe("restingSections", () => {
+  it("shows a project only its own tab set, and nothing when that is empty", () => {
+    expect(restingSections(MACHINE, [MACHINE[1]], false).map((section) => section.key)).toEqual(["in-project"]);
+    expect(restingSections(MACHINE, [], false)).toEqual([]);
+  });
+
+  it("shows Everything the machine, and nothing on an empty machine", () => {
+    expect(restingSections(MACHINE, [], true).map((section) => section.key)).toEqual(["on-machine"]);
+    expect(restingSections([], [], true)).toEqual([]);
+  });
+});
+
+describe("tile helpers", () => {
+  it("leads with the ranked apps in rank order and puts every unranked app on the second row", () => {
+    const { leading, other } = splitLaunchTiles(TILES);
+    expect(leading.map((t) => t.app.name)).toEqual(["chat", "files", "browser", "terminal"]);
+    expect(other.map((t) => t.app.name)).toEqual(["notes"]);
+  });
+
+  it("keeps registry order among unranked apps and has no leading row without a rank", () => {
+    const split = splitLaunchTiles([tile("terminal"), tile("notes")]);
+    expect(split.leading).toEqual([]);
+    expect(split.other.map((t) => t.app.name)).toEqual(["terminal", "notes"]);
+  });
+
+  it("sends a prompt to the first app whose action takes a message, whatever it is called", () => {
+    const target = promptTargetOfTiles(TILES);
+    expect(target?.app.name).toBe("chat");
+    expect(target?.action.id).toBe("new");
+    expect(promptTargetOfTiles([tile("terminal"), tile("notes")])).toBeNull();
+    const assistant = tile("assistant", { actions: [{ id: "ask", label: "Ask", params: ["message"] }] });
+    expect(promptTargetOfTiles([tile("terminal"), assistant])?.action.id).toBe("ask");
+  });
+});
+
+describe("search helpers", () => {
+  it("finds rows by title or app, every token of the query somewhere", () => {
+    expect(searchRows(MACHINE, "chat").map((r) => r.address)).toEqual(["app:chat?instance=c1"]);
+    expect(searchRows(MACHINE, "viewer file").map((r) => r.address)).toEqual(["app:files"]);
+    expect(searchRows(MACHINE, "nothing here")).toEqual([]);
+  });
+
+  it("finds the actions a query can answer with", () => {
+    expect(searchTiles(TILES, "term").map((t) => t.app.name)).toEqual(["terminal"]);
+    expect(searchTiles(TILES, "new").map((t) => t.app.name).length).toBe(TILES.length);
   });
 });
 
@@ -79,6 +194,43 @@ describe("row helpers", () => {
   });
 });
 
+describe("rail paging", () => {
+  it("offers an arrow only where there is somewhere to go", () => {
+    expect(railPaging({ scrollLeft: 0, clientWidth: 600, scrollWidth: 1500 })).toEqual({
+      canPageLeft: false,
+      canPageRight: true,
+    });
+    expect(railPaging({ scrollLeft: 400, clientWidth: 600, scrollWidth: 1500 })).toEqual({
+      canPageLeft: true,
+      canPageRight: true,
+    });
+    expect(railPaging({ scrollLeft: 900, clientWidth: 600, scrollWidth: 1500 })).toEqual({
+      canPageLeft: true,
+      canPageRight: false,
+    });
+    expect(railPaging({ scrollLeft: 0, clientWidth: 600, scrollWidth: 600 })).toEqual({
+      canPageLeft: false,
+      canPageRight: false,
+    });
+  });
+
+  it("pages one visible width along, clamped to the ends", () => {
+    expect(railPageTarget({ scrollLeft: 0, clientWidth: 600, scrollWidth: 1500 }, 1)).toBe(600);
+    expect(railPageTarget({ scrollLeft: 600, clientWidth: 600, scrollWidth: 1500 }, 1)).toBe(900);
+    expect(railPageTarget({ scrollLeft: 900, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(300);
+    expect(railPageTarget({ scrollLeft: 300, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(0);
+  });
+});
+
+describe("the messages a template's actions seed", () => {
+  it("adopts through the use-template skill and asks for a new machine in plain words", () => {
+    const orchard = template("orchard");
+    expect(adoptTemplateMessage(orchard)).toBe("/use-template https://github.com/someone/orchard");
+    expect(createMachineFromTemplateMessage(orchard)).toContain("https://github.com/someone/orchard");
+    expect(createMachineFromTemplateMessage(orchard)).toContain("new Minds machine");
+  });
+});
+
 describe("NewTabLauncher", () => {
   let root: HTMLElement;
 
@@ -94,13 +246,11 @@ describe("NewTabLauncher", () => {
 
   function mount(overrides: Partial<NewTabLauncherAttrs>): NewTabLauncherAttrs {
     const attrs: NewTabLauncherAttrs = {
-      tiles: [
-        { app: appRecord("chat", { critical: true }), action: { id: "new", label: "New Chat" } },
-        { app: appRecord("terminal"), action: { id: "new", label: "New terminal" } },
-      ],
+      tiles: TILES,
       rows: MACHINE,
       memberRows: [MACHINE[1]],
       isEverything: false,
+      catalog: LOADED,
       nowMs: 10_000,
       onRunAction: vi.fn(),
       onOpenRow: vi.fn(),
@@ -110,20 +260,52 @@ describe("NewTabLauncher", () => {
     return attrs;
   }
 
+  function type(text: string): void {
+    const input = root.querySelector<HTMLInputElement>(".new-tab-launcher-search input")!;
+    input.value = text;
+    input.dispatchEvent(new Event("input"));
+    m.redraw.sync();
+  }
+
+  function sectionKeys(): string[] {
+    return Array.from(root.querySelectorAll<HTMLElement>("[data-section]")).map((section) => section.dataset.section!);
+  }
+
   it("runs a tile's action with no parameters, whichever app it is", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!.click();
-    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new");
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new", {});
     root.querySelector<HTMLElement>('[data-launch="chat:new"]')!.click();
-    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new");
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {});
   });
 
-  it("opens a row from either table through the same callback", () => {
+  it("lays the tiles out as the built-in row and a row for every other app", () => {
+    mount({});
+    const leading = Array.from(root.querySelectorAll<HTMLElement>(".new-tab-launcher-tiles-leading [data-launch]"));
+    const other = Array.from(root.querySelectorAll<HTMLElement>(".new-tab-launcher-tiles-other [data-launch]"));
+    expect(leading.map((el) => el.dataset.launch)).toEqual(["chat:new", "files:new", "browser:new", "terminal:new"]);
+    expect(other.map((el) => el.dataset.launch)).toEqual(["notes:new"]);
+  });
+
+  it("rests on the project's own table and keeps the machine for search", () => {
     const attrs = mount({});
-    const sections = Array.from(root.querySelectorAll<HTMLElement>("[data-section]"));
-    expect(sections.map((section) => section.dataset.section)).toEqual(["in-project", "on-machine"]);
-    root.querySelector<HTMLElement>('[data-address="app:files"]')!.click();
-    expect(attrs.onOpenRow).toHaveBeenCalledWith(expect.objectContaining({ address: "app:files" }));
+    expect(sectionKeys()).toEqual(["in-project"]);
+    root.querySelector<HTMLElement>('[data-address="app:chat?instance=c1"]')!.click();
+    expect(attrs.onOpenRow).toHaveBeenCalledWith(expect.objectContaining({ address: "app:chat?instance=c1" }));
+    expect(root.querySelector('[data-address="app:files"]')).toBeNull();
+  });
+
+  it("drops the project table entirely when the project holds nothing", () => {
+    mount({ memberRows: [] });
+    expect(sectionKeys()).toEqual([]);
+    expect(root.textContent).not.toContain("Nothing is in this project yet.");
+    expect(root.querySelector(".new-tab-start-something")).not.toBeNull();
+  });
+
+  it("gives Everything the whole machine at rest", () => {
+    mount({ isEverything: true });
+    expect(sectionKeys()).toEqual(["on-machine"]);
+    expect(root.querySelectorAll(".new-tab-launcher-row").length).toBe(3);
   });
 
   it("stands the tiles down while a create is in flight", () => {
@@ -154,5 +336,120 @@ describe("NewTabLauncher", () => {
     checkbox.dispatchEvent(new Event("change"));
     m.redraw.sync();
     expect(root.querySelectorAll(".new-tab-launcher-row").length).toBe(2);
+  });
+
+  it("starts a seeded chat from a Start something tile", () => {
+    const attrs = mount({});
+    root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {
+      message: expect.stringContaining("build a new app"),
+    });
+  });
+
+  it("disables the prompt tiles when no app takes a first message", () => {
+    const attrs = mount({ tiles: [tile("terminal")] });
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    expect(buildTile.getAttribute("aria-disabled")).toBe("true");
+    buildTile.click();
+    expect(attrs.onRunAction).not.toHaveBeenCalled();
+  });
+
+  it("reveals the intents a page at a time behind See more, until every one is shown", () => {
+    mount({});
+    expect(root.querySelectorAll(".new-tab-start-tile").length).toBe(START_PAGE_SIZE);
+    expect(root.querySelector('[data-start="learn"]')).toBeNull();
+    root.querySelector<HTMLElement>(".new-tab-start-more")!.click();
+    m.redraw.sync();
+    expect(root.querySelectorAll(".new-tab-start-tile").length).toBe(START_OPTIONS.length);
+    expect(root.querySelector('[data-start="learn"]')).not.toBeNull();
+    expect(root.querySelector(".new-tab-start-more")).toBeNull();
+  });
+
+  it("lays the catalog out as its shelves and an All templates row, dropping a slug it does not carry", () => {
+    mount({});
+    const shelves = Array.from(root.querySelectorAll<HTMLElement>("[data-shelf]")).map((el) => el.dataset.shelf);
+    expect(shelves).toEqual(["popular", "work", "all"]);
+    const work = root.querySelector<HTMLElement>('[data-shelf="work"]')!;
+    expect(Array.from(work.querySelectorAll<HTMLElement>("[data-template]")).map((el) => el.dataset.template)).toEqual(
+      ["orchard"],
+    );
+    expect(root.querySelectorAll('[data-shelf="all"] [data-template]').length).toBe(3);
+  });
+
+  it("says when the templates are still loading, failed, or not offered", () => {
+    mount({ catalog: { kind: "loading" } });
+    expect(root.querySelector(".new-tab-templates-status")!.textContent).toBe("Loading templates…");
+    m.mount(root, null);
+    mount({ catalog: { kind: "failed" } });
+    expect(root.querySelector(".new-tab-templates-status")!.textContent).toBe("Failed to load templates.");
+    m.mount(root, null);
+    mount({ catalog: { kind: "disabled" } });
+    expect(root.querySelector(".new-tab-templates")).toBeNull();
+  });
+
+  it("opens a template's detail and adopts it into a seeded chat", () => {
+    const attrs = mount({});
+    root
+      .querySelector<HTMLElement>('[data-shelf="popular"] [data-template="orchard"], [data-template="inbox-digest"]')!
+      .click();
+    m.redraw.sync();
+    const detail = document.querySelector<HTMLElement>(".new-tab-template-detail")!;
+    expect(detail).not.toBeNull();
+    expect(document.querySelector(".modal-card")!.textContent).toContain("Inbox-digest");
+    document.querySelector<HTMLElement>(".new-tab-template-adopt")!.click();
+    m.redraw.sync();
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {
+      message: "/use-template https://github.com/someone/inbox-digest",
+    });
+    expect(document.querySelector(".new-tab-template-detail")).toBeNull();
+  });
+
+  it("asks for a new machine from the detail's other action", () => {
+    const attrs = mount({});
+    root.querySelector<HTMLElement>('[data-template="orchard"]')!.click();
+    m.redraw.sync();
+    document.querySelector<HTMLElement>(".new-tab-template-create-machine")!.click();
+    m.redraw.sync();
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {
+      message: expect.stringContaining("https://github.com/someone/orchard"),
+    });
+  });
+
+  it("swaps the page for search results: the machine, the intents, and the templates that match", () => {
+    const attrs = mount({});
+    type("term");
+    expect(sectionKeys()).toEqual(["on-machine"]);
+    // The action to open a new terminal leads, then the terminal that exists.
+    const machine = root.querySelector<HTMLElement>('[data-section="on-machine"]')!;
+    expect(machine.querySelector('[data-launch="terminal:new"]')).not.toBeNull();
+    expect(machine.querySelector('[data-address="app:terminal?instance=t1"]')).not.toBeNull();
+    expect(machine.querySelector('[data-address="app:chat?instance=c1"]')).toBeNull();
+    expect(root.querySelector(".new-tab-start-tile")).toBeNull();
+    expect(root.querySelector("[data-template]")).toBeNull();
+    machine.querySelector<HTMLElement>('[data-launch="terminal:new"]')!.click();
+    expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), "new", {});
+
+    type("radar");
+    expect(sectionKeys()).toEqual([]);
+    expect(Array.from(root.querySelectorAll<HTMLElement>("[data-template]")).map((el) => el.dataset.template)).toEqual(
+      ["weekend-radar"],
+    );
+
+    type("routine");
+    expect(root.querySelectorAll(".new-tab-start-tile").length).toBe(1);
+    expect(root.querySelector('[data-start="routine"]')).not.toBeNull();
+
+    type("zzzz nothing");
+    expect(root.querySelector(".new-tab-launcher-no-matches")!.textContent).toContain("zzzz nothing");
+  });
+
+  it("clears the search from its button and puts the resting page back", () => {
+    mount({});
+    type("term");
+    expect(root.querySelector(".new-tab-start-something")).toBeNull();
+    root.querySelector<HTMLElement>(".new-tab-launcher-search-clear")!.click();
+    m.redraw.sync();
+    expect(root.querySelector(".new-tab-start-something")).not.toBeNull();
+    expect(sectionKeys()).toEqual(["in-project"]);
   });
 });

@@ -21,6 +21,7 @@ from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
 from imbue.system_interface.shell.primitives import DeviceKind
+from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -46,6 +47,54 @@ def app(config: Config) -> Flask:
 @pytest.fixture
 def client(app: Flask) -> FlaskClient:
     return app.test_client()
+
+
+def test_templates_catalog_route_answers_the_catalog_with_resolved_thumbnails(config: Config) -> None:
+    catalog_url = config.system_interface_template_catalog_url
+    fetcher = FakeTemplateCatalogFetcher(
+        body_by_url={
+            catalog_url: json.dumps(
+                {
+                    "format": 1,
+                    "templates": [
+                        {
+                            "slug": "inbox",
+                            "title": "Inbox",
+                            "description": "Mail.",
+                            "repository_url": "https://github.com/x/inbox",
+                            "thumbnail": "thumbnails/x--inbox.svg",
+                        }
+                    ],
+                    "shelves": [{"key": "popular", "title": "Most popular", "slugs": ["inbox"]}],
+                }
+            ).encode()
+        }
+    )
+    test_client = create_application(build_test_state(config=config, template_catalog_fetcher=fetcher)).test_client()
+
+    response = test_client.get("/api/templates-catalog")
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["is_stale"] is False
+    assert body["catalog"]["shelves"][0]["slugs"] == ["inbox"]
+    (template,) = body["catalog"]["templates"]
+    assert template["thumbnail_url"] == catalog_url.rsplit("/", 1)[0] + "/thumbnails/x--inbox.svg"
+
+
+def test_templates_catalog_route_says_when_nothing_could_be_loaded(config: Config) -> None:
+    test_client = create_application(
+        build_test_state(config=config, template_catalog_fetcher=FakeTemplateCatalogFetcher())
+    ).test_client()
+    response = test_client.get("/api/templates-catalog")
+    assert response.status_code == 503
+    assert response.get_json() == {"detail": "failed to load templates"}
+
+
+def test_templates_catalog_route_answers_null_when_no_catalog_is_configured(client: FlaskClient) -> None:
+    response = client.get("/api/templates-catalog")
+    assert response.status_code == 200
+    assert response.get_json() == {"catalog": None, "is_stale": False}
 
 
 def test_index_returns_html_when_static_exists(client: FlaskClient, tmp_path: Path) -> None:
