@@ -3,9 +3,10 @@ from typing import Final
 from pydantic_settings import BaseSettings
 
 # Where the shipped catalog lives: the raw file on the template repository.
-# CLEANUP: point this at ``main`` (and update ``catalog/README.md`` and
-# ``system/changelog/mngr-new-tab-page.md``, which name the branch too) once the new-tab-page
-# work has merged to ``main``.
+# CLEANUP: point this at ``main`` (and update ``catalog/README.md``,
+# ``system/changelog/mngr-new-tab-page.md``, and
+# ``docs/system/blueprint/new-tab-page/plan-new-tab-page.md``, which name the branch too) once
+# the new-tab-page work has merged to ``main``.
 DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
     "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/mngr/new-tab-page/catalog/new-tab-templates.json"
 )
