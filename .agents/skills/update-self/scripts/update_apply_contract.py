@@ -67,6 +67,13 @@ EMERGENCY_FILENAME = "emergency.json"
 # fix, and it comes down only when a provisioner run succeeds.
 PROVISION_INCOMPLETE_FILENAME = "provision-incomplete.json"
 
+# The kept rollback point of the last apply run with ``--keep-rollback-point``
+# (the careful flow for a critical app): what it landed, what it touched, and the
+# pre-apply copies it left in place. The shell reads it to raise the "recently
+# updated" notice, and only a person closes it -- confirming discards the copies,
+# rolling back restores them. Any later apply replaces it.
+LAST_GOOD_FILENAME = "last-good.json"
+
 # The apply's phases, recorded in the marker as each completes so an
 # interrupted apply can be read (by recovery, and by the system interface's
 # "an update was interrupted" banner) without guessing. The marker comes down
@@ -211,6 +218,119 @@ class ApplyMarker:
                 for s in raw.get("snapshots", [])
             ],
         )
+
+
+@dataclass
+class LastGoodRecord:
+    """The rollback point an apply kept for the user to confirm or take back.
+
+    ``merge_sha`` is the merge the apply landed and ``rollback_to`` the tree it
+    landed on; ``programs`` are the supervisord programs a rollback restarts (the
+    touched critical apps', the shell's included) and ``apps`` the app names the
+    shell raises the notice on. ``needs_services_restart`` says the diff reached
+    the bootstrap or the services agent's own setup, which a program restart
+    cannot undo. ``progress`` is what a running rollback is doing right now and
+    ``outcome`` how it ended, both for the notice to show.
+    """
+
+    merge_sha: str
+    rollback_to: str
+    applied_at: float
+    driven_by: str
+    snapshots: list[SnapshotRecord]
+    programs: list[str]
+    apps: list[str]
+    needs_services_restart: bool
+    progress: str | None = None
+    outcome: str | None = None
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "merge_sha": self.merge_sha,
+                "rollback_to": self.rollback_to,
+                "applied_at": self.applied_at,
+                "driven_by": self.driven_by,
+                "snapshots": [
+                    {"name": s.name, "source": s.source, "copy": s.copy}
+                    for s in self.snapshots
+                ],
+                "programs": list(self.programs),
+                "apps": list(self.apps),
+                "needs_services_restart": self.needs_services_restart,
+                "progress": self.progress,
+                "outcome": self.outcome,
+            },
+            indent=2,
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "LastGoodRecord":
+        raw = json.loads(text)
+        if not isinstance(raw, dict):
+            raise ValueError(f"expected a JSON object, got {type(raw).__name__}")
+        progress = raw.get("progress")
+        outcome = raw.get("outcome")
+        return cls(
+            merge_sha=str(raw["merge_sha"]),
+            rollback_to=str(raw["rollback_to"]),
+            applied_at=float(raw.get("applied_at", 0.0)),
+            driven_by=str(raw.get("driven_by", "")),
+            snapshots=[
+                SnapshotRecord(
+                    name=str(s["name"]), source=str(s["source"]), copy=str(s["copy"])
+                )
+                for s in raw.get("snapshots", [])
+            ],
+            programs=[str(p) for p in raw.get("programs", [])],
+            apps=[str(a) for a in raw.get("apps", [])],
+            needs_services_restart=bool(raw.get("needs_services_restart", False)),
+            progress=str(progress) if progress is not None else None,
+            outcome=str(outcome) if outcome is not None else None,
+        )
+
+
+def last_good_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / LAST_GOOD_FILENAME
+
+
+def read_last_good(repo_root: Path) -> LastGoodRecord | None:
+    """The kept rollback point, or ``None`` when there is none or it is unreadable.
+
+    Lenient like :func:`read_marker`: the record is what a notice is raised from,
+    and a corrupt one must not wedge the apply that would replace it.
+    """
+    path = last_good_path(repo_root)
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        sys.stderr.write(f"warning: could not read {path} ({exc}); ignoring it.\n")
+        return None
+    try:
+        return LastGoodRecord.from_json(text)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        sys.stderr.write(
+            f"warning: {path} is not a valid rollback-point record ({exc}); ignoring it.\n"
+        )
+        return None
+
+
+def write_last_good(record: LastGoodRecord, repo_root: Path) -> None:
+    """Persist the kept rollback point atomically (write-then-rename)."""
+    path = last_good_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    scratch = path.with_suffix(".json.tmp")
+    scratch.write_text(record.to_json() + "\n")
+    scratch.replace(path)
+
+
+def clear_last_good(repo_root: Path) -> None:
+    try:
+        last_good_path(repo_root).unlink()
+    except FileNotFoundError:
+        pass
 
 
 def marker_path(repo_root: Path) -> Path:

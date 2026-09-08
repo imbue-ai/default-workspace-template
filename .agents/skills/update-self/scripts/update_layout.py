@@ -15,6 +15,9 @@ from typing import NamedTuple
 # (idempotent) for the files it reads (:func:`read_provisioner_inputs`).
 PROVISIONER_SCRIPT = "system/scripts/setup_system.sh"
 
+# The supervisord program table; a rollback re-reads it when the update changed it.
+SUPERVISORD_CONF = "system/supervisord.conf"
+
 
 # The served app, the editable tool the live service runs from, and the build
 # surfaces. These mirror system/scripts/build_workspace.sh -- the source of

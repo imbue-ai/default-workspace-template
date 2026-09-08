@@ -12,7 +12,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Sequence
 
 from update_banding import ExpendWrapper, as_expendable
 from update_layout import (
@@ -122,11 +122,13 @@ class CriticalInstanceApp(NamedTuple):
 
     ``instances_url`` is the manifest's own declaration when it makes one (the
     terminal's sidecar port); ``None`` means the API lives at the app URL, which
-    only the registry knows.
+    only the registry knows. ``program`` is the supervisord program that runs
+    it, whose pid the settled verdict holds steady.
     """
 
     name: str
     instances_url: str | None
+    program: str = ""
 
 
 def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, ...]:
@@ -170,6 +172,7 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
         ):
             continue
         declared_url = manifest.get("instances_url")
+        program = manifest.get("program")
         apps.append(
             CriticalInstanceApp(
                 name=name,
@@ -178,9 +181,133 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
                     if isinstance(declared_url, str) and declared_url
                     else None
                 ),
+                program=program if isinstance(program, str) and program else name,
             )
         )
     return tuple(apps)
+
+
+# The supervisord program that runs the live shell, and the client used to ask
+# whether a program has settled.
+SHELL_PROGRAM = "system_interface"
+_SUPERVISORCTL = "supervisorctl"
+# How many consecutive healthy answers (one poll interval apart) make a verdict.
+# One 200 is a point-in-time probe, not settled state: it reads green in a gap
+# between two restarts and red on a change that was never broken. Since this
+# verdict is what arms the automatic rollback, both directions are expensive --
+# green ships a stack that is still turning over, red reverts a good change.
+SETTLED_HEALTHY_PROBES = 3
+
+
+def parse_supervisor_pid(status_line: str) -> str | None:
+    """The pid one ``supervisorctl status`` line reports, or None if it is not RUNNING.
+
+    The line reads ``chat   RUNNING   pid 1234, uptime 0:00:05``. Every other
+    state (STARTING, BACKOFF, FATAL, STOPPED) names no settled process, so it
+    answers None -- the same answer a supervisorctl that could not be reached
+    gets, because neither is evidence the program has settled.
+    """
+    if "RUNNING" not in status_line:
+        return None
+    marker = "pid "
+    index = status_line.find(marker)
+    if index == -1:
+        return None
+    return status_line[index + len(marker) :].split(",")[0].strip() or None
+
+
+def read_supervisor_pids(
+    repo_root: Path, runner: Runner, programs: Sequence[str]
+) -> dict[str, str | None]:
+    """Ask supervisord for each program's pid in one call (None where not RUNNING)."""
+    result = runner.run(
+        [_SUPERVISORCTL, "status", *programs],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    pids: dict[str, str | None] = {program: None for program in programs}
+    for line in (getattr(result, "stdout", "") or "").splitlines():
+        fields = line.split()
+        if fields and fields[0] in pids:
+            pids[fields[0]] = parse_supervisor_pid(line)
+    return pids
+
+
+def wait_settled(
+    http: HttpClient,
+    repo_root: Path,
+    runner: Runner,
+    sleeper: Callable[[float], None],
+    *,
+    shell_url: str,
+    programs: Sequence[str],
+    instance_apps: Sequence[CriticalInstanceApp],
+    require_stable_pid: bool,
+    attempts: int = HEALTH_ATTEMPTS,
+) -> str | None:
+    """Whether the live workspace reaches -- and holds -- a healthy state; None when it does.
+
+    Healthy is the shell's health answering together with every ``instance_apps``
+    entry's instances API answering (re-reading the registry each time, as the
+    apps re-register). It takes ``SETTLED_HEALTHY_PROBES`` consecutive healthy
+    answers rather than one, and, when the caller has just restarted programs,
+    supervisord reporting every one of ``programs`` RUNNING on the same pids
+    throughout. A pid that turns over mid-run restarts the confirmation instead
+    of failing it: the stack is still settling (the services agent is
+    supervisord's parent, so a restart turns every program over), which is the
+    situation this exists to wait out rather than to judge.
+
+    Returns what the last attempt found when the budget runs out, so the caller
+    can say which app or program never settled.
+    """
+    healthy_streak = 0
+    streak_pids: dict[str, str | None] | None = None
+    last_finding = "the budget ran out before the first probe"
+    for index in range(attempts):
+        finding: str | None = None
+        if http.get_status(shell_url, timeout=5.0) != 200:
+            finding = f"the shell's health at {shell_url} did not answer 200"
+        for app in instance_apps:
+            if finding is not None:
+                break
+            url = instances_probe_url(repo_root, app)
+            if url is None:
+                finding = _describe_missing_registry_url(repo_root, app.name)
+            else:
+                page = http.get_page(url, timeout=5.0)
+                if not is_instances_answer(page):
+                    finding = (
+                        f"the {app.name} app's instances API at "
+                        f"{_describe_instances_non_answer(url, page)}"
+                    )
+        pids: dict[str, str | None] | None = None
+        if finding is None and require_stable_pid:
+            pids = read_supervisor_pids(repo_root, runner, programs)
+            not_running = sorted(
+                program for program, pid in pids.items() if pid is None
+            )
+            if not_running:
+                finding = (
+                    f"supervisord does not report {', '.join(not_running)} RUNNING"
+                )
+        if finding is None:
+            if healthy_streak == 0 or pids != streak_pids:
+                healthy_streak = 1
+                streak_pids = pids
+            else:
+                healthy_streak += 1
+            if healthy_streak >= SETTLED_HEALTHY_PROBES:
+                return None
+            last_finding = "the workspace answered healthy but had not yet held it"
+        else:
+            healthy_streak = 0
+            streak_pids = None
+            last_finding = finding
+        if index < attempts - 1:
+            sleeper(HEALTH_INTERVAL_SECONDS)
+    return last_finding
 
 
 def _read_registry_rows(repo_root: Path) -> list:
