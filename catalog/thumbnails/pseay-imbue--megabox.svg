@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Megabox unified inbox: a dark rail, a Slack-and-email message list, and a reading pane">
+  <defs>
+    <clipPath id="card">
+      <rect x="0" y="0" width="240" height="160" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#card)">
+    <!-- app surface -->
+    <rect x="0" y="0" width="240" height="160" fill="#F3F7F5"/>
+
+    <!-- left rail -->
+    <rect x="0" y="0" width="60" height="160" fill="#0B1F24"/>
+    <circle cx="15" cy="18" r="5" fill="#1FB6A6"/>
+    <rect x="24" y="14" width="27" height="7" rx="3" fill="#F3F7F5" opacity="0.85"/>
+    <rect x="12" y="44" width="36" height="9" rx="4" fill="#0E7C86"/>
+    <rect x="12" y="60" width="36" height="8" rx="4" fill="#1C3A42"/>
+    <rect x="12" y="74" width="36" height="8" rx="4" fill="#1C3A42"/>
+    <rect x="12" y="88" width="28" height="8" rx="4" fill="#1C3A42"/>
+
+    <!-- message list -->
+    <rect x="60" y="12" width="90" height="30" fill="#E4EEEB"/>
+    <line x1="150" y1="0" x2="150" y2="160" stroke="#E1E9E6" stroke-width="1"/>
+
+    <!-- row 1 (email, selected) -->
+    <circle cx="75" cy="27" r="7" fill="#0E7C86"/>
+    <rect x="90" y="21" width="50" height="6" rx="3" fill="#223A40"/>
+    <rect x="90" y="31" width="40" height="5" rx="2.5" fill="#B7C7C3"/>
+
+    <!-- row 2 (slack) -->
+    <circle cx="75" cy="59" r="7" fill="#1FB6A6"/>
+    <rect x="90" y="53" width="46" height="6" rx="3" fill="#33484E"/>
+    <rect x="90" y="63" width="52" height="5" rx="2.5" fill="#C4D4D0"/>
+
+    <!-- row 3 (email) -->
+    <circle cx="75" cy="91" r="7" fill="#0E7C86"/>
+    <rect x="90" y="85" width="44" height="6" rx="3" fill="#33484E"/>
+    <rect x="90" y="95" width="48" height="5" rx="2.5" fill="#C4D4D0"/>
+
+    <!-- row 4 (slack) -->
+    <circle cx="75" cy="123" r="7" fill="#1FB6A6"/>
+    <rect x="90" y="117" width="50" height="6" rx="3" fill="#33484E"/>
+    <rect x="90" y="127" width="38" height="5" rx="2.5" fill="#C4D4D0"/>
+
+    <!-- reading pane -->
+    <rect x="162" y="16" width="58" height="8" rx="3" fill="#223A40"/>
+    <circle cx="167" cy="37" r="5" fill="#0E7C86"/>
+    <rect x="177" y="34" width="34" height="5" rx="2.5" fill="#7C9A98"/>
+    <rect x="162" y="52" width="66" height="4" rx="2" fill="#CBD8D5"/>
+    <rect x="162" y="62" width="60" height="4" rx="2" fill="#CBD8D5"/>
+    <rect x="162" y="72" width="68" height="4" rx="2" fill="#CBD8D5"/>
+    <rect x="162" y="82" width="52" height="4" rx="2" fill="#CBD8D5"/>
+    <rect x="162" y="92" width="40" height="4" rx="2" fill="#CBD8D5"/>
+
+    <!-- reply pill -->
+    <rect x="162" y="116" width="54" height="16" rx="8" fill="#0E7C86"/>
+    <circle cx="171" cy="124" r="3" fill="#1FB6A6"/>
+    <rect x="178" y="122" width="30" height="4" rx="2" fill="#F3F7F5"/>
+  </g>
+</svg>

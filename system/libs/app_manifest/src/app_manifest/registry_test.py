@@ -37,6 +37,7 @@ def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) 
     assert row.priority == "user"
     assert row.default_shortcut is None
     assert row.actions == ()
+    assert row.launcher_rank is None
 
 
 def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
@@ -54,7 +55,8 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "critical = false\n"
         'priority = "files"\n'
         'default_shortcut = {action = "new", mode = "focus"}\n'
-        'actions = [{id = "new", label = "New File Viewer"}]\n'
+        'actions = [{id = "new", label = "New File Viewer", params = ["path"]}, {id = "recent", label = "Recent"}]\n'
+        "launcher_rank = 20\n"
     )
 
     rows = read_registry(registry)
@@ -68,7 +70,11 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.action == "new"
-    assert [(action.id, action.label) for action in row.actions] == [("new", "New File Viewer")]
+    assert [(action.id, action.label, action.params) for action in row.actions] == [
+        ("new", "New File Viewer", ("path",)),
+        ("recent", "Recent", ()),
+    ]
+    assert row.launcher_rank == 20
 
 
 def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> None:
