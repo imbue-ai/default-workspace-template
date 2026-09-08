@@ -77,9 +77,7 @@ class _RecordingStarter:
         self.started.append(agent_name)
 
 
-def _source(
-    agent_manager: AgentManager, starter: _RecordingStarter | None = None
-) -> AgentManagerInstanceSource:
+def _source(agent_manager: AgentManager, starter: _RecordingStarter | None = None) -> AgentManagerInstanceSource:
     agent_manager.note_agent_list_known()
     return AgentManagerInstanceSource(
         manager=agent_manager, agent_starter=starter if starter is not None else _RecordingStarter(None)
@@ -307,6 +305,7 @@ class _LandingAgentManager(AgentManager):
         project_id: str = "",
         account_id: str = "",
         agent_id: str = "",
+        message: str = "",
     ) -> CreatedChatAgent:
         landed_id = _agent_id()
         _seed_agent(self, landed_id, "Chat-1")
@@ -323,6 +322,7 @@ class _VanishingAgentManager(AgentManager):
         project_id: str = "",
         account_id: str = "",
         agent_id: str = "",
+        message: str = "",
     ) -> CreatedChatAgent:
         return CreatedChatAgent(agent_id=_agent_id(), name="Chat-1", display_name="Chat 1")
 
@@ -345,6 +345,22 @@ def test_new_is_refused_when_the_created_chat_is_nowhere_to_be_listed() -> None:
 
     with pytest.raises(ChatCreateRefusedError, match="vanished"):
         source.create_instance(ActionId("new"), {"account_id": "acct-1"})
+
+
+def test_new_keeps_a_seeded_message_on_the_chat_it_reserves(agent_manager: AgentManager) -> None:
+    """With nothing signed in, ``new`` with a ``message`` mints a waiting chat that carries the
+    message, so the launch after sign-in sends it; without one the reservation carries none."""
+    source = _source(agent_manager)
+
+    seeded = source.create_instance(ActionId("new"), {"message": "/use-template https://example.com/a.git"})
+    plain = source.create_instance(ActionId("new"), {})
+
+    seeded_proto = agent_manager.get_proto_agent(seeded.key)
+    plain_proto = agent_manager.get_proto_agent(plain.key)
+    assert seeded_proto is not None and plain_proto is not None
+    assert seeded_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    assert seeded_proto.message == "/use-template https://example.com/a.git"
+    assert plain_proto.message == ""
 
 
 def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_manager: AgentManager) -> None:
@@ -454,7 +470,9 @@ def test_agents_are_stoppable_and_provisional_and_subagent_records_are_not(agent
     reserved_id = _agent_id()
     _seed_agent(agent_manager, agent_id, "Chat-1")
     with agent_manager._lock:
-        agent_manager._proto_agents[reserved_id] = _creating("Chat 2", reserved_id, ProvisionalChatPhase.AWAITING_ACCOUNT)
+        agent_manager._proto_agents[reserved_id] = _creating(
+            "Chat 2", reserved_id, ProvisionalChatPhase.AWAITING_ACCOUNT
+        )
     source = _source(agent_manager)
     subagent = source.create_instance(ActionId("subagent"), {"parent": agent_id, "session": uuid4().hex})
 

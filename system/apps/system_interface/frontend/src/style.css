@@ -576,3 +576,14 @@ body > .dv-tab.dv-dragged .dv-default-tab {
  * hover square; `.dv-custom-tab-action` is only a bare marker the E2E
  * selectors query, and the 12px glyph size is set on the icon markup at the
  * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
+
+/* The New Tab page's template rails scroll sideways behind their paging arrows; the scrollbar
+   itself is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's
+   edge is what says there is more. */
+.new-tab-template-rail {
+  scrollbar-width: none;
+}
+
+.new-tab-template-rail::-webkit-scrollbar {
+  display: none;
+}
