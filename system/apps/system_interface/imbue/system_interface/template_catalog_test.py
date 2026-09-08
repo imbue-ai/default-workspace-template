@@ -119,11 +119,11 @@ def test_store_fetches_once_within_the_freshness_window_and_caches_to_disk(tmp_p
     second = store.read()
 
     assert first.availability is TemplateCatalogAvailability.FRESH
-    assert first.catalog is not None and [t.slug for t in first.catalog.templates] == ["inbox"]
+    assert first.catalog is not None and [template.slug for template in first.catalog.templates] == ["inbox"]
     assert second == first
     assert fetcher.fetched_urls == [_CATALOG_URL]
     cached = json.loads((tmp_path / CATALOG_CACHE_FILENAME).read_text())
-    assert [t["slug"] for t in cached["templates"]] == ["inbox"]
+    assert [template["slug"] for template in cached["templates"]] == ["inbox"]
 
 
 def test_store_answers_the_disk_copy_as_stale_when_the_fetch_fails(tmp_path: Path) -> None:
@@ -137,7 +137,7 @@ def test_store_answers_the_disk_copy_as_stale_when_the_fetch_fails(tmp_path: Pat
     reading = store.read()
 
     assert reading.availability is TemplateCatalogAvailability.STALE
-    assert reading.catalog is not None and [t.slug for t in reading.catalog.templates] == ["inbox"]
+    assert reading.catalog is not None and [template.slug for template in reading.catalog.templates] == ["inbox"]
 
 
 def test_store_is_unavailable_with_no_fetch_and_no_disk_copy(tmp_path: Path) -> None:
@@ -172,7 +172,7 @@ def test_store_refetches_once_the_copy_is_no_longer_fresh_and_keeps_the_old_one_
 
     assert fetcher.fetched_urls == [_CATALOG_URL, _CATALOG_URL]
     assert reading.availability is TemplateCatalogAvailability.STALE
-    assert reading.catalog is not None and [t.slug for t in reading.catalog.templates] == ["inbox"]
+    assert reading.catalog is not None and [template.slug for template in reading.catalog.templates] == ["inbox"]
 
 
 def test_store_ignores_a_disk_copy_it_cannot_read(tmp_path: Path) -> None:
