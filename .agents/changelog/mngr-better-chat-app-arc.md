@@ -74,3 +74,5 @@ The preview wrapper page's comment (`.agents/shared/scripts/preview_wrapper_serv
 When the apply's instances poll gives up without the registry ever naming a URL for the app, its finding says what the registry looked like: a registry that does not exist or has no row for the app reads as "never listed", while one that is there but cannot be read or parsed is named as such with the error, so the failure points at the broken file rather than at a registration that never happened. The poll itself still waits on an unreadable registry as if the app had not registered yet.
 
 The apply test for a rollback into a tree from before the app model now drives the rollback for real: the shell fails its own health probe after the forward restart, the recovery restarts into the manifest-less tree, and the test asserts the apply is recovered (exit 2) with the chat's instances API never asked, rather than passing on a forward apply that never rolled back.
+
+In the apply's test of which apps the post-restart probes read off a tree, the note that the fixture tree already holds the shell and the browser sits on its own line above the call rather than trailing a wrapped one.
