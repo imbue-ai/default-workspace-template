@@ -305,7 +305,17 @@ def _live_prose_files() -> list[Path]:
     committed tree, which is identical to a filesystem walk in CI checkouts.
     """
     tracked = subprocess.run(
-        ["git", "ls-files", "--", "README.md", "CLAUDE.md", ".agents", "docs", "data"],
+        [
+            "git",
+            "ls-files",
+            "--",
+            "README.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".agents",
+            "docs",
+            "data",
+        ],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
