@@ -193,6 +193,7 @@ Projects and views:
 | `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `200 {"updated_at"}`, the stamp written (the window's next `base_updated_at`), `null` when the body equalled the stored arrangement and nothing was written or broadcast; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one) |
 | `GET /api/clients` | | `{"clients": [client, ...]}`; a window reads its own record here on boot to learn its active view |
 | `GET /api/inventory` | | the inventory document (section 9) |
+| `GET /api/templates-catalog` | | the New Tab page's template catalog: `200 {"catalog": {"generated_at", "templates": [template with "thumbnail_url" resolved to an absolute URL, ...], "shelves": [{"key", "title", "slugs"}]}, "is_stale": bool}` (`is_stale` when the shell is answering its last good copy because the fetch failed); `200 {"catalog": null, "is_stale": false}` when no catalog URL is configured; `503 {"detail"}` when nothing could be loaded. The document, its URL, and its cache are described in `catalog/README.md` and `docs/system/blueprint/new-tab-page/plan-new-tab-page.md` |
 
 `project` is `{"id", "name", "color", "glyph", "tabs": [address], "shortcuts": [{"app", "action", "mode"}]}`.
 `layout` is `{"dockview": <dockview JSON>, "tabs": {"<panel_id>": {"address", "tab_id", "last_focused_ms"}}, "device_kind", "updated_at"}`.
