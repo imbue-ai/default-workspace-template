@@ -159,7 +159,7 @@ def _running_e2e_server(
     project_names: tuple[str, ...] = (STARTER_PROJECT_NAME,),
     is_stub_taking_message: bool = False,
     is_catalog_offered: bool = False,
-    catalog_document: bytes | None = None,
+    catalog_body: bytes | None = None,
 ) -> Generator[E2EServer, None, None]:
     """Run the shell with a stub app whose ``stub_instances`` are seeded as records titled after their keys.
 
@@ -168,7 +168,7 @@ def _running_e2e_server(
     auto-opened: the first landing is the New Tab page. ``is_stub_taking_message`` declares a
     ``message`` param on the stub's ``new`` action, which is what makes it the app the page's seeded
     prompts go to. With ``is_catalog_offered`` the shell has a template catalog URL, answered by
-    ``catalog_document`` -- or by nothing, so the page sees the catalog fail to load.
+    ``catalog_body`` -- or by nothing, so the page sees the catalog fail to load.
     """
     base_url = f"http://127.0.0.1:{port}"
     registry_path = tmp_path / "registry" / "apps.toml"
@@ -213,8 +213,8 @@ def _running_e2e_server(
         catalog_fetcher = (
             FakeTemplateCatalogFetcher(
                 body_by_url={}
-                if catalog_document is None
-                else {config.system_interface_template_catalog_url: catalog_document}
+                if catalog_body is None
+                else {config.system_interface_template_catalog_url: catalog_body}
             )
             if is_catalog_offered
             else None
@@ -1146,7 +1146,7 @@ def test_new_tab_lists_the_template_catalog_and_adopts_one_into_a_seeded_chat(tm
     action takes a message, which is all the page goes by, so the create it receives is what the
     page sent: the ``new`` action with the message."""
     with _running_e2e_server(
-        tmp_path, _PORT + 19, is_stub_taking_message=True, is_catalog_offered=True, catalog_document=_CATALOG_DOCUMENT
+        tmp_path, _PORT + 19, is_stub_taking_message=True, is_catalog_offered=True, catalog_body=_CATALOG_DOCUMENT
     ) as server:
         page.goto(server.base_url)
         _wait_for_view(page, STARTER_PROJECT_ID)
