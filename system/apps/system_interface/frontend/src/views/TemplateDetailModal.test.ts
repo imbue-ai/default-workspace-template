@@ -7,6 +7,7 @@ import m from "mithril";
 
 import { catalogTemplateRecord } from "../testing/records";
 import { TemplateDetailModal, templateRequirements } from "./TemplateDetailModal";
+import type { TemplateDetailModalAttrs } from "./TemplateDetailModal";
 
 describe("templateRequirements", () => {
   it("lists accounts by service with their permissions joined, then the model, keys, and packages", () => {
@@ -48,21 +49,28 @@ describe("TemplateDetailModal", () => {
     root.remove();
   });
 
+  /** Mount the dialog over a plain template with every action live, ``overrides`` laid over that. */
+  function mountDetail(overrides: Partial<TemplateDetailModalAttrs>): TemplateDetailModalAttrs {
+    const attrs: TemplateDetailModalAttrs = {
+      template: catalogTemplateRecord("plain"),
+      isStartDisabled: false,
+      startDisabledReason: null,
+      onClose: vi.fn(),
+      onAdopt: vi.fn(),
+      onCreateMachine: vi.fn(),
+      ...overrides,
+    };
+    m.mount(root, { view: () => m(TemplateDetailModal, attrs) });
+    return attrs;
+  }
+
   it("shows the write-up as paragraphs and the Needs list, and links the repository", () => {
-    m.mount(root, {
-      view: () =>
-        m(TemplateDetailModal, {
-          template: catalogTemplateRecord("digest", {
-            what_it_is: "Reads your inbox\nevery morning.\n\nWrites a digest.",
-            required_accounts: [{ service: "slack-api", permission: "slack-read-all" }],
-            needs_ai: true,
-          }),
-          isStartDisabled: false,
-          startDisabledReason: null,
-          onClose: vi.fn(),
-          onAdopt: vi.fn(),
-          onCreateMachine: vi.fn(),
-        }),
+    mountDetail({
+      template: catalogTemplateRecord("digest", {
+        what_it_is: "Reads your inbox\nevery morning.\n\nWrites a digest.",
+        required_accounts: [{ service: "slack-api", permission: "slack-read-all" }],
+        needs_ai: true,
+      }),
     });
     const detail = root.querySelector<HTMLElement>(".new-tab-template-detail")!;
     expect(Array.from(detail.querySelectorAll("p")).map((paragraph) => paragraph.textContent)).toEqual([
@@ -77,17 +85,7 @@ describe("TemplateDetailModal", () => {
   });
 
   it("falls back to the description and omits Needs when the template has neither write-up nor requirements", () => {
-    m.mount(root, {
-      view: () =>
-        m(TemplateDetailModal, {
-          template: catalogTemplateRecord("plain", { description: "Just a thing." }),
-          isStartDisabled: false,
-          startDisabledReason: null,
-          onClose: vi.fn(),
-          onAdopt: vi.fn(),
-          onCreateMachine: vi.fn(),
-        }),
-    });
+    mountDetail({ template: catalogTemplateRecord("plain", { description: "Just a thing." }) });
     const detail = root.querySelector<HTMLElement>(".new-tab-template-detail")!;
     expect(Array.from(detail.querySelectorAll("p")).map((paragraph) => paragraph.textContent)).toEqual([
       "Just a thing.",
@@ -96,18 +94,9 @@ describe("TemplateDetailModal", () => {
   });
 
   it("stands both actions down when told to, so neither callback fires", () => {
-    const onAdopt = vi.fn();
-    const onCreateMachine = vi.fn();
-    m.mount(root, {
-      view: () =>
-        m(TemplateDetailModal, {
-          template: catalogTemplateRecord("plain"),
-          isStartDisabled: true,
-          startDisabledReason: "No app on this machine can start a chat",
-          onClose: vi.fn(),
-          onAdopt,
-          onCreateMachine,
-        }),
+    const attrs = mountDetail({
+      isStartDisabled: true,
+      startDisabledReason: "No app on this machine can start a chat",
     });
     const adopt = root.querySelector<HTMLElement>(".new-tab-template-adopt")!;
     const createMachine = root.querySelector<HTMLElement>(".new-tab-template-create-machine")!;
@@ -115,7 +104,7 @@ describe("TemplateDetailModal", () => {
     expect(createMachine.getAttribute("aria-disabled")).toBe("true");
     adopt.click();
     createMachine.click();
-    expect(onAdopt).not.toHaveBeenCalled();
-    expect(onCreateMachine).not.toHaveBeenCalled();
+    expect(attrs.onAdopt).not.toHaveBeenCalled();
+    expect(attrs.onCreateMachine).not.toHaveBeenCalled();
   });
 });
