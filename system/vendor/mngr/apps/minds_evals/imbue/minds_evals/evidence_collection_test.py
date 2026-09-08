@@ -1453,6 +1453,25 @@ def test_oracle_evidence_files_record_every_declared_check_as_passed() -> None:
     assert "RUNNING" in files[evidence_collection.SERVICES_FILENAME]
 
 
+def test_the_oracle_flow_log_carries_every_record_kind() -> None:
+    # The oracle bundle is what `-a oracle` calibrates the judge and the reward composition against,
+    # so a reader path it never exercises is a path nothing green ever proves.
+    case = _case_config(
+        _authored(
+            ui_flows=[{"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."}]
+        )
+    )
+
+    files = evidence_collection.oracle_evidence_files(case)
+
+    log = files["flows/add_complete_delete/log.jsonl"]
+    records = [json.loads(line) for line in log.splitlines()]
+    assert [record["kind"] for record in records] == ["init", "action", "final"]
+    # The digest finds the closing reading by this action text, and prints it as the agent's account
+    # of the final state.
+    assert records[-1]["action"] == "read the final state"
+
+
 def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
     case = _case_config(_authored(deliverable={"kind": "minds-app", "files": [{"glob": "workspace/apps/*/main.py"}]}))
 
@@ -1659,8 +1678,38 @@ def test_a_step_whose_frame_was_not_captured_names_no_screenshot(tmp_path: Path)
     _collector, environment = _run_flow_collector(tmp_path, agent, rules)
 
     log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
-    # Two steps and the closing reading, none of which produced a frame.
-    assert [json.loads(line)["screenshot"] for line in log.splitlines()] == ["", "", ""]
+    records = [json.loads(line) for line in log.splitlines()]
+    # Two steps and the closing reading, none of which produced a frame. The opening record is not
+    # among them: its frame comes from the navigation, which is not the capture that failed here.
+    assert [record["screenshot"] for record in records if record["kind"] != "init"] == ["", "", ""]
+
+
+def test_a_flow_opens_with_the_frame_and_the_page_it_started_from(tmp_path: Path) -> None:
+    # The opening navigation captures a frame and a page state before any action is decided. Without
+    # a record naming them a reader meets the flow one action in, looking at the frame that followed
+    # that action, with nothing saying what the flow was aiming at.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    opening = json.loads(log.splitlines()[0])
+    assert opening["kind"] == "init"
+    assert opening["screenshot"] == "step_000.png"
+    assert opening["goal"] and opening["expect"] and opening["state"]
+
+
+def test_a_step_records_what_it_predicted_and_what_the_page_did(tmp_path: Path) -> None:
+    # The pair is what lets the next decision notice that the page disagreed with it, instead of
+    # re-deriving the same wrong model of the UI and repeating the action.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    acted = [json.loads(line) for line in log.splitlines() if json.loads(line)["kind"] == "action"]
+    assert acted[0]["expected"] == "the item is added to the list"
+    assert acted[0]["observed"] != ""
 
 
 def test_the_next_decision_is_told_when_an_action_changed_nothing(tmp_path: Path) -> None:
@@ -1672,8 +1721,9 @@ def test_the_next_decision_is_told_when_an_action_changed_nothing(tmp_path: Path
     _collector, _environment = _run_flow_collector(tmp_path, agent)
 
     # The default scripted step returns the same page every time, so the first click was a silent
-    # no-op and the second decision must be told so.
-    assert "(the page state is exactly the same as before that action)" in agent.histories[1]
+    # no-op and the second decision must be told so. It reaches the history inside the step's own
+    # entry, beside the prediction it is contradicting, rather than as a line of its own.
+    assert any(ui_flows.UNCHANGED_STATE_SUMMARY in entry for entry in agent.histories[1])
 
 
 def test_a_step_that_changed_the_page_leaves_no_no_change_note(tmp_path: Path) -> None:

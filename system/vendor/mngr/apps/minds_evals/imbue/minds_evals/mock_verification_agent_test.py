@@ -51,13 +51,25 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
 
 def done_action(reasoning: str = "every step is carried out") -> ui_flows.FlowAction:
     return ui_flows.FlowAction(
-        kind=ui_flows.FlowActionKind.DONE, role="", target="", text="", amount=0, reasoning=reasoning
+        kind=ui_flows.FlowActionKind.DONE,
+        role="",
+        target="",
+        text="",
+        amount=0,
+        reasoning=reasoning,
+        expected="nothing further",
     )
 
 
 def click_action(role: str = "button", target: str = "Add") -> ui_flows.FlowAction:
     return ui_flows.FlowAction(
-        kind=ui_flows.FlowActionKind.CLICK, role=role, target=target, text="", amount=0, reasoning="clicking it"
+        kind=ui_flows.FlowActionKind.CLICK,
+        role=role,
+        target=target,
+        text="",
+        amount=0,
+        reasoning="the button is on the page",
+        expected="the item is added to the list",
     )
 
 
