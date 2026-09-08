@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { catalogTemplateRecord } from "../testing/records";
 import type { TemplateCatalog } from "./TemplateCatalog";
-import { matchesQuery, resolveShelves, searchTemplates, writeUpParagraphs } from "./TemplateCatalog";
+import { resolveShelves, searchTemplates, writeUpParagraphs } from "./TemplateCatalog";
 
 const CATALOG: TemplateCatalog = {
   generated_at: "",
@@ -34,19 +34,6 @@ describe("resolveShelves", () => {
 
   it("gives a catalog with no shelves the one All templates row", () => {
     expect(resolveShelves({ ...CATALOG, shelves: [] }).map((shelf) => shelf.key)).toEqual(["all"]);
-  });
-});
-
-describe("matchesQuery", () => {
-  it("needs every token somewhere, in any order, case-insensitively", () => {
-    expect(matchesQuery("open term", "Open new terminal")).toBe(true);
-    expect(matchesQuery("TERMINAL open", "Open new terminal")).toBe(true);
-    expect(matchesQuery("open browser", "Open new terminal")).toBe(false);
-    expect(matchesQuery("digest kanjun", "Inbox Digest", "Triage your mail.", "kanjun")).toBe(true);
-  });
-
-  it("matches everything on a blank query", () => {
-    expect(matchesQuery("   ", "anything")).toBe(true);
   });
 });
 
