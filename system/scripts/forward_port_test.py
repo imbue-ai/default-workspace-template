@@ -607,6 +607,7 @@ instances = true
 instances_url = "http://127.0.0.1:8301"
 critical = false
 priority = "files"
+launcher_rank = 20
 
 [default_shortcut]
 action = "new"
@@ -616,6 +617,10 @@ mode = "focus"
 id = "new"
 label = "New File Viewer"
 params = [{name = "path", label = "Path", required = false}]
+
+[[actions]]
+id = "recent"
+label = "Recent files"
 """
 
 
@@ -643,8 +648,13 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["program"] == "files"
     assert "internal" not in row
     assert row["default_shortcut"] == {"action": "new", "mode": "focus"}
-    # ``params`` is documentation for the manifest's readers; the row carries id and label only.
-    assert row["actions"] == [{"id": "new", "label": "New File Viewer"}]
+    assert row["launcher_rank"] == 20
+    # The row carries each action's param NAMES (the New Tab page reads them), and no ``params``
+    # key at all for an action that declares none.
+    assert row["actions"] == [
+        {"id": "new", "label": "New File Viewer", "params": ["path"]},
+        {"id": "recent", "label": "Recent files"},
+    ]
 
 
 def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) -> None:
@@ -673,7 +683,13 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
     assert row["display_name"] == "Files"
     assert row["program"] == "files-sidecar"
     assert row["critical"] is True
-    for stale_key in ("instances", "instances_url", "default_shortcut", "actions"):
+    for stale_key in (
+        "instances",
+        "instances_url",
+        "default_shortcut",
+        "actions",
+        "launcher_rank",
+    ):
         assert stale_key not in row, stale_key
     assert "priority" not in row
 
@@ -868,9 +884,10 @@ def test_the_writer_round_trips_an_icon_with_quotes_newlines_and_the_real_files_
             "internal": True,
             "default_shortcut": {"action": "new", "mode": "focus"},
             "actions": [
-                {"id": "new", "label": 'Say "hi"'},
+                {"id": "new", "label": 'Say "hi"', "params": ["message", "account_id"]},
                 {"id": "other", "label": "Other"},
             ],
+            "launcher_rank": 10,
         },
     ]
 
@@ -894,11 +911,16 @@ def test_the_writer_escapes_control_characters(tmp_path: Path) -> None:
 def test_the_writer_refuses_a_value_type_the_registry_never_holds() -> None:
     forward_port = _load_module("_forward_port_writer_type_check", _SCRIPT)
     with pytest.raises(TypeError, match="cannot hold") as excinfo:
-        forward_port.dump_registry([{"name": "web", "port": 8000}])
+        forward_port.dump_registry([{"name": "web", "load": 0.5}])
     assert isinstance(excinfo.value, forward_port.RegistryError)
     # An array holds inline tables only; a bare string in one is refused the same way.
     with pytest.raises(TypeError, match="cannot hold an array element"):
         forward_port.dump_registry([{"name": "web", "actions": ["new"]}])
+    # An inline table's array holds strings only (an action's param names).
+    with pytest.raises(TypeError, match="cannot hold an inline-table array element"):
+        forward_port.dump_registry(
+            [{"name": "web", "actions": [{"id": "new", "label": "New", "params": [1]}]}]
+        )
 
 
 def test_a_registry_whose_apps_are_not_tables_is_refused_by_name(

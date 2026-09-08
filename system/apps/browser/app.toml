@@ -4,6 +4,7 @@ icon = "icon.svg"
 instances = true
 critical = false
 priority = "browser"
+launcher_rank = 30
 
 [default_shortcut]
 action = "new"

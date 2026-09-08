@@ -29,10 +29,13 @@ ENV_APPS_FILE: Final[str] = "MINDS_APPS_FILE"
 
 
 class RegistryAction(FrozenModel):
-    """An action as copied onto a registry row: the id and label only."""
+    """An action as copied onto a registry row: the id, the label, and the names of its params."""
 
     id: ActionId = Field(description="The declared action id")
     label: NonEmptyStr = Field(description="The action's user-facing label")
+    params: tuple[NonEmptyStr, ...] = Field(
+        default=(), description="The names of the create body's documented params, in manifest order"
+    )
 
 
 class RegistryRow(FrozenModel):
@@ -57,6 +60,9 @@ class RegistryRow(FrozenModel):
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
     actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
+    launcher_rank: int | None = Field(
+        default=None, description="The app's place on the New Tab page's leading tile row; absent reads as none"
+    )
 
 
 def registry_path() -> Path:
