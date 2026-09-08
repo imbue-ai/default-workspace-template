@@ -47,6 +47,7 @@ _BUILTIN_SERVICE_ORDER = (
     "owner-exec",
     "terminal",
     "system_interface",
+    "agent-observer",
     "chat",
     "share-gateway",
     "github-sync",
