@@ -25,8 +25,8 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.instances import CHAT_APP_NAME
-from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatState
 from imbue.chat.state import state_of

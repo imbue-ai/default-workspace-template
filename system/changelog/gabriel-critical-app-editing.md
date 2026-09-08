@@ -1,0 +1,5 @@
+`system/supervisord.conf` gains the `agent-observer` program: the workspace's one `mngr observe --quiet`, run from the primary agent's work dir in the chat's memory band, restarted on exit like every service. The chat app no longer runs an observer of its own; every chat instance follows the event file this program writes. `supervisorctl restart agent-observer` bounces it, and a chat rides the outage out (its `/api/health` reports it) rather than freezing.
+
+`system/vendor/mngr` is refreshed from the paired mngr branch `gabriel/critical-app-editing`, which carries the observe read side (`ObserveEventFollower`, `is_observe_writer_running`, `find_last_full_state_offset`), the follower's start-without-a-writer mode the chat relies on, and the `initial_branch` widening.
+
+The workspace app model's contracts record the chat's `agent_events` health field and the observer's band; the chat, apps, and services READMEs describe the program.

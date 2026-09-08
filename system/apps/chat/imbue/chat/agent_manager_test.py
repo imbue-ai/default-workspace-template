@@ -3,7 +3,6 @@
 import json
 import os
 import queue
-import shutil
 import signal
 import time
 import tomllib
@@ -67,7 +66,6 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
-from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -574,7 +572,7 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
             "source": "mngr/agent_states",
         }
     )
-    agent_manager._handle_observe_output_line(line, True)
+    agent_manager._handle_observe_line(line)
     assert agent_manager.get_agents() == []
 
 
@@ -1393,7 +1391,11 @@ def test_observer_dying_mid_run_keeps_the_last_list_and_reports_degraded(
     wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=10.0)
 
     release_observe_lock(fd)
-    wait_for(lambda: "exited" in _events_status_detail(agent_manager), timeout=15.0)
+    # Releasing the lock changes nothing under the follower's directory watch, so the
+    # outage is noticed on its next wake: a change in the events dir here, the fallback
+    # poll (ten seconds) in production.
+    (get_observe_events_dir(tmp_path) / "wake").touch()
+    wait_for(lambda: "exited" in _events_status_detail(agent_manager), timeout=10.0)
     assert not agent_manager.get_agent_events_status().is_stream_healthy
     assert [a.id for a in agent_manager.get_agents()] == [str(before.id)]
 

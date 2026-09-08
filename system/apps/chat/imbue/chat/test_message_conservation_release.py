@@ -39,6 +39,7 @@ from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
+from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.mngr.utils.polling import wait_for
 
 pytestmark = pytest.mark.release
@@ -93,17 +94,6 @@ def _skip_unless_live_claude_agent_possible(work_repo_parent: Path) -> None:
         pytest.skip("no claude-trusted ancestor for the work repo; mngr create --no-connect would refuse")
 
 
-def _prepare_isolated_host_dir(host_dir: Path) -> None:
-    """An isolated mngr host dir with its own profile, opted into pytest, local provider only."""
-    profile_dir = host_dir / "profiles" / "conservation"
-    profile_dir.mkdir(parents=True)
-    (host_dir / "config.toml").write_text('profile = "conservation"\n')
-    (profile_dir / "settings.toml").write_text(
-        "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
-    )
-    (profile_dir / "tmux_onboarding_shown").write_text("")
-
-
 def _mngr_env(host_dir: Path, tmux_dir: Path) -> dict[str, str]:
     """The subprocess env: the caller's env minus its own agent identity, re-homed to the
     isolated host dir and tmux server (and outside any enclosing tmux client)."""
@@ -148,7 +138,7 @@ def test_live_claude_stop_flush_and_restart_conserve_every_message(tmp_path: Pat
     _skip_unless_live_claude_agent_possible(work_repo_parent)
 
     host_dir = tmp_path / "host"
-    _prepare_isolated_host_dir(host_dir)
+    prepare_isolated_mngr_host_dir(host_dir)
     tmux_dir = tmp_path / "tmux"
     tmux_dir.mkdir()
     env = _mngr_env(host_dir, tmux_dir)

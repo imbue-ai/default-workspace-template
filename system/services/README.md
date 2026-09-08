@@ -18,6 +18,10 @@ needing to open them.
   remote repository.
 - `env_converge/` - One-shot environment convergence on boot (deferred
   installs at the pinned apt snapshot).
+- `agent-observer` (no directory: a program in `system/supervisord.conf`) - The
+  workspace's one `mngr observe`, writing the agent lifecycle event file every
+  chat instance follows.
+
 - `oom_priority/` - The OOM-prevention machinery: priority bands, the shed
   ledger, and the earlyoom integration.
 
