@@ -58,11 +58,13 @@ _IRRELEVANT_PATHS = (
         # The settings file the long-lived mngr config parser re-reads.
         (".mngr/settings.toml", True),
         # Every manifest the served environment was resolved from.
-        ("pyproject.toml", True),
-        ("uv.lock", True),
         ("system/apps/system_interface/pyproject.toml", True),
         ("system/services/oom_priority/pyproject.toml", True),
         ("system/libs/tk_command_parsing/pyproject.toml", True),
+        # ... but not the workspace-root manifests, which every scaffolded app
+        # appends itself to and relocks.
+        ("pyproject.toml", False),
+        ("uv.lock", False),
         # The backend this process is running.
         ("system/apps/system_interface/imbue/system_interface/server.py", True),
         # ... but not its tests, which no running process holds.
@@ -200,6 +202,18 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "ordinary work and bookkeeping", *_IRRELEVANT_PATHS)
+    assert tracker.staleness() is None
+
+
+def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
+    # Scaffolding an app -- the routine action the build-app skill documents --
+    # appends the new package to the root manifest's ``[project].dependencies``
+    # and ``[tool.uv.sources]`` and relocks. None of that moves what this
+    # process resolved, so the banner must stay down: firing on every app a
+    # user builds is how a banner stops being read.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    _commit_files(repo, "scaffold a new app", "pyproject.toml", "uv.lock", "system/apps/finances/src/finances/app.py")
     assert tracker.staleness() is None
 
 

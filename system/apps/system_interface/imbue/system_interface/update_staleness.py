@@ -76,8 +76,9 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # What makes THIS running process stale: the code it holds in memory, the
 # manifests its environment was resolved from, and the settings file it
 # re-reads with long-lived parsing code. Deliberately NOT the frontend (the
-# served bundle is rebuilt on disk without a restart), docs, skills, tests, or
-# anything else agents routinely commit. (The update apply itself restarts the
+# served bundle is rebuilt on disk without a restart), docs, skills, tests, the
+# workspace-root manifests (see ``_BACKEND_MANIFESTS``), or anything else
+# agents routinely commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
 # a tree moved by anything else.) The vendored mngr is read at runtime through
 # more than its ``.py`` files (this process both imports it and shells out to
@@ -99,13 +100,19 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/tk_command_parsing/",
 )
 _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
+# The per-package manifests this environment was resolved from. The
+# workspace-root ``pyproject.toml`` and ``uv.lock`` are deliberately absent:
+# scaffolding an app appends the new package to the root's
+# ``[project].dependencies`` and ``[tool.uv.sources]`` and relocks, which moves
+# nothing this process resolved but raised the banner on every app a user
+# built. The residue is a re-point of a root ``[tool.uv.sources]`` entry with
+# no matching package-manifest edit -- rare enough not to pay for a
+# near-permanent false banner.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/services/oom_priority/pyproject.toml",
         "system/libs/tk_command_parsing/pyproject.toml",
-        "pyproject.toml",
-        "uv.lock",
     }
 )
 
