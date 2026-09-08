@@ -13,3 +13,14 @@ jobs/
 regrades/
 # Per-user local secrets (ANTHROPIC_API_KEY etc.), sourced by dev runs only.
 .env.local
+# The vendored viewer's toolchain and build output, both produced by scripts/build_viewer.sh.
+# bun lives inside the project rather than on the developer's machine, since only the viewer
+# recipes need it.
+.bun/
+viewer/node_modules/
+viewer/build/
+# The repo root ignores **/lib/ as Python build output. The vendored viewer has a real source
+# directory at that path, and the negation has to name the directory itself: git never descends
+# into an excluded directory, so a pattern matching only the files inside it would not bring them
+# back.
+!viewer/app/lib/
