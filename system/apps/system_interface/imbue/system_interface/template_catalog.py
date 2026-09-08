@@ -157,6 +157,12 @@ def parse_template_catalog(body: bytes, source: str) -> TemplateCatalog:
         parsed = json.loads(body)
     except ValueError as e:
         raise TemplateCatalogFormatError(f"the catalog at {source} is not JSON: {e}") from e
+    return template_catalog_from_document(parsed, source)
+
+
+def template_catalog_from_document(parsed: Any, source: str) -> TemplateCatalog:
+    """The catalog in an already-parsed JSON value (a fetched body, or the copy on disk); refuses
+    anything but a format-1 object, and skips a template or shelf that does not validate."""
     if not isinstance(parsed, dict):
         raise TemplateCatalogFormatError(f"the catalog at {source} is not a JSON object")
     if parsed.get("format") != CATALOG_FORMAT:
@@ -313,7 +319,7 @@ class TemplateCatalogStore(MutableModel):
         if document is None:
             return None
         try:
-            return parse_template_catalog(json.dumps(document).encode("utf-8"), str(self.cache_path))
+            return template_catalog_from_document(document, str(self.cache_path))
         except TemplateCatalogFormatError as e:
             logger.warning("Ignored the cached template catalog: {}", e)
             return None
