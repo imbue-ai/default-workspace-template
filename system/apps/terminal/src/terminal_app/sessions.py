@@ -86,6 +86,28 @@ def _find_session_of_record(
 
 
 @pure
+def _unclaimed_session_named(
+    name: TmuxSessionName,
+    live_sessions: Sequence[TmuxSession],
+    records: Sequence[TerminalSessionRecord],
+) -> TmuxSession | None:
+    """The live session tmux lists under ``name``, unless a terminal already holds it by id.
+
+    A session renamed inside tmux to another terminal's key stays the terminal that holds its
+    id; its name is not a second way to claim it, or two terminals would share one session and
+    stopping either would kill the other's.
+    """
+    return next(
+        (
+            session
+            for session in live_sessions
+            if session.name == name and _find_record_of_session(session, records) is None
+        ),
+        None,
+    )
+
+
+@pure
 def _live_instance_record(
     session: TmuxSession, record: TerminalSessionRecord | None
 ) -> InstanceRecord:
@@ -370,7 +392,14 @@ class TmuxSessionSource(InstanceSourceInterface):
                 return _live_instance_record(live, record)
             if record is None:
                 raise UnknownInstanceError(f"no terminal has the key {key!r}")
-            created = self._create_session_for(record)
+            try:
+                created = self._create_session_for(record)
+            except TmuxCommandError as e:
+                # tmux refuses a name a session already carries: one renamed inside tmux to this
+                # terminal's key, which belongs to the terminal holding its id, not to this one.
+                raise InstanceConflictError(
+                    f"could not start terminal {name!r}: {e}"
+                ) from e
         return _fresh_instance_record(created)
 
     def _terminal_name_or_raise(self, key: InstanceKey, verb: str) -> TmuxSessionName:
@@ -391,8 +420,8 @@ class TmuxSessionSource(InstanceSourceInterface):
         """
         with self._lock:
             live_sessions = self._user_sessions()
-            live_by_name = {session.name: session for session in live_sessions}
-            for record in self.store.list_records():
+            records = self.store.list_records()
+            for record in records:
                 own = _find_session_of_record(record, live_sessions)
                 if own is not None:
                     if record.session_created == own.created_epoch:
@@ -402,7 +431,7 @@ class TmuxSessionSource(InstanceSourceInterface):
                         # it learns the time here, since the dispatch attaches only by both.
                         self._bind(record, own)
                     continue
-                live = live_by_name.get(record.name)
+                live = _unclaimed_session_named(record.name, live_sessions, records)
                 if live is not None:
                     self._adopt(record, live)
                     continue
@@ -489,12 +518,12 @@ class TmuxSessionSource(InstanceSourceInterface):
         record: TerminalSessionRecord | None,
         live_sessions: Sequence[TmuxSession],
     ) -> TmuxSession | None:
-        """The live session backing the terminal: the record's own session, else the one with its name."""
+        """The live session backing the terminal: the record's own session, else the one with its name that no terminal holds by id."""
         if record is not None:
             own = _find_session_of_record(record, live_sessions)
             if own is not None:
                 return own
-        return next((session for session in live_sessions if session.name == name), None)
+        return _unclaimed_session_named(name, live_sessions, self.store.list_records())
 
     def _user_sessions(self) -> list[TmuxSession]:
         """The live sessions that are terminals: not an agent's, and named so the name can be a key."""
