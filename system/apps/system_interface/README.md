@@ -176,20 +176,23 @@ as messages. See the `manage-layout` skill for end-to-end orientation.
 ## Updating the running UI
 
 The deployed system interface is the live web UI the user is looking at, so
-changes are not applied in place. The canonical flow is the
-`update-system-interface` agent skill: a change is delegated to a worker,
-tested in isolation, **previewed** to the user as a tab
-(`reveal_system_interface.py preview --slug <name> --work-dir <dir>` boots the
-worker's already-built work_dir on a free port and registers it, with a
-labeled wrapper page, as the `si-preview` app; `unpreview` tears it down),
-and, once approved, applied through the general **update apply** shared with
-the `update-self` flow:
+changes are not applied in place. Its manifest says `critical = true`, which
+routes every edit through `update-app`'s careful flow
+(`.agents/skills/update-app/references/critical-app.md`): the change is made in
+an isolated worktree, **previewed** to the user as a tab
+(`preview_app.py up --app system_interface --worktree <dir>` boots
+`system-interface --preview` from the worktree, read-only over a seeded copy of
+the live state directory and a copied registry, and registers it with a labeled
+wrapper page as the `system_interface-preview` app; `down` tears it down),
+hardened by a background worker at approval, and applied through the general
+**update apply** shared with the `update-self` flow:
 
 ```bash
 python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-<slug>" \
     --worker-bundle "system_interface=<work_dir>/system/apps/system_interface/imbue/system_interface/static" \
-    --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static"
+    --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static" \
+    --keep-rollback-point
 ```
 
 The apply merges the worker's branch, classifies what changed and does only

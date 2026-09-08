@@ -76,9 +76,11 @@ Run these in order before `git merge`:
    the worker touched: for an app, `system/apps/<package>/ system/supervisord.conf`
    (a standalone service likewise, under `system/services/<package>/`);
    for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path; for the system interface, `system/apps/system_interface/` (that
-   creation's merge lives in `update-system-interface` Step 4, which applies
-   this same check). Empty output means fresh: merge normally. Any output
+   its path; for a critical app, its `system/apps/<package>/` together with
+   `system/libs/workspace_ui/`, `system/package.json`, and
+   `system/package-lock.json` (that creation's merge lives in
+   `update-app/references/critical-app.md` step 4, which applies this same
+   check). Empty output means fresh: merge normally. Any output
    means the base moved under the worker: the pass is stale -- do not merge;
    supersede it (below).
 

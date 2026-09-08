@@ -7,7 +7,7 @@ the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
-It serves every update flow, not just update-self: ``update-system-interface``
+It serves every update flow, not just update-self: the careful flow for a critical app
 hands it an ordinary merge and its own already-built bundle, so both flows
 land the same way. What it must protect is therefore whole-repo -- the root
 venv, the uv tool environments (the mngr tool and each critical app's own),

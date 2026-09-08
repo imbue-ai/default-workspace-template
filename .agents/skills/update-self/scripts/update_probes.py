@@ -358,7 +358,7 @@ def _preflight_boot(
     env.update(env_overrides)
     # The caller is an agent, so its environment carries MNGR_AGENT_ID, which
     # the chat app reads as its own primary agent's id; a throwaway boot must
-    # never act as the calling agent. The preview flow (reveal_system_interface.py)
+    # never act as the calling agent. The preview flow (preview_app.py)
     # drops it for the same reason.
     env.pop("MNGR_AGENT_ID", None)
     with tempfile.TemporaryDirectory() as scratch:

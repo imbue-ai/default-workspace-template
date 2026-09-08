@@ -22,7 +22,7 @@ leading label for the inner service's name.
 
 Run via bare ``python3`` (standard library only, no venv needed):
 
-    python3 preview_wrapper_server.py --port 8200 --inner-service si-preview-app \\
+    python3 preview_wrapper_server.py --port 8200 --inner-service chat-preview-app \\
         --title "my-change"
 """
 
