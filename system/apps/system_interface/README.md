@@ -340,9 +340,23 @@ right-click for project settings), its shortcut rows (a project's stored
 shortcuts, seeded from every app's `default_shortcut`; Everything's rail is
 every app's primary action), the "All apps" popover (pin an action to the
 project's rail), a search pill, and the view's tab list. The New Tab page is
-the only empty state: tiles for every app's primary action, "In this
-project" (the tab set), and "On this machine" (everything else), each with an
-app filter and a last-active column.
+the only empty state, and the page for starting things: a search field; "Open
+new" (every app's primary action as a tile, the apps that declare a
+`launcher_rank` in their manifest leading in rank order, the rest on a second
+row); "In this project" (the tab set, with an app filter and a last-active
+column, omitted when empty); "Start something" (hardcoded intents, each a new
+chat seeded with a prompt, six at a time behind "See more"); and "Start from a
+template" (the published templates by category, in sideways rails, with a
+detail dialog whose "Make it mine" starts a chat that adopts the template).
+Typing in the search field swaps the page for results: the machine's
+instances and actions, the matching intents, the matching templates. A seeded
+prompt goes to whichever app declares an action with a `message` param (the
+chat app's `new`), so the shell still names no app. The template catalog is a
+JSON document the shell fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`
+(`catalog/README.md` at the repo root describes it), reuses for six hours,
+keeps the last good copy of under `data/.state/system_interface/`, and serves
+to the page at `GET /api/templates-catalog`; the design is
+`docs/system/blueprint/new-tab-page/plan-new-tab-page.md`.
 
 An app page's sends (the chat's messages) and a client's view switches are
 logged to `data/.state/system_interface/events/client_activity/events.jsonl`
