@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _MODULE_PATH = Path(__file__).with_name("migrate_workspace.py")
 _spec = importlib.util.spec_from_file_location("migrate_workspace", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
@@ -476,16 +478,20 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
     ]
 
 
-def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
-    # Every config the scan reads, which is what `_local_supervisord_configs` returns: the main
-    # file plus its drop-ins. Reading only the main one would check the parser against a file
-    # that declares a single program, which is not the config the scan is given.
-    system_dir = Path(__file__).resolve().parents[4] / "system"
-    configs = [system_dir / "supervisord.conf", *sorted((system_dir / "supervisord.conf.d").glob("*.conf"))]
+def test_parse_supervisord_ports_reads_the_real_template_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read through the scan's own file list rather than a copy of it, so this checks the parser
+    # against the config the scan is actually given: the main file plus its drop-ins, which is
+    # where every program now lives. A hand-rolled list would keep passing if the scan itself
+    # stopped finding the drop-ins. The list is relative to the workspace root, hence the chdir.
+    monkeypatch.chdir(Path(__file__).resolve().parents[4])
     ports = [
         port
-        for conf in configs
-        for port in migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
+        for conf in migrate_workspace._local_supervisord_configs()
+        for port in migrate_workspace.parse_supervisord_ports(
+            conf.read_text(encoding="utf-8")
+        )
     ]
     # The chat, the terminal and the files app register from inside their own processes
     # (the registry scan covers them), so the config itself names the other two.
