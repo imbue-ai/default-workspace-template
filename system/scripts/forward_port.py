@@ -22,8 +22,9 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
 and copies its static fields onto the row: ``display_name``, ``instances``,
 ``instances_url``, ``critical``, ``priority``, ``program`` (default: the name),
-``internal``, ``default_shortcut``, and ``actions`` (id and label only); the
-icon is read from the file the manifest names, relative to the manifest. Every
+``internal``, ``launcher_rank``, ``default_shortcut``, and ``actions`` (id,
+label, and the names of the params); the icon is read from the file the manifest
+names, relative to the manifest. Every
 manifest field is authoritative on every call, so a re-registration with a
 changed manifest updates the row. Only what is copied from files is checked
 here (the name rule, the icon markup, the value types); the manifest's other
@@ -140,6 +141,7 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # own. ``program`` defaults to the name when the manifest omits it.
 _MANIFEST_STRING_KEYS = ("display_name", "instances_url", "priority", "program")
 _MANIFEST_BOOL_KEYS = ("instances", "critical", "internal")
+_MANIFEST_INT_KEYS = ("launcher_rank",)
 
 # The registry keys a manifest owns. A manifest registration rewrites every one
 # of them (absent in the manifest means absent on the row), so a stale value
@@ -152,6 +154,7 @@ _MANIFEST_OWNED_KEYS = (
     "priority",
     "program",
     "internal",
+    "launcher_rank",
     "default_shortcut",
     "actions",
 )
@@ -348,15 +351,31 @@ def _toml_string(value: str) -> str:
 def _toml_inline_table(table: dict[str, object]) -> str:
     return (
         "{"
-        + ", ".join(f"{key} = {_toml_scalar(value)}" for key, value in table.items())
+        + ", ".join(
+            f"{key} = {_toml_inline_table_value(value)}" for key, value in table.items()
+        )
         + "}"
     )
 
 
+def _toml_inline_table_value(value: object) -> str:
+    """A value inside an inline table: a scalar, or an array of strings (an action's param names)."""
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, str):
+                raise UnsupportedRegistryValueError(
+                    f"the registry cannot hold an inline-table array element of type {type(item).__name__}: {item!r}"
+                )
+        return "[" + ", ".join(_toml_string(item) for item in value) + "]"
+    return _toml_scalar(value)
+
+
 def _toml_scalar(value: object) -> str:
-    """A string or boolean as TOML; the registry's tables and arrays hold nothing else."""
+    """A string, boolean, or integer as TOML; the registry's tables and arrays hold nothing else."""
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
     if isinstance(value, str):
         return _toml_string(value)
     raise UnsupportedRegistryValueError(
@@ -472,6 +491,11 @@ def _read_manifest(
             if not isinstance(raw[key], bool):
                 return {}, None, f"manifest {str(path)!r}: {key} must be a boolean"
             fields[key] = raw[key]
+    for key in _MANIFEST_INT_KEYS:
+        if key in raw:
+            if not isinstance(raw[key], int) or isinstance(raw[key], bool):
+                return {}, None, f"manifest {str(path)!r}: {key} must be an integer"
+            fields[key] = raw[key]
     if "program" not in fields:
         fields["program"] = name
 
@@ -512,7 +536,24 @@ def _read_manifest(
                     None,
                     f"manifest {str(path)!r}: every action needs a string 'id' and 'label'",
                 )
-            copied_actions.append({"id": action["id"], "label": action["label"]})
+            copied_action: dict[str, object] = {
+                "id": action["id"],
+                "label": action["label"],
+            }
+            params = action.get("params")
+            if params is not None:
+                if not isinstance(params, list) or not all(
+                    isinstance(param, dict) and isinstance(param.get("name"), str)
+                    for param in params
+                ):
+                    return (
+                        {},
+                        None,
+                        f"manifest {str(path)!r}: every action param needs a string 'name'",
+                    )
+                if params:
+                    copied_action["params"] = [param["name"] for param in params]
+            copied_actions.append(copied_action)
         fields["actions"] = copied_actions
 
     icon = raw.get("icon")

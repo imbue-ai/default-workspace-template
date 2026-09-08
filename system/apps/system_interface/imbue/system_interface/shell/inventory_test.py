@@ -51,7 +51,7 @@ def test_the_registry_read_synthesizes_single_instance_records(
     assert inventory.find_instance(Address("app:files")) is not None
     assert inventory.find_instance(Address("app:terminal?instance=terminal-1")) is None
     serialized = inventory.serialized()
-    assert serialized[0]["actions"] == [{"id": "new", "label": "New terminal"}]
+    assert serialized[0]["actions"] == [{"id": "new", "label": "New terminal", "params": []}]
     assert serialized[1]["actions"] == [{"id": "open", "label": "Open Files"}]
     assert serialized[1]["instances"][0]["key"] == ""
     # One broadcast for the read; the liveness probe that found everything running adds none.

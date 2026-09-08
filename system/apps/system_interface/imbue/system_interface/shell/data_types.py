@@ -164,6 +164,7 @@ def app_wire_json(entry: AppInventoryEntry) -> dict[str, Any]:
         "has_instances": row.instances,
         "actions": [action_wire_json(action) for action in effective_actions(row)],
         "default_shortcut": default_shortcut_wire_json(row.default_shortcut),
+        "launcher_rank": row.launcher_rank,
         "is_running": entry.is_running,
         "is_listed": entry.is_listed,
         "instances": [instance.model_dump(mode="json") for instance in entry.instances],
@@ -177,8 +178,8 @@ def instances_url_of(row: RegistryRow) -> str:
 
 
 @pure
-def action_wire_json(action: RegistryAction) -> dict[str, str]:
-    return {"id": str(action.id), "label": str(action.label)}
+def action_wire_json(action: RegistryAction) -> dict[str, Any]:
+    return {"id": str(action.id), "label": str(action.label), "params": [str(param) for param in action.params]}
 
 
 @pure
