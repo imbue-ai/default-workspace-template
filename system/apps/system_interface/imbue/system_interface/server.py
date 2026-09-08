@@ -31,6 +31,7 @@ from imbue.system_interface.request_helpers import json_response
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.projects import project_wire_json
+from imbue.system_interface.shell.routes import HTTP_SERVICE_UNAVAILABLE
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.template_catalog import TemplateCatalogAvailability
@@ -410,7 +411,6 @@ def _health_endpoint() -> Response:
 
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
-_HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 
 def _templates_catalog_endpoint() -> Response:
@@ -423,7 +423,7 @@ def _templates_catalog_endpoint() -> Response:
         case TemplateCatalogAvailability.DISABLED:
             return json_response({"catalog": None, "is_stale": False})
         case TemplateCatalogAvailability.UNAVAILABLE:
-            return json_response({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}, status_code=_HTTP_SERVICE_UNAVAILABLE)
+            return json_response({"detail": _TEMPLATES_UNAVAILABLE_DETAIL}, status_code=HTTP_SERVICE_UNAVAILABLE)
         case TemplateCatalogAvailability.FRESH | TemplateCatalogAvailability.STALE:
             assert reading.catalog is not None, "a fresh or stale reading carries its catalog"
             return json_response(
