@@ -187,13 +187,19 @@ def read_critical_instance_apps(repo_root: Path) -> tuple[CriticalInstanceApp, .
     return tuple(apps)
 
 
+def _read_registry_rows(repo_root: Path) -> list:
+    """The registry's ``apps`` rows; raises whatever reading or parsing it raised."""
+    return tomllib.loads((repo_root / APPS_REGISTRY_PATH).read_text()).get("apps", [])
+
+
 def registry_app_url(repo_root: Path, app_name: str) -> str | None:
     """The ``url`` of the registry row named ``app_name``, or ``None`` when the
     registry is missing, unreadable, or has no such row -- all of which read as
-    "the app has not registered yet" to a poll, never as a failure."""
-    registry_path = repo_root / APPS_REGISTRY_PATH
+    "the app has not registered yet" to a poll, never as a failure (the registry
+    is rewritten under the poll as apps register). What a poll that gave up saw
+    is :func:`_describe_missing_registry_url`'s to tell."""
     try:
-        rows = tomllib.loads(registry_path.read_text()).get("apps", [])
+        rows = _read_registry_rows(repo_root)
     except (OSError, tomllib.TOMLDecodeError):
         return None
     for row in rows:
@@ -245,9 +251,7 @@ def wait_instances_healthy(
     for index in range(attempts):
         url = instances_probe_url(repo_root, app)
         if url is None:
-            last_finding = (
-                f"the app registry at {APPS_REGISTRY_PATH} never listed '{app.name}'"
-            )
+            last_finding = _describe_missing_registry_url(repo_root, app.name)
         else:
             page = http.get_page(url, timeout=5.0)
             if is_instances_answer(page):
@@ -256,6 +260,23 @@ def wait_instances_healthy(
         if index < attempts - 1:
             sleeper(interval)
     return last_finding
+
+
+def _describe_missing_registry_url(repo_root: Path, app_name: str) -> str:
+    """Why the registry names no URL for ``app_name``: a registry that does not
+    exist or has no row for it means the app never registered, while one that is
+    there but will not read or parse is named as such, so the failure points at
+    the broken file rather than at a registration that was never the problem."""
+    try:
+        _read_registry_rows(repo_root)
+    except FileNotFoundError:
+        pass
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        return (
+            f"the app registry at {APPS_REGISTRY_PATH} could not be read "
+            f"({type(exc).__name__}: {exc})"
+        )
+    return f"the app registry at {APPS_REGISTRY_PATH} never listed '{app_name}'"
 
 
 def _describe_instances_non_answer(url: str, page: FetchedPage | None) -> str:
