@@ -119,6 +119,17 @@ def test_list_agents_endpoint(client: FlaskClient) -> None:
     assert data["agents"][0]["state"] == "RUNNING"
 
 
+def test_health_reports_whether_lifecycle_events_are_arriving(client: FlaskClient) -> None:
+    """``/api/health`` stays ``ok`` for the pre-flight probe but says the stream is not feeding this instance."""
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "ok"
+    assert data["agent_events"]["is_stream_healthy"] is False
+    assert "not been started" in data["agent_events"]["detail"]
+
+
 def test_http_errors_keep_their_status_codes(client: FlaskClient) -> None:
     """Routing-level HTTP errors pass through the unhandled-exception handler intact: a 405 stays a 405."""
     assert client.put("/api/agents/x/destroy").status_code == 405
