@@ -154,7 +154,9 @@ def _make_handler(page_html: str) -> type[BaseHTTPRequestHandler]:
 
 
 def serve(port: int, inner_service: str, title: str, inner_path: str) -> None:
-    page_html = build_wrapper_html(inner_service=inner_service, title=title, inner_path=inner_path)
+    page_html = build_wrapper_html(
+        inner_service=inner_service, title=title, inner_path=inner_path
+    )
     server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(page_html))
     server.serve_forever()
 
@@ -181,7 +183,12 @@ def main(argv: list[str] | None = None) -> int:
         help="The path the frame opens on the inner service (default: /).",
     )
     args = parser.parse_args(argv)
-    serve(port=args.port, inner_service=args.inner_service, title=args.title, inner_path=args.inner_path)
+    serve(
+        port=args.port,
+        inner_service=args.inner_service,
+        title=args.title,
+        inner_path=args.inner_path,
+    )
     return 0
 
 

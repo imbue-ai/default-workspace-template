@@ -46,7 +46,8 @@ depend on any particular venv being synced.
 
 Usage:
     python3 serve_isolated_instance.py up --name <slug> --cwd <dir> \\
-        --port-env <ENVVAR> [--port-env <name>=<ENVVAR> ...] [--host-env <ENVVAR>] \\
+        (--port-env <ENVVAR> | --port main) [--port-env <name>=<ENVVAR> | --port <name> ...] \\
+        [--host-env <ENVVAR>] \\
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
@@ -60,7 +61,9 @@ registrations, and the user's tab all stay put.
 
 Ports, copies, and placeholders: every ``--port-env`` names a free port the
 instance is given (a bare ``ENVVAR`` is the ``main`` port, the one probed for
-health; ``sidecar=MYSVC_API_PORT`` adds a second). ``--copy KEY=SOURCE`` copies
+health; ``sidecar=MYSVC_API_PORT`` adds a second), and ``--port <name>`` gives it
+one that no env var carries, reachable only by placeholder (what a manifest's
+``[preview]`` table declares). ``--copy KEY=SOURCE`` copies
 a directory (repo-relative or absolute) into the instance's scratch space before
 boot, so the instance can write to it freely. The launch argv and every ``--env``
 value may carry ``{port:<name>}``, ``{copy:<key>}``, ``{scratch}`` (a fresh
@@ -416,7 +419,7 @@ def substitute_placeholders(
 
 
 def _inner_env(
-    port_env_by_name: dict[str, str],
+    port_env_by_name: dict[str, str | None],
     port_by_name: dict[str, int],
     host_env: str | None,
     env_overrides: dict[str, str] | None,
@@ -432,9 +435,12 @@ def _inner_env(
     for key in unset_env:
         env.pop(key, None)
     for key, value in (env_overrides or {}).items():
-        env[key] = substitute_placeholders(value, port_by_name, copy_by_key, scratch_dir)
+        env[key] = substitute_placeholders(
+            value, port_by_name, copy_by_key, scratch_dir
+        )
     for name, port_env in port_env_by_name.items():
-        env[port_env] = str(port_by_name[name])
+        if port_env is not None:
+            env[port_env] = str(port_by_name[name])
     if host_env is not None:
         env[host_env] = LOOPBACK_HOST
     return env
@@ -451,24 +457,37 @@ def parse_env_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def parse_port_envs(port_envs: Sequence[str]) -> dict[str, str]:
-    """Parse the ``--port-env`` values into port name -> env var.
+def parse_port_envs(
+    port_envs: Sequence[str], port_names: Sequence[str] = ()
+) -> dict[str, str | None]:
+    """Parse the ``--port-env`` and ``--port`` values into port name -> env var (None for a bare port).
 
-    A bare ``ENVVAR`` is the ``main`` port; ``<name>=ENVVAR`` names another. There
-    must be exactly one ``main``: it is the port the health probe reaches.
+    A bare ``ENVVAR`` is the ``main`` port; ``<name>=ENVVAR`` names another; a ``--port``
+    name is a port carried by no env var. There must be exactly one ``main``: it is the
+    port the health probe reaches.
     """
-    parsed: dict[str, str] = {}
+    parsed: dict[str, str | None] = {}
     for item in port_envs:
         name, sep, env_var = item.partition("=")
         if not sep:
             name, env_var = MAIN_PORT_NAME, item
         if not name or not env_var:
-            raise InstanceError(f"--port-env expects ENVVAR or <name>=ENVVAR, got {item!r}")
+            raise InstanceError(
+                f"--port-env expects ENVVAR or <name>=ENVVAR, got {item!r}"
+            )
         if name in parsed:
             raise InstanceError(f"--port-env names the port {name!r} twice")
         parsed[name] = env_var
+    for name in port_names:
+        if not name:
+            raise InstanceError("--port expects a port name")
+        if name in parsed:
+            raise InstanceError(f"--port names the port {name!r} twice")
+        parsed[name] = None
     if MAIN_PORT_NAME not in parsed:
-        raise InstanceError(f"--port-env must name the {MAIN_PORT_NAME!r} port (a bare ENVVAR)")
+        raise InstanceError(
+            f"--port-env or --port must name the {MAIN_PORT_NAME!r} port"
+        )
     return parsed
 
 
@@ -485,7 +504,9 @@ def parse_copy_assignments(assignments: Sequence[str]) -> dict[str, str]:
     return parsed
 
 
-def _make_copies(repo_root: Path, state_dir: Path, copy_sources: dict[str, str]) -> dict[str, str]:
+def _make_copies(
+    repo_root: Path, state_dir: Path, copy_sources: dict[str, str]
+) -> dict[str, str]:
     """Copy each source directory into the instance's scratch space; return key -> copy path.
 
     A source that does not exist yet (an app that has never written its store) becomes
@@ -685,7 +706,7 @@ def up(
     cwd: str,
     repo_root: Path,
     *,
-    port_env_by_name: dict[str, str],
+    port_env_by_name: dict[str, str | None],
     host_env: str | None = None,
     env_overrides: dict[str, str] | None = None,
     unset_env: Sequence[str] = (),
@@ -760,10 +781,17 @@ def up(
         inner_port = port_by_name[MAIN_PORT_NAME]
         copy_by_key = _make_copies(repo_root, state_dir, copy_sources or {})
         resolved_command = [
-            substitute_placeholders(part, port_by_name, copy_by_key, str(scratch_dir)) for part in command
+            substitute_placeholders(part, port_by_name, copy_by_key, str(scratch_dir))
+            for part in command
         ]
         env = _inner_env(
-            port_env_by_name, port_by_name, host_env, env_overrides, unset_env, copy_by_key, str(scratch_dir)
+            port_env_by_name,
+            port_by_name,
+            host_env,
+            env_overrides,
+            unset_env,
+            copy_by_key,
+            str(scratch_dir),
         )
         _append_boot_marker(inner_log_path, name)
         pids.append(
@@ -1031,9 +1059,16 @@ def refresh(
 
     old_pid = int(pids[0])
     port = int(state["inner_port"])
-    port_by_name = {str(port_name): int(value) for port_name, value in (state.get("ports") or {}).items()}
-    copy_by_key = {str(key): str(value) for key, value in (state.get("copies") or {}).items()}
-    scratch_dir = str(state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME)
+    port_by_name = {
+        str(port_name): int(value)
+        for port_name, value in (state.get("ports") or {}).items()
+    }
+    copy_by_key = {
+        str(key): str(value) for key, value in (state.get("copies") or {}).items()
+    }
+    scratch_dir = str(
+        state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
+    )
     inner_log = str(state["inner_log"])
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
@@ -1060,7 +1095,9 @@ def refresh(
             scratch_dir,
         )
     except InstanceError as exc:
-        sys.stderr.write(f"refresh: the recorded recipe for '{name}' cannot be replayed: {exc}\n")
+        sys.stderr.write(
+            f"refresh: the recorded recipe for '{name}' cannot be replayed: {exc}\n"
+        )
         return 1
     _append_boot_marker(Path(inner_log), name)
     try:
@@ -1133,13 +1170,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     up_parser.add_argument(
         "--port-env",
         action="append",
-        required=True,
+        default=[],
         metavar="[NAME=]ENVVAR",
         help="Env var the service reads its port from; a free port is chosen and "
         "injected into it (e.g. SYSTEM_INTERFACE_PORT, MYSVC_PORT). A bare env var "
         "is the 'main' port (the one probed for health); repeat with NAME=ENVVAR "
         "for another named port, reachable as {port:NAME} in --env values and the "
         "launch argv.",
+    )
+    up_parser.add_argument(
+        "--port",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="A named free port carried by no env var, reachable as {port:NAME} "
+        "(repeatable); 'main' when no --port-env names it.",
     )
     up_parser.add_argument(
         "--host-env",
@@ -1237,7 +1282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             launch = launch[1:]
         try:
             env_overrides = parse_env_assignments(args.env)
-            port_env_by_name = parse_port_envs(args.port_env)
+            port_env_by_name = parse_port_envs(args.port_env, args.port)
             copy_sources = parse_copy_assignments(args.copy)
         except InstanceError as exc:
             sys.stderr.write(f"error: {exc}\n")
