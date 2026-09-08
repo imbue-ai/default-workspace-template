@@ -738,19 +738,7 @@ def test_live_page_survives_a_view_that_does_not_include_it(tmp_path: Path, page
 
         _switch_view_via_rail(page, STARTER_PROJECT_NAME)
         _wait_for_view(page, STARTER_PROJECT_ID)
-        page.wait_for_function(
-            f"""
-            () => {{
-              const iframe = document.querySelector({json.dumps(frame_selector)});
-              if (iframe === null) return false;
-              const surface = iframe.closest('.si-live-surface');
-              const box = surface.getBoundingClientRect();
-              return getComputedStyle(surface).display !== 'none' && box.width > 0 && box.height > 0;
-            }}
-            """,
-            timeout=15000,
-        )
-        on_return = _surface_report(page, address)
+        on_return = _wait_for_surface_shown(page, address)
         assert on_return["count"] == 1, f"the page forked into a second copy: {on_return}"
         assert on_return["stamps"] == ["the-original-element"], (
             f"the element was re-created on the way back: {on_return}"
