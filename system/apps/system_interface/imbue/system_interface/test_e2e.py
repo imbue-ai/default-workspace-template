@@ -30,6 +30,7 @@ from app_instances.testing import StubInstanceSource
 from app_instances.testing import free_port
 from app_manifest.primitives import AppName
 from playwright.sync_api import Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import expect
 from pydantic import Field
 
@@ -387,21 +388,24 @@ def _open_rail_switcher(page: Page) -> None:
 def _switch_view_via_rail(page: Page, view_name: str) -> None:
     """Pick a view from the rail's switcher, re-opening it when a click did not land.
 
-    The rail folds and its menu closes on pointer-leave, outside mousedown, and window
-    blur, and the menu re-renders on every inventory or projects broadcast, so on a loaded
-    runner the item click occasionally lands on a menu that has just closed or been rebuilt
-    and the view stays put. A click that took closes the menu; one that did not leaves it
-    open (or never opened it), which is what the retry keys on.
+    The rail's menu closes on outside mousedown and window blur and re-renders on every
+    inventory or projects broadcast, so on a loaded runner the item click occasionally
+    lands on a menu that has just closed or been rebuilt and the view stays put, with the
+    menu gone either way. The retry keys on the switch itself: the rail header names the
+    active view as soon as the shell moves (before the incoming layout is fetched), so a
+    header still naming the old view after a click is a miss, as is a menu that closed
+    before the click could reach it.
     """
     menu = page.locator(".project-rail-menu")
+    header = page.locator(".project-rail-header")
     for attempt in range(3):
-        if menu.count() == 0:
-            _open_rail_switcher(page)
-        menu.locator("[role='menuitem']", has_text=view_name).first.click()
         try:
-            expect(menu).to_have_count(0, timeout=3000)
+            if menu.count() == 0:
+                _open_rail_switcher(page)
+            menu.locator("[role='menuitem']", has_text=view_name).first.click(timeout=5000)
+            expect(header).to_contain_text(view_name, timeout=5000)
             return
-        except AssertionError:
+        except (AssertionError, PlaywrightTimeoutError):
             if attempt == 2:
                 raise
 
