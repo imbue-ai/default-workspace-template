@@ -354,18 +354,24 @@ describe("NewTabLauncher", () => {
   });
 
   it("scrolls to the templates from the Start from a template tile, even when picked from search", () => {
+    // jsdom has no scrollIntoView; the stub lives only as long as this test.
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
-    mount({});
-    type("template");
-    expect(root.querySelector(".new-tab-templates")).toBeNull();
-    root.querySelector<HTMLElement>('[data-start="template"]')!.click();
-    m.redraw.sync();
-    expect(sectionKeys()).toEqual(["in-project"]);
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(scrollIntoView.mock.instances[0]).toBe(root.querySelector(".new-tab-templates"));
-    m.redraw.sync();
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    try {
+      mount({});
+      type("template");
+      expect(root.querySelector(".new-tab-templates")).toBeNull();
+      root.querySelector<HTMLElement>('[data-start="template"]')!.click();
+      m.redraw.sync();
+      expect(sectionKeys()).toEqual(["in-project"]);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.instances[0]).toBe(root.querySelector(".new-tab-templates"));
+      m.redraw.sync();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it("disables the Start from a template tile when no catalog is offered", () => {
