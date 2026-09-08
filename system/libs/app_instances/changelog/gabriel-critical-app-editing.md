@@ -1,0 +1,1 @@
+`run_sidecar_app` takes `is_registered` (default true): a throwaway boot of a sidecar app (a preview on free ports) serves its instances API and its wrapped server without registering, so the live app's registry row is left alone.

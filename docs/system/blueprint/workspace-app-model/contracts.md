@@ -39,18 +39,19 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `default_shortcut` | table | no | absent | `{action = "<id>", mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation and `layout.py --param` validation only. Forbidden when `instances = false`. |
 | `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
+| `preview` | table | no | the scaffold convention | How a throwaway instance boots for a preview (`PreviewSpec`): `command` (default: the program as its console script), `ports` (named free ports; `main` always), `env`, `args`, `copies` (repo-relative directories copied into the instance's scratch space, by key), `health_path` (default `/health`), `open_path` (default `/`), `open_path_takes_key`. `command`, `args`, and `env` values may carry `{port:<name>}`, `{copy:<key>}`, `{host}`, `{scratch}`, `{registry}` (a copied registry with previewed siblings rewritten), and `{shell_url}` (the preview shell's URL when one is up, else empty); `open_path` may carry `{key}` exactly when `open_path_takes_key`. A placeholder naming an undeclared port or copy fails validation. Absent, the table is `env = {<PACKAGE_UPPER>_PORT = "{port:main}", <PACKAGE_UPPER>_HOST = "{host}", <PACKAGE_UPPER>_DATA_DIR = "{copy:data}"}` over `copies = {data = "data/.apps/<name>"}`. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.
 
 Built-in manifests:
 
-| App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
-|---|---|---|---|---|---|---|
-| `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
-| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
-| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
+| App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` | `preview` |
+|---|---|---|---|---|---|---|---|
+| `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` | `system-interface --preview --state-dir {copy:state}` over `copies = {state = "data/.state/system_interface"}`, `MINDS_APPS_FILE = "{registry}"`, health `/api/health` |
+| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) | `chat-app --secondary --nudge-shell-url {shell_url}` over `copies = {data = "data/.apps/chat"}` (`CHAT_DATA_DIR`), health `/api/health`, opens on `/{key}` |
+| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) | `terminal-app --no-register` on ports `main` and `sidecar`, over `copies = {store = "data/.apps/terminal"}` and a `{scratch}` state dir, health `/_instances` |
+| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) | the convention |
+| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) | the convention |
 
 Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
@@ -175,6 +176,8 @@ Instance verbs are relayed by the shell, so browsers never reach an `instances_u
 
 After any successful relay the shell refetches that app's list immediately rather than waiting for the nudge.
 
+A preview shell (`system-interface --preview`, booted read-only over a seeded copy of the live state directory and a copied registry) answers every relay route above, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, and a create through the op route with `403 {"detail": "This is a preview of a proposed change; it cannot change the live workspace."}`, and its page hides those verbs; its page carries the meta tag `system-interface-preview` (content `true`) and never the staleness tag. Project and layout edits land in its copy.
+
 Projects and views:
 
 | Route | Request | Response |
@@ -257,6 +260,7 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 ```
 
 `everything.tabs` is every address of every listed instance, apps in registry order, instances in list order.
+The document also carries `is_preview`, whether the answering shell is a preview (section 6).
 `clients` is every stored client record (section 7's retention), each carrying `is_connected` and additionally `docked`, the addresses in that client's layout of its active view, so `layout.py list` can say where an instance is docked without reading layouts.
 
 ## 10. The browser-side contract (`app_contract.js`)
@@ -349,6 +353,6 @@ Everything a program persists goes under `data/` (gitignored, restic-backed), in
   Every app's instance records live here, at `data/.apps/<name>/instances.json`, whatever document shape the app uses (the library's `JsonStoreInstanceSource` for the files app; the terminal's own `{name, title, workdir}` records).
   A terminal's title and starting directory, and a file viewer's folder, are things the user chose, so they belong here even when the instance is backed by state elsewhere.
   The update-app skill treats this directory as the user's real data: verification never writes to it.
-- `data/.state/` (a program's own under `data/.state/<name>/`): what a program keeps about this machine and can rebuild, or must not outlive it: the registry (`data/.state/apps.toml`), the terminal's dispatch scripts and pty-to-tab files (`data/.state/terminal/commands/`), and the shell's client layouts and client records (section 7).
+- `data/.state/` (a program's own under `data/.state/<name>/`): what a program keeps about this machine and can rebuild, or must not outlive it: the registry (`data/.state/apps.toml`), the terminal's dispatch scripts and pty-to-tab files (`data/.state/terminal/commands/`), the shell's client layouts and client records (section 7), and every isolated instance's state under `data/.state/isolated-instances/<name>/` (its pids, ports, logs, `copies/<key>/` for the directories its manifest's preview table names, and `scratch/`), beside a preview's registry copy `<name>-preview.registry.toml`.
 
 A path an app takes on its command line (`--store`, `--state-dir`) defaults to these locations and is overridden only by tests.
