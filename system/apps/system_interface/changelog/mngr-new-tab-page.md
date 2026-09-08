@@ -10,6 +10,8 @@ The New Tab page is redesigned around starting things, after the `minds-new-tab`
 
 - "Start from a template": the published-template catalog by category, each category a sideways rail of cards with paging arrows (each a full-height strip at the rail's end that fades the rail out under it, so the whole edge is the target), followed by an "All templates" row. A card opens a detail dialog (the drawing, the write-up, what it needs, the repository) whose "Make it mine" starts a chat that adopts the template with `/use-template`, and whose other action asks for a new machine made from it (both stand down, like the prompt tiles, when no app takes a first message or the pane is already starting something).
 
+- Both offers float off the page under the pointer, eased out over 300ms, with exactly one thing inside them growing: a template card's drawing grows with it, while a "Start something" tile holds still (it is mostly text) and grows only its glyph. The shadow is a tile's whole hover answer -- it no longer fills its background behind it -- and a tile that is standing down stays flat.
+
 - The catalog is fetched by the shell from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (a versioned JSON document, see `catalog/README.md`), reused for six hours, kept as a last good copy under `data/.state/system_interface/template_catalog.json`, and served at `GET /api/templates-catalog`. The page says "Loading templates..." until it arrives and "Failed to load templates." when nothing could be loaded; with no URL configured the section is omitted.
 
 - The shell's `apps_updated` message and inventory document carry each app's `launcher_rank` and each action's `params` (the names), read off the registry.
