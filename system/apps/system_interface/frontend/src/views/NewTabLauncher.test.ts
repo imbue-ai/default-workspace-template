@@ -21,7 +21,7 @@ import {
   searchLauncherRows,
   searchTiles,
   sortRowsByRecency,
-  splitLaunchTiles,
+  orderLaunchTiles,
 } from "./NewTabLauncher";
 import type { LaunchTile, LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
@@ -80,7 +80,7 @@ const MACHINE = [
   row("app:files", "files", null, { label: "File Viewer" }),
 ];
 
-// Registry order, with the built-ins' manifest ranks: the leading row sorts them chat, files, browser, terminal.
+// Registry order, with the built-ins' manifest ranks: the tiles lead chat, files, browser, terminal.
 const TILES = [
   tile("terminal", { launcher_rank: 40 }),
   tile("notes"),
@@ -117,16 +117,12 @@ describe("restingSections", () => {
 });
 
 describe("tile helpers", () => {
-  it("leads with the ranked apps in rank order and puts every unranked app on the second row", () => {
-    const { leading, other } = splitLaunchTiles(TILES);
-    expect(leading.map((t) => t.app.name)).toEqual(["chat", "files", "browser", "terminal"]);
-    expect(other.map((t) => t.app.name)).toEqual(["notes"]);
+  it("leads with the ranked apps in rank order and follows with every unranked app", () => {
+    expect(orderLaunchTiles(TILES).map((t) => t.app.name)).toEqual(["chat", "files", "browser", "terminal", "notes"]);
   });
 
-  it("keeps registry order among unranked apps and has no leading row without a rank", () => {
-    const split = splitLaunchTiles([tile("terminal"), tile("notes")]);
-    expect(split.leading).toEqual([]);
-    expect(split.other.map((t) => t.app.name)).toEqual(["terminal", "notes"]);
+  it("keeps registry order among unranked apps", () => {
+    expect(orderLaunchTiles([tile("terminal"), tile("notes")]).map((t) => t.app.name)).toEqual(["terminal", "notes"]);
   });
 
   it("sends a prompt to the first app whose action takes a message, whatever it is called", () => {
@@ -254,12 +250,16 @@ describe("NewTabLauncher", () => {
     expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "chat" }), "new", {});
   });
 
-  it("lays the tiles out as the built-in row and a row for every other app", () => {
+  it("lays the tiles out as one list, the built-ins first and every other app after them", () => {
     mount({});
-    const leading = Array.from(root.querySelectorAll<HTMLElement>(".new-tab-launcher-tiles-leading [data-launch]"));
-    const other = Array.from(root.querySelectorAll<HTMLElement>(".new-tab-launcher-tiles-other [data-launch]"));
-    expect(leading.map((el) => el.dataset.launch)).toEqual(["chat:new", "files:new", "browser:new", "terminal:new"]);
-    expect(other.map((el) => el.dataset.launch)).toEqual(["notes:new"]);
+    const tiles = Array.from(root.querySelectorAll<HTMLElement>(".new-tab-launcher-tiles [data-launch]"));
+    expect(tiles.map((el) => el.dataset.launch)).toEqual([
+      "chat:new",
+      "files:new",
+      "browser:new",
+      "terminal:new",
+      "notes:new",
+    ]);
   });
 
   it("rests on the project's own table and keeps the machine for search", () => {

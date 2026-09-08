@@ -1,15 +1,15 @@
 /**
  * The New Tab launcher: a full-page panel answering two questions about this pane -- what do you
  * want in it, and what could you start. From the top: a search field; "Open new" (the apps'
- * primary actions as tiles, the built-in four leading in a fixed order, every other app on a
- * second row); "In this project" (the active view's tab set, omitted when empty); then, under a
+ * primary actions as tiles, four to a row, the built-in four first in a fixed order and every
+ * other app after them); "In this project" (the active view's tab set, omitted when empty); then, under a
  * dashed rule, the two offers of things to start: "Start something" (hardcoded intents, each a
  * chat seeded with a prompt) and "Start from a template" (the published catalog, by category, in
  * sideways rails). Typing in the search field swaps the sections for results: the machine's
  * instances and actions, the matching intents, the matching templates.
  *
  * Nothing here knows what any app is: the tables carry the apps' own names and icons, the kind
- * filter is by app, the leading tile row is the apps that declare a ``launcher_rank`` in their
+ * filter is by app, the tiles lead with the apps that declare a ``launcher_rank`` in their
  * manifests, and a seeded prompt goes to whichever app declares an action with a ``message`` param
  * (contracts.md sections 2 and 3). The list building, filtering, and ordering are exported as pure
  * functions so they can be tested without a DOM. The template cards and their rails are
@@ -101,19 +101,12 @@ export function createMachineFromTemplateMessage(template: CatalogTemplate): str
   );
 }
 
-export interface LaunchTileRows {
-  /** The apps that declare a ``launcher_rank``, lowest first (registry order breaks a tie). */
-  leading: LaunchTile[];
-  /** Every other app, in registry order. */
-  other: LaunchTile[];
-}
-
-/** The two tile rows: the ranked apps in rank order, then every app without a rank. */
-export function splitLaunchTiles(tiles: readonly LaunchTile[]): LaunchTileRows {
+/** The tiles in display order: the apps that declare a ``launcher_rank``, lowest first (registry
+ *  order breaks a tie), then every other app in registry order. */
+export function orderLaunchTiles(tiles: readonly LaunchTile[]): LaunchTile[] {
   const ranked = tiles.filter((tile) => tile.app.launcher_rank !== null);
   const leading = [...ranked].sort((left, right) => (left.app.launcher_rank ?? 0) - (right.app.launcher_rank ?? 0));
-  const other = tiles.filter((tile) => tile.app.launcher_rank === null);
-  return { leading, other };
+  return [...leading, ...tiles.filter((tile) => tile.app.launcher_rank === null)];
 }
 
 /** Where a seeded prompt goes: the first app (in tile order) with an action that takes a ``message``. */
@@ -557,11 +550,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   // ---------- "Open new" ----------
 
-  /** One tile. The leading row's tiles share the row's width between them (``isFill``), so the
-   *  row squares up with the tables under it; the second row's tiles take the width their icon
-   *  and name need (capped at the row's, where the name truncates) and wrap when the row runs
-   *  out. */
-  function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs, isFill: boolean): m.Vnode {
+  /** One tile: a quarter of the row (four to a row, less the three 8px gaps between them), so the
+   *  built-in four fill the first row and any further app wraps under them at the same size. */
+  function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
     const isDisabled = attrs.isAwaitingCreate === true;
     const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
     return m(
@@ -569,8 +560,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       {
         key: `${tile.app.name}:${tile.action.id}`,
         class:
-          "border-default flex h-9 items-stretch overflow-hidden rounded-lg border " +
-          (isFill ? "min-w-0 flex-1" : "max-w-full shrink-0") +
+          "border-default flex h-9 w-[calc((100%-24px)/4)] shrink-0 items-stretch overflow-hidden rounded-lg border" +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
@@ -596,21 +586,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  function tileRow(
-    tiles: readonly LaunchTile[],
-    attrs: NewTabLauncherAttrs,
-    marker: string,
-    isFill: boolean,
-  ): m.Vnode {
-    return m(
-      "div",
-      { class: `${marker} flex flex-wrap gap-2 px-2` },
-      tiles.map((tile) => tileView(tile, attrs, isFill)),
-    );
-  }
-
   function openNewSection(attrs: NewTabLauncherAttrs): m.Vnode {
-    const { leading, other } = splitLaunchTiles(attrs.tiles);
     return m("section", { class: "new-tab-launcher-open-new" }, [
       m(
         "h2",
@@ -623,16 +599,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             { class: "text-faint px-2 py-1 text-(length:--font-size-row)" },
             "No apps are registered on this machine yet.",
           )
-        : [
-            leading.length === 0 ? null : tileRow(leading, attrs, "new-tab-launcher-tiles-leading", true),
-            other.length === 0
-              ? null
-              : m(
-                  "div",
-                  { class: leading.length === 0 ? "" : "mt-2" },
-                  tileRow(other, attrs, "new-tab-launcher-tiles-other", false),
-                ),
-          ],
+        : m(
+            "div",
+            { class: "new-tab-launcher-tiles flex flex-wrap gap-2 px-2" },
+            orderLaunchTiles(attrs.tiles).map((tile) => tileView(tile, attrs)),
+          ),
     ]);
   }
 

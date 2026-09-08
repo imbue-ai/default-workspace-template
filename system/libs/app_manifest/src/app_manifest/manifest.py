@@ -78,8 +78,8 @@ class AppManifest(FrozenModel):
     launcher_rank: int | None = Field(
         default=None,
         ge=1,
-        description="Where the app's tile sits on the New Tab page's leading row (lower first); "
-        "an app without one follows on the second row",
+        description="The app's place among the New Tab page's leading tiles (lower first); "
+        "an app without one follows every ranked app",
     )
     handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
 

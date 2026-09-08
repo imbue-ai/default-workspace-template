@@ -108,9 +108,9 @@ settings), its shortcut rows (seeded from every app's `default_shortcut`;
 Everything's rail is every app's primary action), the "All apps" popover, a
 search pill, and the view's tab list. The New Tab page is
 the only empty state, and the page for starting things: a search field; "Open
-new" (every app's primary action as a tile, the apps that declare a
-`launcher_rank` in their manifest leading in rank order, the rest on a second
-row); "In this project" (the tab set, with an app filter and a last-active
+new" (every app's primary action as a tile, four to a row, the apps that
+declare a `launcher_rank` in their manifest first in rank order and the rest
+after them); "In this project" (the tab set, with an app filter and a last-active
 column, omitted when empty); "Start something" (hardcoded intents, each a new
 chat seeded with a prompt, six at a time behind "See more"); and "Start from a
 template" (the published templates by category, in sideways rails, with a

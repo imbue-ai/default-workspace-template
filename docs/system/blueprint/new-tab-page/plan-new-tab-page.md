@@ -25,8 +25,8 @@
   actually launches.
 - The shell keeps naming no app (its project ratchet holds that). The two places
   the page needs to know something about the apps are declared by the apps
-  themselves, in their manifests: a `launcher_rank` puts an app's tile on the
-  leading "Open new" row (the built-ins declare chat 10, files 20, browser 30,
+  themselves, in their manifests: a `launcher_rank` puts an app's tile among the
+  leading "Open new" tiles (the built-ins declare chat 10, files 20, browser 30,
   terminal 40), and an action with a `message` param is one the page can seed a
   prompt into (the chat's `new`). The registration script copies both onto the
   registry row, and the shell's `apps_updated` carries them to the page.
@@ -47,13 +47,12 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    below); Escape or the trailing clear button empties it and brings the resting
    page back.
 2. **"Open new".** The eyebrow keeps its name and its "Starting..." state. The
-   tiles are laid out in two rows. The first row holds the apps whose manifests
-   declare a `launcher_rank`, lowest first: chat, file viewer, browser, terminal
-   for the built-ins, skipping any the machine has not registered. The second row
-   holds every other openable app, in registry order, and is omitted when there
-   is none. Every tile is the same pill it is today, running the app's primary
-   action; the first row's tiles share the row's width between them, the second
-   row's take the width their icon and name need and wrap when the row runs out.
+   tiles are one list, four to a row, wrapping past four. The apps whose
+   manifests declare a `launcher_rank` come first, lowest first: chat, file
+   viewer, browser, terminal for the built-ins, skipping any the machine has not
+   registered; every other openable app follows in registry order, so the first
+   app a user adds starts a second row. Every tile is the same pill it is today,
+   a quarter of the row wide, running the app's primary action.
 3. **"In this project".** The active project's tab set, as today (recency-sorted,
    with the per-app filter menu). Omitted entirely when the project holds nothing,
    so a brand-new project's page goes straight from "Open new" to the offers. On

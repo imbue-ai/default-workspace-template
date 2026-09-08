@@ -38,7 +38,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `internal` | bool | no | `false` | Hidden from every open surface. |
 | `default_shortcut` | table | no | absent | `{action = "<id>", mode = "focus" \| "new"}`. `action` must be a declared action id, or `open` for a single-instance app. |
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
-| `launcher_rank` | integer | no | absent | At least 1. Where the app's tile sits on the New Tab page's leading "Open new" row, lowest first; an app without one follows on the second row. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
+| `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.

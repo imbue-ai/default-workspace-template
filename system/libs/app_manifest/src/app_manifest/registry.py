@@ -61,7 +61,7 @@ class RegistryRow(FrozenModel):
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
     actions: tuple[RegistryAction, ...] = Field(default=(), description="The declared create actions")
     launcher_rank: int | None = Field(
-        default=None, description="The app's place on the New Tab page's leading tile row; absent reads as none"
+        default=None, description="The app's place among the New Tab page's leading tiles; absent reads as none"
     )
 
 
