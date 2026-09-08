@@ -235,6 +235,17 @@ describe("NewTabLauncher", () => {
     return Array.from(root.querySelectorAll<HTMLElement>("[data-section]")).map((section) => section.dataset.section!);
   }
 
+  /** Open a table's filter menu and uncheck the app the menu shows as ``displayName``. */
+  function uncheckAppInFilter(sectionKey: string, displayName: string): void {
+    root.querySelector<HTMLElement>(`[data-section="${sectionKey}"] button[aria-expanded]`)!.click();
+    m.redraw.sync();
+    const label = Array.from(root.querySelectorAll("label")).find((candidate) =>
+      candidate.textContent!.includes(displayName),
+    )!;
+    label.querySelector("input")!.dispatchEvent(new Event("change"));
+    m.redraw.sync();
+  }
+
   it("runs a tile's action with no parameters, whichever app it is", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!.click();
@@ -307,13 +318,7 @@ describe("NewTabLauncher", () => {
     type("t");
     const machine = root.querySelector<HTMLElement>('[data-section="on-machine"]')!;
     expect(machine.querySelector('[data-launch="terminal:new"]')).not.toBeNull();
-    machine.querySelector<HTMLElement>("button[aria-expanded]")!.click();
-    m.redraw.sync();
-    const terminalLabel = Array.from(root.querySelectorAll("label")).find((label) =>
-      label.textContent!.includes("Terminal"),
-    )!;
-    terminalLabel.querySelector("input")!.dispatchEvent(new Event("change"));
-    m.redraw.sync();
+    uncheckAppInFilter("on-machine", "Terminal");
     expect(root.querySelector('[data-launch="terminal:new"]')).toBeNull();
     expect(root.querySelector('[data-address="app:terminal?instance=t1"]')).toBeNull();
     expect(root.querySelector('[data-launch="chat:new"]')).not.toBeNull();
@@ -326,13 +331,7 @@ describe("NewTabLauncher", () => {
     const machine = root.querySelector<HTMLElement>('[data-section="on-machine"]')!;
     expect(machine.querySelector('[data-launch="notes:new"]')).not.toBeNull();
     expect(machine.querySelectorAll(".new-tab-launcher-row").length).toBe(1);
-    machine.querySelector<HTMLElement>("button[aria-expanded]")!.click();
-    m.redraw.sync();
-    const notesLabel = Array.from(root.querySelectorAll("label")).find((label) =>
-      label.textContent!.includes("Notes"),
-    )!;
-    notesLabel.querySelector("input")!.dispatchEvent(new Event("change"));
-    m.redraw.sync();
+    uncheckAppInFilter("on-machine", "Notes");
     expect(root.querySelector('[data-launch="notes:new"]')).toBeNull();
     expect(root.querySelector('[data-section="on-machine"]')!.textContent).toContain("No tabs match this filter.");
   });
