@@ -1,0 +1,1 @@
+The wrapped server behind every instance-serving app -- the files app's dufs, the terminal app's ttyd -- now runs in its own session, along with the registration call. Signals still reach it: the sidecar forwards each one to the child directly.

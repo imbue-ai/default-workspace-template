@@ -25,6 +25,7 @@ from enum import auto
 from pathlib import Path
 from typing import Final
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from loguru import logger
@@ -165,13 +166,10 @@ def detect_backup_capabilities(
 def _findmnt_fstype(path: Path) -> str:
     """Return the filesystem type for `path` via `findmnt`; empty string on any failure."""
     try:
-        result = subprocess.run(
+        result = run_detached_subprocess(
             # -T (--target) walks up to the containing mount, so a path INSIDE
             # a filesystem (not itself a mountpoint) still reports its fstype.
             ["findmnt", "-n", "-o", "FSTYPE", "-T", str(path)],
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=_FINDMNT_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as e:

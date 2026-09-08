@@ -17,6 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
 from loguru import logger
 
 from browser import chrome_args
@@ -61,9 +62,7 @@ def profile_holder_pid(profile_dir: Path) -> int | None:
         # and pgrep reads it as an (unknown) option, silently matching NOTHING -- which
         # made this guard a no-op that never reaped anything. Caught by running it against
         # a real Fortress, not by any unit test.
-        out = subprocess.run(
-            ["pgrep", "-f", "--", marker], capture_output=True, text=True, timeout=5, check=False
-        ).stdout
+        out = run_detached_subprocess(["pgrep", "-f", "--", marker], timeout=5).stdout
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug("profile-holder probe failed ({})", e)
         return None
@@ -183,7 +182,8 @@ def launch(
         ),
         start_url,
     ]
-    proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # ``ChromeProcess.close`` terminates it by handle, which is what makes detaching safe.
+    proc = spawn_detached_process(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + _PORT_WAIT_S
     while time.monotonic() < deadline:
         if proc.poll() is not None:
