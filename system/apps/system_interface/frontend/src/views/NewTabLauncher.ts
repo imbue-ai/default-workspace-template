@@ -557,7 +557,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   // ---------- "Open new" ----------
 
-  function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
+  /** One tile. The leading row's tiles share the row's width between them (``isFill``), so the
+   *  row squares up with the tables under it; the second row's tiles take the width their icon
+   *  and name need and wrap when the row runs out. */
+  function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs, isFill: boolean): m.Vnode {
     const isDisabled = attrs.isAwaitingCreate === true;
     const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
     return m(
@@ -565,7 +568,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       {
         key: `${tile.app.name}:${tile.action.id}`,
         class:
-          "border-default flex h-9 min-w-0 flex-1 items-stretch overflow-hidden rounded-lg border" +
+          "border-default flex h-9 items-stretch overflow-hidden rounded-lg border " +
+          (isFill ? "min-w-0 flex-1" : "shrink-0") +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
@@ -591,11 +595,16 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  function tileRow(tiles: readonly LaunchTile[], attrs: NewTabLauncherAttrs, marker: string): m.Vnode {
+  function tileRow(
+    tiles: readonly LaunchTile[],
+    attrs: NewTabLauncherAttrs,
+    marker: string,
+    isFill: boolean,
+  ): m.Vnode {
     return m(
       "div",
       { class: `${marker} flex flex-wrap gap-2 px-2` },
-      tiles.map((tile) => tileView(tile, attrs)),
+      tiles.map((tile) => tileView(tile, attrs, isFill)),
     );
   }
 
@@ -614,13 +623,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             "No apps are registered on this machine yet.",
           )
         : [
-            leading.length === 0 ? null : tileRow(leading, attrs, "new-tab-launcher-tiles-leading"),
+            leading.length === 0 ? null : tileRow(leading, attrs, "new-tab-launcher-tiles-leading", true),
             other.length === 0
               ? null
               : m(
                   "div",
                   { class: leading.length === 0 ? "" : "mt-2" },
-                  tileRow(other, attrs, "new-tab-launcher-tiles-other"),
+                  tileRow(other, attrs, "new-tab-launcher-tiles-other", false),
                 ),
           ],
     ]);
@@ -658,7 +667,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         m(
           "span",
           { class: "flex shrink-0 items-center " + (isDisabled ? "text-faint" : "text-secondary") },
-          m.trust(startGlyph(option, START_GLYPH_SIZE)),
+          m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
         m(
