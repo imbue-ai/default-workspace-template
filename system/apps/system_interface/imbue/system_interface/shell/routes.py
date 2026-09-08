@@ -111,6 +111,7 @@ HTTP_CONFLICT: Final[int] = 409
 HTTP_PRECONDITION_FAILED: Final[int] = 412
 HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
+HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 
 class ProjectMetadataRequest(FrozenModel):

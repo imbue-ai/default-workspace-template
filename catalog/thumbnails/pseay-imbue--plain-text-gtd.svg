@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Plain-Text GTD">
+  <!-- Warm ruled-paper "commonplace book" aesthetic: parchment ground,
+       charcoal ink, one red accent. Mock task data only. -->
+  <rect width="240" height="160" rx="10" fill="#f5efe6"/>
+  <rect x="0.5" y="0.5" width="239" height="159" rx="9.5" fill="none" stroke="#d8cdb9" stroke-width="1"/>
+
+  <!-- Italic serif masthead -->
+  <text x="20" y="36" font-family="Garamond, 'Times New Roman', serif" font-style="italic" font-size="26" fill="#1c1b1a">G.T.D.</text>
+  <text x="118" y="35" font-family="Garamond, 'Times New Roman', serif" font-size="9" letter-spacing="1.5" fill="#918878">TODAY</text>
+  <line x1="20" y1="44" x2="220" y2="44" stroke="#1c1b1a" stroke-width="1.2"/>
+
+  <!-- Ruled lines for the task list -->
+  <g stroke="#e7dec9" stroke-width="1">
+    <line x1="20" y1="66" x2="220" y2="66"/>
+    <line x1="20" y1="88" x2="220" y2="88"/>
+    <line x1="20" y1="110" x2="220" y2="110"/>
+    <line x1="20" y1="132" x2="220" y2="132"/>
+  </g>
+
+  <!-- Task 1: checked (done), struck through -->
+  <rect x="24" y="52" width="10" height="10" rx="2" fill="none" stroke="#4a6843" stroke-width="1.4"/>
+  <path d="M26 57 l2.5 2.5 l4.5 -5" fill="none" stroke="#4a6843" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="42" y="61" font-family="Garamond, 'Times New Roman', serif" font-size="12" fill="#918878">Email Alex re: kickoff</text>
+  <line x1="42" y1="57.5" x2="150" y2="57.5" stroke="#918878" stroke-width="1"/>
+
+  <!-- Task 2: open, with red due-date accent -->
+  <rect x="24" y="74" width="10" height="10" rx="2" fill="none" stroke="#5b554c" stroke-width="1.4"/>
+  <text x="42" y="83" font-family="Garamond, 'Times New Roman', serif" font-size="12" fill="#1c1b1a">Plan launch</text>
+  <text x="176" y="83" font-family="Garamond, 'Times New Roman', serif" font-size="10" fill="#a64238">due Jul 18</text>
+
+  <!-- Task 3: open -->
+  <rect x="24" y="96" width="10" height="10" rx="2" fill="none" stroke="#5b554c" stroke-width="1.4"/>
+  <text x="42" y="105" font-family="Garamond, 'Times New Roman', serif" font-size="12" fill="#1c1b1a">Draft weekly review</text>
+
+  <!-- Task 4: open, waiting -->
+  <rect x="24" y="118" width="10" height="10" rx="2" fill="none" stroke="#5b554c" stroke-width="1.4"/>
+  <text x="42" y="127" font-family="Garamond, 'Times New Roman', serif" font-size="12" fill="#1c1b1a">Book flights</text>
+  <text x="176" y="127" font-family="Garamond, 'Times New Roman', serif" font-style="italic" font-size="10" fill="#8a6a2c">waiting</text>
+
+  <!-- Footer label -->
+  <text x="20" y="150" font-family="Garamond, 'Times New Roman', serif" font-size="9" letter-spacing="1" fill="#918878">INBOX · NEXT · PROJECTS · WAITING · REVIEW</text>
+</svg>

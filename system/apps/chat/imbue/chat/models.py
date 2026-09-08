@@ -285,6 +285,11 @@ class CreateChatRequest(FrozenModel):
         default="",
         description="A chat minted earlier while nothing was signed in (or one whose create failed) to launch now",
     )
+    message: str = Field(
+        default="",
+        description="The first message the chat sends once it is running; empty sends none "
+        "(a chat minted earlier keeps the message it was minted with)",
+    )
 
 
 class ProvisionalChatPhase(LowerCaseStrEnum):
@@ -309,6 +314,7 @@ class ProvisionalChat(FrozenModel):
     name: str = Field(description="The display name minted for it")
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
     account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
+    message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
 

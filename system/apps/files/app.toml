@@ -6,6 +6,7 @@ instances = true
 instances_url = "http://127.0.0.1:8301"
 critical = false
 priority = "files"
+launcher_rank = 20
 
 [default_shortcut]
 action = "new"

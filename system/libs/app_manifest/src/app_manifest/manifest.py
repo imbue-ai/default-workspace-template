@@ -75,6 +75,12 @@ class AppManifest(FrozenModel):
     internal: bool = Field(default=False, description="Hidden from every open surface")
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
     actions: tuple[AppAction, ...] = Field(default=(), description="The declared create actions")
+    launcher_rank: int | None = Field(
+        default=None,
+        ge=1,
+        description="The app's place among the New Tab page's leading tiles (lower first); "
+        "an app without one follows every ranked app",
+    )
     handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
 
     @model_validator(mode="before")

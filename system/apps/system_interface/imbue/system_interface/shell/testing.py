@@ -4,6 +4,7 @@ import json
 import queue
 import time
 from collections.abc import Callable
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
@@ -52,8 +53,11 @@ def registry_row_toml(
     default_shortcut: tuple[str, str] | None = None,
     display_name: str | None = None,
     label: str = "",
+    action_params: Mapping[str, Sequence[str]] | None = None,
+    launcher_rank: int | None = None,
 ) -> str:
-    """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads."""
+    """One ``[[apps]]`` row as ``forward_port.py`` writes it, with the manifest-derived keys the shell reads.
+    ``action_params`` names each action's params by action id."""
     lines = [
         "[[apps]]",
         f'name = "{name}"',
@@ -66,12 +70,17 @@ def registry_row_toml(
     ]
     if program is not None:
         lines.append(f'program = "{program}"')
+    if launcher_rank is not None:
+        lines.append(f"launcher_rank = {launcher_rank}")
     if default_shortcut is not None:
         lines.append(f'default_shortcut = {{ action = "{default_shortcut[0]}", mode = "{default_shortcut[1]}" }}')
     for action_id, label_text in actions:
         lines.append("[[apps.actions]]")
         lines.append(f'id = "{action_id}"')
         lines.append(f'label = "{label_text}"')
+        params = (action_params or {}).get(action_id, ())
+        if params:
+            lines.append("params = [" + ", ".join(f'"{param}"' for param in params) + "]")
     return "\n".join(lines) + "\n"
 
 

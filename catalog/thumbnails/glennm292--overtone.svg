@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Overtone -- a daily music scout">
+  <!-- Overtone inspiration thumbnail: DACTAL light aesthetic (white ground, teal),
+       serif wordmark, an overtone-series waveform (fundamental + overtone), and
+       three scene-tinted artist cards for DEEPER / BROADER / OTHER. -->
+  <rect x="0.5" y="0.5" width="239" height="159" rx="14" fill="#ffffff" stroke="#cfe3e3" stroke-width="1"/>
+
+  <!-- wordmark + tagline -->
+  <text x="16" y="40" font-family="Georgia, 'Times New Roman', serif" font-size="26" fill="#147a7a">Overtone</text>
+  <text x="18" y="55" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-size="9" fill="#7b8794">daily music scout</text>
+
+  <!-- overtone series: a fundamental wave and a higher-frequency overtone -->
+  <path d="M 18 80 Q 35 63 52 80 Q 69 97 86 80 Q 103 63 120 80 Q 137 97 154 80 Q 171 63 188 80 Q 205 97 222 80"
+        fill="none" stroke="#147a7a" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M 18 80 Q 26.5 71 35 80 Q 43.5 89 52 80 Q 60.5 71 69 80 Q 77.5 89 86 80 Q 94.5 71 103 80 Q 111.5 89 120 80 Q 128.5 71 137 80 Q 145.5 89 154 80 Q 162.5 71 171 80 Q 179.5 89 188 80 Q 196.5 71 205 80 Q 213.5 89 222 80"
+        fill="none" stroke="#63c2c2" stroke-width="1.4" stroke-linecap="round"/>
+
+  <!-- three scene-tinted artist cards -->
+  <!-- DEEPER (teal) -->
+  <rect x="14" y="104" width="64" height="48" rx="8" fill="#ffffff" stroke="#e1e8ee" stroke-width="1"/>
+  <rect x="14" y="108" width="4" height="40" rx="2" fill="#147a7a"/>
+  <text x="24" y="120" font-family="Georgia, 'Times New Roman', serif" font-size="6.5" letter-spacing="0.5" fill="#147a7a">DEEPER</text>
+  <circle cx="34" cy="137" r="7" fill="#147a7a"/>
+  <rect x="46" y="132" width="22" height="5" rx="2.5" fill="#b8c2cc"/>
+  <rect x="46" y="141" width="16" height="4" rx="2" fill="#147a7a" opacity="0.4"/>
+
+  <!-- BROADER (firebrick) -->
+  <rect x="88" y="104" width="64" height="48" rx="8" fill="#ffffff" stroke="#e1e8ee" stroke-width="1"/>
+  <rect x="88" y="108" width="4" height="40" rx="2" fill="#b22222"/>
+  <text x="98" y="120" font-family="Georgia, 'Times New Roman', serif" font-size="6.5" letter-spacing="0.5" fill="#b22222">BROADER</text>
+  <circle cx="108" cy="137" r="7" fill="#b22222"/>
+  <rect x="120" y="132" width="22" height="5" rx="2.5" fill="#b8c2cc"/>
+  <rect x="120" y="141" width="16" height="4" rx="2" fill="#b22222" opacity="0.4"/>
+
+  <!-- OTHER (indigo) -->
+  <rect x="162" y="104" width="64" height="48" rx="8" fill="#ffffff" stroke="#e1e8ee" stroke-width="1"/>
+  <rect x="162" y="108" width="4" height="40" rx="2" fill="#4b0082"/>
+  <text x="172" y="120" font-family="Georgia, 'Times New Roman', serif" font-size="6.5" letter-spacing="0.5" fill="#4b0082">OTHER</text>
+  <circle cx="182" cy="137" r="7" fill="#4b0082"/>
+  <rect x="194" y="132" width="22" height="5" rx="2.5" fill="#b8c2cc"/>
+  <rect x="194" y="141" width="16" height="4" rx="2" fill="#4b0082" opacity="0.4"/>
+</svg>

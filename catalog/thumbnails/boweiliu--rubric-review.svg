@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" width="240" height="160" role="img" aria-label="A rubric scorecard: criteria rows with before and after marks, one row scoring low">
+  <defs>
+    <linearGradient id="rr-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f4f6f9"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="240" height="160" rx="10" fill="url(#rr-bg)"/>
+  <rect x="0.5" y="0.5" width="239" height="159" rx="9.5" fill="none" stroke="#e0e4ea"/>
+
+  <!-- Title and column headers -->
+  <rect x="18" y="18" width="58" height="7" rx="3.5" fill="#16181d"/>
+  <text x="163" y="41" font-family="ui-sans-serif, -apple-system, sans-serif" font-size="7" font-weight="700" letter-spacing="0.6" fill="#9aa1ad">PRE</text>
+  <text x="196" y="41" font-family="ui-sans-serif, -apple-system, sans-serif" font-size="7" font-weight="700" letter-spacing="0.6" fill="#9aa1ad">POST</text>
+  <line x1="18" y1="47" x2="222" y2="47" stroke="#e0e4ea" stroke-width="1"/>
+
+  <!-- Row 1 -->
+  <circle cx="23" cy="59" r="2.4" fill="#c3c9d2"/>
+  <rect x="31" y="56" width="74" height="5.5" rx="2.75" fill="#c3c9d2"/>
+  <text x="165" y="62" font-family="ui-monospace, monospace" font-size="9" fill="#5c6370">4</text>
+  <text x="200" y="62" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#16181d">5</text>
+
+  <!-- Row 2 -->
+  <circle cx="23" cy="76" r="2.4" fill="#c3c9d2"/>
+  <rect x="31" y="73" width="92" height="5.5" rx="2.75" fill="#c3c9d2"/>
+  <text x="165" y="79" font-family="ui-monospace, monospace" font-size="9" fill="#5c6370">5</text>
+  <text x="200" y="79" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#16181d">5</text>
+
+  <!-- Row 3: the failing criterion -->
+  <rect x="12" y="86" width="216" height="19" rx="5" fill="#fdeceb"/>
+  <rect x="12" y="86" width="2.5" height="19" rx="1.25" fill="#d64545"/>
+  <circle cx="23" cy="95.5" r="2.4" fill="#d64545"/>
+  <rect x="31" y="92.5" width="84" height="5.5" rx="2.75" fill="#d99a97"/>
+  <text x="165" y="99" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#d64545">1</text>
+  <text x="200" y="99" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#16181d">5</text>
+
+  <!-- Row 4 -->
+  <circle cx="23" cy="115" r="2.4" fill="#c3c9d2"/>
+  <rect x="31" y="112" width="66" height="5.5" rx="2.75" fill="#c3c9d2"/>
+  <text x="165" y="118" font-family="ui-monospace, monospace" font-size="9" fill="#5c6370">4</text>
+  <text x="200" y="118" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#16181d">5</text>
+
+  <!-- Computed total -->
+  <line x1="18" y1="128" x2="222" y2="128" stroke="#e0e4ea" stroke-width="1"/>
+  <rect x="31" y="138" width="34" height="5.5" rx="2.75" fill="#16181d"/>
+  <text x="158" y="144" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#5c6370">34</text>
+  <text x="193" y="144" font-family="ui-monospace, monospace" font-size="9" font-weight="700" fill="#1c5fd6">50</text>
+</svg>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Kriteek: a split diff with a review-round snapshot timeline">
+  <rect width="240" height="160" rx="12" fill="#12181f"/>
+
+  <!-- Snapshot timeline: squares = merged into main, circles = not; amber = current round -->
+  <line x1="26" y1="30" x2="214" y2="30" stroke="#3e4c59" stroke-width="2"/>
+  <rect x="21" y="25" width="10" height="10" rx="2" fill="#52606d"/>
+  <circle cx="82" cy="30" r="5.5" fill="#52606d"/>
+  <rect x="123" y="25" width="10" height="10" rx="2" fill="#52606d"/>
+  <circle cx="184" cy="30" r="6.5" fill="#f0b429" stroke="#12181f" stroke-width="1.5"/>
+
+  <!-- Split diff panel -->
+  <rect x="20" y="52" width="200" height="88" rx="8" fill="#1c242d"/>
+  <line x1="120" y1="58" x2="120" y2="134" stroke="#12181f" stroke-width="2"/>
+
+  <!-- Left column (removed / red) -->
+  <rect x="30" y="64" width="80" height="8" rx="2" fill="#3a2226"/>
+  <rect x="30" y="78" width="66" height="8" rx="2" fill="#7a2d34"/>
+  <rect x="30" y="92" width="80" height="8" rx="2" fill="#3a2226"/>
+  <rect x="30" y="106" width="54" height="8" rx="2" fill="#7a2d34"/>
+  <rect x="30" y="120" width="72" height="8" rx="2" fill="#3a2226"/>
+
+  <!-- Right column (added / green) -->
+  <rect x="130" y="64" width="80" height="8" rx="2" fill="#1f3326"/>
+  <rect x="130" y="78" width="72" height="8" rx="2" fill="#2f7d4f"/>
+  <rect x="130" y="92" width="58" height="8" rx="2" fill="#2f7d4f"/>
+  <rect x="130" y="106" width="80" height="8" rx="2" fill="#1f3326"/>
+  <rect x="130" y="120" width="64" height="8" rx="2" fill="#1f3326"/>
+
+  <!-- Unresolved comment badge -->
+  <circle cx="200" cy="90" r="12" fill="#f0b429"/>
+  <path d="M191 87 h18 v8 a2 2 0 0 1 -2 2 h-9 l-4 4 v-4 h-1 a2 2 0 0 1 -2 -2 z" fill="#12181f"/>
+</svg>

@@ -987,6 +987,7 @@ def _create_chat_agent() -> Response:
             project_id=project_id,
             account_id=create_request.account_id,
             agent_id=create_request.agent_id,
+            message=create_request.message,
         )
         response = CreateAgentResponse(agent_id=created.agent_id, name=created.name, display_name=created.display_name)
         return json_response(response.model_dump(), status_code=201)

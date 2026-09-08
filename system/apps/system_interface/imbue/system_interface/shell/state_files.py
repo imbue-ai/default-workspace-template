@@ -1,5 +1,6 @@
 """The shell's state files: JSON documents under ``data/.state/system_interface/``, written atomically under one lock."""
 
+import contextlib
 import json
 import os
 import threading
@@ -44,5 +45,8 @@ def write_json_atomic(path: Path, document: dict[str, Any]) -> None:
         temp_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
         os.replace(temp_path, path)
     except OSError as e:
-        temp_path.unlink(missing_ok=True)
+        # Best effort: the cleanup must not replace the error being reported (the temp file's
+        # directory may be the very thing that is wrong).
+        with contextlib.suppress(OSError):
+            temp_path.unlink(missing_ok=True)
         raise ShellStateError(f"cannot write shell state file {path}: {e}") from e

@@ -106,9 +106,25 @@ deleted through its app once nothing references it.
 The rail shows the view's identity (the switcher; right-click for project
 settings), its shortcut rows (seeded from every app's `default_shortcut`;
 Everything's rail is every app's primary action), the "All apps" popover, a
-search pill, and the view's tab list. The New Tab page is the only empty
-state: tiles for every app's primary action, "In this project", and "On this
-machine". A fresh install lands there with no project.
+search pill, and the view's tab list. The New Tab page is
+the only empty state, and the page for starting things: a search field; "Open
+new" (every app's primary action as a tile, four to a row, the apps that
+declare a `launcher_rank` in their manifest first in rank order and the rest
+after them); "In this project" (the tab set, with an app filter and a last-active
+column, omitted when empty); "Start something" (hardcoded intents, each a new
+chat seeded with a prompt, six at a time behind "See more"); and "Start from a
+template" (the published templates by category, in sideways rails, with a
+detail dialog whose "Make it mine" starts a chat that adopts the template).
+Typing in the search field swaps the page for results: the machine's
+instances and actions, the matching intents, the matching templates. A seeded
+prompt goes to whichever app declares an action with a `message` param (the
+chat app's `new`), so the shell still names no app. The template catalog is a
+JSON document the shell fetches from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`
+(`catalog/README.md` at the repo root describes it), reuses for six hours,
+keeps the last good copy under `data/.state/system_interface/`, and serves
+to the page at `GET /api/templates-catalog`; the design is
+`docs/system/blueprint/new-tab-page/plan-new-tab-page.md`. A fresh install lands
+there with no project.
 
 A workspace that predates the app model is carried over once by
 `system/scripts/migrate_workspace_layouts.py`, which bootstrap runs at every

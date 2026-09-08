@@ -147,8 +147,21 @@ def _launcher_row(page: Page, address: str) -> Any:
     return page.locator(f'.new-tab-launcher-row[data-address="{address}"]:visible')
 
 
+def _search_launcher(page: Page, query: str) -> None:
+    """Type into the New Tab page's search field, which swaps the page for the machine-wide results."""
+    page.locator(".new-tab-launcher:visible .new-tab-launcher-search input").fill(query)
+
+
+def _app_name_of_address(address: str) -> str:
+    return address.removeprefix("app:").split("?", 1)[0]
+
+
 def _open_from_launcher(page: Page, address: str) -> None:
-    """Open an instance from the New Tab page (opening the page from the "+" when none is up)."""
+    """Open an instance from the New Tab page (opening the page from the "+" when none is up).
+
+    A project's resting page lists only its own tab set, so an instance the project does not hold
+    is reached the way a user reaches it: by searching for its app.
+    """
     expect(page.locator(".dv-default-tab-content").first).to_be_visible(timeout=15000)
     launcher = page.locator(".new-tab-launcher:visible")
     if launcher.count() == 0:
@@ -158,6 +171,8 @@ def _open_from_launcher(page: Page, address: str) -> None:
             page.locator(".dockview-add-tab-button:visible").first.click()
     expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
     row = _launcher_row(page, address)
+    if row.count() == 0:
+        _search_launcher(page, _app_name_of_address(address))
     expect(row.first).to_be_visible(timeout=15000)
     row.first.click()
 

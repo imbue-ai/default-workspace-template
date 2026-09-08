@@ -17,6 +17,7 @@ from app_instances.testing import RecordingNudger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
@@ -306,14 +307,45 @@ def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_
     """A chat minted earlier keeps the name and project it was minted with: a launch that names either
     is refused rather than answered with a different name than it asked for."""
     reserved = agent_manager.reserve_chat()
-    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+    with pytest.raises(AgentCreationError, match="keeps the name, project, and first message"):
         agent_manager.create_chat_agent("Renamed", agent_id=reserved.agent_id)
-    with pytest.raises(AgentCreationError, match="keeps the name and project"):
+    with pytest.raises(AgentCreationError, match="keeps the name, project, and first message"):
         agent_manager.create_chat_agent("", project_id="project-1", agent_id=reserved.agent_id)
     reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
     assert reserved_proto is not None
     assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
     agent_manager.stop()
+
+
+def test_create_chat_agent_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+    """A reserved chat keeps the first message it was minted with; a launch cannot reseed it."""
+    reserved = agent_manager.reserve_chat(message="/welcome-tour")
+    with pytest.raises(AgentCreationError, match="first message"):
+        agent_manager.create_chat_agent("", agent_id=reserved.agent_id, message="something else")
+    reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
+    assert reserved_proto is not None
+    assert reserved_proto.message == "/welcome-tour"
+    assert reserved_proto.phase is ProvisionalChatPhase.AWAITING_ACCOUNT
+    agent_manager.stop()
+
+
+def test_a_seeded_chat_leaves_the_first_chat_claim_for_a_plain_one(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """A chat seeded with its own first message does not take the workspace's one ``/welcome``:
+    it launches without the ``first`` template, carrying its message, and the claim stays."""
+    q = broadcaster.register()
+
+    seeded = agent_manager.create_chat_agent("seeded-chat", message="Teach me about Minds")
+    agent_manager.stop()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    proto_msg = json.loads(raw)
+    assert proto_msg["agent_id"] == seeded.agent_id
+    assert proto_msg["message"] == "Teach me about Minds"
+    # The claim is still there for the next plain chat.
+    assert claim_first_chat() is True
 
 
 def _seed_failed_chat(
@@ -356,6 +388,7 @@ def test_create_chat_agent_relaunches_a_failed_chat_under_its_id_and_name(
         "name": "Chat 1",
         "project_id": "",
         "account_id": signed_in.id,
+        "message": "",
         "phase": "creating",
         "error": None,
     }
@@ -839,6 +872,26 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
     assert argv[argv.index("--type") + 1] == HarnessType.CODEX
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat"]
+
+
+def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
+    """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
+    like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
+    seeded = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+        initial_message="/use-template https://github.com/example/a-template",
+    )
+    assert_mngr_argv_valid(seeded)
+    assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
+
+    plain = _build_chat_create_command(
+        mngr_binary="mngr", name="demo", agent_id="agent-123", primary_labels={}, harness=HarnessType.CLAUDE
+    )
+    assert "--message" not in plain
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:

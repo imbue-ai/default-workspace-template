@@ -17,8 +17,8 @@ describe("pickableActions", () => {
       appRecord("browser", { actions: [] }),
       appRecord("chat", {
         actions: [
-          { id: "subagent", label: "Subagent" },
-          { id: "new", label: "New Chat" },
+          { id: "subagent", label: "Subagent", params: [] },
+          { id: "new", label: "New Chat", params: [] },
         ],
         default_shortcut: { action: "new", mode: "new" },
       }),
@@ -76,6 +76,7 @@ describe("AllAppsPicker", () => {
     expect(attrs.onRunAction).toHaveBeenCalledWith(expect.objectContaining({ name: "terminal" }), {
       id: "new",
       label: "New terminal",
+      params: [],
     });
     root.querySelector<HTMLElement>(".project-rail-pin")!.click();
     expect(attrs.onPin).toHaveBeenCalledWith(

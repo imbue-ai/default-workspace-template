@@ -150,8 +150,8 @@ describe("primaryActionForApp", () => {
       program: "",
       critical: true,
       actions: [
-        { id: "new", label: "New Chat" },
-        { id: "subagent", label: "Open subagent" },
+        { id: "new", label: "New Chat", params: [] },
+        { id: "subagent", label: "Open subagent", params: [] },
       ],
       ...overrides,
     });
