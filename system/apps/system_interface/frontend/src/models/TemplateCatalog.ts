@@ -153,8 +153,3 @@ async function fetchTemplateCatalog(): Promise<TemplateCatalogState> {
     return { kind: "failed" };
   }
 }
-
-export function resetTemplateCatalogForTesting(): void {
-  state = { kind: "loading" };
-  isRequested = false;
-}
