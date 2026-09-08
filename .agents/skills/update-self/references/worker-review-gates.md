@@ -28,9 +28,7 @@ that this branch fired and shows the evidence for all three conditions.
 ## Otherwise run the real gates, scoped to the locally-divergent content
 
 Follow the "Review gates" section of
-`.agents/shared/worker/references/harden-creation.md` (unattended `/autofix`,
-then judge each fix commit yourself -- keep by default, revert only what
-undoes intended behavior -- plus the architecture gates).
+`.agents/shared/worker/references/harden-creation.md`.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own
