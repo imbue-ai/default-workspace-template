@@ -21,6 +21,10 @@ details.
   automation-agent waker (see the manage-scheduled-tasks skill).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
+- `detached_subprocess/` - The way a service that adopts it shells out:
+  `run_detached_command` runs a child in its own session, out of reach of the
+  workspace's terminal, plus the two ratchet rules the chat app and the shell
+  each apply to their own source tree to stay on it.
 - `github_sync/` - The opt-in GitHub auto-push wiring (a git hook, not a
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
