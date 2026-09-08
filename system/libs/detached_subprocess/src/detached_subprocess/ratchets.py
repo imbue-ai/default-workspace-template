@@ -2,7 +2,7 @@
 
 Every app that shells out from a supervisord service reintroduces the whole failure mode with
 one attached spawn, so the rules are allowlist-by-file rather than counts. They live here
-because the two apps that spawn share the reasoning and the exemption mechanics; each app
+because the two apps that adopt them share the reasoning and the exemption mechanics; each app
 applies them to its own source tree, with its own allowlist, from its own
 ``test_subprocess_ratchets.py``.
 
