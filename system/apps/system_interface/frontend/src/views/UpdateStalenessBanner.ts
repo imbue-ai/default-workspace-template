@@ -14,8 +14,8 @@
  */
 
 import m from "mithril";
-import { Button } from "./components/Button";
-import { bannerClass } from "./components/banner";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { bannerClass } from "@imbue/workspace-ui/src/components/banner";
 
 const META_TAG_NAME = "system-interface-update-staleness";
 

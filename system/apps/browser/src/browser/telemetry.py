@@ -266,6 +266,9 @@ class _ResourceSampler(threading.Thread):
             "swap_pct": swap.percent,
             "daemon_cpu": round(daemon_cpu, 1),
             "daemon_rss_mb": round(daemon.memory_info().rss / 1e6),
+            # Threads the daemon holds: a stop or join that gave up leaves one behind, and
+            # a count that climbs across pause/resume cycles is the sign of it.
+            "daemon_threads": daemon.num_threads(),
             "chrome_cpu": round(chrom_cpu, 1),
             "chrome_rss_mb": round(chrom_rss / 1e6),
             "chrome_procs": len(self._proc_cache),
