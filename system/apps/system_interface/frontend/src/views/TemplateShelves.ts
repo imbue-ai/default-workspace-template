@@ -3,8 +3,8 @@
  * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
  * cards that shows three and a half at a time, pages one visible width with the arrows overlaying
  * its ends (each a full-height strip that fades the rail out under it), and scrolls freely with
- * the trackpad. Picking a card is the launcher's business (it
- * opens the detail dialog), so both components only report the pick.
+ * the trackpad. Picking a card is the launcher's business (it opens the detail dialog), so both
+ * components only report the pick.
  *
  * The rail arithmetic (which arrows to show, where a page lands) is exported as pure functions so
  * it can be tested without a DOM.
