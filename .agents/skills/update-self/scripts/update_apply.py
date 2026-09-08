@@ -261,10 +261,11 @@ def _refuse_a_re_merge_that_drops_a_rolled_back_target(
     )
     rollback = next(
         (
-            line.split(" ", 1)[0]
-            for line in since_target.splitlines()
-            if line.split(" ", 1)[1:]
-            and line.split(" ", 1)[1].startswith(_ROLLBACK_SUBJECT_PREFIX)
+            commit
+            for commit, _separator, subject in (
+                line.partition(" ") for line in since_target.splitlines()
+            )
+            if subject.startswith(_ROLLBACK_SUBJECT_PREFIX)
         ),
         None,
     )
