@@ -2,7 +2,7 @@
 
 The harbor environment is the Minds box; the driver starts the backend with per-trial env, creates
 one nested Modal workspace through the production Minds API, drives the scripted multi-turn
-conversation against the workspace's system_interface (bridged through ``mngr exec``), snapshots the
+conversation against the workspace's chat app (bridged through ``mngr exec``), snapshots the
 workspace after turns, and keeps the ATIF ``trajectory.json`` (what the verifier grades) and
 ``state.json`` current in the box so even a timed-out trial leaves a gradeable partial record.
 """
@@ -568,7 +568,7 @@ def _agent_reply_text(event: Mapping[str, Any]) -> str:
 
     Reads both common-transcript vintages: the ATIF-shaped ``step`` record with ``source: "agent"``
     (whose text is ``message``) that mngr's emitters write, and the legacy ``assistant_message``
-    record the workspace system_interface still produces."""
+    record the workspace's chat app still produces."""
     if event.get("type") == "step" and event.get("source") == "agent":
         return str(event.get("message") or "").strip()
     if event.get("type") == "assistant_message":

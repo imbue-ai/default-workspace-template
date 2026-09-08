@@ -37,8 +37,6 @@ Usage:
 Environment:
     MINDS_WORKSPACE_SERVER_URL  Base URL of the live workspace server
                                 (default http://127.0.0.1:8000).
-    MNGR_AGENT_ID               This agent's id. Sent for telemetry on the
-                                broadcast.
     LATCHKEY_GATEWAY,           Gateway address + password mngr injects into the
     LATCHKEY_GATEWAY_PASSWORD   agent environment. Both must be present to reach
                                 the Minds app; the broadcast still runs without
@@ -62,8 +60,6 @@ from typing import Callable, Sequence
 
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
-ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
-MNGR_AGENT_ID_HEADER = "X-Mngr-Agent-Id"
 
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
@@ -164,7 +160,9 @@ def resolve_primary_agent_id(runner: Runner) -> str:
         if candidate:
             return candidate
     if completed.returncode != 0:
-        return unresolved(f"mngr ls exited {completed.returncode} and listed no primary agent")
+        return unresolved(
+            f"mngr ls exited {completed.returncode} and listed no primary agent"
+        )
     return unresolved("mngr ls listed no primary agent")
 
 
@@ -174,11 +172,10 @@ def broadcast_reload(http: HttpClient, base_url: str) -> bool:
     Returns whether the broadcast was accepted. A non-200 does not mean no
     browser reloaded -- only that the workspace server did not take the op.
     """
-    agent_id = os.environ.get(ENV_MNGR_AGENT_ID, "")
     status = http.post_json(
         f"{base_url}/api/layout/broadcast",
-        {"op": RELOAD_OP, "args": {}, "agent_id": agent_id},
-        {"Content-Type": "application/json", MNGR_AGENT_ID_HEADER: agent_id},
+        {"op": RELOAD_OP, "args": {}},
+        {"Content-Type": "application/json"},
         timeout=_TIMEOUT_SECONDS,
     )
     if status == 200:

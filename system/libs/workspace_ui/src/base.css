@@ -1,0 +1,321 @@
+/* DESIGN SYSTEM (optional) — how the DEFAULT UI stays coherent.
+ *
+ * Styling lives in the MARKUP as Tailwind utilities; this
+ * file is the token layer plus a small set of escape hatches, not a stylesheet
+ * of component classes. When you extend or maintain the default look:
+ *   - Style in the view: utility class strings on the m(...) markup, colours
+ *     via the semantic utility layer (text-primary, bg-fill-hover, ...), text
+ *     via the type-* roles, shared recipes via the component builders in
+ *     this library's components/.
+ *   - Hand-written CSS here is only for what utilities cannot reach: vendor
+ *     DOM (dockview/xterm), markdown-rendered content, keyframes and
+ *     pseudo-element machines (the spinner), contextual rules over
+ *     shared markup, and cascade-critical overrides. In those, `@apply` the
+ *     semantic utilities where they cover the declarations; reference the
+ *     --c-* value tokens where no utility fits, never a raw hex.
+ *
+ * This is a convention for the default UI, not an enforced rule. If the user
+ * wants their interface restyled to their own taste, build exactly that and
+ * ignore these tokens freely — nothing enforces them. Background:
+ * system/apps/system_interface/frontend/style_guide.md. */
+/* The library's own sources: the class names its components use live in their
+   TS class strings. Each app's stylesheet imports this file after
+   `@import "tailwindcss" source(none)` and adds its own `@source`; a class name
+   assembled by string concatenation is NOT detected -- safelist any such case
+   with `@source inline("...")`. */
+@source "./**/*.ts";
+
+/* Colour tokens — two layers.
+ * 1. VALUE LAYER (--c-*, on :root below): the raw colour for each token. The
+ *    ONLY place a value lives, so a future theme swap (or dark mode) edits one
+ *    table. Hand-written CSS in this file references these directly.
+ * 2. UTILITY LAYER (@theme inline, below): registers each --c-* under a clean
+ *    semantic name, generating the colour utilities the views use
+ *    (text-primary, bg-fill-hover, border-default, ...). `inline` makes the
+ *    generated utility resolve THROUGH var(--c-*) at runtime, so re-declaring
+ *    a --c-* value on a subtree reskins it live.
+ * The palette itself is the system interface's own (warm neutrals + green
+ * accent). */
+:root {
+  --c-bg: #fafaf8;
+  --c-bg-sidebar: #f3f2ef;
+  /* State fills are translucent rather than opaque hexes so they
+     stack: a control's hover tint over an already-tinted row reads one step
+     deeper, which is what keeps a hover-revealed control's own hover visible.
+     Warmth comes from the surface underneath, not the tint. */
+  --c-fill-hover: rgb(0 0 0 / 0.07);
+  --c-fill-active: rgb(0 0 0 / 0.11);
+  --c-bg-user-bubble: #ededed;
+  --c-bg-composer: #ffffff;
+  --c-bg-chat: #ffffff;
+  --c-bg-code: #f0f0f0;
+  --c-text-primary: #202020;
+  --c-text-secondary: #666666;
+  --c-text-faint: #8c8c8c;
+  --c-border: #e4e3df;
+  --c-border-faint: #efeeeb;
+  --c-border-code: #e0e0e0;
+  --c-accent: #2f6b4f;
+  --c-accent-hover: #24573f;
+  --c-accent-light: #e9f2ee;
+  --c-surface: #ffffff;
+  --c-surface-secondary: #f3f2ef;
+  --c-stop-button: #64748b;
+  --c-stop-button-hover: #475569;
+  /* Semantic status colours. */
+  --c-danger: #d83a2c;
+  --c-danger-hover: #b62d22;
+  --c-danger-bg: #fdecea;
+  --c-danger-border: #f4c7c3;
+  --c-warning: #b45309;
+  --c-warning-bg: #fde68a;
+  --c-success: #22a06b;
+  --c-success-bg: #e0f2ea;
+  --c-success-border: #b2decb;
+  /* Foreground on accent/coloured surfaces (e.g. white button text). */
+  --c-text-on-accent: #ffffff;
+  /* Inverse surface — dark ("black") bg with on-accent text. */
+  --c-inverse-surface: #202020;
+  --c-inverse-surface-hover: #383838;
+  /* Typography scale — role-based; backs the type-* utilities below. Unit: px.
+     (Not --text-*: overriding Tailwind's --text-sm/lg would silently resize its
+     text-sm/text-lg utilities, which the views use at their stock values.) */
+  --font-size-heading-lg: 24px;
+  --font-size-heading: 18px;
+  --font-size-body: 14px;
+  /* Row text: the dense-chrome step between body and helper. */
+  --font-size-row: 13px;
+  --font-size-helper: 12px;
+  /* (No --weight-medium: 500 in markup is Tailwind's font-medium, and no type
+     role uses it -- see the type-roles note below.) */
+  --weight-regular: 400;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  /* Motion scale — one unit (ms). Durations back the common UI transitions;
+     off-scale durations and the long looping animation timings stay raw. */
+  --dur-fast: 80ms;
+  --dur-base: 120ms;
+  --dur-slow: 200ms;
+  /* Z-index scale — names the workspace's stacking layers.
+     Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
+     clears them at --z-tooltip. */
+  --z-content: 1;
+  --z-sticky: 100;
+  --z-dropdown: 1000;
+  --z-overlay: 10000;
+  --z-tooltip: 10001;
+  --width-message-column: 740px;
+}
+
+/* The colour-utility layer: clean semantic names over the --c-* values,
+ * grouped by role below. Utilities generate on demand: text-primary, bg-page,
+ * bg-fill-hover, border-default, bg-danger-surface, ... */
+@theme inline {
+  /* text: text-primary / -secondary / -faint / -on-accent */
+  --color-primary: var(--c-text-primary);
+  --color-secondary: var(--c-text-secondary);
+  --color-faint: var(--c-text-faint);
+  --color-on-accent: var(--c-text-on-accent);
+  /* borders: border-default / border-subtle */
+  --color-default: var(--c-border);
+  --color-subtle: var(--c-border-faint);
+  /* surfaces: bg-page / -sidebar / -chat / -composer / -code / -user-bubble /
+     -surface / -surface-secondary / -inverse / -inverse-hover */
+  --color-page: var(--c-bg);
+  --color-sidebar: var(--c-bg-sidebar);
+  --color-chat: var(--c-bg-chat);
+  --color-composer: var(--c-bg-composer);
+  --color-code: var(--c-bg-code);
+  --color-user-bubble: var(--c-bg-user-bubble);
+  --color-surface: var(--c-surface);
+  --color-surface-secondary: var(--c-surface-secondary);
+  --color-inverse: var(--c-inverse-surface);
+  --color-inverse-hover: var(--c-inverse-surface-hover);
+  /* fills: bg-fill-hover / bg-fill-active (control state tints) */
+  --color-fill-hover: var(--c-fill-hover);
+  --color-fill-active: var(--c-fill-active);
+  /* accent / interactive */
+  --color-accent: var(--c-accent);
+  --color-accent-hover: var(--c-accent-hover);
+  --color-accent-light: var(--c-accent-light);
+  --color-stop: var(--c-stop-button);
+  --color-stop-hover: var(--c-stop-button-hover);
+  /* status */
+  --color-danger: var(--c-danger);
+  --color-danger-hover: var(--c-danger-hover);
+  --color-danger-surface: var(--c-danger-bg);
+  --color-danger-border: var(--c-danger-border);
+  --color-warning: var(--c-warning);
+  --color-warning-surface: var(--c-warning-bg);
+  --color-success: var(--c-success);
+  --color-success-surface: var(--c-success-bg);
+  --color-success-border: var(--c-success-border);
+}
+
+@theme {
+  /* Font stacks on Tailwind's own namespace: --font-sans re-bases the preflight
+     default (so body text needs no explicit font-family) and backs font-sans;
+     --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
+     `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
+     references the same scale via the `--spacing(N)` function (e.g.
+     `padding: --spacing(3)` compiles to `calc(var(--spacing) * 3)`) -- so markup
+     and CSS share one source with no per-step token to define or keep in sync.
+     Off-grid strays stay raw as design-system-exceptions. */
+  --spacing: 0.25rem;
+  /* Radius scale. sm/md/lg equal Tailwind's own defaults, so overriding them
+     leaves the rounded-* utilities in the views at their stock values (only xl
+     differs from Tailwind's). md is the default control radius; lg carries
+     inputs, cards and modals; xl is reserved for the largest surfaces; pills
+     and circles are Tailwind's stock rounded-full. The 12px pane/chrome frame
+     keeps its own --si-pane-radius (defined in the shell's stylesheet). */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
+     lift on interactive cards; --shadow-overlay is the one soft floating
+     shadow shared by everything above the page -- menus, pickers, modals,
+     tooltips, the lightbox. */
+  --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
+}
+
+/* Font family comes from the preflight default (re-based onto --font-sans above). */
+body {
+  font-size: var(--font-size-body);
+  color: var(--c-text-primary);
+  background-color: var(--c-bg);
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography roles.
+ * The role-based type system, declared as Tailwind utilities so they
+ * compose with variants, sort under the prettier plugin,
+ * and work inside @apply. Each bundles font-size + weight + line-height; COLOR
+ * is orthogonal — compose with text-primary / text-secondary / text-faint.
+ * Prefer these (or the --font-size-* / --weight-* tokens) over hand-set
+ * font-size/weight. `medium` (500) is a valid weight but is intentionally NOT
+ * used on interactive controls (buttons/tabs) — that treatment comes with the
+ * Button/Tab primitive. */
+@utility type-heading-lg {
+  font-size: var(--font-size-heading-lg);
+  font-weight: var(--weight-bold);
+  line-height: 1.25;
+}
+@utility type-heading {
+  font-size: var(--font-size-heading);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+}
+@utility type-label {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
+}
+@utility type-body {
+  font-size: var(--font-size-body);
+  font-weight: var(--weight-regular);
+  line-height: 1.5;
+}
+@utility type-helper {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-regular);
+  line-height: 1.4;
+}
+@utility type-section {
+  font-size: var(--font-size-helper);
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Default border color. Tailwind v4 defaults un-colored
+   borders/dividers to `currentColor`; default them to the standard border token
+   instead so a bare `border` / `border-t` utility is legible without each call
+   site naming a color. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--c-border);
+  }
+}
+
+/* Spinner primitive.
+ * One CSS ring spinner (+ one @keyframes spin).
+ * Size via --spinner-size (or .spinner--sm; add a size
+ * step when a use exists); the two-tone track/arc default to --c-border /
+ * --c-accent, overridable via --spinner-track / --spinner-arc.
+ * .spinner--current makes it monochrome (currentColor ring with a transparent
+ * gap) for use on coloured contexts. (The login screen's fancier SVG arc is
+ * its own svg drawing -- see loginSpinnerIcon in components/icons.ts -- but shares
+ * this @keyframes.) */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinner {
+  display: block;
+  width: var(--spinner-size, 16px);
+  height: var(--spinner-size, 16px);
+  border: 2px solid var(--spinner-track, var(--c-border));
+  border-top-color: var(--spinner-arc, var(--c-accent));
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+.spinner--sm {
+  --spinner-size: 12px;
+}
+.spinner--current {
+  --spinner-track: currentColor;
+  --spinner-arc: transparent;
+}
+
+/* Modal enter animations.
+ * The modal shell itself (overlay + card + header/title + body copy + actions)
+ * lives as utility class strings in components/Modal.ts. Only its @keyframes live
+ * here (Tailwind's animate-[...] utilities reference them by name). */
+@keyframes modal-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The activity dot's pulse (components/activityDot.ts); like the modal's, only the
+ * @keyframes live here, the utility references them by name. */
+@keyframes agent-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}

@@ -77,16 +77,19 @@ def program_block(program: str, *registrations: tuple[str, str]) -> str:
 TEMPLATE_SUPERVISORD_CONF: Final[str] = "".join(
     (
         program_block("system_interface", ("system_interface", "http://localhost:8000")),
-        "[program:terminal]\ncommand=bash system/apps/terminal/run_ttyd.sh\n\n",
+        "[program:chat]\ncommand=chat-app\n\n",
+        "[program:terminal]\ncommand=terminal-app\n\n",
         program_block("browser", ("browser", "http://localhost:8200")),
-        program_block("files", ("files", "http://localhost:8300")),
+        "[program:files]\ncommand=files-app\n\n",
         "[program:owner-exec]\ncommand=bash system/services/owner_exec/run.sh\n\n",
     )
 )
-TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interface", "browser", "files"})
-# The template apps only the registry half sees; the registry also marks `owner-exec` `internal`.
-SCRIPT_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "owner-exec"})
-TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SCRIPT_REGISTERED_APPS
+TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interface", "browser"})
+# The template apps that register from inside the program they run, which only the registry half
+# sees; the registry also marks `owner-exec` `internal`. The chat app runs as its own program
+# and registers from its entry point like the terminal.
+SELF_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "files", "chat", "owner-exec"})
+TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SELF_REGISTERED_APPS
 
 # A workspace agent id in the shape the forward proxy routes on (`agent-<32 hex>`). Mixed digits
 # rather than one repeated character, so a wrong slice of it can never accidentally match.

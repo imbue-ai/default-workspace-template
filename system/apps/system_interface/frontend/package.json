@@ -1,12 +1,12 @@
 {
-  "name": "llm-webchat-frontend",
+  "name": "system-interface-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "postbuild": "git rev-parse HEAD:./ > ../imbue/system_interface/static/.source-tree-hash 2>/dev/null || rm -f ../imbue/system_interface/static/.source-tree-hash",
+    "build": "tsc --noEmit && vite build && vite build --config vite.contract.config.ts",
+    "postbuild": "git rev-parse HEAD:./ HEAD:../../../libs/workspace_ui HEAD:../../../package-lock.json > ../imbue/system_interface/static/.source-tree-hash 2>/dev/null || rm -f ../imbue/system_interface/static/.source-tree-hash",
     "preview": "vite preview",
     "lint": "tsc --noEmit && eslint src/",
     "format": "prettier --write 'src/**/*.{ts,css,html}' '*.{ts,html}'",
@@ -14,24 +14,18 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@imbue/workspace-ui": "0.1.0",
     "dockview-core": "^5.2.0",
     "dompurify": "^3.3.3",
-    "marked": "^17.0.4",
     "mithril": "^2.2.7"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.1.0",
-    "@types/dompurify": "^3.0.5",
     "@types/mithril": "^2.2.7",
     "@types/node": "^25.4.0",
-    "eslint": "^10.0.3",
     "jsdom": "^30.0.1",
-    "prettier": "^3.8.1",
-    "prettier-plugin-tailwindcss": "^0.7.2",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.57.0",
     "vite": "^6.2.0",
     "vitest": "^4.1.0"
   }
