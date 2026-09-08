@@ -2,14 +2,17 @@
 
 Every app that shells out from a supervisord service reintroduces the whole failure mode with
 one attached spawn, so the rules are allowlist-by-file rather than counts. They live here
-because the two apps that adopt them share the reasoning and the exemption mechanics; each app
-applies them to its own source tree, with its own allowlist, from its own
-``subprocess_ratchets_test.py``.
+because every project that adopts them shares the reasoning and the exemption mechanics; each
+applies them to its own source tree, with its own allowlist, from its own subprocess ratchet
+(``subprocess_ratchets_test.py``, or ``test_subprocess_ratchets.py`` in the chat app and the
+system interface, which follow the mngr monorepo's naming).
 
-There are two rules because there are two ways to spawn. Run-to-completion commands go through
-``run_detached_command``. Long-running background processes cannot -- they need
-``ConcurrencyGroup`` -- so they ask it for the detachment themselves, and a rule looking only
-for the raw runner call would not see them.
+There are two rules because there are two ways to spawn. Direct calls into ``subprocess`` and
+``os.system`` belong to the first: they go through ``run_detached_command``,
+``run_detached_subprocess`` or ``spawn_detached_process`` instead, whichever fits the service
+(see ``runner``). A ``ConcurrencyGroup`` service can also spawn through the group itself, which
+reaches the same runner without naming it, so a rule looking only for the raw call would not
+see those -- hence the second.
 """
 
 from __future__ import annotations
@@ -28,16 +31,19 @@ BACKGROUND_SPAWN_NAMES = ("run_process_in_background", "run_process_to_completio
 RAW_SPAWN_RULE = RegexRatchetRule(
     rule_name="subprocess spawns outside the detached runner",
     rule_description=(
-        "A workspace service must spawn every subprocess written in its own source through "
-        "detached_subprocess.runner.run_detached_command, which puts the child in its own "
+        "A workspace service must spawn every subprocess written in its own source through an "
+        "entry point of detached_subprocess.runner, each of which puts the child in its own "
         "session. A child that inherits the service's controlling terminal can stop the whole "
         "service just by touching that terminal when it is killed (the kernel answers a read or a "
         "mode change from a background process group with SIGTTIN / SIGTTOU addressed to the whole "
         "group), which wedges the workspace: the socket keeps accepting and nothing answers. Do "
-        "not call run_local_command_modern_version, subprocess.Popen/run, or os.system directly "
-        "-- extend run_detached_command instead. Importing the attached runner counts as much as "
-        "calling it: handing it to something else as a value (a default argument, a callback) "
-        "spawns just as attached."
+        "not call run_local_command_modern_version, subprocess.Popen/run, or os.system directly. "
+        "Use run_detached_command for a command that runs to completion in a service built on "
+        "ConcurrencyGroup, run_detached_subprocess for the same in a service that is not, and "
+        "spawn_detached_process for a child that outlives the call; extend one of them rather "
+        "than reaching past it. Importing the attached runner counts as much as calling it: "
+        "handing it to something else as a value (a default argument, a callback) spawns just "
+        "as attached."
     ),
     # The import alternatives are anchored to the start of a line so they read code and not
     # prose: the modules that spawn also name the runner in comments, which a bare name pattern
@@ -60,7 +66,8 @@ BACKGROUND_SPAWN_RULE = RegexRatchetRule(
         "subprocess runner as a direct call, so it inherits the service's controlling terminal "
         "unless it asks not to, and terminating it can then stop the whole service. A spawn that "
         "genuinely has to outlive the call must pass is_detached_from_terminal=True; anything "
-        "else should prefer run_detached_command."
+        "else should prefer run_detached_command. A service not built on ConcurrencyGroup wants "
+        "spawn_detached_process for the first case and run_detached_subprocess for the second."
     ),
     pattern_string="|".join(rf"{name}\(" for name in BACKGROUND_SPAWN_NAMES),
 )
