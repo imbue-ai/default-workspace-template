@@ -207,13 +207,24 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
 
 def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
     # Scaffolding an app -- the routine action the build-app skill documents --
-    # appends the new package to the root manifest's ``[project].dependencies``
-    # and ``[tool.uv.sources]`` and relocks. None of that moves what this
+    # writes the package under ``system/apps/``, appends it to the root
+    # manifest's ``[project].dependencies`` and ``[tool.uv.sources]``, relocks,
+    # and appends a supervisord program block. None of that moves what this
     # process resolved, so the banner must stay down: firing on every app a
-    # user builds is how a banner stops being read.
+    # user builds is how a banner stops being read. Every manifest and config
+    # ``scaffold_flask_lib.py`` writes is listed, so a rule that later caught
+    # any one of them fails here rather than in a user's workspace.
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
-    _commit_files(repo, "scaffold a new app", "pyproject.toml", "uv.lock", "system/apps/finances/src/finances/app.py")
+    _commit_files(
+        repo,
+        "scaffold a new app",
+        "pyproject.toml",
+        "uv.lock",
+        "system/supervisord.conf",
+        "system/apps/finances/pyproject.toml",
+        "system/apps/finances/src/finances/runner.py",
+    )
     assert tracker.staleness() is None
 
 
