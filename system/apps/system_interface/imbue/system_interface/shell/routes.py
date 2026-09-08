@@ -183,6 +183,18 @@ def _require_loopback() -> ResponseReturnValue | None:
     return None
 
 
+# What a preview shell answers to a verb that would act on a live instance or program. A
+# preview reads the live apps' instances but owns nothing it could change: the verbs would
+# reach the live apps (or supervisord) exactly as the live shell's do.
+PREVIEW_REFUSAL_DETAIL = "This is a preview of a proposed change; it cannot change the live workspace."
+
+
+def _refuse_if_preview() -> ResponseReturnValue | None:
+    if get_state().is_preview:
+        return _detail(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
+    return None
+
+
 def _project_id(raw: str) -> ProjectId:
     if is_everything_view(raw):
         raise EverythingIsNotAProjectError(f"{EVERYTHING_VIEW_ID!r} is a view, not a project")
@@ -284,6 +296,9 @@ def client_activity_route() -> ResponseReturnValue:
 
 
 def relay_create_route(name: str) -> ResponseReturnValue:
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     entry = _entry_or_raise(name)
     outcome = relay_create(_shell().http_client, entry, request.get_data())
     if outcome.status_code < HTTP_BAD_REQUEST:
@@ -295,6 +310,9 @@ def _relay_keyed(
     name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]
 ) -> ResponseReturnValue:
     """One instance verb through the relay: the app's answer as it is, and a refetch of its list when it accepted."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     entry = _entry_or_raise(name)
     _instance_key_or_raise(key)
     outcome = send(entry)
@@ -329,6 +347,9 @@ def relay_start_route(name: str, key: str) -> ResponseReturnValue:
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     shell = _shell()
     entry = _entry_or_raise(name)
     program = entry.row.program or ""
@@ -509,6 +530,7 @@ def inventory_document() -> ResponseReturnValue:
             clients,
             shell.broadcaster.connected_client_ids(),
             docked_by_client_id,
+            is_preview=get_state().is_preview,
         )
     )
 
@@ -946,6 +968,8 @@ def _create_through_relay(
 ) -> _CreatedInstance:
     """Run the app's action through the relay (the same route the browser uses) and answer the instance it made. The
     title comes from the app's answer rather than the inventory, which may not have listed the instance yet."""
+    if get_state().is_preview:
+        raise InstanceCreateRefusedError(HTTP_FORBIDDEN, PREVIEW_REFUSAL_DETAIL)
     body = json.dumps(
         {
             "action": _create_action_id(entry, arguments),

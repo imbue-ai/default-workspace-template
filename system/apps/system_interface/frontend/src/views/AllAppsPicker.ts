@@ -17,6 +17,7 @@
 import m from "mithril";
 import type { AppAction, AppRecord } from "../models/Inventory";
 import { appStoppedDetail, getOpenableApps, primaryActionForApp } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import { appIconMarkup } from "./components/appIcon";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
@@ -99,7 +100,8 @@ export function AllAppsPicker(): m.Component<AllAppsPickerAttrs> {
           "transition-all duration-(--dur-base) " +
           (isFadingOut ? "h-0 overflow-hidden opacity-0" : "h-8 cursor-pointer opacity-100 hover:bg-fill-hover"),
         ...(isStopped && !isFadingOut ? hoverTooltipAttrs(`${label} — ${appStoppedDetail(row.app)}`) : {}),
-        onclick: isFadingOut ? undefined : () => attrs.onRunAction(row.app, row.action),
+        // A preview shell creates nothing; pinning stays, since it edits the preview's own copy.
+        onclick: isFadingOut || isPreviewShell() ? undefined : () => attrs.onRunAction(row.app, row.action),
       },
       [
         m(
