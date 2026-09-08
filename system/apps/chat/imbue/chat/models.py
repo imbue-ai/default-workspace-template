@@ -19,6 +19,18 @@ class AgentCreationError(ValueError):
     ...
 
 
+class AgentEventsStatus(FrozenModel):
+    """Whether the agent-lifecycle event stream is actually feeding this chat instance.
+
+    ``is_stream_healthy`` is deliberately not "can I list agents": the initial discovery
+    succeeds just as well while the workspace's observer is down, which would let a chat
+    with a frozen agent view pass a probe.
+    """
+
+    is_stream_healthy: bool = Field(description="Whether lifecycle events are actually reaching this instance")
+    detail: str = Field(description="Human-readable explanation of the current state")
+
+
 class AgentRenameError(ValueError):
     """Raised when an agent cannot be renamed in mngr.
 

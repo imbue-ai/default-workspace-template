@@ -70,6 +70,8 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config as ShellConfig
@@ -106,6 +108,20 @@ def agent_message_lock(agent_state_dir: Path) -> Generator[None, None, None]:
             yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def observer_holding_the_lock(events_base_dir: Path) -> Iterator[None]:
+    """Hold the observe lock for the body, standing in for a live ``mngr observe``.
+
+    The chat's follower reads the lock as the observer's liveness, so a test that wants
+    the stream to count as up holds it while writing events with mngr's own writer.
+    """
+    fd = acquire_observe_lock(events_base_dir)
+    try:
+        yield
+    finally:
+        release_observe_lock(fd)
 
 
 def is_e2e_browser_installed() -> bool:

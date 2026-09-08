@@ -19,7 +19,7 @@ from pydantic import PrivateAttr
 
 from imbue.imbue_common.mutable_model import MutableModel
 
-DEFAULT_STAMPS_PATH: Final[Path] = Path("data/.apps/chat/last_messaged.json")
+STAMPS_FILENAME: Final[str] = "last_messaged.json"
 _STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
 
 
