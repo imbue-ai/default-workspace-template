@@ -240,6 +240,52 @@ def _has_rollback_since(merge_ref: str, repo_root: Path, runner: Runner) -> bool
     return any(line.startswith(_ROLLBACK_SUBJECT_PREFIX) for line in log.splitlines())
 
 
+def _refuse_a_re_merge_that_drops_a_rolled_back_target(
+    target_ref: str, merge_ref: str, repo_root: Path, runner: Runner
+) -> None:
+    """Refuse to apply ``merge_ref`` when it re-merges a target the tree landed and
+    then rolled back, unless it first reverts that rollback.
+
+    The rollback is a forward revert, so git already counts the target's content as
+    merged: a plain re-merge lands only what the target gained since the failed
+    attempt, and the apply would then probe the old release plus a few files, find
+    it healthy (the manifests it probes by are not even in the tree), and record
+    the update as landed. Reverting the rollback commit on the worker's branch is
+    what puts the content back (the update-self worker reference says how); its
+    presence in ``HEAD..merge_ref`` is what lets the apply proceed.
+    """
+    if not _is_merge_landed(target_ref, repo_root, runner):
+        return
+    since_target = git_out(
+        runner, repo_root, ["log", "--format=%H %s", f"{target_ref}..HEAD"]
+    )
+    rollback = next(
+        (
+            line.split(" ", 1)[0]
+            for line in since_target.splitlines()
+            if line.split(" ", 1)[1:]
+            and line.split(" ", 1)[1].startswith(_ROLLBACK_SUBJECT_PREFIX)
+        ),
+        None,
+    )
+    if rollback is None:
+        return
+    reverts = git_out(runner, repo_root, ["log", "--format=%s", f"HEAD..{merge_ref}"])
+    if any(
+        line.startswith(f'Revert "{_ROLLBACK_SUBJECT_PREFIX}')
+        for line in reverts.splitlines()
+    ):
+        return
+    raise ApplyPreconditionError(
+        f"{target_ref} was landed and then rolled back by {rollback[:12]}, so git "
+        f"already counts its content as merged and {merge_ref} would land only what "
+        "the target gained since: the tree would be the previous release plus a few "
+        "files, which the probes cannot tell from a good update. Revert that rollback "
+        f"on the worker's branch first (`git revert --no-edit {rollback[:12]}`, per the "
+        "update-self worker reference), then re-run. Nothing was changed."
+    )
+
+
 def _expected_frontend_tree_hash(
     repo_root: Path, runner: Runner, bundle: FrontendBundle
 ) -> str | None:
@@ -829,6 +875,12 @@ def apply_update(
             "longer in the tree even though the commit is still in history. "
             "Re-running the apply cannot re-land it: re-dispatch a fresh worker "
             "pass off the current HEAD instead. Nothing was changed."
+        )
+    # The fresh worker pass that follows such a rollback has the same trap one step
+    # later: its re-merge of the target lands nothing unless it reverts the rollback.
+    if target_ref is not None and not is_merge_landed:
+        _refuse_a_re_merge_that_drops_a_rolled_back_target(
+            target_ref, merge_ref, repo_root, runner
         )
     write_marker(marker, repo_root, now)
 
