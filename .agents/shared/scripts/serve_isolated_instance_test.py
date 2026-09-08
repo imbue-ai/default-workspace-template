@@ -171,7 +171,9 @@ def _up(
         _LAUNCH,
         str(cwd if cwd is not None else tmp_path),
         tmp_path,
-        port_env_by_name=kwargs.pop("port_env_by_name", {mod.MAIN_PORT_NAME: _PORT_ENV}),
+        port_env_by_name=kwargs.pop(
+            "port_env_by_name", {mod.MAIN_PORT_NAME: _PORT_ENV}
+        ),
         runner=runner or _RecordingRunner(),
         http=http or _FakeHttp(_all_healthy),
         spawner=spawner or _FakeSpawner(),
@@ -363,7 +365,10 @@ def test_body_excerpt_marks_truncation_by_bytes_not_characters() -> None:
     assert excerpt.endswith("...")
 
     # A short body -- trailing newline and all -- comes back whole, unmarked.
-    assert mod._read_body_excerpt(io.BytesIO(b'{"detail":"fine"}\n')) == '{"detail":"fine"}'
+    assert (
+        mod._read_body_excerpt(io.BytesIO(b'{"detail":"fine"}\n'))
+        == '{"detail":"fine"}'
+    )
 
 
 def _install_oom_tagger(repo_root: Path) -> Path:
@@ -771,7 +776,9 @@ def test_named_ports_reach_the_env_and_the_argv(tmp_path: Path) -> None:
     ]
 
 
-def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(tmp_path: Path) -> None:
+def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(
+    tmp_path: Path,
+) -> None:
     # The source is copied whole before boot; the instance is pointed at the copy, never
     # the source, and {scratch} names a directory of the instance's own.
     source = tmp_path / "data" / ".apps" / "my-service"
@@ -780,11 +787,20 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(tmp_path: P
     spawner = _FakeSpawner()
     code = mod.up(
         _NAME,
-        ["my-service", "--store", "{copy:store}/records.json", "--state", "{scratch}/state"],
+        [
+            "my-service",
+            "--store",
+            "{copy:store}/records.json",
+            "--state",
+            "{scratch}/state",
+        ],
         str(tmp_path),
         tmp_path,
         port_env_by_name={"main": _PORT_ENV},
-        copy_sources={"store": "data/.apps/my-service", "missing": "data/.apps/never-written"},
+        copy_sources={
+            "store": "data/.apps/my-service",
+            "missing": "data/.apps/never-written",
+        },
         runner=_RecordingRunner(),
         http=_FakeHttp(_all_healthy),
         spawner=spawner,
@@ -798,13 +814,44 @@ def test_copies_land_in_the_scratch_space_and_fill_their_placeholder(tmp_path: P
     assert (state_dir / mod.COPIES_DIRNAME / "missing").is_dir()
     scratch = state_dir / mod.SCRATCH_DIRNAME
     assert scratch.is_dir()
-    assert spawner.detached_spawns[0][1:] == ["--store", f"{copy_path}/records.json", "--state", f"{scratch}/state"]
+    assert spawner.detached_spawns[0][1:] == [
+        "--store",
+        f"{copy_path}/records.json",
+        "--state",
+        f"{scratch}/state",
+    ]
     state = json.loads(_state_path(tmp_path).read_text())
     assert state["copies"]["store"] == str(copy_path)
     assert state["scratch"] == str(scratch)
 
 
-def test_a_placeholder_naming_nothing_the_instance_was_given_fails_the_boot(tmp_path: Path) -> None:
+def test_a_port_with_no_env_var_reaches_the_argv_by_placeholder_alone(
+    tmp_path: Path,
+) -> None:
+    spawner = _FakeSpawner()
+    code = mod.up(
+        _NAME,
+        ["my-service", "--port", "{port:main}"],
+        str(tmp_path),
+        tmp_path,
+        port_env_by_name={"main": None},
+        env_overrides={"MYSVC_PORT_URL": "http://{host}:{port:main}"},
+        runner=_RecordingRunner(),
+        http=_FakeHttp(_all_healthy),
+        spawner=spawner,
+        sleeper=lambda _seconds: None,
+    )
+
+    assert code == 0
+    main_port = json.loads(_state_path(tmp_path).read_text())["ports"]["main"]
+    assert spawner.detached_spawns[0][1:] == ["--port", str(main_port)]
+    assert spawner.detached_envs[0]["MYSVC_PORT_URL"] == f"http://127.0.0.1:{main_port}"
+    assert _PORT_ENV not in spawner.detached_envs[0]
+
+
+def test_a_placeholder_naming_nothing_the_instance_was_given_fails_the_boot(
+    tmp_path: Path,
+) -> None:
     spawner = _FakeSpawner()
     code = mod.up(
         _NAME,
@@ -876,7 +923,9 @@ def test_refresh_replays_the_named_ports_and_copies(tmp_path: Path) -> None:
         (["=MYSVC_PORT"], "expects"),
     ],
 )
-def test_port_envs_must_name_main_exactly_once(port_envs: list[str], problem: str) -> None:
+def test_port_envs_must_name_main_exactly_once(
+    port_envs: list[str], problem: str
+) -> None:
     with pytest.raises(mod.InstanceError, match=problem):
         mod.parse_port_envs(port_envs)
 
@@ -886,6 +935,13 @@ def test_a_bare_port_env_is_the_main_port_and_copies_parse_by_key() -> None:
         "main": "MYSVC_PORT",
         "sidecar": "MYSVC_API_PORT",
     }
+    # A --port is a port no env var carries; it still counts as main when it is named so.
+    assert mod.parse_port_envs([], ["main", "sidecar"]) == {
+        "main": None,
+        "sidecar": None,
+    }
+    with pytest.raises(mod.InstanceError, match="twice"):
+        mod.parse_port_envs(["MYSVC_PORT"], ["main"])
     assert mod.parse_copy_assignments(["data=data/.apps/x"]) == {"data": "data/.apps/x"}
     with pytest.raises(mod.InstanceError, match="KEY=SOURCE"):
         mod.parse_copy_assignments(["data"])
@@ -944,7 +1000,7 @@ def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
     page = wrapper_mod.build_wrapper_html("si-preview-app", "t", inner_path="/agent-1")
 
     assert 'var previewPath = "/agent-1";' in page
-    assert 'innerHost + previewPath' in page
+    assert "innerHost + previewPath" in page
     with pytest.raises(ValueError, match="start with"):
         wrapper_mod.build_wrapper_html("si-preview-app", "t", inner_path="agent-1")
 
