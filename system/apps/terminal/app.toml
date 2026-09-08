@@ -15,3 +15,18 @@ mode = "focus"
 id = "new"
 label = "New Terminal"
 params = [{name = "workdir", label = "Working directory", required = false}]
+
+# A terminal preview serves the ttyd page and its instances API on two free ports,
+# over a copy of the terminal's store and a scratch state directory; the sessions
+# it creates are real tmux sessions.
+[preview]
+ports = ["main", "sidecar"]
+command = [
+    "terminal-app", "--no-register",
+    "--app-url", "http://127.0.0.1:{port:main}",
+    "--instances-url", "http://127.0.0.1:{port:sidecar}",
+    "--store", "{copy:store}/instances.json",
+    "--state-dir", "{scratch}/state",
+]
+copies = {store = "data/.apps/terminal"}
+health_path = "/_instances"

@@ -3,3 +3,5 @@
 `system/vendor/mngr` is refreshed from the paired mngr branch `gabriel/critical-app-editing`, which carries the observe read side (`ObserveEventFollower`, `is_observe_writer_running`, `find_last_full_state_offset`), the follower's start-without-a-writer mode the chat relies on, and the `initial_branch` widening.
 
 The workspace app model's contracts record the chat's `agent_events` health field and the observer's band; the chat, apps, and services READMEs describe the program.
+
+`system/test_app_manifests.py` checks that every critical built-in's `[preview]` table names the app's own console script, and pins the chat, shell, and terminal tables' shapes.
