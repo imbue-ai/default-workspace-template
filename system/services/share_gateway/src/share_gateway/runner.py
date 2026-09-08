@@ -52,9 +52,12 @@ POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
-# How long every child together gets to honour SIGTERM before it is killed. Sized to fit inside
-# supervisord's stopwaitsecs for [program:share-gateway], which is the unset default of 10s.
-_STOP_GRACE_SECONDS = 10.0
+# How long every child together gets to honour SIGTERM before it is killed. Kept under
+# supervisord's stopwaitsecs for [program:share-gateway] (the unset default of 10s), because this
+# clock only starts once the SIGTERM handler runs: the remainder is what the SIGKILL sweep, the
+# wait() that reaps it, and the gateway server's shutdown get before supervisord SIGKILLs us and
+# orphans whatever is left holding 443.
+_STOP_GRACE_SECONDS = 8.0
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
