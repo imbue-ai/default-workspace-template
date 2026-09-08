@@ -14,6 +14,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
@@ -38,13 +39,7 @@ class CaptureCommandError(EnvConvergeError, RuntimeError):
 
 def _run_capture_command(command: list[str]) -> str:
     try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
-        )
+        result = run_detached_subprocess(command, timeout=_COMMAND_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise CaptureCommandError(" ".join(command), str(e)) from e
     if result.returncode != 0:
@@ -116,12 +111,8 @@ def capture_npm_state() -> NpmGlobalState:
         output = _run_capture_command(["npm", "ls", "-g", "--json", "--depth=0"])
     except CaptureCommandError:
         logger.debug("npm ls exited nonzero; retrying without check")
-        result = subprocess.run(
-            ["npm", "ls", "-g", "--json", "--depth=0"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_COMMAND_TIMEOUT_SECONDS,
+        result = run_detached_subprocess(
+            ["npm", "ls", "-g", "--json", "--depth=0"], timeout=_COMMAND_TIMEOUT_SECONDS
         )
         output = result.stdout
     return NpmGlobalState(

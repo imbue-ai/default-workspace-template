@@ -16,7 +16,6 @@ The three concrete implementations are selected from `BackupCapabilities.method`
 """
 
 import json
-import subprocess
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
@@ -139,11 +139,8 @@ class BtrfsLocalSnapshotTaker(SnapshotTakerInterface):
             source is not None and target is not None
         )  # checked by make_snapshot_taker
         target.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
+        result = run_detached_subprocess(
             ["sudo", "btrfs", "subvolume", "snapshot", "-r", str(source), str(target)],
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=_BTRFS_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
@@ -176,11 +173,8 @@ class BtrfsLocalSnapshotTaker(SnapshotTakerInterface):
             return
         if not target.exists():
             return
-        result = subprocess.run(
+        result = run_detached_subprocess(
             ["sudo", "btrfs", "subvolume", "delete", str(target)],
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=_BTRFS_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:

@@ -45,11 +45,11 @@ import contextlib
 import importlib
 import os
 import shutil
-import subprocess
 import threading
 import time
 from typing import Any
 
+from detached_subprocess.runner import run_detached_subprocess
 from loguru import logger
 
 from browser import telemetry
@@ -269,12 +269,7 @@ def display_geometry(display: str) -> tuple[int, int]:
     """The X display's root geometry, from xdpyinfo (present wherever Xvfb is)."""
     if shutil.which("xdpyinfo") is None:
         raise VideoPipeError("xdpyinfo is not installed; cannot size the capture")
-    result = subprocess.run(
-        ["xdpyinfo", "-display", display],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    result = run_detached_subprocess(["xdpyinfo", "-display", display], timeout=10)
     if result.returncode != 0:
         raise VideoPipeError(f"xdpyinfo failed for {display}: {result.stderr.strip()[:200]}")
     for line in result.stdout.splitlines():

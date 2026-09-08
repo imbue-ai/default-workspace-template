@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+from detached_subprocess.runner import run_detached_subprocess
+
 _RESTIC_TIMEOUT_SECONDS: Final[float] = 3600.0
 # Tags the minds backup restore stamps on its safety + restored-state snapshots
 # (kept in sync with the desktop client's restore script). The retention forget
@@ -56,14 +58,7 @@ def run_restic(
     """Run `restic <args...>` with `env_overrides` merged onto `os.environ`."""
     env = dict(os.environ)
     env.update(env_overrides)
-    return subprocess.run(
-        ["restic", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=timeout_seconds,
-    )
+    return run_detached_subprocess(["restic", *args], timeout=timeout_seconds, env=env)
 
 
 def probe_repo(

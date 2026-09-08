@@ -21,38 +21,43 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from werkzeug.serving import BaseWSGIServer
-from werkzeug.serving import make_server
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
+from werkzeug.serving import BaseWSGIServer, make_server
 
 from share_gateway import materials as materials_module
-from share_gateway.assignment import RelayAssignment
-from share_gateway.assignment import load_assignment
-from share_gateway.log import log as _log
-from share_gateway.caddyfile import build_label_to_name
-from share_gateway.caddyfile import read_registered_apps
-from share_gateway.caddyfile import render_caddyfile
-from share_gateway.certs import CertProvisioningError
-from share_gateway.certs import ensure_share_certificate
+from share_gateway.assignment import RelayAssignment, load_assignment
+from share_gateway.caddyfile import (
+    build_label_to_name,
+    read_registered_apps,
+    render_caddyfile,
+)
+from share_gateway.certs import CertProvisioningError, ensure_share_certificate
 from share_gateway.frpc_config import render_frpc_toml
-from share_gateway.handoff import JwksCache
-from share_gateway.handoff import SingleUseJtiRegistry
-from share_gateway.materials import ShareMaterials
-from share_gateway.materials import load_or_create_auth_label
-from share_gateway.materials import load_or_create_signing_secret
-from share_gateway.materials import read_share_materials
-from share_gateway.server import PendingLoginRegistry
-from share_gateway.server import build_gateway_app
+from share_gateway.handoff import JwksCache, SingleUseJtiRegistry
+from share_gateway.log import log as _log
+from share_gateway.materials import (
+    ShareMaterials,
+    load_or_create_auth_label,
+    load_or_create_signing_secret,
+    read_share_materials,
+)
+from share_gateway.server import PendingLoginRegistry, build_gateway_app
 
 POLL_INTERVAL_SECONDS = 10
 APPS_TOML_PATH = Path("data/.state/apps.toml")
 _CADDY_ADMIN_URL = "http://localhost:2019"
 _RENEWAL_CHECK_INTERVAL = timedelta(hours=24)
+# How long every child together gets to honour SIGTERM before it is killed. Kept under
+# supervisord's stopwaitsecs for [program:share-gateway] (the unset default of 10s), because this
+# clock only starts once the SIGTERM handler runs: the remainder is what the SIGKILL sweep, the
+# wait() that reaps it, and the gateway server's shutdown get before supervisord SIGKILLs us and
+# orphans whatever is left holding 443.
+_STOP_GRACE_SECONDS = 8.0
 
 
 def _try_setup_inotify(paths: list[Path]) -> object | None:
@@ -87,21 +92,47 @@ def _wait_for_change_inotify(fd: object, timeout_seconds: float) -> bool:
         return False
 
 
+def _stop_children(
+    children: Sequence[tuple[str, subprocess.Popen[bytes]]],
+    grace_seconds: float = _STOP_GRACE_SECONDS,
+) -> None:
+    """SIGTERM every child before waiting on any, then reap them all against one deadline.
+
+    Detaching these children put them out of reach of supervisord's group signals, so this is
+    the only SIGTERM they get and the only budget they get is the program's ``stopwaitsecs``.
+    Signalling and waiting one child at a time would spend that whole budget on the first slow
+    child and leave the rest holding their ports when supervisord SIGKILLs this process.
+    """
+    signalled = []
+    for name, process in children:
+        if process.poll() is not None:
+            continue
+        _log(f"Stopping {name}...")
+        process.send_signal(signal.SIGTERM)
+        signalled.append(process)
+    deadline = time.monotonic() + grace_seconds
+    for process in signalled:
+        try:
+            process.wait(timeout=max(deadline - time.monotonic(), 0.0))
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def _stop_child(process: subprocess.Popen[bytes] | None, name: str) -> None:
-    if process is None or process.poll() is not None:
+    if process is None:
         return
-    _log(f"Stopping {name}...")
-    process.send_signal(signal.SIGTERM)
-    try:
-        process.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+    _stop_children([(name, process)])
 
 
 def _start_child(argv: list[str], name: str) -> subprocess.Popen[bytes]:
+    """A managed child (caddy, frpc), in its own session.
+
+    ``_stop_children`` signals it by handle, which is what makes detaching safe: supervisord's
+    group kill no longer reaches it, and that explicit stop is now its only path down.
+    """
     _log(f"Starting {name}: {' '.join(argv[:3])}...")
-    return subprocess.Popen(argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
+    return spawn_detached_process(argv, stdout=sys.stderr.fileno(), stderr=sys.stderr.fileno())
 
 
 def _reload_caddy(caddyfile_text: str) -> bool:
@@ -125,17 +156,12 @@ def _reload_caddy(caddyfile_text: str) -> bool:
 def _reload_frpc(config_path: Path) -> bool:
     """Hot-reload one frpc's proxies from its on-disk config via its admin API; False on failure."""
     try:
-        result = subprocess.run(
-            ["frpc", "reload", "-c", str(config_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=15,
-        )
+        result = run_detached_subprocess(["frpc", "reload", "-c", str(config_path)], timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
         _log(f"frpc reload failed: {exc}")
         return False
     if result.returncode != 0:
-        _log(f"frpc reload rejected ({result.returncode}): {result.stdout.decode(errors='replace')[:300]}")
+        _log(f"frpc reload rejected ({result.returncode}): {(result.stdout + result.stderr)[:300]}")
         return False
     return True
 
@@ -272,10 +298,14 @@ def _start_stack(materials: ShareMaterials) -> ShareStack | None:
 def _stop_stack(stack: ShareStack | None) -> None:
     if stack is None:
         return
-    for relay_id, frpc_process in sorted(stack.frpc_process_by_relay_id.items()):
-        _stop_child(frpc_process, f"frpc[{relay_id}]")
+    children = [
+        (f"frpc[{relay_id}]", frpc_process)
+        for relay_id, frpc_process in sorted(stack.frpc_process_by_relay_id.items())
+    ]
+    if stack.caddy_process is not None:
+        children.append(("caddy", stack.caddy_process))
+    _stop_children(children)
     stack.frpc_process_by_relay_id.clear()
-    _stop_child(stack.caddy_process, "caddy")
     if stack.gateway_server is not None:
         stack.gateway_server.shutdown()
     _log("Share stack stopped")

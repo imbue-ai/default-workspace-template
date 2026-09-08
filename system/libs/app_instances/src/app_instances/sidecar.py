@@ -14,6 +14,7 @@ from typing import Final
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import AppManifest, load_manifest
 from app_manifest.primitives import AppUrl, InstancesUrl
+from detached_subprocess.runner import run_detached_subprocess, spawn_detached_process
 from flask import Flask
 from imbue.imbue_common.logging import log_span
 from imbue.imbue_common.pure import pure
@@ -90,11 +91,8 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
         )
     started_at = time.monotonic()
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=REGISTRATION_TIMEOUT_SECONDS,
+        completed = run_detached_subprocess(
+            command, timeout=REGISTRATION_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired as e:
         raise SidecarError(
@@ -249,8 +247,14 @@ def run_sidecar_app(
 
 
 def _spawn_child(child_argv: Sequence[str]) -> subprocess.Popen[bytes]:
+    """The wrapped server, in its own session.
+
+    ``_forward_signals_to`` hands it every stop signal by handle, which is what makes detaching
+    safe: supervisord's group kill no longer reaches it, and that forwarding is now its only
+    path to a clean shutdown.
+    """
     try:
-        return subprocess.Popen(list(child_argv))
+        return spawn_detached_process(child_argv)
     except OSError as e:
         raise SidecarError(
             f"cannot start the wrapped server {list(child_argv)}: {e}"

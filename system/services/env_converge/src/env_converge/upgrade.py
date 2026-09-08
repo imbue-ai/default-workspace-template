@@ -11,6 +11,7 @@ part of the update-self flow after the template merge lands the new
 import subprocess
 from pathlib import Path
 
+from detached_subprocess.runner import run_detached_subprocess
 from loguru import logger
 
 from env_converge.capture import parse_dpkg_versions
@@ -34,13 +35,7 @@ class UpgradeCommandError(EnvConvergeError, RuntimeError):
 
 def _run_upgrade_step(step: str, command: list[str]) -> None:
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_APT_TIMEOUT_SECONDS,
-        )
+        completed = run_detached_subprocess(command, timeout=_APT_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise UpgradeCommandError(step, str(e)) from e
     if completed.returncode != 0:

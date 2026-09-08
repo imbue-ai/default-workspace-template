@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Final
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
@@ -176,9 +177,7 @@ class SubprocessTmux(TmuxInterface):
         command = [self.tmux_executable, *arguments]
         started_at = time.monotonic()
         try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=TMUX_TIMEOUT_SECONDS
-            )
+            completed = run_detached_subprocess(command, timeout=TMUX_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as e:
             raise TmuxCommandError(
                 f"tmux did not finish {arguments[0]} within {TMUX_TIMEOUT_SECONDS}s"

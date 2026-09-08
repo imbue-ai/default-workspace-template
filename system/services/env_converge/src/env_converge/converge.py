@@ -33,6 +33,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from detached_subprocess.runner import run_detached_subprocess
 from imbue.imbue_common.pure import pure
 from loguru import logger
 
@@ -161,14 +162,11 @@ def run_unit_scripts(workspace_dir: Path, overlay_dir: Path) -> list[UnitRunResu
         env["ENV_CONVERGE_OVERLAY_DIR"] = str(overlay_dir)
         env["ENV_CONVERGE_WORKSPACE_DIR"] = str(workspace_dir)
         try:
-            completed = subprocess.run(
+            completed = run_detached_subprocess(
                 ["bash", str(unit_path)],
-                cwd=str(workspace_dir),
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
                 timeout=_UNIT_TIMEOUT_SECONDS,
+                env=env,
+                cwd=workspace_dir,
             )
             exit_code = completed.returncode
             stderr_tail = completed.stderr[-2000:]
@@ -207,13 +205,7 @@ def run_unit_scripts(workspace_dir: Path, overlay_dir: Path) -> list[UnitRunResu
 def _run_install_command(command: list[str]) -> tuple[bool, str]:
     """Run one install command; returns (is_ok, error detail). Never raises."""
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=_INSTALL_TIMEOUT_SECONDS,
-        )
+        completed = run_detached_subprocess(command, timeout=_INSTALL_TIMEOUT_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, str(e)
     if completed.returncode != 0:
@@ -356,11 +348,17 @@ def install_missing_from_record(
             set(recorded.apt_state.manual_packages) - set(current.version_by_package)
         )
         if missing_apt:
-            subprocess.run(
-                ["apt-get", "update", "-qq"],
-                check=False,
-                timeout=_INSTALL_TIMEOUT_SECONDS,
+            # Captured rather than inherited (the detached runner always captures), so the
+            # output that used to land in this service's log is logged explicitly instead.
+            refreshed = run_detached_subprocess(
+                ["apt-get", "update", "-qq"], timeout=_INSTALL_TIMEOUT_SECONDS
             )
+            if refreshed.returncode != 0:
+                logger.warning(
+                    "apt-get update failed ({}): {}",
+                    refreshed.returncode,
+                    refreshed.stderr.strip()[-2000:],
+                )
         installed_apt, unavailable_apt = _install_missing(
             "apt",
             missing_apt,
