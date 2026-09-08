@@ -295,6 +295,24 @@ describe("NewTabLauncher", () => {
     expect(root.querySelectorAll(".new-tab-launcher-row").length).toBe(2);
   });
 
+  it("filters a search's machine table by app, its action rows included", () => {
+    mount({});
+    type("t");
+    const machine = root.querySelector<HTMLElement>('[data-section="on-machine"]')!;
+    expect(machine.querySelector('[data-launch="terminal:new"]')).not.toBeNull();
+    machine.querySelector<HTMLElement>("button[aria-expanded]")!.click();
+    m.redraw.sync();
+    const terminalLabel = Array.from(root.querySelectorAll("label")).find((label) =>
+      label.textContent!.includes("Terminal"),
+    )!;
+    terminalLabel.querySelector("input")!.dispatchEvent(new Event("change"));
+    m.redraw.sync();
+    expect(root.querySelector('[data-launch="terminal:new"]')).toBeNull();
+    expect(root.querySelector('[data-address="app:terminal?instance=t1"]')).toBeNull();
+    expect(root.querySelector('[data-launch="chat:new"]')).not.toBeNull();
+    expect(root.querySelector('[data-address="app:chat?instance=c1"]')).not.toBeNull();
+  });
+
   it("starts a seeded chat from a Start something tile", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-start="build-app"]')!.click();
