@@ -2,27 +2,24 @@ import re
 import tomllib
 from enum import auto
 from pathlib import Path
-from typing import Any
-from typing import Final
-from typing import Self
+from typing import Any, Final, Self
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
-from pydantic import Field
-from pydantic import ValidationError
-from pydantic import model_validator
+from pydantic import Field, ValidationError, model_validator
 
-from app_manifest.errors import InvalidManifestValueError
-from app_manifest.errors import ManifestLoadError
-from app_manifest.primitives import ActionId
-from app_manifest.primitives import AppName
-from app_manifest.primitives import DisplayName
-from app_manifest.primitives import IconPath
-from app_manifest.primitives import InstancesUrl
-from app_manifest.primitives import PreviewName
-from app_manifest.primitives import PriorityName
-from app_manifest.primitives import ProgramName
+from app_manifest.errors import InvalidManifestValueError, ManifestLoadError
+from app_manifest.primitives import (
+    ActionId,
+    AppName,
+    DisplayName,
+    IconPath,
+    InstancesUrl,
+    PreviewName,
+    PriorityName,
+    ProgramName,
+)
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 
