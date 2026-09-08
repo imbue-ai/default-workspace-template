@@ -4,15 +4,16 @@ Two different LLM consumers run during a trial and they must not be conflated:
 
 - the **workspace agent** under test, whose consumption is the eval's subject. Its per-message usage
   already rides the workspace event stream: the workspace's chat app parses claude's session
-  files itself (its ``AgentSessionWatcher``, which reimplements mngr's common_transcript
-  conversion) and attaches a ``usage`` block and a ``model`` to every ``assistant_message``. So
-  nothing has to be collected out of the workspace before it is destroyed -- the driver's own
-  transcript is an account that is always available. Under ``--ak proxy=true`` the in-box proxy's
-  per-request log is a second account, and ``resolve_workspace_usage`` decides which one a trial
-  reports. Two record vintages arrive on the transcript stream and both are read: the watcher's
-  ``assistant_message`` records, and the ATIF-shaped ``step`` records (``source: "agent"``, token
-  counts under ATIF's ``metrics`` names) that mngr's own emitters write. The one reconciliation
-  that matters is the input bucket -- see ``_atif_token_snapshot``.
+  files itself (its claude session parser, behind ``AgentSessionWatcher``, reimplements mngr's
+  common_transcript conversion) and attaches a ``usage`` block and a ``model`` to every
+  ``assistant_message``. So nothing has to be collected out of the workspace before it is
+  destroyed -- the driver's own transcript is an account that is always available. Under
+  ``--ak proxy=true`` the in-box proxy's per-request log is a second account, and
+  ``resolve_workspace_usage`` decides which one a trial reports. Two record vintages arrive on the
+  transcript stream and both are read: the watcher's ``assistant_message`` records, and the
+  ATIF-shaped ``step`` records (``source: "agent"``, token counts under ATIF's ``metrics`` names)
+  that mngr's own emitters write. The one reconciliation that matters is the input bucket -- see
+  ``_atif_token_snapshot``.
 - the **decider**, the harness's simulated-user model. It is a cost of running the eval, not a
   property of the thing being measured, so it is reported separately as metadata.
 

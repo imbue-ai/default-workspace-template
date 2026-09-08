@@ -48,8 +48,8 @@ for pruned in "${PRUNE[@]}"; do
 done
 
 if [ "$mode" = "diff" ]; then
-  # The provenance file is ours, so it is never part of the delta. The rest are gitignored build
-  # outputs, installed packages, and generated types, all of which may be present in a working tree.
+  # The provenance file is ours, so it is never part of the delta. Build outputs, generated route
+  # types and installed packages are gitignored but may be present in a working tree.
   diff -r -x VENDORED_FROM.md -x node_modules -x build -x .react-router "$upstream" "$viewer_dir" && {
     echo "No local changes against $tag."
     exit 0

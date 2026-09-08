@@ -11,3 +11,5 @@ The snapshot script's unit test now also rejects unbound names in every scope of
 The workspace app model's phase 10 lands on the paired default-workspace-template branch: the chat app is its own package, program, and frontend build there, and the evals bridge in this repo follows it to the chat app's registered port.
 
 The minds-eval-harbor specs (`concise.md`, `outcome_verification.md`) describe the bridged calls as reaching the workspace's chat app at its registered port, where they named the system_interface on port 8000.
+
+CLAUDE.md gains a rule for manual tmux verification: never run a bare `tmux kill-server`, `kill-session`, or `attach` from an agent session (inside a tmux pane `$TMUX` overrides `TMUX_TMPDIR`, so a bare call reaches the server every agent lives in); drive probes on one private server, running a script under test with `env -u TMUX TMUX_TMPDIR=<short dir>` and passing the socket it resolves to (`<short dir>/tmux-$(id -u)/default`) with `-S` on every call of your own.
