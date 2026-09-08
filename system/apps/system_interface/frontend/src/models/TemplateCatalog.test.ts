@@ -1,34 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { CatalogTemplate, TemplateCatalog } from "./TemplateCatalog";
+import { catalogTemplateRecord } from "../testing/records";
+import type { TemplateCatalog } from "./TemplateCatalog";
 import { matchesQuery, resolveShelves, searchTemplates, writeUpParagraphs } from "./TemplateCatalog";
-
-function template(slug: string, overrides: Partial<CatalogTemplate> = {}): CatalogTemplate {
-  return {
-    slug,
-    title: slug,
-    description: "",
-    what_it_is: "",
-    author: "",
-    repository_url: `https://github.com/x/${slug}`,
-    thumbnail_url: "",
-    version: "",
-    updated_at: "",
-    required_accounts: [],
-    required_secrets: [],
-    needs_ai: false,
-    apt_packages: [],
-    choices: [],
-    ...overrides,
-  };
-}
 
 const CATALOG: TemplateCatalog = {
   generated_at: "",
   templates: [
-    template("inbox", { title: "Inbox Digest", description: "Triage your mail.", author: "kanjun" }),
-    template("radar", { title: "Weekend Radar", description: "Kid-friendly events near home.", author: "matt" }),
-    template("orchard", { title: "Orchard", description: "A work tracker.", author: "mango" }),
+    catalogTemplateRecord("inbox", { title: "Inbox Digest", description: "Triage your mail.", author: "kanjun" }),
+    catalogTemplateRecord("radar", {
+      title: "Weekend Radar",
+      description: "Kid-friendly events near home.",
+      author: "matt",
+    }),
+    catalogTemplateRecord("orchard", { title: "Orchard", description: "A work tracker.", author: "mango" }),
   ],
   shelves: [
     { key: "popular", title: "Most popular", slugs: ["radar", "inbox"] },

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
-import { appRecord } from "../testing/records";
-import type { CatalogTemplate, TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
+import { appRecord, catalogTemplateRecord } from "../testing/records";
+import type { TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
 import {
   NewTabLauncher,
   adoptTemplateMessage,
@@ -61,29 +61,13 @@ function chatTile(): LaunchTile {
   });
 }
 
-function template(slug: string, overrides: Partial<CatalogTemplate> = {}): CatalogTemplate {
-  return {
-    slug,
-    title: slug[0].toUpperCase() + slug.slice(1),
-    description: `What ${slug} does.`,
-    what_it_is: "",
-    author: "someone",
-    repository_url: `https://github.com/someone/${slug}`,
-    thumbnail_url: `https://example.com/${slug}.svg`,
-    version: "v1",
-    updated_at: "",
-    required_accounts: [],
-    required_secrets: [],
-    needs_ai: false,
-    apt_packages: [],
-    choices: [],
-    ...overrides,
-  };
-}
-
 const CATALOG: TemplateCatalog = {
   generated_at: "",
-  templates: [template("inbox-digest"), template("weekend-radar"), template("orchard")],
+  templates: [
+    catalogTemplateRecord("inbox-digest"),
+    catalogTemplateRecord("weekend-radar"),
+    catalogTemplateRecord("orchard"),
+  ],
   shelves: [
     { key: "popular", title: "Most popular", slugs: ["inbox-digest", "weekend-radar"] },
     { key: "work", title: "Reimagine your work", slugs: ["orchard", "missing-slug"] },
@@ -224,7 +208,7 @@ describe("rail paging", () => {
 
 describe("the messages a template's actions seed", () => {
   it("adopts through the use-template skill and asks for a new machine in plain words", () => {
-    const orchard = template("orchard");
+    const orchard = catalogTemplateRecord("orchard");
     expect(adoptTemplateMessage(orchard)).toBe("/use-template https://github.com/someone/orchard");
     expect(createMachineFromTemplateMessage(orchard)).toContain("https://github.com/someone/orchard");
     expect(createMachineFromTemplateMessage(orchard)).toContain("new Minds machine");
