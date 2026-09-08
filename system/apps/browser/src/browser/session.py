@@ -2356,8 +2356,8 @@ class BrowserSessionManager(MutableModel):
         return fleet_manifest.Manifest(browsers=entries)
 
     def _spawn_save(self) -> None:
-        """Schedule a manifest checkpoint (fire-and-forget, strong-ref'd) from plain
-        synchronous code on the loop, for an event that changed what the manifest records."""
+        """Schedule a manifest checkpoint (fire-and-forget, strong-ref'd) for an event that
+        changed what the manifest records, so the verb answers without waiting on the write."""
         async def _do() -> None:
             try:
                 await self._save_manifest()
