@@ -1341,12 +1341,14 @@ version = "0.1.0"
 source = { editable = "system/libs/github_sync" }
 dependencies = [
     { name = "click" },
+    { name = "detached-subprocess" },
     { name = "loguru" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "loguru", specifier = ">=0.7.0" },
 ]
 

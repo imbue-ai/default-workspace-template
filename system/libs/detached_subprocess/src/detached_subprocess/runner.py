@@ -4,10 +4,22 @@ A service that adopts this spawns every subprocess written in its own source thr
 three entry points -- :func:`run_detached_command` for a command that runs to completion in a
 service built on ``ConcurrencyGroup``, :func:`run_detached_subprocess` for the same in a service
 that is not, :func:`spawn_detached_process` for a child that outlives the call -- and a ratchet
-(``test_subprocess_ratchets.py``) that keeps it that way. Every supervisord program whose source
-is in this repo does. What remains attached is the code that is not one: ``bootstrap``, which is
-the foreground process group that owns the terminal rather than a child of it, and the CLI tools
-under ``system/scripts/``, which a person runs and which may legitimately want a terminal.
+(``subprocess_ratchets_test.py``) that keeps it that way. Every supervisord program whose Python
+source is in this repo does.
+
+Two things sit outside that. ``bootstrap`` is the foreground process group that owns the
+terminal rather than a child of it, so its children are foreground and cannot be stopped this
+way; and the ``oom_priority`` launchers ``exec`` into the service rather than spawning it, so
+there is no child to detach. The rules also scan Python only, so a supervisord program with a
+shell body -- ``owner-exec``, ``vm-exec-register``, and anything ``cron`` drives -- is not
+covered by them, whatever its exposure.
+
+Detaching at the top instead, once, is the alternative worth having considered: it would need no
+call-site changes and would keep process groups intact so supervisord still reaped everything.
+It is not reachable. Leaving a session requires forking, and every candidate is already a
+leader -- bootstrap ``exec``s supervisord from the tmux pane, and supervisord ``setpgrp``s each
+program before exec, so ``setsid`` returns EPERM in both places. Getting there means forking
+supervisord away from the pane, which breaks the contract that keeps the bootstrap window alive.
 
 Workspace services are started by supervisord, which puts each one into its own process group
 with ``setpgrp`` -- a new *group*, but the same session, so the service and everything it
@@ -59,10 +71,6 @@ from imbue.concurrency_group.subprocess_utils import (
 )
 
 
-class DetachedSpawnError(Exception):
-    """Raised when a long-lived child could not be started at all."""
-
-
 def run_detached_command(
     command: Sequence[str],
     timeout: float | None = None,
@@ -99,8 +107,8 @@ def run_detached_command(
 def run_detached_subprocess(
     command: Sequence[str],
     timeout: float | None = None,
-    env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """:func:`subprocess.run` with the child in its own session, capturing text output.
 
@@ -130,8 +138,8 @@ def spawn_detached_process(
     command: Sequence[str],
     stdout: int | IO[bytes] | None = None,
     stderr: int | IO[bytes] | None = None,
-    env: Mapping[str, str] | None = None,
     cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.Popen[bytes]:
     """Start a long-lived child in its own session, returning its handle.
 
@@ -139,21 +147,22 @@ def spawn_detached_process(
     wrapped server, a display, a browser -- which cannot go through a runner that waits for the
     command to finish.
 
-    The caller owns the child's death. Detaching puts it out of reach of the service's process
-    group, so supervisord's ``stopasgroup``/``killasgroup`` no longer reaps it: only the handle
-    returned here does. Terminate it explicitly (``terminate``/``kill``/``send_signal``), which
-    addresses the process rather than the group and so still works. A child that nothing
-    terminates will survive the service that started it -- pass it to
-    :func:`subprocess.Popen` directly instead, and say why in the app's ratchet allowlist.
+    Raises :class:`OSError` when the child cannot be spawned, exactly as :func:`subprocess.Popen`
+    does, so an existing handler keeps working.
+
+    The caller owns the child's death, and owes two things for it. Terminate it explicitly
+    (``terminate``/``kill``/``send_signal``): detaching puts it out of reach of the service's
+    process group, so supervisord's ``stopasgroup``/``killasgroup`` no longer reaps it and the
+    handle returned here is the only thing that does. And if the child holds a fixed port, sweep
+    for an orphan at startup -- a parent SIGKILLed for overrunning ``stopwaitsecs`` never runs its
+    own teardown, and the orphan then holds the port against the restarted service
+    (``chrome_launcher.reap_orphan`` is the worked example).
     """
-    try:
-        return subprocess.Popen(
-            list(command),
-            stdout=stdout,
-            stderr=stderr,
-            env=dict(env) if env is not None else None,
-            cwd=cwd,
-            start_new_session=True,
-        )
-    except OSError as e:
-        raise DetachedSpawnError(f"cannot start {list(command)}: {e}") from e
+    return subprocess.Popen(
+        list(command),
+        stdout=stdout,
+        stderr=stderr,
+        env=dict(env) if env is not None else None,
+        cwd=cwd,
+        start_new_session=True,
+    )

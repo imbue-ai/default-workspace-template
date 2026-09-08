@@ -13,7 +13,6 @@ import sys
 import pytest
 
 from detached_subprocess.runner import (
-    DetachedSpawnError,
     run_detached_command,
     run_detached_subprocess,
     spawn_detached_process,
@@ -65,6 +64,8 @@ def test_a_long_lived_child_runs_in_its_own_session() -> None:
     assert child_session_id == child_process_group_id
 
 
-def test_a_long_lived_child_that_cannot_start_is_reported() -> None:
-    with pytest.raises(DetachedSpawnError):
+def test_a_long_lived_child_that_cannot_start_raises_oserror() -> None:
+    """The stdlib's own error, not a bespoke one: callers already guard OSError around a spawn,
+    and the browser's launch handler catches exactly that."""
+    with pytest.raises(OSError):
         spawn_detached_process(["definitely-not-a-real-binary-xyz"])

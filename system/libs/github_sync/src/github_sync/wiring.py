@@ -14,6 +14,7 @@ post-commit auto-push hook applies everywhere.
 
 import subprocess
 
+from detached_subprocess.runner import run_detached_subprocess
 from loguru import logger
 
 from github_sync.config import (
@@ -31,12 +32,7 @@ PERMISSIONS_OVERRIDE_HEADER = "X-Latchkey-Gateway-Permissions-Override"
 
 def _git_config(*args: str) -> subprocess.CompletedProcess[str]:
     """Run a `git config --global` command, never raising."""
-    return subprocess.run(
-        ["git", "config", "--global", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return run_detached_subprocess(["git", "config", "--global", *args])
 
 
 def _list_global_config(key_regexp: str) -> list[tuple[str, str]]:
