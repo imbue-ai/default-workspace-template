@@ -239,6 +239,32 @@ def is_available() -> bool:
     return _pixelflux["module"] is not None
 
 
+class PixelfluxCaptureBackend:
+    """The real capture: pixelflux's ScreenCapture on an X display sized by xdpyinfo.
+
+    The pipe reaches pixelflux only through this object, so a test can hand it a fake
+    that records what the pipe does to the capture (start, stop, region, cursor callback).
+    """
+
+    def is_available(self) -> bool:
+        _attempt_pixelflux_import()
+        return _pixelflux["module"] is not None
+
+    def unavailable_reason(self) -> str:
+        return str(_pixelflux["error"])
+
+    def display_geometry(self, display: str) -> tuple[int, int]:
+        return display_geometry(display)
+
+    def new_settings(self) -> Any:
+        module: Any = _pixelflux["module"]
+        return module.CaptureSettings()
+
+    def new_capture(self) -> Any:
+        module: Any = _pixelflux["module"]
+        return module.ScreenCapture()
+
+
 def display_geometry(display: str) -> tuple[int, int]:
     """The X display's root geometry, from xdpyinfo (present wherever Xvfb is)."""
     if shutil.which("xdpyinfo") is None:
@@ -362,9 +388,12 @@ class PixelfluxVideoPipe:
     connection's sender thread drains whichever rows the credit windows admit.
     """
 
-    def __init__(self, browser_id: str, display: str) -> None:
+    def __init__(
+        self, browser_id: str, display: str, backend: PixelfluxCaptureBackend | None = None
+    ) -> None:
         self.browser_id = browser_id
         self.display = display
+        self._backend = backend if backend is not None else PixelfluxCaptureBackend()
         self._capture = None
         self._settings = None
         self._condition = threading.Condition()
@@ -408,10 +437,10 @@ class PixelfluxVideoPipe:
         # guard alone misses them) until the fresh post-resize keyframe re-establishes rows.
         self._resync = False
 
-    def _build_settings(self, pixelflux_module: Any, width: int, height: int) -> Any:
+    def _build_settings(self, width: int, height: int) -> Any:
         """A CaptureSettings for this pipe at the given region and the current CRF.
         Shared by start() and resume() so both configure the encoder identically."""
-        settings = pixelflux_module.CaptureSettings()
+        settings = self._backend.new_settings()
         settings.capture_width = width
         settings.capture_height = height
         settings.target_fps = _CAPTURE_FPS
@@ -424,23 +453,21 @@ class PixelfluxVideoPipe:
         return settings
 
     def start(self) -> None:
-        _attempt_pixelflux_import()
-        if _pixelflux["module"] is None:
+        if not self._backend.is_available():
             raise VideoPipeError(
-                f"pixelflux failed to import (missing system libraries? see setup_system.sh): {_pixelflux['error']}"
+                f"pixelflux failed to import (missing system libraries? see setup_system.sh): {self._backend.unavailable_reason()}"
             )
-        pixelflux_module: Any = _pixelflux["module"]
         # The framebuffer size is the hard cap for any capture region.
         # (display_geometry uses xdpyinfo -display, so it needs no env.)
-        self._cap_w, self._cap_h = display_geometry(self.display)
+        self._cap_w, self._cap_h = self._backend.display_geometry(self.display)
         width = min(_INIT_CAPTURE_W, self._cap_w)
         height = min(_INIT_CAPTURE_H, self._cap_h)
         self._expected_w = width
         self._region_w, self._region_h = width, height
         # STRIPE mode (no video_fullframe): min(cores, height/64) rows, each with its own
         # change detection and encoder -- only changed rows encode, in parallel.
-        settings = self._build_settings(pixelflux_module, width, height)
-        capture = pixelflux_module.ScreenCapture()
+        settings = self._build_settings(width, height)
+        capture = self._backend.new_capture()
         # Bind the capture to THIS pipe's display under the fleet-global lock so a
         # concurrent pipe/launch can't cross os.environ["DISPLAY"] mid-start.
         with _DISPLAY_START_LOCK:
@@ -775,6 +802,8 @@ class PixelfluxVideoPipe:
             capture, self._capture = self._capture, None
             self._rows.clear()          # stale once capture stops; resume forces fresh keyframes
             self._cursor_message = None
+            # An undelivered ``res,`` is dropped with the rows: resume announces the size afresh.
+            self._control_message = None
             self._condition.notify_all()
         if capture is not None:
             self._guarded_stop(capture)
@@ -785,16 +814,15 @@ class PixelfluxVideoPipe:
         repaints immediately (~40ms to first frame), re-applying the current region.
         start_capture runs OUTSIDE the condition lock so it can't block the encoder
         callback / sender. Called only on the sender thread (serialized with pause)."""
-        pixelflux_module: Any = _pixelflux["module"]
         with self._condition:
             if not self._paused or self._closed:
                 return
-            if pixelflux_module is None:
+            if not self._backend.is_available():
                 self._paused = False
                 return
             width, height = self._region_w, self._region_h
-        settings = self._build_settings(pixelflux_module, width, height)
-        capture = pixelflux_module.ScreenCapture()
+        settings = self._build_settings(width, height)
+        capture = self._backend.new_capture()
         with _DISPLAY_START_LOCK:
             os.environ["DISPLAY"] = self.display
             capture.start_capture(self._on_frame, settings)
@@ -809,9 +837,24 @@ class PixelfluxVideoPipe:
             self._epoch += 1
             self._rows.clear()
             self._paused = False
+            # The viewer learns its size here, ahead of the fresh keyframe: a viewer that
+            # connected hidden never received the ``res,`` of its first resize (pause drops
+            # whatever was pending), and one that resized while paused was never told.
+            self._control_message = f"res,{width},{height}"
             self._condition.notify_all()
         capture.request_idr_frame()
         logger.info("video pipe resumed for {}", self.browser_id)
+
+    def wait_while_paused(self, timeout: float) -> None:
+        """Block until the conductor wakes this pipe (a resume or a close) or ``timeout`` passes.
+
+        The paused sender drains nothing, so this waits on the condition alone rather than
+        through ``next_packet``, which returns at once while a control or cursor message is
+        pending and would make a paused loop spin.
+        """
+        with self._condition:
+            if self._paused and not self._closed:
+                self._condition.wait(timeout)
 
     def _guarded_stop(self, capture) -> None:  # noqa: ANN001
         """stop_capture joins native encoder threads; run it on a guarded thread so a

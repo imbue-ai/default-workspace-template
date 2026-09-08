@@ -39,21 +39,26 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo --icon-file system/apps/foo/icon.svg --program foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
   (see below) -- keep it as the outermost command, in front of any `bash -c`
-  wrapper. The `forward_port.py --name` is the service name and becomes the
-  leading label of the service's origin hostname
-  (`http://<name>.<workspace-host>/`), so it must be DNS-safe: lowercase
-  letters/digits with single hyphens (underscores are tolerated only for
-  legacy names like `system_interface`), not `localhost`, and not starting
-  with `host-` or `agent-`. The `--program` names the supervisord program
-  running the app (program-name-equals-service-name, so pass the app's own
-  name); its presence on the registry entry is what lets the workspace offer
-  Stop/Start for the app, so pass it for every supervised app and never for
-  unsupervised instances (previews, isolated test servers).
+  wrapper. `forward_port.py --manifest` reads the app's `app.toml` (its
+  registered name, display name, icon, and the supervisord `program` that
+  runs it, which is what lets the workspace offer Stop/Start for the app) and
+  registers the app at `--url`. The manifest's `name` becomes the leading
+  label of the app's origin hostname (`http://<name>.<workspace-host>/`), so
+  it must be DNS-safe: lowercase letters/digits with single hyphens
+  (underscores are tolerated only for legacy names like `system_interface`),
+  not `localhost`, and not starting with `host-` or `agent-`. The app then
+  runs as its own tool's entry point (`foo`, installed by
+  `uv tool install -e system/apps/foo`), never through `uv run`: every Python
+  app has its own uv tool environment, and the root venv is for background
+  services. A registration with no app directory (a preview, an isolated test
+  server, the owner-exec service) keeps the manifest-less
+  `forward_port.py --name <name> --url <url>` form with `--internal` or
+  `--no-icon`, and never passes `--program`.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
@@ -115,9 +120,9 @@ than ~1s later, and it keeps the command self-documenting.
    forgets the removed program.
 
 For an app, also drop its `data/.state/apps.toml` entry with
-`python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
-web lib, `build-app`'s `cleanup.md` reference covers the full
-teardown (reverting the lib and the root `pyproject.toml` edits).
+`python3 system/scripts/forward_port.py --name <name> --remove` and its tool
+environment with `uv tool uninstall <name>`; for a scaffolded web lib,
+`build-app`'s `cleanup.md` reference covers the full teardown.
 
 ## Modifying a service
 

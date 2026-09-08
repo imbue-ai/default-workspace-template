@@ -164,6 +164,30 @@ the trial gave up). They stay there; the
 recipe uploads nothing. Archiving belongs to whatever runs the eval on a schedule, which supplies
 its own credentials rather than reading a developer's.
 
+## Browsing results
+
+```
+just minds-evals-view                                  # apps/minds_evals/jobs on :8080
+just minds-evals-view /path/to/other/jobs 8090
+```
+
+The backend is stock harbor; only the frontend is ours. `apps/minds_evals/viewer/` is a verbatim
+copy of harbor's own `apps/viewer`, vendored so that eval-specific annotations can be rendered
+without forking harbor's Python -- `harbor.viewer.create_app` accepts the static directory as an
+argument, which is the whole seam. See `viewer/VENDORED_FROM.md` for the tag it came from and how
+to re-vendor.
+
+The recipe builds first when the sources are newer than the last build, bootstrapping a pinned bun
+into `apps/minds_evals/.bun` on first use: about ten seconds once, two after, and nothing on a
+no-op. Neither the toolchain nor the build output is committed.
+
+Two properties are worth knowing. The vendored tag must match the harbor pin in `pyproject.toml`,
+because a newer frontend calls endpoints an older backend does not serve; `viewer_contract_test.py`
+checks every URL in the vendored client against the routes harbor actually registers, since nothing
+else connects the hand-written TypeScript to the Python. And a job directory stays fully readable by
+stock `harbor view`, which renders none of our annotations but everything else -- that fallback holds
+as long as annotations live in ATIF `extra`, which upstream ignores.
+
 ## Diagnosing a trial that went wrong
 
 Five artifacts answer "what happened", in the order worth reading:
@@ -683,10 +707,11 @@ kinds of row:
 - **Pre-existing rows** -- what the workspace already served before the agent ran. A single
   `workspace_state` probe taken before turn 1 supplies both halves of that set, because neither is
   complete alone: the app registry as it actually stood (the only source that sees a template app
-  registering its port from inside the script its supervisord program runs, as the terminal and the
-  owner-exec and vm-exec daemons do), unioned with the names the workspace's own
-  `system/supervisord.conf` registers through its `forward_port.py --name` invocations (which covers
-  a template app whose service had not registered its port yet). Measuring beats a hand-maintained
+  registering its port from inside the program its supervisord entry runs -- its own entry point,
+  or a launcher script -- as the terminal and the owner-exec and vm-exec daemons do), unioned with
+  the names the workspace's own `system/supervisord.conf` registers through its `forward_port.py`
+  invocations (`--name`, or the block's own program name for a `--manifest` registration), which
+  covers a template app whose service had not registered its port yet. Measuring beats a hand-maintained
   name list, so the set stays correct for a dwt fork or branch that ships extra apps. The manifest
   records it as `preexisting_registrations`.
 - **Rows the registry marks `internal = true`** -- machinery that forwards a port but has no page of

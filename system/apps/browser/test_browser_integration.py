@@ -259,7 +259,9 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     # launch) and returns 200, NOT 503.
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
 
-    async def fake_create(self: bsession.BrowserSessionManager, name: str | None = None) -> bsession.LiveBrowser:
+    async def fake_create(
+        self: bsession.BrowserSessionManager, name: str | None = None, start_url: str | None = None
+    ) -> bsession.LiveBrowser:
         created = bsession.LiveBrowser(browser_id=name or "morgan-lee")
         self._browsers[created.browser_id] = created
         return created

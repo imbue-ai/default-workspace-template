@@ -41,7 +41,7 @@ These four forks were decided with the user before writing this spec.
   * `generate.py` -- the task generator (adapter pattern): reads the existing eval-config JSON schema unchanged (`mngr_branch`, `dwt_repo`, `dwt_branch`, `timeout_seconds`, `personas[]`) and emits one harbor task directory per persona case into a dataset directory.
   * `driver.py` -- `MindsPersonaDriver(BaseAgent)`, the host-side conversation loop.
   * `decider.py` -- the `DECIDE_FROM_PERSONA` role-play call (ported from the dwt worker's `eval_decider.py`: same prompt framing, `claude-opus-4-8`, `max_tokens=64`, fallback literal `"Sounds good."`).
-  * `minds_bridge.py` -- helpers that reach the box's Minds HTTP API and the workspace's system_interface through `environment.exec` (ported from `minds_client.py`).
+  * `minds_bridge.py` -- helpers that reach the box's Minds HTTP API and the workspace's chat app through `environment.exec` (ported from `minds_client.py`).
   * `templates/` -- task templates: `task.toml`, `instruction.md`, `tests/` (rewardkit), `solution/` (oracle).
 * The CLI surface is deliberately minimal to stay harbor-aligned: `minds-evals generate --config <f> --output <dir>`, plus a justfile recipe that prints/invokes the full `harbor run` command. There is no wrapper around `harbor run` itself.
 * `--output` is required and datasets are generated outside the repo tree (the `minds-evals-generate` recipe defaults to `/tmp/minds-evals/datasets/generated`), because each task embeds a full mngr-internal clone and one under `apps/` trips the repo's marked-test discovery; `apps/minds_evals/datasets/` is gitignored as a safety net for an in-tree `--output`. Datasets are disposable -- dev runs and CI regenerate them from the checked-in configs.
@@ -84,7 +84,7 @@ These four forks were decided with the user before writing this spec.
 * `apps/minds_evals` is a standalone uv project rather than a member of the monorepo's uv workspace: harbor's `rich>=14.1.0` and `modal>=1.5.1` floors cannot co-resolve with the workspace's `litellm[proxy]` (`rich<14`) and `modal==1.4.3` pins, and uv allows one version per package per workspace. It therefore carries its own `uv.lock`, and its tests and type check run under `just test-minds-evals` via a dedicated path-gated CI job instead of the root offload run.
 * `run()` implements the ported turn semantics for string entries, extended for goal entries per `goal_driven_turns.md`:
   1. Create the per-case dwt clone inside the box (port of `launch._ensure_base`/`_prepare_clone`, minus writing `test_case_metadata.json`, which only the retired in-workspace eval worker consumed) and create the workspace through the Minds API (`workspace.build_payload` semantics unchanged: `launch_mode=MODAL`, `backup_provider=CONFIGURE_LATER`), polling the create operation to `agent_id`.
-  2. For each prompts entry, for each of its exchanges: ask the entry's turn source what to do, and if it says something, wait until the workspace agent reaches `WAITING`, send that message, and wait for the reply. A string entry is one exchange; a goal entry runs until its client stops or its budget does (see `goal_driven_turns.md`). That reply wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local system_interface -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
+  2. For each prompts entry, for each of its exchanges: ask the entry's turn source what to do, and if it says something, wait until the workspace agent reaches `WAITING`, send that message, and wait for the reply. A string entry is one exchange; a goal entry runs until its client stops or its budget does (see `goal_driven_turns.md`). That reply wait is a bridged poll: `environment.exec` into the box, then mngr's remote-exec path into the workspace, then curl against the workspace-local chat app -- the same API the old worker polled (the exact mngr CLI invocation is a PR1 verification item).
   3. Snapshot the workspace `/mngr` dir as a tarball (same exclude set as the old restic job) into `/logs/agent/snapshots/post_message_<k>.tar.gz` via the bridge, where `<k>` numbers the messages actually sent. Cadence is a driver kwarg (`--ak snapshot_mode=per-turn|final|off`, default `per-turn`) selecting a named point: `per-turn` snapshots after every exchange, `final` once after the last entry.
   4. Append every event to `/logs/agent/full_transcript.jsonl` after each turn (same event schema as today), and maintain `/logs/agent/state.json` (`waits_done`, `num_turns`, `test_state`, plus one `entries` record per prompts entry) so a timed-out trial still leaves a gradeable partial transcript.
   5. Also emit an ATIF `trajectory.json` with `source: "user"` / `"agent"` steps so `harbor view` renders the conversation.
@@ -219,7 +219,7 @@ the old-vs-new justification lives in that PR's description.
 | old semantic | fate |
 |---|---|
 | multi-turn persona chat, literal + DECIDE turns, first turn literal | preserved (driver + decider port) |
-| turn gating on real agent WAITING state | preserved (same system_interface poll, bridged) |
+| turn gating on real agent WAITING state | preserved (same chat app poll, bridged) |
 | per-turn `/mngr` snapshots | preserved as tarballs in trial artifacts (restic dropped) |
 | full transcript JSONL, partial on timeout | preserved, same schema, plus ATIF |
 | per-turn progress state (`state.json`) | preserved in `/logs/agent/state.json` |
@@ -234,7 +234,7 @@ the old-vs-new justification lives in that PR's description.
 
 ## Risks
 
-* **Bridged workspace access**: the driver reaches the workspace system_interface via box-exec + `mngr ssh` + curl, so each poll is a Modal exec round trip. Poll intervals of a few seconds keep this well under rate limits, but PR1 must verify latency is acceptable end-to-end.
+* **Bridged workspace access**: the driver reaches the workspace's chat app via box-exec + `mngr ssh` + curl, so each poll is a Modal exec round trip. Poll intervals of a few seconds keep this well under rate limits, but PR1 must verify latency is acceptable end-to-end.
 * **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.

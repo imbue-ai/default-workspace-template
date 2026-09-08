@@ -12,9 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
-
-from imbue.system_interface.accounts import account_dir
-from imbue.system_interface.accounts import read_index
+from imbue.chat.accounts import account_dir, read_index
 
 _SCRIPT = Path(__file__).parent / "migrate_claude_auth.py"
 _spec = importlib.util.spec_from_file_location("migrate_claude_auth", _SCRIPT)

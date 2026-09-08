@@ -387,6 +387,20 @@ def _linear_graphql(payload: Mapping[str, Any], timeout_seconds: int) -> Any:
     return result
 
 
+@pure
+def merge_check_run_pages(pages: Sequence[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
+    """Flatten the pages `gh api --paginate --slurp` returns into one check-run sequence.
+
+    On an object-returning endpoint `--paginate` alone emits one bare JSON object per page,
+    concatenated, which is not valid JSON; `--slurp` wraps the pages in an array instead. Every
+    page repeats the endpoint's `total_count`, so `check_runs` is the only field worth merging.
+    """
+    merged: list[Mapping[str, Any]] = []
+    for page in pages:
+        merged.extend(page.get("check_runs") or ())
+    return tuple(merged)
+
+
 def fetch_check_run_records(
     repo: str,
     since: datetime,
@@ -425,11 +439,11 @@ def fetch_check_run_records(
     suite_names = set(suites)
     records: list[CheckRunRecord] = []
     for commit, meta in meta_by_commit.items():
-        check_data = _run_json(
-            ["gh", "api", f"repos/{repo}/commits/{commit}/check-runs", "--paginate"],
+        check_pages = _run_json(
+            ["gh", "api", f"repos/{repo}/commits/{commit}/check-runs", "--paginate", "--slurp"],
             timeout_seconds=_GH_TIMEOUT_SECONDS,
         )
-        for check in check_data.get("check_runs", []):
+        for check in merge_check_run_pages(check_pages):
             if check.get("name") not in suite_names or check.get("conclusion") not in ("neutral", "failure"):
                 continue
             summary = (check.get("output") or {}).get("summary") or ""

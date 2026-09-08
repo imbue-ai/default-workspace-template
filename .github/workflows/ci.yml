@@ -77,7 +77,7 @@ jobs:
           # `navigator` (added to Node in 21), and Node 20 is past end-of-life.
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: system/apps/system_interface/frontend/package-lock.json
+          cache-dependency-path: system/package-lock.json
 
       # uv sync silently UPDATES a stale lock rather than failing, so without
       # this gate a pyproject change merged without `uv lock` passes CI while
@@ -93,11 +93,10 @@ jobs:
       - name: Install Playwright browsers
         run: uv run playwright install --with-deps chromium
 
-      - name: Build and test system/apps/system_interface frontend
-        working-directory: system/apps/system_interface/frontend
+      - name: Build and test the frontends (system/ npm workspace)
+        working-directory: system
         run: |
           npm ci
-          npm run test
           npm run build
           npm test
 
@@ -106,4 +105,8 @@ jobs:
 
       - name: Run system/apps/system_interface tests
         working-directory: system/apps/system_interface
+        run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
+
+      - name: Run system/apps/chat tests
+        working-directory: system/apps/chat
         run: PYTEST_MAX_DURATION_SECONDS=300 uv run pytest
