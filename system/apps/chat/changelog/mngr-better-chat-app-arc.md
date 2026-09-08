@@ -27,3 +27,5 @@ A chat can be stopped and started from the workspace's tab menu and from `layout
 `chat-app --preflight` boots the app without side effects for the update apply's pre-flight check: it imports, builds, and serves `/api/health`, but reconciles no accounts (the boot sweep reaps sign-in processes), starts no agent manager (no `mngr observe`, session sweep, memory prioritizer, or shell nudges), and registers nothing.
 
 Phase 11 of the workspace app model: the chat frontend's one origin derivation follows the shared library's rename (`deriveAppOrigin`), and the README says the update apply polls `/api/health` on the `--preflight` boot and `/_instances` after the restart.
+
+The claude auth module (`harnesses/claude/auth.py`) no longer carries the OAuth-URL scrape and paste-burst constant of the retired sign-in modal; the provider chooser's flows in `harnesses/auth_flows.py` own that, and the module is the read side its docstring describes.
