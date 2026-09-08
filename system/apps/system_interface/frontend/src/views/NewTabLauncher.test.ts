@@ -395,9 +395,7 @@ describe("NewTabLauncher", () => {
 
   it("opens a template's detail and adopts it into a seeded chat", () => {
     const attrs = mount({});
-    root
-      .querySelector<HTMLElement>('[data-shelf="popular"] [data-template="orchard"], [data-template="inbox-digest"]')!
-      .click();
+    root.querySelector<HTMLElement>('[data-shelf="popular"] [data-template="inbox-digest"]')!.click();
     m.redraw.sync();
     const detail = document.querySelector<HTMLElement>(".new-tab-template-detail")!;
     expect(detail).not.toBeNull();
