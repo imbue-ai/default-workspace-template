@@ -17,8 +17,12 @@ The models behind a workspace app's two descriptions:
 
 - `app_manifest.manifest`: `AppManifest` (pydantic, `extra = "forbid"`; every
   cross-field rule of the contract is a validator), `AppAction`,
-  `DefaultShortcut`, `ShortcutMode`, `load_manifest(path)` (reads, validates,
-  and checks the icon file exists beside the manifest), and
+  `DefaultShortcut`, `ShortcutMode`, `PreviewSpec` (the optional `[preview]`
+  table: how a throwaway instance boots, with named free ports, a scratch copy
+  of the directories it names, and placeholders in its command, args, and env;
+  absent, it is `scaffold_preview_spec(name)`, the build-app convention, so
+  every app previews by construction), `load_manifest(path)` (reads,
+  validates, and checks the icon file exists beside the manifest), and
   `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides

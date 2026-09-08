@@ -1,0 +1,1 @@
+`app.toml` gains the shell's `[preview]` table: a preview boots `system-interface --preview --state-dir {copy:state}` over a seeded copy of `data/.state/system_interface`, reads a copied registry through `MINDS_APPS_FILE = {registry}`, and probes `/api/health`.

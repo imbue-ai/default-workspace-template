@@ -18,7 +18,9 @@ def test_a_missing_registry_is_empty(tmp_path: Path) -> None:
 
 def test_a_manifest_less_row_reads_with_the_documented_defaults(tmp_path: Path) -> None:
     registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:5000"\nlabel = "web-abcd1234"\n')
+    registry.write_text(
+        '[[apps]]\nname = "web"\nurl = "http://localhost:5000"\nlabel = "web-abcd1234"\n'
+    )
 
     rows = read_registry(registry)
 
@@ -68,7 +70,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
     assert row.priority == "files"
     assert row.default_shortcut is not None
     assert row.default_shortcut.action == "new"
-    assert [(action.id, action.label) for action in row.actions] == [("new", "New File Viewer")]
+    assert [(action.id, action.label) for action in row.actions] == [
+        ("new", "New File Viewer")
+    ]
 
 
 def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> None:
@@ -93,7 +97,9 @@ def test_a_row_that_fails_validation_is_skipped_and_logged(tmp_path: Path) -> No
 
 def test_unknown_keys_on_a_row_are_ignored(tmp_path: Path) -> None:
     registry = tmp_path / "apps.toml"
-    registry.write_text('[[apps]]\nname = "web"\nurl = "http://localhost:5000"\nfuture_key = "x"\n')
+    registry.write_text(
+        '[[apps]]\nname = "web"\nurl = "http://localhost:5000"\nfuture_key = "x"\n'
+    )
 
     assert [row.name for row in read_registry(registry)] == ["web"]
 
@@ -114,7 +120,9 @@ def test_an_apps_key_that_is_not_an_array_raises(tmp_path: Path) -> None:
         read_registry(registry)
 
 
-def test_registry_path_honours_the_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_registry_path_honours_the_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv(ENV_APPS_FILE, raising=False)
     assert registry_path() == Path(DEFAULT_APPS_FILE)
 

@@ -3,3 +3,5 @@ The chat app no longer runs its own `mngr observe`. The workspace's one observer
 `chat-app --secondary` boots a second chat beside the live one, the preview of a proposed change: it follows the same observer, reads the live accounts, and tracks every agent the live chat tracks, but reconciles no accounts, writes no memory scores (its prioritizer is handed a refusing writer), registers nothing, and nudges no shell unless `--nudge-shell-url` names one. Sends from it are real. `CHAT_DATA_DIR` (default `data/.apps/chat`) is the chat's data directory, so a secondary chat pointed at a scratch copy keeps its message stamps out of the live chat's data.
 
 The manager's tests write events through mngr's own writer into a temporary host dir and hold the observe lock to stand in for a live observer; the observe-subprocess tests are gone with the subprocess.
+
+`app.toml` gains the chat's `[preview]` table: a preview boots `chat-app --secondary --nudge-shell-url {shell_url}` over a scratch copy of `data/.apps/chat` (`CHAT_DATA_DIR`), probes `/api/health`, and opens on `/{key}`, the conversation the user is in.
