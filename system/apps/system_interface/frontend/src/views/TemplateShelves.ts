@@ -137,7 +137,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
         class:
           "new-tab-template-rail-arrow absolute inset-y-0 z-(--z-content) flex w-16 cursor-pointer items-center " +
           "from-surface to-transparent text-secondary hover:text-primary focus-visible:outline-2 " +
-          "focus-visible:outline-offset-[-2px] focus-visible:outline-accent " +
+          "focus-visible:-outline-offset-2 focus-visible:outline-accent " +
           (isRight ? "right-0 justify-end bg-linear-to-l pr-2" : "left-0 justify-start bg-linear-to-r pl-2"),
         "aria-label": isRight ? "Show more templates" : "Show previous templates",
         "data-rail-page": isRight ? "next" : "previous",
