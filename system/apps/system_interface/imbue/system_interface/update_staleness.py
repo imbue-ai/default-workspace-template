@@ -104,8 +104,8 @@ _LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 # workspace-root ``pyproject.toml`` and ``uv.lock`` are deliberately absent:
 # scaffolding an app appends the new package to the root's
 # ``[project].dependencies`` and ``[tool.uv.sources]`` and relocks, which moves
-# nothing this process resolved but raised the banner on every app a user
-# built. The residue is a re-point of a root ``[tool.uv.sources]`` entry with
+# nothing this process resolved but would raise the banner on every app a user
+# builds. The residue is a re-point of a root ``[tool.uv.sources]`` entry with
 # no matching package-manifest edit -- rare enough not to pay for a
 # near-permanent false banner.
 _BACKEND_MANIFESTS = frozenset(
