@@ -559,7 +559,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
 
   /** One tile. The leading row's tiles share the row's width between them (``isFill``), so the
    *  row squares up with the tables under it; the second row's tiles take the width their icon
-   *  and name need and wrap when the row runs out. */
+   *  and name need (capped at the row's, where the name truncates) and wrap when the row runs
+   *  out. */
   function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs, isFill: boolean): m.Vnode {
     const isDisabled = attrs.isAwaitingCreate === true;
     const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
@@ -569,7 +570,7 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         key: `${tile.app.name}:${tile.action.id}`,
         class:
           "border-default flex h-9 items-stretch overflow-hidden rounded-lg border " +
-          (isFill ? "min-w-0 flex-1" : "shrink-0") +
+          (isFill ? "min-w-0 flex-1" : "max-w-full shrink-0") +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
