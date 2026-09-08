@@ -78,6 +78,10 @@ import {
   isStepBoundary,
   StepBoundaryDivider,
 } from "~/components/trajectory/harness-annotation";
+import {
+  UiFlowsViewer,
+  useUiFlows,
+} from "~/components/trajectory/ui-flows-viewer";
 import { CodeBlock } from "~/components/ui/code-block";
 import { Markdown } from "~/components/ui/markdown";
 import {
@@ -2912,8 +2916,10 @@ function getTrialUrl(jobName: string, t: TrialSummary): string {
   return `${getTaskUrl(jobName, { source: t.source ?? "_", agent: t.agent_name ?? "_", modelProvider: t.model_provider ?? "_", modelName: t.model_name ?? "_", taskName: t.task_name })}/trials/${encodeURIComponent(t.name)}`;
 }
 
+const UI_FLOWS_TAB = "ui-flows" as const;
 const TRIAL_TAB_ORDER_WITHOUT_RECORDING = [
   "trajectory",
+  UI_FLOWS_TAB,
   "agent",
   "verifier",
   "artifacts",
@@ -2937,24 +2943,49 @@ const LEGACY_TRIAL_TAB_ALIASES: Record<string, TrialTabWithoutRecording> = {
   summary: "analysis",
 };
 
-function getTrialTabOrder(
-  hasRecording: boolean
-): readonly TrialTab[] {
-  if (!hasRecording) return TRIAL_TAB_ORDER_WITHOUT_RECORDING;
-  return [
-    "trajectory",
-    RECORDING_TAB,
-    ...TRIAL_TAB_ORDER_WITHOUT_RECORDING.slice(1),
-  ];
+interface TrialTabAvailability {
+  hasRecording: boolean;
+  hasUiFlows: boolean;
 }
 
-function normalizeTrialTab(tab: string, hasRecording: boolean): TrialTab {
+function getTrialTabOrder({
+  hasRecording,
+  hasUiFlows,
+}: TrialTabAvailability): readonly TrialTab[] {
+  const withoutRecording = TRIAL_TAB_ORDER_WITHOUT_RECORDING.filter(
+    (name) => hasUiFlows || name !== UI_FLOWS_TAB
+  );
+  if (!hasRecording) return withoutRecording;
+  return ["trajectory", RECORDING_TAB, ...withoutRecording.slice(1)];
+}
+
+/**
+ * Whether the step a query should be scoped to has been chosen yet.
+ *
+ * A step-scoped trial selects its first step in an effect that runs once the trial has loaded, so
+ * `step` is null for the renders before that and a query issued then answers about the wrong scope.
+ * For the ui-flows tab an early empty answer is not merely stale: `normalizeTrialTab` rewrites the
+ * URL for a tab it does not recognise, so it would drop `?tab=ui-flows` out of an incoming link.
+ */
+function isStepSelectionSettled(
+  trial: TrialResult | undefined,
+  step: string | null
+): boolean {
+  if (trial === undefined) return false;
+  const steps = trial.step_results;
+  return steps === null || steps.length === 0 || step !== null;
+}
+
+function normalizeTrialTab(
+  tab: string,
+  available: TrialTabAvailability
+): TrialTab {
   if (tab === RECORDING_TAB) {
-    return hasRecording ? RECORDING_TAB : "trajectory";
+    return available.hasRecording ? RECORDING_TAB : "trajectory";
   }
 
   const normalized = LEGACY_TRIAL_TAB_ALIASES[tab] ?? tab;
-  const tabOrder = getTrialTabOrder(hasRecording);
+  const tabOrder = getTrialTabOrder(available);
   return tabOrder.includes(normalized as TrialTab)
     ? (normalized as TrialTab)
     : "trajectory";
@@ -3105,6 +3136,16 @@ function TrialContent({
   const inProgress = !trial.finished_at;
   const availableRecording = isAvailableRecording(recording) ? recording : null;
   const isSimulatedUserTrial = trial.config.user_agent !== null;
+
+  // The tab is offered only when the trial recorded flows, which most tasks do not declare. The
+  // query is the one the tab itself runs, so react-query serves both from a single request.
+  const { data: uiFlows } = useUiFlows(
+    jobName,
+    trialName,
+    step,
+    isStepSelectionSettled(trial, step)
+  );
+  const hasUiFlows = (uiFlows?.length ?? 0) > 0;
 
   const { data: trajectory } = useQuery({
     queryKey: ["trajectory", jobName, trialName, step],
@@ -3291,6 +3332,9 @@ function TrialContent({
           {availableRecording && (
             <TabsTrigger value="recording">Recording</TabsTrigger>
           )}
+          {hasUiFlows && (
+            <TabsTrigger value={UI_FLOWS_TAB}>UI flows</TabsTrigger>
+          )}
           <TabsTrigger value="agent">Agent</TabsTrigger>
           <TabsTrigger value="verifier">Verifier</TabsTrigger>
           <TabsTrigger value="artifacts">Artifacts</TabsTrigger>
@@ -3354,6 +3398,18 @@ function TrialContent({
             <RecordingViewer
               data={availableRecording}
               videoUrl={recordingFileUrl(jobName, trialName)}
+            />
+          </TabsContent>
+        )}
+        {hasUiFlows && (
+          <TabsContent
+            value={UI_FLOWS_TAB}
+            className="[&>div]:border-x-0 [&>div]:sm:border-x"
+          >
+            <UiFlowsViewer
+              jobName={jobName}
+              trialName={trialName}
+              step={step}
             />
           </TabsContent>
         )}
@@ -3592,19 +3648,31 @@ export default function Trial() {
     },
   });
   const hasRecording = isAvailableRecording(recording);
-  const tabOrder = useMemo(
-    () => getTrialTabOrder(hasRecording),
-    [hasRecording]
+  const [step, setStep] = useQueryState("step", parseAsString);
+  const { data: uiFlows } = useUiFlows(
+    jobName!,
+    trialName!,
+    step,
+    !!jobName && !!trialName && isStepSelectionSettled(trial, step)
   );
+  const available = useMemo(
+    // Availability is assumed until the flows are known to be absent, which covers both the query
+    // being in flight and its being held back until a step is chosen. `normalizeTrialTab` rewrites
+    // the URL for a tab it does not recognise, so treating "not answered yet" as "absent" would
+    // drop `?tab=ui-flows` out of an incoming link before its evidence had a chance to arrive.
+    () => ({ hasRecording, hasUiFlows: uiFlows === undefined || uiFlows.length > 0 }),
+    [hasRecording, uiFlows]
+  );
+  const tabOrder = useMemo(() => getTrialTabOrder(available), [available]);
   const tab = useMemo(
-    () => normalizeTrialTab(rawTab, hasRecording),
-    [rawTab, hasRecording]
+    () => normalizeTrialTab(rawTab, available),
+    [rawTab, available]
   );
   const setTab = useCallback(
     (next: string) => {
-      void setRawTab(normalizeTrialTab(next, hasRecording));
+      void setRawTab(normalizeTrialTab(next, available));
     },
-    [hasRecording, setRawTab]
+    [available, setRawTab]
   );
 
   useEffect(() => {
@@ -3676,8 +3744,6 @@ export default function Trial() {
     { enableOnFormTags: false, preventDefault: true },
     [goJob, nextJobName]
   );
-
-  const [step, setStep] = useQueryState("step", parseAsString);
 
   // Default to the first step when the trial has step_results and no step is
   // selected (or the selected step is no longer present).
