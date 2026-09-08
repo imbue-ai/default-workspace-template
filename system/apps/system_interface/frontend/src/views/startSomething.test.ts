@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   START_OPTIONS,
   START_PAGE_SIZE,
+  glyphTones,
   hasMoreStartOptions,
   nextStartCount,
   searchStartOptions,
-  glyphTones,
   startGlyph,
   visibleStartOptions,
 } from "./startSomething";
