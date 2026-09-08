@@ -5,3 +5,5 @@ Integration branch for the imbue_cloud slice-fleet generation 2 program (mngr-in
 - host_backup keeps no btrfs snapshot between backup ticks and drops the `max_local_snapshots` setting (`new-fleet-phase-2.md`).
 
 - The desktop Lima guest image pins point at imbue's artifact mirror instead of `cloud.debian.org` (`mngr-mirror-upstream-artifacts.md`, the companion of mngr-internal #856).
+
+- The in-container owner-exec daemon pin (`system/scripts/install_owner_exec.sh`) moves from v0.2.1 to v0.2.2, which never authorizes an `authorized_keys` line carrying options (`command=`, `restrict`, `from=`, `cert-authority`); v0.2.1 stripped the options and granted such keys unrestricted exec. The monorepo's VM-install pin moves in lockstep (mngr-internal #870).
