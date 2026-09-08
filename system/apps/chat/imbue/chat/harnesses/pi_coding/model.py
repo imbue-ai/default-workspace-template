@@ -30,6 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger
 
 from imbue.chat.agent_discovery import AgentInfo
@@ -56,7 +57,6 @@ from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.mngr.errors import MngrError
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.file_utils import read_json_dict
@@ -224,9 +224,8 @@ class PiModelResolver(HarnessModelResolver):
         pi_config_dir = self._state_dir / PI_CONFIG_DIR_RELPATH
         env = {**os.environ, "PI_CODING_AGENT_DIR": str(pi_config_dir)}
         try:
-            finished = run_local_command_modern_version(
+            finished = run_detached_command(
                 [executable, "--list-models"],
-                is_checked=False,
                 timeout=_LIST_MODELS_TIMEOUT_SECONDS,
                 env=env,
                 name="pi --list-models",

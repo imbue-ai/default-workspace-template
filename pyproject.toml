@@ -94,6 +94,7 @@ tk-command-parsing = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
 app-instances = { workspace = true }
+detached-subprocess = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }

@@ -26,6 +26,7 @@ from app_instances.nudge import shell_base_url
 from app_manifest.errors import RegistryReadError
 from app_manifest.registry import read_registry
 from app_manifest.registry import registry_path
+from detached_subprocess.runner import run_detached_command
 from flask import Flask
 from flask import Response
 from flask import request
@@ -104,7 +105,6 @@ from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
 from imbue.chat.ws_broadcaster import proto_agent_created_message
 from imbue.chat.wsgi import build_sock
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
@@ -591,10 +591,9 @@ def _mark_fast_mode_prompt_answered(agent_id: str) -> Response:
         error = ErrorResponse(detail=f"Agent '{agent_id}' not found")
         return json_response(error.model_dump(), status_code=404)
 
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=_build_fast_mode_answered_label_command(agent_state.name),
         cwd=None,
-        is_checked=False,
         timeout=_LABEL_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
@@ -702,10 +701,9 @@ def _restart_agent_process(agent_name: str) -> tuple[bool, str]:
     Refused by mngr for an ``is_primary=true`` agent; callers guard that with a
     clearer 400 before calling.
     """
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=["mngr", "start", agent_name, "--restart", "--no-resume"],
         cwd=None,
-        is_checked=False,
         timeout=60.0,
     )
     is_restarted = result.returncode == 0
@@ -934,10 +932,9 @@ def _get_screen_capture(agent_id: str) -> Response:
     scrollback_flag = ["-S", "-"] if include_scrollback else []
     command = ["tmux", "capture-pane", "-t", session_name, *scrollback_flag, "-p"]
 
-    result = run_local_command_modern_version(
+    result = run_detached_command(
         command=command,
         cwd=None,
-        is_checked=False,
         timeout=5.0,
     )
     success = result.returncode == 0

@@ -10,6 +10,8 @@ Cases that declare expectations split that earned score evenly between conversat
 delivered outcome: a great app described badly and a great description of no app are equally
 imperfect. Cases without expectations are unchanged.
 
+The harness then takes a fixed share of whatever that came to; see HARNESS_SHARE for why.
+
 Grading-infrastructure failures must NOT be graded as a legitimate 0.0: they leave the reward file
 absent so harbor errors the trial instead. That covers a judge API/auth error, rewardkit not
 producing a parseable reward file, a case file that does not say what this case expects, and outcome
@@ -47,6 +49,15 @@ MANIFEST_PATH = Path("/logs/agent/verification/manifest.json")
 # The headline knob: how much of a gated trial's reward the delivered artifact carries. Constant in
 # v1, deliberately not per-case -- per-case weights would make rewards incomparable across cases.
 OUTCOME_SHARE = 0.5
+
+# How much of the reward the harness carries. The branch under test IS the agent's harness: a change
+# made to help the agent can break the skills, plugins and tooling the whole system runs on, and that
+# regression is invisible in every other dimension -- an agent whose review gate will not load simply
+# looks like an agent that skipped review. A fifth is enough that a wholly broken harness costs more
+# than any judge delta we have measured, without letting shared infrastructure noise swamp what the
+# agent actually did. Applied to whatever the trial earned on quality and outcome, so the parity
+# between those two is untouched.
+HARNESS_SHARE = 0.2
 
 # Which expanded check list makes a class scored, mirroring outcome/checks.py's registration rule.
 SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
@@ -219,11 +230,22 @@ def _evidence_failure(
 
 
 def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any]) -> float:
+    """What the trial earned: its conversation and delivery, discounted by how well its harness held.
+
+    Every dimension is read the same way: absent means 0.0. There is no compat branch for a trial
+    captured before `harness_quality` existed, because there is no such trial at this point -- these
+    rewards come from the run rewardkit just did, not from whatever was stored when the trial was
+    captured, so a regrade of an old trial grades it on the current verifier's dimensions and
+    restates its reward. Forgiving an absent harness score would only have covered rewardkit failing
+    to emit the dimension, which is a worse trial, not a better one.
+    """
     quality = float(rewards.get("quality", 0.0))
-    if not expectations:
-        return quality
-    outcome = float(rewards.get("outcome", 0.0))
-    return (1.0 - OUTCOME_SHARE) * quality + OUTCOME_SHARE * outcome
+    earned = (
+        (1.0 - OUTCOME_SHARE) * quality + OUTCOME_SHARE * float(rewards.get("outcome", 0.0))
+        if expectations
+        else quality
+    )
+    return (1.0 - HARNESS_SHARE) * earned + HARNESS_SHARE * float(rewards.get("harness_quality", 0.0))
 
 
 def _fail_as_grading_error(reason: str, reward_path: Path) -> int:

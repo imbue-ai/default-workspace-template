@@ -49,7 +49,10 @@ from imbue.minds_evals.generate import resolve_remote_tip
 from imbue.minds_evals.generate import step_files_box_dir
 from imbue.minds_evals.generate import worst_case_exchange_count
 from imbue.minds_evals.minds_bridge import EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
+from imbue.minds_evals.template_loading import load_template_module
 from imbue.minds_evals.testing import make_local_git_repo
+
+_RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_generate_test_renderer")
 
 
 def _write_config(tmp_path: Path, config: dict[str, object]) -> Path:
@@ -375,6 +378,14 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         oracle_trajectory = json.loads(render_oracle_trajectory_json(case_config))
         assert [step["source"] for step in oracle_trajectory["steps"]] == ["user", "agent"] * len(case_config.prompts)
         assert oracle_trajectory["extra"]["minds_evals"]["source"] == "hand_built"
+        # The oracle has to carry tool output, or both grade-time pre-steps read an empty document and
+        # `-a oracle` scores a free 10 on the timeline and a clean 1.0 on both harness criteria while
+        # exercising none of their code.
+        first_agent_step = next(step for step in oracle_trajectory["steps"] if step["source"] == "agent")
+        rendered = _RENDERER.render_judge_transcript(oracle_trajectory["steps"])
+        assert first_agent_step["tool_calls"][0]["function_name"] == "Bash"
+        assert "[PROGRESS · step declared]" in rendered
+        assert "[PROGRESS · step done]" in rendered
         assert json.dumps(oracle_trajectory, indent=2) in solve_text
 
     # environment/ must be byte-identical across tasks or the Modal image cache diverges.

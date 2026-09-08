@@ -1255,7 +1255,7 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch(
-            "imbue.chat.server.run_local_command_modern_version",
+            "imbue.chat.server.run_detached_command",
             return_value=fake_result,
         ) as mock_run,
         patch.object(AgentManager, "reset_activity_state") as mock_reset,
@@ -1292,7 +1292,7 @@ def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
     )
     with (
         patch("imbue.chat.server._find_agent", return_value=services_agent),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/services-1/interrupt")
 
@@ -1321,7 +1321,7 @@ def test_interrupt_agent_returns_500_on_failure(client: FlaskClient) -> None:
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch(
-            "imbue.chat.server.run_local_command_modern_version",
+            "imbue.chat.server.run_detached_command",
             return_value=fake_result,
         ),
     ):
@@ -1421,7 +1421,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     with (
         patch("imbue.chat.server._find_agent", return_value=_agent_info()),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch("imbue.chat.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
     ):
@@ -1442,7 +1442,7 @@ def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> N
     with (
         patch("imbue.chat.server._find_agent", return_value=_agent_info()),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1458,7 +1458,7 @@ def test_flush_queue_rejects_is_primary_agent(client: FlaskClient) -> None:
             "imbue.chat.server._find_agent",
             return_value=_agent_info(agent_id="services-1", name="system-services", labels={"is_primary": "true"}),
         ),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/services-1/flush-queue")
 
@@ -1479,7 +1479,7 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     with (
         patch("imbue.chat.server._find_agent", return_value=_agent_info()),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=failed),
+        patch("imbue.chat.server.run_detached_command", return_value=failed),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
         response = client.post("/api/agents/agent-123/flush-queue")
@@ -1577,7 +1577,7 @@ def test_shoulder_tap_atomic_claude_nothing_queued_is_a_noop(client: FlaskClient
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -1603,7 +1603,7 @@ def test_shoulder_tap_atomic_claude_flushed_presses_chord_and_never_restarts(
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -1635,7 +1635,7 @@ def test_shoulder_tap_atomic_claude_no_ops_benignly_when_a_send_is_in_flight(
         patch("imbue.chat.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/shoulder-tap-atomic")
 
@@ -1653,7 +1653,7 @@ def test_shoulder_tap_atomic_writes_sentinel_for_pi(client: FlaskClient, tmp_pat
     agent_info = _agent_info(name="pi-agent", harness=HarnessType.PI_CODING, agent_state_dir=tmp_path)
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/shoulder-tap-atomic")
 
@@ -1747,7 +1747,7 @@ def test_drain_to_composer_claude_nonempty_queue_delegates_to_base_restart(
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch("imbue.chat.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
         patch.object(AgentManager, "send_message_to_agent") as mock_send,
     ):
@@ -1784,7 +1784,7 @@ def test_drain_to_composer_claude_empty_queue_uses_the_chord_not_a_restart(tmp_p
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
         patch(
             "imbue.chat.harnesses.claude.tap.mark_claude_agent_idle",
             side_effect=lambda *_a, **_k: idle_marks.append(True),
@@ -1811,7 +1811,7 @@ def test_drain_to_composer_pi_appends_retract_sentinel_and_returns_block(client:
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -1839,7 +1839,7 @@ def test_drain_to_composer_pi_empty_mirror_still_appends_and_returns_empty(
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -1864,7 +1864,7 @@ def test_drain_to_composer_pi_native_retract_does_not_fold_in_flight_block(
     with (
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version") as mock_run,
+        patch("imbue.chat.server.run_detached_command") as mock_run,
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
 
@@ -1917,7 +1917,7 @@ def test_drain_to_composer_pi_falls_back_to_restart_when_a_send_is_in_flight(
         patch.object(AgentManager, "get_or_create_session", return_value=in_flight_session),
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch("imbue.chat.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = client.post("/api/agents/agent-123/drain-to-composer")
@@ -1950,7 +1950,7 @@ def test_drain_to_composer_claude_falls_back_to_restart_when_a_send_is_in_flight
         patch("imbue.chat.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
+        patch("imbue.chat.server.run_detached_command", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")
@@ -1984,7 +1984,7 @@ def test_drain_to_composer_claude_returns_in_flight_send_when_the_lock_stays_hel
         patch("imbue.chat.harnesses.interrupt.STOP_LOCK_WAIT_SECONDS", 0.1),
         patch("imbue.chat.server._find_agent", return_value=agent_info),
         patch.object(ChatState, "get_or_create_watcher", return_value=fake_watcher),
-        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch("imbue.chat.server.run_detached_command", return_value=_restart_ok()),
         patch.object(AgentManager, "reset_activity_state"),
     ):
         response = app.test_client().post(f"/api/agents/{agent_id}/drain-to-composer")

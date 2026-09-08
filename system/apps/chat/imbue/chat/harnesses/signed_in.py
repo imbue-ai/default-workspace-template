@@ -18,13 +18,13 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.binding import account_env
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.concurrency_group.errors import ProcessError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 
 logger = _loguru_logger
 
@@ -60,7 +60,7 @@ _PROBES: Final[dict[HarnessType, tuple[tuple[str, ...], str | None]]] = {
 
 
 def is_signed_in(
-    harness: HarnessType, account_dir: Path, runner: Callable[..., Any] = run_local_command_modern_version
+    harness: HarnessType, account_dir: Path, runner: Callable[..., Any] = run_detached_command
 ) -> SignedIn:
     """Ask the harness's own CLI whether this account folder is authenticated.
 
@@ -88,7 +88,6 @@ def is_signed_in(
     try:
         finished = runner(
             command=list(command),
-            is_checked=False,
             timeout=_PROBE_TIMEOUT_SECONDS,
             cwd=None,
             env=env,

@@ -33,6 +33,7 @@ members = [
     "caretaker",
     "chat",
     "default-workspace-template",
+    "detached-subprocess",
     "env-converge",
     "files-app",
     "github-sync",
@@ -669,6 +670,7 @@ dependencies = [
     { name = "app-instances" },
     { name = "app-manifest" },
     { name = "concurrency-group" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
@@ -710,6 +712,7 @@ requires-dist = [
     { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },
@@ -1004,6 +1007,21 @@ dev = [
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.4" },
     { name = "tomlkit", specifier = ">=0.12" },
+]
+
+[[package]]
+name = "detached-subprocess"
+version = "0.1.0"
+source = { editable = "system/libs/detached_subprocess" }
+dependencies = [
+    { name = "concurrency-group" },
+    { name = "imbue-common" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
+    { name = "imbue-common", editable = "system/vendor/mngr/libs/imbue_common" },
 ]
 
 [[package]]
@@ -3377,6 +3395,7 @@ dependencies = [
     { name = "app-instances" },
     { name = "app-manifest" },
     { name = "concurrency-group" },
+    { name = "detached-subprocess" },
     { name = "flask" },
     { name = "flask-sock" },
     { name = "httpx" },
@@ -3409,6 +3428,7 @@ requires-dist = [
     { name = "app-instances", editable = "system/libs/app_instances" },
     { name = "app-manifest", editable = "system/libs/app_manifest" },
     { name = "concurrency-group", editable = "system/vendor/mngr/libs/concurrency_group" },
+    { name = "detached-subprocess", editable = "system/libs/detached_subprocess" },
     { name = "flask", specifier = ">=3.0" },
     { name = "flask-sock", specifier = ">=0.7" },
     { name = "httpx", specifier = ">=0.27" },

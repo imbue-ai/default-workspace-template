@@ -58,6 +58,10 @@ html.dark {
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
+  --color-step-user: var(--step-user);
+  --color-step-user-surface: var(--step-user-surface);
+  --color-step-harness: var(--step-harness);
+  --color-step-harness-surface: var(--step-harness-surface);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
@@ -89,6 +93,11 @@ html.dark {
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
+  /* The simulated user's turns, and the harness's own annotations. */
+  --step-user: oklch(0.55 0.13 250);
+  --step-user-surface: oklch(0.968 0.017 250);
+  --step-harness: oklch(0.62 0.11 85);
+  --step-harness-surface: oklch(0.972 0.02 85);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -123,6 +132,10 @@ html.dark {
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
+  --step-user: oklch(0.7 0.12 250);
+  --step-user-surface: oklch(0.245 0.028 250);
+  --step-harness: oklch(0.75 0.11 85);
+  --step-harness-surface: oklch(0.245 0.028 85);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);

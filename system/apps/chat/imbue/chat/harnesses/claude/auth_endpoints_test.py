@@ -118,6 +118,23 @@ def test_status_endpoint_logged_out_when_claude_missing(isolated_claude_config: 
     assert response.get_json()["logged_in"] is False
 
 
+def _timed_out_runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+    return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+
+def test_status_endpoint_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
+    """503, not `logged_in: false`.
+
+    A caller that reads a failed request as a failed request cannot mistake it for an answer;
+    one handed `logged_in: false` has no way to tell it apart from a real signed-out verdict.
+    """
+    service = ClaudeAuthService(command_runner=_timed_out_runner)
+    with _client(claude_auth_service=service) as client:
+        response = client.get("/api/claude-auth/status")
+    assert response.status_code == 503
+    assert "logged_in" not in response.get_json()
+
+
 def test_submit_credentials_rejects_unmanaged_keys(isolated_claude_config: Path) -> None:
     with _client() as client:
         response = client.post(

@@ -79,6 +79,44 @@ def test_get_auth_status_returns_logged_out_when_runner_raises(isolated_claude_c
     assert status.auth_mode is auth.AuthMode.NONE
 
 
+def test_get_auth_status_refuses_to_answer_when_the_check_times_out(isolated_claude_config: Path) -> None:
+    """A check that ran out of time says nothing about this workspace's auth.
+
+    `claude auth status` is killed with SIGTERM on timeout, so it prints nothing, and the parse
+    path would otherwise read that silence as "signed out". Raising rather than returning a
+    defaulted status is what stops a caller from passing that silence along as an answer.
+    """
+
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout="", returncode=-15, is_timed_out=True)
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    with pytest.raises(auth.AuthStatusUnavailableError):
+        service.get_auth_status()
+
+
+def test_get_auth_status_keeps_the_answer_of_a_check_that_finished_just_past_the_deadline(
+    isolated_claude_config: Path,
+) -> None:
+    """`is_timed_out` is recomputed after the output drain, so a check that exited cleanly a
+    moment before the deadline carries it alongside a complete payload. Raising there would
+    throw away a perfectly good answer."""
+
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout=json.dumps({"loggedIn": True}), returncode=0, is_timed_out=True)
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    assert service.get_auth_status().logged_in is True
+
+
+def test_get_auth_status_still_answers_a_real_logged_out_result(isolated_claude_config: Path) -> None:
+    def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
+        return FakeFinishedProcess(stdout=json.dumps({"loggedIn": False}))
+
+    service = auth.ClaudeAuthService(command_runner=_runner)
+    assert service.get_auth_status().logged_in is False
+
+
 def test_get_auth_status_parses_logged_in_json(isolated_claude_config: Path) -> None:
     def _runner(_cmd: list[str], _timeout: float, _env: object = None) -> FakeFinishedProcess:
         return FakeFinishedProcess(stdout='{"loggedIn": true, "email": "x@y.com", "subscriptionType": "Pro"}')

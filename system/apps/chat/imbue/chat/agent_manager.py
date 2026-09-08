@@ -10,6 +10,7 @@ from typing import Final
 
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import SilentNudger
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
@@ -82,7 +83,6 @@ from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
@@ -693,10 +693,9 @@ class AgentManager:
             ]
         restarted = 0
         for name in names:
-            result = run_local_command_modern_version(
+            result = run_detached_command(
                 command=[self._mngr_binary, "start", name, "--restart", "--no-resume"],
                 cwd=None,
-                is_checked=False,
                 timeout=60.0,
             )
             if result.returncode == 0:
@@ -744,10 +743,9 @@ class AgentManager:
         agent_state = self.get_agent_by_id(agent_id)
         if agent_state is None:
             raise AgentDestroyError(f"Agent '{agent_id}' not found")
-        result = run_local_command_modern_version(
+        result = run_detached_command(
             command=_build_chat_destroy_command(self._mngr_binary, agent_state.name),
             cwd=None,
-            is_checked=False,
             timeout=DESTROY_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
@@ -767,10 +765,9 @@ class AgentManager:
             raise AgentStopError(f"Agent '{agent_id}' not found")
         # Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it
         # shares the destroy's generous bound.
-        result = run_local_command_modern_version(
+        result = run_detached_command(
             command=_build_chat_stop_command(self._mngr_binary, agent_state.name),
             cwd=None,
-            is_checked=False,
             timeout=DESTROY_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
@@ -945,10 +942,9 @@ class AgentManager:
         else:
             cmd = _build_chat_rename_command(self._mngr_binary, agent_state.id, display_name)
         try:
-            result = run_local_command_modern_version(
+            result = run_detached_command(
                 command=cmd,
                 cwd=None,
-                is_checked=False,
                 timeout=_RENAME_TIMEOUT_SECONDS,
             )
         except (OSError, ConcurrencyGroupError) as e:
@@ -1381,10 +1377,9 @@ class AgentManager:
         try:
             _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
             try:
-                result = run_local_command_modern_version(
+                result = run_detached_command(
                     command=cmd,
                     cwd=work_dir,
-                    is_checked=False,
                     trace_output=True,
                     trace_on_line_callback=output_tail,
                     shutdown_event=self._shutdown_event,
@@ -1566,6 +1561,11 @@ class AgentManager:
                 on_output=self._handle_observe_output_line,
                 shutdown_event=self._shutdown_event,
                 is_checked_by_group=False,
+                # Not startable through detached_subprocess.runner.run_detached_command, which runs
+                # a command to completion, while this one streams for the life of the service.
+                # It needs the same isolation for the same reason: `stop()` ends it with
+                # SIGTERM, and mngr discovery shells out underneath it.
+                is_detached_from_terminal=True,
             )
         except (OSError, InvalidConcurrencyGroupStateError):
             _loguru_logger.warning(

@@ -789,6 +789,27 @@ def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
     assert "{}/snapshots/".format(minds_bridge.BOX_LOGS_DIR) in pull_command
 
 
+def test_a_snapshot_carries_the_transcripts_of_agents_the_run_destroyed(tmp_path: Path) -> None:
+    """A worker the lead destroys after merging leaves its conversation only in mngr's preserved dir,
+    which sits in the agent side's own host dir (/root/.mngr) rather than the workspace home tree."""
+    environment = MockBoxEnvironment(
+        tmp_path,
+        [
+            ScriptedExecRule("tar czf /tmp/post_message_1", [ok_result(mngr_exec_json(""))]),
+            ScriptedExecRule("mngr rsync", [ok_result()]),
+        ],
+    )
+
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1"))
+
+    tar_command = environment.exec_commands[0]
+    assert minds_bridge.PRESERVED_AGENT_STATE_DIR in tar_command
+    # Named unconditionally, tar exits nonzero on a run that destroyed nothing and the whole snapshot
+    # is skipped -- so the segment has to be conditional on the directory existing.
+    assert "[ -d " in tar_command
+    assert minds_bridge.WORKSPACE_BACKUP_ROOT in tar_command
+
+
 def test_read_box_file_tail_bounds_the_read_in_the_box(tmp_path: Path) -> None:
     environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule("tail -c", [ok_result("last lines\n")])])
 

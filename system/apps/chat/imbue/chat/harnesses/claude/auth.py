@@ -23,12 +23,12 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from detached_subprocess.runner import run_detached_command
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
 from imbue.chat.harnesses.pty_auth import PtyAuthError
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
-from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -59,8 +59,13 @@ _DISPLAY_SUFFIX_LENGTH: Final = 4
 # characters in `.claude.json`'s `customApiKeyResponses.approved` (the same
 # suffix length mngr's `approve_api_key_for_claude` records).
 _API_KEY_APPROVAL_SUFFIX_LENGTH: Final = 20
-# How long `claude auth status --json` may take to answer.
-_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 10.0
+# `claude auth status` is offline -- it reads ~/.claude/.credentials.json and prints -- so a
+# warm run takes well under a second. What it really waits on is cold start: paging in a 256MB
+# single-file binary plus node, on a container that is a VM guest whose memory the host reclaims
+# while it sleeps. Measured across one workspace's access log, the first check after an idle gap
+# routinely took 3-8s and was seen to exceed the old 10s budget (3 timeouts in 60 calls). Stays
+# under mngr_forward's 30s stall notice, so a slow check cannot make the workspace look wedged.
+_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS: Final = 25.0
 
 
 class ClaudeAuthError(PtyAuthError):
@@ -71,13 +76,23 @@ class CredentialPasteError(ClaudeAuthError):
     """Raised when a pasted credential blob fails strict validation."""
 
 
+class AuthStatusUnavailableError(ClaudeAuthError):
+    """Raised when the auth check did not finish, so nothing is known either way.
+
+    Distinct from a signed-out answer, and deliberately an exception rather than a field on
+    `AuthStatus`: every caller has to decide what to do about not knowing, and a field is too
+    easy to leave unread -- which would put `logged_in=False` in front of the user as though
+    the check had said so.
+    """
+
+
 # Public type aliases for dependency injection. Tests pass deterministic
 # fakes to `ClaudeAuthService`; production code uses the module defaults.
 CommandRunner = Callable[..., Any]
 
 
 def _default_command_runner(command: list[str], timeout: float, env: Mapping[str, str] | None = None) -> Any:
-    return run_local_command_modern_version(command=command, is_checked=False, timeout=timeout, cwd=None, env=env)
+    return run_detached_command(command=command, timeout=timeout, cwd=None, env=env)
 
 
 class AuthMode(str, Enum):
@@ -376,7 +391,9 @@ class ClaudeAuthService(MutableModel):
 
         Returns `logged_in=False` if the `claude` binary is missing or
         doesn't produce output, rather than raising, since the whole point
-        of the modal is to recover from broken auth state.
+        of the modal is to recover from broken auth state. A check that ran
+        out of time is different -- it says nothing about this workspace
+        either way -- and raises `AuthStatusUnavailableError`.
 
         The managed env currently in settings.json is overlaid on the
         status subprocess's environment (with `extra_env` layered on top):
@@ -403,6 +420,15 @@ class ClaudeAuthService(MutableModel):
         except ProcessSetupError as e:
             logger.warning("claude auth status failed to launch: {}", e)
             return self._with_derived_mode(AuthStatus(logged_in=False), combined_extra)
+
+        # `is_timed_out` is recomputed once the runner has drained the child's output, not at
+        # the moment it decided to kill, so a check that exited on its own a moment before the
+        # deadline reports it alongside a zero exit and a complete payload. Only a command that
+        # did not finish has nothing to say; a nonzero or absent code is what marks the kill.
+        if result.is_timed_out and result.returncode != 0:
+            raise AuthStatusUnavailableError(
+                f"claude auth status did not finish within {_CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS:.0f}s"
+            )
 
         stdout = result.stdout.strip() if isinstance(result.stdout, str) else ""
         if not stdout:

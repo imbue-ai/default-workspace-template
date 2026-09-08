@@ -52,10 +52,15 @@ def _error_response(detail: str, status_code: int = 400) -> Response:
 
 
 def get_status() -> Response:
-    """GET /api/claude-auth/status -- current auth state."""
+    """GET /api/claude-auth/status -- current auth state, or 503 if it could not be determined."""
     service: auth.ClaudeAuthService = get_state().claude_auth_service
     try:
         status = service.get_auth_status()
+    except auth.AuthStatusUnavailableError as e:
+        # A check that ran out of time is not a signed-out answer, and reporting one states as
+        # fact something the check never established. 503 rather than 500: the check may well
+        # answer on the next try.
+        return _error_response(str(e), status_code=503)
     except auth.ClaudeAuthError as e:
         return _error_response(str(e), status_code=500)
     return _json_response(_status_to_response(status).model_dump())
