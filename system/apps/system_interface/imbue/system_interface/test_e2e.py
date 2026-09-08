@@ -34,6 +34,7 @@ from playwright.sync_api import expect
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
 from imbue.system_interface.server import create_application
@@ -514,12 +515,8 @@ def _wait_for_surface_shown(page: Page, address: str, stamp: str | None = None) 
         reports.append(_surface_report(page, address, stamp))
         return reports[-1]["shownCount"] == 1
 
-    wait_for(
-        _is_shown,
-        timeout=15.0,
-        poll_interval=0.1,
-        error_message=f"the page for {address} never came on screen: {reports[-1] if reports else None}",
-    )
+    if not poll_until(_is_shown, timeout=15.0, poll_interval=0.1):
+        pytest.fail(f"the page for {address} never came on screen: {reports[-1]}")
     return reports[-1]
 
 
@@ -1182,13 +1179,14 @@ def test_new_tab_lists_the_template_catalog_and_adopts_one_into_a_seeded_chat(tm
         expect(detail).to_contain_text("Turns a noisy inbox into a scannable digest.")
 
         page.locator(".new-tab-template-adopt").click()
-        wait_for(
+        is_adopted = poll_until(
             lambda: f"create:new:{{'message': '/use-template {_CATALOG_TEMPLATE_REPOSITORY_URL}'}}"
             in server.stub_source.calls,
             timeout=15.0,
             poll_interval=0.1,
-            error_message=f"adopting the template never created a seeded chat: {server.stub_source.calls}",
         )
+        if not is_adopted:
+            pytest.fail(f"adopting the template never created a seeded chat: {server.stub_source.calls}")
         expect(page.locator(".new-tab-template-detail")).to_have_count(0)
 
 
@@ -1207,14 +1205,15 @@ def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Pa
         expect(page.locator(".new-tab-start-more")).to_have_count(0)
 
         page.locator('.new-tab-start-tile[data-start="learn"]').click()
-        wait_for(
+        is_seeded = poll_until(
             lambda: any(
                 call.startswith("create:new:{'message': 'Teach me about Minds") for call in server.stub_source.calls
             ),
             timeout=15.0,
             poll_interval=0.1,
-            error_message=f"the tile never created a seeded chat: {server.stub_source.calls}",
         )
+        if not is_seeded:
+            pytest.fail(f"the tile never created a seeded chat: {server.stub_source.calls}")
 
 
 @pytest.mark.timeout(60, func_only=False)
