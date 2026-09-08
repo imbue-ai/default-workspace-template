@@ -22,7 +22,8 @@
 import m from "mithril";
 import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
 import type { CatalogTemplate, ResolvedShelf, TemplateCatalogState } from "../models/TemplateCatalog";
-import { matchesQuery, resolveShelves, searchTemplates } from "../models/TemplateCatalog";
+import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
+import { matchesQuery } from "../models/search";
 import { serviceIconMarkup } from "./components/appIcon";
 import {
   START_OPTIONS,

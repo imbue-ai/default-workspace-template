@@ -8,12 +8,13 @@
  * nothing to give (a failed fetch is retried the next time a launcher mounts). A shell with no
  * catalog URL configured answers a null catalog, and the page omits the section.
  *
- * The pure helpers below (shelf resolution, the "All templates" row, the search match) are
- * exported so they can be tested without a DOM or a socket.
+ * The pure helpers below (shelf resolution, the "All templates" row, the template search, the
+ * write-up's paragraphs) are exported so they can be tested without a DOM or a socket.
  */
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
+import { matchesQuery } from "./search";
 
 export interface CatalogRequiredAccount {
   service: string;
@@ -99,20 +100,6 @@ export function resolveShelves(catalog: TemplateCatalog): ResolvedShelf[] {
   }
   shelves.push({ key: ALL_TEMPLATES_SHELF_KEY, title: ALL_TEMPLATES_SHELF_TITLE, templates: [...catalog.templates] });
   return shelves;
-}
-
-/**
- * Whether every whitespace-separated token of ``query`` appears somewhere in ``fields``, case-
- * insensitively -- so "open term" finds "Open new terminal" and word order does not matter. Plain
- * substrings, no fuzz: at this catalog's size a near miss confuses more than the extra typing costs.
- */
-export function matchesQuery(query: string, ...fields: readonly string[]): boolean {
-  const haystack = fields.join(" ").toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((token) => token !== "")
-    .every((token) => haystack.includes(token));
 }
 
 /** The templates a query finds: by title, description, or author. */
