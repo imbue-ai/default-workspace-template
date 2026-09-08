@@ -5,6 +5,7 @@ from scripts.flake_reconcile import CheckRunRecord
 from scripts.flake_reconcile import ClusterStatus
 from scripts.flake_reconcile import RunOutcome
 from scripts.flake_reconcile import aggregate_flaky_tests
+from scripts.flake_reconcile import merge_check_run_pages
 from scripts.flake_reconcile import parse_check_run_summary
 from scripts.flake_reconcile import preferred_status_for_branches
 
@@ -174,3 +175,21 @@ def test_aggregate_flaky_tests_keeps_flaky_tests_and_drops_pure_hard_failures() 
     # Raw failure lines are handed to the agent to cluster -- no root-causing here.
     assert "AssertionError: Creating host aaa-bbb in modal" in modal_flake.sample_failure_lines
     assert "AssertionError: Creating host ccc-ddd in modal" in modal_flake.sample_failure_lines
+
+
+def test_merge_check_run_pages_concatenates_every_page() -> None:
+    # `--slurp` yields one object per page, each repeating total_count; only check_runs merge.
+    pages = (
+        {"total_count": 104, "check_runs": [{"name": f"a{index}"} for index in range(100)]},
+        {"total_count": 104, "check_runs": [{"name": f"b{index}"} for index in range(4)]},
+    )
+    merged = merge_check_run_pages(pages)
+    assert len(merged) == 104
+    assert merged[0]["name"] == "a0"
+    assert merged[-1]["name"] == "b3"
+
+
+def test_merge_check_run_pages_tolerates_a_page_carrying_no_check_runs() -> None:
+    # A commit with no check-runs still answers with a page, and gh can emit no pages at all.
+    assert merge_check_run_pages(({"total_count": 0},)) == ()
+    assert merge_check_run_pages(()) == ()
