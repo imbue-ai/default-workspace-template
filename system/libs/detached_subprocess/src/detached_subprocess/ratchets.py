@@ -39,12 +39,15 @@ RAW_SPAWN_RULE = RegexRatchetRule(
         "calling it: handing it to something else as a value (a default argument, a callback) "
         "spawns just as attached."
     ),
-    # The import alternative is anchored to the start of a line and to the `from ... import`
-    # prefix so it reads code and not prose: the modules that spawn also name the runner in
-    # comments, which a bare name pattern would misfire on. What follows `import` is left open
-    # (up to a trailing `#`) so an alias spelling -- `... as _run` -- still matches.
+    # The import alternatives are anchored to the start of a line so they read code and not
+    # prose: the modules that spawn also name the runner in comments, which a bare name pattern
+    # would misfire on. One is anchored to the `from ... import` prefix, leaving what follows
+    # `import` open (up to a trailing `#`) so an alias spelling -- `... as _run` -- still
+    # matches; the other takes a line holding nothing but the name, which is the continuation
+    # line of a parenthesized import.
     pattern_string=(
         r"^from \S+ import [^#\n]*\brun_local_command_modern_version\b"
+        r"|^\s*run_local_command_modern_version,?\s*$"
         r"|run_local_command_modern_version\(|subprocess\.(?:Popen|run|call|check_call|check_output)\(|os\.system\("
     ),
     is_multiline=True,
