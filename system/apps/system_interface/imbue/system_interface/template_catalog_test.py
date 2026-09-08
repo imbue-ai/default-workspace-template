@@ -155,9 +155,13 @@ def test_store_waits_out_the_retry_window_after_a_failure_then_fetches_again(tmp
     assert store.read().availability is TemplateCatalogAvailability.UNAVAILABLE
     assert fetcher.fetched_urls == [_CATALOG_URL]
 
-    eager = _store(tmp_path, fetcher, retry_after_failure_seconds=0.0)
-    eager.read()
+    # With the window already past, the read after a failure fetches again and picks the catalog up.
+    eager_fetcher = FakeTemplateCatalogFetcher()
+    eager = _store(tmp_path, eager_fetcher, retry_after_failure_seconds=0.0)
+    assert eager.read().availability is TemplateCatalogAvailability.UNAVAILABLE
+    eager_fetcher.body_by_url[_CATALOG_URL] = catalog_document(catalog_template_document("inbox"))
     assert eager.read().availability is TemplateCatalogAvailability.FRESH
+    assert eager_fetcher.fetched_urls == [_CATALOG_URL, _CATALOG_URL]
 
 
 def test_store_refetches_once_the_copy_is_no_longer_fresh_and_keeps_the_old_one_on_a_refusal(tmp_path: Path) -> None:
