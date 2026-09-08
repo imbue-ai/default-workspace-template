@@ -83,11 +83,24 @@ Run these in order before `git merge`:
    means the base moved under the worker: the pass is stale -- do not merge;
    supersede it (below).
 
-   Every path in a creation's footprint belongs to that creation alone -- its
+   No shared *authored* file remains in that footprint -- a creation's
    supervisord program lives in its own drop-in rather than in the shared
-   config, and the root `pyproject.toml` needs no per-creation entry. So a
-   second creation being built in the same tree cannot make this pass look
-   stale, and cannot make the merge conflict.
+   config, and the root `pyproject.toml` needs no per-creation entry -- so two
+   creations built in the same tree no longer collide textually: neither
+   appears in the other's diff, and neither makes the merge conflict.
+
+   That is a claim about paths, not about correctness. The check reads one
+   creation's own paths, so it cannot see a change to something that creation
+   *depends on*: a shared library under `system/libs/` (`app_manifest` alone
+   backs `chat`, `terminal` and the system interface), a skill script an app
+   calls or reads (`system_interface`'s `update_staleness_test.py` asserts
+   against `update-self`'s `update_apply_contract.py`), or another creation's
+   `app.toml`, which every registry reader joins against. Such a change breaks
+   a pass this check calls fresh, and conflicts with nothing. Widening the
+   footprint to cover it would not do: every shared-library commit would then
+   stale every pass in flight, which is the serialization the split exists to
+   remove. So read a green result as "nothing this creation owns moved", not
+   as "this pass is still valid".
 
    `uv.lock` is deliberately NOT in the footprint. It is derived, every
    creation's scaffold regenerates it, and `.gitattributes` marks it
