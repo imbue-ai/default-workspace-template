@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 # ``system/changelog/mngr-new-tab-page.md``, which name the branch too) once the new-tab-page
 # work has merged to ``main``.
 DEFAULT_TEMPLATE_CATALOG_URL: Final[str] = (
-    "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/josh/new-tab-base/catalog/new-tab-templates.json"
+    "https://raw.githubusercontent.com/imbue-ai/default-workspace-template/mngr/new-tab-page/catalog/new-tab-templates.json"
 )
 
 

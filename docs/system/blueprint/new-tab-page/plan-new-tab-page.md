@@ -135,7 +135,7 @@ terminal". With no matches at all the page says so under the field.
 
 - The catalog is a JSON document at `system_interface_template_catalog_url` (the
   shell's config, `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL`; default the raw GitHub
-  URL of `catalog/new-tab-templates.json` on this repo's `josh/new-tab-base`
+  URL of `catalog/new-tab-templates.json` on this repo's `mngr/new-tab-page`
   branch). Its shape, format 1:
 
   ```json
