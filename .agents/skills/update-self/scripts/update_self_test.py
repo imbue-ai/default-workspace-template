@@ -3115,19 +3115,34 @@ def test_recovery_does_not_probe_an_app_the_restored_tree_does_not_declare(
     apply_repo: Path,
 ) -> None:
     """Rolled back into a tree from before the app model, no manifest declares an
-    instances API, so the shell's health alone confirms the recovery."""
+    instances API, so the shell's health alone confirms the recovery: the shell
+    failing its own probe after the forward restart rolls the apply back, and the
+    recovery counts as recovered with the chat's instances API never asked."""
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     runner = _apply_runner(_BACKEND_DIFF, apply_repo)
+    restarts = {"seen": 0}
+
+    def shell_unhealthy_until_recovery(url: str) -> int | None:
+        if _is_live(url) and restarts["seen"] < 2:
+            return 500
+        return 200
 
     def chat_never_healthy(url: str) -> update_runtime.FetchedPage:
         if url == _instances_url(_CHAT_ROW_URL):
             return update_runtime.FetchedPage(status=503, body="", headers={})
         return _built_app_page(url)
 
-    http = _FakeHttp(_all_healthy, chat_never_healthy)
+    def count_restarts(argv: list[str]) -> None:
+        if tuple(argv[:4]) == _RESTART:
+            restarts["seen"] += 1
+
+    runner.on_command = count_restarts
+    http = _FakeHttp(shell_unhealthy_until_recovery, chat_never_healthy)
+
     code = _apply(runner, http, _FakeSpawner(), apply_repo)
 
-    assert code == 0
+    assert code == 2
+    assert len(runner.argvs_starting(*_RESTART)) == 2  # forward, then recovery
     assert _instances_url(_CHAT_ROW_URL) not in http.page_urls
 
 
