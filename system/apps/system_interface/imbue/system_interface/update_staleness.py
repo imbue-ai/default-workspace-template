@@ -35,7 +35,7 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.system_interface.subprocess_runner import run_detached_command
+from detached_subprocess.runner import run_detached_command
 
 logger = _loguru_logger
 
@@ -73,37 +73,36 @@ _GIT_TIMEOUT_SECONDS = 10.0
 # holds nothing worth a graceful exit, and this runs on a request thread.
 _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 
-# What makes THIS running process stale: the code it holds in memory, the
-# manifests its environment was resolved from, and the settings file it
-# re-reads with long-lived parsing code. Deliberately NOT the frontend (the
-# served bundle is rebuilt on disk without a restart), docs, skills, tests, or
-# anything else agents routinely commit. (The update apply itself restarts the
+# What makes THIS running process stale: the code it holds in memory and the
+# manifests its environment was resolved from. Deliberately NOT the frontend
+# (the served bundle is rebuilt on disk without a restart), docs, skills,
+# tests, the other apps (separate processes, restarted with this one by every
+# apply), the mngr settings file (never read by this process), or anything
+# else agents routinely commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
-# a tree moved by anything else.) The vendored mngr is read at runtime through
-# more than its ``.py`` files (this process both imports it and shells out to
-# it), so everything there but docs and tests counts -- a missed skew is the
-# failure this whole detector exists to prevent.
+# a tree moved by anything else.) Everything under the vendored mngr tree but
+# docs and tests counts -- a missed skew is the failure this whole detector
+# exists to prevent.
 #
 # The imported-source prefixes are every workspace tree this process runs code
-# from: its own backend, the vendored mngr (imported in-process and shelled
-# out to), the OOM banding library (``agent_manager``, ``oom_prioritizer``) and
-# the tk command parser (the claude/codex/pi-coding tool labels). All are
-# editable installs resolving straight into these trees, so the moment one
-# advances this process is running old code. ``test_every_imported_workspace_
-# package_is_covered`` holds this list to the app's actual dependencies.
+# from: its own backend, the vendored mngr tree (its shared libraries are
+# imported here; the tree counts as a whole rather than module by module), and
+# the instances and manifest libraries. All are editable installs resolving straight into these
+# trees, so the moment one advances this process is running old code.
+# ``test_every_imported_workspace_package_is_covered`` holds this list to the
+# app's actual dependencies.
 _APP_BACKEND_PREFIX = "system/apps/system_interface/imbue/"
 _VENDORED_MNGR_PREFIX = "system/vendor/mngr/"
 _IMPORTED_SOURCE_PREFIXES = (
     _APP_BACKEND_PREFIX,
-    "system/services/oom_priority/",
-    "system/libs/tk_command_parsing/",
+    "system/libs/app_instances/",
+    "system/libs/app_manifest/",
 )
-_LIVE_SETTINGS_FILE = ".mngr/settings.toml"
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
-        "system/services/oom_priority/pyproject.toml",
-        "system/libs/tk_command_parsing/pyproject.toml",
+        "system/libs/app_instances/pyproject.toml",
+        "system/libs/app_manifest/pyproject.toml",
         "pyproject.toml",
         "uv.lock",
     }
@@ -117,7 +116,7 @@ def _is_test_file(path: str) -> bool:
 
 def _is_path_relevant_to_this_server(path: str) -> bool:
     """Whether a change to ``path`` leaves this running server stale."""
-    if path == _LIVE_SETTINGS_FILE or path in _BACKEND_MANIFESTS:
+    if path in _BACKEND_MANIFESTS:
         return True
     if path.startswith(_VENDORED_MNGR_PREFIX):
         return not path.endswith(".md") and not _is_test_file(path)

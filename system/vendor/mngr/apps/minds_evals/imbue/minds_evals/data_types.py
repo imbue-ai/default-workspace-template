@@ -715,9 +715,9 @@ def cross_step_lifetime_seconds(case: CaseConfig) -> float:
 
 
 class Transcript(FrozenModel):
-    """The conversation so far, as raw system_interface events (verbatim schema)."""
+    """The conversation so far, as raw chat app events (verbatim schema)."""
 
-    events: tuple[dict[str, Any], ...] = Field(description="Raw events from the workspace system_interface")
+    events: tuple[dict[str, Any], ...] = Field(description="Raw events from the workspace's chat app")
 
 
 class DeciderResult(FrozenModel):

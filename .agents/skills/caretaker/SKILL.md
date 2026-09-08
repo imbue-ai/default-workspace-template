@@ -116,7 +116,7 @@ You're always in control: everything here is adjustable any time -- the schedule
 
 That is the whole message. Right after sending it, silently surface your tab
 so the user sees it: run
-`python3 system/scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
+`python3 system/scripts/layout.py open "app:chat?instance=$MNGR_AGENT_ID"`
 (with no `--view`, the op goes to the view the connected client is looking at.
 Best-effort -- continue if it fails). Then
 create your permissions file at `data/.state/caretaker/permissions.md` with the
@@ -172,7 +172,7 @@ finds something.
    as your opening reply *before* you create or start any step, so it lands in the
    conversation and never as a step title, caption, or ticket. Right after the
    hello is sent, silently surface your tab with
-   `python3 system/scripts/layout.py open "chat:$MNGR_AGENT_NAME"`
+   `python3 system/scripts/layout.py open "app:chat?instance=$MNGR_AGENT_ID"`
    (best-effort, continue on failure; it lands in the view the user is looking
    at) -- after, not before, so the tab never pops up empty. It is one short,
    friendly opening message -- who you are and what you're about to do -- shaped by

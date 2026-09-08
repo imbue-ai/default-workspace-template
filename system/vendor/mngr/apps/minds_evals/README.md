@@ -707,10 +707,11 @@ kinds of row:
 - **Pre-existing rows** -- what the workspace already served before the agent ran. A single
   `workspace_state` probe taken before turn 1 supplies both halves of that set, because neither is
   complete alone: the app registry as it actually stood (the only source that sees a template app
-  registering its port from inside the script its supervisord program runs, as the terminal and the
-  owner-exec and vm-exec daemons do), unioned with the names the workspace's own
-  `system/supervisord.conf` registers through its `forward_port.py --name` invocations (which covers
-  a template app whose service had not registered its port yet). Measuring beats a hand-maintained
+  registering its port from inside the program its supervisord entry runs -- its own entry point,
+  or a launcher script -- as the terminal and the owner-exec and vm-exec daemons do), unioned with
+  the names the workspace's own `system/supervisord.conf` registers through its `forward_port.py`
+  invocations (`--name`, or the block's own program name for a `--manifest` registration), which
+  covers a template app whose service had not registered its port yet. Measuring beats a hand-maintained
   name list, so the set stays correct for a dwt fork or branch that ships extra apps. The manifest
   records it as `preexisting_registrations`.
 - **Rows the registry marks `internal = true`** -- machinery that forwards a port but has no page of
