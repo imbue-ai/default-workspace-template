@@ -13,6 +13,7 @@
 import m from "mithril";
 import type { CatalogTemplate, ResolvedShelf } from "../models/TemplateCatalog";
 import { TemplateArt } from "./TemplateArt";
+import { HOVER_LIFT_GROUP } from "./hoverLift";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 const CARD_FALLBACK_GLYPH_SIZE = 20;
@@ -68,9 +69,9 @@ export function TemplateCard(): m.Component<TemplateCardAttrs> {
         [
           m(TemplateArt, {
             template,
-            frameClass:
-              "rounded-lg transition-[transform,box-shadow] duration-(--dur-slow) group-hover:scale-[1.02] " +
-              "group-hover:shadow-overlay",
+            // The whole card is the target, so the title and byline lift the drawing too; the
+            // "Start something" tiles wear the same lift.
+            frameClass: `${HOVER_LIFT_GROUP} rounded-lg`,
             glyphSize: CARD_FALLBACK_GLYPH_SIZE,
           }),
           m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),

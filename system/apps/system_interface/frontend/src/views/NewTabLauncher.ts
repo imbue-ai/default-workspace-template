@@ -38,6 +38,7 @@ import {
 import type { StartOption } from "./startSomething";
 import { TemplateDetailModal } from "./TemplateDetailModal";
 import { TemplateCard, TemplateShelves } from "./TemplateShelves";
+import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -629,17 +630,24 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         "data-start": option.key,
         "aria-disabled": isDisabled ? "true" : undefined,
+        // A tile that can be picked floats on hover but does not move, and is the ``group`` that
+        // grows its glyph; the shadow alone is what says it is under the pointer, so a fill behind
+        // it would only mute the shadow and read as a second, different answer. A disabled tile
+        // stays flat, so the page never offers to open what it cannot.
         class:
           "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
-          (isDisabled ? "cursor-not-allowed text-faint" : "cursor-pointer text-primary hover:bg-fill-hover"),
+          (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
         onclick: isDisabled ? undefined : pick,
         ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
       },
       [
-        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones.
+        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones. It
+        // is also what grows on hover, so the movement is the glyph's and not the whole tile's.
         m(
           "span",
-          { class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : "") },
+          {
+            class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : ` ${HOVER_GLYPH_GROUP}`),
+          },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
