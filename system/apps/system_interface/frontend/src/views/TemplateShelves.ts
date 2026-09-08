@@ -53,6 +53,18 @@ export function railArrowTop(artCentre: number): string {
   return artCentre > 0 ? `${artCentre}px` : "50%";
 }
 
+/**
+ * Which ends of a rail fade out (the ``data-fade`` the stylesheet reads): the ones with more rail
+ * past them, so the fade says "there is more this way" and nothing else. An end the rail cannot
+ * scroll towards holds a card at rest, which is left alone -- unfaded, and with room to lift.
+ */
+export function railFadeSides(paging: { canPageLeft: boolean; canPageRight: boolean }): string {
+  if (paging.canPageLeft && paging.canPageRight) return "both";
+  if (paging.canPageLeft) return "start";
+  if (paging.canPageRight) return "end";
+  return "none";
+}
+
 export interface TemplateCardAttrs {
   template: CatalogTemplate;
   // Whether the card fills its grid cell (a search result) rather than taking a rail's card width.
@@ -158,11 +170,15 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
    * button and not the shared recipe: the recipe fixes a button's size, fill and radius, and here
    * those belong to the circle rather than to the thing being clicked.
    *
-   * The circle fills the sliver rather than overhanging it, so it never covers a card: the
-   * scroller's padding is what stands between it and the cards, and that padding is also what
-   * keeps a hovered card at the rail's end from being clipped (see the row below). The focus ring
-   * goes on the circle too -- the sliver is tall enough that ringing it would read as a frame
-   * around the whole rail.
+   * The circle is pinned to the sliver's outer edge, which is as far out as the page goes, and
+   * hangs a few pixels past the sliver's inner one. What it hangs over is the scroller's padding,
+   * which is empty while the rail is at rest -- the cards stop 8px clear of it -- and that padding
+   * is also what keeps a hovered card at either end from being clipped (see the row below). A card
+   * dragged freely with the trackpad can pass under that overhang; a paged one cannot, since the
+   * scroll padding lands it at the same place the cards rest.
+   *
+   * The focus ring goes on the circle too -- the sliver is tall enough that ringing it would read
+   * as a frame around the whole rail.
    */
   function railArrow(shelf: ResolvedShelf, direction: -1 | 1, artCentre: number): m.Vnode {
     const isRight = direction === 1;
@@ -206,7 +222,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   function railGutter(shelf: ResolvedShelf, direction: -1 | 1, canPage: boolean): m.Vnode {
     return m(
       "div",
-      { class: "relative w-6 shrink-0" },
+      { class: "relative w-5 shrink-0" },
       canPage ? railArrow(shelf, direction, artCentreByShelf.get(shelf.key) ?? 0) : null,
     );
   }
@@ -216,33 +232,38 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
     return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
       m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
       // The row hangs its slivers out past the page column, so the arrows sit in the page's margin
-      // and the cards still line up under the heading: -mx-6 back, w-6 slivers and the scroller's
-      // px-2 forward leave the cards at the heading's own px-2. -mx-6 is also the most the page
+      // and the cards still line up under the heading: -mx-6 back, w-5 slivers and the scroller's
+      // px-3 forward leave the cards at the heading's own px-2. -mx-6 is also the most the page
       // can give, being exactly the launcher's own padding; past that the arrows would fall
       // outside the scroll box and raise a scrollbar.
       //
-      // That fixes the budget at 32px, and the scroller's share of it is what keeps a hovered
-      // card whole. Its overflow clips at its padding edge, so a lifted card at either end of the
-      // rail loses whatever grows past that: at 4px it kept its shadow but had its rounded corner
-      // sliced flat. 8px clears both the 2% growth and the shadow's ~6px reach (a 12px blur), and
-      // the arrows pay for it by wearing a 24px circle rather than a 28px one.
+      // That fixes the budget at 32px, and the scroller's share of it is what keeps a hovered card
+      // whole: it clips at its padding edge, so a lifted card at either end of the rail loses
+      // whatever grows past that. The 2% growth costs ~2px and the shadow reaches ~6px (a 12px
+      // blur), so 8px only just covered it and trimmed the shadow's last of it; 12px clears both
+      // with room to spare. The arrows keep their 24px circle by giving up sliver width instead:
+      // the circle hangs 4px past its 20px sliver, over the scroller's padding, which no card
+      // occupies while the rail is at rest.
       m("div", { class: "new-tab-template-rail-row -mx-6 mt-2 flex" }, [
         railGutter(shelf, -1, paging.canPageLeft),
+        // The scroller lays the cards out itself rather than wrapping a flex row, because that is
+        // what makes its trailing padding real: a scroll container in block layout leaves its
+        // end-side padding out of its scrollable extent, so the last card came to rest flush
+        // against the edge and had its lift clipped there however much padding was asked for. A
+        // flex scroll container keeps it, and both ends clear alike.
         m(
           "div",
           {
-            class: "new-tab-template-rail min-w-0 flex-1 snap-x overflow-x-auto scroll-pl-2 px-2 pt-1 pb-3",
+            class:
+              "new-tab-template-rail flex min-w-0 flex-1 snap-x items-start gap-6 overflow-x-auto " +
+              "scroll-pl-3 px-3 pt-1 pb-3",
+            // Which ends fade; the mask itself is in style.css, where the eased ramp lives.
+            "data-fade": railFadeSides(paging),
             oncreate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onupdate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onscroll: (event: Event) => measureRail(shelf.key, event.currentTarget as HTMLElement),
           },
-          m(
-            "div",
-            { class: "flex items-start gap-6" },
-            shelf.templates.map((template) =>
-              m(TemplateCard, { key: template.slug, template, isFill: false, onPick }),
-            ),
-          ),
+          shelf.templates.map((template) => m(TemplateCard, { key: template.slug, template, isFill: false, onPick })),
         ),
         railGutter(shelf, 1, paging.canPageRight),
       ]),

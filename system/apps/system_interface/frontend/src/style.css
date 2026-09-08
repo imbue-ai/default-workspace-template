@@ -577,13 +577,70 @@ body > .dv-tab.dv-dragged .dv-default-tab {
  * selectors query, and the 12px glyph size is set on the icon markup at the
  * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
 
-/* The New Tab page's template rails scroll sideways behind their paging arrows; the scrollbar
+/* The New Tab page's template rails scroll sideways beside their paging arrows; the scrollbar
    itself is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's
-   edge is what says there is more. */
+   edge is what says there is more.
+
+   Each end that still has rail past it fades out, which is the rest of saying so. The fade is a
+   MASK rather than a scrim painted in the page's colour: it takes the cards' own shadows down with
+   them instead of laying a pale sheet over them, and it does not have to be kept in step with
+   whatever is behind the rail.
+
+   THE STOPS ARE EASED, and that is the whole point of writing this by hand. A two-stop gradient
+   moves alpha at a constant rate across the ramp, but the eye's response to lightness is not
+   constant -- it is far more sensitive at the dark end than the light one -- so a linear ramp does
+   not read as linear. It reads as a visible line where the fade starts, then a long flat tail that
+   never quite arrives. The stops below sample smoothstep (3t^2 - 2t^3) at eighths, which starts
+   and ends gently and does its work in the middle, so the fade reads as continuous with no edge to
+   catch on. The percentages are of the fade's own width, so --rail-fade retunes it in one place.
+
+   Only an end the rail can scroll towards is faded, so a card at rest against an edge -- the first
+   one, or the last one once the rail is paged to its end -- is never dimmed, and the hover lift
+   stays whole there. */
 .new-tab-template-rail {
   scrollbar-width: none;
+  --rail-fade: 40px;
+  --rail-fade-start: linear-gradient(
+    to right,
+    rgb(0 0 0 / 0) 0,
+    rgb(0 0 0 / 0.043) calc(var(--rail-fade) * 0.125),
+    rgb(0 0 0 / 0.156) calc(var(--rail-fade) * 0.25),
+    rgb(0 0 0 / 0.316) calc(var(--rail-fade) * 0.375),
+    rgb(0 0 0 / 0.5) calc(var(--rail-fade) * 0.5),
+    rgb(0 0 0 / 0.684) calc(var(--rail-fade) * 0.625),
+    rgb(0 0 0 / 0.844) calc(var(--rail-fade) * 0.75),
+    rgb(0 0 0 / 0.957) calc(var(--rail-fade) * 0.875),
+    rgb(0 0 0 / 1) var(--rail-fade)
+  );
+  --rail-fade-end: linear-gradient(
+    to left,
+    rgb(0 0 0 / 0) 0,
+    rgb(0 0 0 / 0.043) calc(var(--rail-fade) * 0.125),
+    rgb(0 0 0 / 0.156) calc(var(--rail-fade) * 0.25),
+    rgb(0 0 0 / 0.316) calc(var(--rail-fade) * 0.375),
+    rgb(0 0 0 / 0.5) calc(var(--rail-fade) * 0.5),
+    rgb(0 0 0 / 0.684) calc(var(--rail-fade) * 0.625),
+    rgb(0 0 0 / 0.844) calc(var(--rail-fade) * 0.75),
+    rgb(0 0 0 / 0.957) calc(var(--rail-fade) * 0.875),
+    rgb(0 0 0 / 1) var(--rail-fade)
+  );
 }
 
 .new-tab-template-rail::-webkit-scrollbar {
   display: none;
+}
+
+.new-tab-template-rail[data-fade="start"] {
+  mask-image: var(--rail-fade-start);
+}
+
+.new-tab-template-rail[data-fade="end"] {
+  mask-image: var(--rail-fade-end);
+}
+
+/* Both ends: two masks kept to whichever is the more transparent of the pair, so each end fades on
+   its own and the middle, opaque in both, is untouched. */
+.new-tab-template-rail[data-fade="both"] {
+  mask-image: var(--rail-fade-start), var(--rail-fade-end);
+  mask-composite: intersect;
 }
