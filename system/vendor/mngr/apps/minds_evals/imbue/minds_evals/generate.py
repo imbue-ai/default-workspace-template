@@ -103,8 +103,8 @@ AGENT_TIMEOUT_GRACE_SECONDS: Final[float] = 300.0
 # rewardkit aggregates a dimension in two levels: all of a directory's .py criteria are averaged
 # into ONE programmatic reward of weight 1.0, and each judge toml is a second reward carrying its
 # own weight -- so an even split is weight 1.0 regardless of how many programmatic criteria a case
-# declares. (Contrast the quality dimension's weight of 3.0, which buys equal weight PER CRITERION
-# across its three judge criteria and one programmatic guard.)
+# declares. (Contrast the quality dimension, whose judge weight is set to the number of judge criteria
+# so that every criterion in the dimension -- judged and programmatic alike -- carries equal weight.)
 OUTCOME_JUDGE_WEIGHT: Final[float] = 1.0
 
 # What the outcome judge reads: the case's ground truth (rendered at grade time), the evidence index,
@@ -289,7 +289,7 @@ def _reject_ungradeable_reward_floors(
 ) -> None:
     """Refuse a floor on a dimension this step's own verifier will not emit.
 
-    Three of the four dimensions are unconditional: `gates` and `quality` ship in every verifier
+    Only the outcome dimension is conditional: `gates` and `quality` ship in every verifier
     build context and `reward` is what finalize.py composes. `outcome` is the exception -- the
     criteria directory is written only for a step that declares expectations, so that rewardkit
     does not score a step with nothing to score. Harbor reads a threshold on a key the verifier
@@ -931,6 +931,58 @@ def _oracle_conversation(case_config: CaseConfig) -> list[dict[str, str]]:
     return conversation
 
 
+# One shell inference stitched into the oracle's first agent step: a `tk` step record, and a tool
+# result carrying no failure signature. Without it the oracle carries no tool calls at all, so both
+# grade-time pre-steps see nothing to read -- the timeline renders no blocks and the harness report
+# finds no signatures -- and `-a oracle` scores a free 10 on `nontechnical_status_language` and a
+# clean 1.0 on both soundness criteria while exercising none of that code. Decorating the built
+# document rather than teaching build_hand_built_trajectory about tool calls keeps the driver's own
+# fallback shape (which really does carry none) exactly as it is.
+_ORACLE_STEP_ID: Final[str] = "ora-step-a1b2"
+_ORACLE_STEP_TITLE: Final[str] = "Set the app up so you can open it"
+_ORACLE_STEP_SUMMARY: Final[str] = "Set it up and checked it opens."
+_ORACLE_TOOL_CALL_ID: Final[str] = "oracle-tk-1"
+
+
+def _with_oracle_tool_calls(document: dict[str, Any]) -> dict[str, Any]:
+    """The oracle document with one shell inference attached to its first agent step, so the
+    grade-time pre-steps have real tool output to read. See the constants above for why."""
+    # `to_json_dict()` is our own serializer, so "steps" is there by construction; a KeyError here
+    # would mean the document shape changed, which should stop generation rather than be tolerated.
+    for step in document["steps"]:
+        if step.get("source") != "agent":
+            continue
+        step["tool_calls"] = [
+            {
+                "tool_call_id": _ORACLE_TOOL_CALL_ID,
+                "function_name": "Bash",
+                "arguments": {
+                    "command": 'tk create --step "{}" && tk close {} "{}"'.format(
+                        _ORACLE_STEP_TITLE, _ORACLE_STEP_ID, _ORACLE_STEP_SUMMARY
+                    )
+                },
+            }
+        ]
+        step["observation"] = {
+            "results": [
+                {
+                    "source_call_id": _ORACLE_TOOL_CALL_ID,
+                    "content": "Created {}: {}\ntk-step {} title: {}\ntk-step {} summary: {}".format(
+                        _ORACLE_STEP_ID,
+                        _ORACLE_STEP_TITLE,
+                        _ORACLE_STEP_ID,
+                        _ORACLE_STEP_TITLE,
+                        _ORACLE_STEP_ID,
+                        _ORACLE_STEP_SUMMARY,
+                    ),
+                    "extra": {"is_error": False},
+                }
+            ]
+        }
+        break
+    return document
+
+
 @pure
 def render_oracle_trajectory_json(case_config: CaseConfig) -> str:
     """The oracle's trajectory.json: the canned conversation in the hand-built ATIF shape the driver
@@ -952,7 +1004,7 @@ def render_oracle_trajectory_json(case_config: CaseConfig) -> str:
         boundaries=(),
     )
     assert oracle_trajectory is not None, "an eval case always has at least one prompt"
-    return json.dumps(oracle_trajectory.to_json_dict(), indent=2)
+    return json.dumps(_with_oracle_tool_calls(oracle_trajectory.to_json_dict()), indent=2)
 
 
 @pure

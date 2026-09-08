@@ -55,6 +55,11 @@ DEFAULT_CALL_TIMEOUT_SECONDS: Final[float] = 120.0
 # an action is chosen from.
 MAX_STATE_PROMPT_CHARS: Final[int] = 12_000
 
+# How much of that budget the TAIL of a cut state keeps. Overlays and detail panels are appended to
+# the end of the document (React portals render at the end of body), so a head-only cut hides
+# exactly the element the agent's last action opened and it loops re-opening it.
+TAIL_STATE_PROMPT_CHARS: Final[int] = 5_000
+
 _ACTION_TOOL_NAME: Final[str] = "next_browser_action"
 _READING_TOOL_NAME: Final[str] = "flow_reading"
 
@@ -130,7 +135,8 @@ _ACTION_TOOL: Final[ToolParam] = {
                 "enum": [member.value for member in FlowActionKind],
                 "description": (
                     "click: click the element named by role + target. "
-                    "input: type text into the element named by role + target. "
+                    "input: type text into the element named by role + target -- any editable "
+                    "element, not only textboxes (headings and cells are often editable in place). "
                     "keys: press a key combination (e.g. 'Enter'). "
                     "scroll: scroll the page by amount pixels. "
                     "open: navigate to the url in text. "
@@ -185,6 +191,13 @@ _SYSTEM_PROMPT: Final[str] = (
     "your reasoning rather than hunting for a workaround.\n"
     "- After typing into a field you usually need a separate action to submit it (press Enter, or "
     "click the button).\n"
+    "- To EDIT text an element already shows (a heading, a label, a cell), use 'input' on that "
+    "element even when its role is not 'textbox': many apps make text editable in place, and no "
+    "input element ever appears. Commit with Enter. Success shows as the element's text having "
+    "changed, not as an edit control appearing.\n"
+    "- Never repeat an action the history says left the page unchanged. Clicking the same thing "
+    "again will change nothing; take the next plausible gesture instead (for an edit, 'input' into "
+    "the element, then Enter).\n"
     "- Choose 'done' as soon as every declared step has been carried out."
 )
 
@@ -201,12 +214,20 @@ _READING_SYSTEM_PROMPT: Final[str] = (
 
 @pure
 def truncate_state(state_text: str) -> str:
-    """The head of a page state. The URL, the title and the top of the accessibility tree lead it, so
-    the head is the part an action is chosen from; a long tail of static text is not worth the
-    tokens."""
+    """The head AND the tail of a page state, with the middle elided. The head -- the URL, the title
+    and the top of the accessibility tree -- is the part most actions are chosen from, but a panel
+    or dialog the last action opened renders at the END of the tree, so a head-only cut would show
+    the agent a page on which its click did nothing. The cuts land on line boundaries because the
+    tree is line-oriented and a half line reads as an element that is not there."""
     if len(state_text) <= MAX_STATE_PROMPT_CHARS:
         return state_text
-    return state_text[:MAX_STATE_PROMPT_CHARS] + "\n[...page state truncated...]"
+    head = state_text[: MAX_STATE_PROMPT_CHARS - TAIL_STATE_PROMPT_CHARS]
+    if "\n" in head:
+        head = head.rsplit("\n", 1)[0]
+    tail = state_text[-TAIL_STATE_PROMPT_CHARS:]
+    if "\n" in tail:
+        tail = tail.split("\n", 1)[1]
+    return "{}\n[...page state truncated; the end of the page follows...]\n{}".format(head, tail)
 
 
 @pure

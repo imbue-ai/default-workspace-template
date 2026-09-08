@@ -2196,6 +2196,12 @@ class EvidenceCollector(MutableModel):
                     utc_now_iso(),
                 )
             )
+            if outcome.is_ok and outcome.state_text == state_text:
+                # An action that landed without changing anything readable. Recorded as an observed
+                # fact the next decision sees: without it the agent has looped on a silent no-op
+                # believing it progressed (observed: 15 identical clicks on an in-place-editable
+                # heading whose only click feedback was a CSS focus wash).
+                history.append("(the page state is exactly the same as before that action)")
             state_text = outcome.state_text or state_text
 
         # The agent's account of the state the flow ended in. Evidence for the judge, never a

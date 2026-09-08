@@ -1663,6 +1663,31 @@ def test_a_step_whose_frame_was_not_captured_names_no_screenshot(tmp_path: Path)
     assert [json.loads(line)["screenshot"] for line in log.splitlines()] == ["", "", ""]
 
 
+def test_the_next_decision_is_told_when_an_action_changed_nothing(tmp_path: Path) -> None:
+    # A click can land and still alter nothing readable (an in-place-editable heading whose only
+    # click feedback is a CSS focus wash). Without the observed fact in its history, the agent has
+    # re-tried such a click to the step cap, reasoning each time that it must have progressed.
+    agent = ScriptedVerificationAgent(actions=[click_action(), click_action(), done_action()], readings=[reading()])
+
+    _collector, _environment = _run_flow_collector(tmp_path, agent)
+
+    # The default scripted step returns the same page every time, so the first click was a silent
+    # no-op and the second decision must be told so.
+    assert "(the page state is exactly the same as before that action)" in agent.histories[1]
+
+
+def test_a_step_that_changed_the_page_leaves_no_no_change_note(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule(
+        "box_flow_step.py", [_step_result(), _step_result(snapshot='- heading "Renamed by eval" [level=3]')]
+    )
+
+    _collector, _environment = _run_flow_collector(tmp_path, agent, rules)
+
+    assert all("exactly the same" not in entry for entry in agent.histories[1])
+
+
 def test_collector_records_a_flow_that_ran_as_completed_whatever_the_app_showed(tmp_path: Path) -> None:
     # Trial time records that the declared steps were carried out; whether the app ended up in the
     # state the `expect` describes is the grade-time judge's call, from this evidence. Recording a

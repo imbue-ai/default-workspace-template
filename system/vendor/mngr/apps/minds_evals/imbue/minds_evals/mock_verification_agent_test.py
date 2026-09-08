@@ -19,6 +19,9 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
     action_count: int = Field(default=0, description="How many decisions have been handed out")
     reading_count: int = Field(default=0, description="How many readings have been handed out")
     prompts: list[str] = Field(default_factory=list, description="Every page state the agent was shown")
+    histories: list[tuple[str, ...]] = Field(
+        default_factory=list, description="The history each decision was shown, in order"
+    )
 
     def _record(self, is_answered: bool) -> ui_flows.VerifierCall:
         call = ui_flows.VerifierCall(
@@ -31,6 +34,7 @@ class ScriptedVerificationAgent(ui_flows.VerificationAgent):
         self, flow_steps: str, history: tuple[str, ...], state_text: str
     ) -> tuple[ui_flows.FlowAction | None, ui_flows.VerifierCall]:
         self.prompts.append(state_text)
+        self.histories.append(history)
         assert self.actions, "the scripted agent was asked for an action but has no script"
         action = self.actions[min(self.action_count, len(self.actions) - 1)]
         self.action_count += 1

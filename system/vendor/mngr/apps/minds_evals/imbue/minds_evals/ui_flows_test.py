@@ -276,11 +276,20 @@ def test_build_action_prompt_says_so_when_nothing_has_happened_yet() -> None:
     assert "- textbox 'Add a task'" in prompt
 
 
-def test_truncate_state_marks_a_page_it_cut() -> None:
-    truncated = ui_flows.truncate_state("x" * (ui_flows.MAX_STATE_PROMPT_CHARS + 100))
+def test_truncate_state_keeps_the_head_and_the_tail_of_a_page_it_cut() -> None:
+    filler = "- generic [ref=e{}]: item\n" * 2000
+    state = "page https://app.example/ (Roadmap)\n" + filler.format(*range(2000)) + '- complementary "Item details"'
 
-    assert truncated.endswith("[...page state truncated...]")
-    assert len(truncated) < ui_flows.MAX_STATE_PROMPT_CHARS + 100
+    truncated = ui_flows.truncate_state(state)
+
+    assert truncated.startswith("page https://app.example/ (Roadmap)")
+    assert truncated.endswith('- complementary "Item details"')
+    assert "[...page state truncated" in truncated
+    assert len(truncated) <= ui_flows.MAX_STATE_PROMPT_CHARS + 100
+
+
+def test_truncate_state_returns_a_short_page_verbatim() -> None:
+    assert ui_flows.truncate_state("- button 'Add'") == "- button 'Add'"
 
 
 def test_summarize_verifier_usage_counts_the_calls_that_produced_nothing() -> None:
