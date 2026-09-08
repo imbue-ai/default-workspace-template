@@ -53,6 +53,7 @@ def test_error_snippet_is_empty_for_a_call_a_hook_refused() -> None:
     )
     assert error_snippet(blocked) == ""
     assert error_snippet("Stop hook error: something") == ""
+    assert error_snippet("PreToolUse:mcp__linear__create-issue hook error: [check.sh]: not now") == ""
 
 
 def test_error_snippet_keeps_an_ordinary_error_that_merely_mentions_a_hook() -> None:
