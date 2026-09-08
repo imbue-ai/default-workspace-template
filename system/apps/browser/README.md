@@ -37,8 +37,8 @@ agent, identified by its `MNGR_AGENT_ID`, or the human).
   /browsers` (409 with the reason while the fleet is full or Chromium is not
   installed), delete is the same close as `DELETE /browsers/<name>`, and a
   location report with an absolute `http(s)` URL navigates the live browser's
-  active tab (409 while an agent holds it, while it is launching or crashed, or
-  when Chromium refuses the navigation; a rooted path is 400) and checkpoints
+  active tab (409 while an agent holds it, while it is launching, stopped, or
+  crashed, or when Chromium refuses the navigation; a rooted path is 400) and checkpoints
   the manifest so a restart restores the new page. Reads, delete, and location
   answer 503 until the restore finishes,
   like the daemon's own state-changing routes; create does not wait, like `POST
