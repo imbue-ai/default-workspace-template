@@ -1,7 +1,7 @@
 """Numbered browser names + server-side name validation.
 
 Browsers are addressed by NAME. The name is the addressing key everywhere: the
-CLI ``<name>`` arg, ``service:browser?session=<name>``, the cast WS path
+CLI ``<name>`` arg, the address ``app:browser?instance=<name>``, the cast WS path
 ``/browsers/<name>/cast``, the manifest ``id``, and the persistent profile dir
 ``browser-use-user-data-dir-<name>``. :func:`is_valid_browser_name` therefore
 guarantees a name is safe as a URL path segment, a query value, and a filesystem

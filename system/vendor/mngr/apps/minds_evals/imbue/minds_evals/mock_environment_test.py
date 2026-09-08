@@ -1,6 +1,6 @@
 """A concrete scripted BaseEnvironment implementation for driver/bridge unit tests: commands are
 matched against ordered substring rules, each yielding a sequence of canned ExecResults (the last
-one repeats). An optional ConversationModel additionally serves the workspace system_interface's
+one repeats). An optional ConversationModel additionally serves the workspace chat app's
 stateful sign-in, chat-creation, message, events, and agents endpoints, so the driver's whole
 bring-up and turn loop can be exercised end to end."""
 
@@ -66,7 +66,7 @@ WELCOME_EXCHANGE: Final[tuple[dict, ...]] = (
 
 
 class ConversationModel:
-    """A stateful model of the workspace's chat surface for the bridged system_interface calls.
+    """A stateful model of the workspace's chat surface for the bridged chat app calls.
 
     A workspace boots with no chat: the agents listing carries only ``system-services`` until a
     ``create-chat`` call makes one. That chat is listed, and reports WAITING, before its
@@ -188,7 +188,7 @@ class ConversationModel:
         return curl_stdout(json.dumps(created), status=201)
 
     def handle(self, command: str) -> str | None:
-        """Return the curl-body stdout for a system_interface call, or None if this command is not
+        """Return the curl-body stdout for a chat app call, or None if this command is not
         one (so the caller falls back to scripted rules)."""
         if "/api/claude-auth/submit-credentials" in command:
             self.submitted_credential_commands.append(command)

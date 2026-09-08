@@ -4,18 +4,18 @@
  * deleted.
  *
  * Reached from the sidebar's switcher header context menu, and only ever for a
- * real project. Creating no longer goes through here: the switcher's "New
+ * real project. Creating does not go through here: the switcher's "New
  * project" mints "Project N" with the next unused glyph on the spot, so the
- * user lands in the New Tab launcher instead of on a form. Everything never
- * reaches here either -- it is a view rather than a project, with no name,
- * color, glyph or member list of its own and nothing to delete.
+ * user lands on the new project's New Tab page instead of on a form. Everything
+ * never reaches here either -- it is a view rather than a project, with no
+ * name, color, glyph or tab set of its own and nothing to delete.
  *
  * Deleting is confirm-gated in place -- a second, red button inside this same
  * dialog rather than a second stacked dialog -- because the modal already owns
  * the screen and the name being deleted is right there in the preview.
- * Deleting a project is itself a pure view operation now: it removes the
- * project's own view and member list and nothing more, so there is no longer
- * any consequence for the confirmation to enumerate beyond that.
+ * Deleting a project is itself a pure view operation: it removes the
+ * project's own view and tab set and nothing more, so the confirmation has
+ * no other consequence to enumerate.
  *
  * Built on the shared Modal shell (views/components/Modal.ts): a backdrop mousedown to
  * dismiss, Enter in the name field to save, and Escape through the shell's
@@ -24,13 +24,13 @@
  */
 
 import m from "mithril";
-import { Modal } from "./components/Modal";
+import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { deleteProjectRequest, updateProjectSettings } from "../models/Projects";
-import type { ProjectInfo } from "../models/Projects";
+import type { ProjectInfo } from "../models/Inventory";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
-import { Button } from "./components/Button";
-import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "./components/Modal";
-import { inputClass } from "./components/Input";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { MODAL_LABEL_CLASS, MODAL_MESSAGE_CLASS } from "@imbue/workspace-ui/src/components/Modal";
+import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 
 export interface ProjectSettingsModalAttrs {
   project: ProjectInfo;
@@ -39,8 +39,8 @@ export interface ProjectSettingsModalAttrs {
   // normalizes the name).
   onSaved: (project: ProjectInfo) => void;
   // Fired once the project is gone server-side. The parent re-lists; a client
-  // mounted on the deleted project is moved off it by the `project_deleted`
-  // broadcast, the same path another client's delete takes.
+  // mounted on the deleted project is moved off it when the `projects_updated`
+  // push no longer names it, the same path another client's delete takes.
   onDeleted: (projectId: string) => void;
   onCancel: () => void;
 }
@@ -77,7 +77,7 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
-      attrs.onSaved(await updateProjectSettings(attrs.project.project_id, chosen, color, glyphIndex));
+      attrs.onSaved(await updateProjectSettings(attrs.project.id, chosen, color, glyphIndex));
     } catch (e) {
       error = (e as Error).message ?? "The project could not be saved.";
       isSaving = false;
@@ -92,8 +92,8 @@ export function ProjectSettingsModal(): m.Component<ProjectSettingsModalAttrs> {
     m.redraw();
 
     try {
-      await deleteProjectRequest(attrs.project.project_id);
-      attrs.onDeleted(attrs.project.project_id);
+      await deleteProjectRequest(attrs.project.id);
+      attrs.onDeleted(attrs.project.id);
     } catch (e) {
       // Stay in the confirmation step: the reason lands next to the button that
       // failed, and a retry is one click away rather than two.

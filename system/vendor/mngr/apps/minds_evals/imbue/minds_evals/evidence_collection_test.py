@@ -31,7 +31,7 @@ from imbue.minds_evals.testing import BOX_COMMON_TRANSCRIPT_PATH
 from imbue.minds_evals.testing import BOX_WORKSPACE_TRAJECTORY_PATH
 from imbue.minds_evals.testing import CHAT_WORK_DIR
 from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
-from imbue.minds_evals.testing import SCRIPT_REGISTERED_APPS
+from imbue.minds_evals.testing import SELF_REGISTERED_APPS
 from imbue.minds_evals.testing import TEMPLATE_CONFIG_REGISTRATIONS
 from imbue.minds_evals.testing import TEMPLATE_PREEXISTING_APPS
 from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
@@ -315,15 +315,52 @@ def test_parse_supervised_registrations_accepts_either_flag_order() -> None:
     assert evidence_collection.parse_supervised_registrations(conf) == {"todo": "todo"}
 
 
+def test_parse_supervised_registrations_reads_a_manifest_registration_as_the_programs_own_name() -> None:
+    # From the workspace app model on, an app with a manifest registers through
+    # `--manifest <app.toml>` and no `--name`; the manifest's name is the program's name, and a
+    # multi-port block may mix both forms.
+    conf = (
+        "[program:files]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml '
+        '--url http://localhost:8300 && exec dufs"\n'
+        "\n"
+        "[program:dashboard]\n"
+        "command=bash -c 'python3 system/scripts/forward_port.py --manifest system/apps/dashboard/app.toml "
+        "--url http://localhost:9000 && python3 system/scripts/forward_port.py --url http://localhost:9001 "
+        "--name dashboard-admin && dashboard'\n"
+        "\n"
+        "[program:terminal]\ncommand=terminal-app\n"
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {
+        "files": "files",
+        "dashboard": "dashboard",
+        "dashboard-admin": "dashboard",
+    }
+
+
+@pytest.mark.parametrize("chain", ["&&", ";", "||"])
+def test_parse_supervised_registrations_stops_a_manifest_call_at_the_apps_own_command(chain: str) -> None:
+    # The app command chained after the manifest call may carry a --name of its own; it is not
+    # the registration's, whichever operator a hand-written block chains with.
+    conf = (
+        "[program:notes]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/notes/app.toml '
+        '--url http://localhost:8400 {} docker run --name notes-db postgres"\n'.format(chain)
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {"notes": "notes"}
+
+
 def test_the_config_half_names_only_the_apps_it_registers_itself() -> None:
     # The config half of the pre-existing set, joined through the forward_port.py calls in the file
     # rather than read off a hand-kept name list -- which is what keeps it correct as the template
-    # gains and loses apps. An app that registers from inside its program's script is not here at
+    # gains and loses apps. An app that registers from inside the program it runs is not here at
     # all; the registry half is what covers those.
     config_registrations = frozenset(evidence_collection.parse_supervised_registrations(TEMPLATE_SUPERVISORD_CONF))
 
     assert config_registrations == TEMPLATE_CONFIG_REGISTRATIONS
-    assert not config_registrations & SCRIPT_REGISTERED_APPS
+    assert not config_registrations & SELF_REGISTERED_APPS
 
 
 @pytest.mark.parametrize(
@@ -382,11 +419,11 @@ def test_parse_registry_snapshot_reads_names_only_from_a_registry_that_is_there(
 
 
 def test_parse_registry_snapshot_takes_both_halves_from_the_one_probe() -> None:
-    # One probe, both halves: here the registry knows only the script-registered rows and the config
+    # One probe, both halves: here the registry knows only the self-registered rows and the config
     # knows only the rest, so the snapshot has to end up with both.
     registry = "".join(
         '[[apps]]\nname = "{}"\nurl = "http://localhost:7681"\n\n'.format(name)
-        for name in sorted(SCRIPT_REGISTERED_APPS)
+        for name in sorted(SELF_REGISTERED_APPS)
     )
     output = workspace_state_output(registry, supervisord=TEMPLATE_SUPERVISORD_CONF)
 

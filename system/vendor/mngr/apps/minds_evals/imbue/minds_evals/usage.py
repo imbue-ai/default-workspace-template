@@ -3,8 +3,8 @@
 Two different LLM consumers run during a trial and they must not be conflated:
 
 - the **workspace agent** under test, whose consumption is the eval's subject. Its per-message usage
-  already rides the workspace event stream: the workspace's ``system_interface`` parses claude's
-  session files itself (its ``AgentSessionWatcher``, which reimplements mngr's common_transcript
+  already rides the workspace event stream: the workspace's chat app parses claude's session
+  files itself (its ``AgentSessionWatcher``, which reimplements mngr's common_transcript
   conversion) and attaches a ``usage`` block and a ``model`` to every ``assistant_message``. So
   nothing has to be collected out of the workspace before it is destroyed -- the driver's own
   transcript is an account that is always available. Under ``--ak proxy=true`` the in-box proxy's

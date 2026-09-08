@@ -10,7 +10,9 @@ from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceCreateAttemptFailedError
+from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceFlowError
 from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
+from imbue.minds.desktop_client.e2e_workspace_runner import _chat_frame
 from imbue.minds.desktop_client.e2e_workspace_runner import _read_failure_message
 from imbue.minds.desktop_client.e2e_workspace_runner import _wait_for_workspace_ready_or_failure
 
@@ -218,3 +220,62 @@ def test_terminal_iframe_selector_matches_the_labelled_origin() -> None:
     assert any(labelled.startswith(prefix) for prefix in prefixes)
     assert not any(bare.startswith(prefix) for prefix in prefixes)
     assert not any(unrelated.startswith(prefix) for prefix in prefixes)
+
+
+# The workspace shell's own origin, a chat page framed at the chat app's origin (its path is the
+# chat's agent id), and a terminal iframe (path ``/``) -- the frames a workspace has open.
+_WORKSPACE_AGENT_ID = "agent-0123456789abcdef0123456789abcdef"
+_WORKSPACE_SHELL_URL = f"https://{_WORKSPACE_AGENT_ID}.localhost:8421/"
+_CHAT_AGENT_ID = "agent-fedcba9876543210fedcba9876543210"
+_CHAT_PAGE_URL = f"https://chat-x7k9q2w1.{_WORKSPACE_AGENT_ID}.localhost:8421/{_CHAT_AGENT_ID}"
+_TERMINAL_PAGE_URL = f"https://terminal-x7k9q2w1.{_WORKSPACE_AGENT_ID}.localhost:8421/"
+
+
+class _FakeWorkspaceFrame:
+    """The workspace frame: ``_chat_frame`` scans its ``child_frames`` and polls with ``wait_for_timeout``.
+
+    ``child_frame_lists`` is consumed one entry per scan; the final entry repeats, so a chat frame
+    that attaches after N polls is a list whose later entries include it.
+    """
+
+    def __init__(self, child_frame_lists: Sequence[Sequence[_FakeFrame]]) -> None:
+        self._child_frame_lists = [list(frames) for frames in child_frame_lists]
+        self.wait_for_timeout_calls = 0
+
+    @property
+    def child_frames(self) -> list[_FakeFrame]:
+        return self._child_frame_lists.pop(0) if len(self._child_frame_lists) > 1 else self._child_frame_lists[0]
+
+    def wait_for_timeout(self, timeout_ms: float) -> None:
+        self.wait_for_timeout_calls += 1
+
+
+def test_chat_frame_is_the_child_whose_path_is_the_chat_agent_id() -> None:
+    terminal = _FakeFrame(urls=[_TERMINAL_PAGE_URL])
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeWorkspaceFrame(child_frame_lists=[[terminal, chat]])
+    assert _chat_frame(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+    assert workspace.wait_for_timeout_calls == 0
+
+
+def test_chat_frame_polls_until_the_chat_attaches() -> None:
+    # The first chat is created asynchronously after sign-in, so the frame is
+    # not there on the first scan; the poll runs through Playwright's own wait.
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeWorkspaceFrame(child_frame_lists=[[], [chat]])
+    assert _chat_frame(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+    assert workspace.wait_for_timeout_calls == 1
+
+
+def test_chat_frame_ignores_the_agent_id_in_a_host_name() -> None:
+    # Only a URL PATH ending in the agent id is a chat page: the workspace shell
+    # and its service iframes carry the agent id in their host names, on path ``/``.
+    workspace = _FakeWorkspaceFrame(child_frame_lists=[[_FakeFrame(urls=[_WORKSPACE_SHELL_URL])]])
+    with pytest.raises(WorkspaceFlowError):
+        _chat_frame(cast(Frame, workspace), timeout_seconds=0)
+
+
+def test_chat_frame_raises_when_no_chat_opens_in_time() -> None:
+    workspace = _FakeWorkspaceFrame(child_frame_lists=[[_FakeFrame(urls=[_TERMINAL_PAGE_URL])]])
+    with pytest.raises(WorkspaceFlowError):
+        _chat_frame(cast(Frame, workspace), timeout_seconds=0)
