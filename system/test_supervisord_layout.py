@@ -5,9 +5,11 @@ Programs live one per file under ``system/supervisord.conf.d/``, reached via the
 on that -- the OOM band checks in ``system/services/oom_priority``, the
 ``build-app`` scaffolder's port pre-flight and duplicate-name guard,
 ``migrate-workspace``'s port scan, and (cross-repo) the minds evals evidence
-capture, which joins each registered app to the program that supervises it. All
-of them expand the glob by hand, because neither ``configparser`` nor a plain
-``cat`` follows supervisord's ``[include]``.
+capture, which joins each registered app to the program that supervises it. Each
+of them reaches the drop-ins by hand, because neither ``configparser`` nor a
+plain ``cat`` follows supervisord's ``[include]`` -- all but
+``migrate-workspace`` by expanding the glob the config declares, that one by
+reading ``system/supervisord.conf.d/`` under its literal name.
 
 That makes the glob a real contract, and one that fails *open*: a reader that
 misses the drop-ins still parses a valid config, just a nearly empty one, and
