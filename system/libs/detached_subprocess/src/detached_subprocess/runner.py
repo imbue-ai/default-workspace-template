@@ -1,8 +1,9 @@
 """The one way a workspace service shells out: detached from the workspace's terminal.
 
-Every run-to-completion subprocess spawned from a service's own source goes through
-:func:`run_detached_command`, and each consuming app carries a ratchet
-(``test_subprocess_ratchets.py``) that keeps it that way.
+A service that adopts this runs every run-to-completion subprocess written in its own source
+through :func:`run_detached_command`, and carries a ratchet (``test_subprocess_ratchets.py``)
+that keeps it that way. The chat app and the system interface do; the workspace's other
+supervisord programs spawn attached and have the same exposure.
 
 Workspace services are started by supervisord, which puts each one into its own process group
 with ``setpgrp`` -- a new *group*, but the same session, so the service and everything it
@@ -32,8 +33,7 @@ children down with the service. Each child's own timeout is what bounds it inste
 that passes no timeout is choosing to let its child outlive a restart. A service that exits
 cleanly can still reap those itself -- an ``atexit`` handler reaches a detached child, since
 that is a process handle rather than a group signal -- but one that never gets there, SIGKILLed
-for overrunning ``stopwaitsecs`` or OOM-killed, leaves them running for good. Each consuming app
-documents its own children and their bounds in its ratchet module.
+for overrunning ``stopwaitsecs`` or OOM-killed, leaves them running for good.
 
 Calling into a library that spawns for you is the hole neither this module nor a ratchet can
 close: the library spawns through its own runner with the default (attached) disposition, and a
