@@ -13,3 +13,5 @@ The New Tab page is redesigned around starting things, after the `minds-new-tab`
 - The catalog is fetched by the shell from `SYSTEM_INTERFACE_TEMPLATE_CATALOG_URL` (a versioned JSON document, see `catalog/README.md`), reused for six hours, kept as a last good copy under `data/.state/system_interface/template_catalog.json`, and served at `GET /api/templates-catalog`. The page says "Loading templates..." until it arrives and "Failed to load templates." when nothing could be loaded; with no URL configured the section is omitted.
 
 - The shell's `apps_updated` message and inventory document carry each app's `launcher_rank` and each action's `params` (the names), read off the registry.
+
+- A shell state file write that fails because a regular file sits where its directory should be now raises the documented `ShellStateError` (the temp-file cleanup no longer replaces it with a bare `NotADirectoryError`).
