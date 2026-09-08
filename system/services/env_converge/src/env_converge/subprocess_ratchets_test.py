@@ -5,8 +5,7 @@ the workspace's tmux terminal -- and a package manager drawing progress is exact
 kind of child that touches one. See ``detached_subprocess.runner`` for the mechanism.
 
 The rules themselves live in ``detached_subprocess.ratchets``; every supervisord program in this
-repo applies the same two to its own tree. This file supplies only what is specific here: the
-source tree to scan and the allowlist.
+repo applies the same two to its own tree. This file supplies only the source tree to scan.
 
 Named ``*_test.py`` because that is this repo's convention for a unit test, which a static scan
 is. (``test_*_ratchets.py`` is the per-project standard set, which ``system/test_meta_ratchets.py``
@@ -25,11 +24,9 @@ _SOURCE = Path(__file__).parent.parent.parent
 
 pytestmark = pytest.mark.xdist_group(name="ratchets")
 
-_ALLOWED_RAW_SPAWN_FILES = TEST_FILE_PATTERNS
-
 
 def test_prevent_subprocess_spawns_outside_the_detached_runner() -> None:
-    assert_ratchet(RAW_SPAWN_RULE, _SOURCE, snapshot(0), _ALLOWED_RAW_SPAWN_FILES)
+    assert_ratchet(RAW_SPAWN_RULE, _SOURCE, snapshot(0), TEST_FILE_PATTERNS)
 
 
 def test_prevent_background_process_spawns() -> None:
