@@ -3040,9 +3040,8 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
 def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_api(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repo_root = _make_apply_repo(
-        tmp_path
-    )  # the shell (critical, no instances) and the browser
+    # The fixture tree already carries the shell (critical, no instances) and the browser.
+    repo_root = _make_apply_repo(tmp_path)
     _write_instances_app(repo_root, "terminal", instances_url=_TERMINAL_INSTANCES_URL)
     _write_instances_app(repo_root, "chat")
     _write_instances_app(
