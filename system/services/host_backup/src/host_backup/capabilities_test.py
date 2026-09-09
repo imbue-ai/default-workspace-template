@@ -20,9 +20,10 @@ def test_detects_outer_trigger_when_trigger_dir_exists(tmp_path: Path) -> None:
     assert capabilities.method == SnapshotMethod.OUTER_TRIGGER
     assert capabilities.trigger_dir == trigger_dir
     assert capabilities.snapshot_read_path == Path("/mngr-snapshots/current")
-    # outer_trigger snapshots cover the whole unified volume; restic reads the
-    # home/ subtree inside each snapshot.
-    assert capabilities.read_subpath == "home"
+    # outer_trigger snapshots cover the whole unified volume, so restic reads a
+    # subtree inside each snapshot; which name that subtree has depends on the
+    # outer helper, so both known layouts are offered and resolved per snapshot.
+    assert capabilities.read_subpath_candidates == ("home", "host_dir")
 
 
 def test_detects_direct_when_no_trigger_dir_and_not_btrfs(tmp_path: Path) -> None:

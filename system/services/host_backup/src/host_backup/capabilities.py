@@ -12,7 +12,9 @@ Detection decision tree (everything is probeable from inside the container):
   - If the trigger dir (`/mngr-snapshot/`) exists as a directory, we are
     inside a vps-docker agent container with the snapshot-trigger volume
     mounted -> `outer_trigger`. Snapshots cover the whole unified volume, so
-    restic reads the `home/` subtree inside each snapshot (`read_subpath`).
+    restic reads a subtree inside each snapshot rather than its root; which
+    subtree depends on the outer helper's layout, so the candidates are
+    resolved against the produced snapshot (`read_subpath_candidates`).
   - Else if the backup root (`/home/user`, resolved through the provider's
     home symlink) is on a btrfs filesystem (lima), we can take snapshots
     directly via `sudo btrfs subvolume snapshot` -> `btrfs_local`.
@@ -38,6 +40,13 @@ DEFAULT_TRIGGER_DIR: Final[Path] = Path("/mngr-snapshot")
 # The tree backups cover: the whole persistent home (workspace, worktrees,
 # mngr state at ~/.mngr, dotfiles) -- NOT just the mngr data dir.
 DEFAULT_BACKUP_ROOT: Final[Path] = Path("/home/user")
+
+# What the outer snapshot helper may call the backed-up tree inside a snapshot.
+# Older helpers place it at `home/`; newer ones write `host_dir/` beside their own
+# bookkeeping (`agents/`, `host_state.json`). The inner service cannot tell which
+# helper it is talking to before a snapshot exists, so it tries both against the
+# snapshot it actually got.
+OUTER_TRIGGER_READ_SUBPATH_CANDIDATES: Final[tuple[str, ...]] = ("home", "host_dir")
 
 _FINDMNT_TIMEOUT_SECONDS: Final[float] = 15.0
 
@@ -95,13 +104,15 @@ class BackupCapabilities(FrozenModel):
             "outer_trigger (e.g. /mngr-snapshot). Present only for outer_trigger."
         ),
     )
-    read_subpath: str | None = Field(
-        default=None,
+    read_subpath_candidates: tuple[str, ...] = Field(
+        default=(),
         description=(
-            "Subdirectory inside each snapshot that corresponds to the backup "
-            "root. outer_trigger snapshots cover the whole unified volume "
-            "(provider bookkeeping beside home/), so restic reads <snapshot>/home; "
-            "None when the snapshot root IS the backup root."
+            "Names the backup root may have inside each snapshot, most preferred "
+            "first; the first one that exists in the produced snapshot is used. "
+            "outer_trigger snapshots cover the whole unified volume (provider "
+            "bookkeeping beside the backed-up tree), and outer helper versions "
+            "differ on what they call that tree, so the name cannot be assumed "
+            "at startup. Empty when the snapshot root IS the backup root."
         ),
     )
     outer_helper_timeout_seconds: float = Field(
@@ -137,7 +148,7 @@ def detect_backup_capabilities(
             snapshot_current_path=Path("/mngr-btrfs/snapshots/current"),
             snapshot_read_path=Path("/mngr-snapshots/current"),
             trigger_dir=trigger_dir,
-            read_subpath="home",
+            read_subpath_candidates=OUTER_TRIGGER_READ_SUBPATH_CANDIDATES,
         )
     # The provider reaches the persistent home via a symlink (lima: onto the
     # btrfs data disk), so probe the resolved path -- a symlink itself is

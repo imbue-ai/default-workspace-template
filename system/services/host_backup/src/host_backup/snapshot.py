@@ -19,6 +19,7 @@ import json
 import subprocess
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
@@ -209,6 +210,33 @@ class _HelperResult(FrozenModel):
     snapshot_path: str = ""
 
 
+def _resolve_read_path(
+    snapshot_root: Path,
+    subpath_candidates: Sequence[str],
+) -> Path:
+    """Find the backed-up tree inside a snapshot the outer helper just produced.
+
+    Raises SnapshotError when the snapshot holds none of the expected subtrees,
+    rather than handing restic a path that does not exist.
+    """
+    if len(subpath_candidates) == 0:
+        return snapshot_root
+    for candidate in subpath_candidates:
+        candidate_path = snapshot_root / candidate
+        if candidate_path.is_dir():
+            return candidate_path
+    present_entries = (
+        sorted(entry.name for entry in snapshot_root.iterdir())
+        if snapshot_root.is_dir()
+        else []
+    )
+    raise SnapshotError(
+        f"snapshot {snapshot_root} contains none of {tuple(subpath_candidates)}; "
+        f"it holds {present_entries!r}. The outer snapshot helper's layout does "
+        "not match what this service expects."
+    )
+
+
 class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
     """Writes request.json, waits for the outer helper to produce result.json."""
 
@@ -233,9 +261,11 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
         outer_snapshot_path = result.snapshot_path or str(
             self.capabilities.snapshot_current_path.parent / snapshot_name
         )
-        read_path = self.capabilities.snapshot_read_path.parent / snapshot_name
-        if self.capabilities.read_subpath is not None:
-            read_path = read_path / self.capabilities.read_subpath
+        snapshot_root = self.capabilities.snapshot_read_path.parent / snapshot_name
+        read_path = _resolve_read_path(
+            snapshot_root=snapshot_root,
+            subpath_candidates=self.capabilities.read_subpath_candidates,
+        )
         return SnapshotResult(
             method=SnapshotMethod.OUTER_TRIGGER,
             snapshot_path=outer_snapshot_path,
