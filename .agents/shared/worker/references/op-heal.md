@@ -21,7 +21,7 @@ then -- once the fix is implemented and verified per `type-app.md` -- report
 `done` with a body that summarizes the work so the lead can frame the preview:
 
 ```
-Fixed the system interface on branch `<branch>`. Ready to preview.
+Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
 - Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
