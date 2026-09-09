@@ -2,24 +2,27 @@ import re
 import tomllib
 from enum import auto
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any
+from typing import Final
+from typing import Self
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field
+from pydantic import ValidationError
+from pydantic import model_validator
 
-from app_manifest.errors import InvalidManifestValueError, ManifestLoadError
-from app_manifest.primitives import (
-    ActionId,
-    AppName,
-    DisplayName,
-    IconPath,
-    InstancesUrl,
-    PreviewName,
-    PriorityName,
-    ProgramName,
-)
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.errors import ManifestLoadError
+from app_manifest.primitives import ActionId
+from app_manifest.primitives import AppName
+from app_manifest.primitives import DisplayName
+from app_manifest.primitives import IconPath
+from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import PreviewName
+from app_manifest.primitives import PriorityName
+from app_manifest.primitives import ProgramName
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 
@@ -35,14 +38,10 @@ OPEN_ACTION_ID: Final[ActionId] = ActionId("open")
 # ``{shell_url}``. ``open_path`` alone may carry ``{key}``. The isolated-instance
 # script fills the port, copy, host, and scratch ones once it has allocated them,
 # so it mirrors this pattern; the preview script fills the other two.
-PREVIEW_PLACEHOLDER_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"\{(?P<kind>[a-z_]+)(?::(?P<name>[a-z0-9_-]+))?\}"
-)
+PREVIEW_PLACEHOLDER_PATTERN: Final[re.Pattern[str]] = re.compile(r"\{(?P<kind>[a-z_]+)(?::(?P<name>[a-z0-9_-]+))?\}")
 PREVIEW_PORT_PLACEHOLDER_KIND: Final[str] = "port"
 PREVIEW_COPY_PLACEHOLDER_KIND: Final[str] = "copy"
-PREVIEW_BARE_PLACEHOLDER_KINDS: Final[frozenset[str]] = frozenset(
-    {"host", "scratch", "registry", "shell_url"}
-)
+PREVIEW_BARE_PLACEHOLDER_KINDS: Final[frozenset[str]] = frozenset({"host", "scratch", "registry", "shell_url"})
 PREVIEW_KEY_PLACEHOLDER: Final[str] = "{key}"
 MAIN_PORT_NAME: Final[PreviewName] = PreviewName("main")
 PREVIEW_DATA_COPY_KEY: Final[PreviewName] = PreviewName("data")
@@ -62,9 +61,7 @@ class ActionParam(FrozenModel):
 
     name: NonEmptyStr = Field(description="The key in the create body's params")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
-    required: bool = Field(
-        default=False, description="Whether the create refuses a body without it"
-    )
+    required: bool = Field(default=False, description="Whether the create refuses a body without it")
 
 
 class AppAction(FrozenModel):
@@ -72,72 +69,38 @@ class AppAction(FrozenModel):
 
     id: ActionId = Field(description="The id shortcuts and layout.py refer to")
     label: NonEmptyStr = Field(description="The action's user-facing label")
-    params: tuple[ActionParam, ...] = Field(
-        default=(), description="The create body's documented params"
-    )
+    params: tuple[ActionParam, ...] = Field(default=(), description="The create body's documented params")
 
 
 class DefaultShortcut(FrozenModel):
     """The rail row a new project is seeded with for this app."""
 
-    action: ActionId = Field(
-        description="A declared action id, or 'open' for a single-instance app"
-    )
+    action: ActionId = Field(description="A declared action id, or 'open' for a single-instance app")
     mode: ShortcutMode = Field(description="focus or new")
 
 
 def _preview_placeholders(text: str) -> list[tuple[str, str | None]]:
-    return [
-        (match.group("kind"), match.group("name"))
-        for match in PREVIEW_PLACEHOLDER_PATTERN.finditer(text)
-    ]
+    return [(match.group("kind"), match.group("name")) for match in PREVIEW_PLACEHOLDER_PATTERN.finditer(text)]
 
 
 class PreviewSpec(FrozenModel):
     """How a throwaway instance of the app boots for a preview: the manifest's ``[preview]`` table."""
 
-    command: tuple[NonEmptyStr, ...] = Field(
-        default=(),
-        description="The launch argv; empty runs the app's program as its console script",
-    )
-    ports: tuple[PreviewName, ...] = Field(
-        default=(MAIN_PORT_NAME,),
-        description="The named free ports the instance is given; main is always one",
-    )
-    env: dict[str, str] = Field(
-        default_factory=dict,
-        description="Environment for the instance; values may carry placeholders",
-    )
-    args: tuple[str, ...] = Field(
-        default=(),
-        description="Arguments appended to the command; may carry placeholders",
-    )
-    copies: dict[PreviewName, str] = Field(
-        default_factory=dict,
-        description="Repo-relative directories copied into the instance's scratch space, by key",
-    )
-    health_path: str = Field(
-        default=DEFAULT_PREVIEW_HEALTH_PATH,
-        description="The path probed for a 200 once booted",
-    )
-    open_path: str = Field(
-        default=DEFAULT_PREVIEW_OPEN_PATH,
-        description="The path the preview tab opens on",
-    )
-    open_path_takes_key: bool = Field(
-        default=False, description="Whether open_path carries {key}, an instance key"
-    )
+    command: tuple[NonEmptyStr, ...] = Field(default=(), description="The launch argv; empty runs the app's program")
+    ports: tuple[PreviewName, ...] = Field(default=(MAIN_PORT_NAME,), description="The named free ports; main is always one")
+    env: dict[str, str] = Field(default_factory=dict, description="Environment for the instance; values may carry placeholders")
+    args: tuple[str, ...] = Field(default=(), description="Arguments appended to the command; may carry placeholders")
+    copies: dict[PreviewName, str] = Field(default_factory=dict, description="Repo-relative directories copied into the scratch space")
+    health_path: str = Field(default=DEFAULT_PREVIEW_HEALTH_PATH, description="The path probed for a 200 once booted")
+    open_path: str = Field(default=DEFAULT_PREVIEW_OPEN_PATH, description="The path the preview tab opens on")
+    open_path_takes_key: bool = Field(default=False, description="Whether open_path carries {key}, an instance key")
 
     @model_validator(mode="after")
     def _check_placeholders_and_names(self) -> Self:
         if MAIN_PORT_NAME not in self.ports:
-            raise InvalidManifestValueError(
-                f"preview.ports must include {str(MAIN_PORT_NAME)!r}"
-            )
+            raise InvalidManifestValueError(f"preview.ports must include {str(MAIN_PORT_NAME)!r}")
         if len(set(self.ports)) != len(self.ports):
-            raise InvalidManifestValueError(
-                f"preview.ports must be unique, got {list(self.ports)}"
-            )
+            raise InvalidManifestValueError(f"preview.ports must be unique, got {list(self.ports)}")
         for key, source in self.copies.items():
             path = Path(source)
             if not source or path.is_absolute() or ".." in path.parts:
@@ -148,16 +111,12 @@ class PreviewSpec(FrozenModel):
             for kind, name in _preview_placeholders(text):
                 self._check_placeholder(field_name, kind, name)
         if not self.health_path.startswith("/") or not self.open_path.startswith("/"):
-            raise InvalidManifestValueError(
-                "preview.health_path and preview.open_path must start with '/'"
-            )
+            raise InvalidManifestValueError("preview.health_path and preview.open_path must start with '/'")
         if _preview_placeholders(self.health_path):
             raise InvalidManifestValueError("preview.health_path takes no placeholders")
         open_path_without_key = self.open_path.replace(PREVIEW_KEY_PLACEHOLDER, "")
         if _preview_placeholders(open_path_without_key):
-            raise InvalidManifestValueError(
-                f"preview.open_path may carry only {PREVIEW_KEY_PLACEHOLDER}"
-            )
+            raise InvalidManifestValueError(f"preview.open_path may carry only {PREVIEW_KEY_PLACEHOLDER}")
         has_key = PREVIEW_KEY_PLACEHOLDER in self.open_path
         if has_key != self.open_path_takes_key:
             raise InvalidManifestValueError(
@@ -166,9 +125,7 @@ class PreviewSpec(FrozenModel):
         return self
 
     def _placeholder_bearing_texts(self) -> list[tuple[str, str]]:
-        texts = [("command", part) for part in self.command] + [
-            ("args", part) for part in self.args
-        ]
+        texts = [("command", part) for part in self.command] + [("args", part) for part in self.args]
         texts.extend(("env", value) for value in self.env.values())
         return texts
 
@@ -185,13 +142,9 @@ class PreviewSpec(FrozenModel):
                 )
         elif kind in PREVIEW_BARE_PLACEHOLDER_KINDS:
             if name is not None:
-                raise InvalidManifestValueError(
-                    f"preview.{field_name}: {{{kind}}} takes no name, got {name!r}"
-                )
+                raise InvalidManifestValueError(f"preview.{field_name}: {{{kind}}} takes no name, got {name!r}")
         else:
-            raise InvalidManifestValueError(
-                f"preview.{field_name} carries an unknown placeholder {{{kind}}}"
-            )
+            raise InvalidManifestValueError(f"preview.{field_name} carries an unknown placeholder {{{kind}}}")
 
 
 def scaffold_env_prefix(name: AppName) -> str:
@@ -222,46 +175,23 @@ class AppManifest(FrozenModel):
 
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
-    icon: IconPath | None = Field(
-        default=None,
-        description="The icon file, relative to the manifest; required unless internal",
-    )
-    instances: bool = Field(
-        default=False, description="Whether the app serves the instances API"
-    )
-    instances_url: InstancesUrl | None = Field(
-        default=None,
-        description="Where the instances API is served when not at the app URL",
-    )
-    critical: bool = Field(
-        default=False,
-        description="No Stop verb; snapshot-and-rollback target in the update apply",
-    )
-    priority: PriorityName = Field(
-        default=DEFAULT_PRIORITY, description="The memory-shedding band name"
-    )
-    program: ProgramName = Field(
-        description="The supervisord program that runs the app (defaults to the name)"
-    )
+    icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
+    instances: bool = Field(default=False, description="Whether the app serves the instances API")
+    instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served when not at the app URL")
+    critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
+    priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
+    program: ProgramName = Field(description="The supervisord program that runs the app (defaults to the name)")
     internal: bool = Field(default=False, description="Hidden from every open surface")
-    default_shortcut: DefaultShortcut | None = Field(
-        default=None, description="The rail row a new project is seeded with"
-    )
-    actions: tuple[AppAction, ...] = Field(
-        default=(), description="The declared create actions"
-    )
+    default_shortcut: DefaultShortcut | None = Field(default=None, description="The rail row a new project is seeded with")
+    actions: tuple[AppAction, ...] = Field(default=(), description="The declared create actions")
     launcher_rank: int | None = Field(
         default=None,
         ge=1,
         description="The app's place among the New Tab page's leading tiles (lower first); "
         "an app without one follows every ranked app",
     )
-    handles: dict[str, Any] = Field(
-        default_factory=dict, description="Reserved; must be absent or empty"
-    )
-    preview: PreviewSpec = Field(
-        description="How a throwaway instance boots for a preview (the scaffold convention by default)"
-    )
+    handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
+    preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
     @classmethod
@@ -273,11 +203,7 @@ class AppManifest(FrozenModel):
     @model_validator(mode="before")
     @classmethod
     def _default_preview_to_scaffold_convention(cls, data: Any) -> Any:
-        if (
-            isinstance(data, dict)
-            and "preview" not in data
-            and isinstance(data.get("name"), str)
-        ):
+        if isinstance(data, dict) and "preview" not in data and isinstance(data.get("name"), str):
             try:
                 name = AppName(data["name"])
             except InvalidManifestValueError:
@@ -290,22 +216,14 @@ class AppManifest(FrozenModel):
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.instances_url is not None and not self.instances:
-            raise InvalidManifestValueError(
-                "instances_url is only allowed with instances = true"
-            )
+            raise InvalidManifestValueError("instances_url is only allowed with instances = true")
         if self.actions and not self.instances:
-            raise InvalidManifestValueError(
-                "actions are only allowed with instances = true"
-            )
+            raise InvalidManifestValueError("actions are only allowed with instances = true")
         if self.handles:
-            raise InvalidManifestValueError(
-                "handles must be absent or empty in this release"
-            )
+            raise InvalidManifestValueError("handles must be absent or empty in this release")
         action_ids = [action.id for action in self.actions]
         if len(set(action_ids)) != len(action_ids):
-            raise InvalidManifestValueError(
-                f"action ids must be unique, got {action_ids}"
-            )
+            raise InvalidManifestValueError(f"action ids must be unique, got {action_ids}")
         if self.default_shortcut is not None:
             allowed_ids = set(action_ids) if self.instances else {OPEN_ACTION_ID}
             if self.default_shortcut.action not in allowed_ids:
@@ -335,13 +253,9 @@ def load_manifest(path: Path) -> AppManifest:
     try:
         manifest = AppManifest.model_validate(data)
     except ValidationError as e:
-        raise ManifestLoadError(
-            f"manifest {path} is invalid: {describe_validation_error(e)}"
-        ) from e
+        raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
-        raise ManifestLoadError(
-            f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it"
-        )
+        raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
     return manifest
 
 
