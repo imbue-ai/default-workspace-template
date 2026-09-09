@@ -1,11 +1,13 @@
 /**
  * Record factories for the frontend tests: an app as the inventory lists it, one of its
- * instances, a project, and a published template as the catalog lists it. Each takes
- * overrides so a test spells only what it is about.
+ * instances, a project, a published template as the catalog lists it, and the update
+ * notice as the shell sends it. Each takes overrides so a test spells only what it is
+ * about.
  */
 
 import type { AppRecord, InstanceRecord, ProjectInfo } from "../models/Inventory";
 import type { CatalogTemplate } from "../models/TemplateCatalog";
+import type { UpdateNoticeWire } from "../models/UpdateNotice";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -79,6 +81,21 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
     needs_ai: false,
     apt_packages: [],
     choices: [],
+    ...overrides,
+  };
+}
+
+/** An open notice (no rollback started) for an apply that touched the chat alone. */
+export function noticeWire(overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
+  return {
+    merge_sha: "abc1234abc1234abc1234abc1234abc1234abc12",
+    applied_at: 1_780_000_000,
+    driven_by: "mngr/update-widgets",
+    apps: ["chat"],
+    programs: ["chat"],
+    needs_services_restart: false,
+    progress: null,
+    outcome: null,
     ...overrides,
   };
 }

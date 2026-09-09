@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { noticeWire } from "../testing/records";
 import { dispatchSocketEventForTesting } from "./Inventory";
 import {
   getUpdateNotice,
@@ -8,21 +9,6 @@ import {
   resetUpdateNoticeForTesting,
   updateNoticeForApp,
 } from "./UpdateNotice";
-import type { UpdateNoticeWire } from "./UpdateNotice";
-
-export function noticeWire(overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
-  return {
-    merge_sha: "abc1234abc1234abc1234abc1234abc1234abc12",
-    applied_at: 1_780_000_000,
-    driven_by: "mngr/update-widgets",
-    apps: ["chat"],
-    programs: ["chat"],
-    needs_services_restart: false,
-    progress: null,
-    outcome: null,
-    ...overrides,
-  };
-}
 
 afterEach(() => {
   resetUpdateNoticeForTesting();
