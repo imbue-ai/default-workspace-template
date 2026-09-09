@@ -82,9 +82,8 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 latter for a service that has no certificate; the user is shown the resulting
 origin and told when credentials would travel unencrypted. Add nothing else,
 unless the service signs in through the browser with cookies --
-then add a `login` object with `login_url`, `cookie_url` (both `https`, or
-`http` too for an `http` service; both on that domain or a subdomain of it) and
-`cookie_keys`:
+then add a `login` object with `login_url`, `cookie_url` (either scheme, both
+on that domain or a subdomain of it) and `cookie_keys`:
 
 ```bash
   -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"login_url": "https://api.example.com/login", "cookie_url": "https://api.example.com/", "cookie_keys": ["session"]}}}'
