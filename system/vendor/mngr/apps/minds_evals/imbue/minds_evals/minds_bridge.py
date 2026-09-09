@@ -57,8 +57,16 @@ BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
 # and is imported by it as a plain module, so the two files must land in the same directory.
 BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
+# The venv the proxy is served from, built by the box image and holding nothing else. Never the
+# workspace venv under BOX_MNGR_DIR: that one carries plain `litellm`, whose CLI refuses to serve
+# without the [proxy] extra, and every `uv run` in the box re-syncs it from the lock -- so proxy
+# dependencies added to it would be stripped out from under a running proxy mid-trial. It is a
+# different directory from BOX_PROXY_DIR above, which holds the proxy's config, hooks and usage
+# log (proxy.log itself goes to the service logs dir, like every other long-running service's).
+BOX_PROXY_VENV_DIR: Final[str] = "/opt/eval_proxy"
+BOX_PROXY_LITELLM_PATH: Final[str] = "{}/bin/litellm".format(BOX_PROXY_VENV_DIR)
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
-BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
+BOX_PROXY_USAGE_LOG_PATH: Final[str] = "{}/usage_proxy.jsonl".format(BOX_PROXY_DIR)
 TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
 PROXY_LOG_FILENAME: Final[str] = "proxy.log"
 # How much of a service log the timeout diagnostics keep. The tail is where a wedged service says
@@ -1003,17 +1011,17 @@ async def start_proxy(
             "ANTHROPIC_API_KEY": anthropic_api_key,
             PROXY_KEY_ENV_VAR: proxy_key,
             PROXY_USAGE_LOG_ENV_VAR: BOX_PROXY_USAGE_LOG_PATH,
-            # litellm imports the hooks by module name, so the directory holding them must be on the
-            # path; it is not the working directory, which stays the monorepo for `uv run`.
+            # litellm imports the hooks by module name, so the directory holding them must be on
+            # the path.
             "PYTHONPATH": BOX_PROXY_DIR,
         }
     )
     command = (
-        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
+        "mkdir -p {logs} && setsid nohup {litellm} --config {config} "
         "--port {port} --host 127.0.0.1 > {log} 2>&1 < /dev/null &"
     ).format(
         logs=BOX_SERVICE_LOGS_DIR,
-        mngr=BOX_MNGR_DIR,
+        litellm=BOX_PROXY_LITELLM_PATH,
         config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
         port=port,
         log=service_log_path(PROXY_LOG_FILENAME),

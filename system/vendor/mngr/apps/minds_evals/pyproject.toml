@@ -122,14 +122,16 @@ concurrency = ["multiprocessing", "thread"]
 omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
 
 [tool.ty.src]
-# resources/ is shipped as source into the eval box and runs against the monorepo
-# venv, importing mngr_forward and litellm, which this project does not depend on.
-# It is type-checked by the root workspace instead -- the box runs that venv, so it
-# is the accurate environment for it; the root [tool.ty.src] exclude deliberately
-# does not cover it. Anything listed here must stay checked there:
-# test_meta_ratchets.py reads this list and probes the root's ty for each path, so
-# excluding a path here without un-excluding it at the root fails that check. Every
-# entry must name a directory or a file, since the probe hands it straight to ty.
+# resources/ is shipped as source into the eval box, importing mngr_forward and
+# litellm, which this project does not depend on. It is type-checked by the root
+# workspace instead -- the box runs that venv, so it is the accurate environment
+# for it, and it stays accurate for the proxy hooks, which the box loads from its
+# own /opt/eval_proxy venv: that venv installs the litellm version the root
+# workspace is ==-pinned to. The root [tool.ty.src] exclude deliberately does not
+# cover it. Anything listed here must stay checked there: test_meta_ratchets.py
+# reads this list and probes the root's ty for each path, so excluding a path here
+# without un-excluding it at the root fails that check. Every entry must name a
+# directory or a file, since the probe hands it straight to ty.
 #
 # templates/ is NOT excluded. Those files also run elsewhere (the verifier
 # container), but their only foreign import is rewardkit, which the dev group

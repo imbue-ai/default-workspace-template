@@ -1,0 +1,3 @@
+The `test-minds-evals` CI job also runs on changes to `apps/modal_litellm`, which is not one of that project's dependencies: the eval box image installs that app's hash-locked `image_requirements.txt` by path, and the guard that the export is still where the box's Dockerfile looks lives in `minds_evals`' own tests, in the only job that runs them.
+
+The root `[tool.ty.src]` note explaining why `apps/minds_evals/imbue/minds_evals/resources/` is type-checked by the workspace rather than by the standalone project now covers the eval box's proxy hooks: those run against the box's own proxy venv, which installs the `litellm` version this workspace is pinned to.
