@@ -30,4 +30,7 @@ command = [
     "--state-dir", "{scratch}/state",
 ]
 copies = {store = "data/.apps/terminal"}
-health_path = "/_instances"
+# The probe reaches the main port, which here is ttyd's, so it asks for ttyd's own
+# page rather than the instances API on the sidecar. Nothing is lost: the sidecar
+# serves before it spawns ttyd, so a ttyd that answers is a whole terminal.
+health_path = "/"
