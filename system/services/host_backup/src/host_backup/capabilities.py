@@ -20,6 +20,7 @@ Detection decision tree (everything is probeable from inside the container):
     snapshot; restic reads the backup root live).
 """
 
+import os
 import subprocess
 from enum import auto
 from pathlib import Path
@@ -38,6 +39,11 @@ DEFAULT_TRIGGER_DIR: Final[Path] = Path("/mngr-snapshot")
 # The tree backups cover: the whole persistent home (workspace, worktrees,
 # mngr state at ~/.mngr, dotfiles) -- NOT just the mngr data dir.
 DEFAULT_BACKUP_ROOT: Final[Path] = Path("/home/user")
+
+# Where the agent's mngr host dir lives, used to work out how much of the backup
+# root is actually on persistent storage. Read from the environment the service
+# inherits; absent when the service is run outside a provisioned agent host.
+_HOST_DIR_ENV_VAR: Final[str] = "MNGR_HOST_DIR"
 
 _FINDMNT_TIMEOUT_SECONDS: Final[float] = 15.0
 
@@ -104,6 +110,16 @@ class BackupCapabilities(FrozenModel):
             "None when the snapshot root IS the backup root."
         ),
     )
+    is_backup_root_fully_persisted: bool = Field(
+        default=True,
+        description=(
+            "Whether the whole backup root sits on the same persistent storage as "
+            "the mngr host dir. False means only the host dir is persisted and "
+            "everything else under the backup root -- the user's workspace above "
+            "all -- is in no backup and cannot be restored. Defaults to True so "
+            "an environment this cannot be probed in is never falsely alarmed."
+        ),
+    )
     outer_helper_timeout_seconds: float = Field(
         default=120.0,
         description="Hard cap on how long to wait for the outer helper's result.json",
@@ -119,12 +135,51 @@ class BackupCapabilities(FrozenModel):
     )
 
 
+def _read_filesystem_id(path: Path) -> int | None:
+    """The id of the filesystem a path is on, or None when it cannot be read."""
+    try:
+        return path.stat().st_dev
+    except OSError as e:
+        logger.debug("Could not stat {} while probing backup coverage: {}", path, e)
+        return None
+
+
+def are_backup_root_and_host_dir_on_one_filesystem(
+    backup_root_filesystem_id: int | None,
+    host_dir_filesystem_id: int | None,
+) -> bool:
+    """Whether the whole backup root is persisted, or only the mngr host dir within it.
+
+    The mngr host dir is always on persistent storage -- that is what makes an
+    agent's state survive its container. So if the backup root is on a *different*
+    filesystem, the rest of the tree (the user's workspace above all) is not
+    persisted, and no snapshot of that storage can contain it.
+
+    Unknown reads as fully persisted: a probe that failed is not evidence of a
+    gap, and a false alarm here would teach people to ignore a real one.
+    """
+    if backup_root_filesystem_id is None or host_dir_filesystem_id is None:
+        return True
+    return backup_root_filesystem_id == host_dir_filesystem_id
+
+
+def _probe_backup_root_coverage(backup_root: Path) -> bool:
+    host_dir_value = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    if not host_dir_value:
+        return True
+    return are_backup_root_and_host_dir_on_one_filesystem(
+        backup_root_filesystem_id=_read_filesystem_id(backup_root),
+        host_dir_filesystem_id=_read_filesystem_id(Path(host_dir_value)),
+    )
+
+
 def detect_backup_capabilities(
     *,
     trigger_dir: Path = DEFAULT_TRIGGER_DIR,
     backup_root: Path = DEFAULT_BACKUP_ROOT,
 ) -> BackupCapabilities:
     """Probe the container's filesystem to choose the right snapshot mechanism."""
+    is_fully_persisted = _probe_backup_root_coverage(backup_root)
     if trigger_dir.is_dir():
         # vps-docker: snapshots dir is bind-mounted at /mngr-snapshots; the
         # outer helper resolves <btrfs-mount>/<host_id_hex>/snapshots/<name>
@@ -138,6 +193,7 @@ def detect_backup_capabilities(
             snapshot_read_path=Path("/mngr-snapshots/current"),
             trigger_dir=trigger_dir,
             read_subpath="home",
+            is_backup_root_fully_persisted=is_fully_persisted,
         )
     # The provider reaches the persistent home via a symlink (lima: onto the
     # btrfs data disk), so probe the resolved path -- a symlink itself is
@@ -155,7 +211,11 @@ def detect_backup_capabilities(
             host_subvolume_path=resolved_root,
             snapshot_current_path=resolved_root / "snapshots" / "current",
             snapshot_read_path=resolved_root / "snapshots" / "current",
+            is_backup_root_fully_persisted=is_fully_persisted,
         )
+    # direct takes no snapshot: restic reads the backup root live, so whatever
+    # is under it is covered and the persistence probe does not apply. The field
+    # keeps its True default rather than reporting a gap that is not one.
     return BackupCapabilities(
         method=SnapshotMethod.DIRECT,
         snapshot_read_path=backup_root,
