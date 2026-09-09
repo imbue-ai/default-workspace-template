@@ -233,10 +233,14 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
 
-  `uv run --all-packages`, not a bare `uv run`: with no root `pyproject.toml`
-  entry, a root-closure-scoped `uv sync` prunes the member and deletes its
-  console script, and `--all-packages` reinstates it on the restart that
-  follows.
+  The command ends in the app's own name, not `uv run <name>`; supervisord
+  resolves that name on PATH. The copy it finds is the console script
+  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
+  -e` puts the tool's own entry point under your HOME, which supervisord's
+  children do not have on PATH. So always sync with `--all-packages`: a
+  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
+  root dependency), deletes that script, and the next restart is a spawn error
+  with nothing to recover it.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
