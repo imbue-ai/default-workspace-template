@@ -347,9 +347,7 @@ _NON_SERVICE_PROGRAM_BANDS: Final[dict[str, int]] = {
 }
 
 
-def supervisord_program_band(
-    program_name: str, priority_by_program: Mapping[str, str]
-) -> int:
+def supervisord_program_band(program_name: str, priority_by_program: Mapping[str, str]) -> int:
     """The band a supervisord program is expected to occupy.
 
     ``priority_by_program`` is the app registry's view (``app_registry``): the

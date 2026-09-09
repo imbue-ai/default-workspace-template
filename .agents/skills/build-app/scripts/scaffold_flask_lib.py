@@ -65,9 +65,7 @@ RESERVED_NAMES = frozenset(
 # both and the scaffold must too.
 RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # forward_port.py owns icon reading/validation; reuse it so a bad icon fails here.
-_FORWARD_PORT_PATH = (
-    Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
-)
+_FORWARD_PORT_PATH = Path(__file__).resolve().parents[4] / "system/scripts/forward_port.py"
 LOWEST_AUTO_PORT = 8080
 KEBAB_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -368,9 +366,7 @@ def _display_name(description: str, explicit: str | None) -> str:
     candidate = explicit if explicit is not None else description
     candidate = candidate.strip()
     if not candidate:
-        sys.exit(
-            "error: the display name must not be empty (--display-name, or --description when it is omitted)"
-        )
+        sys.exit("error: the display name must not be empty (--display-name, or --description when it is omitted)")
     if len(candidate) > MAX_DISPLAY_NAME_LENGTH:
         sys.exit(
             f"error: the display name {candidate!r} is over {MAX_DISPLAY_NAME_LENGTH} characters; "
@@ -399,11 +395,7 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
-    (lib_dir / "app.toml").write_text(
-        _MANIFEST_TEMPLATE.format(
-            name=name, display_name=display_name, package_upper=package.upper()
-        )
-    )
+    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name, package_upper=package.upper()))
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
@@ -452,9 +444,7 @@ stderr_logfile_backups=3
 """
 
 
-def _update_supervisord_conf(
-    repo_root: Path, name: str, package: str, port: int
-) -> None:
+def _update_supervisord_conf(repo_root: Path, name: str, package: str, port: int) -> None:
     # system/supervisord.conf is INI (not TOML) and has hand-written comments worth
     # preserving, so append a [program:<name>] block as text rather than
     # round-tripping through a parser. The command is wrapped in `bash -c "..."`
@@ -536,11 +526,7 @@ def main() -> None:
         default=None,
         help="what users see for the app (the manifest's display_name, at most 64 characters); defaults to the description",
     )
-    parser.add_argument(
-        "--icon-file",
-        required=True,
-        help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)",
-    )
+    parser.add_argument("--icon-file", required=True, help="the app's icon: an .svg file holding a single house-style <svg> (see the build-app skill)")
     parser.add_argument(
         "--port", type=int, default=None, help="explicit port (auto-picked if omitted)"
     )
@@ -574,13 +560,7 @@ def main() -> None:
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
-        repo_root,
-        args.name,
-        args.description,
-        display_name,
-        port,
-        list(args.extra_dep),
-        icon_markup,
+        repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
     )
     _update_supervisord_conf(repo_root, args.name, package, port)
 
