@@ -358,8 +358,17 @@ def test_a_launching_chat_is_pinned_to_the_protected_floor() -> None:
 
 
 def test_launch_protection_expires_into_the_ordinary_bands() -> None:
-    # The grace is a head start, not a permanent pin: once it is over, the same
-    # unengaged chat falls back to exactly the engagement-only score.
+    # The grace is a head start, not a permanent pin. The same unengaged chat, scored
+    # on either side of the boundary: pinned to the floor a second short of it, and
+    # back on the engagement-only score the moment it reaches it.
+    still_launching = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS - 1.0,
+    )
     aged_out = bands.chat_agent_oom_score_adj(
         is_open=False,
         is_visible=False,
@@ -368,8 +377,9 @@ def test_launch_protection_expires_into_the_ordinary_bands() -> None:
         is_mid_turn=False,
         age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
-    assert aged_out == _fresh(is_open=False, is_visible=False, recency_rank=None)
+    assert still_launching == bands.CHAT_AGENT_LAUNCH
     assert aged_out == bands.CHAT_AGENT_BASE
+    assert aged_out > still_launching
 
 
 def test_an_unknown_age_earns_no_launch_protection() -> None:
