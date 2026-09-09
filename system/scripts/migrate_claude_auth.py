@@ -31,10 +31,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from imbue.chat.harnesses.auth_flows import AuthFlowService
+from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS, derive_auth_mode
 from imbue.mngr.utils.env_utils import parse_env_file
-from imbue.system_interface.harnesses.auth_flows import AuthFlowService
-from imbue.system_interface.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
-from imbue.system_interface.harnesses.claude.auth import derive_auth_mode
 
 
 def _format_env_value(value: str) -> str:

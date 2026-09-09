@@ -1,0 +1,584 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import m from "mithril";
+import type { ToolCall, ToolResultEvent, TranscriptEvent } from "../models/Response";
+import type { AssistantMessageEvent } from "../models/Response";
+import {
+  buildToolResultsWithSkillExpansions,
+  renderAssistantMessageChildren,
+  renderSubagentCard,
+  renderToolCallBlock,
+} from "./message-renderers";
+import { isSkillExpansionUserMessage } from "./message-classification";
+import { setBlockExpanded } from "./expansion-state";
+
+// Avoid importing the shell connection (chat/shell.ts, which pulls in the agents store) and
+// the DOM-dependent markdown renderer (dompurify) at test time; renderSubagentCard only
+// needs openSubagentTab, and the card path never calls MarkdownContent.
+vi.mock("../shell", () => ({ openSubagentTab: vi.fn(), startChatOnAccount: vi.fn() }));
+vi.mock("../markdown", () => ({ MarkdownContent: () => null }));
+
+// The render paths ask the detail cache for on-demand payloads (and kick off fetches);
+// stub those three so tests control the state machine without mithril's XHR.
+const { mockDetailState, mockRequestDetail } = vi.hoisted(() => ({
+  mockDetailState: vi.fn(),
+  mockRequestDetail: vi.fn(),
+}));
+vi.mock("../models/Response", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Response")>()),
+  getEventDetailState: mockDetailState,
+  getEventDetailVersion: () => 0,
+  requestEventDetail: mockRequestDetail,
+}));
+
+function skillToolCall(ts: string, callId: string): TranscriptEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "test-model",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Skill", input_chars: 2 }],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
+function toolResult(ts: string, callId: string, output: string): TranscriptEvent {
+  // `output` models the inline body only a frontend-synthesized result carries; real wire
+  // events are payload-free (output_chars only). The merge tests exercise both.
+  return {
+    timestamp: ts,
+    type: "tool_result",
+    event_id: `r-${callId}`,
+    source: "test",
+    tool_call_id: callId,
+    tool_name: "test-tool",
+    output_chars: output.length,
+    output,
+    is_error: false,
+  };
+}
+
+function skillExpansion(ts: string, skillName: string, eventId: string): TranscriptEvent {
+  return {
+    timestamp: ts,
+    type: "user_message",
+    event_id: eventId,
+    source: "test",
+    role: "user",
+    content: `Base directory for this skill: /home/.claude/skills/${skillName}/\n\n# ${skillName}\n\nBody of ${skillName}.`,
+    display: "skill_expansion",
+    display_label: skillName,
+  };
+}
+
+function apiErrorEvent(text: string, kind: string | null, providerFault: boolean): AssistantMessageEvent {
+  return {
+    timestamp: "2026-08-06T00:00:00.000Z",
+    type: "assistant_message",
+    event_id: "err-1",
+    source: "test",
+    model: "<synthetic>",
+    text,
+    tool_calls: [],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+    is_api_error: kind !== null,
+    api_error_kind: kind,
+    is_provider_fault: providerFault,
+  };
+}
+
+// Uses allText + collectClasses (defined lower in this file) to read the rendered tree.
+describe("renderAssistantMessageChildren API errors", () => {
+  it("wraps a provider-fault error in the red block with a not-our-fault note", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 529 Overloaded", "overloaded", true),
+      new Map(),
+      "agent-1",
+    );
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).toContain("message-api-error-note");
+    expect(allText(children)).toContain("isn't Minds' fault");
+    expect(allText(children)).toContain("overloaded");
+  });
+
+  it("styles a client-side error red but adds no not-our-fault note", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false),
+      new Map(),
+      "agent-1",
+    );
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).not.toContain("message-api-error-note");
+  });
+
+  it("leaves an ordinary assistant message unstyled", () => {
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("Here's the fix.", null, false),
+      new Map(),
+      "agent-1",
+    );
+    expect(collectClasses(children)).not.toContain("message-api-error");
+  });
+});
+
+describe("isSkillExpansionUserMessage", () => {
+  it("reads the backend's display decision, with zero content sniffing", () => {
+    expect(isSkillExpansionUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isSkillExpansionUserMessage({ content: "Base directory for this skill: /x" })).toBe(false);
+    expect(isSkillExpansionUserMessage({ content: "hello" })).toBe(false);
+  });
+});
+
+describe("buildToolResultsWithSkillExpansions", () => {
+  it("folds a skill-expansion user_message into the matching Skill tool call's output", () => {
+    const events = [
+      skillToolCall("2026-04-28T01:00:00Z", "tc-skill"),
+      toolResult("2026-04-28T01:00:01Z", "tc-skill", "Loading skill..."),
+      skillExpansion("2026-04-28T01:00:02Z", "build-app", "u-exp"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    const skillResult = results.get("tc-skill");
+    expect(skillResult).toBeDefined();
+    expect(skillResult?.output).toContain("Loading skill...");
+    expect(skillResult?.output).toContain("Base directory for this skill:");
+    expect(skillResult?.output).toContain("# build-app");
+  });
+
+  it("creates a synthetic tool_result if the Skill tool call has no explicit result", () => {
+    const events = [
+      skillToolCall("2026-04-28T01:00:00Z", "tc-skill"),
+      skillExpansion("2026-04-28T01:00:01Z", "frontend-design", "u-exp"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    const skillResult = results.get("tc-skill");
+    expect(skillResult).toBeDefined();
+    expect(skillResult?.output).toContain("# frontend-design");
+    expect(skillResult?.tool_call_id).toBe("tc-skill");
+  });
+
+  it("matches two back-to-back Skill calls to their respective expansions in order", () => {
+    const events = [
+      skillToolCall("2026-04-28T01:00:00Z", "tc-1"),
+      skillExpansion("2026-04-28T01:00:01Z", "alpha", "u-1"),
+      skillToolCall("2026-04-28T01:00:02Z", "tc-2"),
+      skillExpansion("2026-04-28T01:00:03Z", "beta", "u-2"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-1")?.output).toContain("# alpha");
+    expect(results.get("tc-1")?.output).not.toContain("# beta");
+    expect(results.get("tc-2")?.output).toContain("# beta");
+    expect(results.get("tc-2")?.output).not.toContain("# alpha");
+  });
+
+  it("matches two Skill calls inside one assistant_message to expansions in order", () => {
+    // Claude may emit multiple parallel tool_use blocks in a single
+    // assistant_message. Each Skill call must get its own expansion.
+    const events: TranscriptEvent[] = [
+      {
+        timestamp: "2026-04-28T01:00:00Z",
+        type: "assistant_message",
+        event_id: "a-multi",
+        source: "test",
+        model: "test-model",
+        text: "",
+        tool_calls: [
+          { tool_call_id: "tc-a", tool_name: "Skill", input_chars: 2 },
+          { tool_call_id: "tc-b", tool_name: "Skill", input_chars: 2 },
+        ],
+        stop_reason: null,
+        usage: null,
+        is_auth_error: false,
+        is_api_error: false,
+        api_error_kind: null,
+        is_provider_fault: false,
+      },
+      skillExpansion("2026-04-28T01:00:01Z", "alpha", "u-a"),
+      skillExpansion("2026-04-28T01:00:02Z", "beta", "u-b"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-a")?.output).toContain("# alpha");
+    expect(results.get("tc-a")?.output).not.toContain("# beta");
+    expect(results.get("tc-b")?.output).toContain("# beta");
+    expect(results.get("tc-b")?.output).not.toContain("# alpha");
+  });
+
+  it("keeps earlier Skill calls queued when a later Skill call appears before any expansion", () => {
+    // Two assistant_messages each issue one Skill call, then two
+    // expansions arrive. The first expansion must match the first Skill
+    // call, not the most recent one.
+    const events: TranscriptEvent[] = [
+      skillToolCall("2026-04-28T01:00:00Z", "tc-first"),
+      skillToolCall("2026-04-28T01:00:01Z", "tc-second"),
+      skillExpansion("2026-04-28T01:00:02Z", "first-skill", "u-1"),
+      skillExpansion("2026-04-28T01:00:03Z", "second-skill", "u-2"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-first")?.output).toContain("# first-skill");
+    expect(results.get("tc-second")?.output).toContain("# second-skill");
+  });
+
+  it("leaves non-Skill tool_results alone", () => {
+    const events = [
+      {
+        timestamp: "2026-04-28T01:00:00Z",
+        type: "assistant_message" as const,
+        event_id: "a-1",
+        source: "test",
+        model: "test-model",
+        text: "",
+        tool_calls: [{ tool_call_id: "tc-read", tool_name: "Read", input_chars: 0 }],
+        stop_reason: null,
+        usage: null,
+        is_auth_error: false,
+        is_api_error: false,
+        api_error_kind: null,
+        is_provider_fault: false,
+      },
+      toolResult("2026-04-28T01:00:01Z", "tc-read", "file contents"),
+    ];
+    const results = buildToolResultsWithSkillExpansions(events);
+    expect(results.get("tc-read")?.output).toBe("file contents");
+  });
+});
+
+// Recursively gather every string in a Mithril vnode tree (text + children).
+function allText(node: unknown): string {
+  if (node == null) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(allText).join(" ");
+  if (typeof node === "object") {
+    const v = node as { text?: unknown; children?: unknown };
+    return `${allText(v.text)} ${allText(v.children)}`;
+  }
+  return "";
+}
+
+describe("renderSubagentCard", () => {
+  it("renders a rich card from the tool call alone, with a non-clickable pending state", () => {
+    const toolCall: ToolCall = {
+      tool_call_id: "t1",
+      tool_name: "Agent",
+      input_chars: 2,
+      description: "explore foo",
+      subagent_type: "Explore",
+    };
+    const vnode = renderSubagentCard(toolCall, "agent-1", true);
+    const text = allText(vnode);
+    const classes = collectClasses(vnode).join(" ");
+
+    expect(text).toContain("explore foo");
+    expect(text).toContain("Explore");
+    // Not yet linked: the label is the muted, non-clickable "View conversation" placeholder.
+    expect(text).toContain("View conversation");
+    expect(classes).toContain("subagent-card-link--pending");
+  });
+
+  it("shows a pulsing running dot on a green card while the sub-agent is working", () => {
+    const toolCall: ToolCall = {
+      tool_call_id: "t1",
+      tool_name: "Agent",
+      input_chars: 2,
+      description: "explore foo",
+      subagent_type: "Explore",
+      subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
+    };
+    const classes = collectClasses(renderSubagentCard(toolCall, "agent-1", true)).join(" ");
+    expect(classes).toContain("subagent-card-status-dot--running");
+    expect(classes).not.toContain("subagent-card-status-check");
+    expect(classes).not.toContain("subagent-card--done");
+  });
+
+  it("switches to a checkmark and greys the card once the sub-agent finishes", () => {
+    const toolCall: ToolCall = {
+      tool_call_id: "t1",
+      tool_name: "Agent",
+      input_chars: 2,
+      description: "explore foo",
+      subagent_type: "Explore",
+      subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
+    };
+    const classes = collectClasses(renderSubagentCard(toolCall, "agent-1", false)).join(" ");
+    expect(classes).toContain("subagent-card-status-check");
+    expect(classes).toContain("subagent-card--done");
+    expect(classes).not.toContain("subagent-card-status-dot--running");
+  });
+
+  it("renders a clickable conversation link once the subagent session is linked", () => {
+    const toolCall: ToolCall = {
+      tool_call_id: "t1",
+      tool_name: "Agent",
+      input_chars: 2,
+      description: "explore foo",
+      subagent_type: "Explore",
+      subagent_metadata: { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" },
+    };
+    const vnode = renderSubagentCard(toolCall, "agent-1", false);
+    const text = allText(vnode);
+    const classes = collectClasses(vnode).join(" ");
+
+    expect(text).toContain("View conversation");
+    // Linked: the active link, not the muted pending placeholder.
+    expect(classes).not.toContain("subagent-card-link--pending");
+  });
+
+  it("falls back to subagent_metadata fields when the tool call lacks description", () => {
+    const toolCall: ToolCall = {
+      tool_call_id: "t1",
+      tool_name: "Agent",
+      input_chars: 2,
+      subagent_metadata: { agent_type: "Explore", description: "from metadata", session_id: "agent-sub1" },
+    };
+    const text = allText(renderSubagentCard(toolCall, "agent-1", false));
+    expect(text).toContain("from metadata");
+    expect(text).toContain("View conversation");
+  });
+});
+
+describe("renderToolCallBlock", () => {
+  // A real codex code-mode call: tool_name is always "exec"; the operation is buried
+  // in the JS input as tools.<fn>(...). The header should surface what it ran.
+  const execCall: ToolCall = {
+    tool_call_id: "c1",
+    tool_name: "exec",
+    input_chars: 72,
+    header_label: "Tool: Bash",
+  };
+
+  it("renders the parser's header label", () => {
+    const text = allText(renderToolCallBlock(execCall, null, "agent-x", "a-1"));
+    // A codex exec is headed by what it actually did, never the bare "Tool: exec".
+    expect(text).toContain("Tool: Bash");
+    expect(text).not.toContain("Tool: exec");
+  });
+
+  it("falls back to 'Tool: <name>' for a call parsed before labels existed", () => {
+    const bash: ToolCall = { tool_call_id: "c2", tool_name: "Bash", input_chars: 6 };
+    expect(allText(renderToolCallBlock(bash, null, "agent-x", "a-1"))).toContain("Tool: Bash");
+  });
+
+  it("keeps a failed call glanceable via the resident error snippet", () => {
+    const call: ToolCall = { tool_call_id: "c3", tool_name: "Bash", input_chars: 6 };
+    const failed: ToolResultEvent = {
+      timestamp: "t",
+      type: "tool_result",
+      event_id: "r-c3",
+      source: "test",
+      tool_call_id: "c3",
+      tool_name: "Bash",
+      output_chars: 5000,
+      is_error: true,
+      error_snippet: "FileNotFoundError: no such file",
+    };
+    const text = allText(renderToolCallBlock(call, failed, "agent-x", "a-1"));
+    expect(text).toContain("FileNotFoundError: no such file");
+  });
+});
+
+// Walk a mithril vnode tree and collect every element's class string, so tests can assert
+// on structural state (e.g. the running vs done status indicator) that allText can't see.
+function collectClasses(node: unknown): string[] {
+  if (node == null) return [];
+  if (Array.isArray(node)) return node.flatMap(collectClasses);
+  if (typeof node === "object") {
+    // Mithril normalizes the `class` hyperscript attr into `className` on the
+    // vnode. Split into tokens so marker classes are found individually even
+    // when utilities share the class string.
+    const v = node as { attrs?: { className?: unknown }; children?: unknown };
+    const own = typeof v.attrs?.className === "string" ? v.attrs.className.split(/\s+/).filter(Boolean) : [];
+    return [...own, ...collectClasses(v.children)];
+  }
+  return [];
+}
+
+describe("thinking disclosure", () => {
+  function assistantWithThinking(eventId: string, hasThinking: boolean): AssistantMessageEvent {
+    return {
+      timestamp: "2026-08-06T00:00:00.000Z",
+      type: "assistant_message",
+      event_id: eventId,
+      source: "test",
+      model: "m",
+      text: "the answer",
+      tool_calls: [],
+      stop_reason: null,
+      usage: null,
+      is_auth_error: false,
+      is_api_error: false,
+      api_error_kind: null,
+      is_provider_fault: false,
+      ...(hasThinking ? { has_thinking: true } : {}),
+    };
+  }
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+  });
+
+  it("renders the toggle only when the harness recorded readable thinking", () => {
+    const withToggle = renderAssistantMessageChildren(assistantWithThinking("th-1", true), new Map(), "agent-1");
+    expect(collectClasses(withToggle)).toContain("thinking-toggle");
+
+    const without = renderAssistantMessageChildren(assistantWithThinking("th-2", false), new Map(), "agent-1");
+    expect(collectClasses(without)).not.toContain("thinking-toggle");
+  });
+
+  it("shows a loading note, then the fetched thinking, then unavailable, when expanded", () => {
+    setBlockExpanded("think:th-3", true);
+    const event = assistantWithThinking("th-3", true);
+
+    mockDetailState.mockReturnValue(undefined);
+    let children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("Loading");
+    // Expanding kicks off (or heals) the on-demand fetch.
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-3");
+
+    mockDetailState.mockReturnValue({
+      state: "loaded",
+      detail: { inputs_by_tool_call_id: {}, output: null, thinking: "pondering deeply" },
+    });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("pondering deeply");
+
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    children = renderAssistantMessageChildren(event, new Map(), "agent-1");
+    expect(allText(children)).toContain("No longer available");
+  });
+
+  it("does not fetch while collapsed", () => {
+    renderAssistantMessageChildren(assistantWithThinking("th-4", true), new Map(), "agent-1");
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+  });
+
+  it("renders a fresh mount in the recorded expansion state", () => {
+    setBlockExpanded("think:th-5", true);
+    const expanded = renderAssistantMessageChildren(assistantWithThinking("th-5", true), new Map(), "agent-1");
+    expect(collectClasses(expanded)).toContain("thinking-disclosure--expanded");
+
+    const collapsed = renderAssistantMessageChildren(assistantWithThinking("th-6", true), new Map(), "agent-1");
+    expect(collectClasses(collapsed)).toContain("thinking-disclosure");
+    expect(collectClasses(collapsed)).not.toContain("thinking-disclosure--expanded");
+  });
+
+  it("collapses via the DOM class alone, so the memoized wrapper needs no repaint", () => {
+    // Regression: the assistant-message wrapper is memoized and skips re-rendering on a
+    // toggle, so a collapse that depends on a vdom re-render never happens. The handler
+    // must instead flip the class directly on the mounted element (and record the state),
+    // exactly like the tool-call header does.
+    const redraw = vi.spyOn(m, "redraw").mockImplementation(() => undefined);
+    setBlockExpanded("think:th-7", true);
+    const children = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    const toggle = findByClass(children, "thinking-toggle");
+    const classes = new Set(["thinking-disclosure", "thinking-disclosure--expanded"]);
+    const disclosureStub = {
+      classList: {
+        toggle(name: string): boolean {
+          if (classes.has(name)) {
+            classes.delete(name);
+            return false;
+          }
+          classes.add(name);
+          return true;
+        },
+      },
+    };
+    const click = () =>
+      (toggle?.attrs as { onclick: (e: unknown) => void }).onclick({
+        currentTarget: { parentElement: disclosureStub },
+      });
+
+    mockRequestDetail.mockReset();
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(false);
+    // A collapse fetches nothing and needs no redraw -- the class flip IS the collapse.
+    expect(mockRequestDetail).not.toHaveBeenCalled();
+    expect(redraw).not.toHaveBeenCalled();
+
+    click();
+    expect(classes.has("thinking-disclosure--expanded")).toBe(true);
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-1", "th-7");
+
+    // The recorded state followed both flips, so a fresh mount agrees with the DOM.
+    const remount = renderAssistantMessageChildren(assistantWithThinking("th-7", true), new Map(), "agent-1");
+    expect(collectClasses(remount)).toContain("thinking-disclosure--expanded");
+    redraw.mockRestore();
+  });
+});
+
+// Walk a mithril vnode tree and return the first element vnode whose class contains `name`.
+function findByClass(node: unknown, name: string): { attrs?: Record<string, unknown> } | null {
+  if (node == null) return null;
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findByClass(child, name);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    const v = node as { attrs?: { className?: unknown }; children?: unknown };
+    if (typeof v.attrs?.className === "string" && v.attrs.className.split(" ").includes(name)) {
+      return v as { attrs?: Record<string, unknown> };
+    }
+    return findByClass(v.children, name);
+  }
+  return null;
+}
+
+describe("expanded tool row payload states", () => {
+  const call: ToolCall = { tool_call_id: "pc-1", tool_name: "Bash", input_chars: 20 };
+  const result: ToolResultEvent = {
+    timestamp: "t",
+    type: "tool_result",
+    event_id: "r-pc-1",
+    source: "test",
+    tool_call_id: "pc-1",
+    tool_name: "Bash",
+    output_chars: 5000,
+    is_error: false,
+  };
+
+  beforeEach(() => {
+    mockDetailState.mockReset();
+    mockRequestDetail.mockReset();
+    setBlockExpanded("tc:pc-1", true);
+  });
+
+  it("shows loading notes and requests the payloads while nothing is cached", () => {
+    mockDetailState.mockReturnValue(undefined);
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("Loading");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "a-pc-1");
+    expect(mockRequestDetail).toHaveBeenCalledWith("agent-x", "r-pc-1");
+  });
+
+  it("renders the full fetched input and output once loaded", () => {
+    mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
+      eventId === "a-pc-1"
+        ? {
+            state: "loaded",
+            detail: { inputs_by_tool_call_id: { "pc-1": "the whole input" }, output: null, thinking: null },
+          }
+        : { state: "loaded", detail: { inputs_by_tool_call_id: {}, output: "the whole output", thinking: null } },
+    );
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("the whole input");
+    expect(text).toContain("the whole output");
+  });
+
+  it("shows the quiet placeholder when the payload is gone", () => {
+    mockDetailState.mockReturnValue({ state: "unavailable" });
+    const text = allText(renderToolCallBlock(call, result, "agent-x", "a-pc-1"));
+    expect(text).toContain("No longer available");
+  });
+});

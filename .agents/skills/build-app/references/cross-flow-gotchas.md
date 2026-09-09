@@ -24,8 +24,9 @@ service name. Either:
 - The backend bound to a different host or port than what was
   registered (e.g. bound to a Unix socket, or a port that doesn't match
   the `--url` passed to `forward_port.py`).
-- The `--name` passed to `forward_port.py` does not match the service
-  name the tab points at.
+- The name `forward_port.py` registered (the `name` in the `app.toml`
+  passed as `--manifest`, or the `--name` flag of a manifest-less line)
+  does not match the service name the tab points at.
 
 Fix: re-check pre-flight (bind to 127.0.0.1, port matches
 `system/supervisord.conf`, name matches the tab's service name) and
