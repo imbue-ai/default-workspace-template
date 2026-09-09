@@ -5,10 +5,15 @@
  * setting rather than a place to navigate to -- which is why it is a switch and not a button,
  * and why it sits in the composer's under-bar next to the model.
  *
- * It is the SAME switch as the combo card's fast-mode row, classes and all. An earlier version
- * scaled it down here with its own CSS, which set `transform: translateX(...)` on a knob whose
- * offset already comes from a Tailwind `translate-x-[22px]` utility -- the utility won, and a
- * 22px throw in a 32px track put the knob outside it. One switch, one size, no overrides.
+ * It is the combo card's switch at its SMALL size, asked for by name. Sitting in the under-bar
+ * beside a line of helper text, it has to read as that text's equal rather than as the loudest
+ * thing down there -- so the label takes the faint role and the switch takes `sm`.
+ *
+ * Asked for BY NAME, and not scaled here, because that is what failed before: an earlier
+ * version shrank the one switch with its own CSS `transform`, against a knob whose offset comes
+ * from a Tailwind `translate-x-[...]` utility. The utility won, and a 22px throw in a shrunken
+ * track put the knob outside it. `switchClass`/`switchKnobClass` hand out a track and its throw
+ * together (see `SWITCH_SIZES`); never re-size a switch from the outside.
  */
 import m from "mithril";
 
@@ -37,8 +42,8 @@ export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
         m("span", { class: "terminal-view-toggle-label" }, "Terminal View"),
         m(
           "span",
-          { class: `${css.SWITCH} ${on ? css.SWITCH_ON : css.SWITCH_OFF}` },
-          m("span", { class: `${css.SWITCH_KNOB} ${on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` }),
+          { class: `${css.switchClass("sm")} ${on ? css.SWITCH_ON : css.SWITCH_OFF}` },
+          m("span", { class: css.switchKnobClass("sm", on) }),
         ),
       ],
     );

@@ -53,7 +53,7 @@ export const FLYOUT_MAX_HEIGHT = flyoutContentHeight(FLYOUT_VISIBLE_ROWS, true);
 
 // --- the composer trigger ------------------------------------------------------------------
 export const TRIGGER =
-  "flex h-[30px] items-center gap-1.5 rounded-lg px-2 type-helper whitespace-nowrap " +
+  "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
 /** The separators between the chip's three parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
@@ -116,16 +116,49 @@ export const SLIDER =
   "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
 
 // --- the fast switch -----------------------------------------------------------------------
-export const SWITCH =
-  "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer " +
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
-  "disabled:cursor-not-allowed disabled:opacity-50";
+/** The switch comes in two sizes, and a size is a TRACK PLUS ITS THROW -- never one without
+ *  the other.
+ *
+ *  That is not a style preference, it is the bug this table exists to prevent. The
+ *  terminal-view toggle once scaled the one switch down with its own CSS `transform`, against a
+ *  knob whose offset already came from a Tailwind `translate-x-[...]` utility. The utility won,
+ *  and a 22px throw inside a shrunken track put the knob outside it. Asking for a size by name
+ *  is the only way to get one, so the two can no longer disagree.
+ *
+ *  Each row is arithmetic, not taste: the knob is the track's height less 2px of inset top and
+ *  bottom, and the on-position is `width - inset - knob`, which leaves the knob the same 2px
+ *  from either end. `md` is the combo card's fast-mode row; `sm` is the composer's under-bar,
+ *  where the switch sits beside a line of helper text and has to read as its equal, not as the
+ *  loudest thing down there. */
+const SWITCH_SIZES = {
+  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
+  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
+} as const;
+
+export type SwitchSize = keyof typeof SWITCH_SIZES;
+
+/** The track. Colour is the caller's -- `SWITCH_ON` / `SWITCH_OFF` below. */
+export function switchClass(size: SwitchSize): string {
+  return (
+    `relative inline-flex ${SWITCH_SIZES[size].track} shrink-0 items-center rounded-full transition-colors ` +
+    "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
+    "disabled:cursor-not-allowed disabled:opacity-50"
+  );
+}
+
+/** The knob, already at the position `on` puts it in. */
+export function switchKnobClass(size: SwitchSize, on: boolean): string {
+  const chosen = SWITCH_SIZES[size];
+  return (
+    `inline-flex ${chosen.knob} items-center justify-center rounded-full bg-surface shadow-raised ` +
+    `transition-transform ${on ? chosen.on : SWITCH_KNOB_OFF}`
+  );
+}
+
 export const SWITCH_ON = "bg-accent";
 export const SWITCH_OFF = "bg-fill-active";
-export const SWITCH_KNOB =
-  "inline-flex h-5 w-5 items-center justify-center rounded-full bg-surface shadow-raised transition-transform";
-export const SWITCH_KNOB_ON = "translate-x-[22px]";
-export const SWITCH_KNOB_OFF = "translate-x-[2px]";
+/** The same 2px at rest whatever the size, so it is not in the table. */
+const SWITCH_KNOB_OFF = "translate-x-[2px]";
 export const SWITCH_CHECK = "text-accent";
 
 // --- the flyouts ---------------------------------------------------------------------------

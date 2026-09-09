@@ -81,10 +81,16 @@ const POPOVER_ATTR = "data-model-popover";
 
 /** How long the pointer rests on a row before that row's flyout opens.
  *
- *  Shorter than the tooltip's 250ms on purpose: a tooltip is an aside nobody asked for, so it
- *  waits until it is clearly wanted, while a submenu IS what the pointer came across the card
- *  for. Long enough that a sweep to a row further along opens nothing on the way. */
-const SUBMENU_HOVER_DELAY_MS = 150;
+ *  Near enough to instant to feel like none: a submenu IS what the pointer came across the card
+ *  for, and every millisecond of it reads as the card being slow to answer. Nothing like the
+ *  tooltip's 250ms, which is an aside nobody asked for and so waits to be clearly wanted.
+ *
+ *  Not actually zero, and what the remainder buys is one thing: a flick that crosses two or
+ *  three rows on its way somewhere else does not flash their flyouts up in turn. The two costs
+ *  that used to argue for a long delay are both paid off elsewhere now -- the offerable-model
+ *  fetch runs once per card-open rather than per hover, and a hover the pointer does not stay
+ *  for is cancelled when it leaves (`handleStackLeave`) rather than firing behind it. */
+const SUBMENU_HOVER_DELAY_MS = 40;
 
 /** How long the safe triangle survives once the pointer is inside it.
  *
@@ -585,7 +591,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             {
               type: "button",
               role: "switch",
-              class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              class: `${css.switchClass("md")} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
               "aria-label": "Fast Mode",
               "aria-checked": opts.on ? "true" : "false",
               disabled: !opts.interactive,
@@ -595,7 +601,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             },
             m(
               "span",
-              { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
+              { class: css.switchKnobClass("md", opts.on) },
               opts.on
                 ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
                 : null,
