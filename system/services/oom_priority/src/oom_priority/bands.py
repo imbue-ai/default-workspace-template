@@ -154,9 +154,9 @@ def chat_agent_oom_score_adj(
     A chat younger than ``CHAT_LAUNCH_GRACE_SECONDS`` short-circuits to
     ``CHAT_AGENT_LAUNCH``: none of the signals below can have arrived yet, so
     scoring it on their absence would read "unengaged" when the truth is "too
-    new to tell". ``age_seconds`` is None when there is no live process to read
-    an age from, which earns no grace -- an age we cannot measure may be long
-    spent.
+    new to tell". ``age_seconds`` is None when the caller could not read the
+    process's start time, which earns no grace -- an age we cannot measure may
+    be long spent.
 
     Lower is more protected. Past the grace, two forces move a chat within its
     band, starting from ``CHAT_AGENT_BASE``. Engagement pulls it down:
