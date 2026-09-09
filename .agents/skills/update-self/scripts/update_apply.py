@@ -1459,11 +1459,24 @@ def _record_rollback_progress(
     write_last_good(record, repo_root)
 
 
-def _finish_rollback(record: LastGoodRecord, repo_root: Path, outcome: str) -> None:
-    """Write the outcome the notice shows and drop the copies; the record stays until a person closes it."""
+def _settle_rollback_record(
+    record: LastGoodRecord, repo_root: Path, outcome: str
+) -> None:
+    """Write the outcome the notice shows and stop it reading as a rollback in flight.
+
+    A record with ``progress`` set and no ``outcome`` is what the shell refuses both
+    verbs on, so every way out of a rollback has to come through here -- including the
+    ones nobody predicted -- or the notice sits on the user's tabs with no way to close
+    it.
+    """
     record.progress = None
     record.outcome = outcome
     write_last_good(record, repo_root)
+
+
+def _finish_rollback(record: LastGoodRecord, repo_root: Path, outcome: str) -> None:
+    """Settle the record and drop the copies; the record stays until a person closes it."""
+    _settle_rollback_record(record, repo_root, outcome)
     discard_snapshots(repo_root)
 
 
@@ -1504,6 +1517,44 @@ def rollback_last(
     ).rstrip("/")
 
     _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_REVERTING)
+    try:
+        return _run_rollback(
+            record,
+            repo_root,
+            runner=runner,
+            http=http,
+            sleeper=sleeper,
+            resolved_base=resolved_base,
+            now=now,
+        )
+    except BaseException as exc:
+        # From the progress write above until an outcome is written, the notice reads
+        # as a rollback in flight and refuses every verb, so an exception that simply
+        # ended this (detached) script would leave it that way on the user's tabs
+        # forever. Settle it with what happened, keep the copies -- the tree may be
+        # half-restored and they are what an agent finishes by hand from -- and let the
+        # traceback out to the log the launcher captured.
+        _settle_rollback_record(
+            record,
+            repo_root,
+            f"The rollback stopped partway through ({type(exc).__name__}: {exc}). The "
+            "previous version's copies are still kept. Ask your agent to look at it.",
+        )
+        raise
+
+
+def _run_rollback(
+    record: LastGoodRecord,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    sleeper: Callable[[float], None],
+    resolved_base: str,
+    now: Callable[[], float],
+) -> int:
+    """Revert the merge forward, restore the copies, restart the touched programs, and
+    confirm health. Every ``return`` here has already settled the record."""
     reverted = runner.run(
         ["git", "revert", "-m", "1", "--no-commit", record.merge_sha],
         cwd=str(repo_root),
