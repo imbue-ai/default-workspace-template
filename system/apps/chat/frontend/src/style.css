@@ -298,11 +298,17 @@
   background: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  color: var(--c-text-secondary);
+  /* The faint role, matching the model chip beside it: this is a view setting sitting under
+     the composer, not something to draw the eye down there. */
+  color: var(--c-text-faint);
   font-size: var(--font-size-row);
   transition: color var(--dur-base);
 }
-.terminal-view-toggle:hover,
+/* Hover lifts one step, the way the model chip's does. */
+.terminal-view-toggle:hover {
+  color: var(--c-text-secondary);
+}
+/* Switched ON is a state rather than a hover, and says so at full strength. */
 .terminal-view-toggle[aria-checked="true"] {
   color: var(--c-text-primary);
 }
