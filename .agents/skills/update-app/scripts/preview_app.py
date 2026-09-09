@@ -394,7 +394,11 @@ def up(
         )
     )
     code = runner.run(argv, cwd=repo_root)
-    if code != 0:
+    if code != 0 and not preview_url_by_app:
+        # Kept when siblings came up: their names live only in this record, so dropping it
+        # would leave them running with nothing left for ``down`` to reach them by. They are
+        # left running rather than torn down here, since the usual next move is a rebuild and
+        # a retry, which reuses them.
         _preview_state_path(repo_root, app_name).unlink(missing_ok=True)
     return code
 
