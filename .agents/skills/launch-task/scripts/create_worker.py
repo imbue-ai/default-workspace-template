@@ -1006,10 +1006,9 @@ def launch_sync(
         return launch_rc
 
     # Read the branch now, not after the await. The worker exists from here on, so
-    # mngr can answer; and if it cannot, this is the moment to say so -- the same
-    # reasoning that used to validate the spec up front. Left until after the wait,
-    # a failure here would surface only once the worker had run to completion, and
-    # would discard the report we had just collected.
+    # mngr can answer; and if it cannot, this is the moment to say so. Left until
+    # after the wait, a failure here would surface only once the worker had run to
+    # completion, and would discard the report we had just collected.
     try:
         worker_branch = read_worker_branch(name, runner)
     except WorkerBranchUnknownError as branch_error:

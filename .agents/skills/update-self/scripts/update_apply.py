@@ -678,9 +678,9 @@ def _recover_running_state(
                 repo_root,
                 "mngr start --restart",
             )
-        # Settled, not point-in-time, for the same reason the apply path is:
-        # "the live UI is confirmed healthy" was once printed while supervisord
-        # was still turning the pid over. Every critical app with an instances
+        # Settled, not point-in-time, for the same reason as the apply path: a
+        # single 200 can land while supervisord is still turning the pid over.
+        # Every critical app with an instances
         # API is held beside the shell, read off the restored tree: a tree whose
         # manifests declare none is confirmed by the shell alone.
         instance_apps = read_critical_instance_apps(repo_root)
