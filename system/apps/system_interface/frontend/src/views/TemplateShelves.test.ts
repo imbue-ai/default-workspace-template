@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { railPageTarget, railPaging } from "./TemplateShelves";
+import { railArrowTop, railPageTarget, railPaging } from "./TemplateShelves";
 
 describe("rail paging", () => {
   it("offers an arrow only where there is somewhere to go", () => {
@@ -27,5 +27,17 @@ describe("rail paging", () => {
     expect(railPageTarget({ scrollLeft: 600, clientWidth: 600, scrollWidth: 1500 }, 1)).toBe(900);
     expect(railPageTarget({ scrollLeft: 900, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(300);
     expect(railPageTarget({ scrollLeft: 300, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(0);
+  });
+});
+
+describe("where a paging arrow's circle sits", () => {
+  it("puts it level with the drawings once they have been measured", () => {
+    expect(railArrowTop(96)).toBe("96px");
+  });
+
+  it("falls back to the middle of the sliver before there is anything to measure", () => {
+    // A rail that has not been laid out reports 0, which is not a real centre: no drawing's middle
+    // lands on the row's very top edge.
+    expect(railArrowTop(0)).toBe("50%");
   });
 });
