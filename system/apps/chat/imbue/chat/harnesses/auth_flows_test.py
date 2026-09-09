@@ -19,6 +19,7 @@ from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.binding import account_credential_path
+from imbue.chat.harnesses.binding import harness_for
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.signed_in import SignedIn
@@ -57,6 +58,8 @@ def test_the_shape_comes_from_the_method_not_the_harness() -> None:
     assert flow_shape(get_method("openai", "device")) is FlowShape.CODE_THEN_WAIT
     assert flow_shape(get_method("opencode-go", "api_key")) is FlowShape.PASTE
     assert flow_shape(get_method("anthropic", "api_key")) is FlowShape.PASTE
+    # The same lane as the device flow above, with the other shape.
+    assert flow_shape(get_method("openai", "api_key")) is FlowShape.PASTE
 
 
 def test_a_paste_flow_writes_pi_auth_json_and_commits(service: AuthFlowService, tmp_path: Path) -> None:
@@ -109,6 +112,42 @@ def test_a_claude_key_lands_in_the_account_settings_env(service: AuthFlowService
     (account,) = read_index(tmp_path).accounts
     settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_API_KEY"] == "sk-ant-xyz"
+
+
+def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tmp_path: Path) -> None:
+    """The file the device flow would have produced, written directly -- which is what makes
+    an OpenAI account mintable without a person at a browser."""
+    started = service.start("openai", "api_key")
+    assert started.shape is FlowShape.PASTE
+
+    status = service.submit_key(started.flow_id, "sk-openai-123")
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    assert account.display == "OpenAI"
+    assert harness_for(account) is HarnessType.CODEX
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+    assert json.loads(path.read_text()) == {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-openai-123"}
+    # codex writes its own auth.json 0600, and this file holds the same secret.
+    assert path.stat().st_mode & 0o077 == 0
+
+
+def test_a_rejected_codex_key_puts_the_working_one_back(tmp_path: Path) -> None:
+    """Same rule as the pi lanes: the probe needs the file in place to answer, and the folder
+    a re-auth writes into is a live account whose agents are bound to it."""
+    verdicts = [SignedIn.YES, SignedIn.NO]
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
+    started = service.start("openai", "api_key")
+    service.submit_key(started.flow_id, "sk-good")
+    (account,) = read_index(tmp_path).accounts
+    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+
+    again = service.start("openai", "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "sk-bad")
+
+    assert status.state is FlowState.FAILED
+    assert json.loads(path.read_text())["OPENAI_API_KEY"] == "sk-good"
+    assert read_index(tmp_path).accounts == (account,)
 
 
 def test_seeding_happens_before_the_credential_is_written(service: AuthFlowService, tmp_path: Path) -> None:
