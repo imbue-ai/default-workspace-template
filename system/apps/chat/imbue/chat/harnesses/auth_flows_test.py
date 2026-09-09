@@ -132,24 +132,6 @@ def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tm
     assert path.stat().st_mode & 0o077 == 0
 
 
-def test_a_rejected_codex_key_puts_the_working_one_back(tmp_path: Path) -> None:
-    """Same rule as the pi lanes: the probe needs the file in place to answer, and the folder
-    a re-auth writes into is a live account whose agents are bound to it."""
-    verdicts = [SignedIn.YES, SignedIn.NO]
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
-    started = service.start("openai", "api_key")
-    service.submit_key(started.flow_id, "sk-good")
-    (account,) = read_index(tmp_path).accounts
-    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
-
-    again = service.start("openai", "api_key", account_id=account.id)
-    status = service.submit_key(again.flow_id, "sk-bad")
-
-    assert status.state is FlowState.FAILED
-    assert json.loads(path.read_text())["OPENAI_API_KEY"] == "sk-good"
-    assert read_index(tmp_path).accounts == (account,)
-
-
 def test_seeding_happens_before_the_credential_is_written(service: AuthFlowService, tmp_path: Path) -> None:
     """An unseeded claude account boots into the onboarding dialogs and never signals
     readiness, which gets the agent destroyed."""
@@ -345,22 +327,34 @@ def test_an_abandoned_re_auth_leaves_the_live_account_alone(service: AuthFlowSer
     assert read_index(tmp_path).accounts == (account,)
 
 
-def test_a_rejected_re_auth_key_puts_the_working_one_back(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("lane_id", "key_provider"),
+    # Both sinks that write an account's auth.json, since the rollback restores whatever the
+    # lane's sink put there and the per-lane part of it is naming that file at all.
+    [("opencode-go", "opencode-go"), ("openai", None)],
+)
+def test_a_rejected_re_auth_key_puts_the_working_one_back(
+    tmp_path: Path, lane_id: str, key_provider: str | None
+) -> None:
     """The probe needs the file in place to answer, so the write comes first -- but the
     folder is a live account, and a rejected key left there breaks every bound agent
     silently, at its next turn, with the row still saying the account is fine."""
     verdicts = [SignedIn.YES, SignedIn.NO]
     service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
-    started = service.start("opencode-go", "api_key")
-    service.submit_key(started.flow_id, "good-key", "opencode-go")
+    started = service.start(lane_id, "api_key")
+    service.submit_key(started.flow_id, "good-key", key_provider)
     (account,) = read_index(tmp_path).accounts
     path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+    accepted = path.read_text()
+    assert "good-key" in accepted
 
-    again = service.start("opencode-go", "api_key", account_id=account.id)
-    status = service.submit_key(again.flow_id, "bad-key", "opencode-go")
+    again = service.start(lane_id, "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "bad-key", key_provider)
 
     assert status.state is FlowState.FAILED
-    assert json.loads(path.read_text())["opencode-go"]["key"] == "good-key"
+    # Byte for byte what the accepted key wrote: a restore that put the key back but lost the rest
+    # of the file would leave the account just as broken.
+    assert path.read_text() == accepted
     assert read_index(tmp_path).accounts == (account,)
 
 
