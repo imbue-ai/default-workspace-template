@@ -43,9 +43,6 @@ LAST_GOOD_RECORD_REL: Final[str] = "data/.state/update-apply/last-good.json"
 ROLLBACK_LOG_REL: Final[str] = "data/.state/update-apply/rollback-last.log"
 UPDATE_SELF_SCRIPT_REL: Final[str] = ".agents/skills/update-self/scripts/update_self.py"
 
-# The shell's own name in the record's ``apps``: what the top banner keys on.
-SHELL_APP_NAME: Final[str] = "system_interface"
-
 # A confirm deletes the kept copies, which can be a whole tool environment; generous, but bounded
 # so a wedged script cannot hold a request thread forever.
 _CONFIRM_TIMEOUT_SECONDS: Final[float] = 120.0
