@@ -1,3 +1,0 @@
-The New Tab page plan (`docs/system/blueprint/new-tab-page/plan-new-tab-page.md`) describes the template rails' paging arrows as they are now built: in a sliver at either end of the rail, outside the scrolling area and out in the page's margin, rather than as a full-height strip overlaying the rail's end that fades the cards out under itself. The whole sliver is the click target while only a circle inside it lights up, level with the middle of the card drawings; each sliver keeps its place in the layout whether or not it holds an arrow, so the rail does not resize as an arrow comes and goes.
-
-No changes outside that document in this bucket.

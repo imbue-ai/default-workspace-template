@@ -95,18 +95,12 @@ From top to bottom, inside the same `max-w-4xl` column the page uses today:
    templates" row holding every template. A card is the template's drawing in a
    3:2 frame, its title under it, and "by <author>" under that; no description on
    the card. The rail shows three and a half cards, so the cut-off card says there
-   is more; a right arrow pages the rail one visible width to the right, a left
-   arrow appears once the rail has scrolled and pages it back, and each hides at
-   its end. The arrows live in a sliver at either end of the rail, outside the
-   scrolling area and out in the page's margin, so the cards run to the rail's
-   edge with nothing over them and still line up under the heading; each sliver
-   stays in the layout whether or not it holds an arrow, so the rail does not
-   resize as an arrow comes and goes. The whole sliver is the click target, the
-   full height of the row, so paging costs no aim; what the pointer lights up is
-   only a circle inside it, pinned to the sliver's outer edge and level with the
-   middle of the card drawings (measured, since a card's width and so its 3:2
-   drawing's height follow the rail's own). The rail also scrolls freely with the
-   trackpad. Clicking a card opens the template's detail dialog.
+   is more; a right arrow overlaying that card pages the rail one visible width to
+   the right, a left arrow appears once the rail has scrolled and pages it back,
+   and each hides at its end (each arrow is a full-height strip at the rail's end
+   that fades the rail out under it, so the whole edge is the target). The rail
+   also scrolls freely with the trackpad. Clicking a card opens the template's
+   detail dialog.
 
 ### The template detail dialog
 
