@@ -314,4 +314,3 @@ class AutoOpenReactor(MutableModel):
         if created_at is None:
             return True
         return self.clock() - created_at < self.freshness
-

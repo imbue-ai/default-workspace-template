@@ -22,7 +22,9 @@ def _clock() -> datetime:
 
 
 def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> AutoOpenReactor:
-    return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell, clock=_clock)
+    return AutoOpenReactor(
+        ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell, clock=_clock
+    )
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_tab() -> None:
