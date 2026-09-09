@@ -41,11 +41,16 @@ DEFAULT_TRIGGER_DIR: Final[Path] = Path("/mngr-snapshot")
 # mngr state at ~/.mngr, dotfiles) -- NOT just the mngr data dir.
 DEFAULT_BACKUP_ROOT: Final[Path] = Path("/home/user")
 
-# What the outer snapshot helper may call the backed-up tree inside a snapshot.
-# Older helpers place it at `home/`; newer ones write `host_dir/` beside their own
-# bookkeeping (`agents/`, `host_state.json`). The inner service cannot tell which
-# helper it is talking to before a snapshot exists, so it tries both against the
-# snapshot it actually got.
+# What the backed-up tree is called inside a snapshot. A snapshot covers the
+# whole unified host volume, and that volume has two layouts, chosen by the VPS
+# provider's optional `volume_home_path` setting:
+#   - set (e.g. /home/user): the container's home tree is symlinked onto the
+#     volume's `home/`, and the mngr host_dir is a plain directory inside it.
+#   - unset (the field's default): only the mngr host_dir is on the volume, at
+#     the volume's `host_dir/`, beside `agents/` and `host_state.json`.
+# The provider that carved the volume is outside this container and its setting
+# is not readable from in here, so the layout is discovered from the snapshot
+# itself rather than assumed at startup.
 OUTER_TRIGGER_READ_SUBPATH_CANDIDATES: Final[tuple[str, ...]] = ("home", "host_dir")
 
 _FINDMNT_TIMEOUT_SECONDS: Final[float] = 15.0
