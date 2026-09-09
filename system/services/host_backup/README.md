@@ -61,7 +61,12 @@ an encrypted restic repo on cheaper object storage.
     only the first post-boot backup would capture data; unique names avoid
     that. After the backup, the oldest snapshots beyond `max_local_snapshots`
     (default 5) are deleted by name via a `cleanup` request that carries the
-    snapshot name as `target`.
+    snapshot name as `target`. The snapshot is checked for the subtree restic
+    is about to read (`read_subpath`, `home`) before restic runs: without it
+    the tick fails a step later with restic complaining about its own
+    arguments, saying nothing about the snapshot they came from, so a missing
+    subtree instead aborts the tick with a `snapshot_failed` event naming what
+    the snapshot does hold.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
