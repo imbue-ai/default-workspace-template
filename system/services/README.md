@@ -21,11 +21,12 @@ needing to open them.
 - `agent-observer` (no directory: a program in `system/supervisord.conf`) - The
   workspace's one `mngr observe`, writing the agent lifecycle event file every
   chat instance follows.
-
 - `oom_priority/` - The OOM-prevention machinery: priority bands, the shed
   ledger, and the earlyoom integration.
 
-Each is a uv workspace member (the `system/services/*` glob) with its own
-README. A background service that exists solely to support one app does NOT
-go here -- it lives in that app's folder under `system/apps/` and is named
-`<app>-<role>` in `system/supervisord.conf`.
+Each directory here is a uv workspace member (the `system/services/*` glob) with
+its own README; `agent-observer` is the one program on the list with neither,
+since it is `mngr observe` under supervisord rather than code of ours. A
+background service that exists solely to support one app does NOT go here -- it
+lives in that app's folder under `system/apps/` and is named `<app>-<role>` in
+`system/supervisord.conf`.
