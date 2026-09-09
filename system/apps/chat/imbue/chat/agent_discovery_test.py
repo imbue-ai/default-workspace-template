@@ -361,3 +361,18 @@ def test_a_delivered_send_records_nothing_to_find(monkeypatch: pytest.MonkeyPatc
     assert not events_path.exists()
 
     assert has_undelivered_message_send("chat-1") is False
+
+
+def test_an_unreadable_events_file_does_not_fail_the_create(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """The unreadable case answers False like the absent one, rather than raising: this runs
+    on the create path, where an exception would report a chat that was created perfectly
+    well as a failed one. It is still logged, since unlike an absent file it is a fault."""
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    # A directory where the file belongs: read_text raises IsADirectoryError (an OSError)
+    # for any user, unlike a permission bit, which root ignores.
+    events_path.mkdir()
+
+    assert has_undelivered_message_send("chat-1") is False
+    assert any("chat-1" in record for record in loguru_records)
