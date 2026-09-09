@@ -75,6 +75,7 @@ def test_a_snapshot_matching_no_candidate_raises_instead_of_pointing_restic_nowh
     # diagnosable from the log alone.
     assert "something-else" in str(error_info.value)
 
+
 # --- DirectSnapshotTaker ---
 
 
