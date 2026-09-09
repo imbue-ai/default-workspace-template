@@ -622,8 +622,6 @@ def auth_signup(body: SignUpRequest) -> AuthResponse:
                 return AuthResponse(status="ERROR", message="Sign-up failed")
 
             user = result.user
-            # Defensive: a just-created account has no suspension row, but
-            # every session-creation path carries the gate.
             if suspension_module.is_user_suspended_at_gate(user.id, gate="json_signup"):
                 return AuthResponse(
                     status=suspension_module.ACCOUNT_SUSPENDED_STATUS,

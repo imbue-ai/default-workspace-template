@@ -111,13 +111,11 @@ export function opensshPrivateKeyPem(
   return `-----BEGIN OPENSSH PRIVATE KEY-----\n${wrapped}\n-----END OPENSSH PRIVATE KEY-----\n`;
 }
 
-// ---------------------------------------------------------------------------
 // owner-exec RFC 9421 / RFC 9530 strict profile
 //
 // Mirrors the owner-exec repo's spec/profile.md and internal/profile, and the
 // Python client in imbue_common.owner_exec_client. Cross-checked by the shared
 // vectors (see crypto/owner_exec_vectors.json and ed25519.test.ts).
-// ---------------------------------------------------------------------------
 
 export const REQUEST_TAG = "imbue-owner-exec";
 export const RESPONSE_TAG = "imbue-owner-exec-resp";
