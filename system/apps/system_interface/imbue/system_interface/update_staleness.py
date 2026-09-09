@@ -77,8 +77,9 @@ _GIT_SHUTDOWN_TIMEOUT_SECONDS = 1.0
 # manifests its environment was resolved from. Deliberately NOT the frontend
 # (the served bundle is rebuilt on disk without a restart), docs, skills,
 # tests, the other apps (separate processes, restarted with this one by every
-# apply), the mngr settings file (never read by this process), or anything
-# else agents routinely commit. (The update apply itself restarts the
+# apply), the mngr settings file (never read by this process), the root
+# lockfile (see ``_BACKEND_MANIFESTS``), or anything else agents routinely
+# commit. (The update apply itself restarts the
 # services agent on every apply, so it keeps no such rule; this one exists for
 # a tree moved by anything else.) Everything under the vendored mngr tree but
 # docs and tests counts -- a missed skew is the failure this whole detector
@@ -98,13 +99,24 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_instances/",
     "system/libs/app_manifest/",
 )
+# The manifests this environment was resolved from. The root ``uv.lock`` is
+# deliberately absent: scaffolding an app relocks it (``uv sync
+# --all-packages``, so the root lockfile learns the new workspace member),
+# which moves nothing this process resolved but would raise the banner on every
+# app a user builds. The root ``pyproject.toml`` stays -- the scaffold no
+# longer edits it, since the ``system/apps/*`` member glob picks a new package
+# up, so it still catches a ``[tool.uv.sources]`` re-point or a
+# ``[tool.uv.workspace]`` members/exclude edit. That leaves this list a
+# deliberate narrowing away from the apply's ``_is_backend_manifest`` in
+# ``.agents/skills/update-self/scripts/update_classification.py``, which it
+# otherwise mirrors: over-counting costs the apply one extra reinstall, and
+# costs this banner the trust it only gets to spend once.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/libs/app_instances/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
         "pyproject.toml",
-        "uv.lock",
     }
 )
 
