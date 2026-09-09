@@ -560,13 +560,19 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         key: `${tile.app.name}:${tile.action.id}`,
-        // Four to a row, then three, two and one as the pane narrows. The width is a fraction of
-        // the row minus the gaps it has to leave, so the subtrahend follows the count: gap-2 (8px)
+        // Four to a row, then three, then two as the pane narrows. The width is a fraction of the
+        // row minus the gaps it has to leave, so the subtrahend follows the count: gap-2 (8px)
         // times one fewer than the tiles in the row.
+        //
+        // Two survives far longer than the sections below it, because these labels are one or two
+        // short words -- the widest, "File Viewer", is 64px of text, and a tile spends only
+        // another ~54px on its padding, icon and gap. Two-up therefore still fits a label at a
+        // 260px pane, which is where the last step is; dropping it at 480 with the rest left half
+        // the row empty for no reason.
         class:
           "border-default flex h-9 shrink-0 items-stretch overflow-hidden rounded-lg border " +
           "w-[calc((100%-24px)/4)] @max-[760px]:w-[calc((100%-16px)/3)] " +
-          "@max-[620px]:w-[calc((100%-8px)/2)] @max-[480px]:w-full" +
+          "@max-[620px]:w-[calc((100%-8px)/2)] @max-[260px]:w-full" +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
