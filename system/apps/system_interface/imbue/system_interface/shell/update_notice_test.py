@@ -100,12 +100,27 @@ def test_confirm_runs_the_scripts_confirm_last_in_the_workspace(tmp_path: Path) 
     assert watch.current() is None
 
 
-def test_confirm_is_refused_without_a_record_and_reports_a_failing_script(tmp_path: Path) -> None:
+def test_confirm_is_refused_without_a_record_and_while_a_rollback_runs(tmp_path: Path) -> None:
+    """Confirming discards the copies, so a rollback in flight is restoring from what it would take
+    away -- and a settled record is exactly what the notice's Close button confirms."""
     watch = _watch(tmp_path)
-    write_stub_update_self_script(watch.repo_root, exit_code=1)
+    write_stub_update_self_script(watch.repo_root)
     with pytest.raises(UpdateNoticeRefusedError, match="no update notice"):
         watch.confirm()
+
+    write_rollback_point(watch.repo_root, progress="Restoring the previous version")
+    with pytest.raises(UpdateNoticeRefusedError, match="rollback is running"):
+        watch.confirm()
     assert read_stub_update_self_calls(watch.repo_root) == []
+
+    write_rollback_point(watch.repo_root, outcome="Rolled back to the previous version.")
+    watch.confirm()
+    assert [call["argv"] for call in read_stub_update_self_calls(watch.repo_root)] == [["confirm-last"]]
+
+
+def test_confirm_reports_a_failing_script(tmp_path: Path) -> None:
+    watch = _watch(tmp_path)
+    write_stub_update_self_script(watch.repo_root, exit_code=1)
 
     write_rollback_point(watch.repo_root)
     with pytest.raises(UpdateNoticeCommandError, match=r"exit 1[\s\S]*told to fail"):
