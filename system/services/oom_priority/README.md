@@ -185,7 +185,7 @@ not been messaged. Scored on their absence it would be the most expendable chat
 in the workspace during the one window where a shed cannot be recovered from --
 it has no transcript to revive into, and its opening message (the `first`
 template's `/welcome`, or whatever the creator seeded) is in flight and
-unrepeatable. A chat with no live process to read an age from gets no grace.
+unrepeatable. A chat whose process start time cannot be read gets no grace.
 
 Two forces, combined through a single **freshness** factor that decays with idle
 time (1.0 for the first hour, reaching 0.0 at 24 hours -- the ramp is a table in
