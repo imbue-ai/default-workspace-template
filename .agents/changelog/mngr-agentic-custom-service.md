@@ -2,4 +2,6 @@ The latchkey skill now tells agents how to ask for a connection to a domain latc
 
 Which request to send is decided by the error latchkey returned. `No service matches URL` means there is no service for that domain, so the agent asks for a new connection (`type: "custom-service"`). An error naming an existing service (`No credentials found for <service>`, `Request not permitted by the user`) means the service already exists, so the agent asks for permissions on it as before. The skill spells out that the first two of those share HTTP 400, so the message text is what distinguishes them, and that `latchkey curl` exits 0 even when the request failed.
 
-The latchkey skill now documents the optional `scheme` of a `custom-service` request (`https` by default, `http` for a service with no certificate) and that a sign-in URL may be `http` only for an `http` service.
+The latchkey skill now documents the `scheme` a `custom-service` request must name (`https`, or `http` for a service with no certificate) and that a sign-in URL may be `http` only for an `http` service.
+
+The latchkey skill now says a custom-service domain may be a single label, a private suffix or an IPv4 address, as private networks use; the old public-DNS-shaped restrictions are gone.
