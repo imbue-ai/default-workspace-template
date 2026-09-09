@@ -101,9 +101,10 @@ during approval. A domain that needs no authentication at all cannot be
 reached this way; latchkey refuses a request to a service with no stored
 credentials.
 
-Once the connection exists it is an ordinary service. Another workspace wanting
-the same domain sends a `predefined` request naming its scope -- not a second
-`custom-service` request.
+Once the connection exists it is an ordinary service. Another workspace whose
+latchkey does not know it sees `No service matches URL` too and sends the same
+`custom-service` request; the user is told the connection already exists and
+approving connects that workspace to it.
 
 ### Ask for user permission
 
