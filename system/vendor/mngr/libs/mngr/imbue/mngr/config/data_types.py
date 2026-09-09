@@ -26,6 +26,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import PositiveFloat
 from imbue.imbue_common.pure import pure
 from imbue.mngr.config.field_markers import RegistryField
+from imbue.mngr.config.field_markers import SettingsPatchField
 from imbue.mngr.config.overlay_merge import merge_models_via_overlay
 from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.errors import ParseSpecError
@@ -329,8 +330,12 @@ class CommandDefaults(FrozenModel):
     Field names should match the CLI parameter names (after click's conversion).
     """
 
-    # Store as a flexible dict since we don't know all possible CLI parameters ahead of time
-    defaults: dict[str, Any] = Field(
+    # Store as a flexible dict since we don't know all possible CLI parameters ahead of time.
+    # A settings patch rather than an assign-by-default aggregate: each layer's
+    # ``[commands.<name>]`` table sets only the parameters it cares about, and a local
+    # ``type = "codex"`` must add to the project's ``connect = false`` rather than replace
+    # the whole map. A same-key list assigned bare across layers is still a narrowing.
+    defaults: Annotated[dict[str, Any], SettingsPatchField()] = Field(
         default_factory=dict,
         description="Map of parameter name to default value",
     )

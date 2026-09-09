@@ -89,6 +89,8 @@ layer survive and same-key `__extend`s combine. The merge reads the marker off t
 pydantic field metadata, so core never hard-codes the field name. Because such a
 field can only grow (a higher layer adding keys is a superset), it is also **exempt
 from the assign-narrowing detector**. The fields carrying it today are
+`CommandDefaults.defaults` (so each layer's `[commands.<name>]` table adds the parameters it
+names to the ones lower layers set),
 `ClaudeAgentConfig.settings_overrides` and `AntigravityAgentConfig.settings_overrides`.
 
 ### The `__mngr_merge` surface for `settings_overrides`

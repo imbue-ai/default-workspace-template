@@ -36,7 +36,6 @@ from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CaseStep
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
-from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_BRANCH
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_TIMEOUT_SECONDS
@@ -294,12 +293,16 @@ def _reject_ungradeable_reward_floors(
 ) -> None:
     """Refuse a floor on a dimension this step's own verifier will not emit.
 
-    Only the outcome dimension is conditional: `gates` and `quality` ship in every verifier
-    build context and `reward` is what finalize.py composes. `outcome` is the exception -- the
-    criteria directory is written only for a step that declares expectations, so that rewardkit
-    does not score a step with nothing to score. Harbor reads a threshold on a key the verifier
-    never wrote as -inf, so such a floor fails on every run and aborts the trial there regardless
-    of what the agent did.
+    `gates` and `quality` ship in every verifier build context and `reward` is what finalize.py
+    composes. `outcome` is the one dimension generation can decide about -- the criteria directory
+    is written only for a step that declares expectations, so that rewardkit does not score a step
+    with nothing to score. Harbor reads a threshold on a key the verifier never wrote as -inf, so
+    such a floor fails on every run and aborts the trial there regardless of what the agent did.
+
+    `harness_quality` is conditional too, but on the run's harness config rather than on the eval
+    config: the verifier's pre-step drops it on any harness but claude, and a dataset is
+    arm-agnostic, so nothing here can tell whether a floor on it will be gradeable. A floor on it is
+    therefore left to the author, and holds only for a dataset run on the claude harness.
     """
     if expectations is not None or not isinstance(min_reward, PerDimensionRewardFloors):
         return
@@ -509,7 +512,6 @@ def load_eval_config(config_path: Path) -> EvalConfig:
         verification_timeout_seconds=float(
             raw_config.get("verification_timeout_seconds") or DEFAULT_VERIFICATION_TIMEOUT_SECONDS
         ),
-        avg_word_count_baseline=float(raw_config.get("avg_word_count_baseline") or DEFAULT_AVG_WORD_COUNT_BASELINE),
         cases=_normalize_cases(raw_config.get("personas")),
     )
     _validate_step_file_sources(config, config_path.parent)
@@ -612,7 +614,6 @@ def build_case_config(
         dwt_repo=config.dwt_repo,
         dwt_branch=dwt_ref,
         dwt_sha=dwt_sha,
-        avg_word_count_baseline=config.avg_word_count_baseline,
         expectations=expand_expectations(case.expectations) if case.expectations is not None else None,
         authored_expectations=case.expectations,
     )

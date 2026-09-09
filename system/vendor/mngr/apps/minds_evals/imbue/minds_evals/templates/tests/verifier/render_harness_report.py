@@ -24,6 +24,11 @@ Only output a tool actually *produced by running something* is classified, plus 
 file contents an agent read and prose a subagent wrote quote the strings a broken harness prints, and
 counting those scores an agent for the documentation it consulted.
 
+The ``harness_quality`` dimension is claude-only, and this pass is what enforces that: see
+``prepare_harness_quality``. The reports themselves are still written on every harness -- most of
+what they classify is harness-blind, and they are the only grade-time record of what the workspace
+did to the agent even where nothing scores them.
+
 ``harness_failures.json`` carries the scripted side: per-scope counts of each signature, and the
 ``scored_total`` that ``harness_quality/checks.py`` scores without a model in the loop. The judge reads
 prose and can weigh "tried three times and worked around it" against "gave up"; the counts cannot be
@@ -36,6 +41,7 @@ Runs in the verifier container: stdlib only, absolute paths.
 
 import json
 import re
+import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -45,6 +51,24 @@ WORKERS_DIR = Path("/logs/agent/verification/workers")
 MAIN_REPORT_PATH = Path("/logs/agent/harness_main.txt")
 WORKER_REPORT_PATH = Path("/logs/agent/harness_workers.txt")
 FAILURE_COUNTS_PATH = Path("/logs/agent/harness_failures.json")
+# The harness_quality dimension as rewardkit sees it, under the criteria root the verifier image
+# lands the criteria at.
+HARNESS_QUALITY_DIR = Path("/tests/harness_quality")
+# Where the harness verdict below is left for finalize.py, which composes the reward from it. A file
+# rather than a module the two scripts share: rewardkit imports every .py at the criteria root by
+# file path with nothing on the import path, so a sibling import in either would abort the grade
+# before a criterion ran.
+HARNESS_PATH = Path("/logs/agent/harness.json")
+
+# The harness this verifier's criteria are written for: claude's tool names and its subagent shape.
+CLAUDE_HARNESS = "claude"
+# What ``extra.minds_evals.source`` says on the driver's hand-built turn summary, as against the
+# workspace's own captured document.
+HAND_BUILT_SOURCE = "hand_built"
+# What mngr writes into ``agent.name`` when it cannot resolve the agent's type. It is the absence of
+# an answer rather than a harness, and reading it as one would take this dimension away from a claude
+# trial whose agent record was merely unresolvable.
+UNRESOLVED_AGENT_NAME = "unknown"
 
 # What a broken harness looks like in tool output. A line is classified under the first signature that
 # claims it, so the order is most to least specific: `playwright: not found` is a missing browser
@@ -113,7 +137,9 @@ FAILURE_SIGNATURES: tuple[tuple[str, re.Pattern[str]], ...] = (
 # describing the browser tests -- so classifying them counts documentation *about* a failure as the
 # failure. An errored result is scanned whatever tool produced it, since the error is the harness
 # speaking rather than the content the agent asked for.
-EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput"})
+# A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`.
+EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput", "bash"})
 
 
 # Signatures that are evidence for the judge but are NOT counted against the scripted score. An agent
@@ -275,15 +301,68 @@ def render_harness_report(
     return _clip("{}\n{}\n\n{}\n".format(header, "=" * len(header), body), report_clip), count_by_signature
 
 
+def _minds_evals_extra(document: dict[str, Any]) -> dict[str, Any]:
+    """The eval's own block of a document's root ``extra``; empty when it carries none."""
+    extra = document.get("extra")
+    minds_evals = extra.get("minds_evals") if isinstance(extra, dict) else None
+    return minds_evals if isinstance(minds_evals, dict) else {}
+
+
+def _recorded_harness(document: dict[str, Any]) -> str:
+    """The harness the driver recorded in this trial's harness config; empty when it recorded
+    none."""
+    arm = _minds_evals_extra(document).get("arm")
+    harness_config = arm.get("harness_config") if isinstance(arm, dict) else None
+    harness = harness_config.get("harness") if isinstance(harness_config, dict) else None
+    return harness if isinstance(harness, str) else ""
+
+
+def harness_of_document(document: dict[str, Any]) -> str:
+    """Which agent harness one ATIF document was written by -- `claude`, `pi-coding`, `codex` -- or
+    claude when nothing in it says.
+
+    A captured document's own ``agent.name`` is the harness that wrote it, which is the claim these
+    claude-shaped criteria care about, so it decides wherever it is there. The driver's hand-built
+    fallback carries the DRIVER's name there instead, so on that shape the answer comes from the
+    harness config the driver recorded, which it read back from the workspace's accounts listing
+    and is therefore available even where no document could be captured. A trajectory that says neither is graded as
+    claude, so a document this pass cannot place keeps every dimension rather than losing one --
+    which is why mngr's ``unknown`` placeholder counts as saying nothing.
+    """
+    if _minds_evals_extra(document).get("source") != HAND_BUILT_SOURCE:
+        agent = document.get("agent")
+        name = agent.get("name") if isinstance(agent, dict) else None
+        if isinstance(name, str) and name and name != UNRESOLVED_AGENT_NAME:
+            return name
+    return _recorded_harness(document) or CLAUDE_HARNESS
+
+
+def is_harness_quality_applicable(harness: str) -> bool:
+    """Whether the `harness_quality` dimension measures anything on this harness.
+
+    What the judges are shown is built by claude-shaped rules: a skill invocation is the `Skill`
+    tool, and `unknown_skill` and `missing_plugin` name claude's own vocabulary -- which is what the
+    prompt spends its weight on. On another harness those rules find nothing, so the report is thin
+    because it was built thin rather than because the harness held, and the prompt tells the judge
+    to read a report with nothing in it as a sound harness: a false pass rather than a measurement,
+    at an opus call per scope. The signatures that are harness-blind still fire, which is why the
+    reports are written whatever ran.
+    """
+    return harness == CLAUDE_HARNESS
+
+
+def load_trajectory_document(path: Path) -> dict[str, Any]:
+    """The ATIF document at ``path``; empty when the file is absent or not a document."""
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def load_steps(path: Path) -> list[dict[str, Any]]:
     """The ATIF steps at ``path``; empty when the file is absent or not a document."""
-    try:
-        document = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return []
-    if not isinstance(document, dict):
-        return []
-    steps = document.get("steps")
+    steps = load_trajectory_document(path).get("steps")
     if not isinstance(steps, list):
         return []
     return [step for step in steps if isinstance(step, dict)]
@@ -355,6 +434,27 @@ def write_reports(
     return recorded
 
 
+def prepare_harness_quality(trajectory_path: Path, harness_path: Path, dimension_dir: Path) -> dict[str, Any]:
+    """Settle whether harness_quality applies to this trial: record the answer for finalize.py, and
+    take the dimension out of the criteria tree where it does not. Returns what was recorded.
+
+    rewardkit scores every dimension directory under the criteria root and has no switch for turning
+    one off, so removing the directory is how a dimension is opted out of at grade time. finalize.py
+    reads the record written here and drops the dimension's share of the reward, so the missing
+    dimension is composed as one that does not apply rather than as one that scored zero.
+    """
+    harness = harness_of_document(load_trajectory_document(trajectory_path))
+    is_harness_quality_scored = is_harness_quality_applicable(harness)
+    record = {"name": harness, "is_harness_quality_scored": is_harness_quality_scored}
+    # Recorded before the dimension is removed, because finalize.py reads a record it cannot find as
+    # a scored claude trial: a removal that outlived its record would charge the trial the harness's
+    # share of a dimension nothing scored. The other order costs at most a judge nothing reads.
+    harness_path.write_text(json.dumps(record, indent=2))
+    if not is_harness_quality_scored and dimension_dir.is_dir():
+        shutil.rmtree(dimension_dir)
+    return record
+
+
 def main() -> None:
     write_reports(
         trajectory_path=TRAJECTORY_PATH,
@@ -362,6 +462,9 @@ def main() -> None:
         main_report_path=MAIN_REPORT_PATH,
         worker_report_path=WORKER_REPORT_PATH,
         counts_path=FAILURE_COUNTS_PATH,
+    )
+    prepare_harness_quality(
+        trajectory_path=TRAJECTORY_PATH, harness_path=HARNESS_PATH, dimension_dir=HARNESS_QUALITY_DIR
     )
 
 

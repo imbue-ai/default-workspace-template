@@ -103,6 +103,30 @@ def test_load_trajectory_steps_of_a_missing_or_malformed_file_is_empty(tmp_path:
     assert _RENDERER.load_trajectory_steps(tmp_path / "not-a-document.json") == []
 
 
+def _one_declaration_steps(tool_name: str, created_id: str, title: str) -> list[dict[str, Any]]:
+    """A conversation whose agent declares one progress step, through the named shell tool and under
+    the named ticket id -- the two things about a `tk` declaration that vary by harness and by the
+    directory `tk` was run in."""
+    return [
+        {"step_id": 1, "source": "user", "message": "Build it"},
+        {
+            "step_id": 2,
+            "source": "agent",
+            "message": "On it.",
+            "tool_calls": [
+                {
+                    "tool_call_id": "c1",
+                    "function_name": tool_name,
+                    "arguments": {"command": 'tk create --step "{}"'.format(title)},
+                }
+            ],
+            "observation": {
+                "results": [{"source_call_id": "c1", "content": "Created {}: {}".format(created_id, title)}]
+            },
+        },
+    ]
+
+
 def _step_records_steps() -> list[dict[str, Any]]:
     """A conversation whose agent declares progress steps, closes one, and also opens a regular
     cross-agent ticket -- which the client never sees and the rendering must leave out."""
@@ -190,22 +214,7 @@ def test_a_step_records_id_prefix_is_not_pinned_to_one_working_directory() -> No
     # directory called `workspace` mints `cod-step-`, `a7-step-`, and so on. Pinning `wor-` here drops
     # every declaration from such a run while its closes still render, and the criterion scores 10 for
     # the empty timeline that leaves -- a parsing break that reads as a perfect score.
-    steps = [
-        {"step_id": 1, "source": "user", "message": "Build it"},
-        {
-            "step_id": 2,
-            "source": "agent",
-            "message": "On it.",
-            "tool_calls": [
-                {
-                    "tool_call_id": "c1",
-                    "function_name": "Bash",
-                    "arguments": {"command": 'tk create --step "Set it up"'},
-                }
-            ],
-            "observation": {"results": [{"source_call_id": "c1", "content": "Created cod-step-f1zl: Set it up"}]},
-        },
-    ]
+    steps = _one_declaration_steps("Bash", "cod-step-f1zl", "Set it up")
 
     rendered = _RENDERER.render_judge_transcript(steps)
 
@@ -528,3 +537,16 @@ def test_a_harness_step_boundary_never_reaches_the_judge() -> None:
 
     assert "adjust-requirements" not in rendered
     assert rendered == "[USER]\nNow change it\n\n[AGENT \u00b7 message 1]\nChanged.\n"
+
+
+def test_pis_lowercase_shell_puts_its_progress_steps_on_the_clients_timeline() -> None:
+    # pi-coding names the shell `bash` and runs the same `tk` records through it. A tool set that
+    # knows only claude's `Bash` reads none of that output, which renders an empty timeline -- and an
+    # empty timeline is scored a perfect 10 for copy nobody graded.
+    steps = _one_declaration_steps("bash", "wor-step-aaaa", "Set up the to-do app")
+
+    rendered = _RENDERER.render_judge_transcript(steps)
+
+    assert "[PROGRESS · step declared]\nSet up the to-do app" in rendered
+    # The structural gate reads the same commands, so it must see the step verb it ran too.
+    assert _RENDERER.summarize_progress(steps, rendered) == {"rendered_block_count": 1, "is_step_command_run": True}
