@@ -106,8 +106,9 @@ def build_production_state(
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
-    app is assembled), so it follows no event stream by itself. Tests do not use
-    this; they build a ``ChatState`` with fakes via ``testing.build_test_state``.
+    app is assembled), so it follows no event stream by itself. Tests build a
+    ``ChatState`` with fakes via ``testing.build_test_state`` instead, except where
+    what is under test is this wiring itself (where the chat's data directory lands).
     """
     broadcaster = WebSocketBroadcaster()
     agent_manager = AgentManager.build(
