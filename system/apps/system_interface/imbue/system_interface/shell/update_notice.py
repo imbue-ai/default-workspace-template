@@ -175,12 +175,21 @@ class UpdateNoticeWatch(MutableModel):
     def confirm(self) -> None:
         """Close the notice: the script discards the kept copies and the record.
 
-        Raises ``UpdateNoticeRefusedError`` when there is nothing to confirm and
-        ``UpdateNoticeCommandError`` when the script could not run or failed; the record is
-        left as the script left it either way, and the windows learn of the change from the watch.
+        Raises ``UpdateNoticeRefusedError`` when there is nothing to confirm or a rollback is
+        running, and ``UpdateNoticeCommandError`` when the script could not run or failed; the
+        record is left as the script left it either way, and the windows learn of the change
+        from the watch.
+
+        A rollback in flight is refused because confirming discards the very copies it is
+        restoring from, leaving it to warn about files it could not restore and then write
+        back the record it was just told to close. The band hides both verbs while a rollback
+        runs, so this catches a window that has not seen the progress yet.
         """
-        if self.current() is None:
+        notice = self.current()
+        if notice is None:
             raise UpdateNoticeRefusedError("There is no update notice to confirm.")
+        if notice.is_rolling_back:
+            raise UpdateNoticeRefusedError("A rollback is running; wait for it to finish.")
         try:
             result = run_local_command_modern_version(
                 command=[sys.executable, str(self.repo_root / UPDATE_SELF_SCRIPT_REL), "confirm-last"],
