@@ -52,9 +52,7 @@ def get_host_dir() -> Path:
 # reported to the caller as a successful send, so the event stream is the only way to
 # learn about them. Spelled out rather than imported because mngr has no constant for
 # them either.
-_UNDELIVERED_SEND_EVENT_TYPES: frozenset[str] = frozenset(
-    {"relaxed_send_unconfirmed", "send_rejected_by_agent"}
-)
+_UNDELIVERED_SEND_EVENT_TYPES: frozenset[str] = frozenset({"relaxed_send_unconfirmed", "send_rejected_by_agent"})
 
 
 def has_undelivered_message_send(agent_id: str) -> bool:
