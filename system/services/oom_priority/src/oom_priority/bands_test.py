@@ -12,13 +12,14 @@ _HOUR = 3600.0
 
 
 def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
-    """The score for a just-engaged chat: the engagement-only behaviour."""
+    """The score for a just-engaged chat past its launch grace: the engagement-only behaviour."""
     return bands.chat_agent_oom_score_adj(
         is_open=is_open,
         is_visible=is_visible,
         recency_rank=recency_rank,
         idle_seconds=0.0,
         is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -30,13 +31,14 @@ def _aged(
     recency_rank: int | None = None,
     is_mid_turn: bool = False,
 ) -> int:
-    """The score for a chat last engaged with ``idle_seconds`` ago."""
+    """The score for a chat last engaged with ``idle_seconds`` ago, past its launch grace."""
     return bands.chat_agent_oom_score_adj(
         is_open=is_open,
         is_visible=is_visible,
         recency_rank=recency_rank,
         idle_seconds=idle_seconds,
         is_mid_turn=is_mid_turn,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -233,6 +235,7 @@ def test_chat_score_always_within_the_chat_band() -> None:
                             recency_rank=rank,
                             idle_seconds=idle,
                             is_mid_turn=mid_turn,
+                            age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
                         )
                         assert (
                             bands.CHAT_AGENT_FLOOR
@@ -308,6 +311,7 @@ def test_unknown_idle_time_is_treated_as_fresh() -> None:
         recency_rank=None,
         idle_seconds=None,
         is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 

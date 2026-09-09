@@ -29,7 +29,7 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
-from imbue.chat.agent_discovery import has_unconfirmed_message_send
+from imbue.chat.agent_discovery import has_undelivered_message_send
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.binding import BindingError
@@ -1407,7 +1407,7 @@ class AgentManager:
             # and merely records it. The claim buys the user a greeting, so one that was
             # never submitted has to give it back as surely as a create that died.
             if is_first_chat:
-                is_welcome_unsubmitted = success and has_unconfirmed_message_send(agent_id)
+                is_welcome_unsubmitted = success and has_undelivered_message_send(agent_id)
                 if is_welcome_unsubmitted:
                     _loguru_logger.warning(
                         "Chat {} was created but its `/welcome` was never submitted; returning the "

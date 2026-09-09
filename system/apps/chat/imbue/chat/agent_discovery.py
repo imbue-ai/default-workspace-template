@@ -48,14 +48,30 @@ def get_host_dir() -> Path:
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
 
 
-def has_unconfirmed_message_send(agent_id: str) -> bool:
-    """Whether mngr recorded a send to ``agent_id`` whose submission it never witnessed.
+# The message-delivery event types that mean "this send did not become a turn". mngr
+# writes these in ``BaseAgent.record_message_delivery_event``; both are reported to the
+# caller as a successful send, so the event stream is the only way to learn about them.
+# Duplicated from mngr rather than imported: mngr spells them as bare string literals
+# too, so there is nothing to import yet.
+_UNDELIVERED_SEND_EVENT_TYPES: frozenset[str] = frozenset(
+    {"relaxed_send_unconfirmed", "send_rejected_by_agent"}
+)
+
+
+def has_undelivered_message_send(agent_id: str) -> bool:
+    """Whether mngr recorded a send to ``agent_id`` that never became a turn.
 
     mngr confirms a send by watching the agent for evidence that it took the message.
     A slash command leaves no durable evidence, so an unwitnessed one is reported as a
     successful best-effort send and recorded in the agent's message-delivery events
-    rather than raised. Read right after a create, this answers whether that create's
-    initial message went in, because the initial message is the only one a create sends.
+    rather than raised; an outright rejection by the agent is likewise recorded, not
+    raised. Read right after a create, this answers whether that create's initial
+    message went in, because the initial message is the only one a create sends.
+
+    This is evidence of absence, not proof: an unconfirmed send means "no evidence
+    within the timeout", so a send whose evidence merely arrived late reads as
+    undelivered here. That is the safe direction for the one caller -- handing a
+    first-chat claim back costs a duplicate greeting, keeping it costs the only one.
 
     An events file we cannot read answers False rather than raising: this runs on the
     create path, where an exception would turn a chat that was created perfectly well
@@ -78,7 +94,7 @@ def has_unconfirmed_message_send(agent_id: str) -> bool:
             # torn one. Every whole line still counts, but the damage is worth seeing.
             logger.opt(exception=e).warning("Skipping a malformed message-delivery event of {}", agent_id)
             continue
-        if isinstance(event, dict) and event.get("type") == "relaxed_send_unconfirmed":
+        if isinstance(event, dict) and event.get("type") in _UNDELIVERED_SEND_EVENT_TYPES:
             return True
     return False
 

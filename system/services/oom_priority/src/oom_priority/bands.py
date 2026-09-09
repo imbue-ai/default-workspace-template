@@ -79,6 +79,18 @@ CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a work
 # unrepeatable, so a shed here loses it outright instead of costing a cold start.
 # So a chat launches at, and is held at, the protected floor until it is old
 # enough for the ordinary signals to describe it.
+#
+# This is the one place the chat policy fails *protected* rather than expendable,
+# which is worth stating because everything else here fails the other way (an
+# unrecognized service lands at ``USER_SERVICE``, an unclassifiable agent at
+# ``WORKER_AGENT``). A chat that is never re-tagged at all -- created while the
+# chat app is down, or one whose pid ``reapply`` cannot resolve -- keeps this band
+# for the life of its process, which leaves it above a worker doing unrecoverable
+# work rather than below one. It is bounded: the band is still above every
+# service, so a floor-pinned chat can never outlive the workspace's own services,
+# and the next ``reapply`` re-scores it. Note also that being at the floor does
+# not make a chat safe, only later in the queue -- with no worker or agent
+# subprocess running, a launching chat is still the container's top victim.
 CHAT_AGENT_LAUNCH: Final[int] = CHAT_AGENT_FLOOR  # too young to have earned a band
 # Long enough to cover a create (the harness start, the readiness wait, and the
 # initial-message send), short enough that a chat nobody touches is back under the
@@ -147,7 +159,7 @@ def chat_agent_oom_score_adj(
     recency_rank: int | None,
     idle_seconds: float | None,
     is_mid_turn: bool,
-    age_seconds: float | None = None,
+    age_seconds: float | None,
 ) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
 
