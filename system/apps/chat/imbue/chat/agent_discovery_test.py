@@ -9,7 +9,7 @@ import pytest
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import discover_agents
-from imbue.chat.agent_discovery import has_unconfirmed_message_send
+from imbue.chat.agent_discovery import has_undelivered_message_send
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
@@ -326,10 +326,37 @@ def test_a_torn_event_line_does_not_hide_a_whole_one(monkeypatch: pytest.MonkeyP
     events_path = host_dir / "agents" / "chat-1" / "events" / "messages" / "events.jsonl"
     events_path.parent.mkdir(parents=True)
     events_path.write_text(
-        '{"type": "send_rejected_by_agent", "detail": "tor\n'
+        '{"type": "some_other_delivery_event", "detail": "tor\n'
         + json.dumps({"type": "relaxed_send_unconfirmed", "detail": "no submission evidence"})
         + "\n"
     )
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
 
-    assert has_unconfirmed_message_send("chat-1") is True
+    assert has_undelivered_message_send("chat-1") is True
+
+
+def test_an_agent_that_rejected_the_message_counts_as_undelivered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rejected send is reported to the caller as a successful one, exactly like an
+    unwitnessed one. The greeting did not happen either way, so the claim it was spending
+    has to come back either way."""
+    host_dir = tmp_path / "host"
+    events_path = host_dir / "agents" / "chat-1" / "events" / "messages" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(
+        json.dumps({"type": "send_rejected_by_agent", "detail": "agent rejected the message"}) + "\n"
+    )
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+
+    assert has_undelivered_message_send("chat-1") is True
+
+
+def test_a_delivered_send_records_nothing_to_find(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The ordinary case: a send that landed writes no delivery event at all, so a create
+    that greeted its chat keeps the claim it spent."""
+    host_dir = tmp_path / "host"
+    (host_dir / "agents" / "chat-1" / "events" / "messages").mkdir(parents=True)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+
+    assert has_undelivered_message_send("chat-1") is False

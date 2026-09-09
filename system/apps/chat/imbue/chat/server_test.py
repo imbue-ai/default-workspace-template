@@ -1152,7 +1152,7 @@ def test_presence_endpoint_retags_a_chat_from_the_report() -> None:
         (
             4242,
             bands.chat_agent_oom_score_adj(
-                is_open=True, is_visible=True, recency_rank=None, idle_seconds=0.0, is_mid_turn=False
+                is_open=True, is_visible=True, recency_rank=None, idle_seconds=0.0, is_mid_turn=False, age_seconds=None
             ),
         )
     ]
@@ -1170,7 +1170,7 @@ def test_presence_endpoint_closed_report_releases_the_chat() -> None:
     assert response.status_code == 200
     assert writes[-1][1] > open_adj
     assert writes[-1][1] == bands.chat_agent_oom_score_adj(
-        is_open=False, is_visible=False, recency_rank=None, idle_seconds=None, is_mid_turn=False
+        is_open=False, is_visible=False, recency_rank=None, idle_seconds=None, is_mid_turn=False, age_seconds=None
     )
 
 
@@ -1224,7 +1224,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     assert writes[-1] == (
         4242,
         bands.chat_agent_oom_score_adj(
-            is_open=False, is_visible=False, recency_rank=0, idle_seconds=0.0, is_mid_turn=False
+            is_open=False, is_visible=False, recency_rank=0, idle_seconds=0.0, is_mid_turn=False, age_seconds=None
         ),
     )
 

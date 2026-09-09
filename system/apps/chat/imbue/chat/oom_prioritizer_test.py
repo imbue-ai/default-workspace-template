@@ -56,12 +56,14 @@ class _Harness:
 
 
 def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
+    """The engagement-only score, i.e. what a chat past its launch grace gets."""
     return bands.chat_agent_oom_score_adj(
         is_open=is_open,
         is_visible=is_visible,
         recency_rank=recency_rank,
         idle_seconds=0.0,
         is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -247,13 +249,17 @@ def test_entering_a_running_state_counts_as_engagement() -> None:
 
 
 def test_process_start_time_keeps_a_revived_chat_fresh() -> None:
-    # ``a``'s last recorded message is ancient, but its process started a minute
-    # ago (it was revived), so it must not be treated as abandoned.
+    # ``a``'s last recorded message is ancient, but its process started recently
+    # (it was revived), so it must not be treated as abandoned. Deliberately past
+    # CHAT_LAUNCH_GRACE_SECONDS: inside the grace the launch band would answer
+    # this, and the process-start floor being tested here would never be reached.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.prioritizer.seed_last_message_times({"a": h.now - 30 * 24 * _HOUR})
-    h.process_started_at["a"] = h.now - 60.0
+    h.process_started_at["a"] = h.now - 10 * 60.0
     h.prioritizer.reapply()
-    assert h.latest_adj_by_pid()[10] < bands.WORKER_AGENT
+    adj = h.latest_adj_by_pid()[10]
+    assert adj < bands.WORKER_AGENT
+    assert adj != bands.CHAT_AGENT_LAUNCH
 
 
 def test_an_untouched_long_running_process_ages_out() -> None:
