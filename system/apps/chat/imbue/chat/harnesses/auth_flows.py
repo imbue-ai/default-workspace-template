@@ -866,9 +866,8 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
 
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     """The files a sink writes, so a rejected credential can be rolled back."""
-    if sink is PasteSink.PI_AUTH_JSON:
-        return (account_path / "auth.json",)
-    if sink is PasteSink.CODEX_AUTH_JSON:
+    # pi and codex both name their credential auth.json; what differs is the shape inside it.
+    if sink in (PasteSink.PI_AUTH_JSON, PasteSink.CODEX_AUTH_JSON):
         return (account_path / "auth.json",)
     if sink is PasteSink.CLAUDE_ENV:
         return (account_path / "settings.json",)
