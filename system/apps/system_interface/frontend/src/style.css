@@ -581,66 +581,83 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    itself is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's
    edge is what says there is more.
 
-   Each end that still has rail past it fades out, which is the rest of saying so. The fade is a
-   MASK rather than a scrim painted in the page's colour: it takes the cards' own shadows down with
-   them instead of laying a pale sheet over them, and it does not have to be kept in step with
-   whatever is behind the rail.
+   Each end that still has rail past it fades out, which is the rest of saying so. The fade is an
+   overlay in the page's own colour rather than a mask on the scroller: an overlay is a plain
+   element, so showing and hiding it is opacity, which animates anywhere, and it cannot break the
+   way a mask can. It is pointer-transparent, so the rail still scrolls and the cards still take
+   clicks underneath it. The cost is that it has to be painted in the surface colour and kept in
+   step with it -- hence color-mix off --c-surface rather than a literal white.
 
-   THE STOPS ARE EASED, and that is the whole point of writing this by hand. A two-stop gradient
-   moves alpha at a constant rate across the ramp, but the eye's response to lightness is not
-   constant -- it is far more sensitive at the dark end than the light one -- so a linear ramp does
-   not read as linear. It reads as a visible line where the fade starts, then a long flat tail that
-   never quite arrives. The stops below sample smoothstep (3t^2 - 2t^3) at eighths, which starts
-   and ends gently and does its work in the middle, so the fade reads as continuous with no edge to
-   catch on. The percentages are of the fade's own width, so --rail-fade retunes it in one place.
+   THE STOPS ARE EASED, and that is the whole point of writing this by hand. The overlay fades the
+   card towards the page, so what the eye sees is the two composited, which is linear in the
+   overlay's alpha -- but apparent lightness is not linear in it. CIE L* goes roughly as the cube
+   root of luminance, so equal steps of alpha are not equal steps of apparent lightness, and
+   wherever the ramp is steep in L* the eye picks out a band.
 
-   Only an end the rail can scroll towards is faded, so a card at rest against an edge -- the first
-   one, or the last one once the rail is paged to its end -- is never dimmed, and the hover lift
-   stays whole there. */
+   How much that matters depends entirely on the artwork. A pale card barely changes lightness
+   across the whole fade and looks smooth under any ramp; a near-black one (Task Inbox, say) has to
+   cross about 84 points of L* in the same distance, and that is where a ramp shows. Scoring
+   candidates by their worst L* step per pixel over such a card:
+
+       two plain stops, 30px               12.4   -- a visible line, unusable
+       smoothstep at eighths, 40px          3.89  -- what this first shipped; still banded
+       (1-x)^2.2 at twelfths, 30px          2.85  -- close to the floor for this width
+
+   The ramp is (1-x)^2.2, which unlike smoothstep is asymmetric: it drops away quickly from the
+   opaque edge, where a dark card's lightness moves fastest, and flattens out towards the far end.
+   Smoothstep does the opposite of what is wanted here -- gentle at both ends, steepest in the
+   middle, which is exactly where a high-contrast card cannot afford it.
+
+   Width is the other half, and it is capped here at 30px by choice. The lightness a dark card has
+   to cross is fixed, so a narrower fade must cross it faster: 30px cannot do better than about
+   2.8 L* per pixel however the stops are shaped, where 72px would reach 1.5. This ramp is within a
+   whisker of that floor, so the remaining way to soften it further is more width, not more curve.
+
+   Only an end the rail can scroll towards is faded (the view sets the opacity), so a card at rest
+   against an edge -- the first one, or the last once the rail is paged to its end -- is never
+   dimmed, and the hover lift stays whole there. */
 .new-tab-template-rail {
   scrollbar-width: none;
-  --rail-fade: 40px;
-  --rail-fade-start: linear-gradient(
-    to right,
-    rgb(0 0 0 / 0) 0,
-    rgb(0 0 0 / 0.043) calc(var(--rail-fade) * 0.125),
-    rgb(0 0 0 / 0.156) calc(var(--rail-fade) * 0.25),
-    rgb(0 0 0 / 0.316) calc(var(--rail-fade) * 0.375),
-    rgb(0 0 0 / 0.5) calc(var(--rail-fade) * 0.5),
-    rgb(0 0 0 / 0.684) calc(var(--rail-fade) * 0.625),
-    rgb(0 0 0 / 0.844) calc(var(--rail-fade) * 0.75),
-    rgb(0 0 0 / 0.957) calc(var(--rail-fade) * 0.875),
-    rgb(0 0 0 / 1) var(--rail-fade)
-  );
-  --rail-fade-end: linear-gradient(
-    to left,
-    rgb(0 0 0 / 0) 0,
-    rgb(0 0 0 / 0.043) calc(var(--rail-fade) * 0.125),
-    rgb(0 0 0 / 0.156) calc(var(--rail-fade) * 0.25),
-    rgb(0 0 0 / 0.316) calc(var(--rail-fade) * 0.375),
-    rgb(0 0 0 / 0.5) calc(var(--rail-fade) * 0.5),
-    rgb(0 0 0 / 0.684) calc(var(--rail-fade) * 0.625),
-    rgb(0 0 0 / 0.844) calc(var(--rail-fade) * 0.75),
-    rgb(0 0 0 / 0.957) calc(var(--rail-fade) * 0.875),
-    rgb(0 0 0 / 1) var(--rail-fade)
-  );
 }
 
 .new-tab-template-rail::-webkit-scrollbar {
   display: none;
 }
 
-.new-tab-template-rail[data-fade="start"] {
-  mask-image: var(--rail-fade-start);
+.new-tab-template-rail-fade-start {
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--c-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-surface) 0%, transparent) 100%
+  );
 }
 
-.new-tab-template-rail[data-fade="end"] {
-  mask-image: var(--rail-fade-end);
-}
-
-/* Both ends: two masks kept to whichever is the more transparent of the pair, so each end fades on
-   its own and the middle, opaque in both, is untouched. */
-.new-tab-template-rail[data-fade="both"] {
-  mask-image: var(--rail-fade-start), var(--rail-fade-end);
-  mask-composite: intersect;
+.new-tab-template-rail-fade-end {
+  background-image: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--c-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-surface) 0%, transparent) 100%
+  );
 }

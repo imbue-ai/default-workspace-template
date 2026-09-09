@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { railArrowTop, railFadeSides, railPageTarget, railPaging } from "./TemplateShelves";
+import { railArrowTop, railPageTarget, railPaging } from "./TemplateShelves";
 
 describe("rail paging", () => {
   it("offers an arrow only where there is somewhere to go", () => {
@@ -27,25 +27,6 @@ describe("rail paging", () => {
     expect(railPageTarget({ scrollLeft: 600, clientWidth: 600, scrollWidth: 1500 }, 1)).toBe(900);
     expect(railPageTarget({ scrollLeft: 900, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(300);
     expect(railPageTarget({ scrollLeft: 300, clientWidth: 600, scrollWidth: 1500 }, -1)).toBe(0);
-  });
-});
-
-describe("which ends of a rail fade", () => {
-  it("fades only the ends with more rail past them", () => {
-    expect(railFadeSides({ canPageLeft: false, canPageRight: true })).toBe("end");
-    expect(railFadeSides({ canPageLeft: true, canPageRight: true })).toBe("both");
-    expect(railFadeSides({ canPageLeft: true, canPageRight: false })).toBe("start");
-  });
-
-  it("fades neither end of a rail that fits", () => {
-    expect(railFadeSides({ canPageLeft: false, canPageRight: false })).toBe("none");
-  });
-
-  it("leaves a card resting against an edge unfaded, so its hover lift stays whole", () => {
-    // The two cases that matter: the rail at rest (first card against the start) and paged to its
-    // end (last card against the end). Neither end is scrollable towards, so neither is masked.
-    expect(railFadeSides({ canPageLeft: false, canPageRight: true })).not.toContain("start");
-    expect(railFadeSides({ canPageLeft: true, canPageRight: false })).not.toContain("end");
   });
 });
 

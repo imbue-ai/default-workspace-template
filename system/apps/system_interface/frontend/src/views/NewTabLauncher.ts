@@ -651,9 +651,18 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
+        // The sentence steps up to the title's colour under the pointer, so the tile reads as one
+        // piece while it is the one being offered. It rides the lift's own timing, and the tile is
+        // the ``group`` driving it, so hovering anywhere on the tile brings it up.
         m(
           "span",
-          { class: "type-helper mt-1 block " + (isDisabled ? "text-faint" : "text-secondary") },
+          {
+            class:
+              "type-helper mt-1 block " +
+              (isDisabled
+                ? "text-faint"
+                : "text-secondary transition-colors duration-300 ease-out group-hover:text-primary"),
+          },
           option.description,
         ),
       ],

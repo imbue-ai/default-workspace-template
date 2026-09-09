@@ -398,6 +398,25 @@ describe("NewTabLauncher", () => {
     expect(buildTile.className).not.toContain("hover:bg-fill-hover");
   });
 
+  it("brings a pickable tile's sentence up to the title's colour under the pointer", () => {
+    mount({});
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="build-app"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("group-hover:text-primary");
+    // It rides the lift's timing, so the tile answers the pointer all at once.
+    expect(sentence.className).toContain("duration-300");
+  });
+
+  it("leaves a standing-down tile's sentence faint", () => {
+    mount({ catalog: { kind: "disabled" } });
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="template"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("text-faint");
+    expect(sentence.className).not.toContain("group-hover:text-primary");
+  });
+
   it("times the tile, its glyph and a template's drawing alike", () => {
     mount({});
     // One shared transition across all three, so the page's answers cannot drift apart.

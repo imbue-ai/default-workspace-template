@@ -53,18 +53,6 @@ export function railArrowTop(artCentre: number): string {
   return artCentre > 0 ? `${artCentre}px` : "50%";
 }
 
-/**
- * Which ends of a rail fade out (the ``data-fade`` the stylesheet reads): the ones with more rail
- * past them, so the fade says "there is more this way" and nothing else. An end the rail cannot
- * scroll towards holds a card at rest, which is left alone -- unfaded, and with room to lift.
- */
-export function railFadeSides(paging: { canPageLeft: boolean; canPageRight: boolean }): string {
-  if (paging.canPageLeft && paging.canPageRight) return "both";
-  if (paging.canPageLeft) return "start";
-  if (paging.canPageRight) return "end";
-  return "none";
-}
-
 export interface TemplateCardAttrs {
   template: CatalogTemplate;
   // Whether the card fills its grid cell (a search result) rather than taking a rail's card width.
@@ -180,16 +168,21 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
    * The focus ring goes on the circle too -- the sliver is tall enough that ringing it would read
    * as a frame around the whole rail.
    */
-  function railArrow(shelf: ResolvedShelf, direction: -1 | 1, artCentre: number): m.Vnode {
+  function railArrow(shelf: ResolvedShelf, direction: -1 | 1, artCentre: number, canPage: boolean): m.Vnode {
     const isRight = direction === 1;
     const edge = isRight ? "right-0" : "left-0";
     return m(
       "button",
       {
         type: "button",
+        // Always here, so an arrow that runs out of rail fades away instead of vanishing between
+        // frames; ``disabled`` is what actually takes it out of reach while it is invisible, which
+        // covers the pointer, the tab order and assistive tech in one go.
         class:
-          `new-tab-template-rail-arrow group absolute inset-y-0 ${edge} w-full cursor-pointer ` +
-          "focus-visible:outline-none",
+          `new-tab-template-rail-arrow group absolute inset-y-0 ${edge} w-full ` +
+          "transition-opacity duration-(--dur-slow) ease-[ease] focus-visible:outline-none " +
+          (canPage ? "cursor-pointer opacity-100" : "opacity-0"),
+        disabled: !canPage,
         "aria-label": isRight ? "Show more templates" : "Show previous templates",
         "data-rail-page": isRight ? "next" : "previous",
         onclick: (event: MouseEvent) => {
@@ -216,15 +209,39 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   }
 
   /**
-   * One arrow's sliver. It is always in the layout, whether or not it holds an arrow, so a rail
-   * reaching its end does not resize the cards under the pointer as the arrow leaves.
+   * One arrow's sliver. It is always in the layout, and so is the arrow inside it, so a rail
+   * reaching its end neither resizes the cards under the pointer nor blinks the arrow out.
    */
   function railGutter(shelf: ResolvedShelf, direction: -1 | 1, canPage: boolean): m.Vnode {
     return m(
       "div",
       { class: "relative w-5 shrink-0" },
-      canPage ? railArrow(shelf, direction, artCentreByShelf.get(shelf.key) ?? 0) : null,
+      railArrow(shelf, direction, artCentreByShelf.get(shelf.key) ?? 0, canPage),
     );
+  }
+
+  /**
+   * The soft edge on an end that has more rail past it: an overlay in the page's own colour, laid
+   * over the scroller's edge and faded out inwards. It is an element rather than a mask on the
+   * scroller so that showing and hiding it is opacity, and it takes no pointer events, so the rail
+   * still scrolls and the cards still take clicks underneath it. Its ramp is in style.css, where
+   * the reasoning about it lives; the width is the same 30px at both ends.
+   */
+  function railFade(isEnd: boolean, isShown: boolean): m.Vnode {
+    return m("div", {
+      class:
+        `new-tab-template-rail-fade-${isEnd ? "end" : "start"} pointer-events-none absolute inset-y-0 ` +
+        `z-(--z-content) w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
+        // Inset by a sliver's width, so the overlay starts where the scroller does and never
+        // reaches over an arrow.
+        (isEnd ? "right-5" : "left-5"),
+      // Written as a style rather than an opacity-* utility on purpose: the utilities did not take
+      // on this element (the class landed but the computed opacity stayed 0), and an inline style
+      // cannot be out-ordered by anything. The transition above still animates it.
+      style: { opacity: isShown ? "1" : "0" },
+      "aria-hidden": "true",
+      "data-rail-fade": isEnd ? "end" : "start",
+    });
   }
 
   function shelfView(shelf: ResolvedShelf, onPick: (template: CatalogTemplate) => void): m.Vnode {
@@ -244,7 +261,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
       // with room to spare. The arrows keep their 24px circle by giving up sliver width instead:
       // the circle hangs 4px past its 20px sliver, over the scroller's padding, which no card
       // occupies while the rail is at rest.
-      m("div", { class: "new-tab-template-rail-row -mx-6 mt-2 flex" }, [
+      m("div", { class: "new-tab-template-rail-row relative -mx-6 mt-2 flex" }, [
         railGutter(shelf, -1, paging.canPageLeft),
         // The scroller lays the cards out itself rather than wrapping a flex row, because that is
         // what makes its trailing padding real: a scroll container in block layout leaves its
@@ -257,8 +274,6 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
             class:
               "new-tab-template-rail flex min-w-0 flex-1 snap-x items-start gap-6 overflow-x-auto " +
               "scroll-pl-3 px-3 pt-1 pb-3",
-            // Which ends fade; the mask itself is in style.css, where the eased ramp lives.
-            "data-fade": railFadeSides(paging),
             oncreate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onupdate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onscroll: (event: Event) => measureRail(shelf.key, event.currentTarget as HTMLElement),
@@ -266,6 +281,9 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
           shelf.templates.map((template) => m(TemplateCard, { key: template.slug, template, isFill: false, onPick })),
         ),
         railGutter(shelf, 1, paging.canPageRight),
+        // After the scroller, so they lie over the cards rather than under them.
+        railFade(false, paging.canPageLeft),
+        railFade(true, paging.canPageRight),
       ]),
     ]);
   }
