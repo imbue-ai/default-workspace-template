@@ -560,15 +560,12 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         key: `${tile.app.name}:${tile.action.id}`,
-        // Four to a row, then three, then two as the pane narrows. The width is a fraction of the
-        // row minus the gaps it has to leave, so the subtrahend follows the count: gap-2 (8px)
-        // times one fewer than the tiles in the row.
+        // Four to a row, then three, then two as the pane narrows. The subtrahend has to follow
+        // the count: gap-2 (8px) times one fewer than the tiles in the row.
         //
-        // Two survives far longer than the sections below it, because these labels are one or two
-        // short words -- the widest, "File Viewer", is 64px of text, and a tile spends only
-        // another ~54px on its padding, icon and gap. Two-up therefore still fits a label at a
-        // 260px pane, which is where the last step is; dropping it at 480 with the rest left half
-        // the row empty for no reason.
+        // Two-up holds to 260px, far past the sections below, because these labels are one or two
+        // short words and still fit there; stepping down with the rest would leave half the row
+        // empty.
         class:
           "border-default flex h-9 shrink-0 items-stretch overflow-hidden rounded-lg border " +
           "w-[calc((100%-24px)/4)] @max-[760px]:w-[calc((100%-16px)/3)] " +
@@ -641,10 +638,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         "data-start": option.key,
         "aria-disabled": isDisabled ? "true" : undefined,
-        // A tile that can be picked floats on hover but does not move, and is the ``group`` that
-        // grows its glyph; the shadow alone is what says it is under the pointer, so a fill behind
-        // it would only mute the shadow and read as a second, different answer. A disabled tile
-        // stays flat, so the page never offers to open what it cannot.
+        // A pickable tile is the ``group`` that grows its glyph. The shadow alone is its hover
+        // answer -- a fill behind it only mutes the shadow -- and a disabled tile stays flat, so
+        // the page never offers to open what it cannot.
         class:
           "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
           (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
@@ -662,9 +658,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
-        // The sentence steps up to the title's colour under the pointer, so the tile reads as one
-        // piece while it is the one being offered. It rides the lift's own timing, and the tile is
-        // the ``group`` driving it, so hovering anywhere on the tile brings it up.
+        // The sentence steps up to the title's colour under the pointer, on the lift's own timing
+        // so the tile reads as one piece.
         m(
           "span",
           {
@@ -683,9 +678,8 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   function startGrid(options: readonly StartOption[], attrs: NewTabLauncherAttrs): m.Vnode {
     return m(
       "div",
-      // Three to a row, then two, then one. A 760px pane leaves a three-up tile about 230px, under
-      // what a title and three lines of sentence want; one column at 480, where two would be a
-      // pair of slivers.
+      // Three to a row, then two, then one: a 760px pane leaves a three-up tile about 230px, under
+      // what a title and three lines of sentence want.
       { class: "grid grid-cols-3 gap-3 px-2 @max-[760px]:grid-cols-2 @max-[480px]:grid-cols-1" },
       options.map((option) => startTile(option, attrs)),
     );
@@ -824,10 +818,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       const nowMs = attrs.nowMs ?? Date.now();
       const promptStart = promptStartDisabling(attrs);
 
-      // ``@container``, not a media query, and every step below is a PANE width. This page is a
-      // dock panel that can be split down to a sliver while the window stays wide, so a media
-      // query would measure the wrong box entirely: it would keep the tiles four-up in a pane a
-      // quarter of the screen. The steps -- 760, 620, 480 -- are the prototype's.
+      // ``@container``, not a media query, and every step below is a PANE width: this page is a
+      // dock panel that can be split to a sliver while the window stays wide, so a media query
+      // would keep the tiles four-up the whole way down.
       return m("div", { class: "new-tab-launcher @container bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl pb-12" }, [
           m("div", { class: "mb-6 px-2" }, searchField()),

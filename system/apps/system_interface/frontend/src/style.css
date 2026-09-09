@@ -581,41 +581,18 @@ body > .dv-tab.dv-dragged .dv-default-tab {
    itself is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's
    edge is what says there is more.
 
-   Each end that still has rail past it fades out, which is the rest of saying so. The fade is an
-   overlay in the page's own colour rather than a mask on the scroller: an overlay is a plain
-   element, so showing and hiding it is opacity, which animates anywhere, and it cannot break the
-   way a mask can. It is pointer-transparent, so the rail still scrolls and the cards still take
-   clicks underneath it. The cost is that it has to be painted in the surface colour and kept in
-   step with it -- hence color-mix off --c-surface rather than a literal white.
+   Each end that still has rail past it fades out. The fade is an overlay rather than a mask on the
+   scroller, so showing and hiding it is opacity -- which is why it has to be painted in the
+   surface colour and kept in step with it, hence color-mix off --c-surface and not a literal
+   white.
 
-   THE STOPS ARE EASED, and that is the whole point of writing this by hand. The overlay fades the
-   card towards the page, so what the eye sees is the two composited, which is linear in the
-   overlay's alpha -- but apparent lightness is not linear in it. CIE L* goes roughly as the cube
-   root of luminance, so equal steps of alpha are not equal steps of apparent lightness, and
-   wherever the ramp is steep in L* the eye picks out a band.
-
-   How much that matters depends entirely on the artwork. A pale card barely changes lightness
-   across the whole fade and looks smooth under any ramp; a near-black one (Task Inbox, say) has to
-   cross about 84 points of L* in the same distance, and that is where a ramp shows. Scoring
-   candidates by their worst L* step per pixel over such a card:
-
-       two plain stops, 30px               12.4   -- a visible line, unusable
-       smoothstep at eighths, 40px          3.89  -- what this first shipped; still banded
-       (1-x)^2.2 at twelfths, 30px          2.85  -- close to the floor for this width
-
-   The ramp is (1-x)^2.2, which unlike smoothstep is asymmetric: it drops away quickly from the
-   opaque edge, where a dark card's lightness moves fastest, and flattens out towards the far end.
-   Smoothstep does the opposite of what is wanted here -- gentle at both ends, steepest in the
-   middle, which is exactly where a high-contrast card cannot afford it.
-
-   Width is the other half, and it is capped here at 30px by choice. The lightness a dark card has
-   to cross is fixed, so a narrower fade must cross it faster: 30px cannot do better than about
-   2.8 L* per pixel however the stops are shaped, where 72px would reach 1.5. This ramp is within a
-   whisker of that floor, so the remaining way to soften it further is more width, not more curve.
+   The twelve stops are an eased ramp, (1-x)^2.2, and they do not simplify to a two-stop gradient:
+   the eye reads lightness, not alpha, so over a near-black card two plain stops band at ~12 L* per
+   pixel where this holds ~2.9. 30px cannot do much better than that whatever the stops, so if this
+   still looks banded the lever is more width, not a different curve.
 
    Only an end the rail can scroll towards is faded (the view sets the opacity), so a card at rest
-   against an edge -- the first one, or the last once the rail is paged to its end -- is never
-   dimmed, and the hover lift stays whole there. */
+   against an edge is never dimmed and the hover lift stays whole there. */
 .new-tab-template-rail {
   scrollbar-width: none;
 }

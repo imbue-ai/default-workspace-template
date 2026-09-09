@@ -1,25 +1,15 @@
 /**
- * How a New Tab offer answers the pointer. The page has two of them -- a template card and a
- * "Start something" tile -- and both float off the page on hover while exactly one thing inside
- * them grows: the picture. On a card that is its drawing, which fills the card; on a tile it is
- * the glyph, which is the only picture a tile has. The tile itself holds still, because a tile is
- * mostly text, and moving a paragraph under the pointer is harder to read than moving an icon.
- *
- * 300ms is slower than the product's other feedback (``--dur-slow`` is 200ms) because the others
- * are state changes that should keep up with the pointer, while this one is a surface moving, and
- * at 200ms that reads as a flinch rather than a lift. It is written as a plain duration rather
- * than a token because it is this gesture's own timing, not the shared one.
- *
- * Only scale and shadow animate: neither takes part in layout, so nothing here can reflow the rail
- * or the grid around it. Everything shares ``HOVER_LIFT_TRANSITION``, so the pieces can only ever
- * be timed alike; what differs is which element moves and what drives it.
+ * The shared hover lift for the New Tab page's two offers, a template card and a "Start something"
+ * tile. Everything here shares ``HOVER_LIFT_TRANSITION`` so the pieces cannot drift out of time.
  *
  * The transition names ``scale``, not ``transform``: a ``scale-*`` utility sets the standalone
- * ``scale`` property rather than writing into ``transform``, so a transition over ``transform``
- * matches nothing and the growth lands in one frame while the shadow eases in around it.
+ * ``scale`` property, so a transition over ``transform`` matches nothing and the growth lands in
+ * one frame. A unit test pins the pairing.
  *
- * The ``group`` variants need their hover target to carry Tailwind's ``group`` class -- the card's
- * button, the tile's button -- so the whole offer is the target and its text lifts the picture too.
+ * 300ms is this gesture's own timing and deliberately not ``--dur-slow`` (200ms), which is for
+ * state changes that keep up with the pointer. Only scale and shadow animate, so nothing here can
+ * reflow the rail or grid. The ``group-*`` variants need their hover target to carry Tailwind's
+ * ``group``.
  */
 
 export const HOVER_LIFT_TRANSITION = "transition-[scale,box-shadow] duration-300 ease-out";
@@ -31,8 +21,8 @@ export const HOVER_LIFT_GROUP = `${HOVER_LIFT_TRANSITION} group-hover:scale-[1.0
 export const HOVER_SHADOW_SELF = `${HOVER_LIFT_TRANSITION} hover:shadow-overlay`;
 
 /**
- * The glyph inside such a tile: the one thing that grows. The step is much larger than a card's
- * (a 24px glyph moving 2% would not be visible at all), and it grows from its left edge so it
- * stays lined up with the title and sentence under it instead of drifting into the tile's padding.
+ * The glyph inside such a tile: the one thing that grows. Its step is much larger than a card's
+ * because 2% of 24px would not be visible, and ``origin-left`` keeps it lined up with the text
+ * under it.
  */
 export const HOVER_GLYPH_GROUP = `${HOVER_LIFT_TRANSITION} origin-left group-hover:scale-[1.15]`;
