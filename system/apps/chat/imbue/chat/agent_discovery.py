@@ -1,4 +1,8 @@
-"""Discover mngr-managed agents using the mngr Python API."""
+"""Discover mngr-managed agents, mostly through the mngr Python API.
+
+A few answers the API does not expose are read straight from the agent's state
+directory instead (its ``env`` file, its message-delivery events).
+"""
 
 from __future__ import annotations
 
