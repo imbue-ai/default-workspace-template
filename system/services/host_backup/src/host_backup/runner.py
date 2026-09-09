@@ -17,7 +17,11 @@ from uuid import uuid4
 
 from loguru import logger
 
-from host_backup.capabilities import BackupCapabilities, detect_backup_capabilities
+from host_backup.capabilities import (
+    DEFAULT_BACKUP_ROOT,
+    BackupCapabilities,
+    detect_backup_capabilities,
+)
 from host_backup.config import (
     BACKUP_TOML_PATH,
     PRUNE_TIMESTAMP_PATH,
@@ -101,6 +105,7 @@ def _run_loop(capabilities: BackupCapabilities) -> None:
             trigger_dir=str(capabilities.trigger_dir),
         ),
     )
+    _report_partial_coverage(state=state, capabilities=capabilities)
     while True:
         try:
             _service_iteration(state)
@@ -136,6 +141,38 @@ class _LoopState:
         # Count of ticks that have failed back-to-back (reset to 0 on any
         # successful backup); drives the repeated-failure escalation alarm.
         self.consecutive_backup_failures: int = 0
+
+
+def _report_partial_coverage(
+    *, state: _LoopState, capabilities: BackupCapabilities
+) -> None:
+    """Say so, loudly and durably, when backups cover less than the backup root.
+
+    A partial backup succeeds like any other, so nothing else about the service
+    looks wrong. Someone asking "am I backed up?" would get a confident yes while
+    none of their work was recoverable.
+    """
+    if capabilities.is_backup_root_fully_persisted:
+        return
+    excluded_summary = (
+        f"only the mngr host dir is on persistent storage, so everything else "
+        f"under {DEFAULT_BACKUP_ROOT} -- the user's workspace above all -- is in "
+        f"no backup and cannot be restored"
+    )
+    logger.error(
+        "Backups will run but cover only part of {}: {}",
+        DEFAULT_BACKUP_ROOT,
+        excluded_summary,
+    )
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.BACKUP_COVERAGE_IS_PARTIAL,
+            method=capabilities.method.value,
+            backup_root=str(DEFAULT_BACKUP_ROOT),
+            excluded_summary=excluded_summary,
+        ),
+    )
 
 
 def _service_iteration(state: _LoopState) -> None:

@@ -23,6 +23,7 @@ from host_backup.runner import (
     _LoopState,
     _parse_restic_timestamp,
     _refresh_environment_record,
+    _report_partial_coverage,
     _run_restic_backup,
     _should_tick_now,
     _take_snapshot,
@@ -473,6 +474,48 @@ def test_run_restic_backup_no_alarm_below_threshold(tmp_path: Path) -> None:
         if e["type"] == "BACKUP_REPEATEDLY_FAILING"
     ]
     assert alarms == []
+
+
+def _capabilities_with_coverage(*, is_fully_persisted: bool) -> BackupCapabilities:
+    return BackupCapabilities(
+        method=SnapshotMethod.OUTER_TRIGGER,
+        snapshot_read_path=Path("/mngr-snapshots/current"),
+        trigger_dir=Path("/mngr-snapshot"),
+        is_backup_root_fully_persisted=is_fully_persisted,
+    )
+
+
+def test_partial_coverage_is_reported_as_a_durable_event(tmp_path: Path) -> None:
+    """A backup that runs while excluding the user's work has to say so.
+
+    It otherwise succeeds silently, and someone asking whether they are backed up
+    would get a confident yes over an unrecoverable workspace.
+    """
+    capabilities = _capabilities_with_coverage(is_fully_persisted=False)
+    state = _LoopState(capabilities)
+    state.events_dir = tmp_path / "events"
+
+    _report_partial_coverage(state=state, capabilities=capabilities)
+
+    alarms = [
+        e
+        for e in _events_in(state.events_dir)
+        if e["type"] == "BACKUP_COVERAGE_IS_PARTIAL"
+    ]
+    assert len(alarms) == 1
+    assert alarms[0]["backup_root"] == "/home/user"
+    # The event has to name what is missing, not merely that something is.
+    assert "workspace" in alarms[0]["excluded_summary"]
+
+
+def test_full_coverage_reports_nothing(tmp_path: Path) -> None:
+    capabilities = _capabilities_with_coverage(is_fully_persisted=True)
+    state = _LoopState(capabilities)
+    state.events_dir = tmp_path / "events"
+
+    _report_partial_coverage(state=state, capabilities=capabilities)
+
+    assert not (state.events_dir / "events.jsonl").exists()
 
 
 def test_load_config_if_changed_caches_until_mtime_moves(tmp_path: Path) -> None:

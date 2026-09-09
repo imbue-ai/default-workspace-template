@@ -40,6 +40,7 @@ class BackupEventType(UpperCaseStrEnum):
     RESTIC_BACKUP_SUCCEEDED = auto()
     RESTIC_BACKUP_FAILED = auto()
     BACKUP_REPEATEDLY_FAILING = auto()
+    BACKUP_COVERAGE_IS_PARTIAL = auto()
     FORGET_COMPLETED = auto()
     RESTORE_MARKERS_FORGOTTEN = auto()
     PRUNE_COMPLETED = auto()
@@ -191,6 +192,22 @@ class BackupRepeatedlyFailingEvent(BackupEvent):
     consecutive_failures: int
     threshold: int = Field(
         description="The consecutive-failure count that triggers the alarm"
+    )
+
+
+class BackupCoverageIsPartialEvent(BackupEvent):
+    """Backups run, but only part of the backup root is on persistent storage.
+
+    Emitted once at startup, beside CAPABILITIES_DETECTED, because coverage is a
+    property of how the host was provisioned rather than of any one tick. A
+    partial backup still succeeds and reports success, so without this there is
+    no durable trace that the rest of the tree was never included.
+    """
+
+    method: str = Field(description="btrfs_local | outer_trigger | direct")
+    backup_root: str = Field(description="What the service is meant to cover")
+    excluded_summary: str = Field(
+        description="Plain description of what is missing from every backup"
     )
 
 
