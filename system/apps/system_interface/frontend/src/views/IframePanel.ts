@@ -3,6 +3,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import { getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { sendToChildFrame } from "../relay";
+import { UpdateNoticeBand } from "./UpdateNoticeBand";
 
 /** What the shell tells a page that speaks the app contract (contracts.md section 10). */
 export interface IframeContractAttrs {
@@ -144,32 +145,37 @@ export function IframePanel(): m.Component<IframePanelAttrs> {
       if (stopped != null) {
         return m(StoppedAppPlaceholder, { ...stopped, appName });
       }
-      return m("iframe", {
-        title,
-        style: "width: 100%; height: 100%; border: none;",
-        sandbox: sandbox ?? APP_FRAME_SANDBOX,
-        // Let embedded apps (the browser fleet viewer) reach the user's clipboard.
-        allow: "clipboard-read; clipboard-write",
-        [IFRAME_PANEL_APP_ATTR]: appName,
-        [IFRAME_PANEL_ADDRESS_ATTR]: address,
-        oncreate: (created: m.VnodeDOM) => {
-          frame = created.dom as HTMLIFrameElement;
-          // Every load, not just the first: a reload (the tab's Refresh, or the page's own) is
-          // a fresh page that has to be told who it is again.
-          frame.addEventListener("load", greetOnLoad);
-          syncUrl(url, false);
-        },
-        onupdate: () => {
-          syncUrl(url, isPageAtUrl === true);
-          syncIdentity();
-          syncVisibility();
-        },
-        onremove: () => {
-          frame = null;
-          assignedUrl = null;
-          lastSentIdentity = null;
-        },
-      });
+      // The band is a sibling above the frame inside one constant column: a wrapper that came
+      // and went with the notice would recreate the frame (a reload) each time.
+      return m("div", { class: "si-iframe-panel flex h-full w-full flex-col" }, [
+        m(UpdateNoticeBand, { appName }),
+        m("iframe", {
+          title,
+          style: "width: 100%; flex: 1 1 0; min-height: 0; border: none;",
+          sandbox: sandbox ?? APP_FRAME_SANDBOX,
+          // Let embedded apps (the browser fleet viewer) reach the user's clipboard.
+          allow: "clipboard-read; clipboard-write",
+          [IFRAME_PANEL_APP_ATTR]: appName,
+          [IFRAME_PANEL_ADDRESS_ATTR]: address,
+          oncreate: (created: m.VnodeDOM) => {
+            frame = created.dom as HTMLIFrameElement;
+            // Every load, not just the first: a reload (the tab's Refresh, or the page's own) is
+            // a fresh page that has to be told who it is again.
+            frame.addEventListener("load", greetOnLoad);
+            syncUrl(url, false);
+          },
+          onupdate: () => {
+            syncUrl(url, isPageAtUrl === true);
+            syncIdentity();
+            syncVisibility();
+          },
+          onremove: () => {
+            frame = null;
+            assignedUrl = null;
+            lastSentIdentity = null;
+          },
+        }),
+      ]);
     },
   };
 }

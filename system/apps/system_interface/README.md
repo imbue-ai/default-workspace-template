@@ -343,3 +343,31 @@ changed path is backend code this process imports, a manifest its environment
 was resolved from, or the vendored mngr. The banner
 informs only; acting on it stays with the agent.
 
+## The update notice
+
+The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
+"Updating the running UI") does not discard its snapshots on success: it leaves
+`data/.state/update-apply/last-good.json`, a record of the merge it landed, the
+copies it kept, and the critical apps and supervisord programs it touched. The
+shell turns that record into a notice only a person closes (`shell/update_notice.py`):
+every tab of an app the record names carries a band above its page, and the shell
+itself a top banner beside the staleness one, saying the app was updated a moment
+ago and offering "Roll back" and "Everything seems good". The shell watches the
+file and pushes every distinct reading over the socket as `update_notice_changed`
+(and seeds it on connect), so the band appears, shows a rollback's progress and
+outcome, and goes away on every window without a reload.
+
+Both verbs are the update-self script's own subcommands, run rather than
+reimplemented (`POST /api/updates/pending/confirm` runs `confirm-last`, which
+discards the copies and the record; `POST /api/updates/pending/rollback` starts
+`rollback-last`, which reverts the merge forward, restores the copies, restarts
+only the recorded programs, and writes its progress and outcome back into the
+record). The rollback is launched detached in its own session: it restarts the
+shell's own program when the shell was touched, and supervisord stops that
+program as a group, so a child of the shell would die halfway through its own
+work. "Roll back" asks first, naming the update and what it restarts; a rollback
+whose diff reached the workspace's own setup restores the files and its outcome
+names the command an agent must run. A preview shell shows the notice but
+refuses both verbs. `GET /api/updates/pending` is how the careful flow learns a
+previous update is still unconfirmed.
+

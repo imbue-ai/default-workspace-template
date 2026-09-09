@@ -21,6 +21,8 @@ import { deriveAppOrigin, workspaceHostCoordinate } from "@imbue/workspace-ui/sr
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { applyUpdateNotice } from "./UpdateNotice";
+import type { UpdateNoticeWire } from "./UpdateNotice";
 
 /** What an instance is doing, as its app reports it (contracts.md section 4.1). */
 export type InstanceStatus = "idle" | "working" | "attention" | "stopped" | "error";
@@ -148,7 +150,8 @@ type WsEvent =
     }
   | { type: "layout_updated"; view_id: string; client_id: string; save_id: string }
   | { type: "active_view_changed"; client_id: string; view_id: string }
-  | { type: "tab_rebound"; client_id: string; view_id: string; tab_id: string; address: string };
+  | { type: "tab_rebound"; client_id: string; view_id: string; tab_id: string; address: string }
+  | { type: "update_notice_changed"; notice: UpdateNoticeWire | null };
 
 export type AppsUpdatedListener = (apps: AppRecord[]) => void;
 export type ProjectsUpdatedListener = (projects: ProjectInfo[]) => void;
@@ -324,6 +327,9 @@ function handleEvent(event: WsEvent): void {
           address: event.address,
         });
       }
+      break;
+    case "update_notice_changed":
+      applyUpdateNotice(event.notice);
       break;
   }
 }

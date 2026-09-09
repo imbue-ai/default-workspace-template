@@ -81,3 +81,15 @@ class AppLifecycleRefusedError(ShellError, ValueError):
 
 class SupervisorProgramActionError(ShellError, RuntimeError):
     """Supervisord refused, or could not be reached for, a stop or start."""
+
+
+class UpdateNoticeRecordError(ShellError, ValueError):
+    """The kept rollback point's file does not hold a record."""
+
+
+class UpdateNoticeRefusedError(ShellError, ValueError):
+    """The update notice is not in a state the verb applies to: nothing kept, a rollback already running, or one done."""
+
+
+class UpdateNoticeCommandError(ShellError, RuntimeError):
+    """The update-self script behind a notice verb could not be run, or failed."""
