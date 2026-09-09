@@ -1208,8 +1208,8 @@ def apply_update(
                     applied_at=now(),
                     driven_by=marker.dri_agent,
                     snapshots=list(marker.snapshots),
-                    programs=sorted({program for _, program, _ in touched}),
-                    apps=[name for name, _, _ in touched],
+                    programs=sorted({program for _, program in touched}),
+                    apps=[name for name, _ in touched],
                     needs_services_restart=_needs_services_restart(
                         plan, [path for _, path in name_status]
                     ),
@@ -1379,8 +1379,8 @@ def apply_update(
 
 def _touched_critical_apps(
     plan: ApplyPlan, name_status: Sequence[tuple[str, str]], repo_root: Path
-) -> list[tuple[str, str, bool]]:
-    """The critical apps whose program or bundle this apply changed: ``(name, program, has_instances)``.
+) -> list[tuple[str, str]]:
+    """The critical apps whose program or bundle this apply changed: ``(name, program)``.
 
     Read off the merged tree's manifests: an app is touched when a changed path is
     under its directory, or when the frontend was rebuilt and the app owns one of
@@ -1392,7 +1392,7 @@ def _touched_critical_apps(
     if not apps_dir.is_dir():
         return []
     bundle_owners = {bundle.app for bundle in FRONTEND_BUNDLES}
-    touched: list[tuple[str, str, bool]] = []
+    touched: list[tuple[str, str]] = []
     for directory in sorted(apps_dir.iterdir()):
         manifest_path = directory / MANIFEST_FILENAME
         if not manifest_path.is_file():
@@ -1417,13 +1417,7 @@ def _touched_critical_apps(
         if not is_touched:
             continue
         program = manifest.get("program")
-        touched.append(
-            (
-                name,
-                program if isinstance(program, str) and program else name,
-                manifest.get("instances") is True,
-            )
-        )
+        touched.append((name, program if isinstance(program, str) and program else name))
     return touched
 
 
