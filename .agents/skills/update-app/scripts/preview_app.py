@@ -330,8 +330,10 @@ def up(
         )
         return 1
     manifest_path, manifest = find_manifest(worktree, app_name)
-    # Siblings first: the shell's registry copy needs their URLs, and a chat's nudge target
-    # needs the shell's, so the order is the siblings, then this app.
+    # Siblings first, because the registry copy this app is booted with has to name their
+    # URLs. A sibling therefore boots before this app exists: a chat previewed under a shell
+    # resolves {shell_url} to "" and runs without a nudger, so the preview shell refetches
+    # its instance list on its own sweep rather than on the chat's word.
     preview_url_by_app: dict[str, str] = {}
     for sibling in with_apps:
         # A sibling opens on the same instance when its path takes one (the chat under a shell
