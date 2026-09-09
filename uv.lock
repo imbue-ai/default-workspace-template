@@ -685,6 +685,7 @@ dependencies = [
     { name = "pyte" },
     { name = "simple-websocket" },
     { name = "tk-command-parsing" },
+    { name = "tomlkit" },
     { name = "watchdog" },
     { name = "werkzeug" },
 ]
@@ -726,6 +727,7 @@ requires-dist = [
     { name = "pyte", specifier = ">=0.8" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "tk-command-parsing", editable = "system/libs/tk_command_parsing" },
+    { name = "tomlkit", specifier = ">=0.12" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
 ]

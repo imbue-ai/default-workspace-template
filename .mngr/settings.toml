@@ -12,9 +12,19 @@ agent_ready_timeout = 45.0
 
 # --- Command defaults ---
 
-# Default create command settings -- apply to all mngr create from this repo
+# Default create command settings -- apply to all mngr create from this repo.
+#
+# No default `type` here, on purpose. The agent type a create resolves to when it
+# names none -- and the provider account it runs on -- come from the git-ignored
+# `.mngr/settings.local.toml`, which the chat app writes from the account store
+# (system/apps/chat/imbue/chat/create_defaults.py): the pinned default account,
+# else the most recently used one, as `type` plus its binding (`env__extend` for
+# claude, an `extra_provision_command__extend` credential link for the others)
+# plus an `account=<id>` label. That file is the one place a workspace's default
+# harness lives, so a create with no account fails rather than launching a claude
+# that cannot take a turn; see [pre_command_scripts] below for the message it fails
+# with. Every creator that wants a specific harness says so with `--type`.
 [commands.create]
-type = "claude"
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
@@ -90,6 +100,23 @@ worktree_base_folder = "/home/user/worktrees/"
 # safe even on installs that don't include the proxy plugin at all.
 disable_plugin__extend = ["recursive", "ttyd", "claude_subagent_proxy"]
 yes = true
+
+# Runs before every `mngr create` from this project root. Inside the workspace,
+# with no provider account signed in, there is no settings.local.toml naming a
+# default type, and mngr's own refusal ("No agent type provided", with a hint to
+# set one in config) sends the user after the wrong fix; the script refuses with
+# "sign in first" instead. It gates itself to creates run inside the workspace,
+# so the create of the workspace itself (run from a checkout of this template on
+# the user's machine) is never refused.
+[pre_command_scripts]
+create = ["python3 system/scripts/require_create_account.py"]
+
+# A worker's worktree carries no settings.local.toml of its own (the file is
+# git-ignored), so a create run from inside one -- a worker launching a worker --
+# would name no type and no account. Sharing the workspace's copy by symlink keeps
+# every checkout of the workspace on the same default account.
+[work_dir_extra_paths]
+".mngr/settings.local.toml" = "SHARE"
 
 # --- Agent types ---
 

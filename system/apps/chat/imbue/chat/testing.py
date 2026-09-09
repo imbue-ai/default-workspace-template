@@ -69,6 +69,7 @@ from imbue.chat.state import ChatState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
@@ -178,6 +179,23 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
+
+
+class RecordingShell(MutableModel):
+    """A shell for the auto-open reactor whose connected clients a test sets, recording every open it is asked for."""
+
+    model_config = {"extra": "forbid", "frozen": False}
+
+    client_ids: list[str] = []
+    refused_client_ids: list[str] = []
+    opens: list[tuple[str, str]] = []
+
+    def connected_client_ids(self) -> list[str]:
+        return list(self.client_ids)
+
+    def open_chat(self, agent_id: str, client_id: str) -> bool:
+        self.opens.append((agent_id, client_id))
+        return client_id not in self.refused_client_ids
 
 
 class RecordingClientActivityShell:

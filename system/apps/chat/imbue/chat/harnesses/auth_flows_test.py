@@ -18,7 +18,7 @@ from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
 from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.auth_flows import flow_shape
-from imbue.chat.harnesses.binding import account_credential_path
+from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import get_method
 from imbue.chat.harnesses.signed_in import SignedIn
