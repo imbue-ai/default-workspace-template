@@ -146,12 +146,14 @@ export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
 export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto";
 /** The shared row shape, minus its hover/cursor: the selected and locked variants below need
  *  to say those themselves, and a `hover:` from the base would override a selected row's
- *  steady fill. Keep in step with `menuRowClass`. */
+ *  steady fill. Keep in step with `menuRowClass` -- `mx-1 w-[calc(100%-0.5rem)] rounded px-2`
+ *  is its inset highlight slab, and the reasoning for each part lives there. */
 const FLYOUT_ROW_SHAPE =
-  "flex h-8 w-full items-center gap-1.5 px-3 text-left " +
+  "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 /** `pr-14` reserves the right edge for the tick and the removal control beside it, so the row's
- *  text never reflows when the bin appears. */
+ *  text never reflows when the bin appears. Those controls are positioned against the row's
+ *  WRAPPER rather than the row, so they stay put while the highlight insets around them. */
 const FLYOUT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-14`;
 /** An ACCOUNT row reserves two slots more, for the rename pencil and the default star. Its
  *  own base rather than a wider shared one: model rows carry neither, and widening what they

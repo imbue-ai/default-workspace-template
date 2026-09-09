@@ -1,9 +1,10 @@
 /* The floating-menu chrome: a card on the primary surface with a hairline
- * border, 8px radius and the overlay elevation shadow, holding 32px rows of
- * full-bleed hover highlight. Every floating menu composes this recipe --
- * the tab ⋮ menu, the rail's row menus, the launcher's filter menu, and the
- * model card with its flyouts (whose selected/locked row variants extend the
- * row shape in modelCardStyles.ts).
+ * border, 8px radius and the overlay elevation shadow, holding 32px rows
+ * whose highlight is an inset, rounded slab rather than a full-bleed band.
+ * Every floating menu composes this recipe -- the tab ⋮ menu, the rail's row
+ * menus, the launcher's filter menu, and the model card with its flyouts
+ * (whose selected/locked row variants extend the row shape in
+ * modelCardStyles.ts).
  *
  * Positioning is not part of the recipe -- callers say fixed/absolute in
  * `extra`, along with min-width and text size. The Tailwind scanner reads
@@ -30,9 +31,25 @@ export interface MenuRowOptions {
  *  Inert on a non-focusable row (the tab menu's divs), so it rides the base. */
 const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
+/** The row's highlight is a slab inset 4px from the card's edges, with the 4px
+ *  radius that the card's own 8px corner leaves once you step 4px inward -- so
+ *  the highlight looks concentric with the card rather than pasted into it.
+ *
+ *  The width is spelled `calc(100% - 0.5rem)` rather than left to `w-full` or
+ *  to `auto`, because neither is right once the row has margins. `w-full`
+ *  measures 100% PLUS the 8px and overflows the card (invisibly -- the card
+ *  clips). And `auto` does not fill: a <button> shrink-to-fits even at
+ *  `display: flex`, which pulls the highlight in behind a trailing tick and
+ *  leaves it outside the band. An explicit width is the only form that holds
+ *  for a <button>, a <label> and the tab menu's <div>s alike.
+ *
+ *  `px-2` completes the 12px the text used to get from `px-3` alone. The
+ *  highlight moved inward; the text did not. */
+const MENU_ROW_SLAB = "mx-1 w-[calc(100%-0.5rem)] rounded px-2";
+
 export function menuRowClass(options: MenuRowOptions = {}): string {
   const parts = [
-    `flex h-8 w-full items-center px-3 text-left hover:bg-fill-hover ${MENU_ROW_FOCUS}`,
+    `flex h-8 items-center ${MENU_ROW_SLAB} text-left hover:bg-fill-hover ${MENU_ROW_FOCUS}`,
     options.inert === true ? "cursor-default" : "cursor-pointer",
     options.tightGap === true ? "gap-1" : "gap-2",
   ];
