@@ -23,6 +23,12 @@ const RAIL_ARROW_GLYPH_SIZE = 20;
 // half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
 const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)]";
 
+// The three layers a rail row stacks, innermost first: the cards (no z-index of their own, though
+// a hovered one's scale still promotes it), the edge fade over them, and the paging arrows over
+// that. Spelled out because paint order alone cannot express it -- see railFade.
+const RAIL_FADE_LAYER = "z-10";
+const RAIL_ARROW_LAYER = "z-20";
+
 /** What a rail measures about itself, read off the scroll container. */
 export interface RailExtent {
   scrollLeft: number;
@@ -215,7 +221,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   function railGutter(shelf: ResolvedShelf, direction: -1 | 1, canPage: boolean): m.Vnode {
     return m(
       "div",
-      { class: "relative w-5 shrink-0" },
+      { class: `relative ${RAIL_ARROW_LAYER} w-5 shrink-0` },
       railArrow(shelf, direction, artCentreByShelf.get(shelf.key) ?? 0, canPage),
     );
   }
@@ -227,18 +233,19 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
    * still scrolls and the cards still take clicks underneath it. Its ramp is in style.css, where
    * the reasoning about it lives; the width is the same 30px at both ends.
    *
-   * It is inset by a sliver's width so it covers the scroller and not the arrows -- but the arrow's
-   * circle hangs a few pixels back past its sliver, into exactly the strip where this overlay is at
-   * its most opaque, so the two do overlap. The overlay carries no z-index and is rendered ahead of
-   * the slivers for that reason: both are positioned, so the later one paints on top, and the arrow
-   * has to be the one that wins. The scroller is not positioned, so the overlay still covers the
-   * cards regardless of the order.
+   * It has to sit ABOVE the cards and BELOW the arrows, and both halves of that need saying out
+   * loud with a z-index rather than left to paint order. A hovered card's drawing takes a scale,
+   * and a transform makes an element paint with the positioned ones, so DOM order alone put a
+   * lifted card over the overlay and cut it off with a hard edge; meanwhile the arrow's circle
+   * hangs a few pixels back past its sliver, into the strip where this overlay is at its most
+   * opaque, so the overlay must lose to that. Hence RAIL_FADE_LAYER between the two, inside the
+   * row's own isolated stacking context so none of it leaks into the page.
    */
   function railFade(isEnd: boolean, isShown: boolean): m.Vnode {
     return m("div", {
       class:
-        `new-tab-template-rail-fade-${isEnd ? "end" : "start"} pointer-events-none absolute inset-y-0 ` +
-        `w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
+        `new-tab-template-rail-fade-${isEnd ? "end" : "start"} ${RAIL_FADE_LAYER} pointer-events-none ` +
+        `absolute inset-y-0 w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
         (isEnd ? "right-5" : "left-5"),
       // Written as a style rather than an opacity-* utility on purpose: the utilities did not take
       // on this element (the class landed but the computed opacity stayed 0), and an inline style
@@ -266,10 +273,9 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
       // with room to spare. The arrows keep their 24px circle by giving up sliver width instead:
       // the circle hangs 4px past its 20px sliver, over the scroller's padding, which no card
       // occupies while the rail is at rest.
-      m("div", { class: "new-tab-template-rail-row relative -mx-6 mt-2 flex" }, [
-        // The overlays come first so the arrows, positioned like them but rendered after, paint on
-        // top of the few pixels where the two overlap. Being out of flow, their place here costs
-        // the row's layout nothing.
+      // ``isolate`` keeps the row's three layers (cards, fade, arrows) to itself, so the z-indexes
+      // they use to order themselves cannot reach anything else on the page.
+      m("div", { class: "new-tab-template-rail-row relative isolate -mx-6 mt-2 flex" }, [
         railFade(false, paging.canPageLeft),
         railFade(true, paging.canPageRight),
         railGutter(shelf, -1, paging.canPageLeft),
