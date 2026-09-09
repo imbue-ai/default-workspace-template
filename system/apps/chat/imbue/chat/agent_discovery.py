@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -45,6 +46,41 @@ def get_host_dir() -> Path:
     and the activity-state tracker (``AgentManager``).
     """
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
+
+
+def has_unconfirmed_message_send(agent_id: str) -> bool:
+    """Whether mngr recorded a send to ``agent_id`` whose submission it never witnessed.
+
+    mngr confirms a send by watching the agent for evidence that it took the message.
+    A slash command leaves no durable evidence, so an unwitnessed one is reported as a
+    successful best-effort send and recorded in the agent's message-delivery events
+    rather than raised. Read right after a create, this answers whether that create's
+    initial message went in, because the initial message is the only one a create sends.
+
+    An events file we cannot read answers False rather than raising: this runs on the
+    create path, where an exception would turn a chat that was created perfectly well
+    into a failed one.
+    """
+    events_path = get_host_dir() / "agents" / agent_id / "events" / "messages" / "events.jsonl"
+    try:
+        lines = events_path.read_text().splitlines()
+    except FileNotFoundError:
+        # No send ever recorded anything for this agent, which is the common case.
+        return False
+    except OSError as e:
+        logger.opt(exception=e).warning("Could not read the message-delivery events of {}", agent_id)
+        return False
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as e:
+            # A separate process appends this file a line at a time, so a read can catch a
+            # torn one. Every whole line still counts, but the damage is worth seeing.
+            logger.opt(exception=e).warning("Skipping a malformed message-delivery event of {}", agent_id)
+            continue
+        if isinstance(event, dict) and event.get("type") == "relaxed_send_unconfirmed":
+            return True
+    return False
 
 
 class AgentInfo(FrozenModel):

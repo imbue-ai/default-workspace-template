@@ -49,9 +49,9 @@ Separately, and outside this file: the shed NOTICE is claude-only
 agent gets a ledger record but no in-session explanation on its next message.
 
 The band comes from the agent's label, resolved from ``MNGR_AGENT_NAME`` + the
-host records (see ``agent_identity``): a chat starts maximally expendable and is
-protected later by live UI engagement; a worker or an unidentifiable agent starts
-at the least-protected agent tier.
+host records (see ``agent_identity``): a chat starts protected, for as long as it
+takes to launch, and is scored on live UI engagement thereafter; a worker or an
+unidentifiable agent starts at the least-protected agent tier.
 
 Tagging is best-effort: any failure (no writable ``/proc`` -- e.g. macOS -- or
 host records that can't classify the agent) is swallowed so it can never block
@@ -80,19 +80,21 @@ def _band_for(agent_name: str) -> int:
 
     - The primary (services) agent is pinned to the never-shed ``PRIMARY_AGENT``
       band (defensive; the primary never actually runs this wrapper).
-    - A chat (``user_created``) starts at ``CHAT_AGENT_BASE``, the middle of the
-      chat range. The system_interface prioritizer moves it either way from
-      there -- down toward the protected floor as the user engages with it, up
-      toward ``CHAT_AGENT_STALE_CEILING`` (past the worker band) as it is left
-      alone -- so an un-re-tagged chat stays middling-expendable rather than
-      pinned to the protected floor.
+    - A chat (``user_created``) starts at ``CHAT_AGENT_LAUNCH``, the protected
+      floor. It has to: the engagement signals that would otherwise protect it
+      (an open tab, a visible tab, a message) cannot exist yet, and this is the
+      window in which its unrepeatable opening message is in flight. The
+      system_interface prioritizer holds it there for the rest of
+      ``CHAT_LAUNCH_GRACE_SECONDS`` and then moves it either way -- down toward
+      the floor as the user engages with it, up toward
+      ``CHAT_AGENT_STALE_CEILING`` (past the worker band) as it is left alone.
     - Everything else -- a worker, or an agent whose record we cannot read to
       classify -- lands at ``WORKER_AGENT``, the least-protected agent tier: an
       agent we cannot identify must not be shielded by our ignorance."""
     if is_primary_agent(agent_name):
         return bands.PRIMARY_AGENT
     if is_chat_agent(agent_name):
-        return bands.CHAT_AGENT_BASE
+        return bands.CHAT_AGENT_LAUNCH
     return bands.WORKER_AGENT
 
 

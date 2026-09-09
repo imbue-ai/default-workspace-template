@@ -29,6 +29,7 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
+from imbue.chat.agent_discovery import has_unconfirmed_message_send
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.binding import BindingError
@@ -1293,7 +1294,8 @@ class AgentManager:
         # The claim is one-shot and there is no second chance at it, so a create that goes on
         # to FAIL must give it back -- otherwise a workspace whose first create died on a bad
         # credential or an OOM never delivers `/welcome` at all, and nothing in the app can
-        # reset it. Released on every failure path in `_run_creation`.
+        # reset it. Released by `_run_creation` on every failure path, and also when the
+        # create survived but its greeting was never submitted.
         #
         # A chat seeded with its own first message leaves the claim alone: its prompt is what
         # the user asked for, and the welcome still greets the first plain chat.
@@ -1399,8 +1401,21 @@ class AgentManager:
             # The workspace's one `/welcome` claim goes back if this create did not survive;
             # see `claim_first_chat`. Outside the lock it guards nothing, and it takes the
             # index lock of its own.
-            if not success and is_first_chat:
-                release_first_chat()
+            #
+            # A create that exits 0 can still have failed to deliver the greeting: `/welcome`
+            # is a slash command, so mngr reports a send it could not witness as successful
+            # and merely records it. The claim buys the user a greeting, so one that was
+            # never submitted has to give it back as surely as a create that died.
+            if is_first_chat:
+                is_welcome_unsubmitted = success and has_unconfirmed_message_send(agent_id)
+                if is_welcome_unsubmitted:
+                    _loguru_logger.warning(
+                        "Chat {} was created but its `/welcome` was never submitted; returning the "
+                        "workspace's first-chat claim so the next chat is greeted instead",
+                        agent_id,
+                    )
+                if not success or is_welcome_unsubmitted:
+                    release_first_chat()
 
             with self._lock:
                 if success:

@@ -334,3 +334,53 @@ def test_a_program_without_a_registry_row_keeps_its_by_name_band() -> None:
 
 def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
     assert bands.SERVICE_BANDS["system_interface"] < bands.SERVICE_BANDS["chat"] < bands.SERVICE_BANDS["share-gateway"]
+
+
+def test_a_launching_chat_is_pinned_to_the_protected_floor() -> None:
+    # A chat seconds old has no open tab, no visible tab and no message yet -- every
+    # signal that earns protection is still absent -- so the engagement-only score
+    # leaves it the most expendable chat in the workspace, above every service. That
+    # is the window in which losing it costs the most: no transcript has been written,
+    # so a shed here is unrecoverable rather than a cold start.
+    launching = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=0.0,
+    )
+    assert launching == bands.CHAT_AGENT_LAUNCH
+    assert launching == bands.CHAT_AGENT_FLOOR
+    assert launching < _fresh(is_open=False, is_visible=False, recency_rank=None)
+
+
+def test_launch_protection_expires_into_the_ordinary_bands() -> None:
+    # The grace is a head start, not a permanent pin: once it is over, the same
+    # unengaged chat falls back to exactly the engagement-only score.
+    aged_out = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
+    )
+    assert aged_out == _fresh(is_open=False, is_visible=False, recency_rank=None)
+    assert aged_out == bands.CHAT_AGENT_BASE
+
+
+def test_an_unknown_age_earns_no_launch_protection() -> None:
+    # Age comes from the chat's live process; when there is none to read, the chat
+    # must not be handed a launch grace it may have used up long ago.
+    assert (
+        bands.chat_agent_oom_score_adj(
+            is_open=False,
+            is_visible=False,
+            recency_rank=None,
+            idle_seconds=0.0,
+            is_mid_turn=False,
+            age_seconds=None,
+        )
+        == bands.CHAT_AGENT_BASE
+    )
