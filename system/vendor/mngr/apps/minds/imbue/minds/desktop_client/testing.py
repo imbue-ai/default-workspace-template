@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timedelta
@@ -58,6 +59,8 @@ from imbue.minds.desktop_client.latchkey.gateway_client import WorkspaceRequestP
 from imbue.minds.desktop_client.latchkey.pending_requests import PendingRequestsInterface
 from imbue.minds.desktop_client.latchkey.response_events import RequestResponseEvent
 from imbue.minds.desktop_client.minds_config import MindsConfig
+from imbue.minds.desktop_client.notification import NotificationDispatcher
+from imbue.minds.desktop_client.notification import NotificationRequest
 from imbue.minds.desktop_client.restic_cli import _get_restic_binary
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import set_state
@@ -83,6 +86,7 @@ from imbue.minds.desktop_client.update_status import UpdateRunStatus
 from imbue.minds.desktop_client.update_status import UpdateVerdict
 from imbue.minds.desktop_client.workspace_update_state import WorkspaceUpdateStateStore
 from imbue.minds.primitives import DeviceId
+from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.api.discovery_events import DiscoveredProvider
 from imbue.mngr.api.discovery_events import DiscoveryError
@@ -695,6 +699,44 @@ def write_blocking_stub_mngr(tmp_path: Path, name: str, release_path: Path) -> s
 # a regression fails on the assertion that says what went wrong rather than on
 # pytest's opaque timeout.
 SUPPRESSION_WAIT_SECONDS: Final[float] = 5.0
+
+
+class RefusingSpawnMngrCaller(RecordingMngrCaller):
+    """Answers the skill probe, then refuses the ``mngr create`` the way a wedged machine does.
+
+    The refusal a wedged machine gives is not the outer ``mngr exec``'s: the inner
+    command's verdict arrives on the same stream, between the outer mngr's
+    discovery chatter and its own closing "command failed". Only a double that
+    fails the create alone -- while the probe ahead of it still answers -- puts
+    those three in the order the app has to read them apart in.
+    """
+
+    refusal_stderr: str = Field(default="", description="The stderr the refused inner ``mngr create`` answers with")
+
+    def call(
+        self,
+        argv: Sequence[str],
+        timeout: float | None = None,
+        env_overrides: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> MngrCallResult:
+        result = super().call(argv, timeout, env_overrides, cwd)
+        if any("mngr create" in arg for arg in argv):
+            return MngrCallResult(returncode=1, stderr=self.refusal_stderr, is_mngr_output=True)
+        return result
+
+
+class RecordingNotificationDispatcher(NotificationDispatcher):
+    """Dispatcher double that records dispatch calls instead of hitting any OS channel."""
+
+    _dispatched: list[tuple[NotificationRequest, str]] = PrivateAttr(default_factory=list)
+
+    def dispatch(self, request: NotificationRequest, agent_display_name: str) -> None:
+        self._dispatched.append((request, agent_display_name))
+
+    @property
+    def dispatched(self) -> list[tuple[NotificationRequest, str]]:
+        return self._dispatched
 
 
 class SuppressionAnnouncingTracker(SystemInterfaceHealthTracker):

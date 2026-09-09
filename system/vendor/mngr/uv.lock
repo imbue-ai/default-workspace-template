@@ -2967,6 +2967,7 @@ source = { editable = "libs/mngr_latchkey" }
 dependencies = [
     { name = "click" },
     { name = "concurrency-group" },
+    { name = "filelock" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-forward" },
@@ -2975,13 +2976,13 @@ dependencies = [
     { name = "pluggy" },
     { name = "psutil" },
     { name = "pydantic" },
-    { name = "watchdog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "filelock", specifier = ">=3.31" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "imbue-mngr-forward", editable = "libs/mngr_forward" },
@@ -2990,7 +2991,6 @@ requires-dist = [
     { name = "pluggy", specifier = ">=1.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "watchdog", specifier = ">=4.0" },
 ]
 
 [[package]]

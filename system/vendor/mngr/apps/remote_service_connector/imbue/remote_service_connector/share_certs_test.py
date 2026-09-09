@@ -26,9 +26,7 @@ from imbue.remote_service_connector.testing import _SHARE_STUB_USER_LABEL
 from imbue.remote_service_connector.testing import _make_share_test_client
 from imbue.remote_service_connector.testing import _share_headers
 
-# ---------------------------------------------------------------------------
 # ACME issuance
-# ---------------------------------------------------------------------------
 
 
 def _make_workspace_key() -> rsa.RSAPrivateKey:

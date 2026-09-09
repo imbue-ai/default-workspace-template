@@ -174,37 +174,37 @@ Fresh-env verification depends on `dwt_branch` being pinned to a SHA at generati
 
 The accounting the design leans on, so nothing here is rebuilt.
 
-**harbor** (pinned v0.21.0):
+**harbor** (pinned v0.22.0):
 
 - `artifacts` in `task.toml`: environment paths pulled from the trial and re-materialized at the same absolute paths in the verifier container. This is the only channel into the verifier; everything below rides it.
 - `environment_mode = "separate"` + `harbor trial regrade`: the replayability contract the evidence/judgment split preserves.
 - `solution/solve.sh` (oracle): must fabricate a passing evidence bundle so oracle runs exercise the new dimension end to end.
 - `[agent].timeout_sec`: already `timeout_seconds + AGENT_TIMEOUT_GRACE_SECONDS`; the verification phase needs its own explicit slice (see Driver changes).
 
-**rewardkit** (0.1.x, the verifier engine):
+**rewardkit** (0.2.x, the verifier engine):
 
 - Judge tomls: an LLM judge over listed `files`, with `likert` (1-N) and `binary` criteria, per-criterion or judge-level files (per-criterion files force `mode = "individual"`), a `prompt_template`, and weights.
   Files are inlined as text; images become vision blocks; **any file over 1 MiB is skipped with a visible `[skipped: file too large]` block** -- a hard sizing constraint on every judge input.
-  `.html`/`.pdf`/office documents convert via markitdown and `image_similarity` needs Pillow, but both live behind optional extras (`documents`, `image`) that the verifier's bare `uvx --from 'harbor-rewardkit==0.1.*'` pin does NOT install -- and the resulting ImportError is uncaught, aborting the entire grading run with no reward file for any dimension.
+  `.html`/`.pdf`/office documents convert via markitdown and `image_similarity` needs Pillow, but both live behind optional extras (`documents`, `image`) that the verifier's bare `uvx --from 'harbor-rewardkit==0.2.0'` pin does NOT install -- and the resulting ImportError is uncaught, aborting the entire grading run with no reward file for any dimension.
   Any judge input or criterion needing an extra must add it to the `test.sh` pin explicitly; until then, judge files stay to plain text, JSON/JSONL, and images.
 - Programmatic criteria: `@criterion` functions in `.py` files returning bool/float, plus a stock library of criterion factories: `file_exists`, `file_contains(_regex)`, `file_matches`, `json_path_equals`, `http_status_equals`, `http_response_contains`, `command_succeeds`, `command_output_*`, `image_similarity`, `sqlite_query_equals`, `diff_ratio`, `trajectory_*`, and more.
   **Edge:** these run in the verifier container at grade time, so in this topology `http_*` (live requests) and `command_succeeds` (needs the project's toolchain) cannot reach the app -- the same checks are instead performed at trial time and their *recorded results* asserted on with plain criteria over the manifest.
-- Dimensions: each subdirectory of `tests/` is a scoring dimension with its own entry in `reward.json` (`gates/` and `quality/` today, `outcome/` added by this spec); `finalize.py` composes the final reward because rewardkit's own aggregations cannot express gating (see concise.md, Implementation corrections).
+- Dimensions: each *immediate* subdirectory of `tests/` is a scoring dimension with its own entry in `reward.json` -- `gates/` and `quality/` today, `outcome/` added by this spec. rewardkit recurses below them, but a nested directory joins its parent dimension's weighted mean rather than becoming a dimension of its own. `finalize.py` composes the final reward because rewardkit's own aggregations cannot express gating (see concise.md, Implementation corrections).
 
 **The Minds workspace** (default-workspace-template):
 
 - `data/.state/apps.toml`: the authoritative registry of served apps and their ports/origins (written by `forward_port.py`); the template's own apps (`system_interface`, `terminal`, `browser`, `files`, ...) register through the same path a delivered app does, so nothing about a row says which is which.
   The **pre-existing** set -- what the workspace already served before the agent ran -- is measured from the workspace itself, not from a hand-maintained name list, which must track the template and had already drifted (`files`, missing from the list and in BACKOFF, was counted as the deliverable, so flows drove the forward proxy's own error page while the real app went unopened).
   It is read from a single probe taken **before turn 1**, once the workspace has booted and been signed in -- the same `workspace_state` probe the evidence phase runs later -- which answers two questions at once, unioned, because neither is complete alone.
-  First, the **app registry as it actually stood**: a measurement rather than an inference, and the only source that sees a template app registering its port from inside the script its supervisord program runs -- `terminal` does exactly that (`system/apps/terminal/run_ttyd.sh`), as do `owner-exec` and the cloud slice's `vm-exec`, so a config-only derivation would score the workspace's own terminal as the case's deliverable.
-  Second, the **workspace's own `system/supervisord.conf`**, which the same probe cats and which at that moment is still the pinned template's file verbatim, parsed with the same `forward_port.py --name` join used for the live workspace's service health. This covers a template app whose service is slow enough that it had not registered its port yet: the file is on disk from the moment the workspace is cloned, whatever its services are doing.
-  Not the directory names under `system/apps/`: a registry name is a caller-supplied `--name` flag rather than a directory, and a multi-port app registers extra origin-label rows that correspond to no directory at all.
+  First, the **app registry as it actually stood**: a measurement rather than an inference, and the only source that sees a template app registering its port from inside the program its supervisord entry runs (its own entry point, or a launcher script) rather than from a `forward_port.py` call in the config itself -- `terminal` does exactly that (the `terminal-app` package registers from inside its entry point), as do `owner-exec` and the cloud slice's `vm-exec`, so a config-only derivation would score the workspace's own terminal as the case's deliverable.
+  Second, the **workspace's own `system/supervisord.conf`**, which the same probe cats and which at that moment is still the pinned template's file verbatim, parsed with the same join through its `forward_port.py` invocations (`--name`, or the block's own program name for a `--manifest` registration) used for the live workspace's service health. This covers a template app whose service is slow enough that it had not registered its port yet: the file is on disk from the moment the workspace is cloned, whatever its services are doing.
+  Not the directory names under `system/apps/`: a registry name is what the app hands `forward_port.py` (a `--name` flag, or the name in its `--manifest`) rather than a directory, and a multi-port app registers extra origin-label rows that correspond to no directory at all.
   The union is correct for a dwt fork or branch that ships extra apps, which an eval config may point `dwt_repo`/`dwt_branch` at, and it costs nothing that internal daemons land in the set -- their rows are excluded as `internal` anyway.
   The registry is the half that must be readable: without it the set is **unknown**, never empty, the delivered set is unresolvable, and every entry that depends on it is recorded `error` with reason `preexisting_unknown` rather than promoting every template app to a deliverable. A config section the probe came back without only means that half contributes nothing.
   The manifest carries the resolved set as `preexisting_registrations` so a reader can see what was subtracted, and `null` when it is unknown -- the manifest itself keeps that apart from a workspace that served nothing, since a case with no expectations records no entry that would carry the `preexisting_unknown` reason.
 - supervisord: every app's serving process is a `[program:*]` entry; `supervisorctl status` is the process-level health truth.
 - The browser fleet (`agentic-browser-fleet`): real Chromium, direct-control CLI, screenshots -- the UI-automation vehicle, already in every workspace.
-- `system_interface` HTTP API on workspace-local port 8000, already bridged by `minds_bridge.workspace_curl_json`.
+- The workspace's chat app's HTTP API, workspace-local at the port its `chat` row in `data/.state/apps.toml` holds (`http://127.0.0.1:8010` when the row is not there yet), already bridged by `minds_bridge.workspace_curl_json`.
 
 **The driver** (`apps/minds_evals`):
 

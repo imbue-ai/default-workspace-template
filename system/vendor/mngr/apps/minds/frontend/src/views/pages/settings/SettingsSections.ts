@@ -1,25 +1,15 @@
-// The app-level settings sections: left nav + the shared revoke dialog + one
-// panel each for connectors, local files, machines, notifications, error
-// reporting, updates, and the master password. Port of
+// The app-level settings sections: left nav + one panel each for
+// notifications, error reporting, updates, and the master password. What an
+// agent may reach is not here: credentials and grants belong to one machine
+// each, so they live on that machine's Permissions tab. Port of
 // templates/AppSettingsSections.jinja with the interactivity of
 // static/app_settings.js folded into the SettingsModel; the Updates panel is
 // desktop-only and has no jinja original.
 
 import m from "mithril";
-import type { UpdateChannel, UpdateState } from "../../../electron-bridge";
-import type {
-  PendingRevoke,
-  ServiceAccountOverview,
-  ServicePermissionOverview,
-  SettingsModel,
-  SettingsSection,
-  WorkspaceDelegationGrant,
-  WorkspaceFileSharingGrant,
-} from "../../../models/settings";
-import {
-  CHANNEL_COPY,
-  addAccountBlockedReason,
-} from "../../../models/settings";
+import type { PeekedChannel, UpdateChannel, UpdateState } from "../../../electron-bridge";
+import type { SettingsModel, SettingsSection } from "../../../models/settings";
+import { CHANNEL_COPY } from "../../../models/settings";
 import { formatRelativeAgo } from "../../../models/backups";
 import type { NotificationStyle } from "../../../models/notificationsUi";
 import {
@@ -51,465 +41,6 @@ function navButton(
   );
 }
 
-function colorDot(color: string): m.Children {
-  return m("span", {
-    class: "w-2.5 h-2.5 rounded-full shrink-0",
-    style: `background-color: ${color}`,
-  });
-}
-
-function accountSubsection(
-  model: SettingsModel,
-  service: ServicePermissionOverview,
-  account: ServiceAccountOverview,
-): m.Children {
-  const workspaceCount = account.workspace_grants.length;
-  const machineNoun = workspaceCount === 1 ? "machine" : "machines";
-  return m("div", [
-    m("div", { class: "flex items-center justify-between gap-3 mb-2" }, [
-      m("p", { class: "type-body text-primary font-semibold truncate" }, [
-        account.label,
-        m(
-          "span",
-          { class: "type-helper text-tertiary font-normal" },
-          ` · ${workspaceCount} ${machineNoun}${account.is_connected ? "" : " · not connected"}`,
-        ),
-      ]),
-      m("div", { class: "flex items-center gap-2 shrink-0" }, [
-        workspaceCount > 0
-          ? m(
-              Button,
-              {
-                variant: "ghost",
-                size: "md",
-                onclick: () =>
-                  model.openRevoke({
-                    title: `Remove all ${service.display_name} authorizations for ${account.label}?`,
-                    body:
-                      `This removes ${service.display_name} permissions for ${account.label} from every machine. ` +
-                      "Agents can request them again later.",
-                    confirmLabel: "Revoke",
-                    url: "/settings/permissions/revoke-all",
-                    payload: {
-                      service_name: service.service_name,
-                      account: account.account,
-                    },
-                  }),
-              },
-              "Revoke all",
-            )
-          : null,
-        account.is_connected
-          ? m(
-              Button,
-              {
-                variant: "ghost",
-                size: "md",
-                onclick: () =>
-                  model.openRevoke({
-                    title: `Disconnect ${account.label}?`,
-                    body:
-                      `This signs ${account.label} out of ${service.display_name}. Your saved credentials and this ` +
-                      "account's permissions are removed; agents can reconnect it later.",
-                    confirmLabel: "Disconnect",
-                    url: "/settings/connectors/disconnect-account",
-                    payload: {
-                      service_name: service.service_name,
-                      account: account.account,
-                    },
-                  }),
-              },
-              "Disconnect",
-            )
-          : null,
-      ]),
-    ]),
-    workspaceCount > 0
-      ? m(
-          "div",
-          { class: "grid grid-cols-2 gap-3" },
-          account.workspace_grants.map((grant) =>
-            m("div", { class: "minds-card p-4 flex flex-col gap-3" }, [
-              m("div", { class: "flex items-center gap-2" }, [
-                colorDot(grant.color),
-                m(
-                  "span",
-                  { class: "type-body font-semibold text-primary truncate" },
-                  grant.workspace_name,
-                ),
-              ]),
-              m("div", [
-                m("p", { class: "type-helper text-tertiary mb-1" }, "Allowed"),
-                m(
-                  "div",
-                  { class: "flex flex-wrap gap-1" },
-                  grant.permissions.map((permission) =>
-                    m(
-                      "code",
-                      {
-                        class: "code-pill",
-                        "data-tooltip": permission.description || undefined,
-                      },
-                      permission.label,
-                    ),
-                  ),
-                ),
-              ]),
-              m(
-                "div",
-                { class: "mt-auto" },
-                m(
-                  Button,
-                  {
-                    variant: "secondary",
-                    size: "md",
-                    onclick: () =>
-                      model.openRevoke({
-                        title: `Revoke ${service.display_name} access?`,
-                        body:
-                          `This removes ${grant.workspace_name}'s ${service.display_name} permissions for ` +
-                          `${account.label}. The agent can request them again later.`,
-                        confirmLabel: "Revoke",
-                        url: "/settings/permissions/revoke",
-                        payload: {
-                          workspace_agent_id: grant.workspace_agent_id,
-                          service_name: service.service_name,
-                          account: account.account,
-                        },
-                      }),
-                  },
-                  "Revoke",
-                ),
-              ),
-            ]),
-          ),
-        )
-      : m(
-          "p",
-          { class: "type-helper text-tertiary" },
-          "Not allowed in any machine yet.",
-        ),
-  ]);
-}
-
-/** The service-level "+ Add account" action.
- *
- * It runs latchkey's browser sign-in, so for a service that has none there is
- * nothing to click: the button is disabled and says why on hover. The title
- * sits on a wrapper because a disabled button gets no mouse events, and so no
- * tooltip, in Chromium. */
-function addAccountButton(
-  model: SettingsModel,
-  service: ServicePermissionOverview,
-): m.Children {
-  const isBusy = model.addAccountBusyService === service.service_name;
-  const blockedReason = addAccountBlockedReason(service);
-  return m(
-    "span",
-    {
-      class: "shrink-0",
-      ...(blockedReason === null ? {} : { title: blockedReason }),
-    },
-    m(
-      Button,
-      {
-        variant: "ghost",
-        size: "md",
-        id: `add-account-${service.service_name}`,
-        disabled: isBusy || blockedReason !== null,
-        onclick: async () => {
-          const errorMessage = await model.addConnectorAccount(
-            service.service_name,
-          );
-          if (errorMessage !== null) window.alert(errorMessage);
-        },
-      },
-      isBusy ? "Signing in..." : "+ Add account",
-    ),
-  );
-}
-
-function connectorsPanel(model: SettingsModel): m.Children {
-  const overview = model.overview;
-  if (overview === null) return null;
-  return m("section", [
-    m("h2", { class: "type-heading-lg text-primary mb-2" }, "Connectors"),
-    m(
-      "p",
-      { class: "type-body text-secondary mb-6" },
-      "Third-party services your agents have connected to. To connect a new one, just ask an agent in a machine " +
-        "to use it. Revoking here removes access -- your saved sign-in is kept, so agents can reconnect later.",
-    ),
-    overview.permissions_unavailable
-      ? m(
-          Notice,
-          { variant: "warn" },
-          "Connectors can't be loaded right now. Try again in a moment.",
-        )
-      : overview.services_overview.length > 0
-        ? m(
-            "div",
-            { class: "flex flex-col gap-12" },
-            overview.services_overview.map((service) =>
-              m("div", [
-                m(
-                  "div",
-                  { class: "flex items-center justify-between gap-3 mb-3" },
-                  [
-                    m(
-                      "h3",
-                      { class: "type-heading text-primary" },
-                      service.display_name,
-                    ),
-                    addAccountButton(model, service),
-                  ],
-                ),
-                m(
-                  "div",
-                  { class: "flex flex-col gap-6" },
-                  service.accounts.map((account) =>
-                    accountSubsection(model, service, account),
-                  ),
-                ),
-              ]),
-            ),
-          )
-        : m(Notice, { variant: "info" }, "No connectors have been added yet."),
-  ]);
-}
-
-function fileSharingPanel(model: SettingsModel): m.Children {
-  const overview = model.overview;
-  if (overview === null) return null;
-  const grants: WorkspaceFileSharingGrant[] = overview.file_sharing_grants;
-  return m("section", [
-    m("div", { class: "flex items-center justify-between gap-3 mb-2" }, [
-      m("h2", { class: "type-heading-lg text-primary" }, "Local files"),
-      grants.length > 0
-        ? m(
-            Button,
-            {
-              variant: "ghost",
-              size: "md",
-              onclick: () =>
-                model.openRevoke({
-                  title: "Remove all file sharing?",
-                  body: "This removes shared file access from every machine. Agents can request it again later.",
-                  confirmLabel: "Revoke",
-                  url: "/settings/permissions/file-sharing/revoke-all",
-                  payload: {},
-                }),
-            },
-            "Revoke all",
-          )
-        : null,
-    ]),
-    m(
-      "p",
-      { class: "type-body text-secondary mb-6" },
-      "Files and folders on this computer that your agents can read or write. To share a new location, ask an " +
-        "agent in a machine to access it or to write data in there. Revoking removes access; agents can ask again later.",
-    ),
-    overview.permissions_unavailable
-      ? m(
-          Notice,
-          { variant: "warn" },
-          "File sharing can't be loaded right now. Try again in a moment.",
-        )
-      : grants.length > 0
-        ? m(
-            "div",
-            { class: "flex flex-col gap-3" },
-            grants.map((grant) =>
-              m("div", { class: "minds-card p-4 flex flex-col gap-3" }, [
-                m("div", { class: "flex items-center justify-between gap-3" }, [
-                  m("div", { class: "flex items-center gap-2 min-w-0" }, [
-                    colorDot(grant.color),
-                    m(
-                      "span",
-                      {
-                        class: "type-body font-semibold text-primary truncate",
-                      },
-                      grant.workspace_name,
-                    ),
-                  ]),
-                  m(
-                    Button,
-                    {
-                      variant: "secondary",
-                      size: "md",
-                      onclick: () =>
-                        model.openRevoke({
-                          title: "Revoke file sharing?",
-                          body: `This removes ${grant.workspace_name}'s shared file access. The agent can request it again later.`,
-                          confirmLabel: "Revoke",
-                          url: "/settings/permissions/file-sharing/revoke",
-                          payload: {
-                            workspace_agent_id: grant.workspace_agent_id,
-                          },
-                        }),
-                    },
-                    "Revoke",
-                  ),
-                ]),
-                m("div", [
-                  m(
-                    "p",
-                    { class: "type-helper text-tertiary mb-1" },
-                    "Allowed",
-                  ),
-                  m(
-                    "div",
-                    { class: "flex flex-col gap-1" },
-                    grant.paths.map((shared) =>
-                      m(
-                        "div",
-                        { class: "flex items-center justify-between gap-3" },
-                        [
-                          m(
-                            "code",
-                            {
-                              class: "code-pill truncate min-w-0",
-                              "data-tooltip": shared.path,
-                            },
-                            shared.path,
-                          ),
-                          m(
-                            "span",
-                            { class: "type-helper text-secondary shrink-0" },
-                            shared.access_label,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ]),
-              ]),
-            ),
-          )
-        : m(
-            Notice,
-            { variant: "info" },
-            "No files are being shared with agents yet.",
-          ),
-  ]);
-}
-
-function delegationPanel(model: SettingsModel): m.Children {
-  const overview = model.overview;
-  if (overview === null) return null;
-  const grants: WorkspaceDelegationGrant[] =
-    overview.workspace_delegation_grants;
-  return m("section", [
-    m("h2", { class: "type-heading-lg text-primary mb-2" }, "Machines"),
-    m(
-      "p",
-      { class: "type-body text-secondary mb-6" },
-      "Access you've granted agents in one machine to manage other machines (listing, creating, destroying, SSH, " +
-        "health checks, and more), grouped by the machine being managed. To grant more, ask an agent to perform " +
-        "the operation on the target machine. Revoking removes it; agents can ask again later.",
-    ),
-    overview.permissions_unavailable
-      ? m(
-          Notice,
-          { variant: "warn" },
-          "Machine delegation can't be loaded right now. Try again in a moment.",
-        )
-      : grants.length > 0
-        ? m(
-            "div",
-            { class: "flex flex-col gap-8" },
-            grants.map((grant) =>
-              m("div", [
-                m(
-                  "h3",
-                  {
-                    class:
-                      "type-heading text-primary flex items-center gap-2 mb-1",
-                  },
-                  [
-                    colorDot(grant.color),
-                    m("span", { class: "truncate" }, grant.workspace_name),
-                  ],
-                ),
-                m("p", { class: "type-helper text-tertiary mb-2" }, "Allowed"),
-                m(
-                  "div",
-                  { class: "flex flex-col" },
-                  grant.verbs.map((verb) =>
-                    m(
-                      "div",
-                      {
-                        class:
-                          "flex items-center justify-between gap-3 py-1.5 border-b border-subtle",
-                      },
-                      [
-                        m(
-                          "div",
-                          {
-                            class: "flex items-center gap-2 min-w-0 flex-wrap",
-                          },
-                          [
-                            m(
-                              "code",
-                              {
-                                class: "code-pill",
-                                "data-tooltip": verb.description,
-                              },
-                              verb.label,
-                            ),
-                            m(
-                              "span",
-                              { class: "type-helper text-tertiary" },
-                              "on:",
-                            ),
-                            m(
-                              "span",
-                              { class: "type-body text-secondary truncate" },
-                              verb.is_all_workspaces
-                                ? "All machines"
-                                : verb.target_names.join(", "),
-                            ),
-                          ],
-                        ),
-                        m(
-                          Button,
-                          {
-                            variant: "ghost",
-                            size: "md",
-                            extra: "shrink-0",
-                            onclick: () =>
-                              model.openRevoke({
-                                title: `Revoke ${verb.label} access?`,
-                                body:
-                                  `This removes ${grant.workspace_name}'s ${verb.label} access to other machines. ` +
-                                  "The agent can request it again later.",
-                                confirmLabel: "Revoke",
-                                url: "/settings/permissions/workspace/revoke",
-                                payload: {
-                                  workspace_agent_id: grant.workspace_agent_id,
-                                  verb: verb.verb_permission,
-                                },
-                              }),
-                          },
-                          "Revoke",
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ]),
-            ),
-          )
-        : m(
-            Notice,
-            { variant: "info" },
-            "No machine management has been delegated to agents yet.",
-          ),
-  ]);
-}
-
-/** The three delivery styles, with the words a reader picks between. */
 const NOTIFICATION_STYLE_OPTIONS: {
   value: NotificationStyle;
   label: string;
@@ -922,86 +453,73 @@ function masterPasswordPanel(
   ]);
 }
 
-function revokeDialog(model: SettingsModel): m.Children {
-  const pending: PendingRevoke | null = model.pendingRevoke;
-  return m(
-    Modal,
-    {
-      isOpen: pending !== null,
-      onClose: () => model.closeRevoke(),
-      cardExtra: "text-left",
-    },
-    pending === null
-      ? null
-      : [
-          m("h2", { class: "type-heading text-primary mb-3" }, pending.title),
-          m("p", { class: "type-body text-primary mb-4" }, pending.body),
-          model.revokeError !== ""
-            ? m(
-                "p",
-                { class: "type-body text-important mb-3", role: "alert" },
-                model.revokeError,
-              )
-            : null,
-          m("div", { class: "flex justify-end gap-3" }, [
-            m(
-              Button,
-              { variant: "secondary", onclick: () => model.closeRevoke() },
-              "Cancel",
-            ),
-            m(
-              Button,
-              {
-                variant: "danger",
-                disabled: model.isRevokeBusy,
-                onclick: () => void model.confirmRevoke(),
-              },
-              pending.confirmLabel,
-            ),
-          ]),
-        ],
-  );
-}
-
-/** The one notice above the channel list, or nothing when there is none to give. */
 function updateStatusLine(model: SettingsModel): m.Children {
   const state = model.updateState;
   if (state === null) return null;
   const status = state.status;
-  // `parked` gets no notice. Being ahead of your channel is temporary and
-  // self-correcting -- the channel catches up -- and every channel already
-  // prints what it serves, which is the same fact without the alarm. Warning
-  // that you are "not receiving updates" reads as a fault when nothing is
-  // wrong.
   if (status.type === "error") {
     return m(Notice, { variant: "warn" }, `Update check failed: ${status.message}`);
   }
   if (status.type === "update-downloaded") {
     return m(Notice, { variant: "info" }, `Minds ${status.version} is downloaded. Restart to install.`);
   }
-  if (status.type === "update-available") {
-    return m(Notice, { variant: "info" }, `Downloading ${status.feedVersion}...`);
-  }
-  if (status.type === "disabled") {
-    return m(Notice, { variant: "info" }, "Updates are only available in installed builds.");
-  }
-  if (status.type === "parked" && status.feedVersion != null && status.currentVersion !== undefined) {
-    // Stated, but not as an alarm: nothing is wrong, and the versions beside
-    // each channel already imply it. Left unsaid, though, a channel switch
-    // looks like it did nothing -- the panel redraws identically to up-to-date.
-    return m(
-      "p",
-      { class: "type-helper text-tertiary" },
-      `${channelLabel(status.channel)} is at ${status.feedVersion}, so you will stay on ` +
-        `${status.currentVersion} until it catches up.`,
-    );
-  }
   return null;
 }
 
-/** A channel's display name, so a sentence never drops the bare `alpha` into prose. */
-function channelLabel(channel: UpdateChannel | undefined): string {
-  return CHANNEL_COPY.find((entry) => entry.name === channel)?.label ?? "That channel";
+/**
+ * Where you stand with your channel: the second of the panel's two fixed lines.
+ *
+ * Reads "up to date" through a canary this install has not been offered yet,
+ * where nothing is waiting to be installed -- but never after a failed check,
+ * which would be claiming it on no evidence.
+ */
+function updateStandingLine(model: SettingsModel): m.Children {
+  const state = model.updateState;
+  if (state === null) return null;
+  const status = state.status;
+  const line = (text: string, tone = "text-secondary"): m.Children =>
+    m("p", { class: `type-body ${tone} mb-3` }, text);
+  if (status.type === "disabled") {
+    return line("Updates are disabled in dev builds.");
+  }
+  if (status.type === "error") {
+    return line("Couldn't check for updates.");
+  }
+  if (status.type === "update-downloaded") {
+    return null;
+  }
+  if (status.type === "update-available") {
+    return line(`Downloading ${status.feedVersion}...`);
+  }
+  if (status.type === "parked") {
+    return line(
+      `You're ahead of ${channelLabel(state.channel)} and will get updates when it catches up.`,
+      "text-tertiary",
+    );
+  }
+  return line(`You're up to date with ${channelLabel(state.channel)}.`);
+}
+
+/**
+ * The version a channel serves, appended to its blurb.
+ *
+ * Never a percentage: the pacing is ours to run, not the reader's to act on.
+ */
+function channelVersionText(peeked: PeekedChannel | undefined): string | null {
+  if (peeked === undefined || peeked.version === null) return null;
+  return peeked.isOutsideRollout === true
+    ? `Currently rolling out ${peeked.version}.`
+    : `Currently on ${peeked.version}.`;
+}
+
+/**
+ * A channel's display name, so a sentence never drops the bare `alpha` into prose.
+ *
+ * CHANNEL_COPY covers every UpdateChannel, but it is an array -- it carries the
+ * order the panel lists channels in -- so `find` is still typed as optional.
+ */
+function channelLabel(channel: UpdateChannel): string {
+  return CHANNEL_COPY.find((entry) => entry.name === channel)?.label ?? channel;
 }
 
 function channelSwitchDialog(model: SettingsModel): m.Children {
@@ -1096,17 +614,14 @@ function channelRow(
     },
     [
       m("span", [
-        // The version rides in the heading rather than on its own line: it is
-        // what the channel *is* right now, and a second line repeated the word
-        // "Currently" down the whole list.
+        m("span", { class: "type-body text-primary font-semibold" }, channel.label),
+        // Mid-canary a channel serves two versions at once, so there is no
+        // single one to put beside its name.
         m(
           "span",
-          { class: "type-body text-primary font-semibold" },
-          peeked !== undefined && peeked.version !== null
-            ? `${channel.label} (${peeked.version})`
-            : channel.label,
+          { class: "block type-helper text-tertiary" },
+          [channel.blurb, channelVersionText(peeked)].filter((part) => part !== null).join(" "),
         ),
-        m("span", { class: "block type-helper text-tertiary" }, channel.blurb),
         isUnavailable
           ? m("span", { class: "block type-helper text-warning" }, "Unavailable right now.")
           : null,
@@ -1188,11 +703,8 @@ function updatesPanel(model: SettingsModel): m.Children {
   const concealed = visible.filter((channel) => channel.name === INTERNAL_CHANNEL);
   return m("section", [
     m("h2", { class: "type-heading-lg text-primary mb-2" }, "Updates"),
-    m(
-      "p",
-      { class: "type-body text-secondary mb-3" },
-      `You are running Minds ${state.currentVersion}.`,
-    ),
+    m("p", { class: "type-body text-secondary" }, `You're on Minds ${state.currentVersion}.`),
+    updateStandingLine(model),
     updateStatusLine(model),
     ...listed.map((channel) => channelRow(model, state, channel)),
     concealed.length > 0 ? internalChannelDisclosure(model, state, concealed) : null,
@@ -1250,7 +762,7 @@ export function SettingsSections(): m.Component<SectionsAttrs> {
   return {
     view(vnode) {
       const { model } = vnode.attrs;
-      const groups: ("Permissions" | "Other")[] = ["Permissions", "Other"];
+      const groups: "Other"[] = ["Other"];
       return [
         splitPane({
           navLabel: "Settings sections",
@@ -1271,15 +783,6 @@ export function SettingsSections(): m.Component<SectionsAttrs> {
             ]),
           ),
           content: [
-            model.activeSection === "connectors"
-              ? connectorsPanel(model)
-              : null,
-            model.activeSection === "file-sharing"
-              ? fileSharingPanel(model)
-              : null,
-            model.activeSection === "workspace-delegation"
-              ? delegationPanel(model)
-              : null,
             model.activeSection === "notifications"
               ? notificationsPanel(model)
               : null,
@@ -1292,9 +795,6 @@ export function SettingsSections(): m.Component<SectionsAttrs> {
               : null,
           ],
         }),
-        // Fixed-position when open and nothing at all when closed, so it rides
-        // beside the pane rather than as a third column inside it.
-        revokeDialog(model),
       ];
     },
   };

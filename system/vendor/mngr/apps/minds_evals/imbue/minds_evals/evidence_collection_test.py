@@ -31,7 +31,7 @@ from imbue.minds_evals.testing import BOX_COMMON_TRANSCRIPT_PATH
 from imbue.minds_evals.testing import BOX_WORKSPACE_TRAJECTORY_PATH
 from imbue.minds_evals.testing import CHAT_WORK_DIR
 from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
-from imbue.minds_evals.testing import SCRIPT_REGISTERED_APPS
+from imbue.minds_evals.testing import SELF_REGISTERED_APPS
 from imbue.minds_evals.testing import TEMPLATE_CONFIG_REGISTRATIONS
 from imbue.minds_evals.testing import TEMPLATE_PREEXISTING_APPS
 from imbue.minds_evals.testing import TEMPLATE_SUPERVISORD_CONF
@@ -315,15 +315,51 @@ def test_parse_supervised_registrations_accepts_either_flag_order() -> None:
     assert evidence_collection.parse_supervised_registrations(conf) == {"todo": "todo"}
 
 
+def test_parse_supervised_registrations_reads_a_manifest_registration_as_the_programs_own_name() -> None:
+    # An app with a manifest registers through `--manifest <app.toml>` and no `--name`; the
+    # manifest's name is the program's name, and a multi-port block may mix both forms.
+    conf = (
+        "[program:files]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml '
+        '--url http://localhost:8300 && exec dufs"\n'
+        "\n"
+        "[program:dashboard]\n"
+        "command=bash -c 'python3 system/scripts/forward_port.py --manifest system/apps/dashboard/app.toml "
+        "--url http://localhost:9000 && python3 system/scripts/forward_port.py --url http://localhost:9001 "
+        "--name dashboard-admin && dashboard'\n"
+        "\n"
+        "[program:terminal]\ncommand=terminal-app\n"
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {
+        "files": "files",
+        "dashboard": "dashboard",
+        "dashboard-admin": "dashboard",
+    }
+
+
+@pytest.mark.parametrize("chain", ["&&", ";", "||"])
+def test_parse_supervised_registrations_stops_a_manifest_call_at_the_apps_own_command(chain: str) -> None:
+    # The app command chained after the manifest call may carry a --name of its own; it is not
+    # the registration's, whichever operator a hand-written block chains with.
+    conf = (
+        "[program:notes]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/notes/app.toml '
+        '--url http://localhost:8400 {} docker run --name notes-db postgres"\n'.format(chain)
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {"notes": "notes"}
+
+
 def test_the_config_half_names_only_the_apps_it_registers_itself() -> None:
     # The config half of the pre-existing set, joined through the forward_port.py calls in the file
     # rather than read off a hand-kept name list -- which is what keeps it correct as the template
-    # gains and loses apps. An app that registers from inside its program's script is not here at
+    # gains and loses apps. An app that registers from inside the program it runs is not here at
     # all; the registry half is what covers those.
     config_registrations = frozenset(evidence_collection.parse_supervised_registrations(TEMPLATE_SUPERVISORD_CONF))
 
     assert config_registrations == TEMPLATE_CONFIG_REGISTRATIONS
-    assert not config_registrations & SCRIPT_REGISTERED_APPS
+    assert not config_registrations & SELF_REGISTERED_APPS
 
 
 @pytest.mark.parametrize(
@@ -382,11 +418,11 @@ def test_parse_registry_snapshot_reads_names_only_from_a_registry_that_is_there(
 
 
 def test_parse_registry_snapshot_takes_both_halves_from_the_one_probe() -> None:
-    # One probe, both halves: here the registry knows only the script-registered rows and the config
+    # One probe, both halves: here the registry knows only the self-registered rows and the config
     # knows only the rest, so the snapshot has to end up with both.
     registry = "".join(
         '[[apps]]\nname = "{}"\nurl = "http://localhost:7681"\n\n'.format(name)
-        for name in sorted(SCRIPT_REGISTERED_APPS)
+        for name in sorted(SELF_REGISTERED_APPS)
     )
     output = workspace_state_output(registry, supervisord=TEMPLATE_SUPERVISORD_CONF)
 
@@ -1417,6 +1453,25 @@ def test_oracle_evidence_files_record_every_declared_check_as_passed() -> None:
     assert "RUNNING" in files[evidence_collection.SERVICES_FILENAME]
 
 
+def test_the_oracle_flow_log_carries_every_record_kind() -> None:
+    # The oracle bundle is what `-a oracle` calibrates the judge and the reward composition against,
+    # so a reader path it never exercises is a path nothing green ever proves.
+    case = _case_config(
+        _authored(
+            ui_flows=[{"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."}]
+        )
+    )
+
+    files = evidence_collection.oracle_evidence_files(case)
+
+    log = files["flows/add_complete_delete/log.jsonl"]
+    records = [json.loads(line) for line in log.splitlines()]
+    assert [record["kind"] for record in records] == ["init", "action", "final"]
+    # The digest finds the closing reading by this action text, and prints it as the agent's account
+    # of the final state.
+    assert records[-1]["action"] == "read the final state"
+
+
 def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
     case = _case_config(_authored(deliverable={"kind": "minds-app", "files": [{"glob": "workspace/apps/*/main.py"}]}))
 
@@ -1623,8 +1678,64 @@ def test_a_step_whose_frame_was_not_captured_names_no_screenshot(tmp_path: Path)
     _collector, environment = _run_flow_collector(tmp_path, agent, rules)
 
     log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
-    # Two steps and the closing reading, none of which produced a frame.
-    assert [json.loads(line)["screenshot"] for line in log.splitlines()] == ["", "", ""]
+    records = [json.loads(line) for line in log.splitlines()]
+    # Two steps and the closing reading, none of which produced a frame. The opening record is not
+    # among them: its frame comes from the navigation, which is not the capture that failed here.
+    assert [record["screenshot"] for record in records if record["kind"] != "init"] == ["", "", ""]
+
+
+def test_a_flow_opens_with_the_frame_and_the_page_it_started_from(tmp_path: Path) -> None:
+    # The opening navigation captures a frame and a page state before any action is decided. Without
+    # a record naming them a reader meets the flow one action in, looking at the frame that followed
+    # that action, with nothing saying what the flow was aiming at.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    opening = json.loads(log.splitlines()[0])
+    assert opening["kind"] == "init"
+    assert opening["screenshot"] == "step_000.png"
+    assert opening["goal"] and opening["expect"] and opening["state"]
+
+
+def test_a_step_records_what_it_predicted_and_what_the_page_did(tmp_path: Path) -> None:
+    # The pair is what lets the next decision notice that the page disagreed with it, instead of
+    # re-deriving the same wrong model of the UI and repeating the action.
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+
+    _collector, environment = _run_flow_collector(tmp_path, agent)
+
+    log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]
+    acted = [json.loads(line) for line in log.splitlines() if json.loads(line)["kind"] == "action"]
+    assert acted[0]["expected"] == "the item is added to the list"
+    assert acted[0]["observed"] != ""
+
+
+def test_the_next_decision_is_told_when_an_action_changed_nothing(tmp_path: Path) -> None:
+    # A click can land and still alter nothing readable (an in-place-editable heading whose only
+    # click feedback is a CSS focus wash). Without the observed fact in its history, the agent has
+    # re-tried such a click to the step cap, reasoning each time that it must have progressed.
+    agent = ScriptedVerificationAgent(actions=[click_action(), click_action(), done_action()], readings=[reading()])
+
+    _collector, _environment = _run_flow_collector(tmp_path, agent)
+
+    # The default scripted step returns the same page every time, so the first click was a silent
+    # no-op and the second decision must be told so. It reaches the history inside the step's own
+    # entry, beside the prediction it is contradicting, rather than as a line of its own.
+    assert any(ui_flows.UNCHANGED_STATE_SUMMARY in entry for entry in agent.histories[1])
+
+
+def test_a_step_that_changed_the_page_leaves_no_no_change_note(tmp_path: Path) -> None:
+    agent = ScriptedVerificationAgent(actions=[click_action(), done_action()], readings=[reading()])
+    rules = _executor_rules()
+    rules[4] = ScriptedExecRule(
+        "box_flow_step.py", [_step_result(), _step_result(snapshot='- heading "Renamed by eval" [level=3]')]
+    )
+
+    _collector, _environment = _run_flow_collector(tmp_path, agent, rules)
+
+    assert all("exactly the same" not in entry for entry in agent.histories[1])
 
 
 def test_collector_records_a_flow_that_ran_as_completed_whatever_the_app_showed(tmp_path: Path) -> None:

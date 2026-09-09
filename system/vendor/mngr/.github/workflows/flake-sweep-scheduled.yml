@@ -1,0 +1,245 @@
+name: Flake sweep (scheduled)
+
+# Daily unattended run of the `detect-flakes` skill: sweep a full CI window for
+# every flaking test, then reconcile the whole MIND Linear backlog against it.
+#
+# Because a *full-window* sweep is the only thing allowed to close stale flake
+# tickets, running this on a schedule is what keeps the backlog honest -- a
+# human-triggered sweep that happens whenever someone remembers leaves closed
+# flakes open and new ones unfiled.
+#
+# The clustering judgement lives in the skill, not in a script:
+# scripts/flake_reconcile.py only moves data and never clusters. So this
+# workflow's whole job is to hand Claude Code a correctly-credentialed checkout
+# and get out of the way.
+#
+# Deliberately does NOT reuse .github/actions/tmr-setup. That action serves
+# TMR's orchestrator and changes with it; a little duplication here is cheaper
+# than a dependency that can shift under a job nobody watches.
+
+on:
+  # 13:00 UTC. TMR starts at 08:00 UTC and may run up to 4h, so this is clear of
+  # its worst case, and the Slack heartbeat lands before the Pacific workday.
+  # GitHub cron is UTC year-round, so this drifts an hour against PST/PDT.
+  schedule:
+    - cron: "0 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # `gh api .../actions/runs` (list CI runs) and `gh api .../check-runs` (read
+  # the flake-aware check-run summaries) -- both read-only, and both are what
+  # `flake_reconcile.py list-flakes` is built on.
+  actions: read
+  checks: read
+  # Lets the Vault steps mint a GitHub OIDC token.
+  id-token: write
+
+# A 120-minute job against a daily cron cannot lap itself, but a manual dispatch
+# during a scheduled run could. Queue rather than cancel: a half-applied
+# reconciliation is worse than a late one.
+concurrency:
+  group: flake-sweep-scheduled
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The skill writes its plan and outcome here; the job summary and the
+      # Slack post are both rendered from it verbatim.
+      SUMMARY_FILE: flake-sweep-summary.md
+      SWEEP_LOG: flake-sweep-claude.log
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The skill scopes flake evidence to post-fix commits with
+          # `git merge-base --is-ancestor`, which a shallow clone cannot answer.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        run: uv sync --all-packages
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code@2.1.227
+
+      # Must equal LATCHKEY_VERSION in
+      # libs/mngr_latchkey/imbue/mngr_latchkey/remote/provisioning.py;
+      # apps/minds/imbue/minds/test_latchkey_version_alignment.py enforces that.
+      - name: Install latchkey CLI
+        run: npm install -g latchkey@3.11.0
+
+      - name: Configure git identity
+        run: |
+          git config user.email "dev@imbue.com"
+          git config user.name "imbue-dev"
+
+      # Without this, Claude Code hits its trust dialog on an unseen checkout and
+      # hangs forever -- there is no human here to accept it.
+      - name: Pre-trust checkout for Claude
+        run: uv run --project libs/mngr_claude python scripts/pretrust_claude_checkout.py
+
+      - name: Fetch credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/ANTHROPIC_API_KEY
+            mngr/ci/LINEAR_FLAKE_SWEEP_API_KEY
+
+      # flake_reconcile.py reaches Linear via `latchkey curl`, so the token has
+      # to be installed into latchkey rather than passed as an env var.
+      - name: Authenticate latchkey to Linear
+        env:
+          LINEAR_TOKEN: ${{ env.LINEAR_FLAKE_SWEEP_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LINEAR_TOKEN:-}" ]; then
+            echo "::error::LINEAR_FLAKE_SWEEP_API_KEY was not returned by Vault."
+            exit 1
+          fi
+          latchkey auth set linear -H "Authorization: ${LINEAR_TOKEN}"
+
+      # Fail in seconds on a bad credential rather than 90 minutes into an Opus
+      # run. Asserts exactly the two accesses the sweep depends on.
+      - name: Preflight credentials
+        run: |
+          set -euo pipefail
+          # `list-tickets` is read-only and is the exact call the sweep makes, so
+          # it validates the credential and the latchkey invocation shape at once.
+          # A `latchkey services info` status field would validate neither.
+          if ! uv run python scripts/flake_reconcile.py list-tickets >/dev/null; then
+            echo "::error::Cannot reach Linear through latchkey. Check mngr/ci/LINEAR_FLAKE_SWEEP_API_KEY and the latchkey install."
+            exit 1
+          fi
+          echo "latchkey -> Linear: ok"
+          # A commit with no check-runs still answers 200, so these assert the
+          # permission rather than the data.
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=1" >/dev/null; then
+            echo "::error::Cannot list workflow runs. The job needs 'actions: read'."
+            exit 1
+          fi
+          echo "gh -> actions/runs: ok"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=1" >/dev/null; then
+            echo "::error::Cannot read check-runs for ${GITHUB_SHA}. The job needs 'checks: read' (and the commit must exist on the remote)."
+            exit 1
+          fi
+          echo "gh -> check-runs: ok"
+
+      # The sweep reads ~2000 commits' check-runs, which outruns an agent's
+      # per-command timeout; a workflow step has no such ceiling. Keeping the
+      # deterministic fetch here leaves Claude only the judgement, which is the
+      # split the CLI was built for: it moves data and never clusters.
+      - name: Sweep CI for flakes
+        run: |
+          set -euo pipefail
+          uv run python scripts/flake_reconcile.py list-flakes > /tmp/flakes.json
+
+      - name: Require the sweep to have produced flake data
+        run: |
+          set -euo pipefail
+          if [ ! -s /tmp/flakes.json ]; then
+            echo "::error::/tmp/flakes.json is missing or empty -- the sweep did not run to completion."
+            exit 1
+          fi
+          uv run python -c 'import json;d=json.load(open("/tmp/flakes.json"));print(f"sweep produced {len(d)} flaky test(s)")'
+
+      - name: Reconcile flakes into Linear
+        id: reconcile
+        run: |
+          set -euo pipefail
+          claude -p "/detect-flakes --autonomous" \
+            --model opus \
+            --dangerously-skip-permissions \
+            2>&1 | tee "$SWEEP_LOG"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -f "$SUMMARY_FILE" ]; then
+            cat "$SUMMARY_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No \`$SUMMARY_FILE\` was produced -- see the run log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Guards run before the Slack post so the heartbeat can see their verdict.
+      # A sweep that wrote no summary is unverifiable and must not read as green.
+      - name: Require a summary file
+        if: always() && steps.reconcile.outcome == 'success'
+        run: |
+          set -euo pipefail
+          if [ ! -f "$SUMMARY_FILE" ]; then
+            echo "::error::The sweep produced no ${SUMMARY_FILE}; treating the run as failed."
+            exit 1
+          fi
+          echo "Summary present ($(wc -c < "$SUMMARY_FILE") bytes)."
+
+      - name: Upload sweep artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-sweep
+          path: |
+            flake-sweep-summary.md
+            flake-sweep-claude.log
+            /tmp/flakes.json
+            /tmp/tickets.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Every run posts, including a sweep that changed nothing: the value of a
+      # heartbeat is that silence means breakage. Vault fetch is
+      # continue-on-error so a Vault hiccup degrades to a warning rather than
+      # swallowing the notification.
+      - name: Fetch Slack webhook from Vault
+        if: always()
+        continue-on-error: true
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/SLACK_FLAKE_SWEEP_WEBHOOK
+
+      # Last, so `job.status` reflects every preceding guard: a heartbeat that
+      # reports green on a red run is the one thing it must never do.
+      - name: Post summary to Slack
+        if: always()
+        env:
+          WEBHOOK: ${{ env.SLACK_FLAKE_SWEEP_WEBHOOK }}
+          JOB_STATUS: ${{ job.status }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::warning::SLACK_FLAKE_SWEEP_WEBHOOK not set -- skipping slack notification"
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ] && [ -f "$SUMMARY_FILE" ]; then
+            header=":white_check_mark: *flake sweep* — completed, _trigger=_ \`${TRIGGER}\`"
+            body=$(head -c 3000 "$SUMMARY_FILE")
+            if [ "$(wc -c < "$SUMMARY_FILE")" -gt 3000 ]; then
+              body="${body}"$'\n'"_(truncated — full summary in the run)_"
+            fi
+          else
+            header=":x: *flake sweep* — ${JOB_STATUS}, _trigger=_ \`${TRIGGER}\`"
+            body="See the run log; if the sweep exited cleanly it wrote no summary, so it cannot be verified."
+          fi
+          text=$(printf '%s\n%s\n<%s|run>' "$header" "$body" "$RUN_URL")
+          payload=$(printf '%s' "$text" | jq -Rs '{text: .}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$WEBHOOK"

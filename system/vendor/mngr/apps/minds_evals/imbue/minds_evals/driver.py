@@ -2,7 +2,7 @@
 
 The harbor environment is the Minds box; the driver starts the backend with per-trial env, creates
 one nested Modal workspace through the production Minds API, drives the scripted multi-turn
-conversation against the workspace's system_interface (bridged through ``mngr exec``), snapshots the
+conversation against the workspace's chat app (bridged through ``mngr exec``), snapshots the
 workspace after turns, and keeps the ATIF ``trajectory.json`` (what the verifier grades) and
 ``state.json`` current in the box so even a timed-out trial leaves a gradeable partial record.
 """
@@ -362,20 +362,112 @@ def parse_case_config(instruction: str) -> CaseConfig:
     return CaseConfig.model_validate(raw_case)
 
 
+# Every eval user id opens with this, so the Modal environment a trial creates is recognisable as an
+# eval's among the environments real people's workspaces live in. The evals share the staging tier's
+# MNGR_PREFIX, so without it an eval environment and a developer's are the same shape.
+EVAL_USER_ID_NAMESPACE: Final[str] = "evals-"
+# The Modal environment a trial's nested workspaces live in is named <MNGR_PREFIX><user_id>, and
+# Modal's own name rules are restrictive, so the WHOLE user id is held to this budget rather than
+# just the trial-name part of it. Sized so the longest id still fits MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+# under the MNGR_PREFIX the staging tier exports (`minds-staging-`), which is the only tier MINDS_ENV
+# names -- a `minds-dev-*` or `minds-ci-*` root name carries a far longer prefix than that, and
+# minds_bridge raises on the derived name rather than letting a truncated one be recorded.
+USER_ID_MAX_LENGTH: Final[int] = 48
+# The per-run salt every user id ends in: long enough that two trials cannot collide, short enough
+# to leave the trial name readable.
+_USER_ID_SALT_LENGTH: Final[int] = 8
+# How much of the trial name has to survive for a user id to still say which trial it came from.
+# Whatever the namespace, the salt, the joining dash and this leave over is all a prefix may occupy.
+_MIN_TRIAL_NAME_LENGTH: Final[int] = 8
+USER_ID_PREFIX_MAX_LENGTH: Final[int] = (
+    USER_ID_MAX_LENGTH - len(EVAL_USER_ID_NAMESPACE) - _USER_ID_SALT_LENGTH - _MIN_TRIAL_NAME_LENGTH - 1
+)
+
+_USER_ID_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+# How much the workspace host name carries after its `EVAL-` marker, so the whole name stays under
+# 40 characters. The binding constraint is downstream: mngr's modal provider derives the workspace's
+# Modal app name as <MNGR_PREFIX><workspace name> and truncates it to make room for the state
+# volume's `-state` suffix, leaving 58 characters -- which the longest name this produces sits well
+# inside under `minds-staging-`. Unlike the Modal environment name, nothing here re-derives this
+# one later, so there is no runtime check to catch a budget raised past it.
+_WORKSPACE_HOST_NAME_BUDGET: Final[int] = 34
+
+
 @pure
 def sanitize_user_id(text: str) -> str:
-    """A trial name -> a Modal user_id fragment (lowercase alnum + dashes, bounded length); Modal env
-    names (minds-<env>-<user_id>) are restrictive."""
+    """A trial name -> a Modal user_id fragment: lowercase alphanumerics and dashes, which is all a
+    Modal env name (<MNGR_PREFIX><user_id>) admits. Unbounded on purpose: the derived names apply
+    their own budget through _trial_name_within, each knowing what its own fixed parts leave over."""
     slug = "".join(character if character.isalnum() else "-" for character in text.lower())
     return re.sub(r"-+", "-", slug).strip("-")
 
 
 @pure
-def derive_user_id(trial_name: str, salt: str) -> str:
-    """The per-trial Modal user id: the sanitized trial name plus a fresh per-run salt, so re-runs or
-    resumes can never collide even if a trial name repeats."""
-    base = sanitize_user_id(trial_name)[:31].rstrip("-") or "trial"
-    return "{}-{}".format(base, salt)
+def _trial_name_within(trial_name: str, budget: int) -> str:
+    """The sanitized trial name cut to the room a derived name's fixed parts leave it.
+
+    Both derived names below join this to fixed parts around a dash, so the cut is followed by a
+    strip: a budget landing mid-dash would otherwise double the joining one. Never empty either --
+    a name whose every character sanitized away still has to name something.
+    """
+    return sanitize_user_id(trial_name)[:budget].rstrip("-") or "trial"
+
+
+@pure
+def derive_user_id(trial_name: str, salt: str, user_id_prefix: str) -> str:
+    """The per-trial Modal user id: the eval namespace, an optional caller-supplied prefix, the
+    sanitized trial name, and a fresh per-run salt, so re-runs or resumes can never collide even if
+    a trial name repeats.
+
+    The whole id is held under USER_ID_MAX_LENGTH. The namespace, the prefix and the salt are what
+    recognition, sweeping and re-running respectively depend on, so the trial name -- readability
+    only -- is what absorbs the squeeze.
+    """
+    trial_name_budget = USER_ID_MAX_LENGTH - len(EVAL_USER_ID_NAMESPACE) - len(user_id_prefix) - len(salt) - 1
+    base = _trial_name_within(trial_name, trial_name_budget)
+    return "{}{}{}-{}".format(EVAL_USER_ID_NAMESPACE, user_id_prefix, base, salt)
+
+
+@pure
+def derive_workspace_host_name(trial_name: str, salt: str) -> str:
+    """The Minds workspace's host name: `EVAL-<sanitized trial name>-<salt>`.
+
+    Carries the trial name and the salt alone, and never the eval namespace or the run's user id
+    prefix: those are shared by every trial in a run, so spending the budget on them would leave the
+    name saying nothing about WHICH trial it belongs to. The salt is the only part that tells two
+    attempts of one case apart, so it is always kept whole and the trial name is what gives when the
+    budget bites.
+    """
+    trial_name_budget = _WORKSPACE_HOST_NAME_BUDGET - len(salt) - 1
+    base = _trial_name_within(trial_name, trial_name_budget)
+    return "EVAL-{}-{}".format(base, salt)
+
+
+@pure
+def parse_user_id_prefix(raw_value: object) -> str:
+    """The `--ak user_id_prefix=` value: a name fragment prepended to every trial's Modal user id, so
+    a batch of environments can be recognised (and swept) by name afterwards.
+
+    Modal environment names admit only lowercase alphanumerics and dashes, and an id that Modal
+    refuses fails deep inside a workspace create rather than here, so the shape is checked up front.
+    """
+    text = _agent_kwarg_text(raw_value)
+    if not text:
+        return ""
+    if not _USER_ID_PREFIX_PATTERN.fullmatch(text):
+        raise AgentKwargError(
+            "user_id_prefix {!r} is not a Modal environment name fragment; expected lowercase "
+            "alphanumerics and dashes, starting with an alphanumeric".format(raw_value)
+        )
+    if len(text) > USER_ID_PREFIX_MAX_LENGTH:
+        raise AgentKwargError(
+            "user_id_prefix {!r} is {} characters; at most {} fit alongside the trial name and salt "
+            "in the {}-character Modal user id".format(
+                raw_value, len(text), USER_ID_PREFIX_MAX_LENGTH, USER_ID_MAX_LENGTH
+            )
+        )
+    return text
 
 
 class Say(FrozenModel):
@@ -568,7 +660,7 @@ def _agent_reply_text(event: Mapping[str, Any]) -> str:
 
     Reads both common-transcript vintages: the ATIF-shaped ``step`` record with ``source: "agent"``
     (whose text is ``message``) that mngr's emitters write, and the legacy ``assistant_message``
-    record the workspace system_interface still produces."""
+    record the workspace's chat app produces."""
     if event.get("type") == "step" and event.get("source") == "agent":
         return str(event.get("message") or "").strip()
     if event.get("type") == "assistant_message":
@@ -867,6 +959,7 @@ class MindsPersonaDriver(BaseAgent):
         proxy_probe: object = False,
         proxy: object = False,
         verifier_model: str = "",
+        user_id_prefix: object = "",
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -884,11 +977,22 @@ class MindsPersonaDriver(BaseAgent):
         self._snapshot_mode = parse_snapshot_mode(snapshot_mode)
         self._modal_config_path = modal_config_path
         self._poll_seconds = float(poll_seconds)
-        # An 8-hex salt (not the full uuid4 hex): the salted trial name must fit
-        # the Modal env name budget (minds-<env>-<user_id>, user_id capped at 40
-        # chars like the old harness) while keeping the trial name readable.
-        self._salt = uuid.uuid4().hex[:8]
+        # Prepended to every trial's Modal user id, and so to the Modal environment name derived from
+        # it. A scheduled run passes a per-run stamp here, which is what lets its own environments be
+        # picked out afterwards; a developer run leaves it empty and its environments stay
+        # unmistakable for a scheduled run's.
+        self._user_id_prefix = parse_user_id_prefix(user_id_prefix)
+        # A short slice of the uuid4 hex (not the whole thing): the salted trial name must fit the
+        # Modal user id budget while keeping the trial name readable.
+        self._salt = uuid.uuid4().hex[:_USER_ID_SALT_LENGTH]
+        # harbor's own name for this trial, read in setup(); both the Modal user id and the
+        # workspace host name are derived from it.
+        self._trial_name: str = ""
         self._user_id: str = ""
+        # The Modal environment mngr's modal provider will create for this trial's workspaces.
+        # Recorded per trial because nothing destroys it: the run that made it is the only thing
+        # that knows it exists.
+        self._modal_environment_name: str = ""
         self._mngr_sha: str = ""
         self._api_port: str = ""
         self._box_env: dict[str, str] | None = None
@@ -992,19 +1096,25 @@ class MindsPersonaDriver(BaseAgent):
         # The staged mngr clone's HEAD is the exact SHA the dataset was generated
         # at, so the box env can be built without seeing the instruction.
         self._mngr_sha = await minds_bridge.read_box_mngr_sha(environment)
-        trial_name = self.logs_dir.parent.name
-        self._user_id = derive_user_id(trial_name, self._salt)
+        self._trial_name = self.logs_dir.parent.name
+        self._user_id = derive_user_id(self._trial_name, self._salt, self._user_id_prefix)
         modal_config_path = (
             Path(self._modal_config_path) if self._modal_config_path else minds_bridge.default_modal_config_path()
         )
+        activation_env = await minds_bridge.fetch_minds_activation_env(environment, MINDS_ENV)
+        self._modal_environment_name = minds_bridge.derive_modal_environment_name(activation_env, self._user_id)
         self._box_env = minds_bridge.build_box_env(
-            activation_env=await minds_bridge.fetch_minds_activation_env(environment, MINDS_ENV),
+            activation_env=activation_env,
             modal_token_env=minds_bridge.load_modal_token_env(modal_config_path),
             user_id=self._user_id,
             mngr_sha=self._mngr_sha,
             minds_env=MINDS_ENV,
         )
-        logger.info("Starting the Minds backend (trial user id {})", self._user_id)
+        logger.info(
+            "Starting the Minds backend (trial user id {}, Modal environment {})",
+            self._user_id,
+            self._modal_environment_name,
+        )
         await minds_bridge.start_backend(environment, self._box_env)
         self._api_port = await minds_bridge.discover_api_port(environment, self._box_env, BACKEND_BOOT_TIMEOUT_SECONDS)
         logger.info("Minds backend is up on port {}", self._api_port)
@@ -1294,7 +1404,7 @@ class MindsPersonaDriver(BaseAgent):
         # Prepare the per-case dwt clone inside the box and create the workspace
         # through the production Minds API path.
         await self._prepare_workspace_clone(case, environment)
-        workspace_host_name = "EVAL-{}".format(self._user_id[:34])
+        workspace_host_name = derive_workspace_host_name(self._trial_name, self._salt)
         payload = minds_bridge.build_create_payload(
             dwt_repo=_case_clone_dir(case.case_id),
             dwt_branch="",
@@ -2208,6 +2318,9 @@ class MindsPersonaDriver(BaseAgent):
             "step_name": step.name if step is not None else "",
             "mngr_sha": self._mngr_sha,
             "dwt_sha": self._case.dwt_sha if self._case is not None else "",
+            # Populated in setup(), so it is in the very first sync: the trial leaks this
+            # environment on purpose, and this record is all that says which one to clean up.
+            "modal_environment_name": self._modal_environment_name,
             "waits_done": self._waits_done,
             # "num_turns" is the ported state.json schema key (the old harness's readers consume
             # it). It counts CONFIGURED ENTRIES, which a goal entry can outrun -- "waits_done" is
@@ -2368,6 +2481,7 @@ class MindsPersonaDriver(BaseAgent):
             else 0.0,
             "decider_model": self._decider_model,
             "modal_user_id": self._user_id,
+            "modal_environment_name": self._modal_environment_name,
             "mngr_sha": self._mngr_sha,
             # Both pinned inputs travel with the trial record, so a captured
             # trial says which mngr and which workspace template produced it.

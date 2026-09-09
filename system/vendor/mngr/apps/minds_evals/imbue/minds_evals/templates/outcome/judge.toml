@@ -6,6 +6,10 @@
 # reward of weight 1.0, and each judge toml is a second reward carrying this weight. So weight = 1.0
 # is what makes the judge exactly half the outcome dimension, whatever number of programmatic
 # criteria the case happens to declare.
+#
+# Every criterion below must carry an explicit `name`. rewardkit derives a missing one from the
+# first 40 characters of the description and refuses a judge whose criteria collide, so two
+# per-case criteria that open the same way would abort the whole grade with no reward file.
 [judge]
 judge = "anthropic/claude-opus-4-8"
 files = $judge_files

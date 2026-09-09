@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <!-- window frame -->
+  <rect x="0" y="0" width="240" height="160" rx="6" fill="#1e1e1e"/>
+  <!-- title bar -->
+  <rect x="0" y="0" width="240" height="14" rx="6" fill="#323233"/>
+  <rect x="0" y="8" width="240" height="6" fill="#323233"/>
+  <circle cx="9" cy="7" r="2.2" fill="#ff5f56"/>
+  <circle cx="17" cy="7" r="2.2" fill="#ffbd2e"/>
+  <circle cx="25" cy="7" r="2.2" fill="#27c93f"/>
+  <rect x="86" y="4" width="68" height="6" rx="3" fill="#1e1e1e"/>
+  <text x="120" y="9.2" fill="#8a8a8a" font-size="4.6" text-anchor="middle">lean-ide</text>
+
+  <!-- activity bar -->
+  <rect x="0" y="14" width="14" height="146" fill="#333333"/>
+  <rect x="4" y="22" width="6" height="6" rx="1" fill="#cfcfcf"/>
+  <rect x="4" y="34" width="6" height="6" rx="1" fill="#7a7a7a"/>
+  <rect x="4" y="46" width="6" height="6" rx="1" fill="#7a7a7a"/>
+
+  <!-- file tree -->
+  <rect x="14" y="14" width="46" height="146" fill="#252526"/>
+  <text x="18" y="24" fill="#9d9d9d" font-size="4.4">EXPLORER</text>
+  <text x="18" y="34" fill="#c8c8c8" font-size="5">lean_playground</text>
+  <text x="22" y="43" fill="#5fa8d3" font-size="5">Hello.lean</text>
+  <rect x="20" y="46" width="38" height="7" rx="1.5" fill="#37373d"/>
+  <text x="22" y="51.5" fill="#e6e6e6" font-size="5">Proof.lean</text>
+  <text x="22" y="60" fill="#5fa8d3" font-size="5">Fibonacci</text>
+  <text x="22" y="68.5" fill="#5fa8d3" font-size="5">Infoview</text>
+
+  <!-- editor pane -->
+  <rect x="60" y="14" width="118" height="146" fill="#1e1e1e"/>
+  <rect x="60" y="14" width="52" height="12" fill="#1e1e1e"/>
+  <text x="66" y="22.5" fill="#d7d7d7" font-size="5">Proof.lean</text>
+  <line x1="60" y1="26" x2="178" y2="26" stroke="#2b2b2b" stroke-width="0.6"/>
+
+  <!-- gutter line numbers -->
+  <text x="64" y="40" fill="#5a5a5a" font-size="4.6">1</text>
+  <text x="64" y="50" fill="#5a5a5a" font-size="4.6">2</text>
+  <text x="64" y="60" fill="#5a5a5a" font-size="4.6">3</text>
+
+  <!-- code: theorem add : 2 + 2 = 4 := by decide -->
+  <text x="72" y="40" font-size="5.4"><tspan fill="#c586c0">theorem</tspan><tspan fill="#dcdcaa"> add</tspan><tspan fill="#d4d4d4"> : </tspan><tspan fill="#b5cea8">2 + 2 = 4</tspan></text>
+  <text x="72" y="50" font-size="5.4"><tspan fill="#d4d4d4">    := </tspan><tspan fill="#c586c0">by</tspan></text>
+  <text x="72" y="60" font-size="5.4"><tspan fill="#4ec9b0">  decide</tspan></text>
+  <!-- cursor -->
+  <rect x="88" y="55" width="1" height="7" fill="#e6e6e6"/>
+
+  <!-- infoview panel -->
+  <rect x="120" y="30" width="54" height="88" rx="3" fill="#252526" stroke="#3a3a3a" stroke-width="0.6"/>
+  <text x="125" y="40" fill="#9d9d9d" font-size="4.6">INFOVIEW</text>
+  <line x1="124" y1="43" x2="170" y2="43" stroke="#3a3a3a" stroke-width="0.5"/>
+  <text x="125" y="53" fill="#569cd6" font-size="4.8">Tactic state</text>
+  <text x="125" y="64" font-size="6"><tspan fill="#c586c0">&#8866;</tspan><tspan fill="#b5cea8"> 2 + 2 = 4</tspan></text>
+  <rect x="124" y="76" width="46" height="12" rx="2" fill="#213421"/>
+  <text x="128" y="84.5" fill="#89d185" font-size="5">No goals</text>
+  <text x="125" y="100" fill="#6a9955" font-size="4.6">All goals solved</text>
+
+  <!-- status bar -->
+  <rect x="0" y="152" width="240" height="8" fill="#0a5aa5"/>
+  <text x="4" y="158" fill="#ffffff" font-size="4.6">Lean 4</text>
+  <text x="196" y="158" fill="#ffffff" font-size="4.6">&#8704;  &#8867;</text>
+</svg>

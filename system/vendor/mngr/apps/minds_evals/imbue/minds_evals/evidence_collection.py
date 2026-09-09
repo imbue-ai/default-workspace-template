@@ -107,7 +107,6 @@ WORKSPACE_STAGING_DIR: Final[str] = "/tmp/minds-evals-verification"
 # Where the workspace repo lives in a stock workspace (supervisord's `directory=` and the app
 # scaffold both hard-code it). Probed rather than assumed, but tried first so the common case is free.
 DEFAULT_WORKSPACE_REPO_ROOT: Final[str] = "/home/user/workspace"
-APPS_REGISTRY_RELATIVE_PATH: Final[str] = "data/.state/apps.toml"
 SUPERVISORD_CONF_RELATIVE_PATH: Final[str] = "system/supervisord.conf"
 # Throwaway "isolated instance" servers record the registry rows they registered here, one state
 # file per instance. Reading that record is how a delivered app is told from a preview.
@@ -420,9 +419,32 @@ def parse_service_states(services_text: str) -> dict[str, str]:
 
 # The forward_port.py call an app's supervisord program block chains before its own start command.
 # Either flag order is accepted: the app scaffold writes --url first, the isolated-instance runner
-# writes --name first, and a hand-written block may do either.
-_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py[^\n]*?--name\s+([\w-]+)")
+# writes --name first, and a hand-written block may do either. An app with a manifest registers
+# through ``--manifest <app.toml>`` with no ``--name`` (the name lives in the manifest); its program
+# is named after the app, so the block's own program name is the registration.
+# A call's flags run to the next shell chain operator (``&&``, ``;``, ``||``: the chain to the
+# following call or to the app's own start command, whose flags must not be read as the
+# registration's) or to the end of the line.
+_FORWARD_PORT_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py(?P<flags>[^\n&;|]*)")
+_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name\s+([\w-]+)")
+_FORWARD_PORT_MANIFEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"--manifest\s+\S+")
 _PROGRAM_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
+
+
+@pure
+def _registrations_in_block(block: str, program_name: str) -> list[str]:
+    """The registry names the forward_port.py calls in one program block register, in call order."""
+    registrations: list[str] = []
+    for call in _FORWARD_PORT_CALL_PATTERN.finditer(block):
+        flags = call.group("flags")
+        name_match = _FORWARD_PORT_NAME_PATTERN.search(flags)
+        if name_match is not None:
+            registrations.append(name_match.group(1))
+        elif _FORWARD_PORT_MANIFEST_PATTERN.search(flags) is not None:
+            registrations.append(program_name)
+        else:
+            pass
+    return registrations
 
 
 @pure
@@ -440,8 +462,9 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     for index, match in enumerate(matches):
         block_end = matches[index + 1].start() if index + 1 < len(matches) else len(supervisord_conf)
         block = supervisord_conf[match.end() : block_end]
-        for registration in _FORWARD_PORT_NAME_PATTERN.findall(block):
-            program_by_registration.setdefault(registration, match.group(1).strip())
+        program_name = match.group(1).strip()
+        for registration in _registrations_in_block(block, program_name):
+            program_by_registration.setdefault(registration, program_name)
     return program_by_registration
 
 
@@ -454,17 +477,19 @@ def resolve_preexisting_registrations(
     Both arguments are read from the same pre-turn-1 snapshot, because neither alone is complete:
 
     - ``registry_names`` is the app registry as it actually stood. A measurement rather than an
-      inference, and the only source that sees a template app which registers from inside the script
-      its supervisord program runs rather than from a ``forward_port.py`` call in the config itself.
-      The terminal does exactly that, as do the owner-exec and vm-exec daemons, and counting one as
-      a deliverable is the failure this resolution exists to prevent.
+      inference, and the only source that sees a template app which registers from inside the
+      program it runs (its own entry point, or a launcher script) rather than from a
+      ``forward_port.py`` call in the config itself. The terminal does exactly that, as do the
+      owner-exec and vm-exec daemons, and counting one as a deliverable is the failure this
+      resolution exists to prevent.
     - ``config_registrations`` is what the workspace's own ``system/supervisord.conf`` registers,
-      joined through its ``forward_port.py --name`` invocations. It covers a template app whose
-      service is slow enough that it had not registered its port yet when the snapshot was taken:
-      the file is on disk from the moment the workspace is cloned, whatever its services are doing.
-      Directory names under ``system/apps/`` would not do -- a registry name is a caller-supplied
-      ``--name`` flag, and a multi-port app registers extra origin-label rows that correspond to no
-      directory at all.
+      joined through its ``forward_port.py`` invocations (``--name``, or the block's own program
+      name for a ``--manifest`` registration). It covers a template app whose service is slow
+      enough that it had not registered its port yet when the snapshot was taken: the file is on
+      disk from the moment the workspace is cloned, whatever its services are doing. Directory
+      names under ``system/apps/`` would not do -- a registry name is what the app hands
+      ``forward_port.py`` (a ``--name`` flag, or the name in its ``--manifest``), and a multi-port
+      app registers extra origin-label rows that correspond to no directory at all.
 
     The registry is therefore the half that must be readable; the config half only ever adds names,
     and contributes nothing when the probe came back without it.
@@ -606,7 +631,7 @@ def workspace_state_command() -> str:
         services_marker=_SECTION_MARKER.format("services"),
         supervisord_marker=_SECTION_MARKER.format("supervisord"),
         instances_marker=_SECTION_MARKER.format("isolated_instances"),
-        registry_path=APPS_REGISTRY_RELATIVE_PATH,
+        registry_path=minds_bridge.WORKSPACE_APPS_REGISTRY,
         supervisord_path=SUPERVISORD_CONF_RELATIVE_PATH,
         instances_path=ISOLATED_INSTANCES_RELATIVE_PATH,
         instance_file=shlex.quote(ISOLATED_INSTANCE_FILENAME),
@@ -2064,7 +2089,13 @@ class EvidenceCollector(MutableModel):
         # The session cookie rides this first request, so the opening navigation is already
         # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
         opening = ui_flows.FlowAction(
-            kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
+            kind=ui_flows.FlowActionKind.OPEN,
+            role="",
+            target="",
+            text=target_url,
+            amount=0,
+            reasoning="the flow has not opened the app yet",
+            expected="the delivered app loads",
         )
         outcome = await self._run_step_script(
             ui_flows.build_step_request(
@@ -2093,6 +2124,11 @@ class EvidenceCollector(MutableModel):
             )
             return
         state_text = outcome.state_text
+        steps.append(
+            ui_flows.flow_init_record(
+                check.steps, check.expect, target_url, state_text, outcome.screenshot_name, utc_now_iso()
+            )
+        )
 
         for step_index in range(1, ui_flows.MAX_STEPS_PER_FLOW + 1):
             if self._remaining_seconds <= 0:
@@ -2127,12 +2163,19 @@ class EvidenceCollector(MutableModel):
             if action.kind == ui_flows.FlowActionKind.DONE:
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", "", utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        "",
+                        utc_now_iso(),
                     )
                 )
                 is_finished_by_agent = True
                 break
-            history.append(described)
             outcome = await self._run_step_script(
                 ui_flows.build_step_request(
                     action,
@@ -2145,7 +2188,15 @@ class EvidenceCollector(MutableModel):
             if ui_flows.is_instrument_reason(outcome.reason):
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", outcome.reason, utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        outcome.reason,
+                        utc_now_iso(),
                     )
                 )
                 await self._finish_flow(check, slug, steps, CheckStatus.ERROR, outcome.reason, outcome.detail)
@@ -2156,12 +2207,18 @@ class EvidenceCollector(MutableModel):
                 # a click that hit nothing. The page below shows the truth, so the flow carries on
                 # with the failure recorded where the grade-time judge will read it.
                 step_error = _bounded(outcome.detail.strip(), 200)
-                history.append("(that action failed: {})".format(step_error))
+            # What the page did, against what the action predicted it would do. Recorded on the step
+            # and carried into the next decision's history, which is where a wrong model of the UI
+            # -- a filter that turns out to be a toggle -- becomes visible instead of being retried.
+            observed = ui_flows.summarize_state_change(state_text, outcome.state_text or state_text)
+            history.append(ui_flows.describe_step(described, action.expected, step_error, observed))
             steps.append(
                 ui_flows.flow_step_record(
                     step_index,
                     described,
                     action.reasoning,
+                    action.expected,
+                    observed,
                     state_text,
                     # The executor names the frame it actually wrote, and names nothing when the
                     # capture failed. Naming the file it would have written instead would put a
@@ -2178,7 +2235,7 @@ class EvidenceCollector(MutableModel):
         # not its completion, because the step log already carries every state that was seen.
         reading, _reading_call = agent.read_final_state(check.steps, tuple(history), state_text)
         observation = reading.observation if reading is not None else ""
-        steps.append(ui_flows.flow_reading_record(len(steps) + 1, observation, state_text, utc_now_iso()))
+        steps.append(ui_flows.flow_final_record(len(steps), observation, state_text, utc_now_iso()))
         # Completion, not achievement: a flow that carried out its declared steps is `completed`,
         # and one that ran out of budget first is `incomplete`. Whether the app did what the
         # `expect` describes is decided at grade time, from this evidence.
@@ -2327,25 +2384,37 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
 
 @pure
 def _oracle_flow_log(check: UiFlowCheck) -> str:
+    """The log a flow would have written had the delivered app been perfect: the same record kinds a
+    real flow emits, so the oracle exercises every path a reader takes."""
+    opening_state = "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name)
     return "".join(
         line + "\n"
         for line in (
-            ui_flows.flow_step_record(
-                0,
-                "open {}".format(_ORACLE_APP_URL),
-                "Opening the delivered app to start the flow.",
-                "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name),
-                "",
+            ui_flows.flow_init_record(
+                check.steps,
+                check.expect,
+                _ORACLE_APP_URL,
+                opening_state,
                 "",
                 "1970-01-01T00:00:00+00:00",
             ),
             ui_flows.flow_step_record(
                 1,
                 "finish the flow",
-                "Every declared step has been carried out.",
-                "browser minds-eval-verify @ {}  ({})\n{}".format(_ORACLE_APP_URL, check.name, check.expect),
+                "the delivered app, open and showing what the steps describe",
+                "nothing further -- every declared step has been carried out",
+                "",
+                "{}\n{}".format(opening_state, check.expect),
                 "",
                 "",
+                "1970-01-01T00:00:00+00:00",
+            ),
+            # A reading, not a verdict, exactly as a real flow's closing record is: the digest prints
+            # it as one more piece of evidence and the judge still rules on the `expect` itself.
+            ui_flows.flow_final_record(
+                2,
+                "the page shows: {}".format(check.expect),
+                "{}\n{}".format(opening_state, check.expect),
                 "1970-01-01T00:00:00+00:00",
             ),
         )

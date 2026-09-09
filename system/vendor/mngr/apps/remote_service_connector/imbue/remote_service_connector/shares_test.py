@@ -42,9 +42,7 @@ from imbue.remote_service_connector.testing import _make_share_test_client
 from imbue.remote_service_connector.testing import _share_headers
 from imbue.remote_service_connector.web import web_app
 
-# ---------------------------------------------------------------------------
 # Pure model
-# ---------------------------------------------------------------------------
 
 
 def test_derive_share_user_label_strips_hyphens_from_uuid() -> None:
@@ -210,9 +208,7 @@ def test_resolve_share_region_for_share_honors_preference_only_without_a_datacen
     assert resolve_share_region_for_share(None, None, None, _BOTH_REGIONS, _SHARE_STUB_HOST_ID) == "us1"
 
 
-# ---------------------------------------------------------------------------
 # Share CRUD endpoints
-# ---------------------------------------------------------------------------
 
 
 def test_create_share_returns_domain_endpoint_and_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -528,9 +524,7 @@ def test_create_share_ignores_retired_relays(monkeypatch: pytest.MonkeyPatch) ->
     assert body["relay_endpoints"] == [{"relay_id": _RELAY_ID_US1, "endpoint": _RELAY_ENDPOINT_US1}]
 
 
-# ---------------------------------------------------------------------------
 # Gateway assignment endpoint
-# ---------------------------------------------------------------------------
 
 
 def test_share_assignment_returns_endpoints_for_the_relay_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -632,9 +626,7 @@ def test_share_status_reports_empty_endpoints_when_the_region_lost_its_relays(
     assert body["relay_endpoints"] == []
 
 
-# ---------------------------------------------------------------------------
 # frps plugin auth endpoint
-# ---------------------------------------------------------------------------
 
 
 def _frps_auth_headers(secret: str) -> dict[str, str]:
@@ -1065,9 +1057,7 @@ def test_decide_frps_ping_hits_the_db_every_time_when_the_cache_is_disabled(
     assert lookup.call_count == 2
 
 
-# ---------------------------------------------------------------------------
 # Ping metrics aggregation and access-log suppression
-# ---------------------------------------------------------------------------
 
 
 def _make_aggregator(emitted: list[tuple[str, float, dict[str, str]]]) -> FrpsPingMetricsAggregator:
@@ -1246,9 +1236,7 @@ def test_app_shutdown_flushes_buffered_ping_metrics(monkeypatch: pytest.MonkeyPa
     assert parsed["tags"]["relay"] == _RELAY_ID_US1
 
 
-# ---------------------------------------------------------------------------
 # Workspace-keyed shares (minted share labels, hashed user segment)
-# ---------------------------------------------------------------------------
 
 _STUB_WORKSPACE_ID = "agent-" + "c" * 32
 

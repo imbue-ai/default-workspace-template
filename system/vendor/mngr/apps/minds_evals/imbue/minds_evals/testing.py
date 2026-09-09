@@ -8,6 +8,41 @@ from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds_evals import evidence_collection
+from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
+
+# The scheduled CI workflow. It hard-codes things this package also decides -- the Modal
+# environment prefix its sweep matches on, and the check-run JSON field names its Slack report
+# reads -- because a GitHub Actions workflow cannot import Python. Tests read it back to hold those
+# ends together, so they all name it from here rather than each spelling the path again.
+SCHEDULED_WORKFLOW_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[4] / ".github" / "workflows" / "minds-evals-scheduled.yml"
+)
+
+# Verbatim the CI_ENVIRONMENT_PREFIX env value in that workflow. Two tests in
+# cleanup_environments_test hold it in place -- one reads the workflow and compares, the other
+# builds an environment name the way a CI trial does and asserts this prefix selects it -- so every
+# test that needs the prefix takes it from here, and those two cover all of them.
+CI_SWEEP_PREFIX: Final[str] = "minds-staging-evals-ci-"
+
+# The MNGR_PREFIX the staging activation exports inside the box, which mngr's modal provider puts in
+# front of every user id it turns into an environment name.
+STAGING_MNGR_PREFIX: Final[str] = "minds-staging-"
+
+# An environment a developer's own run left behind: the eval namespace with no CI stamp in it. Every
+# sweep in the suite has to leave this one standing.
+DEVELOPER_ENVIRONMENT_NAME: Final[str] = "{}{}todo-app-envr-cafe1234".format(
+    STAGING_MNGR_PREFIX, EVAL_USER_ID_NAMESPACE
+)
+
+
+def expected_modal_environment_name(trial_name: str) -> str:
+    """The Modal environment `write_trial_dir` records for a trial, for a caller asserting on it.
+
+    Built here and used by the fixture itself, so an assertion cannot end up naming an environment
+    no trial in the fixture ever recorded.
+    """
+    return "{}{}{}".format(STAGING_MNGR_PREFIX, EVAL_USER_ID_NAMESPACE, trial_name)
 
 
 class LocalGitRepo(FrozenModel):
@@ -63,6 +98,24 @@ def make_local_git_repo(parent_dir: Path, repo_name: str, commit_count: int) -> 
     return LocalGitRepo(repo_dir=repo_dir, commit_shas=tuple(commit_shas))
 
 
+def tag_commit(repo_dir: Path, tag_name: str, commit_sha: str, *, is_annotated: bool = False) -> None:
+    """Point a tag at a commit. An annotated tag is a tag OBJECT with its own sha, so only that kind
+    exercises the peeling a ref resolver has to do to reach the commit."""
+    annotation_args = ["-a", "-m", "release {}".format(tag_name)] if is_annotated else []
+    subprocess.run(
+        # Signing is disabled per invocation for the same reason commits disable it: a developer's
+        # global tag.gpgsign would otherwise try to sign these throwaway tags and fail.
+        ["git", "-C", str(repo_dir), "-c", "user.email=test@test", "-c", "user.name=test", "-c", "tag.gpgsign=false"]
+        + ["tag", *annotation_args, tag_name, commit_sha],
+        check=True,
+    )
+
+
+def create_branch(repo_dir: Path, branch_name: str, commit_sha: str) -> None:
+    """Point a new branch at a commit, leaving the checked-out branch alone."""
+    subprocess.run(["git", "-C", str(repo_dir), "branch", branch_name, commit_sha], check=True)
+
+
 def program_block(program: str, *registrations: tuple[str, str]) -> str:
     """One supervisord `[program:*]` block that forwards a port for each (name, url) it registers."""
     forwards = " && ".join(
@@ -77,16 +130,18 @@ def program_block(program: str, *registrations: tuple[str, str]) -> str:
 TEMPLATE_SUPERVISORD_CONF: Final[str] = "".join(
     (
         program_block("system_interface", ("system_interface", "http://localhost:8000")),
-        "[program:terminal]\ncommand=bash system/apps/terminal/run_ttyd.sh\n\n",
+        "[program:chat]\ncommand=chat-app\n\n",
+        "[program:terminal]\ncommand=terminal-app\n\n",
         program_block("browser", ("browser", "http://localhost:8200")),
-        program_block("files", ("files", "http://localhost:8300")),
+        "[program:files]\ncommand=files-app\n\n",
         "[program:owner-exec]\ncommand=bash system/services/owner_exec/run.sh\n\n",
     )
 )
-TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interface", "browser", "files"})
-# The template apps only the registry half sees; the registry also marks `owner-exec` `internal`.
-SCRIPT_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "owner-exec"})
-TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SCRIPT_REGISTERED_APPS
+TEMPLATE_CONFIG_REGISTRATIONS: Final[frozenset[str]] = frozenset({"system_interface", "browser"})
+# The template apps that register from inside the program they run, which only the registry half
+# sees; the registry also marks `owner-exec` `internal`.
+SELF_REGISTERED_APPS: Final[frozenset[str]] = frozenset({"terminal", "files", "chat", "owner-exec"})
+TEMPLATE_PREEXISTING_APPS: Final[frozenset[str]] = TEMPLATE_CONFIG_REGISTRATIONS | SELF_REGISTERED_APPS
 
 # A workspace agent id in the shape the forward proxy routes on (`agent-<32 hex>`). Mixed digits
 # rather than one repeated character, so a wrong slice of it can never accidentally match.
@@ -118,6 +173,181 @@ def workspace_state_output(
         supervisord=supervisord,
         isolated_instances=isolated_instances,
     )
+
+
+# The structural gate criteria the verifier scores on every trial (tests/verifier/gates/checks.py).
+GATES_CRITERION_NAMES: Final[tuple[str, ...]] = (
+    "transcript_has_agent_reply",
+    "agent_engaged_substantively",
+    "all_turns_completed",
+    "not_timed_out",
+)
+
+
+def _exception_info(exception_type: str) -> dict[str, Any]:
+    return {
+        "exception_type": exception_type,
+        "exception_message": "the box never came up",
+        "exception_traceback": "",
+        "occurred_at": "2026-09-01T12:00:00+00:00",
+    }
+
+
+def _write_harbor_trial_result(
+    trial_dir: Path, job_dir: Path, case_id: str, exception_type: str, step_exception_type: str
+) -> None:
+    """harbor's own record of the trial. An exception at either level replaces the verifier result,
+    because a trial harbor could not run is never graded."""
+    trial_result: dict[str, Any] = {
+        "task_name": "minds-evals/{}".format(case_id),
+        "trial_name": trial_dir.name,
+        "trial_uri": trial_dir.as_uri(),
+        "task_id": {"path": "/tmp/minds-evals/datasets/small/{}".format(case_id)},
+        "task_checksum": "0" * 40,
+        "config": {
+            "task": {"path": "/tmp/minds-evals/datasets/small/{}".format(case_id)},
+            "trial_name": trial_dir.name,
+            "trials_dir": str(job_dir),
+        },
+        "agent_info": {"name": "minds-persona-driver", "version": "0.1.0"},
+        "verifier_result": {"rewards": {"gates": 1.0, "quality": 0.75, "reward": 0.75}},
+    }
+    if exception_type:
+        trial_result["exception_info"] = _exception_info(exception_type)
+        trial_result["verifier_result"] = None
+    if step_exception_type:
+        # harbor records a per-step failure on the step alone, leaving the trial-level
+        # exception_info unset -- which is why the run gate has to read both.
+        trial_result["step_results"] = [{"step_name": "agent", "exception_info": _exception_info(step_exception_type)}]
+        trial_result["verifier_result"] = None
+    (trial_dir / "result.json").write_text(json.dumps(trial_result, indent=2))
+
+
+def _write_agent_state(trial_dir: Path, case_id: str, test_state: str, is_environment_recorded: bool) -> None:
+    """The driver's own progress record, synced out of the box."""
+    state: dict[str, Any] = {
+        "eval_name": trial_dir.name,
+        "case_name": case_id,
+        "mngr_sha": "a" * 40,
+        "dwt_sha": "c" * 40,
+        "test_state": test_state,
+        "timed_out": test_state == "timed_out",
+    }
+    # An oracle trial writes a state but reaches no workspace, so the key is absent rather than
+    # empty -- the driver only ever adds it once it has named the environment it will create.
+    if is_environment_recorded:
+        state["modal_environment_name"] = expected_modal_environment_name(trial_dir.name)
+    (trial_dir / "agent" / "state.json").write_text(json.dumps(state))
+
+
+def _write_reward_details(
+    trial_dir: Path, test_state: str, failed_gate_names: tuple[str, ...], judge_raw_score: float
+) -> None:
+    """rewardkit's per-criterion breakdown, in both shapes it emits: one dict for a dimension that
+    yielded a single reward, and a list for one that yielded a judge alongside programmatic guards."""
+    (trial_dir / "verifier" / "reward-details.json").write_text(
+        json.dumps(
+            {
+                "gates": {
+                    "kind": "programmatic",
+                    "criteria": [
+                        {"name": name, "value": 0.0 if name in failed_gate_names else 1.0}
+                        for name in GATES_CRITERION_NAMES
+                    ],
+                },
+                "quality": [
+                    {"kind": "programmatic", "criteria": [{"name": "wordiness", "value": 1.0, "raw": True}]},
+                    {
+                        "kind": "llm",
+                        "criteria": [
+                            {"name": "conciseness", "value": (judge_raw_score - 1) / 9, "raw": judge_raw_score}
+                        ],
+                    },
+                ],
+                "timed_out": test_state == "timed_out",
+            }
+        )
+    )
+
+
+def _write_evidence_manifest(
+    trial_dir: Path, case_id: str, errored_entry_ids: tuple[str, ...], failed_entry_ids: tuple[str, ...]
+) -> None:
+    """The collector's record of what it measured. A `failed` entry is the workspace falling short
+    and a `error` entry is the harness failing to find out; only the second one the run gate charges
+    for, so both statuses belong in the fixtures that pin that split."""
+    (trial_dir / "agent" / "verification" / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "case_id": case_id,
+                "is_evidence_complete": not errored_entry_ids,
+                "entries": [
+                    {
+                        "entry_id": "app_registered",
+                        "check_class": "app",
+                        "status": CheckStatus.PASSED.value,
+                        "reason": "",
+                    },
+                    *(
+                        {
+                            "entry_id": entry_id,
+                            "check_class": "http",
+                            "status": CheckStatus.FAILED.value,
+                            "reason": "probe_returned_500",
+                        }
+                        for entry_id in failed_entry_ids
+                    ),
+                    *(
+                        {
+                            "entry_id": entry_id,
+                            "check_class": "http",
+                            "status": CheckStatus.ERROR.value,
+                            "reason": "probe_unavailable",
+                        }
+                        for entry_id in errored_entry_ids
+                    ),
+                ],
+            }
+        )
+    )
+
+
+def write_trial_dir(
+    job_dir: Path,
+    trial_name: str,
+    *,
+    case_id: str = "todo-app",
+    test_state: str = "finished",
+    failed_gate_names: tuple[str, ...] = (),
+    errored_entry_ids: tuple[str, ...] = (),
+    failed_entry_ids: tuple[str, ...] = (),
+    judge_raw_score: float = 8.0,
+    exception_type: str = "",
+    step_exception_type: str = "",
+    is_result_written: bool = True,
+    is_state_written: bool = True,
+    is_environment_recorded: bool = True,
+    is_manifest_written: bool = True,
+) -> Path:
+    """One finished trial's on-disk artifacts, in the layout harbor and the driver leave behind.
+
+    The keyword arguments reach combinations (an exception at either harbor level, a missing result
+    or state file) that only ever occur when something went wrong on Modal. A trial carrying an
+    exception gets no verifier output at all, because harbor never grades a trial it could not run.
+    """
+    trial_dir = job_dir / trial_name
+    (trial_dir / "agent" / "verification").mkdir(parents=True, exist_ok=True)
+    (trial_dir / "verifier").mkdir(parents=True, exist_ok=True)
+    if is_result_written:
+        _write_harbor_trial_result(trial_dir, job_dir, case_id, exception_type, step_exception_type)
+    if is_state_written:
+        _write_agent_state(trial_dir, case_id, test_state, is_environment_recorded)
+    if not exception_type and not step_exception_type:
+        _write_reward_details(trial_dir, test_state, failed_gate_names, judge_raw_score)
+    if is_manifest_written:
+        _write_evidence_manifest(trial_dir, case_id, errored_entry_ids, failed_entry_ids)
+    return trial_dir
 
 
 # A small common-transcript stream and the ATIF document mngr would build from it, in the shapes

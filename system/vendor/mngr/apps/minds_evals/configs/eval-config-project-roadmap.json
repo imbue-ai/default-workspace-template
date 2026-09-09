@@ -1,0 +1,86 @@
+{
+  "mngr_branch": "main",
+  "timeout_seconds": 7200,
+  "verification_timeout_seconds": 900,
+  "personas": [
+    {
+      "id": "project-roadmap",
+      "persona": "Head of product at a small startup. Non-technical, but knows their own projects well: they exported their company's Slack and Linear data and want a roadmap visualization that reflects the real workstreams in it.",
+      "reward_strategy": "final",
+      "steps": [
+        {
+          "name": "build-and-harden",
+          "files": [
+            {
+              "source": "datasets/project-roadmap-small/41e940fcd33540078ab77fd79f3b3943",
+              "upload_id": "41e940fcd33540078ab77fd79f3b3943"
+            }
+          ],
+          "prompts": [
+            "Can you visualize my product roadmap? I uploaded a pull of my company's Slack and Linear data, it's in /home/user/workspace/data/uploads/41e940fcd33540078ab77fd79f3b3943.",
+            {
+              "goal": "Get a visible app built from your uploaded data. Approve reasonable proposals along the way (a short 'looks good' is enough), and keep going until the agent tells you a running roadmap is ready to open, populated from your real workstreams rather than placeholders.",
+              "max_exchanges": 5
+            },
+            "This is great. Please harden it now. Poll for hardening completion: sleep 60s and check if it's finished, repeating until it is. Do not send me any message until it has finished.",
+            {
+              "goal": "Confirm that the hardening actually ran to completion and that the roadmap app still opens and works afterwards. Do not ask for new features.",
+              "max_exchanges": 3
+            }
+          ],
+          "expectations": {
+            "outcome": "A project roadmap web app, delivered as a running Minds app tab the client can open, populated from the client's uploaded Slack and Linear export (under data/uploads/41e940fcd33540078ab77fd79f3b3943) rather than placeholder content, with roadmap item details viewable in the UI. The hardening the client asked for ran to completion.",
+            "deliverable": {
+              "kind": "minds-app"
+            },
+            "ui_flows": [
+              {
+                "name": "roadmap-content",
+                "steps": "Open the app. Look over the roadmap items it shows.",
+                "expect": "The roadmap shows items drawn from the client's uploaded project data (engineering, design, and product workstreams), not placeholder or demo content."
+              }
+            ]
+          },
+          "min_reward": {
+            "gates": 1.0,
+            "outcome": 0.5
+          }
+        },
+        {
+          "name": "updated-data",
+          "files": [
+            {
+              "source": "datasets/project-roadmap-small/985e2d4f7eb948b3b45a8f0923521ab8",
+              "upload_id": "985e2d4f7eb948b3b45a8f0923521ab8"
+            }
+          ],
+          "prompts": [
+            "I pulled more data and put it at /home/user/workspace/data/uploads/985e2d4f7eb948b3b45a8f0923521ab8. Can you bring the roadmap up to date with it?",
+            {
+              "goal": "Confirm the roadmap now reflects the newer data pull (it covers later work, from mid-February through March) and that inspecting a roadmap item still works.",
+              "max_exchanges": 2
+            }
+          ],
+          "expectations": {
+            "outcome": "The running roadmap reflects the updated export under data/uploads/985e2d4f7eb948b3b45a8f0923521ab8: work from the newer pull (mid-February through March, for example the on-call playbook automation work tracked as ENG-902357) appears on the roadmap alongside or in place of the original items, and roadmap items remain inspectable.",
+            "deliverable": {
+              "kind": "minds-app"
+            },
+            "ui_flows": [
+              {
+                "name": "updated-content",
+                "steps": "Open the roadmap. Look once over the items it shows for work that only appears in the newer data pull, such as on-call playbook automation (ENG-902357, 'Surgical agentlet: AutoFlow for on-call playbook execution and contextual helpers') or other items dated mid-February through March. One look is enough; do not repeat a check that has already answered.",
+                "expect": "The roadmap includes work drawn from the newer pull, not only the items from the original upload."
+              },
+              {
+                "name": "drill-down",
+                "steps": "Interact with an item to see lower level details.",
+                "expect": "Interacting allows you to see more details than in the roadmap view."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

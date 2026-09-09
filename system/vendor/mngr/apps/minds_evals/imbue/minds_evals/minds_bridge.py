@@ -1,4 +1,4 @@
-"""Helpers that reach the box's Minds HTTP API and the workspace's system_interface through
+"""Helpers that reach the box's Minds HTTP API and the workspace's chat app through
 ``environment.exec`` (ported from the old harness's minds_client).
 
 Everything here runs commands inside the harbor environment (the box) or, bridged one level deeper
@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import tomllib
+from collections.abc import Mapping
 from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
@@ -27,6 +28,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
@@ -43,9 +45,9 @@ BOX_LOGS_DIR: Final[str] = "/logs/agent"
 BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
 BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
-# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
-# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
-# pinned mngr SHA, which predates them.
+# baked into the box image because the image is one build per mngr SHA, cached whole, and has to
+# stay byte-identical across a dataset -- so changing them would cost a full rebuild -- and because
+# the image is built from the pinned mngr SHA, which predates them.
 _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
@@ -66,9 +68,15 @@ SERVICE_LOG_TAIL_BYTES: Final[int] = 20_000
 # Read by the uploaded hooks; named here so the two sides cannot drift apart.
 PROXY_KEY_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_KEY"
 PROXY_USAGE_LOG_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_USAGE_LOG"
-# The workspace's own system_interface. Loopback, so it is reachable only from
-# inside the workspace sandbox, which is why it needs no authentication.
-WORKSPACE_SYSTEM_INTERFACE: Final[str] = "http://127.0.0.1:8000"
+# Every route the bridge calls (sign-in, create-chat, the agents listing, sends, events) is the
+# workspace's chat app's, which runs as its own program at its own port. Loopback, so it is
+# reachable only from inside the workspace sandbox, which is why it needs no authentication.
+# The port is the registry's to say: the row named `chat` in
+# `data/.state/apps.toml` carries the URL the app registered at startup, and the fallback is the
+# port the template's chat app defaults to, for a workspace whose registry has no row yet.
+WORKSPACE_APPS_REGISTRY: Final[str] = "data/.state/apps.toml"
+CHAT_APP_NAME: Final[str] = "chat"
+CHAT_APP_FALLBACK_URL: Final[str] = "http://127.0.0.1:8010"
 
 # The workspace's own claude sign-in API -- the endpoints the product's in-UI login modal posts to.
 # Authenticating through these rather than through the create-time host env keeps the workspace in
@@ -175,6 +183,32 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
     return activation_env
 
 
+# mngr's modal provider truncates the environment name it derives to this many characters
+# (MODAL_NAME_MAX_LENGTH in mngr_modal, which this project does not depend on). Truncation is a
+# lossy left-slice with no disambiguating hash, so a truncated name is a name that can collide with
+# another trial's -- and a name nothing here could reconstruct afterwards to clean up.
+MODAL_ENVIRONMENT_NAME_MAX_LENGTH: Final[int] = 64
+
+
+@pure
+def derive_modal_environment_name(activation_env: Mapping[str, str], user_id: str) -> str:
+    """The Modal environment mngr's modal provider will put this trial's workspaces in.
+
+    Derived here rather than read back from Modal because the environment is created lazily, deep
+    inside the first workspace create: a trial that dies before then still has to leave the name
+    behind for cleanup to act on. It is the same concatenation mngr makes.
+    """
+    environment_name = "{}{}".format(activation_env["MNGR_PREFIX"], user_id)
+    if len(environment_name) > MODAL_ENVIRONMENT_NAME_MAX_LENGTH:
+        raise ModalNameBudgetError(
+            "the Modal environment name {!r} is {} characters and mngr would truncate it to {}; "
+            "shorten the user id budget so the recorded name stays the created one".format(
+                environment_name, len(environment_name), MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+            )
+        )
+    return environment_name
+
+
 @pure
 def build_box_env(
     *,
@@ -276,7 +310,7 @@ def describe_agents_listing(body: Any) -> str:
     """
     agents = body.get("agents") if isinstance(body, dict) else None
     if not isinstance(agents, list):
-        return "nothing (the system_interface is unreachable or answered no agents list)"
+        return "nothing (the chat app is unreachable or answered no agents list)"
     if not agents:
         return "an empty agents list"
     return ", ".join(
@@ -460,14 +494,14 @@ async def run_in_workspace(
 
 
 class WorkspaceResponse(FrozenModel):
-    """One bridged HTTP call to the workspace's system_interface."""
+    """One bridged HTTP call to the workspace's chat app."""
 
-    # Status 0 is the one callers may retry -- the bridged exec failed, or the system_interface is
-    # not listening yet. Every other status is the endpoint's own answer, refusals included.
+    # Status 0 is the one callers may retry -- the bridged exec failed, or the chat app is not
+    # listening yet. Every other status is the endpoint's own answer, refusals included.
     status: int = Field(description="The response status; 0 when the call never reached the endpoint")
     body: Any = Field(default=None, description="The parsed JSON body; None when there was none or it did not parse")
     # A body that did not parse came from somewhere other than the endpoint, whose own error shapes
-    # are all JSON -- an unhandled traceback page, or something in front of the system_interface.
+    # are all JSON -- an unhandled traceback page, or something in front of the chat app.
     # That is when a failed trial most needs the text, so it is kept rather than dropped.
     text: str = Field(default="", description="The raw body as captured, whether or not it parsed")
 
@@ -496,6 +530,40 @@ def parse_curl_response(output: str) -> WorkspaceResponse:
         return WorkspaceResponse(status=status, text=head)
 
 
+# Reads the chat app's URL out of the workspace's registry, printing nothing when the registry or
+# the row is missing (a workspace still booting), so the fallback takes over. Runs inside the
+# workspace in the same exec as the curl that uses it: one bridged call per request, and the URL is
+# always the one the app registered most recently. The registry path is relative to the exec's cwd,
+# which `mngr exec` sets to the workspace agent's work_dir -- the repo root -- the same way the
+# template's own forward_port.py reads it.
+_READ_CHAT_URL_PROGRAM: Final[str] = (
+    "import tomllib\n"
+    "rows = tomllib.load(open({registry!r}, 'rb')).get('apps', [])\n"
+    "print(next((row.get('url', '') for row in rows if row.get('name') == {name!r}), ''), end='')\n"
+).format(registry=WORKSPACE_APPS_REGISTRY, name=CHAT_APP_NAME)
+
+
+@pure
+def chat_url_shell_snippet() -> str:
+    """A shell snippet that leaves the chat app's URL in ``$chat_url``: the registry's, else the fallback."""
+    return 'chat_url=$(python3 -c {program} 2>/dev/null); [ -n "$chat_url" ] || chat_url={fallback}'.format(
+        program=shlex.quote(_READ_CHAT_URL_PROGRAM), fallback=shlex.quote(CHAT_APP_FALLBACK_URL)
+    )
+
+
+@pure
+def workspace_curl_command(url_path: str, body_json: str | None) -> str:
+    """The shell command one bridged call runs: resolve the chat app's URL, then curl the path on it."""
+    parts = ["curl", "-s", "--max-time", "30", "-w", "\\n%{http_code}"]
+    if body_json is not None:
+        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
+    curl = " ".join(shlex.quote(part) for part in parts)
+    # The URL is the one shell word left unquoted: it is the variable the snippet just set.
+    return '{snippet}; {curl} "$chat_url"{path}'.format(
+        snippet=chat_url_shell_snippet(), curl=curl, path=shlex.quote(url_path)
+    )
+
+
 async def workspace_curl(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -503,13 +571,9 @@ async def workspace_curl(
     url_path: str,
     body_json: str | None,
 ) -> WorkspaceResponse:
-    """HTTP against the workspace-local system_interface, bridged through mngr exec, keeping the
-    status: an endpoint that answers 4xx has to be told apart from one that is not up yet."""
-    parts = ["curl", "-s", "--max-time", "30", "-w", "\\n%{http_code}"]
-    if body_json is not None:
-        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
-    parts.append("{}{}".format(WORKSPACE_SYSTEM_INTERFACE, url_path))
-    inner_command = " ".join(shlex.quote(part) for part in parts)
+    """HTTP against the workspace-local chat app, bridged through mngr exec, keeping the status: an
+    endpoint that answers 4xx has to be told apart from one that is not up yet."""
+    inner_command = workspace_curl_command(url_path, body_json)
     is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
     if not is_success:
         # Whatever the failed exec left behind: mngr's own failure detail when the bridge could not
@@ -528,8 +592,8 @@ async def workspace_curl_json(
     url_path: str,
     body_json: str | None,
 ) -> Any | None:
-    """The parsed JSON body of a bridged system_interface call, or None when there was none -- what
-    the pollers read, which treat any answer alike."""
+    """The parsed JSON body of a bridged chat app call, or None when there was none -- what the
+    pollers read, which treat any answer alike."""
     response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
     return response.body
 
@@ -617,7 +681,7 @@ async def create_chat_agent(
     chat that could never take a turn. An empty ``account_id`` leaves the choice to the workspace,
     which takes the account it used most recently, or its oldest one when that is no longer usable.
 
-    Only a call that never reached the endpoint is retried, since that is the system_interface still
+    Only a call that never reached the endpoint is retried, since that is the chat app still
     coming up. A refusal is final -- except a name collision, which says a chat under that name is
     already there and is answered by resolving it from the listing.
     """
@@ -708,7 +772,7 @@ async def wait_for_auth_endpoint(
     poll_seconds: float,
 ) -> bool:
     """Block until the workspace's claude-auth endpoint answers, so credentials are not posted at a
-    system_interface that is still coming up. This is a real readiness gate for auth, which the
+    chat app that is still coming up. This is a real readiness gate for auth, which the
     turn loop otherwise lacks -- without it a failure surfaces only as an agent that replies with
     'not logged in' text.
 
@@ -760,7 +824,7 @@ async def authenticate_workspace(
     body = response.body
     if not isinstance(body, dict):
         # The endpoint's own answers are all JSON, so anything else came from somewhere else -- an
-        # unhandled traceback page, or something in front of the system_interface. It is the only
+        # unhandled traceback page, or something in front of the chat app. It is the only
         # account of the failure a trial log would otherwise get, so it is reported verbatim.
         logger.error(
             "The workspace's sign-in endpoint answered nothing readable (HTTP {}): {}",
@@ -851,8 +915,9 @@ async def start_reverse_tunnel(
 ) -> None:
     """Upload the tunnel holder and start it in the background in the box.
 
-    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
-    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    Uploaded at run time rather than baked into the box image: the image is one build per mngr SHA,
+    cached whole, and has to stay byte-identical across a dataset, so shipping this in it would cost
+    a full rebuild.
     """
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
@@ -882,8 +947,8 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 
     Both land in the target's directory, because the script imports the protocol as a plain module
     beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
+    reverse-tunnel holder is: the image is one build per mngr SHA, cached whole, and has to stay
+    byte-identical across a dataset, so a change here would otherwise cost a full rebuild.
     """
     box_dir = target_path.rsplit("/", 1)[0]
     for filename, destination in (
@@ -1143,6 +1208,12 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
 # The workspace home tree, which contains the mngr host dir -- code, agent
 # state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
+# Where mngr rescues a destroyed agent's transcripts to. The agent side of the workspace runs as root,
+# so its own host dir is /root/.mngr, outside the home tree above -- and a worker the lead destroys
+# after merging (which the launch-task flow invites) leaves its conversation ONLY here. Without it a
+# hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
+# survive in the home tree, its trajectory does not.
+PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
 
 
 async def snapshot_workspace(
@@ -1166,8 +1237,18 @@ async def snapshot_workspace(
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    tar_command = "tar czf {} {} -C {} . 2>/dev/null || true".format(
-        workspace_tar, exclude_flags, WORKSPACE_BACKUP_ROOT
+    # The preserved dir is added as its own -C segment, and only when it exists: naming a missing path
+    # makes tar exit nonzero and the snapshot is skipped entirely. Its entries land under
+    # `root/.mngr/preserved/`, distinct from the home tree's `./`.
+    tar_command = (
+        "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
+        "tar czf {tar} {excludes} -C {root} . $preserved 2>/dev/null || true"
+    ).format(
+        preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
+        preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        tar=workspace_tar,
+        excludes=exclude_flags,
+        root=WORKSPACE_BACKUP_ROOT,
     )
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:
