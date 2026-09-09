@@ -155,7 +155,7 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 
 ### `system/supervisord.conf` and `system/services/oom_priority`
 
-- `[program:agent-observer]`: `command=python3 system/services/oom_priority/bin/oom_tag_service.py agent-observer bash -c "cd \"$MNGR_AGENT_WORK_DIR\" && exec mngr observe --quiet"`, `priority` before the chat, the standard log settings; the earlyoom note lists it in the shed order.
+- `[program:agent-observer]`: `command=python3 system/services/oom_priority/bin/oom_tag_service.py agent-observer bash -c "cd \"$MNGR_AGENT_WORK_DIR\" 2>/dev/null || echo '...' >&2; exec mngr observe --quiet"` -- the cd is best-effort, since a work dir that is unset or gone would otherwise fail the command outright and leave supervisord respawning something that never observes; `priority` before the chat, the standard log settings; the earlyoom note lists it in the shed order.
 - `bands.py`: `SERVICE_BANDS["agent-observer"] = 24`, just below the chat, with a comment: shedding it blinds every chat's agent view at once until supervisord brings it back while freeing almost nothing, whereas a shed chat app comes back to a stream the observer kept writing. The built-in service bands are strictly ordered and distinct (`bands_test.py`), so it cannot share the chat's 25; the observer takes its place in the documented order.
 - `system/services/README.md`: the program.
 
