@@ -316,21 +316,28 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
 
 
+def _message_delivery_events_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_id: str) -> Path:
+    """Point the host dir at ``tmp_path`` and return where mngr appends ``agent_id``'s
+    message-delivery events. The directory exists; the file is the caller's to write."""
+    host_dir = tmp_path / "host"
+    events_path = host_dir / "agents" / agent_id / "events" / "messages" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    return events_path
+
+
 def test_a_torn_event_line_does_not_hide_a_whole_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """mngr appends the message-delivery events a line at a time from another process, so a
     read taken right after a create can catch a half-written line. This runs on the create
     path, where a raised JSONDecodeError would report a chat that was created perfectly well
     as a failed one -- and where missing the whole line after it would cost the workspace its
     one `/welcome`."""
-    host_dir = tmp_path / "host"
-    events_path = host_dir / "agents" / "chat-1" / "events" / "messages" / "events.jsonl"
-    events_path.parent.mkdir(parents=True)
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
     events_path.write_text(
         '{"type": "some_other_delivery_event", "detail": "tor\n'
         + json.dumps({"type": "relaxed_send_unconfirmed", "detail": "no submission evidence"})
         + "\n"
     )
-    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
 
     assert has_undelivered_message_send("chat-1") is True
 
@@ -341,13 +348,8 @@ def test_an_agent_that_rejected_the_message_counts_as_undelivered(
     """A rejected send is reported to the caller as a successful one, exactly like an
     unwitnessed one. The greeting did not happen either way, so the claim it was spending
     has to come back either way."""
-    host_dir = tmp_path / "host"
-    events_path = host_dir / "agents" / "chat-1" / "events" / "messages" / "events.jsonl"
-    events_path.parent.mkdir(parents=True)
-    events_path.write_text(
-        json.dumps({"type": "send_rejected_by_agent", "detail": "agent rejected the message"}) + "\n"
-    )
-    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    events_path.write_text(json.dumps({"type": "send_rejected_by_agent", "detail": "agent rejected it"}) + "\n")
 
     assert has_undelivered_message_send("chat-1") is True
 
@@ -355,8 +357,7 @@ def test_an_agent_that_rejected_the_message_counts_as_undelivered(
 def test_a_delivered_send_records_nothing_to_find(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The ordinary case: a send that landed writes no delivery event at all, so a create
     that greeted its chat keeps the claim it spent."""
-    host_dir = tmp_path / "host"
-    (host_dir / "agents" / "chat-1" / "events" / "messages").mkdir(parents=True)
-    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    assert not events_path.exists()
 
     assert has_undelivered_message_send("chat-1") is False
