@@ -1,5 +1,6 @@
 """Tests for agent_discovery module."""
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import discover_agents
+from imbue.chat.agent_discovery import has_unconfirmed_message_send
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
@@ -312,3 +314,22 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def test_a_torn_event_line_does_not_hide_a_whole_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """mngr appends the message-delivery events a line at a time from another process, so a
+    read taken right after a create can catch a half-written line. This runs on the create
+    path, where a raised JSONDecodeError would report a chat that was created perfectly well
+    as a failed one -- and where missing the whole line after it would cost the workspace its
+    one `/welcome`."""
+    host_dir = tmp_path / "host"
+    events_path = host_dir / "agents" / "chat-1" / "events" / "messages" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    events_path.write_text(
+        '{"type": "send_rejected_by_agent", "detail": "tor\n'
+        + json.dumps({"type": "relaxed_send_unconfirmed", "detail": "no submission evidence"})
+        + "\n"
+    )
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+
+    assert has_unconfirmed_message_send("chat-1") is True
