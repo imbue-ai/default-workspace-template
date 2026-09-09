@@ -65,14 +65,14 @@ afterEach(() => {
 describe("UpdateNoticeBand", () => {
   it("renders nothing without a notice, or for an app the apply did not touch", () => {
     expect(mountBand("chat").root.querySelector(".update-notice-band")).toBeNull();
-    applyUpdateNotice(noticeWire({ apps: ["chat"] }));
+    applyUpdateNotice(noticeWire(["chat"]));
     expect(mountBand("terminal").root.querySelector(".update-notice-band")).toBeNull();
     expect(mountBand("chat").root.querySelector(".update-notice-band")).not.toBeNull();
   });
 
   it("offers the two verbs on an open notice, and Everything seems good confirms it", async () => {
     const fetchMock = stubFetch();
-    applyUpdateNotice(noticeWire({ apps: ["chat"] }));
+    applyUpdateNotice(noticeWire(["chat"]));
     const { root } = mountBand("chat");
     expect(root.querySelector(".update-notice-band")?.textContent).toContain(OPEN_NOTICE_TEXT);
     expect(root.querySelector(".update-notice-rollback")).not.toBeNull();
@@ -85,7 +85,7 @@ describe("UpdateNoticeBand", () => {
 
   it("shows the shell's refusal in the band and keeps the verbs", async () => {
     stubFetch(403, "This is a preview of a proposed change; it cannot change the live workspace.");
-    applyUpdateNotice(noticeWire({ apps: ["chat"] }));
+    applyUpdateNotice(noticeWire(["chat"]));
     const { root, redraw } = mountBand("chat");
 
     click(root, ".update-notice-confirm");
@@ -98,7 +98,7 @@ describe("UpdateNoticeBand", () => {
 
   it("asks before rolling back, naming the apps and the programs, then posts the rollback", async () => {
     const fetchMock = stubFetch(202, "The rollback has started.");
-    applyUpdateNotice(noticeWire({ apps: ["chat", "system_interface"], programs: ["chat", "system_interface"] }));
+    applyUpdateNotice(noticeWire(["chat", "system_interface"]));
     const { root, redraw } = mountBand("chat");
 
     click(root, ".update-notice-rollback");
@@ -126,7 +126,7 @@ describe("UpdateNoticeBand", () => {
   });
 
   it("warns in the dialog when the rollback leaves the restart to an agent", () => {
-    applyUpdateNotice(noticeWire({ apps: ["chat"], needs_services_restart: true }));
+    applyUpdateNotice(noticeWire(["chat"], { needs_services_restart: true }));
     const { root, redraw } = mountBand("chat");
     click(root, ".update-notice-rollback");
     redraw();
@@ -135,12 +135,12 @@ describe("UpdateNoticeBand", () => {
 
   it("shows a running rollback's progress with no verbs, then the outcome with Close", async () => {
     const fetchMock = stubFetch();
-    applyUpdateNotice(noticeWire({ apps: ["chat"], progress: "Restoring the previous version" }));
+    applyUpdateNotice(noticeWire(["chat"], { progress: "Restoring the previous version" }));
     const { root, redraw } = mountBand("chat");
     expect(root.querySelector(".update-notice-band")?.textContent).toContain("Restoring the previous version");
     expect(root.querySelector("button")).toBeNull();
 
-    applyUpdateNotice(noticeWire({ apps: ["chat"], outcome: "Rolled back to the previous version." }));
+    applyUpdateNotice(noticeWire(["chat"], { outcome: "Rolled back to the previous version." }));
     redraw();
     expect(root.querySelector(".update-notice-band")?.textContent).toContain("Rolled back to the previous version.");
     expect(root.querySelector(".update-notice-rollback")).toBeNull();
@@ -158,7 +158,7 @@ describe("UpdateNoticeBanner", () => {
     m.render(root, m(UpdateNoticeBanner));
     expect(root.querySelector(".update-notice-banner")).toBeNull();
 
-    applyUpdateNotice(noticeWire({ apps: ["system_interface"] }));
+    applyUpdateNotice(noticeWire(["system_interface"]));
     m.render(root, m(UpdateNoticeBanner));
     expect(root.querySelector(".update-notice-banner")?.textContent).toContain(OPEN_SHELL_NOTICE_TEXT);
   });
@@ -185,7 +185,7 @@ describe("IframePanel with the notice", () => {
     expect(frame).not.toBeNull();
     expect(root.querySelector(".update-notice-band")).toBeNull();
 
-    applyUpdateNotice(noticeWire({ apps: ["chat"] }));
+    applyUpdateNotice(noticeWire(["chat"]));
     render();
 
     expect(root.querySelector(".update-notice-band")).not.toBeNull();

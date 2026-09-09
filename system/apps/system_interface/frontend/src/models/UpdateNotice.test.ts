@@ -19,7 +19,7 @@ describe("the update notice over the socket", () => {
     expect(getUpdateNotice()).toBeNull();
     dispatchSocketEventForTesting({
       type: "update_notice_changed",
-      notice: noticeWire({ apps: ["chat", "terminal"] }),
+      notice: noticeWire(["chat", "terminal"]),
     });
     expect(getUpdateNotice()?.apps).toEqual(["chat", "terminal"]);
     expect(getUpdateNotice()?.drivenBy).toBe("mngr/update-widgets");
@@ -28,19 +28,22 @@ describe("the update notice over the socket", () => {
   });
 
   it("answers only for the apps the apply touched", () => {
-    dispatchSocketEventForTesting({ type: "update_notice_changed", notice: noticeWire({ apps: ["chat"] }) });
+    dispatchSocketEventForTesting({ type: "update_notice_changed", notice: noticeWire(["chat"]) });
     expect(updateNoticeForApp("chat")).not.toBeNull();
     expect(updateNoticeForApp("terminal")).toBeNull();
     expect(updateNoticeForApp("system_interface")).toBeNull();
   });
 
   it("tells a running rollback from a settled one", () => {
-    dispatchSocketEventForTesting({ type: "update_notice_changed", notice: noticeWire({ progress: "Restarting" }) });
+    dispatchSocketEventForTesting({
+      type: "update_notice_changed",
+      notice: noticeWire([], { progress: "Restarting" }),
+    });
     expect(isRollbackRunning(getUpdateNotice()!)).toBe(true);
     expect(isNoticeSettled(getUpdateNotice()!)).toBe(false);
     dispatchSocketEventForTesting({
       type: "update_notice_changed",
-      notice: noticeWire({ outcome: "Rolled back to the previous version." }),
+      notice: noticeWire([], { outcome: "Rolled back to the previous version." }),
     });
     expect(isRollbackRunning(getUpdateNotice()!)).toBe(false);
     expect(isNoticeSettled(getUpdateNotice()!)).toBe(true);
