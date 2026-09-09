@@ -259,13 +259,21 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
-  /** The pointer has left the card or the flyout.
+  /** The pointer has left the card or the flyout. Two things follow.
    *
-   *  A flyout opened by hover has to close when the hover ends -- otherwise it hangs over the
-   *  transcript until something is clicked, which is exactly what a hover menu is supposed to
-   *  spare the user. The CARD is a different matter: it was opened by a click, so it takes a
-   *  click to dismiss, and the pointer wandering off does not count. */
-  function scheduleStackLeave(): void {
+   *  Nothing it was about to open still opens. Sweeping up from the chip enters the card at
+   *  the BOTTOM and leaves at the TOP, so the Provider row is the last one the pointer touches
+   *  on the way out -- and without this its flyout appeared `SUBMENU_HOVER_DELAY_MS` later,
+   *  with the pointer already somewhere up the transcript. A hover that the pointer did not
+   *  stay for is not an intent to open.
+   *
+   *  And an open flyout follows the pointer out, because a menu opened by hover has to be
+   *  dismissed by hover, or it hangs over the transcript until something is clicked -- which is
+   *  exactly what a hover menu is supposed to spare the user. The CARD is a different matter:
+   *  it was opened by a click, so it takes a click to dismiss, and drifting off does not
+   *  count. */
+  function handleStackLeave(): void {
+    cancelHoverIntent();
     if (flyout === null) return;
     cancelStackLeave();
     stackLeaveTimer = window.setTimeout(() => {
@@ -666,7 +674,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           cancelHoverIntent();
           clearSafeApex();
         },
-        onmouseleave: scheduleStackLeave,
+        onmouseleave: handleStackLeave,
       },
       children,
     );
@@ -810,6 +818,27 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // Loading and empty each draw a single line where the list would be.
     const rowCount = loading || visible.length === 0 ? 1 : visible.length;
     return flyoutShell(rowCount, hasSearchField, [
+      // ABOVE the list: the field is where the pointer arrives and where the typing starts, so
+      // it sits at the head of the flyout rather than under a list it filters. It stays put
+      // while the list scrolls beneath it.
+      //
+      // The shared input recipe, with the magnifier laid over its left padding: the field owns
+      // its own frame and focus ring, so nothing here re-styles either.
+      hasSearchField
+        ? m("div", { class: css.SEARCH_WRAP }, [
+            m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
+            m("input", {
+              class: inputClass({ extra: css.SEARCH_INPUT_EXTRA }),
+              type: "text",
+              placeholder: "Search models",
+              value: modelQuery,
+              oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
+              oninput: (event: Event) => {
+                modelQuery = (event.target as HTMLInputElement).value;
+              },
+            }),
+          ])
+        : null,
       // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
       // that mixes the two, and it throws during the DOM diff rather than at build time.
       m(
@@ -846,27 +875,6 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 );
               }),
       ),
-      // BELOW the list. A long catalog's flyout is the one that slides down to the bottom of
-      // the window, so its foot is the edge nearest the composer the pointer came from -- and
-      // the field stays put there while the list scrolls above it.
-      //
-      // The shared input recipe, with the magnifier laid over its left padding: the field owns
-      // its own frame and focus ring, so nothing here re-styles either.
-      hasSearchField
-        ? m("div", { class: css.SEARCH_WRAP }, [
-            m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
-            m("input", {
-              class: inputClass({ extra: css.SEARCH_INPUT_EXTRA }),
-              type: "text",
-              placeholder: "Search models",
-              value: modelQuery,
-              oncreate: (inputVnode: m.VnodeDOM) => (inputVnode.dom as HTMLInputElement).focus(),
-              oninput: (event: Event) => {
-                modelQuery = (event.target as HTMLInputElement).value;
-              },
-            }),
-          ])
-        : null,
     ]);
   }
 
@@ -977,7 +985,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           // The other half of the stack, for the same leave rule: moving between the card and
           // its flyout is not leaving, but moving off both of them is.
           onmouseenter: cancelStackLeave,
-          onmouseleave: scheduleStackLeave,
+          onmouseleave: handleStackLeave,
         },
         m("div", { class: css.CARD_INNER }, [
           menuRow({
