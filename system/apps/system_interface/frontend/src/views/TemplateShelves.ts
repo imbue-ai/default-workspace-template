@@ -22,14 +22,9 @@ const RAIL_ARROW_GLYPH_SIZE = 20;
 // A card is sized so the rail shows exactly three and a half: with three 24px gaps before the
 // half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
 //
-// Under 620px of PANE that fraction is too thin to read a title in, so the rail drops to two and
-// a half. Same arithmetic, but two gaps rather than three and the gap itself tightens to 16px
-// with it, which is why the subtrahend changes too. The steps are container queries, like the
-// rest of the page: this is a dock panel, and a media query would measure the window instead.
-//
-// Two and a half runs out in turn. It hands a card about 150px at a 440px pane, which is a 100px
-// drawing with a title truncated under it -- so from there the rail shows one and a half, one gap
-// before the half, and the card goes back to a size its art and title can use.
+// Then two and a half, then one and a half as the pane narrows, each too thin to read a title in
+// by the step below it. The subtrahend tracks both the gap count and the gap itself, which
+// tightens to 16px at the same step. Container queries, like the rest of the page.
 const CARD_WIDTH_CLASS =
   "w-[calc((100%-72px)/3.5)] @max-[620px]:w-[calc((100%-32px)/2.5)] @max-[440px]:w-[calc((100%-16px)/1.5)]";
 
@@ -119,8 +114,8 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   // Each rail's last measured extent, by shelf key: what decides which paging arrows it shows.
   const railExtentByShelf = new Map<string, RailExtent>();
   // Where each rail's card drawings are centred, in pixels down from the row's top: what puts the
-  // paging arrows level with the drawings instead of with the titles underneath them. It has to be
-  // measured, because a card's width (and so its 3:2 drawing's height) follows the rail's own.
+  // paging arrows level with the drawings rather than the titles. It has to be measured, because a
+  // card's width -- and so its 3:2 drawing's height -- follows the rail's own.
   const artCentreByShelf = new Map<string, number>();
 
   function measured(rail: HTMLElement): RailExtent {
@@ -168,21 +163,13 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   }
 
   /**
-   * A paging arrow. The TARGET is the whole sliver beside the rail, the full height of the row, so
-   * paging costs no aim; what the pointer LIGHTS UP is only the circle inside it, level with the
-   * card drawings. A big invisible target with a small visible control is why this is a plain
-   * button and not the shared recipe: the recipe fixes a button's size, fill and radius, and here
-   * those belong to the circle rather than to the thing being clicked.
+   * A paging arrow. The TARGET is the whole sliver, the full height of the row; what LIGHTS UP is
+   * only the circle inside it. That split is why this is a plain button and not the shared recipe,
+   * which fixes a button's size, fill and radius -- here those belong to the circle, not to the
+   * thing being clicked. The focus ring goes on the circle for the same reason.
    *
-   * The circle is pinned to the sliver's outer edge, which is as far out as the page goes, and
-   * hangs a few pixels past the sliver's inner one. What it hangs over is the scroller's padding,
-   * which is empty while the rail is at rest -- the cards stop 8px clear of it -- and that padding
-   * is also what keeps a hovered card at either end from being clipped (see the row below). A card
-   * dragged freely with the trackpad can pass under that overhang; a paged one cannot, since the
-   * scroll padding lands it at the same place the cards rest.
-   *
-   * The focus ring goes on the circle too -- the sliver is tall enough that ringing it would read
-   * as a frame around the whole rail.
+   * The circle hangs a few pixels past the sliver's inner edge, over the scroller's padding, which
+   * no card occupies while the rail is at rest.
    */
   function railArrow(shelf: ResolvedShelf, direction: -1 | 1, artCentre: number, canPage: boolean): m.Vnode {
     const isRight = direction === 1;
@@ -237,19 +224,14 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
   }
 
   /**
-   * The soft edge on an end that has more rail past it: an overlay in the page's own colour, laid
-   * over the scroller's edge and faded out inwards. It is an element rather than a mask on the
-   * scroller so that showing and hiding it is opacity, and it takes no pointer events, so the rail
-   * still scrolls and the cards still take clicks underneath it. Its ramp is in style.css, where
-   * the reasoning about it lives; the width is the same 30px at both ends.
+   * The soft edge on an end that has more rail past it. Its ramp is in style.css, where the
+   * reasoning about it lives; it takes no pointer events, so the rail still scrolls underneath.
    *
-   * It has to sit ABOVE the cards and BELOW the arrows, and both halves of that need saying out
-   * loud with a z-index rather than left to paint order. A hovered card's drawing takes a scale,
-   * and a transform makes an element paint with the positioned ones, so DOM order alone put a
-   * lifted card over the overlay and cut it off with a hard edge; meanwhile the arrow's circle
-   * hangs a few pixels back past its sliver, into the strip where this overlay is at its most
-   * opaque, so the overlay must lose to that. Hence RAIL_FADE_LAYER between the two, inside the
-   * row's own isolated stacking context so none of it leaks into the page.
+   * It has to sit ABOVE the cards and BELOW the arrows, which paint order cannot express: a
+   * hovered card takes a scale, and a transform makes an element paint with the positioned ones,
+   * so DOM order alone put a lifted card over the overlay and cut it off with a hard edge -- while
+   * the arrow's circle hangs back into the overlay's most opaque strip and has to stay above it.
+   * Hence RAIL_FADE_LAYER between the two.
    */
   function railFade(isEnd: boolean, isShown: boolean): m.Vnode {
     return m("div", {
@@ -270,30 +252,22 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
     const paging = railPaging(railExtentByShelf.get(shelf.key) ?? { scrollLeft: 0, clientWidth: 0, scrollWidth: 0 });
     return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
       m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
-      // The row hangs its slivers out past the page column, so the arrows sit in the page's margin
-      // and the cards still line up under the heading: -mx-6 back, w-5 slivers and the scroller's
-      // px-3 forward leave the cards at the heading's own px-2. -mx-6 is also the most the page
-      // can give, being exactly the launcher's own padding; past that the arrows would fall
-      // outside the scroll box and raise a scrollbar.
+      // The row hangs its slivers out past the page column so the arrows sit in the page's margin:
+      // -mx-6 back, w-5 slivers and the scroller's px-3 forward leave the cards at the heading's
+      // own px-2. -mx-6 is the most the page can give, being exactly the launcher's padding; past
+      // that the arrows fall outside the scroll box and raise a scrollbar.
       //
-      // That fixes the budget at 32px, and the scroller's share of it is what keeps a hovered card
-      // whole: it clips at its padding edge, so a lifted card at either end of the rail loses
-      // whatever grows past that. The 2% growth costs ~2px and the shadow reaches ~6px (a 12px
-      // blur), so 8px only just covered it and trimmed the shadow's last of it; 12px clears both
-      // with room to spare. The arrows keep their 24px circle by giving up sliver width instead:
-      // the circle hangs 4px past its 20px sliver, over the scroller's padding, which no card
-      // occupies while the rail is at rest.
-      // ``isolate`` keeps the row's three layers (cards, fade, arrows) to itself, so the z-indexes
-      // they use to order themselves cannot reach anything else on the page.
+      // So sliver and scroller padding share a fixed 32px, and the scroller's share is what keeps
+      // a hovered card whole -- it clips at its padding edge, and a lifted card needs ~2px for the
+      // growth plus ~6px of shadow reach. ``isolate`` keeps the row's three layers to itself.
       m("div", { class: "new-tab-template-rail-row relative isolate -mx-6 mt-2 flex" }, [
         railFade(false, paging.canPageLeft),
         railFade(true, paging.canPageRight),
         railGutter(shelf, -1, paging.canPageLeft),
         // The scroller lays the cards out itself rather than wrapping a flex row, because that is
         // what makes its trailing padding real: a scroll container in block layout leaves its
-        // end-side padding out of its scrollable extent, so the last card came to rest flush
-        // against the edge and had its lift clipped there however much padding was asked for. A
-        // flex scroll container keeps it, and both ends clear alike.
+        // end-side padding out of its scrollable extent, so the last card rests flush against the
+        // edge and has its lift clipped there however much padding is asked for.
         m(
           "div",
           {
