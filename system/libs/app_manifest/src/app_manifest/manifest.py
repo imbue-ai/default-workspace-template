@@ -86,11 +86,11 @@ def _preview_placeholders(text: str) -> list[tuple[str, str | None]]:
 class PreviewSpec(FrozenModel):
     """How a throwaway instance of the app boots for a preview: the manifest's ``[preview]`` table."""
 
-    command: tuple[NonEmptyStr, ...] = Field(default=(), description="The launch argv; empty runs the app's program")
-    ports: tuple[PreviewName, ...] = Field(default=(MAIN_PORT_NAME,), description="The named free ports; main is always one")
+    command: tuple[NonEmptyStr, ...] = Field(default=(), description="The launch argv; empty runs the app's program as its console script")
+    ports: tuple[PreviewName, ...] = Field(default=(MAIN_PORT_NAME,), description="The named free ports the instance is given; main is always one")
     env: dict[str, str] = Field(default_factory=dict, description="Environment for the instance; values may carry placeholders")
     args: tuple[str, ...] = Field(default=(), description="Arguments appended to the command; may carry placeholders")
-    copies: dict[PreviewName, str] = Field(default_factory=dict, description="Repo-relative directories copied into the scratch space")
+    copies: dict[PreviewName, str] = Field(default_factory=dict, description="Repo-relative directories copied into the instance's scratch space, by key")
     health_path: str = Field(default=DEFAULT_PREVIEW_HEALTH_PATH, description="The path probed for a 200 once booted")
     open_path: str = Field(default=DEFAULT_PREVIEW_OPEN_PATH, description="The path the preview tab opens on")
     open_path_takes_key: bool = Field(default=False, description="Whether open_path carries {key}, an instance key")
