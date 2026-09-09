@@ -44,7 +44,7 @@ USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 
-# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
+# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_LAUNCH`` and is re-tagged
 # at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
 # anywhere within ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``:
 #
