@@ -127,10 +127,14 @@ def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tm
     (account,) = read_index(tmp_path).accounts
     assert account.display == "OpenAI"
     assert harness_for(account) is HarnessType.CODEX
-    path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+    path = account_path / "auth.json"
     assert json.loads(path.read_text()) == {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-openai-123"}
     # codex writes its own auth.json 0600, and this file holds the same secret.
     assert path.stat().st_mode & 0o077 == 0
+    # A device login writes its own credential wherever codex keeps one; a paste writes this file
+    # and nothing else, so the store pin beside it is what decides whether codex reads it at all.
+    assert 'cli_auth_credentials_store = "file"' in (account_path / "config.toml").read_text()
 
 
 def test_seeding_happens_before_the_credential_is_written(service: AuthFlowService, tmp_path: Path) -> None:
