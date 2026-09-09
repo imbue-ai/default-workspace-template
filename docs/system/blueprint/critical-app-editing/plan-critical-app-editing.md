@@ -101,7 +101,7 @@ Specified in the mngr repo's `blueprint/critical-app-editing/plan-critical-app-e
 
 - `system/apps/system_interface/app.toml`: `[preview]` with `command = ["system-interface", "--preview", "--state-dir", "{copy:state}"]`, `env = {SYSTEM_INTERFACE_PORT = "{port:main}", SYSTEM_INTERFACE_HOST = "{host}", MINDS_APPS_FILE = "{registry}"}`, `copies = {state = "data/.state/system_interface"}`, `health_path = "/api/health"`.
 - `system/apps/chat/app.toml`: `command = ["chat-app", "--secondary", "--nudge-shell-url", "{shell_url}"]`, `env = {CHAT_PORT, CHAT_HOST, CHAT_DATA_DIR = "{copy:data}"}`, `copies = {data = "data/.apps/chat"}`, `health_path = "/api/health"`, `open_path = "/{key}"`, `open_path_takes_key = true`.
-- `system/apps/terminal/app.toml`: `ports = ["main", "sidecar"]`, `command = ["terminal-app", "--no-register", "--app-url", "http://127.0.0.1:{port:main}", "--instances-url", "http://127.0.0.1:{port:sidecar}", "--store", "{copy:store}/instances.json", "--state-dir", "{scratch}/state"]`, `copies = {store = "data/.apps/terminal"}`, `health_path = "/_instances"`.
+- `system/apps/terminal/app.toml`: `ports = ["main", "sidecar"]`, `command = ["terminal-app", "--no-register", "--app-url", "http://127.0.0.1:{port:main}", "--instances-url", "http://127.0.0.1:{port:sidecar}", "--store", "{copy:store}/instances.json", "--state-dir", "{scratch}/state"]`, `copies = {store = "data/.apps/terminal"}`, `health_path = "/"` (the probe reaches the main port, which is ttyd's, not the sidecar the instances API is on).
 - `system/test_app_manifests.py`: every critical built-in's preview table validates and names real entry points.
 
 ### `.agents/shared/scripts/serve_isolated_instance.py` (carried from the old branch, plus what the generic script needs)
