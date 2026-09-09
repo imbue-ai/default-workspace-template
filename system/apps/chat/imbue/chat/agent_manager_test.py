@@ -2718,3 +2718,68 @@ def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager
     assert nudger.nudge_count == 1
     agent_manager.remove_agent(next(iter(agent_manager.get_agents())).id)
     assert nudger.nudge_count == 2
+
+
+def _record_unconfirmed_send(host_dir: Path, agent_id: str) -> None:
+    """Write the durable event mngr appends when a send's submission went unwitnessed."""
+    events_path = host_dir / "agents" / agent_id / "events" / "messages" / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-09-08T23:53:50.100295000Z",
+                "type": "relaxed_send_unconfirmed",
+                "event_id": "evt-1",
+                "source": "messages",
+                "agent_id": agent_id,
+                "agent_name": "Chat-1",
+                "detail": "no submission evidence within 15s for message: '/welcome'",
+            }
+        )
+        + "\n"
+    )
+
+
+def test_a_first_chat_whose_welcome_was_never_submitted_gives_the_claim_back(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """``/welcome`` is a slash command, so an unwitnessed submission is only warned about and the
+    create still exits 0. The chat is fine -- but the greeting it was created to deliver never
+    arrived, and a claim spent on a greeting nobody received buys the user nothing."""
+    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    assert claim_first_chat() is True
+    _record_unconfirmed_send(tmp_path, "test-id")
+
+    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, True)
+
+    # The chat is a real, usable chat: this is not a failed create.
+    assert agent_manager.get_agent_by_id("test-id") is not None
+    assert agent_manager.get_proto_agent("test-id") is None
+    # But the workspace's one greeting is back, for the next chat to use.
+    assert claim_first_chat() is True
+
+
+def test_a_first_chat_whose_welcome_landed_keeps_the_claim(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The claim is spent by a greeting that actually arrived; nothing gives it back, or the
+    next chat would be greeted a second time."""
+    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    assert claim_first_chat() is True
+
+    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, True)
+
+    assert agent_manager.get_agent_by_id("test-id") is not None
+    assert claim_first_chat() is False
+
+
+def test_an_ordinary_chats_unconfirmed_send_leaves_the_claim_alone(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """Only the chat that took the claim can give it back. A later chat's unconfirmed slash
+    command must not hand a second workspace greeting out."""
+    _seed_creating_chat(agent_manager, "test-id", "Chat 2")
+    assert claim_first_chat() is True
+    _record_unconfirmed_send(tmp_path, "test-id")
+
+    agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE, False)
+
+    assert claim_first_chat() is False

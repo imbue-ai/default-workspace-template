@@ -20,6 +20,11 @@ Signals, and where each comes from:
   ``mngr message`` or by another agent), and staying in one marks the chat
   mid-turn, which suspends its staleness climb until the turn ends.
 
+None of those signals exists in a chat's first seconds, so a chat whose process is
+younger than ``bands.CHAT_LAUNCH_GRACE_SECONDS`` is held at the protected floor
+instead of being scored on their absence -- the same band the launch wrapper
+writes, so the first reapply after a create does not undo it.
+
 Idle time is measured against the most recent of those events, wall-clock, with
 the agent's own process-start time as a floor so a freshly revived chat counts as
 fresh. Across a system-interface restart the message stamps are re-seeded from
@@ -241,6 +246,7 @@ class ChatOomPrioritizer:
                 recency_rank=rank_by_id.get(chat_id),
                 idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
                 is_mid_turn=chat_id in running_ids,
+                age_seconds=self._age_seconds(chat_id, now),
             )
             self._set_adj(pid, adj)
 
@@ -258,6 +264,18 @@ class ChatOomPrioritizer:
         if not candidates:
             return None
         return max(0.0, now - max(candidates))
+
+    def _age_seconds(self, chat_id: str, now: float) -> float | None:
+        """How long ``chat_id``'s current process has been up, or None if unknown.
+
+        Drives the launch grace, so it is deliberately the *process's* age and not
+        the chat's: a revived chat is launching again, with the same in-flight
+        first message and the same absence of engagement signals as a new one.
+        """
+        started_at = self._resolve_process_started_at(chat_id)
+        if started_at is None:
+            return None
+        return max(0.0, now - started_at)
 
     def _stamp_engagement_locked(self, agent_id: str, at: float) -> None:
         """Record engagement with ``agent_id``, never moving the stamp backwards."""

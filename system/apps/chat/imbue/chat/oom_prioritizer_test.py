@@ -330,3 +330,24 @@ def test_the_sweep_re_tags_as_time_passes_and_stops_cleanly() -> None:
     # Stopped means stopped: no further writes land after ``stop`` returns.
     settled = len(h.writes)
     assert not poll_until(lambda: len(h.writes) != settled, timeout=0.2)
+
+
+def test_a_launching_chat_holds_the_protected_floor_with_no_engagement_yet() -> None:
+    # A chat seconds into its life has no presence report and no message: the
+    # engagement-only score would make it the most expendable chat in the workspace
+    # exactly while its unrepeatable opening message is in flight. The prioritizer
+    # must agree with the launch wrapper and leave it at the floor, or its first
+    # reapply -- which a create triggers almost immediately -- would undo the
+    # protection the wrapper just wrote.
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.process_started_at["a"] = h.now
+    h.prioritizer.reapply()
+    assert h.latest_adj_by_pid()[10] == bands.CHAT_AGENT_LAUNCH
+
+
+def test_a_chat_falls_back_to_engagement_scoring_once_it_is_launched() -> None:
+    h = _Harness(chat_ids=["a"], pids={"a": 10})
+    h.process_started_at["a"] = h.now
+    h.advance(bands.CHAT_LAUNCH_GRACE_SECONDS)
+    h.prioritizer.reapply()
+    assert h.latest_adj_by_pid()[10] == _fresh(is_open=False, is_visible=False, recency_rank=None)
