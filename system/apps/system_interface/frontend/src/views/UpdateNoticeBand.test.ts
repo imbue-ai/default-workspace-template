@@ -7,8 +7,7 @@ import m from "mithril";
 
 import { applyApps } from "../models/Inventory";
 import { applyUpdateNotice, resetUpdateNoticeForTesting } from "../models/UpdateNotice";
-import { noticeWire } from "../models/UpdateNotice.test";
-import { appRecord } from "../testing/records";
+import { appRecord, noticeWire } from "../testing/records";
 import { IframePanel } from "./IframePanel";
 import {
   OPEN_NOTICE_TEXT,
