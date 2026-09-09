@@ -3046,6 +3046,23 @@ def test_an_unhealthy_critical_app_after_the_restart_rolls_back(
     ) in capsys.readouterr().err
 
 
+def _settle_instances(
+    http: _FakeHttp, repo_root: Path, app: update_probes.CriticalInstanceApp, attempts: int
+) -> str | None:
+    """``wait_settled`` over one app's instances API alone: a healthy shell, no pid check."""
+    return update_probes.wait_settled(
+        http,
+        repo_root,
+        _RecordingRunner(repo_root=repo_root),
+        _no_sleep,
+        shell_url=f"{_LIVE_BASE}{update_probes.HEALTH_PATH}",
+        programs=["chat"],
+        instance_apps=[app],
+        require_stable_pid=False,
+        attempts=attempts,
+    )
+
+
 def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
     apply_repo: Path,
 ) -> None:
@@ -3066,11 +3083,7 @@ def test_the_instances_probe_follows_the_registry_as_the_app_re_registers(
     http = _FakeHttp(_all_healthy, page_responder)
     (app,) = update_probes.read_critical_instance_apps(apply_repo)
 
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 10, 0.0, _no_sleep
-    )
-
-    assert failure is None
+    assert _settle_instances(http, apply_repo, app, attempts=10) is None
     assert http.page_urls[:3] == [_instances_url(_LIVE_BASE)] * 3
     assert http.page_urls[3] == _instances_url(_CHAT_ROW_URL)
 
@@ -3083,9 +3096,7 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
     http = _FakeHttp(_all_healthy, _shell_catch_all_page)
 
     # No registry at all: the app never registered.
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 3, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=3)
     assert (
         failure
         == f"the app registry at {update_layout.APPS_REGISTRY_PATH} never listed 'chat'"
@@ -3097,9 +3108,7 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
     # registration that never happened.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     (apply_repo / update_layout.APPS_REGISTRY_PATH).write_text("[[apps\n")
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 2, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=2)
     assert failure is not None
     assert failure.startswith(
         f"the app registry at {update_layout.APPS_REGISTRY_PATH} could not be read "
@@ -3109,21 +3118,20 @@ def test_an_instances_probe_that_never_finds_the_app_says_what_it_last_saw(
 
     # A row that stays on the shell's port: the catch-all's HTML is named as such.
     _write_registry(apply_repo, {"chat": _LIVE_BASE})
-    failure = update_probes.wait_instances_healthy(
-        http, apply_repo, app, 2, 0.0, _no_sleep
-    )
+    failure = _settle_instances(http, apply_repo, app, attempts=2)
     assert failure is not None
     assert failure.startswith(
-        f"{_instances_url(_LIVE_BASE)} answered 200 but as 'text/html'"
+        f"the chat app's instances API at {_instances_url(_LIVE_BASE)} "
+        "answered 200 but as 'text/html'"
     )
 
     # A server that does not answer at all.
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
     silent = _FakeHttp(_all_healthy, lambda url: None)
-    failure = update_probes.wait_instances_healthy(
-        silent, apply_repo, app, 2, 0.0, _no_sleep
+    failure = _settle_instances(silent, apply_repo, app, attempts=2)
+    assert failure == (
+        f"the chat app's instances API at {_instances_url(_CHAT_ROW_URL)} did not answer"
     )
-    assert failure == f"{_instances_url(_CHAT_ROW_URL)} did not answer"
 
 
 def test_read_critical_instance_apps_reads_only_critical_apps_with_an_instances_api(

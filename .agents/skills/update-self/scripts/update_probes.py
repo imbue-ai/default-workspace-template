@@ -359,32 +359,6 @@ def is_instances_answer(page: FetchedPage | None) -> bool:
     )
 
 
-def wait_instances_healthy(
-    http: HttpClient,
-    repo_root: Path,
-    app: CriticalInstanceApp,
-    attempts: int,
-    interval: float,
-    sleeper: Callable[[float], None],
-) -> str | None:
-    """Poll ``app``'s instances API until it answers, re-reading the registry on
-    every attempt so the poll follows the app's own re-registration. Returns
-    ``None`` once it answered, else what the last attempt found."""
-    last_finding = ""
-    for index in range(attempts):
-        url = instances_probe_url(repo_root, app)
-        if url is None:
-            last_finding = _describe_missing_registry_url(repo_root, app.name)
-        else:
-            page = http.get_page(url, timeout=5.0)
-            if is_instances_answer(page):
-                return None
-            last_finding = _describe_instances_non_answer(url, page)
-        if index < attempts - 1:
-            sleeper(interval)
-    return last_finding
-
-
 def _describe_missing_registry_url(repo_root: Path, app_name: str) -> str:
     """Why the registry names no URL for ``app_name``: a registry that does not
     exist or has no row for it means the app never registered, while one that is
