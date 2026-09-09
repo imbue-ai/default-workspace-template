@@ -1179,6 +1179,12 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
 # The workspace home tree, which contains the mngr host dir -- code, agent
 # state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
+# Where mngr rescues a destroyed agent's transcripts to. The agent side of the workspace runs as root,
+# so its own host dir is /root/.mngr, outside the home tree above -- and a worker the lead destroys
+# after merging (which the launch-task flow invites) leaves its conversation ONLY here. Without it a
+# hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
+# survive in the home tree, its trajectory does not.
+PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
 
 
 async def snapshot_workspace(
@@ -1202,8 +1208,18 @@ async def snapshot_workspace(
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    tar_command = "tar czf {} {} -C {} . 2>/dev/null || true".format(
-        workspace_tar, exclude_flags, WORKSPACE_BACKUP_ROOT
+    # The preserved dir is added as its own -C segment, and only when it exists: naming a missing path
+    # makes tar exit nonzero and the snapshot is skipped entirely. Its entries land under
+    # `root/.mngr/preserved/`, distinct from the home tree's `./`.
+    tar_command = (
+        "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
+        "tar czf {tar} {excludes} -C {root} . $preserved 2>/dev/null || true"
+    ).format(
+        preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
+        preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        tar=workspace_tar,
+        excludes=exclude_flags,
+        root=WORKSPACE_BACKUP_ROOT,
     )
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:

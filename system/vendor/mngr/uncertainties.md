@@ -13,4 +13,4 @@ Noticed while writing that spec; it assumes the newer state is correct.
 Issue #521 (imbue-ai/default-workspace-template) motivates a per-chat WebSocket conversion by the browser's ~6-connection HTTP/1.1 per-origin cap.
 Both deployed browser paths already negotiate HTTP/2: `minds run` spawns `mngr forward --use-http2` unconditionally (`apps/minds/imbue/minds/desktop_client/forward_cli.py`), and the share gateway's Caddyfile pins `protocols h1 h2`, so the cap does not apply; the practical ceiling is hypercorn's 100 concurrent h2 streams per client connection.
 Noticed while writing the (since replaced) split-chat-apart plan; its successor, default-workspace-template's `docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md`, keeps SSE as the per-chat transport and treats the channel consolidation as a chat-internal cleanup.
-Resolve by updating the issue when the chat app lands as its own program.
+Resolve by updating the issue: the chat app runs as its own program (default-workspace-template's `system/apps/chat`).

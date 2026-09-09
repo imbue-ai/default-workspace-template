@@ -1,9 +1,10 @@
 #!/bin/bash
-# Run the rewardkit verifier (gates + quality, plus outcome when the case
+# Run the rewardkit verifier (gates + quality + harness_quality, plus outcome when the case
 # declares expectations), then compose the final gated reward. rewardkit owns
 # all judging and scoring; finalize.py combines the dimension scores (reward =
-# quality, or an even split of quality and outcome, zeroed unless every gate
-# passed) and distinguishes a graded 0.0 from a grading-infrastructure failure
+# quality, or an even split of quality and outcome, discounted by the harness's
+# share of it, and zeroed unless every gate passed) and distinguishes a graded
+# 0.0 from a grading-infrastructure failure
 # (judge API error / no parseable reward file / unreadable case file /
 # unmeasurable outcome evidence), leaving no reward file in the latter case so
 # harbor errors the trial instead of scoring it 0.
@@ -14,6 +15,12 @@ set -euo pipefail
 # one block per agent step with a message, which the judge scores conciseness
 # against per individual message rather than per merged turn.
 python3 /tests/render_judge_transcript.py
+
+# Rebuild the harness reports and the failure-signature counts the harness_quality dimension scores:
+# one processed trajectory per scope (the lead agent, and every captured worker), keeping only the
+# steps where a skill was invoked, a tool errored, or output matched a known failure signature. A raw
+# trajectory is far too large for a judge prompt and mostly ordinary work.
+python3 /tests/render_harness_report.py
 
 # Cases that declare expectations get an outcome dimension; its judge grades against the case's
 # ground truth, rendered here for the same regrade reason. The flow evidence is flattened here too:

@@ -13,7 +13,15 @@ from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 def _action(
     kind: ui_flows.FlowActionKind, role: str = "", target: str = "", text: str = "", amount: int = 0
 ) -> ui_flows.FlowAction:
-    return ui_flows.FlowAction(kind=kind, role=role, target=target, text=text, amount=amount, reasoning="because")
+    return ui_flows.FlowAction(
+        kind=kind,
+        role=role,
+        target=target,
+        text=text,
+        amount=amount,
+        reasoning="the page",
+        expected="something to change",
+    )
 
 
 # --- classifying what the executor reported ---
@@ -276,11 +284,20 @@ def test_build_action_prompt_says_so_when_nothing_has_happened_yet() -> None:
     assert "- textbox 'Add a task'" in prompt
 
 
-def test_truncate_state_marks_a_page_it_cut() -> None:
-    truncated = ui_flows.truncate_state("x" * (ui_flows.MAX_STATE_PROMPT_CHARS + 100))
+def test_truncate_state_keeps_the_head_and_the_tail_of_a_page_it_cut() -> None:
+    filler = "- generic [ref=e{}]: item\n" * 2000
+    state = "page https://app.example/ (Roadmap)\n" + filler.format(*range(2000)) + '- complementary "Item details"'
 
-    assert truncated.endswith("[...page state truncated...]")
-    assert len(truncated) < ui_flows.MAX_STATE_PROMPT_CHARS + 100
+    truncated = ui_flows.truncate_state(state)
+
+    assert truncated.startswith("page https://app.example/ (Roadmap)")
+    assert truncated.endswith('- complementary "Item details"')
+    assert "[...page state truncated" in truncated
+    assert len(truncated) <= ui_flows.MAX_STATE_PROMPT_CHARS + 100
+
+
+def test_truncate_state_returns_a_short_page_verbatim() -> None:
+    assert ui_flows.truncate_state("- button 'Add'") == "- button 'Add'"
 
 
 def test_summarize_verifier_usage_counts_the_calls_that_produced_nothing() -> None:
@@ -299,7 +316,11 @@ def test_flow_step_record_keeps_the_page_state_verbatim() -> None:
     # the state must not be abbreviated on the way in.
     state = "page https://x/ (Todo)\n" + "- button 'delete'\n" * 500
 
-    record = json.loads(ui_flows.flow_step_record(0, "click the button", "deleting", state, "step_000.png", "", "t"))
+    record = json.loads(
+        ui_flows.flow_step_record(
+            0, "click the button", "a delete button", "the row goes", "", state, "step_000.png", "", "t"
+        )
+    )
 
     assert record["state"] == state
     assert (record["step_index"], record["screenshot"]) == (0, "step_000.png")
@@ -309,7 +330,208 @@ def test_flow_step_record_says_when_the_action_never_ran() -> None:
     # The judge rules on the `expect` from this log, so a step showing a click next to
     # an unchanged screenshot -- with no note that it was rejected -- would mislead it.
     record = json.loads(
-        ui_flows.flow_step_record(2, "click the button named 'Delete'", "trying", "- heading", "s.png", "no such", "t")
+        ui_flows.flow_step_record(
+            2,
+            "click the button named 'Delete'",
+            "a delete button",
+            "the row goes",
+            "",
+            "- heading",
+            "s.png",
+            "no such",
+            "t",
+        )
     )
 
     assert record["error"] == "no such"
+
+
+def test_every_record_kind_names_itself() -> None:
+    # A reader dispatches on the kind rather than inferring from which fields are present, so a
+    # record that named none would be read as whatever the reader's fallback happens to be.
+    init = json.loads(ui_flows.flow_init_record("open it", "it opens", "https://x/", "- heading", "s.png", "t"))
+    action = json.loads(ui_flows.flow_step_record(1, "click", "a button", "a row goes", "", "- heading", "", "", "t"))
+    final = json.loads(ui_flows.flow_final_record(2, "the row is gone", "- heading", "t"))
+
+    assert (init["kind"], action["kind"], final["kind"]) == ("init", "action", "final")
+
+
+def test_the_opening_record_carries_what_the_flow_was_asked_to_do() -> None:
+    # Without it a reader meets the flow one action in, with nothing saying what it was aiming at.
+    record = json.loads(
+        ui_flows.flow_init_record("scroll to M-141", "M-141 is listed", "https://x/", "- heading", "step_000.png", "t")
+    )
+
+    assert (record["goal"], record["expect"]) == ("scroll to M-141", "M-141 is listed")
+    assert (record["url"], record["screenshot"], record["step_index"]) == ("https://x/", "step_000.png", 0)
+
+
+def test_an_action_records_what_it_predicted_and_what_followed() -> None:
+    # The pair is the point: the next decision is shown both, so a wrong model of the UI reads as a
+    # contradiction rather than being re-derived.
+    record = json.loads(
+        ui_flows.flow_step_record(
+            3,
+            "click the button named 'Platform'",
+            "a team button",
+            "the list narrows",
+            "- button [pressed]",
+            "- x",
+            "",
+            "",
+            "t",
+        )
+    )
+
+    assert (record["reasoning"], record["expected"]) == ("a team button", "the list narrows")
+    assert record["observed"] == "- button [pressed]"
+
+
+def test_an_unchanged_page_is_said_in_so_many_words() -> None:
+    # The signal an agent loops hardest without: an action that landed and changed nothing.
+    assert ui_flows.summarize_state_change("- heading\n- button", "- heading\n- button") == (
+        ui_flows.UNCHANGED_STATE_SUMMARY
+    )
+
+
+def test_a_small_change_names_the_lines_that_moved() -> None:
+    before = "- heading\n- button 'Platform' [pressed]\n- row A\n- row B"
+    after = "- heading\n- button 'Platform'\n- row A"
+
+    summary = ui_flows.summarize_state_change(before, after)
+
+    assert "new: - button 'Platform'" in summary
+    assert "gone: - button 'Platform' [pressed]" in summary
+    assert "gone: - row B" in summary
+
+
+def test_dropping_one_of_two_identical_rows_reads_as_a_removal() -> None:
+    # The line is still on the page in its other copy, so a presence test would call this no change
+    # and tell the agent its correct delete did not land.
+    before = "- heading\n- listitem 'buy milk'\n- listitem 'buy milk'"
+    after = "- heading\n- listitem 'buy milk'"
+
+    summary = ui_flows.summarize_state_change(before, after)
+
+    assert summary == "gone: - listitem 'buy milk'"
+
+
+def test_the_same_lines_in_another_order_read_as_a_rearrangement() -> None:
+    before = "- row A\n- row B"
+    after = "- row B\n- row A"
+
+    assert (
+        ui_flows.summarize_state_change(before, after) == "the page has the same elements in a different arrangement"
+    )
+
+
+def test_a_change_of_blank_lines_alone_still_says_something() -> None:
+    # An empty summary is how both readers spell "nothing was recorded", so a summary that was
+    # produced and came out blank would be indistinguishable from one that was never written.
+    summary = ui_flows.summarize_state_change("- heading\n\n- row A", "- heading\n- row A")
+
+    assert summary == "the page has the same elements in a different arrangement"
+
+
+def test_a_wholesale_change_says_only_how_much_moved() -> None:
+    # Naming lines describes nothing once the page has effectively been replaced, and a hundred of
+    # them in the prompt crowd out the page state the next action is chosen from.
+    before = "\n".join("- row {}".format(index) for index in range(50))
+    after = "\n".join("- cell {}".format(index) for index in range(50))
+
+    summary = ui_flows.summarize_state_change(before, after)
+
+    assert summary == "most of the page changed: 50 lines gone, 50 new, of 50"
+    assert "- row 0" not in summary
+
+
+def test_a_long_changed_line_is_bounded() -> None:
+    before = "- heading"
+    after = "- heading\n- paragraph {}".format("x" * 500)
+
+    summary = ui_flows.summarize_state_change(before, after)
+
+    assert len(summary.splitlines()[0]) <= ui_flows.MAX_SUMMARY_LINE_CHARS + 10
+    assert summary.endswith("...")
+
+
+def test_the_history_carries_the_prediction_beside_what_followed() -> None:
+    # An observation only reads as confirming or contradicting something if the prediction it is
+    # being compared against sits with it, in the same entry.
+    entry = ui_flows.describe_step("click the button named 'X'", "the row goes", "", "gone: - row A")
+
+    assert entry.splitlines() == [
+        "click the button named 'X'",
+        "   expected: the row goes",
+        "   the page then: gone: - row A",
+    ]
+
+
+def test_a_multi_line_change_stays_under_its_own_entry() -> None:
+    # The prompt numbers these entries, so a change spanning lines must not start at the margin
+    # where it would read as the next numbered action.
+    entry = ui_flows.describe_step("click", "two rows go", "", "gone: - row A\ngone: - row B")
+
+    assert all(line.startswith("   ") for line in entry.splitlines()[1:])
+
+
+def test_a_step_that_never_ran_says_so_in_its_entry() -> None:
+    entry = ui_flows.describe_step("click the button named 'X'", "the row goes", "no such element", "")
+
+    assert "   did not run: no such element" in entry.splitlines()
+
+
+def test_an_older_entry_keeps_its_action_when_its_detail_will_not_fit() -> None:
+    # What a step did stays worth knowing long after the detail of how the page moved has stopped
+    # being actionable, so the detail is what gives way first.
+    entries = ["action {}\n   expected: {}".format(index, "x" * 2_000) for index in range(15)]
+
+    fitted = ui_flows.fit_history(entries)
+
+    assert sum(len(entry) for entry in fitted) <= ui_flows.MAX_HISTORY_PROMPT_CHARS
+    assert len(fitted) == len(entries)
+    # The newest goes in whole; the older ones keep their action line alone.
+    assert fitted[-1] == entries[-1]
+    assert fitted[0] == "action 0"
+
+
+def test_entries_that_do_not_fit_at_all_are_dropped_and_counted() -> None:
+    # Silently losing them would let the prompt imply a step never happened for want of room.
+    entries = ["action {} {}".format(index, "x" * 1_500) for index in range(15)]
+
+    fitted = ui_flows.fit_history(entries)
+
+    assert sum(len(entry) for entry in fitted) <= ui_flows.MAX_HISTORY_PROMPT_CHARS + 40
+    assert "earlier actions not shown" in fitted[0]
+    assert fitted[-1] == entries[-1]
+
+
+def test_a_history_that_fits_is_left_alone() -> None:
+    entries = ["click a\n   expected: b", "click c\n   expected: d"]
+
+    assert ui_flows.fit_history(entries) == entries
+
+
+def test_an_element_id_the_next_render_renumbers_is_not_a_change() -> None:
+    # A rebuilt tree renumbers every ref, so comparing them makes an untouched page look rewritten:
+    # on a live run one step reported 27 changed lines in a 24-line tree, nearly all of them this.
+    before = '- button "Delete" [ref=e15] [cursor=pointer]\n- list [ref=e16]'
+    after = '- button "Delete" [ref=e42] [cursor=pointer]\n- list [ref=e43]'
+
+    assert ui_flows.summarize_state_change(before, after) == ui_flows.UNCHANGED_STATE_SUMMARY
+
+
+def test_focus_moving_is_not_a_change() -> None:
+    # A click that only focused something did nothing the flow can build on, and saying otherwise
+    # reads as progress: it is what let an agent click a dead Delete button twice.
+    before = '- button "Delete" [ref=e15]'
+    after = '- button "Delete" [active] [ref=e15]'
+
+    assert ui_flows.summarize_state_change(before, after) == ui_flows.UNCHANGED_STATE_SUMMARY
+
+
+def test_a_real_change_survives_the_normalising() -> None:
+    before = '- textbox "Add a task" [ref=e6]'
+    after = '- textbox "Add a task" [active] [ref=e9]\n- text: buy milk'
+
+    assert ui_flows.summarize_state_change(before, after) == "new: - text: buy milk"

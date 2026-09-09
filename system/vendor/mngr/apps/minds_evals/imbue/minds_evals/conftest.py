@@ -38,7 +38,20 @@ def gate_checks() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
-def wordiness_guard() -> ModuleType:
-    """The wordiness-guard module that ships into every generated dataset, loaded from its path the
+def message_length_guard() -> ModuleType:
+    """The message-length guard module that ships into every generated dataset, loaded from its path the
     way `gate_checks` is: it too runs in the verifier container against fixed absolute paths."""
-    return load_template_module("tests/verifier/quality/wordiness.py", "minds_evals_wordiness_guard")
+    return load_template_module("tests/verifier/quality/message_lengths.py", "minds_evals_message_length_guard")
+
+
+@pytest.fixture(scope="session")
+def harness_report_renderer() -> ModuleType:
+    """The harness-report renderer that ships into every generated dataset, loaded from its path the
+    same way as the other verifier-container scripts."""
+    return load_template_module("tests/verifier/render_harness_report.py", "minds_evals_harness_report")
+
+
+@pytest.fixture(scope="session")
+def harness_checks() -> ModuleType:
+    """The harness_quality programmatic criteria that ship into every generated dataset."""
+    return load_template_module("tests/verifier/harness_quality/checks.py", "minds_evals_harness_checks")
