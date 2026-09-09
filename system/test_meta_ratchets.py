@@ -17,7 +17,13 @@ _VENDORED_DIR = _REPO_ROOT / "system" / "vendor"
 
 # Directory names pruned during filesystem walks: non-source trees (venvs,
 # node_modules, git internals) that can hold tens of thousands of files.
-_PRUNED_DIR_NAMES = frozenset({".git", ".venv", "node_modules"})
+# ``.external_worktrees`` holds standalone clones of *other* repos, checked out
+# for development against them (see AGENTS.md). It is gitignored and none of it
+# is this repo's source, so holding it to this repo's ratchets reports
+# violations nobody here can fix or is responsible for.
+_PRUNED_DIR_NAMES = frozenset(
+    {".git", ".venv", "node_modules", ".external_worktrees"}
+)
 
 _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 
