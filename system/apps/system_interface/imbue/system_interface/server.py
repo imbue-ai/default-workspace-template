@@ -545,6 +545,12 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState) -> None:
                 }
             )
         )
+        # The notice too, so a window that reconnects after a rollback restarted this shell
+        # sees the outcome without a fetch of its own.
+        notice = shell.update_notice.current()
+        websocket.send(
+            json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
+        )
 
         is_client_registered = False
         shutdown = False

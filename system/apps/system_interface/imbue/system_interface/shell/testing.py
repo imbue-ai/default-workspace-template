@@ -30,6 +30,8 @@ from imbue.system_interface.shell.inventory import InstanceFetcherInterface
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.shell.update_notice import LAST_GOOD_RECORD_REL
+from imbue.system_interface.shell.update_notice import UPDATE_SELF_SCRIPT_REL
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
@@ -101,9 +103,14 @@ def write_two_app_registry(tmp_path: Path, *extra_rows: str) -> Path:
 def shell_application(
     tmp_path: Path, inventory: AppInventory, broadcaster: WebSocketBroadcaster, is_preview: bool = False
 ) -> Flask:
-    """The shell app over ``inventory``, its state under ``tmp_path``, sharing the inventory's broadcaster as in production."""
+    """The shell app over ``inventory``, its state under ``tmp_path/state`` and the update notice's workspace at
+    ``tmp_path/repo``, sharing the inventory's broadcaster as in production."""
     state = build_test_state(
-        broadcaster=broadcaster, shell_state_directory=tmp_path / "state", inventory=inventory, is_preview=is_preview
+        broadcaster=broadcaster,
+        shell_state_directory=tmp_path / "state",
+        inventory=inventory,
+        is_preview=is_preview,
+        repo_root=tmp_path / "repo",
     )
     return create_application(state)
 
@@ -221,3 +228,77 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )
+
+
+# ---------- the update notice ----------
+
+# Where the stub update-self script records each call it took.
+STUB_UPDATE_SELF_CALLS_REL: Final[str] = "data/.state/update-apply/stub-calls.jsonl"
+
+# A stand-in for ``update_self.py`` that records its argv, working directory, and session id, closes
+# the record on ``confirm-last`` the way the real script does, and exits as told. Written under the
+# test's workspace root so the shell finds it where it finds the real one.
+_STUB_UPDATE_SELF_SCRIPT = """\
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[4]
+record = root / "data/.state/update-apply/last-good.json"
+with (root / "{calls_rel}").open("a") as calls:
+    calls.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "sid": os.getsid(0)}}) + "\\n")
+if sys.argv[1:] == ["confirm-last"] and {exit_code} == 0:
+    record.unlink(missing_ok=True)
+if {exit_code} != 0:
+    sys.exit("the stub was told to fail")
+sys.exit(0)
+"""
+
+
+def write_rollback_point(
+    repo_root: Path,
+    *,
+    apps: Sequence[str] = ("terminal",),
+    programs: Sequence[str] | None = None,
+    needs_services_restart: bool = False,
+    progress: str | None = None,
+    outcome: str | None = None,
+) -> Path:
+    """The record an apply run with ``--keep-rollback-point`` leaves, in the apply's own shape (its extra
+    fields included), under ``repo_root``."""
+    path = repo_root / LAST_GOOD_RECORD_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "merge_sha": "abc1234abc1234abc1234abc1234abc1234abc12",
+                "rollback_to": "def5678def5678def5678def5678def5678def56",
+                "applied_at": 1_780_000_000.0,
+                "driven_by": "mngr/update-widgets",
+                "snapshots": [
+                    {"name": "bundle", "source": "system/x", "copy": "data/.state/update-apply/snapshots/bundle"}
+                ],
+                "programs": list(programs) if programs is not None else list(apps),
+                "apps": list(apps),
+                "needs_services_restart": needs_services_restart,
+                "progress": progress,
+                "outcome": outcome,
+            }
+        )
+    )
+    return path
+
+
+def write_stub_update_self_script(repo_root: Path, exit_code: int = 0) -> Path:
+    path = repo_root / UPDATE_SELF_SCRIPT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_STUB_UPDATE_SELF_SCRIPT.format(calls_rel=STUB_UPDATE_SELF_CALLS_REL, exit_code=exit_code))
+    return path
+
+
+def read_stub_update_self_calls(repo_root: Path) -> list[dict[str, Any]]:
+    path = repo_root / STUB_UPDATE_SELF_CALLS_REL
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line]

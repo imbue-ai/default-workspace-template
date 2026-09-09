@@ -329,8 +329,10 @@ interleave.
    seems good". Tell the user it is there and what it does. **Never confirm or
    roll back on the user's behalf.** Only a person closes it: confirming
    discards the kept snapshots, rolling back restores them and restarts only the
-   touched programs, and the outcome lands in the apply's run record. If they
-   roll back, the branch and the worker's report are the retry's input.
+   touched programs, and the outcome shows in the notice (and stays in its
+   record, `data/.state/update-apply/last-good.json`, until they close it; a
+   rollback started from the notice logs to `rollback-last.log` beside it). If
+   they roll back, the branch and the worker's report are the retry's input.
 
 4. **Tear down and release.** Whatever the exit code, and after a rejection
    where nothing was merged, tear down the preview and its tab, destroy the

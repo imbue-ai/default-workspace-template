@@ -14,12 +14,12 @@ from watchdog.events import FileModifiedEvent
 from watchdog.events import FileMovedEvent
 
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.file_watch import make_file_change_handler
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
 from imbue.system_interface.shell.inventory import InstanceFetcherInterface
-from imbue.system_interface.shell.inventory import _make_registry_file_handler
 from imbue.system_interface.shell.inventory import parse_instances_body
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
@@ -273,7 +273,7 @@ def test_the_fetcher_reads_a_503_as_not_ready_and_a_listing_as_listed(
 
 def test_the_registry_watch_fires_for_the_registry_file_alone(tmp_path: Path) -> None:
     fired: list[bool] = []
-    handler = _make_registry_file_handler("apps.toml", lambda: fired.append(True))
+    handler = make_file_change_handler("apps.toml", lambda: fired.append(True))
     handler.on_modified(FileModifiedEvent(str(tmp_path / "apps.toml")))
     # forward_port.py replaces the file atomically: the move's destination is the registry.
     handler.on_moved(FileMovedEvent(str(tmp_path / "apps.toml.tmp-1"), str(tmp_path / "apps.toml")))
