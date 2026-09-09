@@ -209,7 +209,9 @@ class _HelperResult(FrozenModel):
     snapshot_path: str = ""
 
 
-def _resolve_snapshot_read_path(*, snapshot_root: Path, read_subpath: str | None) -> Path:
+def _resolve_snapshot_read_path(
+    *, snapshot_root: Path, read_subpath: str | None
+) -> Path:
     """The path restic should read inside a fresh snapshot; raises SnapshotError when it is absent.
 
     Handing restic a path that is not there does not fail here -- it fails two
