@@ -336,7 +336,7 @@ class Spawner:
 def find_free_port() -> int:
     """Bind to an ephemeral port, then release it for the server to take."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
+        sock.bind((LOOPBACK_HOST, 0))
         return int(sock.getsockname()[1])
 
 
@@ -860,7 +860,7 @@ def up(
             )
             wrapper_probe = wait_healthy(
                 http,
-                f"http://127.0.0.1:{wrapper_port}/",
+                f"http://{LOOPBACK_HOST}:{wrapper_port}/",
                 _HEALTH_ATTEMPTS,
                 _HEALTH_INTERVAL_SECONDS,
                 sleeper,
@@ -1118,7 +1118,7 @@ def refresh(
 
     probe = wait_healthy(
         http,
-        f"http://127.0.0.1:{port}{inner['health_path']}",
+        f"http://{LOOPBACK_HOST}:{port}{inner['health_path']}",
         _HEALTH_ATTEMPTS,
         _HEALTH_INTERVAL_SECONDS,
         sleeper,
