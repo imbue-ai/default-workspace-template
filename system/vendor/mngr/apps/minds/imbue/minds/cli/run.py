@@ -443,8 +443,10 @@ def run(
         access=MachineAccess(
             latchkey=latchkey,
             concurrency_group=root_concurrency_group,
-            # Resolved per call: the state the resolver lives in does not exist yet.
-            get_backend_resolver=lambda: get_state().backend_resolver,
+            # The resolver itself, not a lookup through the app state: machine
+            # operations also run on background threads (an auto-registration
+            # push), where ``get_state()``'s ``current_app`` is unbound.
+            backend_resolver=backend_resolver,
         )
     )
     # Loading the provider set imports every installed provider plugin, which is
@@ -579,6 +581,7 @@ def run(
     # laptop sleep restarts from the wake instead of convicting a workspace of
     # seconds during which no probe ran at all.
     system_interface_health_tracker = SystemInterfaceHealthTracker(sleep_tracker=sleep_tracker)
+    sleep_tracker.add_on_wake_callback(system_interface_health_tracker.invalidate_recovery_progress_after_wake)
 
     # The plugin reports every backend failure it observes; minds decides which
     # ones count. Only envelopes carrying no status code, or an infrastructure
@@ -954,10 +957,10 @@ def _restart_mngr_latchkey_forward_supervisor(supervisor: LatchkeyForwardSupervi
     """Restart the detached ``mngr latchkey forward`` supervisor on minds startup.
 
     Uses :meth:`LatchkeyForwardSupervisor.restart` rather than
-    ``ensure_running`` so that minds upgrades always run with a
-    freshly-spawned supervisor: an older supervisor running stale
-    code from a previous minds version is terminated and replaced
-    on every minds start. A running supervisor that minds is happy
+    ``ensure_running`` so that minds upgrades run with a freshly-spawned
+    supervisor: an older supervisor running stale code from a previous
+    minds version is terminated and replaced on every minds start, unless
+    another minds claims the directory first in the gap between the two. A running supervisor that minds is happy
     to adopt does not exist in practice -- the supervisor's lifetime
     is tied to the gateway it owns, and the gateway is a minds-only
     consumer today. Restarting on every minds start is also what
