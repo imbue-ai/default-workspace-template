@@ -85,14 +85,14 @@ export function catalogTemplateRecord(slug: string, overrides: Partial<CatalogTe
   };
 }
 
-/** An open notice (no rollback started) for an apply that touched the chat alone. */
-export function noticeWire(overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
+/** An open notice (no rollback started) for an apply that touched ``apps``, one program each. */
+export function noticeWire(apps: string[], overrides: Partial<UpdateNoticeWire> = {}): UpdateNoticeWire {
   return {
     merge_sha: "abc1234abc1234abc1234abc1234abc1234abc12",
     applied_at: 1_780_000_000,
     driven_by: "mngr/update-widgets",
-    apps: ["chat"],
-    programs: ["chat"],
+    apps,
+    programs: apps,
     needs_services_restart: false,
     progress: null,
     outcome: null,
