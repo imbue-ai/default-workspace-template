@@ -134,7 +134,7 @@ def test_a_program_declared_in_the_main_config_is_still_seen(tmp_path: Path) -> 
     free to move one back. Both its port and its name have to be respected.
     """
     root = _make_workspace(
-        tmp_path, {"browser": 8081}, main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM
+        tmp_path / "workspace", {"browser": 8081}, main_conf=_MAIN_CONF_WITH_INLINE_PROGRAM
     )
 
     taken_port = _scaffold(root, "news", "--port", "8080")
