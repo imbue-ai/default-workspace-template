@@ -171,3 +171,34 @@ def test_worker_template_installs_claude_plugins_before_the_agent_starts() -> No
         idx for idx, cmd in enumerate(commands) if cmd == "uv sync --all-packages"
     )
     assert commands.index(plugin_commands[0]) > sync_position
+
+
+def test_worker_template_installs_the_generic_worker_skill_after_venv_and_plugins() -> (
+    None
+):
+    """A `-t worker` create installs the generic worker at
+    .agents/shared/worker/ into the worker's skill tree as `harden-worker`
+    (via .agents/shared/scripts/install_worker_skills.sh), which every lead's
+    task file tells the worker to use. It runs after the venv converge and the
+    plugin install, exactly once, and the script it names exists in the repo."""
+    result = _apply(("worker",))
+    commands = result["extra_provision_command"]
+    install_commands = [cmd for cmd in commands if "install_worker_skills.sh" in cmd]
+    assert len(install_commands) == 1, (
+        f"expected exactly one worker-skill install command from worker, got {commands!r}"
+    )
+    install_words = install_commands[0].split()
+    assert install_words == [
+        "bash",
+        ".agents/shared/scripts/install_worker_skills.sh",
+        ".agents/skills",
+    ]
+    assert (_REPO_ROOT / install_words[1]).is_file()
+    install_position = commands.index(install_commands[0])
+    sync_position = commands.index("uv sync --all-packages")
+    plugin_position = next(
+        idx for idx, cmd in enumerate(commands) if "claude_update_plugin.sh" in cmd
+    )
+    assert install_position > sync_position
+    assert install_position > plugin_position
+    assert "MNGR_AGENT_ROLE=worker" in result["env"]

@@ -1,0 +1,1 @@
+The mngr create-template test now also pins the `worker` template's skill-install step: the generic worker is installed into the worker's skill tree by `install_worker_skills.sh` exactly once, after the venv converge and the plugin install, and the script the template names exists in the repo.
