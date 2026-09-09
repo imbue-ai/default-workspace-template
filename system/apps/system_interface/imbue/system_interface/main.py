@@ -15,6 +15,7 @@ from imbue.system_interface.config import load_config
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.shell.state_files import DEFAULT_STATE_DIRECTORY
+from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -62,6 +63,9 @@ def build_production_state(config: Config, state_directory: Path, is_preview: bo
             state_directory=state_directory, registry_path=registry_path(), broadcaster=WebSocketBroadcaster()
         ),
         is_preview=is_preview,
+        template_catalog=build_template_catalog_store(
+            catalog_url=config.system_interface_template_catalog_url, state_directory=state_directory
+        ),
     )
 
 

@@ -118,6 +118,7 @@ import { isPreviewShell } from "../models/PreviewShell";
 import { getActiveProjectId, getClientId, setActiveProjectId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { fetchOwnActiveView } from "../models/Clients";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "../models/deepLinks";
+import { ensureTemplateCatalogRequested, getTemplateCatalogState } from "../models/TemplateCatalog";
 import type { DeepLink } from "../models/deepLinks";
 import {
   addProjectTab,
@@ -1045,6 +1046,8 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
   return {
     element,
     init() {
+      // The catalog is fetched once per page load; a launcher mounting after a failed fetch tries again.
+      ensureTemplateCatalogRequested();
       m.mount(element, {
         view: () =>
           m(NewTabLauncher, {
@@ -1052,9 +1055,10 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
             rows: launcherRows(),
             memberRows: launcherMemberRows(),
             isEverything: mountedViewId !== null && isEverythingView(mountedViewId),
+            catalog: getTemplateCatalogState(),
             isAwaitingCreate: isLauncherAwaitingCreate(panelId),
-            onRunAction: (app: AppRecord, actionId: string) => {
-              void runActionInPane(app, actionId, {}, groupForPanel(panelId), panelId);
+            onRunAction: (app: AppRecord, actionId: string, params: Readonly<Record<string, string>>) => {
+              void runActionInPane(app, actionId, { ...params }, groupForPanel(panelId), panelId);
             },
             onOpenRow: (row: LauncherRow) => {
               const openPanelId = panelIdForAddress(row.address);

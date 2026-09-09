@@ -49,6 +49,8 @@ export interface InstanceRecord {
 export interface AppAction {
   id: string;
   label: string;
+  /** The names of the create body's documented params (contracts.md section 3). */
+  params: string[];
 }
 
 export type ShortcutMode = "focus" | "new";
@@ -74,6 +76,8 @@ export interface AppRecord {
   has_instances: boolean;
   actions: AppAction[];
   default_shortcut: DefaultShortcut | null;
+  /** The app's place among the New Tab page's leading tiles, lowest first; null puts it after every ranked app. */
+  launcher_rank: number | null;
   is_running: boolean;
   /** Whether ``instances`` is the app's own answer; false until its list has been fetched once. */
   is_listed: boolean;

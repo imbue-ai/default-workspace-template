@@ -37,6 +37,7 @@ def _full_manifest_data() -> dict[str, object]:
                 "params": [{"name": "path", "label": "Path", "required": False}],
             }
         ],
+        "launcher_rank": 20,
     }
 
 
@@ -54,6 +55,13 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.default_shortcut.mode is ShortcutMode.FOCUS
     assert [action.id for action in manifest.actions] == ["new"]
     assert manifest.actions[0].params[0].name == "path"
+    assert manifest.launcher_rank == 20
+
+
+@pytest.mark.parametrize("rank", [0, -3, "ten", 1.5])
+def test_launcher_rank_must_be_a_positive_integer(rank: object) -> None:
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate({**_full_manifest_data(), "launcher_rank": rank})
 
 
 def test_minimal_manifest_takes_the_documented_defaults() -> None:
@@ -69,6 +77,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.internal is False
     assert manifest.default_shortcut is None
     assert manifest.actions == ()
+    assert manifest.launcher_rank is None
     assert manifest.handles == {}
 
 

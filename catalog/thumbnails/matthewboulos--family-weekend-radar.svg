@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Family Weekend Radar">
+  <defs>
+    <radialGradient id="glowA" cx="18%" cy="0%" r="60%">
+      <stop offset="0%" stop-color="#ffc24b" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#ffc24b" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="95%" cy="8%" r="55%">
+      <stop offset="0%" stop-color="#3da9e0" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#3da9e0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3da9e0" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#3da9e0" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- paper -->
+  <rect width="240" height="160" rx="14" fill="#fef6ee"/>
+  <rect width="240" height="160" rx="14" fill="url(#glowA)"/>
+  <rect width="240" height="160" rx="14" fill="url(#glowB)"/>
+
+  <!-- kicker -->
+  <text x="18" y="26" font-family="Verdana, Geneva, sans-serif" font-size="9" font-weight="bold"
+        letter-spacing="1.6" fill="#ff7a3d">FAMILY WEEKEND RADAR</text>
+
+  <!-- radar centered on home -->
+  <g>
+    <circle cx="70" cy="98" r="52" fill="none" stroke="#e6d6c4" stroke-width="1.5"/>
+    <circle cx="70" cy="98" r="34" fill="none" stroke="#e6d6c4" stroke-width="1.5"/>
+    <circle cx="70" cy="98" r="17" fill="none" stroke="#e6d6c4" stroke-width="1.5"/>
+    <!-- sweep wedge -->
+    <path d="M70 98 L70 46 A52 52 0 0 1 118 78 Z" fill="url(#sweep)"/>
+
+    <!-- event dots, colored by closeness -->
+    <circle cx="83" cy="86" r="4.5" fill="#57c08a"/>
+    <circle cx="53" cy="112" r="4.5" fill="#3da9e0"/>
+    <circle cx="98" cy="120" r="4.5" fill="#ffc24b"/>
+    <circle cx="34" cy="76" r="4.5" fill="#ff7a3d"/>
+    <circle cx="106" cy="70" r="4.5" fill="#e85d9c"/>
+
+    <!-- home pin at center -->
+    <path d="M70 82 a10 10 0 0 1 10 10 c0 7.5 -10 16 -10 16 c0 0 -10 -8.5 -10 -16 a10 10 0 0 1 10 -10 z"
+          fill="#2b2438"/>
+    <circle cx="70" cy="92" r="4" fill="#fef6ee"/>
+  </g>
+
+  <!-- hero event card -->
+  <g>
+    <rect x="132" y="44" width="92" height="86" rx="12" fill="#ffffff" stroke="#efe3d6" stroke-width="1.5"/>
+    <!-- drive-time pin badge -->
+    <rect x="142" y="54" width="50" height="17" rx="8.5" fill="#57c08a"/>
+    <path d="M152 58 a3.4 3.4 0 0 1 3.4 3.4 c0 2.6 -3.4 5.6 -3.4 5.6 c0 0 -3.4 -3 -3.4 -5.6 a3.4 3.4 0 0 1 3.4 -3.4 z"
+          fill="#ffffff"/>
+    <circle cx="152" cy="61.4" r="1.3" fill="#57c08a"/>
+    <text x="159" y="66" font-family="Verdana, Geneva, sans-serif" font-size="8.5" font-weight="bold" fill="#ffffff">12 min</text>
+
+    <!-- title lines -->
+    <rect x="142" y="80" width="72" height="7" rx="3.5" fill="#2b2438"/>
+    <rect x="142" y="92" width="52" height="6" rx="3" fill="#c9bcac"/>
+
+    <!-- ticketed flag chip -->
+    <rect x="142" y="104" width="40" height="13" rx="6.5" fill="#fff2d6" stroke="#f4d9a1" stroke-width="1"/>
+    <text x="149" y="113" font-family="Verdana, Geneva, sans-serif" font-size="7" font-weight="bold" fill="#a15c10">ticketed</text>
+  </g>
+</svg>
