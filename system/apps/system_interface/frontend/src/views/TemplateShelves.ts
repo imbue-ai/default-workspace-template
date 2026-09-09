@@ -24,9 +24,14 @@ const RAIL_ARROW_GLYPH_SIZE = 20;
 //
 // Under 620px of PANE that fraction is too thin to read a title in, so the rail drops to two and
 // a half. Same arithmetic, but two gaps rather than three and the gap itself tightens to 16px
-// with it, which is why the subtrahend changes too. The step is a container query, like the rest
-// of the page: this is a dock panel, and a media query would measure the window instead.
-const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)] @max-[620px]:w-[calc((100%-32px)/2.5)]";
+// with it, which is why the subtrahend changes too. The steps are container queries, like the
+// rest of the page: this is a dock panel, and a media query would measure the window instead.
+//
+// Two and a half runs out in turn. It hands a card about 150px at a 440px pane, which is a 100px
+// drawing with a title truncated under it -- so from there the rail shows one and a half, one gap
+// before the half, and the card goes back to a size its art and title can use.
+const CARD_WIDTH_CLASS =
+  "w-[calc((100%-72px)/3.5)] @max-[620px]:w-[calc((100%-32px)/2.5)] @max-[440px]:w-[calc((100%-16px)/1.5)]";
 
 // The three layers a rail row stacks, innermost first: the cards (no z-index of their own, though
 // a hovered one's scale still promotes it), the edge fade over them, and the paging arrows over
