@@ -339,12 +339,9 @@ def test_the_sweep_re_tags_as_time_passes_and_stops_cleanly() -> None:
 
 
 def test_a_launching_chat_holds_the_protected_floor_with_no_engagement_yet() -> None:
-    # A chat seconds into its life has no presence report and no message: the
-    # engagement-only score would make it the most expendable chat in the workspace
-    # exactly while its unrepeatable opening message is in flight. The prioritizer
-    # must agree with the launch wrapper and leave it at the floor, or its first
-    # reapply -- which a create triggers almost immediately -- would undo the
-    # protection the wrapper just wrote.
+    # The prioritizer must agree with the launch wrapper here: a create triggers a
+    # reapply almost immediately, and scoring a chat this young on its missing
+    # presence and message would write 560 straight over the wrapper's 300.
     h = _Harness(chat_ids=["a"], pids={"a": 10})
     h.process_started_at["a"] = h.now
     h.prioritizer.reapply()
