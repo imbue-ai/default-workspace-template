@@ -1417,7 +1417,9 @@ def _touched_critical_apps(
         if not is_touched:
             continue
         program = manifest.get("program")
-        touched.append((name, program if isinstance(program, str) and program else name))
+        touched.append(
+            (name, program if isinstance(program, str) and program else name)
+        )
     return touched
 
 

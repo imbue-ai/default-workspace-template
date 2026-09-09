@@ -211,7 +211,9 @@ def test_read_worker_branch_survives_an_unrelated_provider_being_down() -> None:
                     "agents": [
                         {"name": "demo-worker", "initial_branch": "mngr/update-my-slug"}
                     ],
-                    "errors": [{"provider_name": "modal", "message": "not authenticated"}],
+                    "errors": [
+                        {"provider_name": "modal", "message": "not authenticated"}
+                    ],
                 }
             ),
             stderr="modal: not authenticated",
@@ -238,7 +240,9 @@ def test_read_worker_branch_says_when_a_provider_error_emptied_the_listing() -> 
             stdout=json.dumps(
                 {
                     "agents": [],
-                    "errors": [{"provider_name": "docker", "message": "daemon unreachable"}],
+                    "errors": [
+                        {"provider_name": "docker", "message": "daemon unreachable"}
+                    ],
                 }
             ),
         ),
