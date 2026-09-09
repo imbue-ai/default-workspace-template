@@ -1773,7 +1773,9 @@ def test_driver_honours_the_verifier_model_override(tmp_path: Path) -> None:
     assert driver._decider_model != "claude-haiku-4-5"
 
 
-def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path) -> None:
+def test_driver_builds_no_verification_agent_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The runner's own shell may carry the key (it does whenever evals are launched from it).
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     driver = MindsPersonaDriver(logs_dir=tmp_path / "agent", extra_env={})
 
     assert driver._build_verification_agent() is None

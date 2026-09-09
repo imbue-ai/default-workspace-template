@@ -130,7 +130,9 @@ def _grade_case(tmp_path: Path, case_text: str | None, is_gated_open: bool) -> t
     """Run finalize.py over a fake verifier tree that differs only in its case file.
 
     Gated open, the tree describes the friendliest possible trial -- gates all passed, the
-    conversation finished, quality scored -- so that the outcome is decided by the case file alone.
+    conversation finished, quality scored, the harness sound -- so that the outcome is decided by the
+    case file alone. Every dimension a real verifier emits is present, since an absent one now scores
+    zero and would decide the reward instead of the case file.
     Gated closed, it is a timed-out trial with a failed gate: the tree on which every other
     infrastructure diagnosis is skipped. Returns the exit code and the reward path, which a grading
     failure must have left absent.
@@ -143,7 +145,7 @@ def _grade_case(tmp_path: Path, case_text: str | None, is_gated_open: bool) -> t
     reward_path = verifier_dir / "reward.json"
     details_path = verifier_dir / "reward-details.json"
     gate_value, test_state = (1.0, "finished") if is_gated_open else (0.0, "timed_out")
-    reward_path.write_text(json.dumps({"gates": gate_value, "quality": 0.8}))
+    reward_path.write_text(json.dumps({"gates": gate_value, "quality": 0.8, "harness_quality": 1.0}))
     details_path.write_text(json.dumps({"gates": {"criteria": [{"value": gate_value}]}}))
     (agent_dir / "state.json").write_text(json.dumps({"test_state": test_state}))
     if case_text is not None:
@@ -197,8 +199,13 @@ def test_a_case_that_declares_no_expectations_still_grades_quality_only(
         tmp_path, case_text=json.dumps({"id": "greeting", **expectations_entry}), is_gated_open=True
     )
 
+    finalize = _load_finalize()
+
     assert exit_code == 0
-    assert json.loads(reward_path.read_text())["reward"] == 0.8
+    # Quality alone, since there are no expectations, then discounted by the harness's share of it.
+    assert json.loads(reward_path.read_text())["reward"] == pytest.approx(
+        (1.0 - finalize.HARNESS_SHARE) * 0.8 + finalize.HARNESS_SHARE * 1.0
+    )
 
 
 def test_a_broken_case_file_errors_a_trial_that_would_otherwise_grade_zero(tmp_path: Path) -> None:
@@ -218,3 +225,55 @@ def test_a_valid_case_file_lets_a_gated_closed_trial_grade_zero(tmp_path: Path) 
 
     assert exit_code == 0
     assert json.loads(reward_path.read_text())["reward"] == 0.0
+
+
+def test_the_harness_takes_a_share_of_what_the_trial_earned() -> None:
+    finalize = _load_finalize()
+    expectations = {"app_checks": ["app_registered"]}
+
+    earned = finalize._earned_reward({"quality": 1.0, "outcome": 1.0, "harness_quality": 0.0}, expectations)
+
+    # Quality and outcome are both perfect, so the whole shortfall is the harness's share of them.
+    assert earned == 1.0 - finalize.HARNESS_SHARE
+
+
+def test_a_broken_harness_costs_a_trial_that_did_everything_else_well() -> None:
+    finalize = _load_finalize()
+    expectations = {"app_checks": ["app_registered"]}
+    rewards = {"quality": 0.8, "outcome": 1.0}
+
+    sound = finalize._earned_reward({**rewards, "harness_quality": 1.0}, expectations)
+    broken = finalize._earned_reward({**rewards, "harness_quality": 0.2}, expectations)
+
+    # The branch under test is the agent's harness, so tooling it breaks has to move the reward --
+    # otherwise an agent whose review gate will not load reads as one that chose to skip review.
+    assert sound > broken
+    assert round(sound - broken, 6) == round(finalize.HARNESS_SHARE * 0.8, 6)
+
+
+def test_the_harness_share_leaves_the_quality_outcome_parity_alone() -> None:
+    finalize = _load_finalize()
+    expectations = {"app_checks": ["app_registered"]}
+
+    quality_only = finalize._earned_reward({"quality": 1.0, "outcome": 0.0, "harness_quality": 1.0}, expectations)
+    outcome_only = finalize._earned_reward({"quality": 0.0, "outcome": 1.0, "harness_quality": 1.0}, expectations)
+
+    assert quality_only == outcome_only
+
+
+def test_an_absent_dimension_scores_zero_whichever_dimension_it_is() -> None:
+    finalize = _load_finalize()
+    expectations = {"app_checks": ["app_registered"]}
+
+    # These rewards are the ones rewardkit just produced, so a dimension is absent only because it
+    # failed to emit -- never because the trial predates it, which is what a regrade re-runs. Reading
+    # the harness leniently while reading quality strictly would forgive exactly that failure.
+    earned_on_quality_and_outcome = 0.5 * 0.6 + 0.5 * 1.0
+
+    perfect_harness = finalize._earned_reward({"quality": 0.6, "outcome": 1.0, "harness_quality": 1.0}, expectations)
+    absent_harness = finalize._earned_reward({"quality": 0.6, "outcome": 1.0}, expectations)
+    absent_quality = finalize._earned_reward({"outcome": 1.0, "harness_quality": 1.0}, expectations)
+
+    assert perfect_harness == pytest.approx((1.0 - finalize.HARNESS_SHARE) * earned_on_quality_and_outcome + 0.2)
+    assert absent_harness == pytest.approx((1.0 - finalize.HARNESS_SHARE) * earned_on_quality_and_outcome)
+    assert absent_quality == pytest.approx((1.0 - finalize.HARNESS_SHARE) * 0.5 + 0.2)

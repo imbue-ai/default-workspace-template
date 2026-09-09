@@ -6,6 +6,7 @@ icon = "icon.svg"
 instances = true
 critical = true
 priority = "chat"
+launcher_rank = 10
 
 [default_shortcut]
 action = "new"
@@ -14,7 +15,10 @@ mode = "new"
 [[actions]]
 id = "new"
 label = "New Chat"
-params = [{name = "account_id", label = "Provider account", required = false}]
+params = [
+    {name = "account_id", label = "Provider account", required = false},
+    {name = "message", label = "First message", required = false},
+]
 
 [[actions]]
 id = "subagent"

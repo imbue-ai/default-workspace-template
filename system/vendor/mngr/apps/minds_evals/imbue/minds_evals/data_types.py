@@ -32,9 +32,10 @@ DEFAULT_DWT_BRANCH: Final[str] = "main"
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 3600.0
 
-# Seed value for the wordiness guard: a guess, not a measurement. To ground it,
-# take the mean over a batch of real runs and set "avg_word_count_baseline" in
-# the eval config, which overrides this per config.
+# Kept only so configs that set "avg_word_count_baseline" still load. Nothing reads it at grade time:
+# the message-length guard replaced the average-words-per-turn measure with per-message limits, which
+# score how the agent writes rather than how its work happened to divide across turns.
+# CLEANUP: drop this and the field on CaseConfig/EvalConfig once no checked-in config sets it.
 DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
@@ -558,12 +559,13 @@ class StepBoxFile(FrozenModel):
 class RewardDimension(LowerCaseStrEnum):
     """A key of the verifier's reward.json that a step's `min_reward` may gate on.
 
-    GATES, QUALITY and OUTCOME are the dimensions rewardkit scores; REWARD is the composed, gated
-    score finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
+    Every member but REWARD is a dimension rewardkit scores; REWARD is the composed, gated score
+    finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
     """
 
     GATES = auto()
     QUALITY = auto()
+    HARNESS_QUALITY = auto()
     OUTCOME = auto()
     REWARD = auto()
 
@@ -678,7 +680,9 @@ class EvalConfig(FrozenModel):
     dwt_branch: str = Field(description="Workspace template branch")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
+    avg_word_count_baseline: float = Field(
+        description="Unused: the message-length guard scores per-message limits, not an average"
+    )
     cases: tuple[PersonaCase, ...] = Field(description="The persona cases, one task each")
 
 
@@ -695,7 +699,9 @@ class CaseConfig(FrozenModel):
     dwt_repo: str = Field(description="Workspace template repo")
     dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
+    avg_word_count_baseline: float = Field(
+        description="Unused: the message-length guard scores per-message limits, not an average"
+    )
     # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
     expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")

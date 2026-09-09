@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Widget Board: wired widget cards on a dark canvas">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1720"/>
+      <stop offset="1" stop-color="#0a0f16"/>
+    </linearGradient>
+    <pattern id="grid" width="16" height="16" patternUnits="userSpaceOnUse">
+      <path d="M16 0H0V16" fill="none" stroke="#1b2530" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- canvas -->
+  <rect width="240" height="160" rx="12" fill="url(#bg)"/>
+  <rect x="1" y="1" width="238" height="158" rx="11" fill="url(#grid)"/>
+
+  <!-- cables (drawn under the cards) -->
+  <path d="M92 52 C120 52 118 86 146 86" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+  <path d="M92 116 C118 116 124 96 146 94" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- Timer widget -->
+  <g>
+    <rect x="20" y="30" width="72" height="44" rx="8" fill="#16212e" stroke="#2b3a4b" stroke-width="1"/>
+    <rect x="20" y="30" width="72" height="14" rx="8" fill="#1f2d3d"/>
+    <rect x="20" y="37" width="72" height="7" fill="#1f2d3d"/>
+    <circle cx="28" cy="37" r="2.5" fill="#f59e0b"/>
+    <text x="35" y="40" font-family="sans-serif" font-size="7" fill="#cbd5e1">Timer</text>
+    <circle cx="56" cy="60" r="9" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <path d="M56 60 L56 54" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+    <path d="M56 60 L60 62" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="92" cy="52" r="3" fill="#38bdf8"/>
+  </g>
+
+  <!-- Email widget -->
+  <g>
+    <rect x="20" y="94" width="72" height="44" rx="8" fill="#16212e" stroke="#2b3a4b" stroke-width="1"/>
+    <rect x="20" y="94" width="72" height="14" rx="8" fill="#1f2d3d"/>
+    <rect x="20" y="101" width="72" height="7" fill="#1f2d3d"/>
+    <circle cx="28" cy="101" r="2.5" fill="#34d399"/>
+    <text x="35" y="104" font-family="sans-serif" font-size="7" fill="#cbd5e1">Email</text>
+    <rect x="28" y="114" width="48" height="4" rx="2" fill="#334555"/>
+    <rect x="28" y="122" width="40" height="4" rx="2" fill="#2a3a49"/>
+    <rect x="28" y="130" width="44" height="4" rx="2" fill="#2a3a49"/>
+    <circle cx="92" cy="116" r="3" fill="#a78bfa"/>
+  </g>
+
+  <!-- AI Agent widget (target) -->
+  <g>
+    <rect x="146" y="62" width="76" height="52" rx="8" fill="#16212e" stroke="#2b3a4b" stroke-width="1"/>
+    <rect x="146" y="62" width="76" height="14" rx="8" fill="#1f2d3d"/>
+    <rect x="146" y="69" width="76" height="7" fill="#1f2d3d"/>
+    <circle cx="154" cy="69" r="2.5" fill="#38bdf8"/>
+    <text x="161" y="72" font-family="sans-serif" font-size="7" fill="#cbd5e1">AI Agent</text>
+    <circle cx="146" cy="86" r="3" fill="#38bdf8"/>
+    <circle cx="146" cy="94" r="3" fill="#a78bfa"/>
+    <rect x="160" y="84" width="50" height="5" rx="2.5" fill="#334555"/>
+    <rect x="160" y="93" width="40" height="5" rx="2.5" fill="#2a3a49"/>
+    <rect x="160" y="102" width="30" height="7" rx="3.5" fill="#2563eb"/>
+    <text x="175" y="107.5" font-family="sans-serif" font-size="5" fill="#e0ecff" text-anchor="middle">Run</text>
+  </g>
+
+  <text x="16" y="20" font-family="sans-serif" font-size="9" font-weight="600" fill="#e2e8f0">Widget Board</text>
+</svg>

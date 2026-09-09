@@ -250,6 +250,12 @@ class AppManifest(FrozenModel):
     actions: tuple[AppAction, ...] = Field(
         default=(), description="The declared create actions"
     )
+    launcher_rank: int | None = Field(
+        default=None,
+        ge=1,
+        description="The app's place among the New Tab page's leading tiles (lower first); "
+        "an app without one follows every ranked app",
+    )
     handles: dict[str, Any] = Field(
         default_factory=dict, description="Reserved; must be absent or empty"
     )

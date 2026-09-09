@@ -2094,6 +2094,25 @@ def test_create_chat_launches_a_reserved_chat_under_its_id(
     assert body["display_name"] == reserved.display_name
 
 
+def test_create_chat_refuses_a_message_beside_a_reserved_id(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reserved chat is launched with the first message it was minted with; a launch that
+    names another is refused (400) rather than sent with a message the tab never asked for."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    reserved = agent_manager.reserve_chat(message="Teach me about Minds")
+
+    response = client.post("/api/agents/create-chat", json={"agent_id": reserved.agent_id, "message": "other"})
+
+    assert response.status_code == 400
+    assert "first message" in response.get_json()["detail"]
+    reserved_proto = agent_manager.get_proto_agent(reserved.agent_id)
+    assert reserved_proto is not None and reserved_proto.message == "Teach me about Minds"
+
+
 def test_create_chat_relaunches_a_failed_chat_under_its_id(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

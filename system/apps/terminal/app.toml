@@ -6,6 +6,7 @@ instances = true
 instances_url = "http://127.0.0.1:7682"
 critical = true
 priority = "terminal"
+launcher_rank = 40
 
 [default_shortcut]
 action = "new"

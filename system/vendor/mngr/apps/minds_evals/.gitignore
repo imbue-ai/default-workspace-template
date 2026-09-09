@@ -24,3 +24,6 @@ viewer/build/
 # into an excluded directory, so a pattern matching only the files inside it would not bring them
 # back.
 !viewer/app/lib/
+
+# macOS Finder cruft
+**/.DS_Store
