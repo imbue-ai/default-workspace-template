@@ -70,9 +70,14 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
-- After every successful backup, `restic forget --keep-hourly N --keep-daily
-  M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
-  once per `prune_interval_hours` (default 24) we additionally run
+- After every successful backup, `restic forget --group-by '' --keep-hourly N
+  --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
+  Grouping is disabled because restic applies the keep-* policy per group and
+  its default grouping (`host,paths`) would put every snapshot in a group of
+  its own -- `outer_trigger` reads each tick from a uniquely-named snapshot
+  path, and a container rebuild changes the hostname -- so the whole
+  repository (which belongs to this one workspace) is thinned as a unit. At
+  most once per `prune_interval_hours` (default 24) we additionally run
   `restic prune` (the slow data deletion step); gated by
   `data/.state/last-restic-prune` (a timestamp file under data/, covered by
   the opt-in GitHub sync when enabled).
