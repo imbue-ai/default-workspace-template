@@ -7,10 +7,13 @@ from typing import Final
 
 import pytest
 from harbor.environments.base import ExecResult
-from loguru import logger
 
+from imbue.imbue_common.modal_image_requirements import IMAGE_REQUIREMENTS_FILENAME
+from imbue.imbue_common.modal_image_requirements import image_pinned_app_dir
+from imbue.imbue_common.modal_image_requirements import image_requirements_path
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 from imbue.minds_evals.minds_bridge import AGENTS_PATH
 from imbue.minds_evals.minds_bridge import AUTH_MODE_API_KEY
@@ -27,6 +30,7 @@ from imbue.minds_evals.minds_bridge import build_credential_lines
 from imbue.minds_evals.minds_bridge import chat_url_shell_snippet
 from imbue.minds_evals.minds_bridge import create_chat_agent
 from imbue.minds_evals.minds_bridge import create_workspace_and_wait
+from imbue.minds_evals.minds_bridge import derive_modal_environment_name
 from imbue.minds_evals.minds_bridge import describe_agents_listing
 from imbue.minds_evals.minds_bridge import destroy_workspaces
 from imbue.minds_evals.minds_bridge import fetch_event_total
@@ -55,6 +59,7 @@ from imbue.minds_evals.mock_environment_test import curl_stdout
 from imbue.minds_evals.mock_environment_test import failed_result
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.template_loading import TEMPLATES_DIR
 
 
 def test_load_modal_token_env_reads_the_active_profile(tmp_path: Path) -> None:
@@ -79,6 +84,17 @@ _ACTIVATION_ENV = {
     "MNGR_HOST_DIR": "/root/.minds-staging/mngr",
     "MNGR_PREFIX": "minds-staging-",
 }
+
+
+def test_derive_modal_environment_name_is_the_concatenation_mngr_makes() -> None:
+    assert derive_modal_environment_name(_ACTIVATION_ENV, "evals-todo-app-cafe1234") == (
+        "minds-staging-evals-todo-app-cafe1234"
+    )
+
+
+def test_derive_modal_environment_name_refuses_a_name_mngr_would_truncate() -> None:
+    with pytest.raises(ModalNameBudgetError, match="truncate"):
+        derive_modal_environment_name(_ACTIVATION_ENV, "z" * 60)
 
 
 def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
@@ -573,26 +589,24 @@ def test_authenticate_workspace_reports_a_rejected_paste(tmp_path: Path) -> None
     assert (sign_in.is_signed_in, sign_in.account_id) == (False, "")
 
 
-def test_authenticate_workspace_never_logs_the_credential_it_pasted(tmp_path: Path) -> None:
+def test_authenticate_workspace_never_logs_the_credential_it_pasted(
+    tmp_path: Path, captured_log_messages: list[str]
+) -> None:
     # What refuses a sign-in can quote the request that carried the paste: the endpoint reports a
     # body it could not read by rendering the validation error, and that error carries the input.
     # A trial log outlives the run and is shared, so the key must not survive into one.
     echoed = json.dumps(
         {"detail": "Invalid request body: input_value='ANTHROPIC_API_KEY={}'".format(_SIGN_IN_API_KEY)}
     )
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="TRACE")
-    try:
-        sign_in = _run_authenticate(tmp_path, echoed, status=400)
-    finally:
-        logger.remove(handler_id)
+
+    sign_in = _run_authenticate(tmp_path, echoed, status=400)
 
     assert (sign_in.is_signed_in, sign_in.account_id) == (False, "")
-    assert logged and not any(_SIGN_IN_API_KEY in message for message in logged)
-    assert any("<redacted>" in message for message in logged)
+    assert captured_log_messages and not any(_SIGN_IN_API_KEY in message for message in captured_log_messages)
+    assert any("<redacted>" in message for message in captured_log_messages)
     # The status goes in beside the detail: it is what separates a paste the endpoint could not
     # read (400) from an account it could not write (500), which are not the same failure.
-    assert any("HTTP 400" in message for message in logged)
+    assert any("HTTP 400" in message for message in captured_log_messages)
     # And a caller with no secret to hide gets its text back, rather than the marker spliced
     # between every character.
     assert redact_secret("nothing to hide", "") == "nothing to hide"
@@ -771,6 +785,53 @@ def test_the_tunnel_and_proxy_log_beside_the_backend(tmp_path: Path) -> None:
     assert "> {} 2>&1".format(service_log_path(minds_bridge.PROXY_LOG_FILENAME)) in proxy_command
 
 
+def test_the_proxy_is_served_by_its_own_litellm(tmp_path: Path) -> None:
+    """The workspace venv's litellm cannot serve -- it carries no [proxy] extra -- and every
+    `uv run` in the box re-syncs that venv, so a proxy borrowing it would die at startup or lose its
+    dependencies mid-trial."""
+    environment = MockBoxEnvironment(tmp_path, [])
+
+    asyncio.run(start_proxy(environment, {}, "model_list: []", "sk-up", "sk-trial", 4000))
+
+    command = environment.exec_commands[-1]
+    assert minds_bridge.BOX_PROXY_LITELLM_PATH in command
+    assert "uv run" not in command
+
+
+# The pin set the box image builds the proxy venv from. Derived from the same layout helper
+# modal_litellm's own drift test resolves its export through, so the two apps cannot disagree about
+# where it lives; the Dockerfile names it repo-root-relative, reading it out of the staged clone it
+# builds from.
+_PROXY_PIN_PACKAGE: Final[str] = "modal-litellm"
+_PROXY_IMAGE_REQUIREMENTS: Final[str] = "{}/{}".format(
+    image_pinned_app_dir(_PROXY_PIN_PACKAGE), IMAGE_REQUIREMENTS_FILENAME
+)
+
+
+def test_the_box_image_builds_the_venv_the_proxy_is_started_from() -> None:
+    """Two files, one path: the image creates the venv and fills it, the driver runs the litellm
+    inside it. A venv created but left empty -- or filled through some other interpreter -- has no
+    litellm to start, and the trial fails bring-up in the box, where the host sees only a log."""
+    dockerfile = (TEMPLATES_DIR / "environment" / "Dockerfile").read_text()
+
+    (venv_line,) = [line for line in dockerfile.splitlines() if "uv venv" in line]
+    (install_line,) = [line for line in dockerfile.splitlines() if "uv pip install" in line]
+
+    assert minds_bridge.BOX_PROXY_VENV_DIR in venv_line
+    assert "--python {}".format(minds_bridge.BOX_PROXY_VENV_DIR) in install_line
+    assert "--require-hashes" in install_line
+    assert _PROXY_IMAGE_REQUIREMENTS in install_line
+
+
+def test_the_proxy_pin_set_the_box_image_installs_is_committed() -> None:
+    """The image reads that export by a path spelled out across app boundaries, and modal_litellm
+    keeps it current knowing nothing of this consumer. Unchecked here, a move of the export shows up
+    as a failed image build, minutes into a run on Modal."""
+    repo_root = Path(__file__).resolve().parents[4]
+
+    assert image_requirements_path(repo_root, _PROXY_PIN_PACKAGE).is_file()
+
+
 def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
     """A finished tarball has no writer holding it open, and the agent logs dir is downloaded once
     per step -- under the never-emptied service logs dir every earlier step's tarballs would be
@@ -840,27 +901,23 @@ def test_describe_agents_listing_names_the_three_ways_a_chat_agent_stays_unresol
     )
 
 
-def test_wait_heartbeat_says_it_is_still_waiting_then_holds_off() -> None:
+def test_wait_heartbeat_says_it_is_still_waiting_then_holds_off(captured_log_messages: list[str]) -> None:
     """One line as soon as a poll fails, then at most one per interval: a twenty-minute wait must be
     visible in the log without becoming thousands of lines of it."""
     heartbeat = WaitHeartbeat(label="the chat agent")
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="TRACE")
-    try:
-        heartbeat.tick("state=unreachable")
-        heartbeat.tick("state=unreachable")
-        lines_within_the_interval = list(logged)
-        # Past the hold-off window, without waiting one out: the class reads a monotonic clock, so
-        # moving its bookkeeping back is the same thing as time passing.
-        heartbeat.last_logged_at -= _WAIT_HEARTBEAT_SECONDS + 1.0
-        heartbeat.tick("state=BUSY")
-    finally:
-        logger.remove(handler_id)
+
+    heartbeat.tick("state=unreachable")
+    heartbeat.tick("state=unreachable")
+    lines_within_the_interval = list(captured_log_messages)
+    # Past the hold-off window, without waiting one out: the class reads a monotonic clock, so
+    # moving its bookkeeping back is the same thing as time passing.
+    heartbeat.last_logged_at -= _WAIT_HEARTBEAT_SECONDS + 1.0
+    heartbeat.tick("state=BUSY")
 
     # What the log has to carry: which wait it is, how long it has run, and what the workspace was
     # answering meanwhile -- a wait that is stuck says nothing without the last of those.
     (first_line,) = lines_within_the_interval
     assert "the chat agent" in first_line
     assert "state=unreachable" in first_line
-    assert len(logged) == 2
-    assert "state=BUSY" in logged[1]
+    assert len(captured_log_messages) == 2
+    assert "state=BUSY" in captured_log_messages[1]

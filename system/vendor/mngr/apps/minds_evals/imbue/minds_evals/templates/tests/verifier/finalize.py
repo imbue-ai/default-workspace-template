@@ -71,6 +71,14 @@ SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app",
 # part broke.
 
 
+# The three helpers below are mirrored by _reward_dicts / _criteria / is_gates_dimension_passed in
+# minds_evals/check_run.py, which decides the same gate verdict host-side. They cannot be shared:
+# this file runs inside the slim rewardkit verifier container, which has stdlib and rewardkit and no
+# imbue package. Keep the two in step. They differ on purpose in one respect, and one only:
+# check_run coerces a criterion value it cannot read to zero, because it must always reach a
+# verdict, where here a malformed reward-details file is a verifier bug and raising is the right
+# answer. Anything else the two decide differently is a bug -- the two ends of one trial would then
+# disagree about whether it passed, with nothing saying so.
 def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     """The per-reward detail dicts for one dimension. rewardkit emits a single dict when a dimension
     directory yields one Reward, or a list of dicts when it yields several (e.g. a judge .toml plus
@@ -94,7 +102,11 @@ def _gates_all_passed(details: dict[str, Any]) -> bool:
     for reward_dict in reward_dicts:
         for criterion in _criteria(reward_dict):
             saw_criterion = True
-            if criterion.get("value", 0) <= 0:
+            value = criterion.get("value", 0)
+            # A bool is excluded before the comparison because isinstance(True, int) holds, so
+            # `True <= 0` is False and a boolean value would otherwise pass the gate here while
+            # failing it in check_run, which excludes bools for the same reason.
+            if isinstance(value, bool) or value <= 0:
                 return False
     return saw_criterion
 

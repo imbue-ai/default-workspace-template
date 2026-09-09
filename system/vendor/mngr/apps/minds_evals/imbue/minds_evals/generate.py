@@ -2,9 +2,10 @@
 eval-config JSON schema unchanged and emits one harbor task directory per persona case.
 
 Each task directory carries a byte-identical environment/ (the adapted box Dockerfile, entrypoint,
-and a staged shallow clone of mngr-internal at the resolved SHA), so Modal's image-layer cache
-builds the box image once per mngr SHA. Per-case data lives only in instruction.md, tests/case.json,
-and solution/solve.sh -- never in environment/, or the cache key diverges.
+and a staged shallow clone of mngr-internal at the resolved SHA), so the whole dataset shares ONE
+Modal image, keyed on the mngr SHA and the Dockerfile and cached as a whole (about two and a half
+minutes to build cold). Per-case data lives only in instruction.md, tests/case.json, and
+solution/solve.sh -- never in environment/, or the cache key diverges.
 """
 
 import json
@@ -22,11 +23,9 @@ from typing import Any
 from typing import Final
 from typing import assert_never
 
-import click
 from loguru import logger
 from pydantic import ValidationError
 
-from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals import evidence_collection
@@ -71,6 +70,12 @@ from imbue.minds_evals.expectations import parse_expectations
 from imbue.minds_evals.usage import summarize_workspace_usage
 
 MNGR_REPO: Final[str] = "https://github.com/imbue-ai/mngr-internal.git"
+
+# A full commit SHA, which git resolves without a remote lookup -- as opposed to a branch or tag
+# name, which only the remote can turn into a commit. Matched with fullmatch, never `$`: `$` also
+# matches before a trailing newline, so a SHA read off a file would be taken at its word and handed
+# to `git fetch` with the newline still on it.
+_FULL_SHA_PATTERN: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{40}")
 
 _TEMPLATES = resources.files("imbue.minds_evals") / "templates"
 
@@ -511,13 +516,37 @@ def load_eval_config(config_path: Path) -> EvalConfig:
     return config
 
 
-def resolve_remote_tip(repo: str, branch: str) -> str:
-    """The branch's current tip SHA on the remote, via plain `git ls-remote` -- git uses your own
+@pure
+def _parse_ls_remote(output: str) -> dict[str, str]:
+    """`git ls-remote`'s tab-separated `<sha> <ref name>` lines, as a mapping of ref name to sha."""
+    entries: dict[str, str] = {}
+    for line in output.splitlines():
+        sha, _, ref_name = line.partition("\t")
+        if sha.strip() and ref_name.strip():
+            entries[ref_name.strip()] = sha.strip()
+    return entries
+
+
+def resolve_remote_ref(repo: str, ref: str) -> str:
+    """The commit SHA a ref names on the remote, via plain `git ls-remote` -- git uses your own
     credentials, and a real auth/network failure surfaces as-is. Every pinned input goes through
-    here (mngr and the workspace template alike), so the messages name the repo they are about."""
+    here (mngr and the workspace template alike), so the messages name the repo they are about.
+
+    A branch name, a tag name, or a full 40-hex commit SHA is accepted. A SHA is taken verbatim and
+    costs no remote round trip. An annotated tag is peeled to the commit it points at, so what comes
+    back is always something a later clone can check out -- never a tag object. A name carried by
+    both a tag and a branch resolves to the TAG (a release tag is the more deliberate pin), which is
+    logged so the choice is visible in the generation log.
+    """
+    if _FULL_SHA_PATTERN.fullmatch(ref):
+        return ref
+    peeled_tag_ref = "refs/tags/{}^{{}}".format(ref)
+    tag_ref = "refs/tags/{}".format(ref)
+    branch_ref = "refs/heads/{}".format(ref)
     try:
         result = subprocess.run(
-            ["git", "ls-remote", repo, "refs/heads/{}".format(branch)],
+            # All three candidates in one round trip; which one wins is decided below, not by git.
+            ["git", "ls-remote", repo, peeled_tag_ref, tag_ref, branch_ref],
             capture_output=True,
             text=True,
             timeout=60,
@@ -525,15 +554,25 @@ def resolve_remote_tip(repo: str, branch: str) -> str:
     except subprocess.TimeoutExpired:
         raise GitSourceError("timed out reaching the remote {} -- check your network/VPN".format(repo)) from None
     if result.returncode != 0:
-        # A failed ls-remote (offline, auth, DNS) is NOT a missing branch -- surface the real reason.
+        # A failed ls-remote (offline, auth, DNS) is NOT a missing ref -- surface the real reason.
         detail = (result.stderr or "").strip() or "git ls-remote failed"
         raise GitSourceError(
             "could not reach the remote {} -- check your network + git auth ({})".format(repo, detail[:200])
         )
-    ref = (result.stdout or "").split("\t")[0].strip()
-    if not ref:
-        raise GitSourceError("branch {!r} not found on the remote {}".format(branch, repo))
-    return ref
+    sha_by_ref = _parse_ls_remote(result.stdout or "")
+    # The peeled entry exists only for an annotated tag; a lightweight tag has the bare ref alone.
+    tag_sha = sha_by_ref.get(peeled_tag_ref) or sha_by_ref.get(tag_ref)
+    branch_sha = sha_by_ref.get(branch_ref)
+    if tag_sha is not None and branch_sha is not None:
+        logger.info("{} carries both a tag and a branch named {!r} -- using the tag", repo, ref)
+    resolved_sha = tag_sha if tag_sha is not None else branch_sha
+    if resolved_sha is None:
+        raise GitSourceError(
+            "ref {!r} not found on the remote {} -- no such tag or branch (a full 40-hex SHA also works)".format(
+                ref, repo
+            )
+        )
+    return resolved_sha
 
 
 def _run_git(*args: str) -> None:
@@ -545,14 +584,20 @@ def _run_git(*args: str) -> None:
 def fetch_mngr_source(repo: str, ref: str, dest: Path) -> None:
     """A FRESH shallow clone of the exact mngr ref into `dest`, via plain git (your own credentials).
     Pulled straight from the remote into a throwaway dir -- independent of any on-device checkout, so
-    your local working-tree state never reaches the box."""
+    your local working-tree state never reaches the box. A ref the remote does not have (a SHA that
+    was never pushed, say) fails here rather than producing an empty clone."""
     _run_git("init", "-q", str(dest))
     _run_git("-C", str(dest), "fetch", "--depth", "1", repo, ref)
     _run_git("-C", str(dest), "-c", "advice.detachedHead=false", "checkout", "-q", "FETCH_HEAD")
 
 
 @pure
-def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_sha: str) -> CaseConfig:
+def build_case_config(
+    config: EvalConfig, case: PersonaCase, *, mngr_ref: str, mngr_sha: str, dwt_ref: str, dwt_sha: str
+) -> CaseConfig:
+    # The refs are passed in rather than read off `config` because a generation may override them;
+    # what lands in the task metadata must be the ref the recorded SHA was actually resolved from.
+    #
     # The deliverable kind is expanded into its explicit check list exactly once, here, so the
     # collector and the verifier can never disagree about what was being checked.
     return CaseConfig(
@@ -562,10 +607,10 @@ def build_case_config(config: EvalConfig, case: PersonaCase, mngr_sha: str, dwt_
         step=None,
         timeout_seconds=config.timeout_seconds,
         verification_timeout_seconds=config.verification_timeout_seconds,
-        mngr_branch=config.mngr_branch,
+        mngr_branch=mngr_ref,
         mngr_sha=mngr_sha,
         dwt_repo=config.dwt_repo,
-        dwt_branch=config.dwt_branch,
+        dwt_branch=dwt_ref,
         dwt_sha=dwt_sha,
         avg_word_count_baseline=config.avg_word_count_baseline,
         expectations=expand_expectations(case.expectations) if case.expectations is not None else None,
@@ -1189,8 +1234,10 @@ def write_task_dir(
     else:
         write_steps_dir(task_dir, case_config, case.steps, config_dir)
 
-    # environment/: identical across all tasks in the dataset (Modal layer-cache
-    # builds the box image once per mngr SHA). Per-case data must never land here.
+    # environment/: identical across all tasks in the dataset, so the dataset builds ONE Modal
+    # image -- keyed on the mngr SHA and the Dockerfile together, and cached as a whole rather
+    # than per instruction. Per-case data must never land here, or every task pays its own
+    # two-and-a-half-minute cold build.
     # The clone is staged WITHOUT .git: Modal's build-context upload drops .git
     # anyway, so nothing in the box may depend on it; the exact SHA travels as a
     # plain file instead (COPYed to /work/mngr_sha, read by the driver).
@@ -1299,8 +1346,22 @@ def _warn_about_step_shapes(case: PersonaCase) -> None:
             )
 
 
-def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> list[Path]:
-    """Generate one harbor task directory per persona case; returns the task directories."""
+def generate_dataset(
+    config_path: Path,
+    output_dir: Path,
+    mngr_repo: str,
+    *,
+    mngr_ref: str | None,
+    dwt_ref: str | None,
+) -> list[Path]:
+    """Generate one harbor task directory per persona case; returns the task directories.
+
+    `mngr_ref` and `dwt_ref` override the config's `mngr_branch` and `dwt_branch` for this
+    generation, so a caller can pin a known-good pair (a release tag, say) without editing the
+    config file. Whichever ref is used is what the task metadata records next to its SHA. Passing
+    None for either takes the config's own ref -- which every caller has to say out loud, so that
+    "generate what the config says" is a decision rather than what happens by omission.
+    """
     config = load_eval_config(config_path)
     # Warned before any network work, since the config alone decides it: an author with a
     # mis-sized budget or an odd step shape should not first wait through two ls-remotes and a
@@ -1309,13 +1370,15 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
         _warn_if_timeout_is_implausible(case, config.timeout_seconds)
         _warn_if_trial_outlives_the_workspace(case, config)
         _warn_about_step_shapes(case)
-    mngr_sha = resolve_remote_tip(mngr_repo, config.mngr_branch)
-    logger.info("Resolved mngr {}@{}", config.mngr_branch, mngr_sha[:12])
+    chosen_mngr_ref = mngr_ref or config.mngr_branch
+    chosen_dwt_ref = dwt_ref or config.dwt_branch
+    mngr_sha = resolve_remote_ref(mngr_repo, chosen_mngr_ref)
+    logger.info("Resolved mngr {}@{}", chosen_mngr_ref, mngr_sha[:12])
     # The workspace template is pinned the same way as mngr: the dataset records the
     # exact SHA and the box clones that, so the same dataset builds the same
     # workspaces however long after generation it is run.
-    dwt_sha = resolve_remote_tip(config.dwt_repo, config.dwt_branch)
-    logger.info("Resolved dwt {}@{}", config.dwt_branch, dwt_sha[:12])
+    dwt_sha = resolve_remote_ref(config.dwt_repo, chosen_dwt_ref)
+    logger.info("Resolved dwt {}@{}", chosen_dwt_ref, dwt_sha[:12])
 
     if output_dir.exists() and any(output_dir.iterdir()):
         raise EvalConfigError(
@@ -1331,54 +1394,16 @@ def generate_dataset(config_path: Path, output_dir: Path, mngr_repo: str) -> lis
         logger.info("Fetching mngr source at {} (shallow clone)", mngr_sha[:12])
         fetch_mngr_source(mngr_repo, mngr_sha, mngr_source)
         for case in config.cases:
-            case_config = build_case_config(config, case, mngr_sha, dwt_sha)
+            case_config = build_case_config(
+                config,
+                case,
+                mngr_ref=chosen_mngr_ref,
+                mngr_sha=mngr_sha,
+                dwt_ref=chosen_dwt_ref,
+                dwt_sha=dwt_sha,
+            )
             task_dir = output_dir / case.case_id
             logger.info("Writing task {}", task_dir)
             write_task_dir(task_dir, case_config, case, config_path.parent, mngr_source)
             task_dirs.append(task_dir)
     return task_dirs
-
-
-@click.group()
-def main() -> None:
-    """Generate harbor task datasets for the Minds persona evals."""
-    setup_logging(level="INFO")
-
-
-@main.command()
-@click.option(
-    "--config",
-    "config_path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    help=(
-        "Eval config json: {mngr_branch, dwt_repo?, dwt_branch?, timeout_seconds?, "
-        "verification_timeout_seconds?, avg_word_count_baseline?, personas:[...]}"
-    ),
-)
-@click.option(
-    "--output",
-    "output_dir",
-    required=True,
-    type=click.Path(file_okay=False, path_type=Path),
-    help="Dataset directory to create (one harbor task subdirectory per persona case)",
-)
-@click.option(
-    "--mngr-repo",
-    default=MNGR_REPO,
-    show_default=True,
-    help="The mngr remote the box source is fetched from",
-)
-def generate(config_path: Path, output_dir: Path, mngr_repo: str) -> None:
-    """Generate one harbor task per persona case from an eval config."""
-    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=mngr_repo)
-    logger.info("Generated {} task(s) in {}", len(task_dirs), output_dir)
-    logger.info(
-        "Run them from the monorepo root with: uv run --project apps/minds_evals harbor run "
-        "-p {} -a imbue.minds_evals.driver:MindsPersonaDriver -e modal -y",
-        output_dir,
-    )
-
-
-if __name__ == "__main__":
-    main()

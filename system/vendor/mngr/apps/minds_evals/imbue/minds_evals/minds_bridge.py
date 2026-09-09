@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import tomllib
+from collections.abc import Mapping
 from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
@@ -27,6 +28,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
@@ -43,9 +45,9 @@ BOX_LOGS_DIR: Final[str] = "/logs/agent"
 BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
 BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
-# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
-# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
-# pinned mngr SHA, which predates them.
+# baked into the box image because the image is one build per mngr SHA, cached whole, and has to
+# stay byte-identical across a dataset -- so changing them would cost a full rebuild -- and because
+# the image is built from the pinned mngr SHA, which predates them.
 _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
@@ -55,8 +57,16 @@ BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
 # and is imported by it as a plain module, so the two files must land in the same directory.
 BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
+# The venv the proxy is served from, built by the box image and holding nothing else. Never the
+# workspace venv under BOX_MNGR_DIR: that one carries plain `litellm`, whose CLI refuses to serve
+# without the [proxy] extra, and every `uv run` in the box re-syncs it from the lock -- so proxy
+# dependencies added to it would be stripped out from under a running proxy mid-trial. It is a
+# different directory from BOX_PROXY_DIR above, which holds the proxy's config, hooks and usage
+# log (proxy.log itself goes to the service logs dir, like every other long-running service's).
+BOX_PROXY_VENV_DIR: Final[str] = "/opt/eval_proxy"
+BOX_PROXY_LITELLM_PATH: Final[str] = "{}/bin/litellm".format(BOX_PROXY_VENV_DIR)
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
-BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
+BOX_PROXY_USAGE_LOG_PATH: Final[str] = "{}/usage_proxy.jsonl".format(BOX_PROXY_DIR)
 TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
 PROXY_LOG_FILENAME: Final[str] = "proxy.log"
 # How much of a service log the timeout diagnostics keep. The tail is where a wedged service says
@@ -179,6 +189,32 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
                 "silently see no workspaces".format(required_key, sorted(activation_env))
             )
     return activation_env
+
+
+# mngr's modal provider truncates the environment name it derives to this many characters
+# (MODAL_NAME_MAX_LENGTH in mngr_modal, which this project does not depend on). Truncation is a
+# lossy left-slice with no disambiguating hash, so a truncated name is a name that can collide with
+# another trial's -- and a name nothing here could reconstruct afterwards to clean up.
+MODAL_ENVIRONMENT_NAME_MAX_LENGTH: Final[int] = 64
+
+
+@pure
+def derive_modal_environment_name(activation_env: Mapping[str, str], user_id: str) -> str:
+    """The Modal environment mngr's modal provider will put this trial's workspaces in.
+
+    Derived here rather than read back from Modal because the environment is created lazily, deep
+    inside the first workspace create: a trial that dies before then still has to leave the name
+    behind for cleanup to act on. It is the same concatenation mngr makes.
+    """
+    environment_name = "{}{}".format(activation_env["MNGR_PREFIX"], user_id)
+    if len(environment_name) > MODAL_ENVIRONMENT_NAME_MAX_LENGTH:
+        raise ModalNameBudgetError(
+            "the Modal environment name {!r} is {} characters and mngr would truncate it to {}; "
+            "shorten the user id budget so the recorded name stays the created one".format(
+                environment_name, len(environment_name), MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+            )
+        )
+    return environment_name
 
 
 @pure
@@ -887,8 +923,9 @@ async def start_reverse_tunnel(
 ) -> None:
     """Upload the tunnel holder and start it in the background in the box.
 
-    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
-    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    Uploaded at run time rather than baked into the box image: the image is one build per mngr SHA,
+    cached whole, and has to stay byte-identical across a dataset, so shipping this in it would cost
+    a full rebuild.
     """
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
@@ -918,8 +955,8 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 
     Both land in the target's directory, because the script imports the protocol as a plain module
     beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
+    reverse-tunnel holder is: the image is one build per mngr SHA, cached whole, and has to stay
+    byte-identical across a dataset, so a change here would otherwise cost a full rebuild.
     """
     box_dir = target_path.rsplit("/", 1)[0]
     for filename, destination in (
@@ -974,17 +1011,17 @@ async def start_proxy(
             "ANTHROPIC_API_KEY": anthropic_api_key,
             PROXY_KEY_ENV_VAR: proxy_key,
             PROXY_USAGE_LOG_ENV_VAR: BOX_PROXY_USAGE_LOG_PATH,
-            # litellm imports the hooks by module name, so the directory holding them must be on the
-            # path; it is not the working directory, which stays the monorepo for `uv run`.
+            # litellm imports the hooks by module name, so the directory holding them must be on
+            # the path.
             "PYTHONPATH": BOX_PROXY_DIR,
         }
     )
     command = (
-        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
+        "mkdir -p {logs} && setsid nohup {litellm} --config {config} "
         "--port {port} --host 127.0.0.1 > {log} 2>&1 < /dev/null &"
     ).format(
         logs=BOX_SERVICE_LOGS_DIR,
-        mngr=BOX_MNGR_DIR,
+        litellm=BOX_PROXY_LITELLM_PATH,
         config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
         port=port,
         log=service_log_path(PROXY_LOG_FILENAME),

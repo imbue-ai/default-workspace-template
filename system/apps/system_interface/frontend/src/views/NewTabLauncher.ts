@@ -38,6 +38,7 @@ import {
 import type { StartOption } from "./startSomething";
 import { TemplateDetailModal } from "./TemplateDetailModal";
 import { TemplateCard, TemplateShelves } from "./TemplateShelves";
+import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -559,8 +560,16 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         key: `${tile.app.name}:${tile.action.id}`,
+        // Four to a row, then three, then two as the pane narrows. The subtrahend has to follow
+        // the count: gap-2 (8px) times one fewer than the tiles in the row.
+        //
+        // Two-up holds to 260px, far past the sections below, because these labels are one or two
+        // short words and still fit there; stepping down with the rest would leave half the row
+        // empty.
         class:
-          "border-default flex h-9 w-[calc((100%-24px)/4)] shrink-0 items-stretch overflow-hidden rounded-lg border" +
+          "border-default flex h-9 shrink-0 items-stretch overflow-hidden rounded-lg border " +
+          "w-[calc((100%-24px)/4)] @max-[760px]:w-[calc((100%-16px)/3)] " +
+          "@max-[620px]:w-[calc((100%-8px)/2)] @max-[260px]:w-full" +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
@@ -629,23 +638,37 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         type: "button",
         "data-start": option.key,
         "aria-disabled": isDisabled ? "true" : undefined,
+        // A pickable tile is the ``group`` that grows its glyph. The shadow alone is its hover
+        // answer -- a fill behind it only mutes the shadow -- and a disabled tile stays flat, so
+        // the page never offers to open what it cannot.
         class:
           "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
-          (isDisabled ? "cursor-not-allowed text-faint" : "cursor-pointer text-primary hover:bg-fill-hover"),
+          (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
         onclick: isDisabled ? undefined : pick,
         ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
       },
       [
-        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones.
+        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones. It
+        // is also what grows on hover, so the movement is the glyph's and not the whole tile's.
         m(
           "span",
-          { class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : "") },
+          {
+            class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : ` ${HOVER_GLYPH_GROUP}`),
+          },
           m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
         ),
         m("span", { class: "type-label mt-3 block" }, option.title),
+        // The sentence steps up to the title's colour under the pointer, on the lift's own timing
+        // so the tile reads as one piece.
         m(
           "span",
-          { class: "type-helper mt-1 block " + (isDisabled ? "text-faint" : "text-secondary") },
+          {
+            class:
+              "type-helper mt-1 block " +
+              (isDisabled
+                ? "text-faint"
+                : "text-secondary transition-colors duration-300 ease-out group-hover:text-primary"),
+          },
           option.description,
         ),
       ],
@@ -655,7 +678,9 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   function startGrid(options: readonly StartOption[], attrs: NewTabLauncherAttrs): m.Vnode {
     return m(
       "div",
-      { class: "grid grid-cols-3 gap-3 px-2" },
+      // Three to a row, then two, then one: a 760px pane leaves a three-up tile about 230px, under
+      // what a title and three lines of sentence want.
+      { class: "grid grid-cols-3 gap-3 px-2 @max-[760px]:grid-cols-2 @max-[480px]:grid-cols-1" },
       options.map((option) => startTile(option, attrs)),
     );
   }
@@ -793,7 +818,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       const nowMs = attrs.nowMs ?? Date.now();
       const promptStart = promptStartDisabling(attrs);
 
-      return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
+      // ``@container``, not a media query, and every step below is a PANE width: this page is a
+      // dock panel that can be split to a sliver while the window stays wide, so a media query
+      // would keep the tiles four-up the whole way down.
+      return m("div", { class: "new-tab-launcher @container bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl pb-12" }, [
           m("div", { class: "mb-6 px-2" }, searchField()),
           isSearching() ? searchResults(attrs, nowMs) : restingPage(attrs, nowMs),

@@ -300,7 +300,6 @@ def make_fake_cloudflare_ctx() -> FakeCloudflareCtx:
     return ctx
 
 
-# ---------------------------------------------------------------------------
 # SuperTokens SDK fakes
 #
 # The remote_service_connector service wraps the SuperTokens SDK behind /auth/*
@@ -313,7 +312,6 @@ def make_fake_cloudflare_ctx() -> FakeCloudflareCtx:
 # that instance. Swapping the ``app`` module's bound references (rather than
 # the SDK's source module) means handlers see fakes without needing to
 # initialize the real SuperTokens SDK, which would fail without a live core.
-# ---------------------------------------------------------------------------
 
 
 _USER_ID_NAMESPACE = uuid.UUID("12345678-1234-5678-1234-567812345678")
@@ -1104,7 +1102,6 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
     return backend
 
 
-# ---------------------------------------------------------------------------
 # Host pool fakes
 #
 # Similar to FakeSuperTokensBackend, this provides an in-memory replacement
@@ -1112,7 +1109,6 @@ def make_fake_supertokens_backend() -> FakeSuperTokensBackend:
 # endpoints.  ``FakePoolBackend.install_on_app_module`` patches the module
 # references through a single for-loop (same pattern as the SuperTokens fakes)
 # so the test-patching ratchet count increases by exactly one line.
-# ---------------------------------------------------------------------------
 
 
 # Placeholder host public keys for fake pool rows. The fake replaces the real
@@ -3313,9 +3309,7 @@ def make_fake_orphan_bucket_store() -> InMemoryOrphanBucketStore:
     return InMemoryOrphanBucketStore()
 
 
-# ---------------------------------------------------------------------------
 # Plans + entitlements fakes
-# ---------------------------------------------------------------------------
 
 
 # Canonical plan values matching the committed deploy.toml [plans] blocks.
@@ -3399,9 +3393,7 @@ def make_fake_entitlements_store() -> InMemoryEntitlementsStore:
     return store
 
 
-# ---------------------------------------------------------------------------
 # R2 cleanup-grant fakes
-# ---------------------------------------------------------------------------
 
 
 class InMemoryLeaseStore:
@@ -3516,9 +3508,7 @@ def make_fake_grant_store() -> InMemoryGrantStore:
     return InMemoryGrantStore()
 
 
-# ---------------------------------------------------------------------------
 # LiteLLM admin-API fake
-# ---------------------------------------------------------------------------
 
 
 class _FakeLiteLLMResponse:
@@ -3619,7 +3609,7 @@ def make_fake_litellm_backend() -> FakeLiteLLMBackend:
     return FakeLiteLLMBackend()
 
 
-# --- Shared route-test helpers (moved from the pre-split app_test.py) ---
+# Shared route-test helpers
 
 
 _USER_STUB_TOKEN = "user-stub-jwt"

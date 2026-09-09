@@ -35,6 +35,7 @@ from imbue.minds_evals.data_types import cross_step_lifetime_seconds
 from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.driver import DRIVER_LOG_FILENAME
 from imbue.minds_evals.driver import Done
+from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
 from imbue.minds_evals.driver import FALLBACK_ENTRY_DETAIL
 from imbue.minds_evals.driver import GoalTurnSource
 from imbue.minds_evals.driver import LiteralTurnSource
@@ -49,6 +50,8 @@ from imbue.minds_evals.driver import TIMEOUT_DIAGNOSTICS_FILENAME
 from imbue.minds_evals.driver import TRAJECTORY_FILENAME
 from imbue.minds_evals.driver import TurnAction
 from imbue.minds_evals.driver import TurnSource
+from imbue.minds_evals.driver import USER_ID_MAX_LENGTH
+from imbue.minds_evals.driver import USER_ID_PREFIX_MAX_LENGTH
 from imbue.minds_evals.driver import WORKSPACE_READINESS_TIMEOUT_SECONDS
 from imbue.minds_evals.driver import _DRIVER_LOG_TRIAL_KEY
 from imbue.minds_evals.driver import _case_clone_dir
@@ -61,10 +64,12 @@ from imbue.minds_evals.driver import build_eval_base_clone_command
 from imbue.minds_evals.driver import build_eval_case_commit_command
 from imbue.minds_evals.driver import build_vendor_mngr_command
 from imbue.minds_evals.driver import derive_user_id
+from imbue.minds_evals.driver import derive_workspace_host_name
 from imbue.minds_evals.driver import is_snapshot_wanted
 from imbue.minds_evals.driver import parse_agent_flag
 from imbue.minds_evals.driver import parse_case_config
 from imbue.minds_evals.driver import parse_snapshot_mode
+from imbue.minds_evals.driver import parse_user_id_prefix
 from imbue.minds_evals.driver import resolve_turn_sources
 from imbue.minds_evals.driver import sanitize_user_id
 from imbue.minds_evals.driver import workspace_readiness_deadline
@@ -179,10 +184,86 @@ def test_sanitize_user_id_lowercases_and_collapses_dashes() -> None:
 
 
 def test_derive_user_id_appends_salt_and_bounds_length() -> None:
-    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234")
+    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234", "")
 
+    assert user_id.startswith(EVAL_USER_ID_NAMESPACE)
     assert user_id.endswith("-cafe1234")
-    assert len(user_id) <= 40
+    assert len(user_id) <= USER_ID_MAX_LENGTH
+
+
+def test_derive_user_id_squeezes_the_trial_name_rather_than_the_prefix_or_the_salt() -> None:
+    prefix = "ci-20260901t120000z-"
+    user_id = derive_user_id("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234", prefix)
+
+    assert user_id.startswith(EVAL_USER_ID_NAMESPACE + prefix)
+    assert user_id.endswith("-cafe1234")
+    assert len(user_id) <= USER_ID_MAX_LENGTH
+    # The trial name is what shrank, and enough of it survives to still name the trial.
+    trial_name_part = user_id[len(EVAL_USER_ID_NAMESPACE) + len(prefix) : -len("-cafe1234")]
+    assert trial_name_part == "a-very-long-t"
+
+
+def test_derive_user_id_falls_back_when_the_trial_name_sanitizes_away() -> None:
+    assert derive_user_id("!!!", "cafe1234", "") == "evals-trial-cafe1234"
+
+
+def test_derive_workspace_host_name_keeps_the_salt_whole_however_long_the_trial_name_is() -> None:
+    """The salt is the only part that tells two attempts of one case apart, so a name too long for
+    its budget has to lose trial name rather than salt."""
+    host_name = derive_workspace_host_name("a-very-long-trial-name-that-goes-on-forever__shortid", "cafe1234")
+
+    assert host_name == "EVAL-a-very-long-trial-name-th-cafe1234"
+    assert host_name.endswith("-cafe1234")
+
+
+def test_derive_workspace_host_name_ignores_what_the_whole_run_shares() -> None:
+    """Two trials of one case under one scheduled run share the eval namespace and the run's user id
+    prefix; only the trial name and the salt say which trial a workspace is. So the host name is
+    built from those two alone, and the contrast with the user id -- same trial, same salt, same run
+    -- is what the budget buys: the id spends 26 of its 48 characters on what the run shares and
+    truncates the trial name to pay for it, where the name keeps it whole."""
+    prefix = "ci-20260901t120000z-"
+    first = derive_workspace_host_name("weather-dashboard__aaaaaaa", "cafe1234")
+    second = derive_workspace_host_name("weather-dashboard__aaaaaaa", "beef5678")
+    user_id = derive_user_id("weather-dashboard__aaaaaaa", "cafe1234", prefix)
+
+    assert first == "EVAL-weather-dashboard-aaaaaaa-cafe1234"
+    # Only the salt differs, and it is what tells two attempts of one case apart.
+    assert first != second
+    assert user_id == "evals-ci-20260901t120000z-weather-dashb-cafe1234"
+    assert prefix in user_id and prefix not in first
+
+
+def test_the_longest_user_id_fits_the_modal_environment_name_untruncated() -> None:
+    """mngr truncates a long environment name with a lossy left-slice and no disambiguating hash, so
+    an id this app records would stop being the one Modal holds. The budget has to leave room under
+    the longest MNGR_PREFIX minds activates."""
+    longest_user_id = derive_user_id("x" * 200, "cafe1234", "c" * USER_ID_PREFIX_MAX_LENGTH)
+
+    assert len(longest_user_id) == USER_ID_MAX_LENGTH
+    environment_name = minds_bridge.derive_modal_environment_name({"MNGR_PREFIX": "minds-staging-"}, longest_user_id)
+    assert len(environment_name) <= minds_bridge.MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+
+
+def test_parse_user_id_prefix_accepts_the_stamp_a_scheduled_run_passes() -> None:
+    assert parse_user_id_prefix("ci-20260901t120000z-") == "ci-20260901t120000z-"
+    assert parse_user_id_prefix("") == ""
+    assert parse_user_id_prefix(None) == ""
+
+
+@pytest.mark.parametrize(
+    "raw_prefix",
+    [
+        "CI-20260901T120000Z-",
+        "ci_20260901t120000z-",
+        "-ci-20260901t120000z",
+        "ci-2026/09/01-",
+        "c" * (USER_ID_PREFIX_MAX_LENGTH + 1),
+    ],
+)
+def test_parse_user_id_prefix_rejects_what_modal_would_refuse_or_what_will_not_fit(raw_prefix: str) -> None:
+    with pytest.raises(AgentKwargError, match="user_id_prefix"):
+        parse_user_id_prefix(raw_prefix)
 
 
 def test_parse_snapshot_mode_accepts_cli_spellings() -> None:
@@ -570,6 +651,7 @@ def _driver_kwargs(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
 ) -> dict[str, Any]:
     """The kwargs every driver in this file is built with.
 
@@ -587,6 +669,7 @@ def _driver_kwargs(
         "poll_seconds": 0.01,
         "proxy": is_proxy_enabled,
         "snapshot_mode": snapshot_mode,
+        "user_id_prefix": user_id_prefix,
         "extra_env": {"ANTHROPIC_API_KEY": _TRIAL_API_KEY} if extra_env is None else extra_env,
     }
 
@@ -597,9 +680,12 @@ def _make_driver(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
 ) -> MindsPersonaDriver:
     """The production driver, for tests that let it resolve its own turn sources."""
-    return MindsPersonaDriver(**_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env))
+    return MindsPersonaDriver(
+        **_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix)
+    )
 
 
 def _make_scripted_driver(
@@ -609,10 +695,12 @@ def _make_scripted_driver(
     is_proxy_enabled: bool = False,
     snapshot_mode: str = "per-turn",
     extra_env: dict[str, str] | None = None,
+    user_id_prefix: str = "",
 ) -> ScriptedSourceDriver:
     """The same driver with its turn sources supplied, so the loop runs without any model call."""
     return ScriptedSourceDriver(
-        scripted_sources, **_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env)
+        scripted_sources,
+        **_driver_kwargs(tmp_path, trial_name, is_proxy_enabled, snapshot_mode, extra_env, user_id_prefix),
     )
 
 
@@ -628,13 +716,25 @@ def _run_driver(
     downloadable_content_by_source: dict[str, str] | None = None,
     rejected_upload_content_substring: str = "",
     scripted_sources: list[TurnSource] | None = None,
+    user_id_prefix: str = "",
     snapshot_mode: str = "per-turn",
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     driver = (
-        _make_driver(tmp_path, trial_name, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode)
+        _make_driver(
+            tmp_path,
+            trial_name,
+            is_proxy_enabled=is_proxy_enabled,
+            snapshot_mode=snapshot_mode,
+            user_id_prefix=user_id_prefix,
+        )
         if scripted_sources is None
         else _make_scripted_driver(
-            tmp_path, trial_name, scripted_sources, is_proxy_enabled=is_proxy_enabled, snapshot_mode=snapshot_mode
+            tmp_path,
+            trial_name,
+            scripted_sources,
+            is_proxy_enabled=is_proxy_enabled,
+            snapshot_mode=snapshot_mode,
+            user_id_prefix=user_id_prefix,
         )
     )
     environment = MockBoxEnvironment(
@@ -695,7 +795,7 @@ def test_driver_completes_a_multi_turn_conversation(tmp_path: Path) -> None:
     # The per-trial box env carried the Modal token pair, the salted user id, and the key manifest.
     backend_env = next(env for env in environment.exec_envs if env and "MINDS_BOX_MNGR_REF" in env)
     assert backend_env["MODAL_TOKEN_ID"] == "ak-test"
-    assert backend_env["MNGR__PROVIDERS__MODAL__USER_ID"].startswith("todo-app-abc123-")
+    assert backend_env["MNGR__PROVIDERS__MODAL__USER_ID"].startswith("evals-todo-app-abc123-")
     assert backend_env["MINDS_BOX_MNGR_REF"] == "b" * 40
 
     # Per-turn snapshots ran and cleanup destroyed the trial's workspaces.
@@ -874,6 +974,50 @@ def test_driver_marks_timed_out_when_the_workspace_cannot_be_signed_in(tmp_path:
     # than a hand-built one with no steps.
     assert context.metadata["trajectory_source"] == "none"
     assert not (driver.logs_dir / "trajectory.json").exists()
+
+
+def test_driver_records_the_modal_environment_it_leaks_before_the_first_turn(tmp_path: Path) -> None:
+    """A trial never destroys the Modal environment it creates, so the record of WHICH one it made
+    has to already be in state.json by the time a trial that dies before its first turn stops."""
+    conversation = _one_turn_conversation()
+    conversation.is_auth_endpoint_up = False
+    _driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__envrec",
+        timeout_seconds=0.3,
+        user_id_prefix="ci-20260901t120000z-",
+    )
+
+    assert context.metadata is not None
+    assert context.metadata["turns_completed"] == 0
+    state = json.loads(environment.uploaded_content_by_target["/logs/agent/state.json"])
+    # minds-staging- is the MNGR_PREFIX the scripted activation exports.
+    assert state["modal_environment_name"] == "minds-staging-" + context.metadata["modal_user_id"]
+    assert state["modal_environment_name"].startswith("minds-staging-evals-ci-20260901t120000z-todo-app")
+    assert context.metadata["modal_environment_name"] == state["modal_environment_name"]
+
+
+def test_driver_names_the_workspace_after_the_trial_even_under_a_run_wide_prefix(tmp_path: Path) -> None:
+    """The host name is what says which trial a workspace belongs to. The eval namespace and the
+    run's prefix are shared by every trial in the run, so a name built from the user id would spend
+    its budget on them and squeeze out what is distinctive -- leaving two attempts of one case
+    indistinguishable."""
+    conversation = _one_turn_conversation()
+    _driver, _environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__hostname",
+        timeout_seconds=30.0,
+        user_id_prefix="ci-20260901t120000z-",
+    )
+
+    assert context.metadata is not None
+    # The chat is named after the workspace host, so the create command carries the host name.
+    salt = context.metadata["modal_user_id"].rsplit("-", 1)[-1]
+    assert '"name": "EVAL-todo-app-hostname-{}"'.format(salt) in conversation.create_chat_commands[0]
 
 
 def test_driver_reports_the_workspace_agents_usage_and_keeps_the_decider_separate(tmp_path: Path) -> None:
@@ -1319,7 +1463,9 @@ def test_settled_worker_count_counts_only_settled_workers_whose_streams_were_rea
     assert _settled_worker_count(captures, records_by_name) == 2
 
 
-def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_embedded(tmp_path: Path) -> None:
+def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_embedded(
+    tmp_path: Path, captured_log_messages: list[str]
+) -> None:
     # The lead's document and stream both failed to come out; its own worker's document is sound,
     # and so is that worker's worker's, but a nested worker embeds inside its lead's document, so
     # neither has anywhere to go -- and each is said to be left out, the deeper one included, whose
@@ -1362,15 +1508,11 @@ def test_embedded_workers_leaves_out_a_workers_worker_whose_lead_could_not_be_em
             report=uncaptured,
         ),
     ]
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="WARNING")
-    try:
-        embedded = _embedded_workers(captures, tmp_path)
-    finally:
-        logger.remove(handler_id)
+
+    embedded = _embedded_workers(captures, tmp_path)
 
     assert embedded == []
-    assert [line for line in logged if "is not embedded" in line] == [
+    assert [line for line in captured_log_messages if "is not embedded" in line] == [
         "Worker lead is not embedded in the trajectory: its stream was not captured",
         "Worker nested is not embedded in the trajectory: its lead lead was not",
         "Worker deeper is not embedded in the trajectory: its lead nested was not",

@@ -1,29 +1,12 @@
-from collections.abc import Iterator
 from types import ModuleType
 
 import pytest
-from loguru import logger
 
 # Only stdlib-only package modules may be imported at the top of a conftest under this app: the
 # ROOT pytest run descends every directory here (its ignore glob stops the files, not the
 # directories) and loads each conftest it meets from a venv that has no harbor. Third-party
 # imports are held to the same bar: loguru is in the root venv, harbor is not.
 from imbue.minds_evals.template_loading import load_template_module
-
-
-@pytest.fixture
-def logged_warnings() -> Iterator[list[str]]:
-    """Every warning loguru emits while the test runs, in order.
-
-    The sink is process-global, so it has to come off again whatever the test does; a leaked one
-    would keep appending every later test's warnings to a list nobody reads.
-    """
-    messages: list[str] = []
-    handler_id = logger.add(lambda message: messages.append(message.record["message"]), level="WARNING")
-    try:
-        yield messages
-    finally:
-        logger.remove(handler_id)
 
 
 @pytest.fixture(scope="session")

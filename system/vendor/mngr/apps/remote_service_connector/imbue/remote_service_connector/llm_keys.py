@@ -150,7 +150,6 @@ def update_litellm_key_budget(request: Request, key_id: str, body: UpdateBudgetR
     with handle_endpoint_errors():
         user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
-        # Verify ownership
         info_resp = litellm_client.litellm_request("GET", "/key/info", params={"key": key_id})
         info_data = info_resp.json()
         info = info_data.get("info", info_data)
@@ -173,7 +172,6 @@ def delete_litellm_key(request: Request, key_id: str) -> dict[str, object]:
     with handle_endpoint_errors():
         user_id = accounts_web_module.resolve_web_user_identity(request)[1]
 
-        # Verify ownership
         info_resp = litellm_client.litellm_request("GET", "/key/info", params={"key": key_id})
         info_data = info_resp.json()
         info = info_data.get("info", info_data)

@@ -6,7 +6,7 @@ browser outlives it, so cookies, storage and the open page persist across steps 
 holding any state or the driver holding a long-lived command protocol.
 
 Uploaded into the box at trial time rather than baked into the image (the box_reverse_tunnel.py
-pattern), so iterating on it never invalidates the image layer cache. flow_step_protocol.py, which
+pattern), so iterating on it never rebuilds the box image. flow_step_protocol.py, which
 carries the request and result models both sides share, is uploaded beside it.
 
 Invoked as: box_flow_step.py '<json StepRequest>'
