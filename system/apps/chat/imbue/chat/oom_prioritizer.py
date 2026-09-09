@@ -240,39 +240,40 @@ class ChatOomPrioritizer:
                 continue
             is_visible = chat_id in visible_ids
             is_open = chat_id in open_ids
+            # Both the idle clock and the launch grace are measured against this, so it
+            # is resolved once: two reads could straddle a restart that touches the
+            # marker and describe the chat as two different processes in one pass.
+            started_at = self._resolve_process_started_at(chat_id)
             adj = bands.chat_agent_oom_score_adj(
                 is_open=is_open,
                 is_visible=is_visible,
                 recency_rank=rank_by_id.get(chat_id),
-                idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
+                idle_seconds=self._idle_seconds(last_engaged_at.get(chat_id), started_at, now),
                 is_mid_turn=chat_id in running_ids,
-                age_seconds=self._age_seconds(chat_id, now),
+                age_seconds=self._age_seconds(started_at, now),
             )
             self._set_adj(pid, adj)
 
-    def _idle_seconds(self, chat_id: str, last_engaged_at: dict[str, float], now: float) -> float | None:
-        """How long ``chat_id`` has gone without engagement, or None if unknown.
+    def _idle_seconds(self, last_engaged_at: float | None, started_at: float | None, now: float) -> float | None:
+        """How long a chat has gone without engagement, or None if unknown.
 
         The chat's own process-start time floors the answer: a chat revived a
         minute ago is fresh whatever its message history says, and for a chat we
         have no recorded engagement for at all it is the only evidence available
         -- an untouched process that started days ago is genuinely abandoned.
         """
-        candidates = [
-            at for at in (last_engaged_at.get(chat_id), self._resolve_process_started_at(chat_id)) if at is not None
-        ]
+        candidates = [at for at in (last_engaged_at, started_at) if at is not None]
         if not candidates:
             return None
         return max(0.0, now - max(candidates))
 
-    def _age_seconds(self, chat_id: str, now: float) -> float | None:
-        """How long ``chat_id``'s current process has been up, or None if unknown.
+    def _age_seconds(self, started_at: float | None, now: float) -> float | None:
+        """How long a chat's current process has been up, or None if unknown.
 
         Drives the launch grace, so it is deliberately the *process's* age and not
         the chat's: a revived chat is launching again, with the same in-flight
         first message and the same absence of engagement signals as a new one.
         """
-        started_at = self._resolve_process_started_at(chat_id)
         if started_at is None:
             return None
         return max(0.0, now - started_at)
