@@ -17,8 +17,63 @@ from host_backup.snapshot import (
     SnapshotError,
     _list_snapshot_names,
     _parse_snapshot_timestamp,
+    _resolve_read_path,
     make_snapshot_taker,
 )
+
+
+# --- _resolve_read_path ---
+
+
+def test_read_path_is_the_snapshot_root_when_no_subpath_is_expected(
+    tmp_path: Path,
+) -> None:
+    assert _resolve_read_path(snapshot_root=tmp_path, subpath_candidates=()) == tmp_path
+
+
+def test_read_path_prefers_the_first_candidate_that_exists(tmp_path: Path) -> None:
+    (tmp_path / "home").mkdir()
+    (tmp_path / "host_dir").mkdir()
+    resolved = _resolve_read_path(
+        snapshot_root=tmp_path, subpath_candidates=("home", "host_dir")
+    )
+    assert resolved == tmp_path / "home"
+
+
+def test_read_path_falls_through_to_a_later_candidate(tmp_path: Path) -> None:
+    # The outer helper on this provider names the backed-up tree host_dir/ and
+    # puts its own bookkeeping beside it; there is no home/ to read.
+    (tmp_path / "host_dir").mkdir()
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "host_state.json").write_text("{}")
+    resolved = _resolve_read_path(
+        snapshot_root=tmp_path, subpath_candidates=("home", "host_dir")
+    )
+    assert resolved == tmp_path / "host_dir"
+
+
+def test_a_candidate_that_is_a_file_is_not_mistaken_for_the_tree(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "home").write_text("not a directory")
+    (tmp_path / "host_dir").mkdir()
+    resolved = _resolve_read_path(
+        snapshot_root=tmp_path, subpath_candidates=("home", "host_dir")
+    )
+    assert resolved == tmp_path / "host_dir"
+
+
+def test_a_snapshot_matching_no_candidate_raises_instead_of_pointing_restic_nowhere(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "something-else").mkdir()
+    with pytest.raises(SnapshotError) as error_info:
+        _resolve_read_path(
+            snapshot_root=tmp_path, subpath_candidates=("home", "host_dir")
+        )
+    # The error names what the snapshot actually held, so the mismatch is
+    # diagnosable from the log alone.
+    assert "something-else" in str(error_info.value)
 
 # --- DirectSnapshotTaker ---
 
