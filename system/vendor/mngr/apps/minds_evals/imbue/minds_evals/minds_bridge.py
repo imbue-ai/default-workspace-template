@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import tomllib
+from collections.abc import Mapping
 from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
@@ -27,6 +28,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
@@ -43,9 +45,9 @@ BOX_LOGS_DIR: Final[str] = "/logs/agent"
 BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
 BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
-# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
-# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
-# pinned mngr SHA, which predates them.
+# baked into the box image because the image is one build per mngr SHA, cached whole, and has to
+# stay byte-identical across a dataset -- so changing them would cost a full rebuild -- and because
+# the image is built from the pinned mngr SHA, which predates them.
 _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
@@ -179,6 +181,32 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
                 "silently see no workspaces".format(required_key, sorted(activation_env))
             )
     return activation_env
+
+
+# mngr's modal provider truncates the environment name it derives to this many characters
+# (MODAL_NAME_MAX_LENGTH in mngr_modal, which this project does not depend on). Truncation is a
+# lossy left-slice with no disambiguating hash, so a truncated name is a name that can collide with
+# another trial's -- and a name nothing here could reconstruct afterwards to clean up.
+MODAL_ENVIRONMENT_NAME_MAX_LENGTH: Final[int] = 64
+
+
+@pure
+def derive_modal_environment_name(activation_env: Mapping[str, str], user_id: str) -> str:
+    """The Modal environment mngr's modal provider will put this trial's workspaces in.
+
+    Derived here rather than read back from Modal because the environment is created lazily, deep
+    inside the first workspace create: a trial that dies before then still has to leave the name
+    behind for cleanup to act on. It is the same concatenation mngr makes.
+    """
+    environment_name = "{}{}".format(activation_env["MNGR_PREFIX"], user_id)
+    if len(environment_name) > MODAL_ENVIRONMENT_NAME_MAX_LENGTH:
+        raise ModalNameBudgetError(
+            "the Modal environment name {!r} is {} characters and mngr would truncate it to {}; "
+            "shorten the user id budget so the recorded name stays the created one".format(
+                environment_name, len(environment_name), MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+            )
+        )
+    return environment_name
 
 
 @pure
@@ -887,8 +915,9 @@ async def start_reverse_tunnel(
 ) -> None:
     """Upload the tunnel holder and start it in the background in the box.
 
-    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
-    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    Uploaded at run time rather than baked into the box image: the image is one build per mngr SHA,
+    cached whole, and has to stay byte-identical across a dataset, so shipping this in it would cost
+    a full rebuild.
     """
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
@@ -918,8 +947,8 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 
     Both land in the target's directory, because the script imports the protocol as a plain module
     beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
+    reverse-tunnel holder is: the image is one build per mngr SHA, cached whole, and has to stay
+    byte-identical across a dataset, so a change here would otherwise cost a full rebuild.
     """
     box_dir = target_path.rsplit("/", 1)[0]
     for filename, destination in (
@@ -1179,6 +1208,12 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
 # The workspace home tree, which contains the mngr host dir -- code, agent
 # state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
+# Where mngr rescues a destroyed agent's transcripts to. The agent side of the workspace runs as root,
+# so its own host dir is /root/.mngr, outside the home tree above -- and a worker the lead destroys
+# after merging (which the launch-task flow invites) leaves its conversation ONLY here. Without it a
+# hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
+# survive in the home tree, its trajectory does not.
+PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
 
 
 async def snapshot_workspace(
@@ -1202,8 +1237,18 @@ async def snapshot_workspace(
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    tar_command = "tar czf {} {} -C {} . 2>/dev/null || true".format(
-        workspace_tar, exclude_flags, WORKSPACE_BACKUP_ROOT
+    # The preserved dir is added as its own -C segment, and only when it exists: naming a missing path
+    # makes tar exit nonzero and the snapshot is skipped entirely. Its entries land under
+    # `root/.mngr/preserved/`, distinct from the home tree's `./`.
+    tar_command = (
+        "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
+        "tar czf {tar} {excludes} -C {root} . $preserved 2>/dev/null || true"
+    ).format(
+        preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
+        preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        tar=workspace_tar,
+        excludes=exclude_flags,
+        root=WORKSPACE_BACKUP_ROOT,
     )
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:

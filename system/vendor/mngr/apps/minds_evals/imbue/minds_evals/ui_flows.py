@@ -19,9 +19,12 @@ FAILED.
 """
 
 import json
+import re
 import shlex
 from abc import ABC
 from abc import abstractmethod
+from collections import Counter
+from collections.abc import Sequence
 from enum import auto
 from typing import Any
 from typing import Final
@@ -54,9 +57,44 @@ DEFAULT_CALL_TIMEOUT_SECONDS: Final[float] = 120.0
 # thousands of tokens, and the head of it -- the URL, the title, and the top of the tree -- is what
 # an action is chosen from.
 MAX_STATE_PROMPT_CHARS: Final[int] = 12_000
+# How much of the prompt the history may take. It grows with every step while the page state above
+# is capped, so without a budget of its own a long flow ends up reasoning mostly about what it
+# already did rather than about the page in front of it.
+MAX_HISTORY_PROMPT_CHARS: Final[int] = 4_000
+
+# A state summary is for orienting the next decision, not for reading the page: past these it
+# says how much moved and stops, because a hundred changed lines in the prompt crowd out the page
+# state the next action is actually chosen from.
+MAX_SUMMARY_LINES: Final[int] = 6
+MAX_SUMMARY_LINE_CHARS: Final[int] = 120
+# Beyond this share of the tree the page has effectively been replaced -- a navigation, a modal over
+# everything -- and naming individual lines describes nothing. Guarded by a floor, because a share
+# alone would call every real change on a short page a replacement.
+MAX_SUMMARY_CHANGE_RATIO: Final[float] = 0.4
+MIN_REPLACEMENT_LINES: Final[int] = 2 * MAX_SUMMARY_LINES
+
+# How much of that budget the TAIL of a cut state keeps. Overlays and detail panels are appended to
+# the end of the document (React portals render at the end of body), so a head-only cut hides
+# exactly the element the agent's last action opened and it loops re-opening it.
+TAIL_STATE_PROMPT_CHARS: Final[int] = 5_000
 
 _ACTION_TOOL_NAME: Final[str] = "next_browser_action"
 _READING_TOOL_NAME: Final[str] = "flow_reading"
+
+
+class FlowRecordKind(LowerCaseStrEnum):
+    """Which kind of line a flow's log.jsonl holds.
+
+    Every line carries one, so a reader dispatches on the kind rather than inferring from the
+    fields present. A reader that meets a kind it does not know shows the record as it stands
+    rather than dropping it, which is what lets a new kind be added without coordinating readers.
+    """
+
+    # The flow before it acted: what it was asked to do, and the page it opened onto.
+    INIT = auto()
+    ACTION = auto()
+    # The agent's account of the state the flow ended in.
+    FINAL = auto()
 
 
 class FlowActionKind(LowerCaseStrEnum):
@@ -90,6 +128,10 @@ class FlowAction(FrozenModel):
     text: str = Field(description="Text to type, keys to press, or the URL to open")
     amount: int = Field(description="Scroll distance in pixels (negative scrolls up)")
     reasoning: str = Field(description="Why the agent chose this action, recorded in the flow log")
+    # The prediction is what `reasoning` alone could not give: the next decision is shown it beside
+    # what the page actually did, so a wrong model of the UI shows up as a contradiction instead of
+    # being re-derived every turn.
+    expected: str = Field(description="What the agent expects the action to do, in one sentence")
 
 
 class FlowReading(FrozenModel):
@@ -125,12 +167,20 @@ _ACTION_TOOL: Final[ToolParam] = {
                 "type": "string",
                 "description": "One sentence: what you see and why this action is the next step.",
             },
+            "expected": {
+                "type": "string",
+                "description": (
+                    "One sentence: what you expect this action to change on the page. Be specific "
+                    "enough that the next turn can tell whether it happened."
+                ),
+            },
             "action": {
                 "type": "string",
                 "enum": [member.value for member in FlowActionKind],
                 "description": (
                     "click: click the element named by role + target. "
-                    "input: type text into the element named by role + target. "
+                    "input: type text into the element named by role + target -- any editable "
+                    "element, not only textboxes (headings and cells are often editable in place). "
                     "keys: press a key combination (e.g. 'Enter'). "
                     "scroll: scroll the page by amount pixels. "
                     "open: navigate to the url in text. "
@@ -149,7 +199,7 @@ _ACTION_TOOL: Final[ToolParam] = {
             "text": {"type": "string", "description": "Text to type, keys to press, or the URL to open."},
             "amount": {"type": "integer", "description": "Scroll distance in pixels; negative scrolls up."},
         },
-        "required": ["reasoning", "action"],
+        "required": ["reasoning", "expected", "action"],
     },
 }
 
@@ -174,8 +224,9 @@ _READING_TOOL: Final[ToolParam] = {
 _SYSTEM_PROMPT: Final[str] = (
     "You are verifying a web app that another AI agent built for a non-technical client. You drive a "
     "real Chromium browser one action at a time.\n\n"
-    "You are given the flow's declared steps, the actions you have already taken, and the current page "
-    "as its URL, its title and its accessibility tree. Choose the SINGLE next action.\n\n"
+    "You are given the flow's declared steps, the actions you have already taken -- each with what "
+    "you expected of it and what the page actually did -- and the current page as its URL, its "
+    "title and its accessibility tree. Choose the SINGLE next action.\n\n"
     "Rules:\n"
     "- Address an element by the ARIA role and accessible name the current page state gives it, spelled "
     "exactly as the tree spells them. Never invent a name the page does not show.\n"
@@ -185,6 +236,16 @@ _SYSTEM_PROMPT: Final[str] = (
     "your reasoning rather than hunting for a workaround.\n"
     "- After typing into a field you usually need a separate action to submit it (press Enter, or "
     "click the button).\n"
+    "- To EDIT text an element already shows (a heading, a label, a cell), use 'input' on that "
+    "element even when its role is not 'textbox': many apps make text editable in place, and no "
+    "input element ever appears. Commit with Enter. Success shows as the element's text having "
+    "changed, not as an edit control appearing.\n"
+    "- Never repeat an action the history says left the page unchanged. Clicking the same thing "
+    "again will change nothing; take the next plausible gesture instead (for an edit, 'input' into "
+    "the element, then Enter).\n"
+    "- More generally, where the history shows an action whose effect did not match what you "
+    "expected of it, take that as the page telling you how it really works, and act on the "
+    "corrected understanding rather than repeating the action.\n"
     "- Choose 'done' as soon as every declared step has been carried out."
 )
 
@@ -201,18 +262,50 @@ _READING_SYSTEM_PROMPT: Final[str] = (
 
 @pure
 def truncate_state(state_text: str) -> str:
-    """The head of a page state. The URL, the title and the top of the accessibility tree lead it, so
-    the head is the part an action is chosen from; a long tail of static text is not worth the
-    tokens."""
+    """The head AND the tail of a page state, with the middle elided. The head -- the URL, the title
+    and the top of the accessibility tree -- is the part most actions are chosen from, but a panel
+    or dialog the last action opened renders at the END of the tree, so a head-only cut would show
+    the agent a page on which its click did nothing. The cuts land on line boundaries because the
+    tree is line-oriented and a half line reads as an element that is not there."""
     if len(state_text) <= MAX_STATE_PROMPT_CHARS:
         return state_text
-    return state_text[:MAX_STATE_PROMPT_CHARS] + "\n[...page state truncated...]"
+    head = state_text[: MAX_STATE_PROMPT_CHARS - TAIL_STATE_PROMPT_CHARS]
+    if "\n" in head:
+        head = head.rsplit("\n", 1)[0]
+    tail = state_text[-TAIL_STATE_PROMPT_CHARS:]
+    if "\n" in tail:
+        tail = tail.split("\n", 1)[1]
+    return "{}\n[...page state truncated; the end of the page follows...]\n{}".format(head, tail)
+
+
+@pure
+def fit_history(history: Sequence[str]) -> list[str]:
+    """The history as the prompt carries it, newest first in importance and oldest first in order.
+
+    Recent entries go in whole; older ones keep only their action line, since what a step did stays
+    worth knowing long after the detail of how the page moved has stopped being actionable. Once
+    even that does not fit, the rest are dropped and counted, so the prompt never claims a step did
+    not happen just because there was no room to describe it.
+    """
+    kept: list[str] = []
+    spent = 0
+    for entry in reversed(history):
+        for candidate in (entry, entry.splitlines()[0]):
+            if spent + len(candidate) <= MAX_HISTORY_PROMPT_CHARS:
+                kept.append(candidate)
+                spent += len(candidate)
+                break
+        else:
+            dropped = len(history) - len(kept)
+            kept.append("({} earlier action{} not shown)".format(dropped, "" if dropped == 1 else "s"))
+            break
+    return list(reversed(kept))
 
 
 @pure
 def build_action_prompt(flow_steps: str, history: tuple[str, ...], state_text: str) -> str:
     """The next-action prompt: what the flow asks for, what has been done, and what the page shows."""
-    history_prose = "\n".join("{}. {}".format(index + 1, entry) for index, entry in enumerate(history))
+    history_prose = "\n".join("{}. {}".format(index + 1, entry) for index, entry in enumerate(fit_history(history)))
     return (
         "Flow steps to carry out:\n{steps}\n\nActions taken so far:\n{history}\n\nCurrent page state:\n{state}"
     ).format(
@@ -229,7 +322,7 @@ def build_reading_prompt(flow_steps: str, history: tuple[str, ...], state_text: 
     The flow's `expect` is deliberately NOT included. Naming the condition invites the model to rule
     on it, and ruling on it is the grade-time judge's job.
     """
-    history_prose = "\n".join("{}. {}".format(index + 1, entry) for index, entry in enumerate(history))
+    history_prose = "\n".join("{}. {}".format(index + 1, entry) for index, entry in enumerate(fit_history(history)))
     return (
         "Flow steps that were carried out:\n{steps}\n\nActions actually taken:\n{history}\n\nFinal page state:\n{state}"
     ).format(
@@ -237,6 +330,25 @@ def build_reading_prompt(flow_steps: str, history: tuple[str, ...], state_text: 
         history=history_prose or "(no actions were taken)",
         state=truncate_state(state_text) or "(the browser reported no page state)",
     )
+
+
+@pure
+def describe_step(described_action: str, expected: str, error: str, observed: str) -> str:
+    """One history entry: what was done, what it was meant to achieve, and what the page did.
+
+    All three in one entry, indented under the action, because the entries are numbered in the
+    prompt and a change spanning several lines would otherwise break the numbering apart. The
+    prediction sits beside the observation so the latter reads as confirming or contradicting
+    something rather than as an isolated fact about the page.
+    """
+    lines = [described_action]
+    if expected:
+        lines.append("   expected: {}".format(expected))
+    if error:
+        lines.append("   did not run: {}".format(error))
+    for index, line in enumerate(observed.splitlines()):
+        lines.append("   {} {}".format("the page then:" if index == 0 else "              ", line))
+    return "\n".join(lines)
 
 
 @pure
@@ -289,6 +401,7 @@ def parse_action(tool_input: dict[str, Any]) -> FlowAction | None:
         text=str(tool_input.get("text") or ""),
         amount=raw_amount if isinstance(raw_amount, int) and not isinstance(raw_amount, bool) else 0,
         reasoning=str(tool_input.get("reasoning") or "").strip(),
+        expected=str(tool_input.get("expected") or "").strip(),
     )
 
 
@@ -696,20 +809,149 @@ def step_command(step_request: str) -> str:
     )
 
 
-@pure
-def flow_reading_record(step_index: int, observation: str, state_text: str, timestamp: str) -> str:
-    """The last line of a flow's log: what the agent says the final page showed.
+# What a state summary says when the two states are identical. Kept as one fixed sentence because
+# it is the signal an agent loops hardest without: an action that landed and changed nothing
+# (observed: 15 identical clicks on an in-place-editable heading whose only click feedback was a
+# CSS focus wash).
+UNCHANGED_STATE_SUMMARY: Final[str] = "the page state is exactly the same as before that action"
 
-    Labelled a reading rather than a verdict, and written in the same shape as a step so a reader
-    walking the log sees it in sequence. It is context for the grade-time judge, which is what
-    actually rules on the flow's `expect`.
+
+# What a browser rewrites on every render rather than because the page changed: element ids are
+# renumbered whenever the tree is rebuilt, and focus and cursor follow the pointer. Comparing them
+# makes an untouched page look rewritten -- on a live run one step reported 27 changed lines in a
+# 24-line tree, of which 18 were nothing but these.
+_VOLATILE_ATTRIBUTES: Final[re.Pattern[str]] = re.compile(r"\s*\[(?:ref=e\d+|active|cursor=[^\]]*)\]")
+
+
+@pure
+def comparable_line(line: str) -> str:
+    """A page line reduced to the content a reader would say it holds.
+
+    Both compared and displayed in this form: an id the next render will renumber is not something
+    the agent can act on, and it crowds out the part of the line that is.
+    """
+    return _VOLATILE_ATTRIBUTES.sub("", line).strip()
+
+
+@pure
+def summarize_state_change(previous_state: str, current_state: str) -> str:
+    """How the page moved, in the few lines the next decision needs to check its prediction against.
+
+    The accessibility tree is line-oriented, so a line is the unit: lines the action added and lines
+    it removed, named up to `MAX_SUMMARY_LINES` and bounded per line. Past `MAX_SUMMARY_CHANGE_RATIO`
+    of the tree the page has effectively been replaced, and listing lines describes nothing, so the
+    summary says only how much moved.
+
+    Deliberately a summary and not a diff: the whole current state is already in the prompt below
+    it, so this exists to point at the delta, not to re-transmit the page.
+    """
+    previous_lines = [comparable_line(line) for line in previous_state.splitlines()]
+    current_lines = [comparable_line(line) for line in current_state.splitlines()]
+    if previous_lines == current_lines:
+        return UNCHANGED_STATE_SUMMARY
+    previous_counts = Counter(previous_lines)
+    current_counts = Counter(current_lines)
+    removed = _surplus_lines(previous_lines, previous_counts - current_counts)
+    added = _surplus_lines(current_lines, current_counts - previous_counts)
+    if not removed and not added:
+        # Every line of one state is matched by a line of the other, as many times over -- the only
+        # thing that can differ is the order they come in.
+        return "the page has the same elements in a different arrangement"
+    largest = max(len(previous_lines), len(current_lines), 1)
+    changed = len(removed) + len(added)
+    if changed > MIN_REPLACEMENT_LINES and changed / largest > MAX_SUMMARY_CHANGE_RATIO:
+        return "most of the page changed: {} lines gone, {} new, of {}".format(len(removed), len(added), largest)
+    return "\n".join(_summary_lines(added, "new:") + _summary_lines(removed, "gone:"))
+
+
+@pure
+def _surplus_lines(lines: Sequence[str], surplus: Counter[str]) -> list[str]:
+    """The lines of one state that the other state does not account for, in the order they appear.
+
+    Counted rather than merely tested for presence: a page that drops one of several identical rows
+    -- a list with two copies of the same item, one of them just deleted -- still shows that line, so
+    a membership test would report the deletion as no change at all.
+
+    Blank lines are left out here rather than at the point of display, so that the lines named and
+    the count of the ones that were not come from the same list.
+    """
+    remaining = surplus.copy()
+    kept: list[str] = []
+    for line in lines:
+        if remaining[line] > 0:
+            remaining[line] -= 1
+            if line:
+                kept.append(line)
+    return kept
+
+
+@pure
+def _summary_lines(lines: Sequence[str], marker: str) -> list[str]:
+    """Up to `MAX_SUMMARY_LINES` of one side of a change, each bounded, with a count of the rest.
+
+    The marker is a word rather than a sign because every line of an accessibility tree already
+    begins with "- ": a "-" marker would render a removed row as "- - row M-101", which reads as
+    two levels of nesting rather than as a deletion.
+    """
+    if not lines:
+        return []
+    shown = ["{} {}".format(marker, _bounded_line(line)) for line in lines[:MAX_SUMMARY_LINES]]
+    if len(lines) > MAX_SUMMARY_LINES:
+        shown.append("{} and {} more".format(marker, len(lines) - MAX_SUMMARY_LINES))
+    return shown
+
+
+@pure
+def _bounded_line(line: str) -> str:
+    return line if len(line) <= MAX_SUMMARY_LINE_CHARS else line[:MAX_SUMMARY_LINE_CHARS] + "..."
+
+
+@pure
+def flow_init_record(goal: str, expect: str, url: str, state_text: str, screenshot_name: str, timestamp: str) -> str:
+    """The first line of a flow's log: what the flow was asked to do, and the page it opened onto.
+
+    The opening navigation is already made and already screenshotted before any action is decided,
+    so this records what was there rather than capturing anything new. Without it a reader meets the
+    flow one action in, looking at the frame that followed the first action and with nothing saying
+    what the agent was trying to achieve.
+
+    `goal` and `expect` are the case's own declarations, copied here so the log stands on its own.
+    The grade-time judge reads them from the case instead, and rules on the `expect` from the
+    evidence below; nothing here decides anything.
     """
     return json.dumps(
         {
+            "kind": FlowRecordKind.INIT.value,
+            "step_index": 0,
+            "timestamp": timestamp,
+            "goal": goal,
+            "expect": expect,
+            "url": url,
+            "state": state_text,
+            "screenshot": screenshot_name,
+            "error": "",
+        }
+    )
+
+
+@pure
+def flow_final_record(step_index: int, observation: str, state_text: str, timestamp: str) -> str:
+    """The last line of a flow's log: what the agent says the final page showed.
+
+    Labelled a reading rather than a verdict. It is context for the grade-time judge, which is what
+    actually rules on the flow's `expect`.
+
+    `action` and `reasoning` carry the reading as well as the structured fields, because the judge's
+    digest finds this record by its action text and prints its reasoning.
+    """
+    return json.dumps(
+        {
+            "kind": FlowRecordKind.FINAL.value,
             "step_index": step_index,
             "timestamp": timestamp,
             "action": "read the final state",
             "reasoning": observation or "(no reading recorded)",
+            "observation": observation,
             "state": state_text,
             "screenshot": "",
             "error": "",
@@ -722,6 +964,8 @@ def flow_step_record(
     step_index: int,
     action: str,
     reasoning: str,
+    expected: str,
+    observed: str,
     state_text: str,
     screenshot_name: str,
     error: str,
@@ -740,13 +984,17 @@ def flow_step_record(
 
     The state is recorded UNTRUNCATED: the judge reads this file, and it is the cheap, token-dense
     alternative to looking at screenshots.
+
     """
     return json.dumps(
         {
+            "kind": FlowRecordKind.ACTION.value,
             "step_index": step_index,
             "timestamp": timestamp,
             "action": action,
             "reasoning": reasoning,
+            "expected": expected,
+            "observed": observed,
             "state": state_text,
             "screenshot": screenshot_name,
             "error": error,

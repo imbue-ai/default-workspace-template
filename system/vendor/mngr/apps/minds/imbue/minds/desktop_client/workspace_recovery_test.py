@@ -386,6 +386,27 @@ def test_run_mngr_narrows_a_nonzero_exit_error_to_mngrs_verdict(tmp_path: Path) 
     assert "DEBUG step 499" in (caught.output_tail or "")
 
 
+def test_run_mngr_reports_the_verdict_a_command_died_on_not_one_it_walked_past(tmp_path: Path) -> None:
+    """The mirror of the nested case: for an un-nested command the LAST marker is the verdict.
+
+    A step mngr logged at ERROR and then carried on past is not why the command
+    died, and letting it stand as the message would both tell the user the wrong
+    thing and hand the wrong text to the substring consumers -- reporting a
+    command that died of something else as this machine's backend going down.
+    ``in_workspace_mngr`` reads the same stderr from the other end, so nothing
+    but the argument separates the two, and this pins the un-nested end.
+    """
+    with ConcurrencyGroup(name="test-verdict-direction") as cg:
+        caught = _run_failing_mngr_stub(
+            cg,
+            tmp_path / "failing_mngr_two_markers",
+            "echo 'ERROR: could not reach provider imbue_cloud_someone; skipping it' >&2\n"
+            "echo 'Error: Agent agent-x not found' >&2\n",
+        )
+
+    assert str(caught) == "exited 1: Error: Agent agent-x not found"
+
+
 def test_run_mngr_keeps_a_tolerated_provider_skip_out_of_the_verdict(tmp_path: Path) -> None:
     """A provider mngr skipped and carried on past is not read as this machine's backend outage.
 
@@ -1685,6 +1706,46 @@ def test_a_start_that_really_booted_the_host_keeps_the_restart_framing(tmp_path:
 
     assert tracker.get_health(workspace_agent) == AgentHealth.RECOVERY_FAILED
     assert tracker.is_recovery_a_no_op(workspace_agent) is False
+
+
+def test_a_failure_the_probe_outranked_ends_the_operation_as_a_caveat(tmp_path: Path) -> None:
+    """The card and the operations endpoint read different stores, and must not disagree about one recovery.
+
+    A start that a sleep left blocked can error long after a probe found the
+    machine answering. The tracker declines that failure, so failing the
+    operation too would leave the workspace on a recovery-failed record while
+    the card says the machine is healthy.
+    """
+    workspace_agent = AgentId.generate()
+    tracker = SystemInterfaceHealthTracker()
+    tracker.mark_recovering(workspace_agent, HostRecoveryKind.START)
+    # The wake handed the start back to the probe loop, and the probe answered.
+    tracker.record_probe_success(workspace_agent)
+    resolver = build_resolver_with_system_services(workspace_agent, AgentId.generate())
+    registry = _started_registry(workspace_agent)
+
+    with ConcurrencyGroup(name="test-restart") as cg, capture_error_logs():
+        run_host_recovery_sequence(
+            workspace_agent_id=workspace_agent,
+            tracker=tracker,
+            backend_resolver=resolver,
+            mngr_binary=_write_fake_mngr(tmp_path, was_host_started=True),
+            mngr_host_dir=tmp_path,
+            concurrency_group=cg,
+            mngr_forward_port=1,
+            mngr_forward_preauth_cookie="cookie",
+            registry=registry,
+            kind=HostRecoveryKind.START,
+            startup_wait_seconds=0.1,
+        )
+
+    assert tracker.get_health(workspace_agent) == AgentHealth.HEALTHY
+    assert tracker.get_last_recovery_error(workspace_agent) is None
+    record = registry.get(workspace_agent)
+    assert record is not None
+    assert record.status == WorkspaceOperationStatus.DONE
+    assert record.error is None
+    assert record.warning is not None
 
 
 # -- post-recovery readiness wait --

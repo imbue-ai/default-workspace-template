@@ -10,8 +10,8 @@ only.
 ## How a trial works
 
 1. The task's environment is a **box**: a full Minds computer (the adapted box Dockerfile plus a
-   staged shallow clone of mngr-internal at an exact SHA), built on Modal's builders and
-   layer-cached per mngr SHA.
+   staged shallow clone of mngr-internal at an exact SHA), built on Modal's builders as a single
+   image per mngr SHA and cached whole (~2.5 minutes cold, seconds on a hit).
 2. The **driver** (`MindsPersonaDriver`, a host-side harbor agent) starts the Minds backend inside
    the box with per-trial env: the Modal token pair parsed from your `~/.modal.toml` and a salted
    per-trial `MNGR__PROVIDERS__MODAL__USER_ID` scope. No AI credentials go in that env.
@@ -28,7 +28,7 @@ only.
    of an account. A create whose answer is lost is retried, and the collision that retry hits is
    resolved back to the chat the first attempt left behind.
    Being the workspace's first chat, it is the one that gets `/welcome`. The greeting it draws is
-   the trajectory's first agent message, before any client turn: the gates and the wordiness check
+   the trajectory's first agent message, before any client turn: the gates and the message-length check
    count only agent messages after the client's first turn, so it answers nothing there, while the
    judged transcript keeps it as the first agent message. Either way the driver waits for that
    welcome to be *answered* before turn 1. A
@@ -103,6 +103,11 @@ only way harbor gets the dependencies it declares. Practical consequences:
 ```bash
 # 1. Generate a dataset (one harbor task per persona case) from an eval config
 just minds-evals-generate apps/minds_evals/configs/eval-config-small.json /tmp/minds-evals/datasets/small
+
+# 1b. ...or pin a known-good pair without editing the config (branch, tag, or full SHA each)
+uv run --project apps/minds_evals minds-evals generate \
+  --config apps/minds_evals/configs/eval-config-small.json --output /tmp/minds-evals/datasets/pinned \
+  --mngr-ref minds-v0.4.4 --dwt-ref minds-v0.4.4
 
 # 2. Sanity-check the dataset end-to-end with the oracle (canned transcript; no Minds boot)
 uv run --project apps/minds_evals harbor run -p /tmp/minds-evals/datasets/small -a oracle -e modal -y -o apps/minds_evals/jobs
@@ -250,7 +255,7 @@ sign in with.
 
 `trajectory.json` is the trial's only conversation record and the one every grade-time reader takes
 the conversation from, exactly as for any other harbor eval: the judge-transcript renderer, the
-structural gates, and the wordiness guard read its ATIF steps, and the judges read the rendering.
+structural gates, and the message-length guard read its ATIF steps, and the judges read the rendering.
 Nothing at grade time knows the workspace UI feed exists.
 
 Two transcripts of the workspace agent exist: the workspace UI feed (`/api/agents/<id>/events`),
@@ -324,15 +329,17 @@ rather than placed on a guess. A case without steps has nothing to divide and ge
 The checked-in configs live in `configs/`: `eval-config.json` (nine cases), `eval-config-small.json`
 (three, two of them carrying `expectations`) for quick end-to-end runs, and
 `eval-config-stepped.json` (one [stepped case](#stepped-cases), whose uploads live in
-`configs/datasets/`). All pin `mngr_branch: main`. A config naming a branch that no longer exists
-fails at generation time, when the branch is resolved to a SHA -- so a config pinned to a feature
-branch is worth keeping only while that branch is.
+`configs/datasets/`). All pin `mngr_branch: main`. A config naming a branch or tag that no longer
+exists fails at generation time, when the ref is resolved to a SHA -- so a config pinned to a
+feature branch is worth keeping only while that branch is. A ref given as a full SHA is taken at
+its word and costs no remote lookup, so a SHA that was never pushed is caught later: for mngr by
+the shallow clone at generation time, and for the workspace template not until the box clones it
+inside every trial.
 
 ```json
 {
   "mngr_branch": "main",
   "timeout_seconds": 3600,
-  "avg_word_count_baseline": 120,
   "personas": [
     {"id": "todo-app", "persona": "...", "prompts": ["Build me ...", "Sounds good.", "DECIDE_FROM_PERSONA"]}
   ]
@@ -340,10 +347,16 @@ branch is worth keeping only while that branch is.
 ```
 
 - `mngr_branch` is resolved to an exact SHA at generation time and recorded in each task's
-  `[metadata]`; the box is built from that SHA.
+  `[metadata]`; the box is built from that SHA. Despite the name it takes any ref: a branch, a tag
+  (annotated tags are peeled to their commit), or a full 40-hex SHA, which is used as-is. A name
+  carried by both a tag and a branch resolves to the tag. `--mngr-ref` on the `generate` command
+  overrides it for one generation, which is how a scheduled run pins a known-good release pair
+  without editing the checked-in config; `--dwt-ref` does the same for `dwt_branch`. The metadata
+  records whichever ref was actually used.
 - `dwt_branch` (on `dwt_repo`, the workspace template; defaults to `main` on
-  `imbue-ai/default-workspace-template`) is pinned the same way: generation resolves it to an exact
-  SHA, records it as `dwt_sha` in `[metadata]` next to the branch it came from, and the box clones
+  `imbue-ai/default-workspace-template`) is pinned the same way and accepts the same refs:
+  generation resolves it to an exact SHA, records it as `dwt_sha` in `[metadata]` next to the ref it
+  came from, and the box clones
   that SHA. So a dataset builds the same workspaces however long after generation it is run --
   **picking up new template changes requires regenerating the dataset**. Each trial's own record
   carries `mngr_sha` and `dwt_sha` too (in `state.json` and the agent metadata), so a captured trial
@@ -382,12 +395,11 @@ branch is worth keeping only while that branch is.
   An entry only earns a record once it has stopped, so a timed-out trial's `entries` ends at the
   entry it died in: that entry and any after it are absent, and `waits_done` can then exceed the
   exchanges the records account for.
-- `avg_word_count_baseline` feeds the verifier's wordiness guard (pass unless the average words per
-  agent turn exceeds baseline * 1.1). The guard takes its counts from `trajectory.json`: a "turn"
-  is the agent messages between one client turn and the next, merged. The driver separately
-  records its own `average_words_per_turn` and the finer `average_words_per_message` (words per
-  individual agent message, before the per-turn merge) in the trial metadata, for observability
-  only; neither figure is read at grade time.
+- `avg_word_count_baseline` is accepted so older configs still load, and nothing reads it: the
+  message-length guard scores per-message limits rather than an average against a baseline. What it
+  measures and why is in `quality/message_lengths.py`'s module docstring. The driver separately
+  records its own `average_words_per_turn` and the finer `average_words_per_message` in the trial
+  metadata, for observability only; neither is read at grade time either.
 - `verification_timeout_seconds` (default 1800) is the evidence-collection phase's own budget. It is
   *added* to the task's `[agent].timeout_sec` (case timeout + verification budget + grace), so
   verification never competes with the conversation for time. It is a deadline, not a reservation:
@@ -807,13 +819,22 @@ and it drops `--embedder-origin` and `--reverse`, which shape only how minds *em
 
 All judging happens inside rewardkit, in the verifier container, over the recorded transcript and
 evidence; `finalize.py` composes the trial's final reward from rewardkit's dimension scores
-afterwards. Every trial is scored on two dimensions, and cases that declare
-`expectations` gain a third.
+afterwards. `gates`, `quality` and `harness_quality` are scored on every trial; cases that declare
+`expectations` add `outcome`.
 
 - **`gates`** -- structural: the trajectory parses, the agent engaged with distinct non-stub
   replies, all turns completed, the run did not time out. These zero the reward when they fail.
-- **`quality`** -- three 1-10 likert judge criteria (`conciseness`, `nontechnical_language`,
-  `proactive`) plus the binary wordiness guard.
+- **`quality`** -- the 1-10 likert judge criteria (`conciseness`, `nontechnical_language`,
+  `nontechnical_status_language`, `proactive`) plus the programmatic message-length guard. The client
+  reads the agent on two surfaces and the criteria are split along them: the first two judge the chat
+  messages, `nontechnical_status_language` judges the progress timeline. `quality/prompt.md` holds the
+  split the judge is given.
+- **`harness_quality`** -- whether the workspace let the agent work at all, scored per scope: a 1-5
+  likert judge (`main_harness_success` over the lead agent, `worker_harness_success` over every
+  launched worker) and a programmatic criterion over the counted failure signatures
+  (`main_harness_soundness`, `worker_harness_soundness`). `render_harness_report.py` holds what
+  counts as a failure and why the dimension is separate. Every criterion in every dimension is framed
+  so a higher number is a better outcome.
 - **`outcome`** (expectation cases only; the generator omits the verifier's `outcome/` directory
   otherwise, so rewardkit never emits a partial score for it) -- one criterion per declared check
   class (`app_registered`, `http_expectations_met`, `files_expectations_met`,
@@ -833,7 +854,15 @@ verifies.
 A stepped case is scored the same way, once per step, against that step's own expectations; the
 trial's reward is then the last step's or the mean, per `reward_strategy`.
 
-`quality = weighted mean(conciseness, nontechnical_language, proactive, wordiness guard)` -- likert
+`harness_quality` then takes a fixed `HARNESS_SHARE` (0.2) of whatever the trial earned on quality and
+outcome, leaving the parity between those two untouched: `reward = gates_all_passed ? (0.8 * earned +
+0.2 * harness_quality) : 0`. Every dimension is read the same way, absent meaning 0.0. The rewards
+composed here are the ones rewardkit just produced, not the ones stored when the trial was captured,
+so regrading a trial older than a dimension grades it on that dimension and restates its reward --
+which is what makes a regrade comparable to a fresh run rather than a reconstruction of an old one.
+
+`quality = weighted mean(conciseness, nontechnical_language, nontechnical_status_language,
+proactive, message-length guard)` -- likert
 criteria normalized as `(raw - 1) / 9`, so raw judge scores stay recoverable (`raw = 9 * normalized
 + 1`; raw values are in `reward-details.json`). `reward` is that score, zeroed unless every
 structural gate passed. For expectation cases it is an even split, `reward = gates_all_passed ?
@@ -864,11 +893,14 @@ Grade-time pre-steps rebuild the judges' inputs from the captured evidence on ev
 `harbor trial regrade` re-scores captured trials under the current rendering with no conversation
 re-run:
 
-- `judge_transcript.txt` (from `trajectory.json`): one `[USER]` block per `user` step and one
+- `judge_transcript.txt` (from `trajectory.json`): one `[USER]` block per `user` step, one
   `[AGENT · message N]` block per `agent` step with a message, so conciseness is judged per
-  individual message rather than over a per-turn merge. On the workspace's own document that is one
-  block per inference; on the hand-built fallback (see [The trajectory](#the-trajectory)) it is one
-  per turn. Both the quality judge and the outcome judge read it.
+  individual message rather than over a per-turn merge, and one `[PROGRESS · ...]` block per
+  progress-timeline record, which is the second surface the client reads and appears in no `message`
+  field (`render_judge_transcript.py` holds how those records are recovered). On the workspace's
+  own document a message block is one inference; on the hand-built fallback (see
+  [The trajectory](#the-trajectory)) it is one per turn, and that fallback carries no tool calls, so
+  it renders no progress blocks. Both the quality judge and the outcome judge read it.
 - `judge_flows_digest.txt` and a flat `judge_screenshots/` (from the flow evidence, which rewardkit
   cannot reach because it expands a listed directory exactly one level and never recurses). The
   digest carries, per flow: the declared steps, the `expect` the judge is to rule on, the completion
@@ -878,6 +910,12 @@ re-run:
   renders a listed path it cannot find as a visible `[not found]` block, while an empty listed
   directory renders *nothing at all*, which is why the digest states the screenshot count instead of
   leaving the judge to infer it.
+- `harness_main.txt`, `harness_workers.txt` and `harness_failures.json` (from `trajectory.json` and
+  each `verification/workers/<name>/trajectory.json`): the processed harness reports the
+  `harness_quality` judges read, and the per-scope signature counts its programmatic criteria score.
+  A raw trajectory runs to hundreds of KB and is mostly ordinary work, so each report keeps only the
+  steps that bear on whether the harness held. `render_harness_report.py` holds the signature list
+  and the rules for what is kept and what is counted.
 
 ### Error versus zero
 
@@ -973,15 +1011,221 @@ also derives the in-box proxy's config from.
 - An unpriced model, and a fast-mode request on a model that cannot serve fast mode, report
   `cost_usd: null` rather than a misleading `0`.
 
+## Modal environments, and what a run leaves behind
+
+Every trial creates its own Modal environment: mngr's Modal provider names it
+`<MNGR_PREFIX><user_id>`, where `MNGR_PREFIX` comes from the staging activation inside the box
+(`minds-staging-`) and `user_id` is the per-trial `MNGR__PROVIDERS__MODAL__USER_ID` the driver
+mints. Teardown destroys the nested workspace *sandboxes*; it never destroys the environment.
+
+**That leak is deliberate for a developer run.** The environment outlives the sandboxes inside it
+and is where the state of a trial that went wrong is recovered from, hours or days later. Deleting
+it at teardown would throw away the only thing left to look at. So removing them is opt-in:
+
+```bash
+just minds-evals-list-environments apps/minds_evals/jobs/<job>   # dry run: prints, deletes nothing
+just minds-evals-cleanup-environments apps/minds_evals/jobs/<job>
+```
+
+Both read the names out of each trial's own `state.json` and touch nothing else. There is no
+developer-facing sweep by name on purpose -- see [Cleaning up a scheduled run](#cleaning-up-a-scheduled-run).
+
+A user id is `evals-<user_id_prefix><trial name>-<salt>`, held to 48 characters so the environment
+name stays within the 64 mngr would otherwise truncate it to (truncation is a lossy left-slice with
+no disambiguating hash, so a truncated name is one nothing can reconstruct afterwards). The
+`evals-` namespace makes an eval's environment recognisable among the environments real staging
+workspaces live in; the salt is what keeps two runs of the same trial apart. When the id has to be
+squeezed it is the trial name that gives, never the prefix or the salt.
+
+- `--ak user_id_prefix=<fragment>` prepends a fragment to every trial's user id, and so to its
+  environment name. It is empty by default and validated against Modal's naming rules (lowercase
+  alphanumerics and dashes, at most 25 characters) before any box boots. A scheduled run passes a
+  per-run stamp, `ci-<YYYYMMDDtHHMMSSz>-`, minted by `minds-evals ci-user-id-prefix`, which is what
+  lets that run's own environments be found afterwards. The timestamp is embedded in the name so the
+  backstop sweep reads the age it acts on from the same string it matches its scope on, and the
+  stamp is minted by the same module that parses it back so the two cannot drift apart.
+- The exact environment name a trial created is recorded as `modal_environment_name` in
+  `agent/state.json` and in the trial metadata, written during setup so a trial killed mid-run
+  still says which environment to clean up.
+
+Why the environments read `minds-staging-evals-...` rather than `minds-evals-...`: the prefix comes
+from `MINDS_ROOT_NAME`, which `apply_bootstrap` re-derives on every minds and bridged `mngr`
+invocation and validates against a fixed pattern (`minds`, `minds-staging`, `minds-dev-*`,
+`minds-ci-*`). A root name of `minds-evals` fails it, and `minds-admin env activate evals` is
+rejected by `DevEnvName` before that. Renaming would mean changing those validators in `apps/minds`,
+which the whole app depends on, to buy a shorter name; namespacing the user id gets the same
+recognisability for free.
+
+## Checking a finished run
+
+`minds-evals check-run <job_dir>` reads a finished harbor job directory and exits 0 only if the run
+passed. A trial passes when all three hold:
+
+- **it completed** -- harbor recorded no exception (trial-level or per-step), and the driver's own
+  `state.json` says the conversation finished rather than timing out;
+- **its structural gates held** -- every criterion of the `gates` dimension in
+  `verifier/reward-details.json` scored above zero. A dimension with no criteria at all counts as
+  not passed: that means the gates were never scored, which is a different claim from them holding;
+- **nothing went unmeasured** -- no entry in `agent/verification/manifest.json` carries status
+  `error`. That is the harness failing rather than the workspace falling short, which is why it
+  fails the run where a `failed` entry does not (see [Evidence, not live state](#evidence-not-live-state)).
+
+**Judge scores are reported, never gated.** They are statistical and drift between runs; gating on
+them would make the scheduled job fail for reasons a code change cannot fix.
+
+`--summary-md <path>` writes a GitHub step-summary table -- one row per trial with its case,
+completion, gates, errored evidence, reward, judge scores, Modal environment, and the mngr and dwt
+SHAs. `--summary-json <path>` writes the same rows as JSON with `is_passed`, `job_name`, and
+`modal_environment_names` (exactly the list the cleanup below acts on). An oracle run
+(`harbor run -a oracle`) is checkable the same way: it writes a `state.json` and a reward, and its
+fabricated evidence carries no `error` entries.
+
+## Cleaning up a scheduled run
+
+`minds-evals cleanup-environments` deletes environments in two scopes, both honouring `--dry-run`:
+
+- `--job-dir <job_dir>` deletes exactly the environments that job's trials recorded, and nothing
+  else. This is what the `just` recipes above run, and what a scheduled job runs when its job
+  directory survived. It reads each trial's `state.json` on its own and skips, with a warning, a
+  trial it cannot read -- deliberately more forgiving than `check-run`, which refuses a job it
+  cannot parse: a trial truncated by the crash being cleaned up after must not take the other
+  trials' environments down with it.
+- `--sweep-prefix <prefix> --older-than-hours N` is the backstop for a run whose job directory did
+  not. It lists the workspace's environments through the Modal SDK, keeps names starting with the
+  prefix whose embedded `ci-<YYYYMMDDtHHMMSSz>` stamp is older than the cutoff, and deletes those.
+
+  Two guards bound it, and they do different jobs. A prefix that does not contain `ci-` is
+  **refused**, not silently narrowed, which stops an operator aiming the sweep at something broad.
+  The **timestamp is what keeps a developer's environment out**: a prefix match alone proves nothing,
+  because the trial name follows the `evals-` namespace directly, so a developer's run of a case
+  whose id begins with `ci-` lands under the CI prefix with no `user_id_prefix` at all. Such a name
+  carries no stamp, so it is skipped rather than deleted -- as is any matching name with no parseable
+  timestamp, since with no age to judge, deleting on the prefix alone would take out a run that is
+  still going.
+
+Deletion cascades the apps and volumes inside the environment. An environment that is already gone
+is not an error -- a second cleanup pass over the same job is a no-op. Deleting needs *manage*
+access to the Modal workspace: the CI token has it, and a developer token without it sees each
+deletion reported as failed (the environment stays; ask a workspace admin to remove it).
+
 ## Notes
 
-- The box image build takes 10-20 minutes the first time on Modal's builders, then is layer-cached
-  per mngr SHA. Keep per-case data out of `environment/` or the cache key diverges.
+- A dataset builds **one** box image, keyed on the mngr SHA and the Dockerfile together and cached
+  as a whole: `modal.Image.from_dockerfile` compiles the file into a single build with no
+  per-instruction cache. Cold that is about two and a half minutes on Modal's builders (apt ~41 s,
+  `uv sync` ~30 s, playwright ~27 s, pnpm ~17 s, ~25 s of fixed Modal overhead); an unchanged
+  Dockerfile plus context is a hit at ~10 s to a running sandbox. One changed byte in the staged
+  mngr clone re-runs all of it, so reordering instructions saves nothing. Keep per-case data out of
+  `environment/` or the cache key diverges and every task pays its own build.
 - Debugging: `uv run --project apps/minds_evals harbor task start-env -p <task> -e modal -i`, then
   `modal shell`. harbor's Modal provider opens no tunnels, so there is no live desktop URL, but the
   box still runs x11vnc/websockify for in-sandbox use.
 - Cleanup: the driver destroys its nested workspace sandboxes in a `finally` block
   (`mngr list --ids | mngr destroy - --force`, scoped to the trial's own USER_ID); the nested
-  sandboxes' `modal_eval` 3h timeout is the backstop if the runner dies hard.
+  sandboxes' `modal_eval` 3h timeout is the backstop if the runner dies hard. The Modal
+  *environment* those sandboxes lived in is left alone -- see
+  [Modal environments, and what a run leaves behind](#modal-environments-and-what-a-run-leaves-behind).
 - This app contains async code (`driver.py`, `minds_bridge.py`): harbor's agent and environment
   APIs are async, so the ratchets that normally forbid async/asyncio carry nonzero baselines here.
+
+## Scheduled CI
+
+`.github/workflows/minds-evals-scheduled.yml` runs this eval nightly at 11:00 UTC against two
+`(mngr, default-workspace-template)` pairs:
+
+- **main** -- both repos at `main`. Answers "is what we are about to ship healthy?".
+- **released** -- the `minds-v<version>` tag named by the `stable` channel's `fallback_branch` in
+  `apps/minds/release-channels.toml`, on both repos. Answers "is what users are running healthy?".
+
+Both pairs run at once; a red one does not cancel the other. Every ref is resolved to a SHA once, up
+front, so a pair cannot drift between dataset generation and the run. A pair whose refs do not
+resolve -- a `minds-v<version>` tag that is not yet on both repos, say -- is reported as unresolved
+and left out of the run, which also does not cost the other pair its answer. Dependencies are
+installed from `apps/minds_evals/uv.lock` or the run fails: the only thing meant to move between two
+nights is the pair of SHAs.
+
+Each pair runs two passes. The **oracle pass** replays the canned transcript: it exercises the box
+image build, generation, the verifier container and grading without booting Minds or paying for the
+agent, and it gates the expensive pass. Cheap is not free -- grading is the verifier's judge call, so
+an oracle-only run still costs one judge pass per case (which is why an oracle run asserts
+`reward >= 0.8` rather than exactly 1.0). The **live pass** is the real eval, at a concurrency equal to
+the config's case count so every case runs in one wave. `minds-evals check-run` decides both: it
+passes only when every trial completed, no trial carries a harness `error` status, and the structural
+gates hold. **Judge scores are reported, never gated** -- they are statistical, and one run's number
+is not a regression signal.
+
+A pair that passes end to end is recorded green in an `actions/cache` marker keyed on
+`(pair, mngr SHA, dwt SHA, config path)`, and the next night skips it. A red run saves nothing, so it
+retries on the next slot. List the green pairs with
+`gh cache list --key minds-evals-green-` -- the Caches web UI cannot filter by key prefix.
+
+Nothing that comes from the branch the workflow runs on is in that key -- not the config's contents,
+and not the eval harness in `apps/minds_evals` (the driver, the gates, the verifier) -- and neither
+is the live staging tier every trial boots. **A green marker says a pair was verified once, against
+whatever harness and tier existed then.** The `main` pair picks up a harness change anyway, because
+its SHA moves whenever `apps/minds_evals` does. The `released` pair does not: its refs are the
+release tag, so between releases it is verified once and skipped every night after -- a new gate, or
+a staging regression, is not seen there until the next release. Dispatch with `force` to re-verify
+any of that.
+
+### Dispatching a run
+
+`workflow_dispatch` inputs:
+
+- `pair` -- `both` (default), `main`, or `released`.
+- `mngr_ref` / `dwt_ref` -- a one-off pair. Setting either replaces the pair selection with a single
+  `custom` pair (branch, tag, or full SHA; the unset side defaults to `main`).
+- `config` -- which eval config to generate the dataset from; empty (the default) uses
+  `eval-config-small.json`. Its persona count becomes the run concurrency.
+- `force` -- evaluate a pair even when its green marker says it was already verified.
+- `skip_live` -- run only the oracle pass. This is the cheap way to test changes to the workflow
+  itself; it never writes a green marker, because it verified nothing about the live path.
+
+GitHub accepts a `workflow_dispatch` only for a workflow file that is already on the default branch,
+so a change to the workflow cannot be dispatched from the branch that carries it. Push that branch
+under `minds-evals-run/` instead (`git push origin HEAD:minds-evals-run/<anything>`): the push runs
+the main pair, oracle pass only, unless the head commit message carries `[live]`, in which case the
+live pass runs too. An ordinary feature branch never triggers it. The Slack report and the green
+marker treat a push the same way they treat `skip_live`.
+
+### Results
+
+Per pair, the run's step summary carries the check-run markdown, and two artifacts are kept for 14
+days: `minds-evals-summary-<pair>` (the markdown and JSON summaries) and
+`minds-evals-jobs-<pair>-<run_id>` (the full job directories, minus `agent/snapshots/` -- the
+workspace tarball is ~90 MB of a trial's ~92 MB).
+
+The `notify` job posts one Slack message per run covering every pair, its refs and SHAs, its verdict,
+and its per-case rows. The verdict covers the eval job as a whole, not only the trials: a run whose
+every pair passed but whose job still went red or was cancelled -- a cleanup that could not delete
+the run's Modal environments, say -- is flagged rather than reported as a clean success. It reads
+the webhook from Vault at `mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`
+(**not yet created** -- until it exists the job emits a warning and writes the same report to the run
+summary, and never fails the run). The rest of the run's credentials come from the same Vault role as
+the other CI jobs: `mngr/ci/ANTHROPIC_API_KEY` and the `mngr/ci/MODAL_TOKEN_ID` /
+`mngr/ci/MODAL_TOKEN_SECRET` pair, which CI writes into a throwaway `~/.modal.toml` because the
+driver parses one. That token belongs to the imbue Modal workspace, the same one a developer's
+`[imbue]` profile puts their own runs in; the staging Minds tier the box activates is reached over
+HTTP, so the token's workspace is independent of it.
+
+### CI environments and cleanup
+
+A CI run passes `--ak user_id_prefix=ci-<YYYYMMDDtHHMMSSz>-`, so every Modal environment it creates
+is attributable to one run and one wall-clock time. Teardown is three-layered:
+
+1. The driver destroys its own nested workspace sandboxes in a `finally` block.
+2. `minds-evals cleanup-environments --job-dir <job dir>` deletes exactly the environments the run
+   recorded, and runs even when the passes failed. This is the layer that collects the run it is
+   part of.
+3. `minds-evals cleanup-environments --sweep-prefix <ci prefix> --older-than-hours 8` is the backstop
+   for a run that died before recording anything. It deletes only names carrying a scheduled run's
+   `ci-<timestamp>` stamp. **The cutoff is `now - 8 h` and the job's own budget is 3 h 20 m, so the
+   sweep never collects the run it runs inside** -- an earlier run's leak is collected by a later
+   run, usually the next night's. That is the point of the 8 h: it puts every still-possible eval,
+   including the other pair running alongside, and every developer's work out of reach.
+
+Cancelling the job (or hitting its timeout) SIGKILLs harbor rather than unwinding it; the boxes it
+leaves then ride their own timeouts -- 3 h for the nested workspace sandboxes, and for the harbor
+sandbox 4 h in the live pass, which is where `just minds-evals-run` sets `--ek
+sandbox_timeout_secs` (the oracle pass calls harbor directly and takes its default) -- and the
+cleanup step still runs.

@@ -1,4 +1,5 @@
 from enum import auto
+from functools import cached_property
 from pathlib import Path
 from typing import Annotated
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Self
 
 from pydantic import Field
 from pydantic import StringConstraints
+from pydantic import computed_field
 from pydantic import model_validator
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -32,9 +34,10 @@ DEFAULT_DWT_BRANCH: Final[str] = "main"
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 3600.0
 
-# Seed value for the wordiness guard: a guess, not a measurement. To ground it,
-# take the mean over a batch of real runs and set "avg_word_count_baseline" in
-# the eval config, which overrides this per config.
+# Kept only so configs that set "avg_word_count_baseline" still load. Nothing reads it at grade time:
+# the message-length guard replaced the average-words-per-turn measure with per-message limits, which
+# score how the agent writes rather than how its work happened to divide across turns.
+# CLEANUP: drop this and the field on CaseConfig/EvalConfig once no checked-in config sets it.
 DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
@@ -558,12 +561,13 @@ class StepBoxFile(FrozenModel):
 class RewardDimension(LowerCaseStrEnum):
     """A key of the verifier's reward.json that a step's `min_reward` may gate on.
 
-    GATES, QUALITY and OUTCOME are the dimensions rewardkit scores; REWARD is the composed, gated
-    score finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
+    Every member but REWARD is a dimension rewardkit scores; REWARD is the composed, gated score
+    finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
     """
 
     GATES = auto()
     QUALITY = auto()
+    HARNESS_QUALITY = auto()
     OUTCOME = auto()
     REWARD = auto()
 
@@ -673,12 +677,14 @@ class PersonaCase(FrozenModel):
 class EvalConfig(FrozenModel):
     """A validated eval config file: the mngr branch under test plus the persona cases."""
 
-    mngr_branch: str = Field(description="The mngr branch the box is built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box is built from")
     dwt_repo: str = Field(description="Workspace template repo each case is cloned from")
-    dwt_branch: str = Field(description="Workspace template branch")
+    dwt_branch: str = Field(description="Workspace template ref (branch, tag, or full SHA)")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
+    avg_word_count_baseline: float = Field(
+        description="Unused: the message-length guard scores per-message limits, not an average"
+    )
     cases: tuple[PersonaCase, ...] = Field(description="The persona cases, one task each")
 
 
@@ -690,12 +696,14 @@ class CaseConfig(FrozenModel):
     prompts: tuple[PromptEntry, ...] = Field(description="The conversation's entries in order")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    mngr_branch: str = Field(description="The mngr branch the box was built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box was built from")
     mngr_sha: str = Field(description="Exact mngr SHA resolved at generation time")
     dwt_repo: str = Field(description="Workspace template repo")
-    dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
+    dwt_branch: str = Field(description="Workspace template ref the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
+    avg_word_count_baseline: float = Field(
+        description="Unused: the message-length guard scores per-message limits, not an average"
+    )
     # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
     expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
@@ -730,6 +738,87 @@ class DeciderResult(FrozenModel):
     input_token_count: int = Field(description="Input tokens the call consumed; 0 when none completed")
     output_token_count: int = Field(description="Output tokens the call consumed; 0 when none completed")
     is_fallback: bool = Field(description="Whether the literal fallback message was used")
+
+
+class JudgeScore(FrozenModel):
+    """One likert judge criterion's score on a trial. Reported for the record, never gated."""
+
+    dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
+    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
+    # rewardkit normalizes a 1-10 likert to (raw - 1) / 9; both are carried so a reader can compare
+    # across runs without having to know which convention a number is in.
+    normalized_score: float = Field(description="The criterion's contribution to its dimension, 0-1")
+    raw_score: float = Field(description="The judge's own 1-10 likert answer")
+
+
+class TrialCheck(FrozenModel):
+    """How one trial of a finished run came out, under the criteria a scheduled run is gated on."""
+
+    trial_name: str = Field(description="The trial directory's name, e.g. 'todo-app__XNXFsgk'")
+    case_id: str = Field(description="The persona case the trial ran; empty when it cannot be read")
+    is_completed: bool = Field(description="Whether the trial ran to the end without erroring or timing out")
+    incompletion_reason: str = Field(description="Why the trial did not complete; empty when it did")
+    is_gates_passed: bool = Field(description="Whether every structural gate criterion scored above zero")
+    error_entry_ids: tuple[str, ...] = Field(description="Evidence manifest entries the harness could not measure")
+    reward: float | None = Field(description="The trial's final reward; None when it was never graded")
+    judge_scores: tuple[JudgeScore, ...] = Field(description="Every likert judge criterion the verifier recorded")
+    modal_environment_name: str = Field(description="The Modal environment the trial left behind; empty if unrecorded")
+    mngr_sha: str = Field(description="The mngr SHA the trial's box was built from")
+    dwt_sha: str = Field(description="The workspace-template SHA the trial's workspace was cloned from")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        return self.is_completed and self.is_gates_passed and not self.error_entry_ids
+
+
+class RunCheck(FrozenModel):
+    """Whether a finished job passed the criteria a scheduled run is gated on, trial by trial."""
+
+    job_name: str = Field(description="The job directory's name")
+    trials: tuple[TrialCheck, ...] = Field(description="One entry per trial directory, in name order")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        """Whether every trial passed; the check-run command's exit code follows this.
+
+        A run with no trials is not a pass: it says nothing ran, which must never read as a green
+        verdict.
+        """
+        return bool(self.trials) and all(trial.is_passed for trial in self.trials)
+
+    @computed_field
+    @cached_property
+    def modal_environment_names(self) -> tuple[str, ...]:
+        """Every environment the run leaked, so the same file that reports the run names what a
+        cleanup pass has to remove.
+
+        Derived from the rows rather than stored beside them, like the verdict above: a list a
+        caller had to keep in step with `trials` is one that can name an environment no trial in
+        the report created. A trial that never reached a workspace records no name, and an empty
+        one is dropped rather than reported as an environment to go looking for.
+        """
+        return tuple(sorted({trial.modal_environment_name for trial in self.trials if trial.modal_environment_name}))
+
+
+class ModalDeletionOutcome(UpperCaseStrEnum):
+    """How one Modal environment deletion came out.
+
+    DELETED and NOT_FOUND both mean the environment is gone, whether or not this call is what removed
+    it; only FAILED is a reason to look."""
+
+    DELETED = auto()
+    NOT_FOUND = auto()
+    FAILED = auto()
+
+
+class CleanupReport(FrozenModel):
+    """What one Modal environment cleanup pass did."""
+
+    deleted_names: tuple[str, ...] = Field(description="Environments the pass removed")
+    already_gone_names: tuple[str, ...] = Field(description="Environments that were absent by the time it looked")
+    failed_names: tuple[str, ...] = Field(description="Environments Modal refused to remove")
 
 
 class GoalDecision(FrozenModel):

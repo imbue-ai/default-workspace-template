@@ -1,0 +1,990 @@
+name: minds evals (scheduled)
+
+# Nightly Minds persona eval (apps/minds_evals) against two (mngr, dwt) pairs:
+# `main` vs `main`, and the released tag both repos carry. Each pair runs a cheap
+# oracle pass (image build + generation + verifier container, no Minds boot and no
+# agent spend -- only the verifier's own judge calls) and then the real eval, and a
+# green pair is remembered so the next night skips it when nothing moved.
+#
+# This is a regression job, not a gate: a trial boots a full Minds computer on
+# Modal per case, so it is far too slow and expensive for a PR check.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pair:
+        description: 'Which (mngr, dwt) pair(s) to evaluate. `main` = both repos at main; `released` = the stable channel fallback_branch tag on both repos.'
+        type: choice
+        options: [both, main, released]
+        default: both
+        required: false
+      mngr_ref:
+        description: 'One-off mngr ref (branch, tag, or full 40-char SHA). Setting this or dwt_ref replaces the pair selection with a single `custom` pair; the unset side defaults to `main`.'
+        required: false
+        default: ''
+      dwt_ref:
+        description: 'One-off default-workspace-template ref (branch, tag, or full 40-char SHA). See mngr_ref.'
+        required: false
+        default: ''
+      config:
+        # Left empty rather than repeating the DEFAULT_CONFIG env value: a schedule fires with every
+        # input null and falls back to DEFAULT_CONFIG, so a second default here would be a second
+        # source of truth -- and the two diverging would silently make the nightly and a default
+        # dispatch evaluate different configs under different cache keys, leaving both permanently
+        # un-green.
+        description: 'Eval config to generate the dataset from; empty uses the DEFAULT_CONFIG below. Its persona count becomes the run concurrency, so every case runs in one wave.'
+        required: false
+        default: ''
+      force:
+        description: 'Evaluate a pair even when the green marker says this exact (mngr SHA, dwt SHA, config) was already verified.'
+        type: boolean
+        required: false
+        default: false
+      skip_live:
+        description: 'Run only the oracle pass. Exercises image build, generation, the verifier container and grading without booting Minds or paying for the agent -- the cheap way to test this workflow itself. Cheap, not free: the verifier judges every trial.'
+        type: boolean
+        required: false
+        default: false
+  # 11:00 UTC threads between the other schedules that provision Modal fleets,
+  # and leaves this run (up to ~3 h) finished well before launch-to-msg's 16:00
+  # slot. Schedules only ever fire from the default branch.
+  schedule:
+    - cron: '0 11 * * *'
+  # A workflow_dispatch is only accepted once the file is on the default
+  # branch, so a change to this workflow cannot be dispatched from the branch
+  # that carries it. Pushing that branch under minds-evals-run/ runs it
+  # instead: the main pair only, and the oracle pass only unless the head
+  # commit message carries "[live]", so a routine push costs one oracle pass
+  # and nothing more. The branch name is the opt-in; an ordinary feature
+  # branch never triggers this.
+  push:
+    branches: ['minds-evals-run/**']
+
+# `contents: read` for checkout. `id-token: write` lets the use-vault-secrets
+# steps mint a GitHub OIDC token for Vault. `actions: read` is what the artifact
+# download in `notify` and its `gh api .../actions/runs/<id>` duration lookup
+# need; actions/cache uses its own injected token, so no write scope.
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+env:
+  # Prefix of every Modal environment a CI eval run creates. The cleanup sweep matches on it, so it
+  # MUST equal the prefix the driver actually produces for a `--ak user_id_prefix=ci-...` run -- a
+  # mismatch leaves live environments behind, and does it in silence, because a sweep that selects
+  # nothing exits 0. A workflow cannot import the constants the driver composes it from, so a
+  # minds_evals test reads this line back out of this file and pins the two together.
+  CI_ENVIRONMENT_PREFIX: minds-staging-evals-ci-
+  # Whether this run stops after the oracle pass: the skip_live input, or a
+  # branch push whose head commit does not ask for the live pass. Decided once
+  # here so the pass steps, the marker steps and the Slack report cannot
+  # disagree about it.
+  IS_LIVE_PASS_SKIPPED: ${{ inputs.skip_live || (github.event_name == 'push' && !contains(github.event.head_commit.message, '[live]')) }}
+  # Spelled with the .git suffix to match DEFAULT_DWT_REPO in minds_evals/data_types.py: this job
+  # freezes the dwt SHA and `generate` resolves it again from the config, and the whole premise is
+  # that both halves pin the identical thing.
+  DWT_REPO_URL: https://github.com/imbue-ai/default-workspace-template.git
+  # The one place the default config lives: the `config` dispatch input is deliberately empty so
+  # both a schedule and a default dispatch land here.
+  DEFAULT_CONFIG: apps/minds_evals/configs/eval-config-small.json
+
+jobs:
+  # Free ubuntu job that does the freezing and the skipping. It resolves every
+  # ref to a SHA exactly once, so a moving ref like `main` cannot drift between
+  # dataset generation and the run, and it consults a per-pair green marker so a
+  # night where nothing moved costs one free job instead of a fleet of boxes.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      # Matrix of the pairs that should actually be evaluated.
+      matrix: ${{ steps.decide.outputs.matrix }}
+      any: ${{ steps.decide.outputs.any }}
+      # Every pair considered, skipped ones included, so `notify` can tell a pair
+      # that was skipped from a pair whose job died.
+      pairs: ${{ steps.decide.outputs.pairs }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: read the released pair from the stable release channel
+        id: channel
+        # The stable channel's fallback_branch is the `minds-v<version>` tag that
+        # a release puts on BOTH repos, which is what makes it usable as one ref
+        # for the pair. Read only when a released pair is actually wanted.
+        env:
+          PAIR_INPUT: ${{ inputs.pair }}
+          MNGR_REF_INPUT: ${{ inputs.mngr_ref }}
+          DWT_REF_INPUT: ${{ inputs.dwt_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$MNGR_REF_INPUT" || -n "$DWT_REF_INPUT" ]]; then
+            echo "released_ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n "$PAIR_INPUT" && "$PAIR_INPUT" != "both" && "$PAIR_INPUT" != "released" ]]; then
+            echo "released_ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          released_ref=$(python -c '
+          import tomllib
+          with open("apps/minds/release-channels.toml", "rb") as handle:
+              channels = tomllib.load(handle)["channels"]
+          print(channels["stable"]["fallback_branch"])
+          ')
+          if [[ -z "$released_ref" ]]; then
+            echo "::error::apps/minds/release-channels.toml has no stable fallback_branch"
+            exit 1
+          fi
+          echo "released_ref=$released_ref" >> "$GITHUB_OUTPUT"
+
+      - name: freeze each pair's refs to SHAs
+        id: compute
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PAIR_INPUT: ${{ inputs.pair }}
+          MNGR_REF_INPUT: ${{ inputs.mngr_ref }}
+          DWT_REF_INPUT: ${{ inputs.dwt_ref }}
+          CONFIG_INPUT: ${{ inputs.config }}
+          RELEASED_REF: ${{ steps.channel.outputs.released_ref }}
+        run: |
+          set -euo pipefail
+          # The only shape a ref may have. `mngr_ref` / `dwt_ref` are dispatch inputs, and a
+          # dispatch through the API (unlike the web form) can carry a newline. Every ref is
+          # written to $GITHUB_OUTPUT as a bare `key=value` line, where a newline would forge
+          # further outputs -- enough to flip a pair's `_present` flag or substitute its
+          # `_cache_key` onto another pair's green marker. Kept unquoted where it is matched: in
+          # bash a quoted right-hand side of `=~` is a literal string, not a pattern.
+          REF_SHAPE='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+          # Resolve a branch / tag / full-SHA ref to a commit SHA. Peels annotated
+          # tags (`^{}`) to the commit they point at -- else the summary and the
+          # marker key would carry a tag-object SHA nobody can check out.
+          resolve_ref() {
+            local url="$1" ref="$2" sha=""
+            # The diagnostic goes to stderr, never stdout: the caller reads this function through a
+            # command substitution, so anything printed here would become the resolved SHA.
+            if [[ ! "$ref" =~ $REF_SHAPE ]]; then
+              echo "ref '${ref}' is not shaped like a branch, tag, or SHA name" >&2
+              echo ""
+              return
+            fi
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+              return
+            fi
+            # Tag before branch for a name that is both, matching resolve_remote_ref in
+            # minds_evals/generate.py ("a release tag is the more deliberate pin"). Selecting by
+            # ref name rather than by taking the first line, because ls-remote sorts refs/heads
+            # before refs/tags and would otherwise decide this the opposite way.
+            local listing
+            listing=$(git ls-remote "$url" "refs/tags/$ref^{}" "refs/tags/$ref" "refs/heads/$ref")
+            for candidate in "refs/tags/$ref^{}" "refs/tags/$ref" "refs/heads/$ref"; do
+              sha=$(awk -v want="$candidate" '$2 == want {print $1; exit}' <<<"$listing")
+              [[ -n "$sha" ]] && break
+            done
+            echo "$sha"
+          }
+          # Credentialed: mngr-internal is private, so an anonymous ls-remote fails.
+          # dwt is public and takes the plain URL.
+          MNGR_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          CONFIG="${CONFIG_INPUT:-$DEFAULT_CONFIG}"
+          # Held to a repo-relative path shape for the same reason the refs are: it is a dispatch
+          # input, it is written to $GITHUB_OUTPUT as a bare `key=value` line, and it is later
+          # echoed into the green marker.
+          if [[ ! "$CONFIG" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*\.json$ ]]; then
+            echo "::error::config '${CONFIG}' is not a repo-relative .json path"
+            exit 1
+          fi
+          # Checked here, on the free job, rather than minutes into a paid runner per pair.
+          if [[ ! -f "$CONFIG" ]]; then
+            echo "::error::config '${CONFIG}' does not exist on this branch"
+            exit 1
+          fi
+          echo "config=$CONFIG" >> "$GITHUB_OUTPUT"
+          # The marker key carries the config PATH, not its contents. Nothing that comes from the
+          # branch this workflow runs on is in the key -- not the config's contents, and not the
+          # eval harness in apps/minds_evals (the driver, the gates, the verifier) -- and neither is
+          # the live staging tier every trial boots. So a green marker says this pair was verified
+          # once, against whatever harness and tier existed then. The `main` pair picks the harness
+          # up anyway, because its SHA moves whenever apps/minds_evals does; the `released` pair
+          # does not, so between releases it is verified once and skipped every night after.
+          # force=true is how any of that gets re-verified.
+          CONFIG_SLUG=$(printf '%s' "$CONFIG" | tr -c 'A-Za-z0-9' '-')
+
+          # A pair that will not resolve is recorded as unresolved rather than aborting the step:
+          # the pairs answer different questions, and losing the `main` answer because a release tag
+          # is not yet on both repos would give up the one that matters most. `_present` stays
+          # unwritten for it, which keeps its marker-lookup step skipped (an empty cache key would
+          # fail the action) and keeps it out of the matrix; `decide` and `notify` report it.
+          freeze_pair() {
+            local name="$1" mngr_ref="$2" dwt_ref="$3" mngr_sha dwt_sha
+            # A malformed ref is not an unresolvable one, and is not recorded as one: it can only
+            # come from a hand-typed dispatch, so it is the operator's mistake rather than a state
+            # of the world, and it must never reach the $GITHUB_OUTPUT writes below (see REF_SHAPE).
+            local candidate_ref
+            for candidate_ref in "$mngr_ref" "$dwt_ref"; do
+              if [[ ! "$candidate_ref" =~ $REF_SHAPE ]]; then
+                echo "::error::pair '$name': ref '${candidate_ref}' is not shaped like a branch, tag, or SHA name"
+                exit 1
+              fi
+            done
+            mngr_sha=$(resolve_ref "$MNGR_URL" "$mngr_ref")
+            dwt_sha=$(resolve_ref "$DWT_REPO_URL" "$dwt_ref")
+            if [[ -z "$mngr_sha" || -z "$dwt_sha" ]]; then
+              echo "::error::pair '$name': could not resolve mngr '$mngr_ref' (got '${mngr_sha:-<empty>}') or dwt '$dwt_ref' (got '${dwt_sha:-<empty>}')"
+              {
+                echo "${name}_unresolved=true"
+                echo "${name}_mngr_ref=$mngr_ref"
+                echo "${name}_dwt_ref=$dwt_ref"
+              } >> "$GITHUB_OUTPUT"
+              return 0
+            fi
+            {
+              echo "${name}_present=true"
+              echo "${name}_mngr_ref=$mngr_ref"
+              echo "${name}_dwt_ref=$dwt_ref"
+              echo "${name}_mngr_sha=$mngr_sha"
+              echo "${name}_dwt_sha=$dwt_sha"
+              echo "${name}_cache_key=minds-evals-green-${name}-mngr-${mngr_sha}-dwt-${dwt_sha}-cfg-${CONFIG_SLUG}"
+            } >> "$GITHUB_OUTPUT"
+          }
+
+          # Naming either ref means the operator is asking about one specific
+          # combination, so it replaces the pair selection rather than adding to it.
+          if [[ -n "$MNGR_REF_INPUT" || -n "$DWT_REF_INPUT" ]]; then
+            freeze_pair custom "${MNGR_REF_INPUT:-main}" "${DWT_REF_INPUT:-main}"
+            exit 0
+          fi
+          # A schedule fires with every input empty (defaults apply to dispatch only).
+          PAIR="${PAIR_INPUT:-both}"
+          # A branch push (see the push trigger) evaluates the main pair only.
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then PAIR=main; fi
+          if [[ "$PAIR" == "main" || "$PAIR" == "both" ]]; then
+            freeze_pair main main main
+          fi
+          if [[ "$PAIR" == "released" || "$PAIR" == "both" ]]; then
+            freeze_pair released "$RELEASED_REF" "$RELEASED_REF"
+          fi
+
+      # One lookup-only restore per possible pair: the action cannot be looped, and
+      # a skipped step reports an empty cache-hit, which reads as "not green".
+      - name: look up the main pair's green marker
+        id: marker_main
+        if: steps.compute.outputs.main_present == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          # Required by the action even with lookup-only; nothing is downloaded, so
+          # the file never has to exist.
+          path: /tmp/minds-evals-marker.txt
+          key: ${{ steps.compute.outputs.main_cache_key }}
+          lookup-only: true
+      - name: look up the released pair's green marker
+        id: marker_released
+        if: steps.compute.outputs.released_present == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/minds-evals-marker.txt
+          key: ${{ steps.compute.outputs.released_cache_key }}
+          lookup-only: true
+      - name: look up the custom pair's green marker
+        id: marker_custom
+        if: steps.compute.outputs.custom_present == 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: /tmp/minds-evals-marker.txt
+          key: ${{ steps.compute.outputs.custom_cache_key }}
+          lookup-only: true
+
+      - name: decide which pairs run
+        id: decide
+        env:
+          FORCE: ${{ inputs.force }}
+          CONFIG: ${{ steps.compute.outputs.config }}
+          MAIN_PRESENT: ${{ steps.compute.outputs.main_present }}
+          MAIN_UNRESOLVED: ${{ steps.compute.outputs.main_unresolved }}
+          MAIN_MNGR_REF: ${{ steps.compute.outputs.main_mngr_ref }}
+          MAIN_MNGR_SHA: ${{ steps.compute.outputs.main_mngr_sha }}
+          MAIN_DWT_REF: ${{ steps.compute.outputs.main_dwt_ref }}
+          MAIN_DWT_SHA: ${{ steps.compute.outputs.main_dwt_sha }}
+          MAIN_CACHE_KEY: ${{ steps.compute.outputs.main_cache_key }}
+          MAIN_CACHE_HIT: ${{ steps.marker_main.outputs.cache-hit }}
+          RELEASED_PRESENT: ${{ steps.compute.outputs.released_present }}
+          RELEASED_UNRESOLVED: ${{ steps.compute.outputs.released_unresolved }}
+          RELEASED_MNGR_REF: ${{ steps.compute.outputs.released_mngr_ref }}
+          RELEASED_MNGR_SHA: ${{ steps.compute.outputs.released_mngr_sha }}
+          RELEASED_DWT_REF: ${{ steps.compute.outputs.released_dwt_ref }}
+          RELEASED_DWT_SHA: ${{ steps.compute.outputs.released_dwt_sha }}
+          RELEASED_CACHE_KEY: ${{ steps.compute.outputs.released_cache_key }}
+          RELEASED_CACHE_HIT: ${{ steps.marker_released.outputs.cache-hit }}
+          CUSTOM_PRESENT: ${{ steps.compute.outputs.custom_present }}
+          CUSTOM_UNRESOLVED: ${{ steps.compute.outputs.custom_unresolved }}
+          CUSTOM_MNGR_REF: ${{ steps.compute.outputs.custom_mngr_ref }}
+          CUSTOM_MNGR_SHA: ${{ steps.compute.outputs.custom_mngr_sha }}
+          CUSTOM_DWT_REF: ${{ steps.compute.outputs.custom_dwt_ref }}
+          CUSTOM_DWT_SHA: ${{ steps.compute.outputs.custom_dwt_sha }}
+          CUSTOM_CACHE_KEY: ${{ steps.compute.outputs.custom_cache_key }}
+          CUSTOM_CACHE_HIT: ${{ steps.marker_custom.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+
+          force = os.environ.get("FORCE") == "true"
+          config = os.environ["CONFIG"]
+          pairs = []
+          for name in ("main", "released", "custom"):
+              key = name.upper()
+              # A pair whose refs would not resolve carries no SHAs and no cache key, so it is
+              # reported and then left alone -- only a "run" reaches the matrix.
+              if os.environ.get(key + "_UNRESOLVED") == "true":
+                  pairs.append(
+                      {
+                          "pair": name,
+                          "mngr_ref": os.environ.get(key + "_MNGR_REF", ""),
+                          "mngr_sha": "",
+                          "dwt_ref": os.environ.get(key + "_DWT_REF", ""),
+                          "dwt_sha": "",
+                          "cache_key": "",
+                          "config": config,
+                          "decision": "unresolved",
+                      }
+                  )
+                  continue
+              if os.environ.get(key + "_PRESENT") != "true":
+                  continue
+              green = os.environ.get(key + "_CACHE_HIT") == "true"
+              pairs.append(
+                  {
+                      "pair": name,
+                      "mngr_ref": os.environ[key + "_MNGR_REF"],
+                      "mngr_sha": os.environ[key + "_MNGR_SHA"],
+                      "dwt_ref": os.environ[key + "_DWT_REF"],
+                      "dwt_sha": os.environ[key + "_DWT_SHA"],
+                      "cache_key": os.environ[key + "_CACHE_KEY"],
+                      "config": config,
+                      "decision": "skip" if (green and not force) else "run",
+                  }
+              )
+          runnable = [pair for pair in pairs if pair["decision"] == "run"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as handle:
+              handle.write("pairs={}\n".format(json.dumps(pairs)))
+              handle.write("matrix={}\n".format(json.dumps({"include": runnable})))
+              handle.write("any={}\n".format("true" if runnable else "false"))
+          # An unresolved pair has refs but no SHAs, and the cell has to say so rather than render an
+          # empty pair of backticks -- the same reading notify's ref_label gives it, so the two
+          # reports of one run agree.
+          def short_sha(sha):
+              return sha[:12] if sha else "unresolved"
+
+          lines = ["## Pairs", "", "| pair | mngr | dwt | decision |", "|---|---|---|---|"]
+          for pair in pairs:
+              lines.append(
+                  "| `{pair}` | `{mngr_ref}` (`{mngr_short}`) | `{dwt_ref}` (`{dwt_short}`) | **{decision}** |".format(
+                      mngr_short=short_sha(pair["mngr_sha"]), dwt_short=short_sha(pair["dwt_sha"]), **pair
+                  )
+              )
+          lines += [
+              "",
+              "- config: `{}`".format(config),
+              "- a `skip` means the green marker already holds that exact (mngr SHA, dwt SHA, config); dispatch with force=true to re-run it",
+              "- an `unresolved` means one of that pair's refs does not exist on its remote; the other pairs still run",
+              "",
+              "Inspect the green markers (the Caches web UI cannot filter by key prefix):",
+              "",
+              "```",
+              "gh cache list --repo {} --key minds-evals-green-".format(os.environ["GITHUB_REPOSITORY"]),
+              "```",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+  evaluate:
+    needs: resolve
+    if: needs.resolve.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # A red pair must not cancel the other: the two pairs answer different
+      # questions ("is main healthy?" and "is what users run healthy?"), and one
+      # answer is worth having without the other. `max-parallel` stays unset so
+      # both pairs run at once -- they are independent fleets on Modal, and
+      # serializing them would double the nightly's wall clock without saving
+      # anything, since the cost is the boxes either way.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    # Per-pair so a dispatch cannot overlap the nightly for the SAME pair (two
+    # runs of one pair would collide on the CI Modal environments) while leaving
+    # the pairs free of each other.
+    concurrency:
+      group: minds-evals-${{ matrix.pair }}
+      cancel-in-progress: false
+    # Budget: every case runs in one wave, so the live pass costs one case's
+    # worth of harbor time (the config's agent timeout, the evidence-collection
+    # budget, and harbor's grace), and around it sit setup, dataset generation,
+    # the oracle pass (which pays the cold box-image build), grading, cleanup
+    # and upload. The remainder is margin.
+    # Cancellation (this timeout, or a manual cancel) SIGKILLs harbor rather than
+    # unwinding it, so the boxes it left behind fall back on their own sandbox
+    # timeouts. The cleanup step below still runs, because it is `if: always()`.
+    timeout-minutes: 200
+    # No job-level outputs on purpose: every matrix shard would write the same
+    # output names and the last to finish would win. `notify` reads the per-pair
+    # summary artifacts instead.
+    env:
+      # Every `uv sync` and `uv run` below installs the lock or fails, never a fresh resolution.
+      # This job's whole premise is that the only thing moving between two nights is the pair of
+      # SHAs it froze; a harbor or modal release picked up mid-run would be an eval regression with
+      # no commit behind it.
+      UV_LOCKED: "1"
+    steps:
+      # The Anthropic key backs the decider (simulated user), the judge, and the
+      # credential each workspace is signed in with. The Modal token pair is what
+      # harbor builds and runs the boxes with, and what the driver forwards into
+      # the box so its own mngr can create nested workspaces.
+      - name: Fetch Anthropic key and Modal credentials from Vault
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/ANTHROPIC_API_KEY
+            mngr/ci/MODAL_TOKEN_ID
+            mngr/ci/MODAL_TOKEN_SECRET
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Verify the Vault secrets reached the runner
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in ANTHROPIC_API_KEY MODAL_TOKEN_ID MODAL_TOKEN_SECRET; do
+            value="${!var:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error::$var is empty -- the Vault secret is not reaching the runner"
+              missing=1
+            else
+              echo "$var present, length=${#value}"
+            fi
+          done
+          if (( missing )); then
+            exit 1
+          fi
+
+      # CI has no ~/.modal.toml, and the driver parses one to forward the token
+      # pair into the box; it reads the active profile whatever its section is
+      # called. The mngr/ci token is the imbue Modal workspace token, the same
+      # workspace a developer's own eval runs land in, scoped by the per-trial
+      # user id. The staging Minds tier the box activates is reached over HTTP,
+      # so the token's workspace is independent of it.
+      - name: Write throwaway Modal profile
+        run: |
+          set -euo pipefail
+          # 0600 before anything is written, the way `modal token set` leaves the file: this holds a
+          # token pair with manage access to the Modal workspace, and the default umask would leave
+          # it world-readable.
+          install -m 600 /dev/null "$HOME/.modal.toml"
+          cat > "$HOME/.modal.toml" <<EOF
+          [imbue]
+          token_id = "${MODAL_TOKEN_ID}"
+          token_secret = "${MODAL_TOKEN_SECRET}"
+          active = true
+          EOF
+
+      - name: Install minds_evals
+        # apps/minds_evals is a standalone uv project with its own lock, excluded
+        # from the root workspace; `--project` selects its venv from the repo root.
+        run: uv sync --locked --project apps/minds_evals
+
+      - name: Name this run's Modal user-id scope
+        id: scope
+        # Every environment the run creates carries this prefix, so a leak is
+        # attributable to a run and to a wall-clock time -- which is what makes the
+        # age-based backstop sweep safe. Minted by the same module the sweep parses
+        # it back with, so the marker and the timestamp format have one speller.
+        env:
+          PREFIX_PATH: ${{ runner.temp }}/user-id-prefix.txt
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals ci-user-id-prefix --output "$PREFIX_PATH"
+          prefix=$(cat "$PREFIX_PATH")
+          echo "user_id_prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Generate the dataset at the frozen SHAs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          CONFIG: ${{ matrix.config }}
+          MNGR_SHA: ${{ matrix.mngr_sha }}
+          DWT_SHA: ${{ matrix.dwt_sha }}
+        # Outside the repo tree on purpose: each generated task embeds a full mngr
+        # clone, and one under apps/ trips the repo's marked-test discovery.
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals minds-evals generate \
+            --config "$CONFIG" \
+            --output "$DATASET_DIR" \
+            --mngr-repo "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            --mngr-ref "$MNGR_SHA" \
+            --dwt-ref "$DWT_SHA"
+
+      - name: Count the cases in the config
+        id: cases
+        # Concurrency equals the case count so every case runs in one wave; cost is
+        # the number of boxes, which is the same however they are spread over time.
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: |
+          set -euo pipefail
+          count=$(python -c '
+          import json
+          import os
+          with open(os.environ["CONFIG"]) as handle:
+              print(len(json.load(handle)["personas"]))
+          ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "$count case(s)"
+
+      - name: Oracle pass
+        id: oracle_pass
+        # The oracle replays a canned near-perfect transcript: no Minds boot and no
+        # agent spend, but it does exercise the box image build, the generated task,
+        # the verifier container and grading. Grading means the verifier judges every
+        # trial, so this pass is cheap rather than free. A failure here is
+        # infrastructure, so it stops the job before the expensive pass pays for the
+        # same break.
+        env:
+          JOB_NAME: ${{ matrix.pair }}-oracle-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          uv run --project apps/minds_evals harbor run \
+            -p "${{ runner.temp }}/dataset" \
+            -a oracle \
+            -e modal \
+            -y \
+            -o apps/minds_evals/jobs \
+            --job-name "$JOB_NAME"
+
+      - name: Check the oracle pass
+        # Runs whether or not the pass step went green, and skipped only when the pass itself never
+        # ran. harbor exits 0 on a trial that merely failed -- which is why check-run is the gate --
+        # so a non-zero pass step means the harness broke, and that is the run whose per-trial rows
+        # are most worth reading. Without this the step's implicit success() would suppress the
+        # table exactly then.
+        if: ${{ !cancelled() && steps.oracle_pass.conclusion != 'skipped' }}
+        env:
+          JOB_NAME: ${{ matrix.pair }}-oracle-${{ github.run_id }}
+          SUMMARY_DIR: ${{ runner.temp }}/summaries
+        # check-run writes its table before it decides the verdict, so the summary is
+        # published whichever way the check went.
+        run: |
+          set -euo pipefail
+          mkdir -p "$SUMMARY_DIR"
+          check_status=0
+          uv run --project apps/minds_evals minds-evals check-run \
+            "apps/minds_evals/jobs/$JOB_NAME" \
+            --summary-md "$SUMMARY_DIR/oracle-summary.md" \
+            --summary-json "$SUMMARY_DIR/oracle-summary.json" \
+            || check_status=$?
+          {
+            echo "## Oracle pass (\`${{ matrix.pair }}\`)"
+            echo ""
+            if [[ -f "$SUMMARY_DIR/oracle-summary.md" ]]; then
+              cat "$SUMMARY_DIR/oracle-summary.md"
+            else
+              echo "check-run wrote no summary -- it could not read the job directory."
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$check_status"
+
+      - name: Live pass
+        id: live_pass
+        if: ${{ env.IS_LIVE_PASS_SKIPPED != 'true' }}
+        env:
+          JOB_NAME: ${{ matrix.pair }}-live-${{ github.run_id }}
+          DATASET_DIR: ${{ runner.temp }}/dataset
+          CASE_COUNT: ${{ steps.cases.outputs.count }}
+          USER_ID_PREFIX: ${{ steps.scope.outputs.user_id_prefix }}
+        run: |
+          set -euo pipefail
+          just minds-evals-run "$DATASET_DIR" "$JOB_NAME" "$CASE_COUNT" \
+            --ak "user_id_prefix=$USER_ID_PREFIX"
+
+      - name: Check the live pass
+        # Read off the pass step rather than restating its condition: skipped when the live pass
+        # was, and run whichever way it went. See the oracle check above for why.
+        if: ${{ !cancelled() && steps.live_pass.conclusion != 'skipped' }}
+        env:
+          JOB_NAME: ${{ matrix.pair }}-live-${{ github.run_id }}
+          SUMMARY_DIR: ${{ runner.temp }}/summaries
+        # Judge scores are reported, never gated: they are statistical, and a
+        # single run's number is not a regression signal. What gates is structural
+        # -- every trial completed, no harness error statuses, gates passed.
+        run: |
+          set -euo pipefail
+          mkdir -p "$SUMMARY_DIR"
+          check_status=0
+          uv run --project apps/minds_evals minds-evals check-run \
+            "apps/minds_evals/jobs/$JOB_NAME" \
+            --summary-md "$SUMMARY_DIR/live-summary.md" \
+            --summary-json "$SUMMARY_DIR/live-summary.json" \
+            || check_status=$?
+          {
+            echo "## Live pass (\`${{ matrix.pair }}\`)"
+            echo ""
+            if [[ -f "$SUMMARY_DIR/live-summary.md" ]]; then
+              cat "$SUMMARY_DIR/live-summary.md"
+            else
+              echo "check-run wrote no summary -- it could not read the job directory."
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$check_status"
+
+      - name: Delete the Modal environments this run created
+        if: always()
+        env:
+          ORACLE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-oracle-${{ github.run_id }}
+          LIVE_JOB_DIR: apps/minds_evals/jobs/${{ matrix.pair }}-live-${{ github.run_id }}
+        # Named deletion first: exactly the environments the job dirs record, which is what collects
+        # THIS run. The age-based sweep after it is the backstop for an EARLIER run that died before
+        # recording anything -- its cutoff is 8 h and this job's budget is 3 h 20 m, so it never
+        # reaches what this run just created, and a leak here is collected by a later run instead.
+        # That gap is the point: it puts the pair running alongside, and every developer's work,
+        # out of reach.
+        #
+        # Every pass runs whatever the ones before it did, and the step reports the
+        # failure at the end: a named pass exits non-zero on an unreadable job dir
+        # or a deletion Modal refused, which is when reaching the backstop matters
+        # most.
+        run: |
+          set -euo pipefail
+          cleanup_status=0
+          for job_dir in "$ORACLE_JOB_DIR" "$LIVE_JOB_DIR"; do
+            if [[ -d "$job_dir" ]]; then
+              uv run --project apps/minds_evals minds-evals cleanup-environments --job-dir "$job_dir" \
+                || cleanup_status=$?
+            else
+              echo "no job dir at $job_dir -- nothing named to clean up"
+            fi
+          done
+          uv run --project apps/minds_evals minds-evals cleanup-environments \
+            --sweep-prefix "$CI_ENVIRONMENT_PREFIX" \
+            --older-than-hours 8 \
+            || cleanup_status=$?
+          exit "$cleanup_status"
+
+      - name: Upload the summaries
+        if: always()
+        # Small and separate from the job dirs so `notify` can pull just these.
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-summary-${{ matrix.pair }}
+          path: ${{ runner.temp }}/summaries
+          retention-days: 14
+          if-no-files-found: ignore
+          # A re-run keeps the same run_id, and the action refuses a name that
+          # already exists on the run. Without this a "re-run failed jobs" dies
+          # here -- and since the green marker is `if: success()`, a pair that
+          # passed on the retry could never record itself. `notify` reconstructs
+          # this exact name, so overwriting beats making it attempt-unique.
+          overwrite: true
+
+      - name: Upload the job directories
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: minds-evals-jobs-${{ matrix.pair }}-${{ github.run_id }}
+          # Snapshots are excluded: the workspace tarball is ~90 MB of a trial's
+          # ~92 MB, and nothing about a red run is diagnosed from it.
+          path: |
+            apps/minds_evals/jobs
+            !apps/minds_evals/jobs/**/agent/snapshots/**
+          retention-days: 14
+          if-no-files-found: ignore
+          # See the summary upload above: run_id does not change on a re-run.
+          overwrite: true
+
+      - name: Write the green marker
+        # Only a full pass earns the marker, so a red pair (or an oracle-only run,
+        # which verified nothing about the live path) is retried the next night.
+        if: ${{ success() && env.IS_LIVE_PASS_SKIPPED != 'true' }}
+        # Through env like every other step: `config` originates in a dispatch input, and spliced
+        # into the shell it would run rather than print.
+        env:
+          PAIR: ${{ matrix.pair }}
+          MNGR_SHA: ${{ matrix.mngr_sha }}
+          DWT_SHA: ${{ matrix.dwt_sha }}
+          CONFIG: ${{ matrix.config }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "pair: $PAIR"
+            echo "mngr: $MNGR_SHA"
+            echo "dwt: $DWT_SHA"
+            echo "config: $CONFIG"
+            echo "saved_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "run_url: $RUN_URL"
+          } | tee /tmp/minds-evals-marker.txt
+      - name: Save the green marker
+        if: ${{ success() && env.IS_LIVE_PASS_SKIPPED != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: /tmp/minds-evals-marker.txt
+          key: ${{ matrix.cache_key }}
+
+  # One Slack message per run covering every pair. Degrades to a warning when the
+  # webhook is missing, so a run is never red because the notification is.
+  notify:
+    needs: [resolve, evaluate]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch the Slack webhook from Vault
+        # continue-on-error because the webhook secret is optional, and because a
+        # Vault hiccup must not kill an always() notification: WEBHOOK then stays
+        # empty and the step below no-ops with a warning.
+        continue-on-error: true
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: mngr_ci_gh
+          secrets: |
+            mngr/ci/SLACK_MINDS_EVALS_WEBHOOK
+      - name: Download the summaries
+        # continue-on-error: a run where every pair was skipped uploads nothing,
+        # and the report below says so rather than the job dying on a 404.
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          pattern: minds-evals-summary-*
+          path: summaries
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Report
+        env:
+          WEBHOOK: ${{ env.SLACK_MINDS_EVALS_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          PAIRS_JSON: ${{ needs.resolve.outputs.pairs }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          EVALUATE_RESULT: ${{ needs.evaluate.result }}
+          SKIP_LIVE: ${{ env.IS_LIVE_PASS_SKIPPED }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # Total wallclock from when the run was queued. GNU date parses ISO-8601
+          # directly on ubuntu runners. Both lookups are allowed to fail: the duration is the least
+          # important field in the message, and under `set -e` an unguarded command substitution
+          # would kill the step before it wrote or posted anything -- which is the one thing this
+          # job must never do.
+          start_iso=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.run_started_at' || true)
+          START_EPOCH=$(date -d "$start_iso" +%s 2>/dev/null || true)
+          START_EPOCH="$START_EPOCH" python - <<'PY' > /tmp/slack-text.txt
+          import json
+          import os
+          import pathlib
+          import time
+
+          # Slack renders one text block; keep each pair's detail bounded so a long
+          # per-case listing cannot push the run links off the end of the message.
+          DETAIL_BUDGET = 2000
+
+          run_url = os.environ["RUN_URL"]
+          skip_live = os.environ.get("SKIP_LIVE") == "true"
+          start_epoch = os.environ.get("START_EPOCH") or ""
+          if start_epoch.isdigit():
+              elapsed = int(time.time()) - int(start_epoch)
+              duration = "{}s".format(elapsed) if elapsed < 60 else "{}m{:02d}s".format(elapsed // 60, elapsed % 60)
+          else:
+              duration = "an unknown time"
+
+          try:
+              pairs = json.loads(os.environ.get("PAIRS_JSON") or "[]")
+          except json.JSONDecodeError:
+              pairs = []
+
+          summaries = pathlib.Path("summaries")
+
+          def trial_line(trial):
+              """One Slack line per trial, from check-run's JSON row (the TrialCheck model)."""
+              if not trial.get("is_completed"):
+                  state = "did not complete ({})".format(trial.get("incompletion_reason") or "unknown")
+              elif trial.get("error_entry_ids"):
+                  state = "unmeasured evidence: {}".format(", ".join(trial["error_entry_ids"]))
+              elif not trial.get("is_gates_passed"):
+                  state = "gates failed"
+              else:
+                  state = "ok"
+              reward = trial.get("reward")
+              judges = ", ".join(
+                  "{}={:.0f}".format(score["criterion"], score["raw_score"]) for score in trial.get("judge_scores", [])
+              )
+              return "    {} `{}`: {}; reward {}{}".format(
+                  ":white_check_mark:" if trial.get("is_passed") else ":x:",
+                  trial.get("case_id") or trial.get("trial_name", "?"),
+                  state,
+                  "-" if reward is None else "{:.2f}".format(reward),
+                  "; judges {}".format(judges) if judges else "",
+              )
+
+          def read_pair(pair_name, phase):
+              """(passed, detail, absence) for one pair's phase. passed is None when there is no
+              verdict to report, and absence then says why -- an empty absence means the summary was
+              there but unreadable, which is a different thing from the pass never having got far
+              enough to write one, and must not be reported as the latter."""
+              json_path = summaries / "minds-evals-summary-{}".format(pair_name) / "{}-summary.json".format(phase)
+              if not json_path.is_file():
+                  return None, "", "no {} summary".format(phase)
+              try:
+                  # Nothing here may raise: this step is the whole report on a run whose Slack
+                  # webhook is unset. An unread summary is reported broken, never skipped.
+                  report = json.loads(json_path.read_text())
+                  return bool(report["is_passed"]), "\n".join(trial_line(trial) for trial in report["trials"]), ""
+              except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                  return None, "", ""
+
+          def ref_label(ref, sha):
+              # A ref that is already a full SHA says nothing the short SHA does not, so it is not
+              # repeated. A pair that never resolved has a ref but no SHA, and the label has to say
+              # so rather than render an empty pair of backticks.
+              short = sha[:12]
+              if not short:
+                  return "`{}` (`unresolved`)".format(ref) if ref else "`unresolved`"
+              if not ref or len(ref) == 40:
+                  return "`{}`".format(short)
+              return "`{}` (`{}`)".format(ref, short)
+
+          lines = []
+          verdicts = []
+          for pair in pairs:
+              name = pair["pair"]
+              pair_label = "[_mngr_ {} | _dwt_ {}]".format(
+                  ref_label(pair.get("mngr_ref", ""), pair.get("mngr_sha", "")),
+                  ref_label(pair.get("dwt_ref", ""), pair.get("dwt_sha", "")),
+              )
+              if pair["decision"] == "skip":
+                  # Already green for this exact pair; the emoji answers "is this
+                  # pair good?", which a skip does not change.
+                  verdicts.append("skipped")
+                  lines.append(":white_check_mark: *{}* -- skipped (already green) {}".format(name, pair_label))
+                  continue
+              if pair["decision"] == "unresolved":
+                  # Named its own reason: one of its refs is not on its remote. Reported rather than
+                  # aborting the run, so a missing release tag never costs the other pairs.
+                  verdicts.append("broken")
+                  lines.append(":x: *{}* -- not evaluated (a ref did not resolve) {}".format(name, pair_label))
+                  continue
+              phase = "oracle" if skip_live else "live"
+              passed, detail, absence = read_pair(name, phase)
+              if passed is None and absence and not skip_live:
+                  # The live pass wrote no summary at all. The oracle runs first and gates it, so the
+                  # run stopped there -- whether the oracle graded and failed or never graded either.
+                  # Both are the oracle's story; reporting "no live summary" would name a pass that
+                  # never started. A live summary that exists but cannot be read is NOT this case,
+                  # which is why an empty absence does not defer.
+                  oracle_passed, oracle_detail, oracle_absence = read_pair(name, "oracle")
+                  if oracle_passed is False:
+                      phase, passed, detail = "oracle", False, oracle_detail
+                  elif oracle_passed is None:
+                      phase, absence = "oracle", oracle_absence
+              if passed is None:
+                  # Nothing to grade: the job died before check-run produced a report, or produced
+                  # one nothing can read. Never report that as a skip -- a broken run is the thing
+                  # most worth seeing.
+                  verdicts.append("broken")
+                  lines.append(
+                      ":x: *{}* -- broken ({}; the job failed before grading) {}".format(
+                          name, absence or "the {} summary could not be read".format(phase), pair_label
+                      )
+                  )
+                  continue
+              verdicts.append("passed" if passed else "failed")
+              lines.append(
+                  "{} *{}* -- {} ({} pass) {}".format(
+                      ":white_check_mark:" if passed else ":x:", name, "passed" if passed else "failed", phase, pair_label
+                  )
+              )
+              if detail:
+                  lines.append(
+                      detail if len(detail) <= DETAIL_BUDGET else detail[:DETAIL_BUDGET] + "\n... (truncated; see the run summary)"
+                  )
+
+          if not pairs:
+              verdicts.append("broken")
+              lines.append(
+                  ":x: no pairs were resolved (resolve={}, evaluate={}) -- the run broke before deciding what to evaluate".format(
+                      os.environ["RESOLVE_RESULT"], os.environ["EVALUATE_RESULT"]
+                  )
+              )
+
+          # The trials passing is not the whole story: `evaluate` also deletes the run's Modal
+          # environments and uploads its artifacts, both `if: always()`, and either failing turns
+          # the job red while every summary still says the eval itself was fine. Slack is the only
+          # thing anyone reads on a nightly, so a red or cancelled job is named here rather than
+          # left to the run page.
+          evaluate_result = os.environ.get("EVALUATE_RESULT", "")
+          is_job_healthy = evaluate_result in ("success", "skipped", "")
+          is_any_pair_bad = "broken" in verdicts or "failed" in verdicts
+          # A failing pair is what turns the job red in the ordinary case, so an unhealthy job on its
+          # own says nothing. Only an unhealthy job with every pair fine points at the steps outside
+          # the eval -- and pointing there on every red run would train the reader to ignore it.
+          is_only_the_job_unhealthy = not is_job_healthy and not is_any_pair_bad
+
+          if is_any_pair_bad:
+              emoji, word = ":x:", "failed"
+          elif is_only_the_job_unhealthy:
+              emoji, word = ":warning:", "every pair passed, but the job did not"
+          elif all(verdict == "skipped" for verdict in verdicts):
+              emoji, word = ":white_check_mark:", "skipped"
+          else:
+              emoji, word = ":white_check_mark:", "succeeded"
+
+          header = "{} *minds-evals* -- {} in {}, _trigger=_ `{}`{}{}".format(
+              emoji,
+              word,
+              duration,
+              os.environ["TRIGGER"],
+              " _(oracle only)_" if skip_live else "",
+              " _(evaluate={}; check cleanup and uploads)_".format(evaluate_result)
+              if is_only_the_job_unhealthy
+              else "",
+          )
+          links = "[<{}|run logs> | <{}#artifacts|artifacts>]".format(run_url, run_url)
+          print("\n".join([header] + lines + [links]))
+          PY
+          # Fenced, not pasted: the report is Slack mrkdwn, which GitHub markdown renders wrong
+          # (links as literal text, `*bold*` as italic, rows folded into one paragraph). The links
+          # are restated below the fence so they stay clickable. Four backticks so a stray triple
+          # in an exception message cannot end the block early.
+          {
+            echo "## minds-evals"
+            echo ""
+            echo '````'
+            cat /tmp/slack-text.txt
+            echo '````'
+            echo ""
+            echo "[Run logs]($RUN_URL) | [Artifacts]($RUN_URL#artifacts)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -z "${WEBHOOK:-}" ]]; then
+            echo "::warning::mngr/ci/SLACK_MINDS_EVALS_WEBHOOK is not set in Vault -- the run summary above was not posted to Slack"
+            exit 0
+          fi
+          jq -Rs '{username: "Evals", icon_emoji: ":brainless:", text: .}' < /tmp/slack-text.txt > /tmp/slack-payload.json
+          # --fail-with-body so an HTTP error is an exit code rather than a silently
+          # discarded message, and a warning rather than a failure so the run is never
+          # red because of its notification -- the same way a missing webhook reads.
+          curl -sS --fail-with-body -X POST -H 'Content-type: application/json' \
+            --data @/tmp/slack-payload.json "$WEBHOOK" \
+            || echo "::warning::Slack rejected the run summary (see the response above); it is in the run summary instead"

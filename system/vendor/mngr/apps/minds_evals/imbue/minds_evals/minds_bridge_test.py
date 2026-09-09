@@ -7,10 +7,10 @@ from typing import Final
 
 import pytest
 from harbor.environments.base import ExecResult
-from loguru import logger
 
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 from imbue.minds_evals.minds_bridge import AGENTS_PATH
 from imbue.minds_evals.minds_bridge import AUTH_MODE_API_KEY
@@ -27,6 +27,7 @@ from imbue.minds_evals.minds_bridge import build_credential_lines
 from imbue.minds_evals.minds_bridge import chat_url_shell_snippet
 from imbue.minds_evals.minds_bridge import create_chat_agent
 from imbue.minds_evals.minds_bridge import create_workspace_and_wait
+from imbue.minds_evals.minds_bridge import derive_modal_environment_name
 from imbue.minds_evals.minds_bridge import describe_agents_listing
 from imbue.minds_evals.minds_bridge import destroy_workspaces
 from imbue.minds_evals.minds_bridge import fetch_event_total
@@ -79,6 +80,17 @@ _ACTIVATION_ENV = {
     "MNGR_HOST_DIR": "/root/.minds-staging/mngr",
     "MNGR_PREFIX": "minds-staging-",
 }
+
+
+def test_derive_modal_environment_name_is_the_concatenation_mngr_makes() -> None:
+    assert derive_modal_environment_name(_ACTIVATION_ENV, "evals-todo-app-cafe1234") == (
+        "minds-staging-evals-todo-app-cafe1234"
+    )
+
+
+def test_derive_modal_environment_name_refuses_a_name_mngr_would_truncate() -> None:
+    with pytest.raises(ModalNameBudgetError, match="truncate"):
+        derive_modal_environment_name(_ACTIVATION_ENV, "z" * 60)
 
 
 def test_build_box_env_scopes_the_trial_and_disables_other_providers() -> None:
@@ -573,26 +585,24 @@ def test_authenticate_workspace_reports_a_rejected_paste(tmp_path: Path) -> None
     assert (sign_in.is_signed_in, sign_in.account_id) == (False, "")
 
 
-def test_authenticate_workspace_never_logs_the_credential_it_pasted(tmp_path: Path) -> None:
+def test_authenticate_workspace_never_logs_the_credential_it_pasted(
+    tmp_path: Path, captured_log_messages: list[str]
+) -> None:
     # What refuses a sign-in can quote the request that carried the paste: the endpoint reports a
     # body it could not read by rendering the validation error, and that error carries the input.
     # A trial log outlives the run and is shared, so the key must not survive into one.
     echoed = json.dumps(
         {"detail": "Invalid request body: input_value='ANTHROPIC_API_KEY={}'".format(_SIGN_IN_API_KEY)}
     )
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="TRACE")
-    try:
-        sign_in = _run_authenticate(tmp_path, echoed, status=400)
-    finally:
-        logger.remove(handler_id)
+
+    sign_in = _run_authenticate(tmp_path, echoed, status=400)
 
     assert (sign_in.is_signed_in, sign_in.account_id) == (False, "")
-    assert logged and not any(_SIGN_IN_API_KEY in message for message in logged)
-    assert any("<redacted>" in message for message in logged)
+    assert captured_log_messages and not any(_SIGN_IN_API_KEY in message for message in captured_log_messages)
+    assert any("<redacted>" in message for message in captured_log_messages)
     # The status goes in beside the detail: it is what separates a paste the endpoint could not
     # read (400) from an account it could not write (500), which are not the same failure.
-    assert any("HTTP 400" in message for message in logged)
+    assert any("HTTP 400" in message for message in captured_log_messages)
     # And a caller with no secret to hide gets its text back, rather than the marker spliced
     # between every character.
     assert redact_secret("nothing to hide", "") == "nothing to hide"
@@ -789,6 +799,27 @@ def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
     assert "{}/snapshots/".format(minds_bridge.BOX_LOGS_DIR) in pull_command
 
 
+def test_a_snapshot_carries_the_transcripts_of_agents_the_run_destroyed(tmp_path: Path) -> None:
+    """A worker the lead destroys after merging leaves its conversation only in mngr's preserved dir,
+    which sits in the agent side's own host dir (/root/.mngr) rather than the workspace home tree."""
+    environment = MockBoxEnvironment(
+        tmp_path,
+        [
+            ScriptedExecRule("tar czf /tmp/post_message_1", [ok_result(mngr_exec_json(""))]),
+            ScriptedExecRule("mngr rsync", [ok_result()]),
+        ],
+    )
+
+    assert asyncio.run(snapshot_workspace(environment, {}, "ws-1", "post_message_1"))
+
+    tar_command = environment.exec_commands[0]
+    assert minds_bridge.PRESERVED_AGENT_STATE_DIR in tar_command
+    # Named unconditionally, tar exits nonzero on a run that destroyed nothing and the whole snapshot
+    # is skipped -- so the segment has to be conditional on the directory existing.
+    assert "[ -d " in tar_command
+    assert minds_bridge.WORKSPACE_BACKUP_ROOT in tar_command
+
+
 def test_read_box_file_tail_bounds_the_read_in_the_box(tmp_path: Path) -> None:
     environment = MockBoxEnvironment(tmp_path, [ScriptedExecRule("tail -c", [ok_result("last lines\n")])])
 
@@ -819,27 +850,23 @@ def test_describe_agents_listing_names_the_three_ways_a_chat_agent_stays_unresol
     )
 
 
-def test_wait_heartbeat_says_it_is_still_waiting_then_holds_off() -> None:
+def test_wait_heartbeat_says_it_is_still_waiting_then_holds_off(captured_log_messages: list[str]) -> None:
     """One line as soon as a poll fails, then at most one per interval: a twenty-minute wait must be
     visible in the log without becoming thousands of lines of it."""
     heartbeat = WaitHeartbeat(label="the chat agent")
-    logged: list[str] = []
-    handler_id = logger.add(lambda message: logged.append(message.record["message"]), level="TRACE")
-    try:
-        heartbeat.tick("state=unreachable")
-        heartbeat.tick("state=unreachable")
-        lines_within_the_interval = list(logged)
-        # Past the hold-off window, without waiting one out: the class reads a monotonic clock, so
-        # moving its bookkeeping back is the same thing as time passing.
-        heartbeat.last_logged_at -= _WAIT_HEARTBEAT_SECONDS + 1.0
-        heartbeat.tick("state=BUSY")
-    finally:
-        logger.remove(handler_id)
+
+    heartbeat.tick("state=unreachable")
+    heartbeat.tick("state=unreachable")
+    lines_within_the_interval = list(captured_log_messages)
+    # Past the hold-off window, without waiting one out: the class reads a monotonic clock, so
+    # moving its bookkeeping back is the same thing as time passing.
+    heartbeat.last_logged_at -= _WAIT_HEARTBEAT_SECONDS + 1.0
+    heartbeat.tick("state=BUSY")
 
     # What the log has to carry: which wait it is, how long it has run, and what the workspace was
     # answering meanwhile -- a wait that is stuck says nothing without the last of those.
     (first_line,) = lines_within_the_interval
     assert "the chat agent" in first_line
     assert "state=unreachable" in first_line
-    assert len(logged) == 2
-    assert "state=BUSY" in logged[1]
+    assert len(captured_log_messages) == 2
+    assert "state=BUSY" in captured_log_messages[1]

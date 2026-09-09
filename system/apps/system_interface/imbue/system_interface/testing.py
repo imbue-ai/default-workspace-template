@@ -8,6 +8,7 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import socketserver
@@ -17,9 +18,12 @@ import threading
 import time
 import xmlrpc.client
 from collections.abc import Iterator
+from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from typing import Final
 from xmlrpc.server import SimpleXMLRPCDispatcher
 from xmlrpc.server import SimpleXMLRPCRequestHandler
@@ -27,11 +31,14 @@ from xmlrpc.server import SimpleXMLRPCRequestHandler
 import simple_websocket
 from app_manifest.registry import registry_path
 from flask import Flask
+from pydantic import Field
 
 from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.state import build_shell_state
+from imbue.system_interface.template_catalog import TemplateCatalogFetcherInterface
+from imbue.system_interface.template_catalog import build_template_catalog_store
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
 
@@ -159,27 +166,78 @@ def _fresh_shell_state_directory() -> Path:
     return Path(directory.name)
 
 
+class FakeTemplateCatalogFetcher(TemplateCatalogFetcherInterface):
+    """Answers each catalog URL from a table (None for one not in it) and records every fetch."""
+
+    body_by_url: dict[str, bytes] = Field(default_factory=dict, description="What each URL answers")
+    fetched_urls: list[str] = Field(default_factory=list, description="Every URL fetched, in order")
+
+    def fetch(self, url: str) -> bytes | None:
+        self.fetched_urls.append(url)
+        return self.body_by_url.get(url)
+
+
+def catalog_template_document(slug: str, **overrides: Any) -> dict[str, Any]:
+    """One template as a catalog lists it: the four required fields and a relative drawing, derived
+    from the slug, with ``overrides`` laid over them."""
+    document: dict[str, Any] = {
+        "slug": slug,
+        "title": slug.title(),
+        "description": f"What {slug} does.",
+        "repository_url": f"https://github.com/someone/{slug}",
+        "thumbnail": f"thumbnails/someone--{slug}.svg",
+    }
+    document.update(overrides)
+    return document
+
+
+def catalog_document(
+    *templates: Mapping[str, Any], shelves: Sequence[Mapping[str, Any]] = (), **overrides: Any
+) -> bytes:
+    """A format-1 catalog document as a fetcher answers it, holding ``templates`` and ``shelves``."""
+    document: dict[str, Any] = {
+        "format": 1,
+        "generated_at": "2026-09-07T00:00:00Z",
+        "templates": list(templates),
+        "shelves": list(shelves),
+    }
+    document.update(overrides)
+    return json.dumps(document).encode("utf-8")
+
+
 def build_test_state(
     *,
     config: Config | None = None,
     broadcaster: WebSocketBroadcaster | None = None,
     shell_state_directory: Path | None = None,
     inventory: AppInventory | None = None,
+    template_catalog_fetcher: TemplateCatalogFetcherInterface | None = None,
 ) -> SystemInterfaceState:
     """Build a `SystemInterfaceState` for tests, injecting fakes where provided.
 
     The shell state is built but never started, so no registry watch or inventory sweep
     runs. ``shell_state_directory`` is where the shell's state files go (a fresh temp
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
-    and ``broadcaster`` the fan-out the inventory and the routes share.
+    and ``broadcaster`` the fan-out the inventory and the routes share. The template catalog
+    is disabled (no URL) unless a ``template_catalog_fetcher`` is given, so no test reaches
+    the network for it; with one, the store fetches the config's URL through it.
     """
+    state_directory = shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory()
+    resolved_config = config if config is not None else Config()
     shell = build_shell_state(
-        state_directory=shell_state_directory if shell_state_directory is not None else _fresh_shell_state_directory(),
+        state_directory=state_directory,
         registry_path=registry_path(),
         broadcaster=broadcaster if broadcaster is not None else WebSocketBroadcaster(),
         inventory=inventory,
     )
-    return SystemInterfaceState(config=config if config is not None else Config(), shell=shell)
+    template_catalog = build_template_catalog_store(
+        catalog_url=resolved_config.system_interface_template_catalog_url
+        if template_catalog_fetcher is not None
+        else "",
+        state_directory=state_directory,
+        fetcher=template_catalog_fetcher,
+    )
+    return SystemInterfaceState(config=resolved_config, shell=shell, template_catalog=template_catalog)
 
 
 def _find_free_port() -> int:

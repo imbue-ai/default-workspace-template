@@ -10,6 +10,8 @@ Cases that declare expectations split that earned score evenly between conversat
 delivered outcome: a great app described badly and a great description of no app are equally
 imperfect. Cases without expectations are unchanged.
 
+The harness then takes a fixed share of whatever that came to; see HARNESS_SHARE for why.
+
 Grading-infrastructure failures must NOT be graded as a legitimate 0.0: they leave the reward file
 absent so harbor errors the trial instead. That covers a judge API/auth error, rewardkit not
 producing a parseable reward file, a case file that does not say what this case expects, and outcome
@@ -48,6 +50,15 @@ MANIFEST_PATH = Path("/logs/agent/verification/manifest.json")
 # v1, deliberately not per-case -- per-case weights would make rewards incomparable across cases.
 OUTCOME_SHARE = 0.5
 
+# How much of the reward the harness carries. The branch under test IS the agent's harness: a change
+# made to help the agent can break the skills, plugins and tooling the whole system runs on, and that
+# regression is invisible in every other dimension -- an agent whose review gate will not load simply
+# looks like an agent that skipped review. A fifth is enough that a wholly broken harness costs more
+# than any judge delta we have measured, without letting shared infrastructure noise swamp what the
+# agent actually did. Applied to whatever the trial earned on quality and outcome, so the parity
+# between those two is untouched.
+HARNESS_SHARE = 0.2
+
 # Which expanded check list makes a class scored, mirroring outcome/checks.py's registration rule.
 SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
 
@@ -60,6 +71,14 @@ SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app",
 # part broke.
 
 
+# The three helpers below are mirrored by _reward_dicts / _criteria / is_gates_dimension_passed in
+# minds_evals/check_run.py, which decides the same gate verdict host-side. They cannot be shared:
+# this file runs inside the slim rewardkit verifier container, which has stdlib and rewardkit and no
+# imbue package. Keep the two in step. They differ on purpose in one respect, and one only:
+# check_run coerces a criterion value it cannot read to zero, because it must always reach a
+# verdict, where here a malformed reward-details file is a verifier bug and raising is the right
+# answer. Anything else the two decide differently is a bug -- the two ends of one trial would then
+# disagree about whether it passed, with nothing saying so.
 def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     """The per-reward detail dicts for one dimension. rewardkit emits a single dict when a dimension
     directory yields one Reward, or a list of dicts when it yields several (e.g. a judge .toml plus
@@ -83,7 +102,11 @@ def _gates_all_passed(details: dict[str, Any]) -> bool:
     for reward_dict in reward_dicts:
         for criterion in _criteria(reward_dict):
             saw_criterion = True
-            if criterion.get("value", 0) <= 0:
+            value = criterion.get("value", 0)
+            # A bool is excluded before the comparison because isinstance(True, int) holds, so
+            # `True <= 0` is False and a boolean value would otherwise pass the gate here while
+            # failing it in check_run, which excludes bools for the same reason.
+            if isinstance(value, bool) or value <= 0:
                 return False
     return saw_criterion
 
@@ -219,11 +242,22 @@ def _evidence_failure(
 
 
 def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any]) -> float:
+    """What the trial earned: its conversation and delivery, discounted by how well its harness held.
+
+    Every dimension is read the same way: absent means 0.0. There is no compat branch for a trial
+    captured before `harness_quality` existed, because there is no such trial at this point -- these
+    rewards come from the run rewardkit just did, not from whatever was stored when the trial was
+    captured, so a regrade of an old trial grades it on the current verifier's dimensions and
+    restates its reward. Forgiving an absent harness score would only have covered rewardkit failing
+    to emit the dimension, which is a worse trial, not a better one.
+    """
     quality = float(rewards.get("quality", 0.0))
-    if not expectations:
-        return quality
-    outcome = float(rewards.get("outcome", 0.0))
-    return (1.0 - OUTCOME_SHARE) * quality + OUTCOME_SHARE * outcome
+    earned = (
+        (1.0 - OUTCOME_SHARE) * quality + OUTCOME_SHARE * float(rewards.get("outcome", 0.0))
+        if expectations
+        else quality
+    )
+    return (1.0 - HARNESS_SHARE) * earned + HARNESS_SHARE * float(rewards.get("harness_quality", 0.0))
 
 
 def _fail_as_grading_error(reason: str, reward_path: Path) -> int:
