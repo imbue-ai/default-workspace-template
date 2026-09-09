@@ -21,7 +21,12 @@ const RAIL_ARROW_GLYPH_SIZE = 20;
 
 // A card is sized so the rail shows exactly three and a half: with three 24px gaps before the
 // half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
-const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)]";
+//
+// Under 620px of PANE that fraction is too thin to read a title in, so the rail drops to two and
+// a half. Same arithmetic, but two gaps rather than three and the gap itself tightens to 16px
+// with it, which is why the subtrahend changes too. The step is a container query, like the rest
+// of the page: this is a dock panel, and a media query would measure the window instead.
+const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)] @max-[620px]:w-[calc((100%-32px)/2.5)]";
 
 // The three layers a rail row stacks, innermost first: the cards (no z-index of their own, though
 // a hovered one's scale still promotes it), the edge fade over them, and the paging arrows over
@@ -289,7 +294,7 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
           {
             class:
               "new-tab-template-rail flex min-w-0 flex-1 snap-x items-start gap-6 overflow-x-auto " +
-              "scroll-pl-3 px-3 pt-1 pb-3",
+              "@max-[620px]:gap-4 scroll-pl-3 px-3 pt-1 pb-3",
             oncreate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onupdate: (vnode: m.VnodeDOM) => measureRail(shelf.key, vnode.dom as HTMLElement),
             onscroll: (event: Event) => measureRail(shelf.key, event.currentTarget as HTMLElement),

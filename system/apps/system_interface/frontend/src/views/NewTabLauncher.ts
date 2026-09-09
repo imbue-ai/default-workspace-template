@@ -560,8 +560,13 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       "div",
       {
         key: `${tile.app.name}:${tile.action.id}`,
+        // Four to a row, then three, two and one as the pane narrows. The width is a fraction of
+        // the row minus the gaps it has to leave, so the subtrahend follows the count: gap-2 (8px)
+        // times one fewer than the tiles in the row.
         class:
-          "border-default flex h-9 w-[calc((100%-24px)/4)] shrink-0 items-stretch overflow-hidden rounded-lg border" +
+          "border-default flex h-9 shrink-0 items-stretch overflow-hidden rounded-lg border " +
+          "w-[calc((100%-24px)/4)] @max-[760px]:w-[calc((100%-16px)/3)] " +
+          "@max-[620px]:w-[calc((100%-8px)/2)] @max-[480px]:w-full" +
           (isDisabled ? " text-faint" : " text-primary"),
       },
       [
@@ -672,7 +677,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   function startGrid(options: readonly StartOption[], attrs: NewTabLauncherAttrs): m.Vnode {
     return m(
       "div",
-      { class: "grid grid-cols-3 gap-3 px-2" },
+      // Three to a row, then two, then one. A 760px pane leaves a three-up tile about 230px, under
+      // what a title and three lines of sentence want; one column at 480, where two would be a
+      // pair of slivers.
+      { class: "grid grid-cols-3 gap-3 px-2 @max-[760px]:grid-cols-2 @max-[480px]:grid-cols-1" },
       options.map((option) => startTile(option, attrs)),
     );
   }
@@ -810,7 +818,11 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
       const nowMs = attrs.nowMs ?? Date.now();
       const promptStart = promptStartDisabling(attrs);
 
-      return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
+      // ``@container``, not a media query, and every step below is a PANE width. This page is a
+      // dock panel that can be split down to a sliver while the window stays wide, so a media
+      // query would measure the wrong box entirely: it would keep the tiles four-up in a pane a
+      // quarter of the screen. The steps -- 760, 620, 480 -- are the prototype's.
+      return m("div", { class: "new-tab-launcher @container bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
         m("div", { class: "mx-auto w-full max-w-4xl pb-12" }, [
           m("div", { class: "mb-6 px-2" }, searchField()),
           isSearching() ? searchResults(attrs, nowMs) : restingPage(attrs, nowMs),
