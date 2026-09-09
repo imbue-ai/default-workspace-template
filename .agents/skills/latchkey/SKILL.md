@@ -75,23 +75,24 @@ approval:
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "custom-service", "payload": {"domain": "api.example.com"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
+  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "custom-service", "payload": {"domain": "api.example.com", "scheme": "https"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
 ```
 
-`payload` takes a `domain`, and optionally a `scheme` of `"https"` (the
-default) or `"http"` for a service that has no certificate -- the user is shown
-the resulting origin and told when credentials would travel unencrypted. Add
-nothing else, unless the service signs in through the browser with cookies --
+`payload` takes a `domain` and a `scheme` of `"https"` or `"http"` -- the
+latter for a service that has no certificate; the user is shown the resulting
+origin and told when credentials would travel unencrypted. Add nothing else,
+unless the service signs in through the browser with cookies --
 then add a `login` object with `login_url`, `cookie_url` (both `https`, or
 `http` too for an `http` service; both on that domain or a subdomain of it) and
 `cookie_keys`:
 
 ```bash
-  -d '{... "payload": {"domain": "api.example.com", "login": {"login_url": "https://api.example.com/login", "cookie_url": "https://api.example.com/", "cookie_keys": ["session"]}}}'
+  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"login_url": "https://api.example.com/login", "cookie_url": "https://api.example.com/", "cookie_keys": ["session"]}}}'
 ```
 
-The domain must be a plain hostname: no scheme (that goes in `scheme`), port,
-path, wildcard, underscore or IP address. There is deliberately no field for a display name --
+The domain must be a bare hostname: no scheme (that goes in `scheme`), port,
+path, wildcard or underscore. A single label (`gitlab`), a private suffix
+(`vault.internal`) or an IPv4 address are all fine; an IPv6 literal is not. There is deliberately no field for a display name --
 the connection is labelled by its domain, so the user always sees exactly what
 it reaches.
 
