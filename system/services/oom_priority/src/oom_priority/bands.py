@@ -62,9 +62,9 @@ AGENT_SUBPROCESS: Final[int] = 900
 # ``AGENT_SUBPROCESS``, so any agent's build/test/browser subprocess is shed
 # before any agent itself.
 #
-# Settling at ``CHAT_AGENT_BASE`` rather than the floor means a chat that stops
-# being re-tagged stays middling-expendable rather than pinned to the protected
-# floor; only a positive staleness signal pushes one past the worker band.
+# ``CHAT_AGENT_BASE`` rather than the floor is where the scoring settles a chat
+# past its launch grace that nothing has been reported about: middling-expendable,
+# with only a positive staleness signal pushing one past the worker band.
 CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh
 CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
 CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
