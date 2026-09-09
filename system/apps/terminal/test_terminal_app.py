@@ -292,4 +292,3 @@ def test_a_terminal_booted_without_registration_serves_but_registers_nothing(
         assert not terminal_environment.registry_path.exists()
     finally:
         _kill_if_running(process)
-

@@ -375,10 +375,14 @@ def _manifest_with_preview(preview: dict[str, object]) -> AppManifest:
     )
 
 
-def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> None:
+def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> (
+    None
+):
     # The scaffold binds <PACKAGE_UPPER>_PORT/_HOST and reads <PACKAGE_UPPER>_DATA_DIR, with the
     # package name being the app name with hyphens as underscores.
-    manifest = AppManifest.model_validate({"name": "news-feed", "display_name": "News", "icon": "icon.svg"})
+    manifest = AppManifest.model_validate(
+        {"name": "news-feed", "display_name": "News", "icon": "icon.svg"}
+    )
 
     assert manifest.preview == scaffold_preview_spec(AppName("news-feed"))
     assert manifest.preview.env == {
@@ -397,8 +401,15 @@ def test_an_explicit_preview_table_says_what_it_needs_and_nothing_else() -> None
     manifest = _manifest_with_preview(
         {
             "ports": ["main", "sidecar"],
-            "command": ["news-server", "--instances-url", "http://127.0.0.1:{port:sidecar}"],
-            "env": {"NEWS_PORT": "{port:main}", "NEWS_STORE": "{copy:store}/records.json"},
+            "command": [
+                "news-server",
+                "--instances-url",
+                "http://127.0.0.1:{port:sidecar}",
+            ],
+            "env": {
+                "NEWS_PORT": "{port:main}",
+                "NEWS_STORE": "{copy:store}/records.json",
+            },
             "copies": {"store": "data/.apps/news-feed"},
             "health_path": "/_instances",
             "open_path": "/{key}",
@@ -429,7 +440,9 @@ def test_an_explicit_preview_table_says_what_it_needs_and_nothing_else() -> None
         ({"health_path": "health"}, "start with '/'"),
     ],
 )
-def test_a_preview_table_that_cannot_be_resolved_is_rejected(preview: dict[str, object], problem: str) -> None:
+def test_a_preview_table_that_cannot_be_resolved_is_rejected(
+    preview: dict[str, object], problem: str
+) -> None:
     with pytest.raises(ValidationError, match=problem):
         _manifest_with_preview(preview)
 
