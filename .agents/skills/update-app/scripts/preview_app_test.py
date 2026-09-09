@@ -410,6 +410,42 @@ def test_a_failed_sibling_stops_the_boot_before_the_app_itself(tmp_path: Path) -
     assert runner.ups() == ["chat-preview"]
 
 
+def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sibling names live only in the preview record, so a failed boot must not drop it."""
+    worktree = _write_worktree(tmp_path)
+    live_registry = tmp_path / "apps.toml"
+    live_registry.write_text(
+        _dump_registry(
+            [{"name": "chat-preview-app", "url": "http://localhost:1", "label": "p"}]
+        )
+    )
+    monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
+    runner = _RecordingRunner(tmp_path, failing_names=["system_interface-preview"])
+
+    assert (
+        mod.up(
+            "system_interface",
+            worktree,
+            tmp_path,
+            with_apps=["chat"],
+            instance_key="agent-1",
+            runner=runner,
+            dump_registry=_dump_registry,
+        )
+        == 1
+    )
+    runner.calls.clear()
+    runner.failing_names.clear()
+
+    assert mod.down("system_interface", tmp_path, runner=runner) == 0
+    downs = [
+        call[call.index("--name") + 1] for call in runner.calls if call[2] == "down"
+    ]
+    assert downs == ["system_interface-preview", "chat-preview"]
+
+
 def test_main_routes_the_verbs(tmp_path: Path) -> None:
     assert mod.main(["down", "--app", "notes", "--repo-root", str(tmp_path)]) == 0
     assert (
