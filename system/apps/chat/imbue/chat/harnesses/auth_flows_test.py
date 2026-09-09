@@ -115,8 +115,9 @@ def test_a_claude_key_lands_in_the_account_settings_env(service: AuthFlowService
 
 
 def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tmp_path: Path) -> None:
-    """The file the device flow would have produced, written directly -- which is what makes
-    an OpenAI account mintable without a person at a browser."""
+    """The file codex reads its credential from, written directly in its API-key shape rather than
+    the token shape a device login leaves there -- which is what makes an OpenAI account mintable
+    without a person at a browser."""
     started = service.start("openai", "api_key")
     assert started.shape is FlowShape.PASTE
 
