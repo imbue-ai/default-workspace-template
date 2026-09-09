@@ -226,14 +226,19 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
    * scroller so that showing and hiding it is opacity, and it takes no pointer events, so the rail
    * still scrolls and the cards still take clicks underneath it. Its ramp is in style.css, where
    * the reasoning about it lives; the width is the same 30px at both ends.
+   *
+   * It is inset by a sliver's width so it covers the scroller and not the arrows -- but the arrow's
+   * circle hangs a few pixels back past its sliver, into exactly the strip where this overlay is at
+   * its most opaque, so the two do overlap. The overlay carries no z-index and is rendered ahead of
+   * the slivers for that reason: both are positioned, so the later one paints on top, and the arrow
+   * has to be the one that wins. The scroller is not positioned, so the overlay still covers the
+   * cards regardless of the order.
    */
   function railFade(isEnd: boolean, isShown: boolean): m.Vnode {
     return m("div", {
       class:
         `new-tab-template-rail-fade-${isEnd ? "end" : "start"} pointer-events-none absolute inset-y-0 ` +
-        `z-(--z-content) w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
-        // Inset by a sliver's width, so the overlay starts where the scroller does and never
-        // reaches over an arrow.
+        `w-[30px] transition-opacity duration-(--dur-slow) ease-[ease] ` +
         (isEnd ? "right-5" : "left-5"),
       // Written as a style rather than an opacity-* utility on purpose: the utilities did not take
       // on this element (the class landed but the computed opacity stayed 0), and an inline style
@@ -262,6 +267,11 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
       // the circle hangs 4px past its 20px sliver, over the scroller's padding, which no card
       // occupies while the rail is at rest.
       m("div", { class: "new-tab-template-rail-row relative -mx-6 mt-2 flex" }, [
+        // The overlays come first so the arrows, positioned like them but rendered after, paint on
+        // top of the few pixels where the two overlap. Being out of flow, their place here costs
+        // the row's layout nothing.
+        railFade(false, paging.canPageLeft),
+        railFade(true, paging.canPageRight),
         railGutter(shelf, -1, paging.canPageLeft),
         // The scroller lays the cards out itself rather than wrapping a flex row, because that is
         // what makes its trailing padding real: a scroll container in block layout leaves its
@@ -281,9 +291,6 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
           shelf.templates.map((template) => m(TemplateCard, { key: template.slug, template, isFill: false, onPick })),
         ),
         railGutter(shelf, 1, paging.canPageRight),
-        // After the scroller, so they lie over the cards rather than under them.
-        railFade(false, paging.canPageLeft),
-        railFade(true, paging.canPageRight),
       ]),
     ]);
   }
