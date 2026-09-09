@@ -666,8 +666,8 @@ def test_refresh_aborts_when_old_server_will_not_exit(tmp_path: Path) -> None:
     code = _refresh(tmp_path, runner=runner, spawner=spawner)
 
     assert code == 1
-    assert runner.killed_pgroup(4242)  # we did try to stop it
-    assert not spawner.detached_spawns  # but never respawned
+    assert runner.killed_pgroup(4242)
+    assert not spawner.detached_spawns
 
 
 def test_refresh_reports_unhealthy_reboot_but_records_new_pid(tmp_path: Path) -> None:
@@ -997,7 +997,9 @@ def test_wrapper_page_derives_the_inner_origin_from_location_host() -> None:
 
 
 def test_wrapper_page_opens_the_inner_service_at_the_given_path() -> None:
-    page = wrapper_mod.build_wrapper_html("chat-preview-app", "t", inner_path="/agent-1")
+    page = wrapper_mod.build_wrapper_html(
+        "chat-preview-app", "t", inner_path="/agent-1"
+    )
 
     assert 'var previewPath = "/agent-1";' in page
     assert "innerHost + previewPath" in page
