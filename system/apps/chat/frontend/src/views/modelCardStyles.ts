@@ -35,8 +35,8 @@ const FLYOUT_VISIBLE_ROWS = 10;
 const FLYOUT_BORDER = 1;
 const FLYOUT_INNER_PADDING = 4;
 export const FLYOUT_PADDING = FLYOUT_BORDER + FLYOUT_INNER_PADDING;
-/** `SEARCH_WRAP`'s `mt-1.5` plus `SEARCH_INPUT_EXTRA`'s `h-8`. */
-const SEARCH_FIELD_HEIGHT = 6 + 32;
+/** `SEARCH_INPUT_EXTRA`'s `h-8` plus `SEARCH_WRAP`'s `mb-1.5` under it. */
+const SEARCH_FIELD_HEIGHT = 32 + 6;
 
 /** How tall a flyout of `rowCount` rows wants to be, measured the way the browser measures a
  *  bordered box: both borders and both paddings, which is what `2 * FLYOUT_PADDING` is.
@@ -129,13 +129,14 @@ export const SWITCH_KNOB_OFF = "translate-x-[2px]";
 export const SWITCH_CHECK = "text-accent";
 
 // --- the flyouts ---------------------------------------------------------------------------
-/** Same shared chrome as the card. The flex column caps the scroll region under the pinned
+/** Same shared chrome as the card. The flex column caps the scroll region beneath the pinned
  *  search field. */
 export const FLYOUT = menuCardClass("fixed flex flex-col overflow-hidden text-(length:--font-size-row)");
-/** The search field standing under the list. The wrapper positions the magnifier over the
+/** The search field at the head of the list. The wrapper positions the magnifier over the
  *  field's own left padding; the field itself is the shared `inputClass`, so its frame, focus
- *  ring and placeholder match every other text field in the workspace. */
-export const SEARCH_WRAP = "relative mx-1.5 mt-1.5";
+ *  ring and placeholder match every other text field in the workspace. The margin is BELOW it,
+ *  separating it from the list it filters -- above it the flyout's own padding is the gap. */
+export const SEARCH_WRAP = "relative mx-1.5 mb-1.5";
 export const SEARCH_ICON = "pointer-events-none absolute left-2.5 top-1/2 z-(--z-content) -translate-y-1/2 text-faint";
 /** Room for the magnifier, and the dense-chrome row size the rest of the flyout sits at. */
 export const SEARCH_INPUT_EXTRA = "h-8 py-0 pl-8 text-(length:--font-size-row)";
