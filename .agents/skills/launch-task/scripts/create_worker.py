@@ -1000,8 +1000,13 @@ def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:
     return 0
 
 
-def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int:
-    """CLI entry point. Tests inject ``runner`` to capture the launch argv lifecycle."""
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser.
+
+    Separate from ``main`` so the skill prose that invokes this script can be
+    checked against the real argument surface (subcommands and flags) without
+    running a command.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1121,7 +1126,12 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int:
+    """CLI entry point. Tests inject ``runner`` to capture the launch argv lifecycle."""
+    args = build_parser().parse_args(argv)
 
     if args.command == "launch":
         return _run_launch(args, runner)
