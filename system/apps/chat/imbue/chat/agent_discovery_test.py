@@ -375,4 +375,5 @@ def test_an_unreadable_events_file_does_not_fail_the_create(
     events_path.mkdir()
 
     assert has_undelivered_message_send("chat-1") is False
-    assert any("chat-1" in record for record in loguru_records)
+    # The level is part of the claim: demoted to debug, the fault stops being visible.
+    assert any(record.startswith("WARNING") and "chat-1" in record for record in loguru_records)
