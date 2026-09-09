@@ -7,3 +7,5 @@ The latchkey skill now documents the `scheme` a `custom-service` request must na
 The latchkey skill now says a custom-service domain may be a single label, a private suffix or an IPv4 address, as private networks use; the old public-DNS-shaped restrictions are gone.
 
 A second workspace wanting an origin an earlier one connected sends the same `custom-service` request; the skill no longer tells it to send a `predefined` request naming the scope instead.
+
+The latchkey skill notes that reserved, local and punycode names and IP addresses are accepted but shown to the user with a warning.
