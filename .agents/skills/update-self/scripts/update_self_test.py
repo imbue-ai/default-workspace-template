@@ -6917,6 +6917,40 @@ def test_rolling_back_reloads_the_supervisord_table_when_the_update_changed_it(
     assert runner.ran("supervisorctl", "update")
 
 
+def test_a_rollback_that_dies_partway_settles_the_notice_and_keeps_the_copies(
+    apply_repo: Path,
+) -> None:
+    """A record left mid-rollback is one the shell refuses every verb on, so a rollback
+    that fails in a way nobody predicted has to settle it on the way out.
+
+    The copies stay: the tree is half-restored at that point, and they are what an agent
+    finishes the job by hand from.
+    """
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_CHAT_FRONTEND_DIFF, apply_repo), apply_repo
+        )
+        == 0
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "commit"),
+        subprocess.CalledProcessError(1, ["git", "commit"], stderr="index locked"),
+    )
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _rollback(runner, apply_repo)
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.progress is None, "the notice would refuse both verbs forever"
+    assert record.outcome is not None and "stopped partway through" in record.outcome
+    assert "CalledProcessError" in record.outcome
+    assert record.snapshots and all(
+        Path(snapshot.copy).exists() for snapshot in record.snapshots
+    )
+
+
 def test_rollback_and_confirm_without_a_kept_point_change_nothing(
     apply_repo: Path,
 ) -> None:
