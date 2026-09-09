@@ -868,6 +868,8 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     """The files a sink writes, so a rejected credential can be rolled back."""
     if sink is PasteSink.PI_AUTH_JSON:
         return (account_path / "auth.json",)
+    if sink is PasteSink.CODEX_AUTH_JSON:
+        return (account_path / "auth.json",)
     if sink is PasteSink.CLAUDE_ENV:
         return (account_path / "settings.json",)
     raise FlowError(f"{sink} has no writer yet")
@@ -956,6 +958,14 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
         path.write_text(json.dumps({provider_id: {"type": "api_key", "key": api_key}}, indent=2) + "\n")
         path.chmod(0o600)
         return display
+    if sink is PasteSink.CODEX_AUTH_JSON:
+        path = account_path / "auth.json"
+        # The same file the device flow ends up writing, in the shape codex reads as
+        # API-key mode: `auth_mode` spelled the way codex serialises it, and no `tokens`.
+        # The key alone would resolve the same way; naming the mode leaves nothing inferred.
+        path.write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": api_key}, indent=2) + "\n")
+        path.chmod(0o600)
+        return lane.provider_name
     if sink is PasteSink.CLAUDE_ENV:
         write_claude_env(account_path, claude_env_from_paste(api_key))
         return lane.provider_name
