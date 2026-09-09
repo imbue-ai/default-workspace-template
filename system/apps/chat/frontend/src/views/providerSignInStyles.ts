@@ -184,9 +184,10 @@ export const PICKER_BACKDROP = "fixed inset-0 z-(--z-dropdown) cursor-default";
  *  overflow-hidden, so an in-panel popover would be clipped -- hence the portal. */
 export const PICKER_MENU = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
 /** The shared menu row shape (menuRowClass), minus its hover: the active row keeps its steady
- *  accent fill, so only the idle variant hovers. */
+ *  accent fill, so only the idle variant hovers. `mx-1 w-[calc(100%-0.5rem)] rounded px-2` is
+ *  that recipe's inset highlight slab; the reasoning for each part lives with it. */
 export const PICKER_OPTION =
-  "flex h-8 w-full cursor-pointer items-center justify-between gap-3 px-3 text-left " +
+  "flex h-8 cursor-pointer items-center justify-between gap-3 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 export const PICKER_OPTION_IDLE = "hover:bg-fill-hover";
 export const PICKER_OPTION_ACTIVE = "bg-accent-light";
