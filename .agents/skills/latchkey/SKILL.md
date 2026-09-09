@@ -92,7 +92,10 @@ on that domain or a subdomain of it) and `cookie_keys`:
 The domain must be a bare hostname: no scheme (that goes in `scheme`), port,
 path, wildcard or underscore. A single label (`gitlab`), a private suffix
 (`vault.internal`) or an IPv4 address are all fine; an IPv6 literal is not, and
-a non-ASCII name goes in as its punycode form. There is deliberately no field for a display name --
+a non-ASCII name goes in as its punycode form. Reserved names (`.test`,
+`.example`, `example.com`), local ones (`localhost`, a single label, `.local`,
+`.internal`), IP addresses and punycode labels are allowed but shown to the
+user with a warning, so expect closer scrutiny of those. There is deliberately no field for a display name --
 the connection is labelled by its domain, so the user always sees exactly what
 it reaches.
 
