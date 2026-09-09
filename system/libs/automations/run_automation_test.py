@@ -24,7 +24,9 @@ exit 0
 """
 
 
-def _run(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _run(
+    tmp_path: Path, *args: str
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake_uv = bin_dir / "uv"
@@ -52,7 +54,9 @@ def _values_of(argv: list[str], flag: str) -> list[str]:
     return [argv[i + 1] for i, token in enumerate(argv) if token == flag]
 
 
-def test_the_create_names_the_role_template_alone_and_no_harness(tmp_path: Path) -> None:
+def test_the_create_names_the_role_template_alone_and_no_harness(
+    tmp_path: Path,
+) -> None:
     """The harness and the account come from the workspace's create defaults, not from a template
     that stopped existing when harnesses moved to `--type`."""
     result, argv = _run(tmp_path, "news")
@@ -65,8 +69,12 @@ def test_the_create_names_the_role_template_alone_and_no_harness(tmp_path: Path)
     assert _values_of(argv, "--message") == ["/news"]
 
 
-def test_a_type_override_rides_the_create_and_a_template_override_replaces_the_role(tmp_path: Path) -> None:
-    result, argv = _run(tmp_path, "caretaker", "--template", "caretaker", "--type", "codex")
+def test_a_type_override_rides_the_create_and_a_template_override_replaces_the_role(
+    tmp_path: Path,
+) -> None:
+    result, argv = _run(
+        tmp_path, "caretaker", "--template", "caretaker", "--type", "codex"
+    )
 
     assert result.returncode == 0, result.stderr
     assert _values_of(argv, "--template") == ["caretaker"]

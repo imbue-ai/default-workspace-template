@@ -71,7 +71,7 @@ def test_a_linked_harness_binds_by_a_credential_link_over_the_agents_state_dir(
     (command,) = settings[PROVISION_COMMAND_KEY]
     parent = str(Path(agent_side).parent)
     assert command == (
-        f"mkdir -p \"$MNGR_AGENT_STATE_DIR\"/{parent} && ln -sfn {account / source} \"$MNGR_AGENT_STATE_DIR\"/{agent_side}"
+        f'mkdir -p "$MNGR_AGENT_STATE_DIR"/{parent} && ln -sfn {account / source} "$MNGR_AGENT_STATE_DIR"/{agent_side}'
     )
 
 

@@ -19,9 +19,9 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
 from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
