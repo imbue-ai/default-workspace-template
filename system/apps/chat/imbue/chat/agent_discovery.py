@@ -48,11 +48,10 @@ def get_host_dir() -> Path:
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
 
 
-# The message-delivery event types that mean "this send did not become a turn". mngr
-# writes these in ``BaseAgent.record_message_delivery_event``; both are reported to the
-# caller as a successful send, so the event stream is the only way to learn about them.
-# Duplicated from mngr rather than imported: mngr spells them as bare string literals
-# too, so there is nothing to import yet.
+# The message-delivery event types that mean "this send did not become a turn". Both are
+# reported to the caller as a successful send, so the event stream is the only way to
+# learn about them. Spelled out rather than imported because mngr has no constant for
+# them either.
 _UNDELIVERED_SEND_EVENT_TYPES: frozenset[str] = frozenset(
     {"relaxed_send_unconfirmed", "send_rejected_by_agent"}
 )
@@ -81,7 +80,6 @@ def has_undelivered_message_send(agent_id: str) -> bool:
     try:
         lines = events_path.read_text().splitlines()
     except FileNotFoundError:
-        # No send ever recorded anything for this agent, which is the common case.
         return False
     except OSError as e:
         logger.opt(exception=e).warning("Could not read the message-delivery events of {}", agent_id)
@@ -90,8 +88,8 @@ def has_undelivered_message_send(agent_id: str) -> bool:
         try:
             event = json.loads(line)
         except json.JSONDecodeError as e:
-            # A separate process appends this file a line at a time, so a read can catch a
-            # torn one. Every whole line still counts, but the damage is worth seeing.
+            # Another process appends this a line at a time, so a read can catch a torn
+            # one. Every whole line still counts, but the damage is worth seeing.
             logger.opt(exception=e).warning("Skipping a malformed message-delivery event of {}", agent_id)
             continue
         if isinstance(event, dict) and event.get("type") in _UNDELIVERED_SEND_EVENT_TYPES:

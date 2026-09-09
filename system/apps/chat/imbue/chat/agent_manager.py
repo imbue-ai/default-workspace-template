@@ -1402,10 +1402,9 @@ class AgentManager:
             # see `claim_first_chat`. Outside the lock it guards nothing, and it takes the
             # index lock of its own.
             #
-            # A create that exits 0 can still have failed to deliver the greeting: `/welcome`
-            # is a slash command, so mngr reports a send it could not witness as successful
-            # and merely records it. The claim buys the user a greeting, so one that was
-            # never submitted has to give it back as surely as a create that died.
+            # A create that exits 0 can still have failed to deliver the greeting, which mngr
+            # records rather than raises. The claim buys the user a greeting, so one that
+            # never arrived has to give it back as surely as a create that died.
             if is_first_chat:
                 is_welcome_unsubmitted = success and has_undelivered_message_send(agent_id)
                 if is_welcome_unsubmitted:

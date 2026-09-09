@@ -341,11 +341,9 @@ def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
 
 
 def test_a_launching_chat_is_pinned_to_the_protected_floor() -> None:
-    # A chat seconds old has no open tab, no visible tab and no message yet -- every
-    # signal that earns protection is still absent -- so the engagement-only score
-    # leaves it the most expendable chat in the workspace, above every service. That
-    # is the window in which losing it costs the most: no transcript has been written,
-    # so a shed here is unrecoverable rather than a cold start.
+    # Every signal that earns protection is still absent at this age, so the
+    # engagement-only score would leave a chat at its most expendable in the window
+    # where losing it costs the most.
     launching = bands.chat_agent_oom_score_adj(
         is_open=False,
         is_visible=False,
