@@ -32,7 +32,7 @@ from imbue.chat.accounts import save_reauth_backup
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.create_defaults import create_defaults_path
-from imbue.chat.create_defaults import read_create_defaults_type
+from imbue.chat.testing import read_create_defaults_type
 from imbue.imbue_common.model_update import to_update
 
 
