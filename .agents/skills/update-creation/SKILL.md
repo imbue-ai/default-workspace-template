@@ -86,17 +86,34 @@ worker has a convenience index (the change is also on its branch on disk):
 COMMIT_RANGE="HEAD~1..HEAD"   # widen to cover all commits implementing the change
 git log --format='%H %s' "$COMMIT_RANGE" > data/.tasks/harden/update-$TARGET/commit.log
 git log -p "$COMMIT_RANGE"    > data/.tasks/harden/update-$TARGET/commit.diff
+DIFF_BASE_REF="${COMMIT_RANGE%%..*}"   # the commit before the change
+```
+
+For the **emergent** origin there is no committed change yet, so the diff base
+is your current commit:
+
+```bash
+DIFF_BASE_REF=HEAD
 ```
 
 Write the task file. Frontmatter carries `operation: update`, the `type`,
-and `finish_report_path` (the report destination the lead polls; see
-`.agents/shared/references/worker-reporting.md`). The body carries the
+`finish_report_path` (the report destination the lead polls; see
+`.agents/shared/references/worker-reporting.md`), `scope_file` (where the
+worker writes the creation's computed footprint at the start of its run -- you
+name the path, the worker creates the file), and `diff_base` (the commit before
+the work being hardened: for the committed origin, the start of
+`$COMMIT_RANGE`, so the scope file's diff covers the committed change; for the
+emergent origin, your `HEAD` at dispatch). The last two are for a skill or an
+app with an `app.toml`; omit both for a service, a pre-manifest app, or the
+system interface, which have no footprint. The body carries the
 `## Change origin` marker the worker dispatches on, plus origin-specific content:
 
 ```bash
 cat > data/.tasks/harden/update-$TARGET/task.md << TASK_EOF
 ---
 finish_report_path: data/.tasks/harden/update-$TARGET/reports/report.md
+scope_file: data/.tasks/harden/update-$TARGET/scope.json
+diff_base: $(git rev-parse "$DIFF_BASE_REF")
 operation: update
 type: skill
 ---

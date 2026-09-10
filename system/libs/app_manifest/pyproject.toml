@@ -8,6 +8,12 @@ dependencies = [
     "click>=8.1",
     "imbue-common",
     "loguru>=0.7",
+    # gitignore-style matching for a footprint's exclude globs. The standard library's
+    # PurePath.full_match arrived in 3.13 and does not implement gitignore's "**", and CI
+    # runs 3.12, so the matching comes from a library rather than the interpreter. The floor
+    # is 1.1 because that is where the "gitignore" pattern factory replaced the now-deprecated
+    # "gitwildmatch" one; the two match identically.
+    "pathspec>=1.1",
     "pydantic>=2.0",
 ]
 

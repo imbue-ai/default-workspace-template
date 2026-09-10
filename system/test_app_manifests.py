@@ -1,5 +1,8 @@
 """Every built-in app manifest validates, names a real supervisord program, is what
 that program's registration line passes, and declares a memory band that exists.
+
+Every manifest in the tree -- user-built apps included -- also validates against the real
+repo root, which is what checks that its declared references still exist where it says.
 """
 
 import ast
@@ -10,6 +13,8 @@ from pathlib import Path
 
 import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
+from app_manifest.scope import APP_CONVENTIONS
+from app_manifest.scope import SKILL_CONVENTIONS
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +34,11 @@ def _built_in_manifest_paths() -> list[Path]:
     return [
         _APPS_DIR / package / MANIFEST_FILENAME for package in _BUILT_IN_APP_PACKAGES
     ]
+
+
+def _every_manifest_path() -> list[Path]:
+    """Every app.toml in the tree, user-built apps included; the suite runs inside workspaces."""
+    return sorted(_APPS_DIR.glob(f"*/{MANIFEST_FILENAME}"))
 
 
 def _command_by_program() -> dict[str, str]:
@@ -91,6 +101,25 @@ def _entry_point_manifest_paths(command: str) -> list[str]:
                     manifest_paths.append(manifest_path)
                 break
     return manifest_paths
+
+
+@pytest.mark.parametrize(
+    "manifest_path", _every_manifest_path(), ids=lambda path: path.parent.name
+)
+def test_every_manifest_validates_against_the_repo_root(manifest_path: Path) -> None:
+    # Loading with the real root is what checks the [[references]] location rules and that
+    # every referenced artifact still exists, so a deleted skill or doc fails here rather
+    # than silently leaving a review pass pointed at nothing.
+    load_manifest(manifest_path, repo_root=_REPO_ROOT)
+
+
+@pytest.mark.parametrize(
+    "convention_path", sorted(set(APP_CONVENTIONS + SKILL_CONVENTIONS)), ids=str
+)
+def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) -> None:
+    # The scope file points every review pass at these; a renamed doc would otherwise
+    # send them to nothing without a test noticing.
+    assert (_REPO_ROOT / convention_path).is_file(), convention_path
 
 
 def test_every_built_in_app_directory_ships_a_manifest() -> None:
