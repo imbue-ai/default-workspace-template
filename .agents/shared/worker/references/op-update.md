@@ -26,11 +26,12 @@ absent or unrecognized.
 ## Valid report `name:` values
 
 - Gates: `outline-approval` (emergent only -- the design gate), `final-creation`
-  (both).
+  (both), and `question` mid-flight in every shape, whenever the answer is not
+  in your task file or the repo.
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
 **System-interface exception.** When the creation is the system interface, there
-is no `## Change origin` toggle and **no gate report at all**: the change is
+is no `## Change origin` toggle and **no approval gate**: the change is
 handed to you as a plain brief, and user approval happens through the lead's
 pre-merge live preview, not a worker gate. Implement the brief, verify it per
 `type-system-interface.md`, then report `done` (or a mid-flight `question`,

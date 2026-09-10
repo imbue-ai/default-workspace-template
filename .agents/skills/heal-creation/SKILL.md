@@ -131,8 +131,8 @@ Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`; branch: `mngr/heal-$TARGET`
 - Poll path: `data/.tasks/harden/heal-$TARGET/reports/report.md`; reports dir
-  `data/.tasks/harden/heal-$TARGET/reports/`; consumed
-  `data/.tasks/harden/heal-$TARGET/reports/consumed/`
+  `data/.tasks/harden/heal-$TARGET/reports/`; `await` archives each report it
+  prints under `data/.tasks/harden/heal-$TARGET/reports/consumed/`
 - The only user-approval gate is `final-creation` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
   `.agents/skills/launch-task/references/worker-failure.md`).

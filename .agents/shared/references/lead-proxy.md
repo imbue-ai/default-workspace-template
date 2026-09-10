@@ -58,6 +58,14 @@ invoke the failure flow (`.agents/skills/launch-task/references/worker-failure.m
 if the session is dead, the agent is wedged on the same operation for an
 extended period, or output has been static.
 
+`await` makes the same call for you in the clearest case: exit code **76** means
+it watched the worker's agent end its turn on several consecutive polls with no
+report -- finished or wedged without reporting, worth surfacing immediately
+rather than waiting out the timeout. That check never fires while the worker has
+a live sub-worker of its own: an agent labelled `lead_agent=<worker>` in state
+RUNNING or WAITING with no pending shed counts as the worker being busy, so an
+intermediate lead waiting on its own child is never mistaken for a dead one.
+
 ## Do not interrupt more recent user work
 
 If the user gave you a more recent task since launching the worker, finish that
@@ -104,15 +112,10 @@ mngr message <WORKER_NAME> -m "<reply, in the user's voice>"
 To escalate, ask the user, wait for
 the user's reply, then forward it via `mngr message`.
 
-After forwarding, consume the report so the next push can land a fresh
-`report.md`:
-
-```bash
-mkdir -p <REPORTS_DIR>/consumed
-mv <REPORTS_DIR>/report.md <REPORTS_DIR>/consumed/$(date +%s)-gate.md
-```
-
-Then re-arm the background poll.
+You never move a report by hand: the `await` that printed it already archived
+it into `<REPORTS_DIR>/consumed/` (timestamped, named by its `type` and `name`),
+so `finish_report_path` is clear for the worker's next push. After forwarding,
+re-arm the background poll.
 
 ## Terminal status: act and stop polling
 
@@ -143,12 +146,41 @@ On `type: status`:
   stop; do not merge, do not invoke the failure flow. Optionally surface the
   one-sentence reason to the user.
 
-In every status case, consume the report (move to `<REPORTS_DIR>/consumed/`) so
-the directory is clean for future runs.
+In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
+`await` that printed it archived it there -- so the reports dir is clean for the
+next run with nothing for you to move.
+
+## When you are a worker yourself
+
+Everything above holds unchanged when you are an intermediate lead: a worker
+that launched its own worker. Four rules are yours alone.
+
+- **A sub-worker's `question` is yours to answer first.** Answer it yourself
+  whenever your own task file and the repo settle it -- that is most of them.
+  Only when the answer is genuinely not available to you do you re-raise it as
+  your *own* `question` gate to your lead (`create_worker.py report --type gate
+  --name question`, per `.agents/shared/references/worker-reporting.md`), and
+  when the reply comes back you forward it to the sub-worker **verbatim** with
+  `mngr message`. Do not paraphrase a decision you did not make.
+- **Merge exactly one level.** A sub-worker's branch `mngr/<sub-worker-name>`
+  merges into *your* branch, with `--no-ff` and the sub-worker named in the
+  merge commit message. Your own lead then sees one merged branch and never
+  needs to know sub-workers existed.
+- **Stop, never destroy.** Once a sub-worker's branch is merged, stop it with
+  `mngr stop <sub-worker-name>` and leave it in place -- its transcript and
+  pushed reports stay where a later capture can resolve them. Do not destroy
+  it, and do not destroy yourself. Stopping matters for your own lead too: a
+  merged sub-worker left in WAITING still reads as a live child, which keeps
+  you counted as busy after you have finished.
+- **Await sub-workers with `--timeout 60m`**, which fits inside the window your
+  own lead is waiting out (90m for the harden flows).
 
 ## `mngr rsync` rationale
 
-When syncing reports (or the initial runtime dir to the worker):
+The launcher makes every transfer in this dispatch itself -- the runtime-dir
+push at `launch`, and the report push a worker's `report` performs -- and they
+all take this shape. Read this when you are debugging one, or writing a sync of
+your own:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \

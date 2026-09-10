@@ -59,18 +59,20 @@ cat << 'BODY_EOF'
 
 ## Reporting back
 Follow `.agents/shared/references/worker-reporting.md` for the full
-report procedure: it has you parse this task's frontmatter to get
-`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
-its parent directory back to the lead. Substitutions for this task:
+report procedure: parse this task's frontmatter for `TASK_FILE` /
+`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write your report body to a
+file and deliver it with the launcher's `report` subcommand, which
+writes the report and pushes it to the lead for you:
+
+`create_worker.py report --task-file "$TASK_FILE" --type <gate|status> --name <name> --body-file <body-file>`
+
+Substitutions for this task:
 
 - `<TASK_FILE>` -> the `task_file` path stamped in this file's frontmatter
-- `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
-  i.e. `dirname "$FINISH_REPORT_PATH"` (your worktree path matches the
-  lead's destination for this flow)
-- Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
-  (terminal).
+- Valid `name:` values: `question` (a mid-flight gate, valid at any
+  point of any run), `done` / `stuck` (terminal).
 
-For a mid-flight `question` gate, stop your turn after pushing -- the
+For a mid-flight `question` gate, stop your turn after reporting -- the
 lead replies via `mngr message` and you resume. For terminal statuses,
 the run ends.
 BODY_EOF
@@ -129,12 +131,16 @@ reports never reach the user and the worker deadlocks waiting for a
 reply. Reports surface as task notifications when the background job
 completes; handle them at that point, not by blocking on the poll.
 
+Once it has printed a report, `await` archives it under
+`data/.tasks/launch-task/$NAME/reports/consumed/`, so the poll path is
+clear for the worker's next push and you never move a report by hand.
+
 ## 4. Handle the report
 
 Follow `.agents/shared/references/lead-proxy.md` for parsing the
 report's frontmatter (`type` + `name`), deciding whether to answer a
-gate yourself vs. escalate to the user, consuming the report so the
-next push can land a fresh `report.md`, and acting on terminal statuses
+gate yourself vs. escalate to the user, re-arming the poll after a gate
+(the report is already archived), and acting on terminal statuses
 (`done` -> merge the worker's branch; `stuck` or 30m timeout without a
 report -> diagnose worker liveness, then surface to the user per
 `references/worker-failure.md` if the worker is genuinely wedged).
@@ -146,7 +152,8 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
-- Consumed dir: `data/.tasks/launch-task/$NAME/reports/consumed/`
+- Consumed dir (where `await` archives each report it prints):
+  `data/.tasks/launch-task/$NAME/reports/consumed/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
 - Terminal statuses: `done` (merge); `stuck` (failure flow).

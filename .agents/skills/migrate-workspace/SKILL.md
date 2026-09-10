@@ -292,10 +292,11 @@ is at /tmp/mind_key; you may re-request the grant yourself if it lapses (script
 exit 3).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
-`question` (a genuinely undecidable case), `done` / `stuck` (terminal).
-Substitutions: `<TASK_FILE>` -> `data/.tasks/migrate-workspace/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/migrate-workspace/reports`.
+Per `.agents/shared/references/worker-reporting.md`: write the body to a file
+and deliver it with the launcher's `report` subcommand. Valid `name:` values:
+`question` (a genuinely undecidable case; valid at any point of the run),
+`done` / `stuck` (terminal). `<TASK_FILE>` ->
+`data/.tasks/migrate-workspace/task.md`.
 BODY_EOF
 } > data/.tasks/migrate-workspace/task.md
 ```
@@ -476,9 +477,10 @@ things over themselves first rather than relying on the checklist alone:
 Leave the workspace **names** alone -- renaming is the user's business and they can
 do it from the app.
 
-Finally, tear down per `launch-task`'s conventions: consume the terminal report
-into `data/.tasks/migrate-workspace/reports/consumed/`, destroy the worker, and
-close the ticket last (its own tool call).
+Finally, tear down per `launch-task`'s conventions: destroy the worker (the
+terminal report is already archived under
+`data/.tasks/migrate-workspace/reports/consumed/` by the `await` that printed
+it) and close the ticket last (its own tool call).
 
 ## Running it again against the same source
 

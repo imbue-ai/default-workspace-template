@@ -186,8 +186,9 @@ Flow-specific substitutions:
 - Worker name: `crystallize-$NAME`; branch: `mngr/crystallize-$NAME`
 - Task file / poll path: `data/.tasks/harden/crystallize-$NAME/task.md` /
   `data/.tasks/harden/crystallize-$NAME/reports/report.md`
-- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`;
-  consumed: `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
+- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`; `await`
+  archives each report it prints under
+  `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
   **app** → none (the worker merges straight to `done`).
 - Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per

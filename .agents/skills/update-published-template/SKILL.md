@@ -265,7 +265,10 @@ the bundle is pushed to the worker. The task body directs the worker to:
 1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
    `.agents/shared/references/worker-reporting.md`, from the exact task-file path
    `data/.tasks/launch-task/<slug>/task.md` -- before any reset that could
-   remove the task file.
+   remove the task file. Deliver the report itself by hand at the end, per
+   `publish-template` §3's `mngr rsync` block and for the same reason: the reset
+   leaves your checkout at the published tip, whose launcher may predate the
+   `report` subcommand.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash

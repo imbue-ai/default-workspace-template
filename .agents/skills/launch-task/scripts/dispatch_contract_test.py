@@ -73,7 +73,22 @@ _PLACEHOLDER_ENV = {
     "TARGET": "demo",
     "REF": "demo-ref",
 }
-_TEXT_PLACEHOLDERS = {"<slug>": "demo"}
+# The worker-side ``report`` invocation is written against values the worker
+# only holds at runtime -- the path it was handed, the kind of report it decided
+# to send -- so the prose spells them as angle-bracket slots or as the shell
+# variables ``parse_task_frontmatter.py`` exports. Both forms get a concrete
+# stand-in here so the argv still reaches the real parser with a real value in
+# every slot; without them a typed or required flag would be checked against a
+# literal ``<...>``.
+_TEXT_PLACEHOLDERS = {
+    "<slug>": "demo",
+    "<TASK_FILE>": "data/.tasks/launch-task/demo/task.md",
+    "$TASK_FILE": "data/.tasks/launch-task/demo/task.md",
+    "<REPORT_TYPE>": "status",
+    "<NAME>": "done",
+    "<BODY_FILE>": "data/.tasks/launch-task/demo/body.md",
+    "$FINISH_REPORT_PATH": "data/.tasks/launch-task/demo/reports/report.md",
+}
 _LEAD_NAME = "lead-demo"
 
 

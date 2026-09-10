@@ -29,12 +29,12 @@ it the normal way and commit the manifest changes so they appear in the merge.
 
 ## Reporting back to the lead
 
-Follow `.agents/shared/references/worker-reporting.md` for the report-file
-procedure and the task-file frontmatter schema, and substitute the runtime
-paths your operation/creation references specify. Surface decisions the user
+Follow `.agents/shared/references/worker-reporting.md` for the reporting
+procedure and the task-file frontmatter schema: you write the body to a file
+and the launcher's `report` subcommand delivers it. Surface decisions the user
 must make as `gate` reports and stop; end the run with a terminal `done` or
-`stuck` status. The operation reference names the exact gate and
-status values its flow uses.
+`stuck` status. The operation reference names the exact gate and status values
+its flow uses, and `question` is available on top of them on every run.
 
 ## Parallelism & Sequencing
 

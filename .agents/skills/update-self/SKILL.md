@@ -242,12 +242,13 @@ lead and synced into your worktree with this runtime dir) -- run *all* its
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
+Per §6 of the worker guide: the report shapes come from
+`.agents/shared/references/worker-reporting.md`, but you write and push the
+report by hand as §6 spells out -- not with the launcher's `report` subcommand,
+which this workspace's own launcher may predate. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
 review-gate escape hatch, or a §4b customization the update cannot keep),
-`done` / `stuck` (terminal). Substitutions:
-`<TASK_FILE>` -> `data/.tasks/update-self/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
+`done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
