@@ -15,14 +15,16 @@ this template on the user's machine, outside any agent, and is never refused. A 
 names its own `--type` cannot be told apart here and is refused too while nothing is signed
 in, which is the state every agent in the workspace is unusable in anyway.
 
-Standard library only: it runs before any venv exists.
+Standard library only: it runs before any venv exists. `tomllib` is imported only past the
+gate: the create of the workspace itself runs this under whatever `python3` the user's machine
+has (the 3.9 of macOS's Command Line Tools has no `tomllib`), and that run must exit 0 before
+touching anything the container's 3.12 provides.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import tomllib
 from pathlib import Path
 
 NO_ACCOUNT_MESSAGE = "No provider account is signed in on this machine. Sign in from a chat tab, then try again."
@@ -48,6 +50,8 @@ def _local_settings_path(environ: dict[str, str]) -> Path:
 
 
 def _names_default_type(path: Path) -> bool:
+    import tomllib
+
     if not path.is_file():
         return False
     try:

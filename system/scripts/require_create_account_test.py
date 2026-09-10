@@ -49,6 +49,30 @@ def test_a_create_outside_any_agent_passes(tmp_path: Path) -> None:
     assert _run(tmp_path).returncode == 0
 
 
+def test_a_create_outside_any_agent_passes_on_a_python_without_tomllib(
+    tmp_path: Path,
+) -> None:
+    """The Minds app runs the workspace's own create from a clone of this template on the user's
+    machine, whose `python3` can be the 3.9 of macOS's Command Line Tools: the host-side exit must
+    come before anything that needs a newer interpreter."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys\n"
+            "sys.modules['tomllib'] = None\n"
+            f"sys.argv = [{str(_SCRIPT)!r}]\n"
+            f"runpy.run_path({str(_SCRIPT)!r}, run_name='__main__')\n",
+        ],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_a_create_from_an_agent_outside_its_own_checkout_passes(tmp_path: Path) -> None:
     """A developer's agent creating a workspace from this template's checkout is not a create inside one."""
     result = _run(
