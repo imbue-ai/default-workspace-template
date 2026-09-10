@@ -1058,29 +1058,29 @@ def _read_file_command(path: str) -> str:
     )
 
 
-def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
-    """The drop-in paths the SOURCE's own ``[include] files`` globs match, or [] when it has none.
+def _supervisord_dropin_listing_command(supervisord_conf: str) -> str:
+    """Shell that prints, one per line, every file the config's ``[include] files`` globs match.
 
-    Read from the source's config rather than assumed: which directory holds the per-program
-    drop-ins is that workspace's to declare, and this is the one reader that runs against a
-    workspace someone else configured. Expanded the way supervisord expands it -- each
-    whitespace-separated pattern against the directory of the config declaring it, with
-    ``%(here)s`` substituted for that directory.
+    Expanded the way supervisord expands it -- each whitespace-separated pattern against the
+    directory of the config declaring it, with ``%(here)s`` substituted for that directory.
 
     The patterns are read as supervisord's own parser reads them -- ``files =`` and ``files:``
     alike, an indented continuation folded into the value above it, comments dropped -- because
     taking one spelling only, or one line only, silently loses whichever drop-ins the missed
-    patterns name.
+    patterns name, and a commented-out pattern read as a live one reads drop-ins supervisord
+    never starts.
 
-    Done in the one round trip the fixed listing already cost. Pathname expansion stays off while
-    the pattern list is split, so a pattern is never globbed against the login shell's own
-    directory, and is turned back on only for the expansion meant to glob. ``%(here)s`` is
-    substituted with parameter expansion rather than ``sed``, and the glob runs with ``IFS``
-    emptied, so a source path holding a space, a ``|`` or an ``&`` cannot be read as syntax.
+    Pathname expansion stays off while the pattern list is split, so a pattern is never globbed
+    against the login shell's own directory, and is turned back on only for the expansion meant to
+    glob. ``%(here)s`` is substituted with parameter expansion rather than ``sed``, and the glob
+    runs with ``IFS`` emptied, so a source path holding a space, a ``|`` or an ``&`` cannot be read
+    as syntax.
+
+    A builder rather than an inline argument so it can be run against a real shell without an SSH
+    target, the way :func:`_read_file_command` is.
     """
     quoted = _shell_quote(supervisord_conf)
-    listing = run_remote(
-        target,
+    return (
         f'conf={quoted}; confdir=$(dirname "$conf"); '
         "patterns=$(awk '"
         r"/^\[include\]/ { inc = 1; next } "
@@ -1097,8 +1097,20 @@ def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -
         'case "$pattern" in /*) ;; *) pattern="$confdir/$pattern" ;; esac; '
         "oldifs=$IFS; IFS=; set +f; for path in $pattern; do "
         "[ -f \"$path\" ] && printf '%s\\n' \"$path\"; done; "
-        "set -f; IFS=$oldifs; done; set +f",
+        "set -f; IFS=$oldifs; done; set +f"
     )
+
+
+def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+    """The drop-in paths the SOURCE's own ``[include] files`` globs match, or [] when it has none.
+
+    Read from the source's config rather than assumed: which directory holds the per-program
+    drop-ins is that workspace's to declare, and this is the one reader that runs against a
+    workspace someone else configured.
+
+    Done in the one round trip the fixed listing already cost.
+    """
+    listing = run_remote(target, _supervisord_dropin_listing_command(supervisord_conf))
     return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
 

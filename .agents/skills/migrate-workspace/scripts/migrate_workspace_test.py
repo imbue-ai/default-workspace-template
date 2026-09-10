@@ -10,6 +10,7 @@ the recreate argv and its labels, port reconciliation, and the audit patterns.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -530,6 +531,88 @@ def test_local_supervisord_configs_follow_a_here_relative_include_glob(
     ]
 
     assert [(port.name, port.port) for port in ports] == [("todo", 8099)]
+
+
+def _write_dropin_workspace(root: Path, include_section: str) -> Path:
+    """A workspace declaring the given ``[include]`` section, and three drop-ins to find or miss.
+
+    ``disabled.d`` is on disk but named by no live pattern, so a reader that widens too far -- one
+    that reads a commented-out pattern as a live one -- shows up as ``ghost`` in the listing.
+    """
+    for directory, program in (("a.d", "alpha"), ("b.d", "beta"), ("disabled.d", "ghost")):
+        (root / "system" / directory).mkdir(parents=True)
+        (root / "system" / directory / f"{program}.conf").write_text(
+            f"[program:{program}]\ncommand={program}-app\n"
+        )
+    conf = root / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n" + include_section)
+    return conf
+
+
+def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
+    """What the listing shell prints for that config, through a real shell instead of over SSH.
+
+    Run from the filesystem root, which is neither the workspace nor the config's directory: the
+    login shell this really runs in is not ours to choose, and a pattern globbed against the
+    shell's own directory would otherwise pass by luck.
+    """
+    command = migrate_workspace._supervisord_dropin_listing_command(str(supervisord_conf))
+    listing = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(supervisord_conf.anchor),
+        timeout=60,
+    ).stdout
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
+@pytest.mark.parametrize(
+    "include_section",
+    [
+        "[include]\nfiles = a.d/*.conf b.d/*.conf\n",
+        "[include]\nfiles: a.d/*.conf b.d/*.conf\n",
+        "[include]\nfiles = a.d/*.conf\n    b.d/*.conf\n",
+        "[include]\nfiles = a.d/*.conf\n    ; disabled.d/*.conf\n    b.d/*.conf\n",
+        "[include]\nfiles = %(here)s/a.d/*.conf %(here)s/b.d/*.conf\n",
+    ],
+    ids=["equals", "colon", "continuation", "commented-out-pattern", "here"],
+)
+def test_remote_dropin_listing_reads_the_include_setting_as_configparser_does(
+    tmp_path: Path, include_section: str
+) -> None:
+    """The source's config is written by someone else, so every spelling supervisord takes counts.
+
+    supervisord parses with configparser: ``files:`` is as good as ``files =``, an indented line
+    continues the value above it, and a comment is dropped before a value is ever assembled.
+    Missing a spelling loses whichever drop-ins its patterns named, and the loss is silent -- an
+    empty listing is also what a source with no drop-ins gives, so every real app's port is
+    reported free and a collision reaches the far side of the migration.
+    """
+    conf = _write_dropin_workspace(tmp_path, include_section)
+
+    assert _run_dropin_listing(conf) == [
+        str(tmp_path / "system/a.d/alpha.conf"),
+        str(tmp_path / "system/b.d/beta.conf"),
+    ]
+
+
+@pytest.mark.parametrize("directory_name", ["with space", "amp&and", "pipe|bar"])
+def test_remote_dropin_listing_survives_a_source_path_the_shell_would_read_as_syntax(
+    tmp_path: Path, directory_name: str
+) -> None:
+    """The source's path is interpolated into a glob and into a ``%(here)s`` substitution.
+
+    A space would split one pattern into several words, and a ``|`` or an ``&`` would be read as a
+    delimiter or a back-reference by a ``sed``-based substitution. Each costs the listing every
+    drop-in at once, which is the same empty answer a source with none gives.
+    """
+    conf = _write_dropin_workspace(
+        tmp_path / directory_name, "[include]\nfiles = %(here)s/a.d/*.conf\n"
+    )
+
+    assert _run_dropin_listing(conf) == [str(tmp_path / directory_name / "system/a.d/alpha.conf")]
 
 
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:

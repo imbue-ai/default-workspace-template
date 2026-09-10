@@ -80,10 +80,12 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
     }
 
 
-# Every in-repo reader of this config, by the path it lives at. They cannot share a helper: they
-# sit in four separate uv workspace members, and two of them are standalone scripts (the scaffolder
-# declares its own PEP 723 dependencies by design). So each carries its own copy of the expansion,
-# and this file pins the copies against each other instead.
+# Every reader of this config that can be compared here, by the path it lives at. They cannot share
+# a helper: they sit in four separate uv workspace members, and two of them are standalone scripts
+# (the scaffolder declares its own PEP 723 dependencies by design). So each carries its own copy of
+# the expansion, and this file pins the copies against each other instead. migrate-workspace's
+# REMOTE reader is the one that cannot join them -- it expands over SSH, in shell -- so its own
+# suite runs that shell against a local workspace instead.
 _READER_PATHS: dict[str, Path] = {
     "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
     "migrate_workspace": _REPO_ROOT / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
