@@ -19,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run --all-packages my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user uv run my-service
 directory=/home/user/workspace
 autostart=true
 autorestart=true

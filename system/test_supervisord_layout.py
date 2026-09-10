@@ -21,10 +21,13 @@ expansion and a copy that drifts fails in exactly that silent way.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import glob
 import importlib.util
 import re
+import shlex
+import subprocess
 from pathlib import Path
 from types import ModuleType
 
@@ -175,6 +178,37 @@ def test_every_reader_honours_a_dropin_directory_the_config_names_itself(tmp_pat
     assert set(app_manifests._command_by_program()) == {"todo"}
 
 
+# The two names the gate lifts out of the vendored capture. Named here because a rename upstream
+# must fail loudly with an instruction, rather than quietly retiring the gate.
+_CAPTURE_BUILDER = "supervisord_config_capture_command"
+_CAPTURE_CONF_CONSTANT = "SUPERVISORD_CONF_RELATIVE_PATH"
+
+
+def _vendored_capture_command(repo_root: Path) -> str | None:
+    """The shell the vendored evals capture would run against ``repo_root``, or None if it has none.
+
+    Lifted out of the source rather than imported: the module it lives in pulls in the whole
+    minds_evals dependency tree (harbor, modal, pydantic), none of which this repo installs. Only
+    the builder and the one constant it formats in are taken, with decorators stripped -- the
+    ``@pure`` marker comes from a package that is not here either.
+    """
+    sources: dict[str, str] = {}
+    for node in ast.parse(_VENDORED_EVALS_CAPTURE.read_text()).body:
+        if isinstance(node, ast.FunctionDef) and node.name == _CAPTURE_BUILDER:
+            node.decorator_list = []
+            sources[node.name] = ast.unparse(node)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == _CAPTURE_CONF_CONSTANT and node.value is not None:
+                sources[node.target.id] = "{} = {}".format(node.target.id, ast.unparse(node.value))
+    if sources.keys() != {_CAPTURE_BUILDER, _CAPTURE_CONF_CONSTANT}:
+        return None
+    namespace: dict[str, object] = {}
+    exec("\n".join(sources[name] for name in (_CAPTURE_CONF_CONSTANT, _CAPTURE_BUILDER)), namespace)
+    builder = namespace[_CAPTURE_BUILDER]
+    assert callable(builder)
+    return builder(shlex.quote(str(repo_root)))
+
+
 def test_include_glob_matches_every_dropin_file() -> None:
     """Every file in supervisord.conf.d/ is reached by the config's own glob.
 
@@ -230,6 +264,12 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
 
     Deliberately a conditional: it says nothing about a template that declares every program in the
     main config, and is a permanent regression guard for one that does not.
+
+    Asserts on what the capture *does*, not on how it is written: it builds the capture's own shell
+    out of the vendored source and runs it against this repo. An upstream rewrite that keeps the
+    behaviour -- a different ``sed``, or a Python reader instead of a shell one -- keeps this green,
+    where matching on the source text would fail a correct implementation under a message telling
+    the next reader not to relax it.
     """
     if not list(_DROPIN_DIR.glob("*.conf")):
         return
@@ -243,15 +283,28 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
         "re-point this test at its new path -- do not drop the check."
     )
 
-    source = _VENDORED_EVALS_CAPTURE.read_text()
-    # The mechanism, not the word: the capture must read the [include] files setting out of the
-    # config and expand its patterns the way supervisord does, %(here)s included.
-    follows_includes = "files[[:space:]]*=" in source and "%(here)s" in source
-    assert follows_includes, (
+    command = _vendored_capture_command(_REPO_ROOT)
+    assert command is not None, (
+        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} defines no {_CAPTURE_BUILDER!r}, so it "
+        "reads the main config alone and would find no program for anything this template declares "
+        f"in {_DROPIN_DIR.relative_to(_REPO_ROOT)}.\n\n"
+        "This is the release gate, not a broken test: land the include-aware capture in mngr, then "
+        "re-sync system/vendor/mngr. If the builder was instead RENAMED upstream, re-point this "
+        "test at the new name -- do not drop the check."
+    )
+    captured = subprocess.run(
+        ["bash", "-c", command], capture_output=True, text=True, cwd="/", timeout=60
+    ).stdout
+    # Run from `/`, which is neither the repo nor the config's directory: a capture that resolves
+    # its globs against its own working directory would pass from the repo root by luck.
+    reached = set(_SECTION_RE.findall(captured))
+    declared = _declared_in([_SUPERVISORD_CONF] + _expand_include_patterns(_parse_main_config()))
+    assert reached >= declared, (
         f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} does not follow supervisord's "
-        "[include] globs, but this template declares programs in "
-        f"{_DROPIN_DIR.relative_to(_REPO_ROOT)} -- so the evals capture would find no program for "
-        "them and report every one of those apps as unsupervised.\n\n"
+        "[include] globs: run against this repo it reaches "
+        f"{sorted(reached) or 'no program at all'}, missing {sorted(declared - reached)}, which "
+        f"this template declares in {_DROPIN_DIR.relative_to(_REPO_ROOT)}. The evals capture would "
+        "find no program for those apps and misgrade every one of them.\n\n"
         "This is the release gate, not a broken test. To satisfy it: land the include-aware "
         "capture in mngr, then re-sync system/vendor/mngr. Do NOT relax this assertion -- the "
         "alternative is shipping a template tag that misgrades every eval run on the matching "
