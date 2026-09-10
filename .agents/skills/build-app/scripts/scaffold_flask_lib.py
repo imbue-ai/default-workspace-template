@@ -208,10 +208,32 @@ def _apps_toml_ports(apps_toml: Path) -> set[int]:
     return ports
 
 
+def _app_manifest_ports(apps_dir: Path) -> set[int]:
+    """Every port the apps under ``apps_dir`` declare in their manifests.
+
+    An app's ``url`` (and its ``instances_url``, when it serves the instances API
+    somewhere else) is a loopback origin naming the port it holds. This is the only
+    static record for an app whose supervisord command names no port because it
+    registers itself at runtime -- chat, files and terminal all do -- and it is the
+    only record of any kind on a tree that has not booted, since the runtime
+    registry under ``data/.state/`` is gitignored.
+    """
+    ports: set[int] = set()
+    for manifest in sorted(apps_dir.glob("*/app.toml")):
+        doc = tomlkit.parse(manifest.read_text())
+        for key in ("url", "instances_url"):
+            match = LOCALHOST_PORT_RE.search(str(doc.get(key, "")))
+            if match:
+                ports.add(int(match.group(1)))
+    return ports
+
+
 def _pick_port(repo_root: Path, requested: int | None) -> int:
-    in_use = _supervisord_conf_ports(
-        repo_root / "system/supervisord.conf"
-    ) | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+    in_use = (
+        _supervisord_conf_ports(repo_root / "system/supervisord.conf")
+        | _apps_toml_ports(repo_root / "data" / ".state" / "apps.toml")
+        | _app_manifest_ports(repo_root / "system/apps")
+    )
     if requested is not None:
         if requested in in_use:
             sys.exit(
@@ -255,7 +277,7 @@ packages = ["src/{package}"]
 """
 
 
-def _lib_runner(name: str, package: str, description: str, port: int) -> str:
+def _lib_runner(name: str, package: str, description: str) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
     port_env_var = f"{package.upper()}_PORT"
     return f'''"""{description}.
@@ -275,11 +297,13 @@ Services run from /home/user/workspace (the repo root). Conventions:
 - Static assets shipped alongside this file (templates, default
   configs, bundled JSON): ``Path(__file__).parent / "assets/..."`` is
   fine and is the right pattern.
-- Listen port: bind ``PORT`` (defined below), which defaults to this
-  app's assigned port but honors the ``{port_env_var}`` env var, so
-  an editing agent can boot a throwaway instance on a *spare* port
-  alongside the live one (see the update-app skill). Never hardcode
-  the port at the ``run_simple`` call.
+- Listen port: bind ``PORT`` (defined below), which is read from this
+  app's own ``app.toml`` -- the one place the port is written -- but
+  honors the ``{port_env_var}`` env var, so an editing agent can boot a
+  throwaway instance on a *spare* port alongside the live one (see the
+  update-app skill). Never hardcode the port at the ``run_simple`` call,
+  and change it in ``app.toml`` rather than here: the manifest is what
+  the forwarder registers and what the build-app port pre-flight reads.
 
 This is a synchronous Flask app served by the threaded Werkzeug server.
 The app owns its own browser origin (the forwarder routes
@@ -290,7 +314,9 @@ WebSockets.
 """
 
 import os
+import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import Flask, Response
 from werkzeug.serving import run_simple
@@ -304,11 +330,32 @@ from werkzeug.serving import run_simple
 # exist_ok=True)`` before writing.
 DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 
-# Listen port. Defaults to this app's assigned port but is overridable via
-# the ``{port_env_var}`` env var so an editing agent can boot a throwaway
-# instance on a spare port next to the live one (see the update-app skill).
-# Never hardcode the port at the ``run_simple`` call, or the override is bypassed.
-PORT = int(os.environ.get("{port_env_var}", "{port}"))
+# This app's manifest, which declares the port under ``url``. Read from it rather
+# than repeating the number here: the manifest is what ``forward_port.py``
+# registers and what the build-app scaffolder's port pre-flight reads, so a port
+# written twice is a port that can drift.
+MANIFEST_PATH = Path("system/apps/{package}/app.toml")
+
+
+class ManifestError(Exception):
+    """The app's manifest does not say where the app serves."""
+
+
+def _declared_port() -> int:
+    url = tomllib.loads(MANIFEST_PATH.read_text(encoding="utf-8")).get("url")
+    if url is None:
+        raise ManifestError(f'{{MANIFEST_PATH}} declares no url; add url = "http://localhost:<port>"')
+    port = urlsplit(url).port
+    if port is None:
+        raise ManifestError(f"{{MANIFEST_PATH}} declares url {{url!r}}, which names no port")
+    return port
+
+
+# Listen port. The manifest's, overridable via the ``{port_env_var}`` env var so
+# an editing agent can boot a throwaway instance on a spare port next to the live
+# one (see the update-app skill). Never hardcode the port at the ``run_simple``
+# call, or the override is bypassed.
+PORT = int(os.environ["{port_env_var}"]) if "{port_env_var}" in os.environ else _declared_port()
 
 app = Flask("{package}", static_folder=None)
 
@@ -469,12 +516,14 @@ def _write_lib(
     (lib_dir / "pyproject.toml").write_text(
         _lib_pyproject(name, package, description, extras)
     )
-    (lib_dir / "app.toml").write_text(_MANIFEST_TEMPLATE.format(name=name, display_name=display_name))
+    (lib_dir / "app.toml").write_text(
+        _MANIFEST_TEMPLATE.format(name=name, display_name=display_name, port=port)
+    )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
-    (src_dir / "runner.py").write_text(_lib_runner(name, package, description, port))
+    (src_dir / "runner.py").write_text(_lib_runner(name, package, description))
     return lib_dir
 
 
@@ -487,6 +536,7 @@ _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
 icon = "icon.svg"
+url = "http://localhost:{port}"
 instances = false
 priority = "user"
 program = "{name}"
@@ -494,7 +544,7 @@ program = "{name}"
 
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && {name}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml && {name}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -536,7 +586,7 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _write_supervisord_program(path: Path, name: str, package: str, port: int) -> None:
+def _write_supervisord_program(path: Path, name: str, package: str) -> None:
     """Write the app's supervisord program to its own drop-in file.
 
     The command is wrapped in `bash -c "..."` because supervisord exec's commands
@@ -550,7 +600,7 @@ def _write_supervisord_program(path: Path, name: str, package: str, port: int) -
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package, port=port)
+        _SUPERVISORD_PROGRAM_TEMPLATE.format(name=name, package=package)
     )
 
 
@@ -651,7 +701,7 @@ def main() -> None:
     lib_dir = _write_lib(
         repo_root, args.name, args.description, display_name, port, list(args.extra_dep), icon_markup
     )
-    _write_supervisord_program(program_path, args.name, package, port)
+    _write_supervisord_program(program_path, args.name, package)
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)

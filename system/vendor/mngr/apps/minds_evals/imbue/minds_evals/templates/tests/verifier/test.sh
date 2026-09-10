@@ -1,13 +1,12 @@
 #!/bin/bash
-# Run the rewardkit verifier (gates + quality + harness_quality, plus outcome when the case
-# declares expectations), then compose the final gated reward. rewardkit owns
-# all judging and scoring; finalize.py combines the dimension scores (reward =
-# quality, or an even split of quality and outcome, discounted by the harness's
-# share of it, and zeroed unless every gate passed) and distinguishes a graded
-# 0.0 from a grading-infrastructure failure
-# (judge API error / no parseable reward file / unreadable case file /
-# unmeasurable outcome evidence), leaving no reward file in the latter case so
-# harbor errors the trial instead of scoring it 0.
+# Run the rewardkit verifier (gates + quality, harness_quality on a claude trial, plus
+# outcome when the case declares expectations), then compose the final gated reward.
+# rewardkit owns all judging and scoring; finalize.py combines the dimension scores
+# (reward = quality, or an even split of quality and outcome, discounted by the harness's
+# share of it where that dimension applies, and zeroed unless every gate passed) and
+# distinguishes a graded 0.0 from a grading-infrastructure failure (judge API error / no
+# parseable reward file / unreadable case file / unmeasurable outcome evidence), leaving
+# no reward file in the latter case so harbor errors the trial instead of scoring it 0.
 set -euo pipefail
 
 # Rebuild the judged transcript from the ATIF trajectory at grade time (so
@@ -20,6 +19,10 @@ python3 /tests/render_judge_transcript.py
 # one processed trajectory per scope (the lead agent, and every captured worker), keeping only the
 # steps where a skill was invoked, a tool errored, or output matched a known failure signature. A raw
 # trajectory is far too large for a judge prompt and mostly ordinary work.
+#
+# The same pass settles whether harness_quality applies at all: the report those criteria and their
+# judges score is built by claude-shaped rules, so on any other harness it takes the dimension out of
+# the criteria tree and records which harness ran in harness.json for finalize.py.
 python3 /tests/render_harness_report.py
 
 # Cases that declare expectations get an outcome dimension; its judge grades against the case's

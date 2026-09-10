@@ -1,6 +1,7 @@
 name = "files"
 display_name = "File Viewer"
 icon = "icon.svg"
+url = "http://localhost:8300"
 instances = true
 # The instances API port; dufs serves the file viewer pages on 8300.
 instances_url = "http://127.0.0.1:8301"

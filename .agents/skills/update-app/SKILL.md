@@ -295,8 +295,11 @@ where the data dies. Encode these, cheapest first:
   the throwaway instance above works: the data-dir override
   `DATA_DIR = Path(os.environ.get("<PACKAGE_UPPER>_DATA_DIR", "data/.apps/<name>"))`
   (route reads/writes through it), and the port override
-  `PORT = int(os.environ.get("<PACKAGE_UPPER>_PORT", "<assigned-port>"))`
-  (bind `PORT` in `run_simple`, never a hardcoded literal). If you genuinely
+  `PORT = int(os.environ["<PACKAGE_UPPER>_PORT"]) if "<PACKAGE_UPPER>_PORT" in
+  os.environ else _declared_port()`, where `_declared_port()` reads `url` out of
+  the app's own `app.toml` (bind `PORT` in `run_simple`, never a hardcoded
+  literal, and never a hardcoded default either -- the manifest is where the
+  port is written). If you genuinely
   can't, fall back to read-only verification plus the snapshot net.
 
 - **The copy isolates local state, not external effects.** Pointing at a

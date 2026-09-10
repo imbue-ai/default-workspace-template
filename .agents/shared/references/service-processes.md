@@ -41,7 +41,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml && foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -49,7 +49,8 @@ Key fields:
   wrapper. `forward_port.py --manifest` reads the app's `app.toml` (its
   registered name, display name, icon, and the supervisord `program` that
   runs it, which is what lets the workspace offer Stop/Start for the app) and
-  registers the app at `--url`. The manifest's `name` becomes the leading
+  registers the app at the `url` the manifest declares, or at `--url` when the
+  command passes one to override it. The manifest's `name` becomes the leading
   label of the app's origin hostname (`http://<name>.<workspace-host>/`), so
   it must be DNS-safe: lowercase letters/digits with single hyphens
   (underscores are tolerated only for legacy names like `system_interface`),
