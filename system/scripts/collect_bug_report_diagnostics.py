@@ -48,6 +48,7 @@ import time
 import zipfile
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from functools import lru_cache
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
@@ -701,11 +702,18 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     return proc.stdout
 
 
-def list_agents(timeout: float) -> list[tuple[str, str, str]]:
-    """Every agent, as ``(name, pinned address, id)`` -- chat, worker, or the services agent.
+@lru_cache(maxsize=1)
+def _query_agents(timeout: float) -> tuple[tuple[str, str, str], ...]:
+    """Ask mngr which agents exist, at most once per run.
 
-    The id is what names an agent's state directory, so it is asked for here
-    rather than derived: mngr owns the mapping from an agent to its own files.
+    Cached because it is the collector's most expensive call (see the fan-out
+    note below) and each half of a report needs the same answer. ``timeout``
+    here is most of the whole collection's budget, so asking three times is how
+    a slow mngr turns a trimmed report into no report at all.
+
+    A failed listing is cached too: retrying a wedged mngr is exactly what the
+    budget cannot afford. Returned as a tuple, so what is cached cannot be
+    mutated through a caller's copy.
 
     Deliberately unfiltered by kind: any agent's conversation can carry the bug,
     so all of them are asked for a transcript (an agent with none simply
@@ -735,7 +743,7 @@ def list_agents(timeout: float) -> list[tuple[str, str, str]]:
         timeout,
     )
     if listed is None:
-        return []
+        return ()
     agents: list[tuple[str, str, str]] = []
     for line in listed.splitlines():
         parts = line.split("|")
@@ -745,7 +753,19 @@ def list_agents(timeout: float) -> list[tuple[str, str, str]]:
         if not name or not address or not agent_id:
             continue
         agents.append((name, address, agent_id))
-    return agents
+    return tuple(agents)
+
+
+def list_agents(timeout: float) -> list[tuple[str, str, str]]:
+    """Every agent, as ``(name, pinned address, id)`` -- chat, worker, or the services agent.
+
+    The id is what names an agent's state directory, so it is asked for here
+    rather than derived: mngr owns the mapping from an agent to its own files.
+
+    One listing serves the whole report, so the harness logs, the log databases
+    and the chats all describe the same set of agents.
+    """
+    return list(_query_agents(timeout))
 
 
 def fetch_transcript(address: str, timeout: float) -> str | None:
