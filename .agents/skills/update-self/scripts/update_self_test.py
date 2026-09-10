@@ -4754,6 +4754,74 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
 
 
+def _install_mngr_tool(home: Path) -> tuple[Path, Path]:
+    """A uv-style mngr tool install under ``home``: ``(shim, tools_root)``."""
+    tools = home / ".local" / "share" / "uv" / "tools"
+    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
+    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
+        "[tool]\nrequirements = []\n"
+    )
+    bin_dir = home / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    shim = bin_dir / update_layout.MNGR_EXECUTABLE
+    shim.write_text(
+        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
+    )
+    return shim, tools
+
+
+def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
+    apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pre-0.4.3 apply left a second install under $HOME, first on every login
+    # shell's PATH and never refreshed again. Removing it is not gated on the
+    # merge's manifests: the box is already broken, whatever this release changes.
+    refreshed_shim, refreshed_tools = _install_mngr_tool(tmp_path / "root")
+    stale_shim, stale_tools = _install_mngr_tool(tmp_path / "home")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not stale_shim.exists()
+    assert not (stale_tools / update_layout.MNGR_TOOL_NAME).exists()
+    assert refreshed_shim.exists()
+    assert (refreshed_tools / update_layout.MNGR_TOOL_NAME).is_dir()
+
+
+def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The console script under $HOME/.local/bin may belong to something else
+    # (a venv script, a hand-written wrapper); only the stale tool's own goes.
+    refreshed_shim, _ = _install_mngr_tool(tmp_path / "root")
+    stale_shim, stale_tools = _install_mngr_tool(tmp_path / "home")
+    stale_shim.write_text('#!/bin/sh\nexec /somewhere/else/mngr "$@"\n')
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = _RecordingRunner()
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
+
+    removed = update_environment.remove_shadowing_mngr_installs(runner)
+
+    assert removed == [stale_tools / update_layout.MNGR_TOOL_NAME]
+    assert stale_shim.exists()
+
+
+def test_the_only_mngr_install_is_never_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The install on PATH is the one being refreshed, even when it lives under $HOME.
+    shim, tools = _install_mngr_tool(tmp_path / "home")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = _RecordingRunner()
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(shim)
+
+    assert update_environment.remove_shadowing_mngr_installs(runner) == []
+    assert shim.exists()
+    assert (tools / update_layout.MNGR_TOOL_NAME).is_dir()
+
+
 def test_a_tool_the_merge_adds_is_installed_beside_the_mngr_tool(
     apply_repo: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
