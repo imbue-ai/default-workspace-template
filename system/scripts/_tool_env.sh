@@ -9,10 +9,12 @@
 # app's `mngr exec` and the terminal app both arrive through such a shell, so the stale
 # copy is the one they run while the refreshed one reports success.
 #
-# The tool directories are pinned rather than $HOME itself, deliberately:
-# build_workspace.sh also writes $HOME-relative state that has to land in the *runtime*
-# home (its `git config --global` safe.directory entry), which a wholesale HOME pin
-# would move. setup_system.sh has no such state and pins HOME instead.
+# The tool directories are pinned rather than $HOME itself because build_workspace.sh
+# also writes $HOME-relative state -- its `git config --global` safe.directory entry --
+# that a wholesale HOME pin would move. (On docker that entry already lands in
+# /root/.gitconfig, which the runtime root never reads, so the pin would only regress
+# the lima/modal creates; the narrow pin keeps this change out of that question
+# entirely.) setup_system.sh has no such state and pins HOME instead.
 #
 # Usage (source it, then):
 #   tool_env_pin                    # export UV_TOOL_DIR/UV_TOOL_BIN_DIR, prepend PATH
@@ -36,10 +38,14 @@ tool_env_pin() {
 }
 
 # Remove an mngr tool environment installed under some other $HOME, along with the
-# console script pointing into it. The update-self apply does the same for workspaces
-# that can still run it (update_environment.remove_shadowing_mngr_installs); this covers
-# the ones whose update cannot start precisely because the shadowing copy is what the
-# app reaches.
+# console script pointing into it.
+#
+# Scope: this runs only where build_workspace.sh does -- the image build and a create's
+# provisioning -- so it keeps NEW workspaces out of the state. It does not reach one
+# already in it: an existing workspace is not re-provisioned, and the update apply runs
+# setup_system.sh, not this script. Those are cleaned by the apply's own
+# update_environment.remove_shadowing_mngr_installs, and only once their update can
+# start at all.
 #
 # Call it only AFTER the pinned install has been made: it refuses to remove anything
 # unless it can see the environment it is protecting, so a failed install never leaves
@@ -57,14 +63,28 @@ tool_env_drop_shadowing_mngr() {
     if [ "$_shadow_env" -ef "$_pinned_env" ]; then
         return 0
     fi
+    # Decide the console script's fate BEFORE removing what it points into: only the one
+    # resolving to the environment being removed goes with it, and that is judged by
+    # device+inode, so a $HOME spelled differently now than when uv baked the shebang
+    # (a trailing slash, a symlink) does not leave a dangling shim behind -- which would
+    # be worse on PATH than the stale-but-working copy it replaced.
+    _shadow_script="$_shadow_home/.local/bin/mngr"
+    _is_shadow_script=false
+    _shadow_shebang="$(head -n 1 "$_shadow_script" 2>/dev/null || true)"
+    case "$_shadow_shebang" in
+        "#!"*)
+            # uv writes `#!<tool env>/bin/python`, so the environment is two levels up.
+            _shadow_interpreter="${_shadow_shebang#\#!}"
+            _shadow_interpreter="${_shadow_interpreter%% *}"
+            if [ "$(dirname "$(dirname "$_shadow_interpreter")")" -ef "$_shadow_env" ]; then
+                _is_shadow_script=true
+            fi
+            ;;
+    esac
     echo "[tool-env] removing the mngr tool install under $_shadow_home/.local; it shadows" \
         "$TOOL_ENV_HOME/.local on every login shell's PATH and no update refreshes it."
     rm -rf "$_shadow_env"
-    # Only the console script that points into what was just removed; one resolving to
-    # the pinned environment is a working shim and stays.
-    _shadow_script="$_shadow_home/.local/bin/mngr"
-    _shadow_shebang="$(head -n 1 "$_shadow_script" 2>/dev/null || true)"
-    case "$_shadow_shebang" in
-        "#!$_shadow_env/"*) rm -f "$_shadow_script" ;;
-    esac
+    if [ "$_is_shadow_script" = true ]; then
+        rm -f "$_shadow_script"
+    fi
 }

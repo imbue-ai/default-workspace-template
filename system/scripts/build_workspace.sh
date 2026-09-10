@@ -72,7 +72,12 @@ while IFS= read -r plugin_path; do
     MNGR_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
 done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
 
-uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr" "${MNGR_PLUGIN_ARGS[@]}"
+# --reinstall because the two-step form always ended in one (`mngr plugin add` reinstalls
+# from the receipt): the base is an editable install, so its *code* tracks the tree either
+# way, but its resolved dependencies do not -- and a tree that gained a dependency since
+# the environment was built is the other way a workspace ends up with an mngr that cannot
+# run at all.
+uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr" "${MNGR_PLUGIN_ARGS[@]}" --reinstall
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue

@@ -89,6 +89,28 @@ def test_the_pinned_install_is_not_removed_when_home_reaches_it_by_another_path(
     assert pinned_script.is_file()
 
 
+def test_the_console_script_goes_even_when_home_is_spelled_differently_than_the_shebang(
+    tmp_path: Path,
+) -> None:
+    """uv bakes an absolute path into the shebang at install time; `$HOME` now may be
+    spelled another way (a trailing slash, a symlink). Matching those as strings would
+    remove the environment and leave the script -- a `mngr` on PATH with a dead
+    interpreter, which is worse than the stale but working copy it replaced."""
+    runtime_home = tmp_path / "home" / "user"
+    image_home = tmp_path / "root"
+    shadow_env, shadow_script = _install_mngr_tool(runtime_home)
+    _install_mngr_tool(image_home)
+
+    _run(
+        f'HOME="{runtime_home}/" tool_env_drop_shadowing_mngr',
+        home=runtime_home,
+        tool_home=image_home,
+    )
+
+    assert not shadow_env.exists()
+    assert not shadow_script.exists()
+
+
 def test_a_console_script_already_resolving_to_the_pinned_install_is_left_alone(
     tmp_path: Path,
 ) -> None:
