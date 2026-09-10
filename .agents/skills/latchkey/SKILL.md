@@ -98,20 +98,19 @@ By default the user is asked to paste a token during approval, and Latchkey
 attaches it as an `Authorization: Bearer <token>` header.
 
 Alternatively, trigger a browser sign-in flow and have Latchkey retrieve and
-store credentials from the browser, by specifying a `login_flow` and
-`login_flow_params`.
+store credentials from the browser, by adding a `login` object.
 
 ```bash
-  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login_url": "https://api.example.com/login", "login_flow": "cookie-capture", "login_flow_params": {"cookieKeys": ["session"]}}}'
+  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"url": "https://api.example.com/login", "flow": "cookie-capture", "flow_params": {"cookieKeys": ["session"]}}}}'
 ```
 
-The `login_url`, `login_flow` and `login_flow_params` fields are the same as the
+`login.url`, `login.flow` and `login.flow_params` are the same as the
 `--login-url`, `--login-flow` and `--login-flow-params` flags documented in
 `latchkey services register --help` (run it to see each flow's parameters), but
 beware that you should use this API instead of the `latchkey services register`
-CLI directly. The three go together: a flow needs a login URL and its
-parameters. The parameters are checked against the flow's schema, so an unknown
-key is refused, and every URL in them (`login_url`, `cookieUrl`, `tokenUrl`)
+CLI directly. All three are required inside `login`: a flow needs a login URL
+and its parameters. The parameters are checked against the flow's schema, so an
+unknown key is refused, and every URL in them (`url`, `cookieUrl`, `tokenUrl`)
 must be on `domain` or a subdomain of it.
 
 Furthermore, beware that every login flow has limitations: make sure that the
