@@ -1303,10 +1303,10 @@ def test_only_allowlisted_targets_are_read_out_of_a_log_db(tmp_path: Path) -> No
 def test_a_log_db_target_allowlist_entry_does_not_match_underscores_as_wildcards(
     tmp_path: Path,
 ) -> None:
-    """The prefix match has to be literal.
+    """The module match has to be literal.
 
     SQL ``LIKE`` reads ``_`` as a single-character wildcard, and every allowlist
-    prefix is full of them, so a ``LIKE`` match would admit targets nobody
+    module name is full of them, so a ``LIKE`` match would admit targets nobody
     listed -- widening a filter whose whole job is to be narrow.
     """
     agents_dir = tmp_path / "agents"
@@ -1324,6 +1324,42 @@ def test_a_log_db_target_allowlist_entry_does_not_match_underscores_as_wildcards
 
     assert "wanted" in rendered
     assert "SECRET-IMPOSTOR" not in rendered
+
+
+def test_a_log_db_target_allowlist_entry_does_not_admit_a_crate_sharing_its_name(
+    tmp_path: Path,
+) -> None:
+    """The match ends at the module boundary, not wherever the name runs out.
+
+    A bare character prefix would also admit every crate whose name merely
+    starts the same way -- ``codex_app_server_protocol`` carries the serialized
+    app-server protocol messages, including the login exchange. Admitting a
+    target nobody listed is the denylist failure mode this allowlist was chosen
+    over, so the allowlist must not have it either.
+    """
+    agents_dir = tmp_path / "agents"
+    _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (1789078900, 1, "TRACE", "codex_app_server", "wanted-from-the-root"),
+            (1789078901, 2, "TRACE", "codex_app_server::client", "wanted-from-below"),
+            (
+                1789078902,
+                3,
+                "TRACE",
+                "codex_app_server_protocol::auth",
+                "SECRET-SIBLING",
+            ),
+        ],
+    )
+    module = _load_collector(agents_dir=agents_dir)
+
+    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+
+    assert "wanted-from-the-root" in rendered
+    assert "wanted-from-below" in rendered
+    assert "SECRET-SIBLING" not in rendered
 
 
 def test_a_log_db_read_sees_rows_a_live_harness_has_not_checkpointed(
