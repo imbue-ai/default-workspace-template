@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import "../testing/dom";
 
-import { DockviewComponent, Orientation, type IContentRenderer, type SerializedDockview } from "dockview-core";
+import {
+  DockviewComponent,
+  Orientation,
+  type GroupPanelPartInitParameters,
+  type IContentRenderer,
+  type SerializedDockview,
+} from "dockview-core";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -103,17 +109,12 @@ describe("panelsWithUnlistedAddresses", () => {
 describe("dockview panel params", () => {
   const docks: DockviewComponent[] = [];
 
-  function buildDock(seen: Record<string, unknown>[]): DockviewComponent {
+  function buildDock(onInit: (parameters: GroupPanelPartInitParameters) => void): DockviewComponent {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const dock = new DockviewComponent(container, {
       createComponent(): IContentRenderer {
-        return {
-          element: document.createElement("div"),
-          init(parameters) {
-            seen.push(parameters.params);
-          },
-        };
+        return { element: document.createElement("div"), init: onInit };
       },
     });
     dock.layout(800, 600);
@@ -131,7 +132,7 @@ describe("dockview panel params", () => {
 
   it("hands the params of addPanel to init, round-trips them through toJSON and fromJSON, and keeps updates", () => {
     const seen: Record<string, unknown>[] = [];
-    const dock = buildDock(seen);
+    const dock = buildDock((parameters) => seen.push(parameters.params));
     const params: PanelParams = {
       kind: "instance",
       address: "app:files",
@@ -147,11 +148,25 @@ describe("dockview panel params", () => {
     expect(parsePanelParams(dock.panels[0].params)).toEqual({ ...params, lastFocusedMs: 7 });
 
     const restoredSeen: Record<string, unknown>[] = [];
-    const restored = buildDock(restoredSeen);
+    const restored = buildDock((parameters) => restoredSeen.push(parameters.params));
     restored.fromJSON(saved);
     expect(restoredSeen).toEqual([{ ...params, lastFocusedMs: 7 }]);
     expect(panelParamsInDocument(restored.toJSON())).toEqual({
       "tab-0000000000000001": { ...params, lastFocusedMs: 7 },
     });
+  });
+
+  it("keeps a parameter a renderer updates from inside init", () => {
+    // What a slot does when the page it binds was opened under another id: the panel takes the page's.
+    const dock = buildDock((parameters) => parameters.api.updateParameters({ tabId: "tab-0000000000000002" }));
+    dock.addPanel({
+      id: "tab-0000000000000001",
+      component: "instance",
+      title: "Files",
+      params: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
+    });
+    const expected = { kind: "instance", address: "app:files", tabId: "tab-0000000000000002", lastFocusedMs: 0 };
+    expect(parsePanelParams(dock.panels[0].params)).toEqual(expected);
+    expect(dock.toJSON().panels["tab-0000000000000001"].params).toEqual(expected);
   });
 });
