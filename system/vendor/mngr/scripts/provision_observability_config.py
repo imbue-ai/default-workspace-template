@@ -99,6 +99,8 @@ def _resolve(tier: str, work_dir: Path) -> None:
         "INGEST_CREDENTIAL_MODAL": observability.get("INGEST_CREDENTIAL_MODAL", ""),
         "INGEST_CREDENTIAL_BOXES": observability.get("INGEST_CREDENTIAL_BOXES", ""),
         "INGEST_CREDENTIAL_RELAYS": observability.get("INGEST_CREDENTIAL_RELAYS", ""),
+        # Empty until the tier's alerting is armed; provision-alerts requires it.
+        "OBSERVABILITY_ALERTS_GITHUB_TOKEN": observability.get("OBSERVABILITY_ALERTS_GITHUB_TOKEN", ""),
     }
     ovh_exports = [f"export {key}={shlex.quote(ovh[key])}" for key in sorted(ovh) if ovh[key]]
     other_exports = [f"export {name}={shlex.quote(value)}" for name, value in export_by_name.items()]

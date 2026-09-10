@@ -15,6 +15,7 @@ import pytest
 
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
+from imbue.minds.deployment_tests.helpers import LEASE_MAX_BOX_GENERATION
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 from imbue.minds.deployment_tests.testing import handle_no_pool_capacity
 from imbue.mngr.utils.testing import get_short_random_string
@@ -49,6 +50,7 @@ def test_lease_is_isolated_per_user_and_release_frees_the_slice(
                 "ssh_public_key": _TEST_SSH_PUBLIC_KEY,
                 "host_name": f"lease-isolation-{get_short_random_string()}",
                 "attributes": {},
+                "max_box_generation": LEASE_MAX_BOX_GENERATION,
             },
         )
         if lease.status_code == 503:

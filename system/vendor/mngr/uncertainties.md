@@ -8,6 +8,11 @@ Conflicts between documentation and code, noticed while writing specs; resolve a
 Both are stale: CI runs the deployment tests via Vault OIDC today (`build-minds-ci-env` in ci.yml), and the pool test is now specified (slice-era) by `specs/remote-workspaces-in-ci.md`.
 Noticed while writing that spec; it assumes the newer state is correct.
 
+## Slice VM guest image diverged from the DWT trixie parity pin
+
+The default-workspace-template's `[providers.lima]` block pins Debian 13 (trixie) guest images "so setup_system.sh provisions an identical toolchain everywhere", but the imbue_cloud slice path never reads that block: `minds-admin server prep` stages the slice guest image from `mngr_lima`'s Debian 12 (bookworm) default, so every production/staging slice VM runs bookworm around a trixie container (verified live on a baked minds-v0.4.1 staging slice, 2026-08-22).
+`specs/slice-fleet-gen2/spec.md` assumes the trixie parity intent is correct and moves gen-2 slice VMs to an explicit trixie pin in `minds_admin`; the gen-1 fleet keeps bookworm guests until migrated.
+
 ## default-workspace-template issue #521 rests on a superseded networking premise
 
 Issue #521 (imbue-ai/default-workspace-template) motivates a per-chat WebSocket conversion by the browser's ~6-connection HTTP/1.1 per-origin cap.

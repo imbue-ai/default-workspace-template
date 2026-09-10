@@ -1,6 +1,13 @@
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+
 import pytest
+from pydantic import SecretStr
 
 from imbue.analytics.errors import AnalyticsConfigError
+from imbue.analytics.settings import ManagementSshCredentials
+from imbue.analytics.settings import gen2_credentials_from_dict_entry
 from imbue.analytics.settings import load_analytics_settings
 from imbue.analytics.settings import load_collection_settings
 
@@ -107,7 +114,7 @@ def test_load_collection_settings_defaults_and_requires_the_pool_key(monkeypatch
     _set_required_env(monkeypatch)
     monkeypatch.setenv("POOL_SSH_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n")
 
-    settings = load_collection_settings()
+    settings = load_collection_settings(None)
 
     assert settings.interval_seconds == 3600
     assert settings.parallelism == 4
@@ -117,7 +124,7 @@ def test_load_collection_settings_defaults_and_requires_the_pool_key(monkeypatch
 
     monkeypatch.delenv("POOL_SSH_PRIVATE_KEY")
     with pytest.raises(AnalyticsConfigError, match="POOL_SSH_PRIVATE_KEY"):
-        load_collection_settings()
+        load_collection_settings(None)
 
 
 def test_load_collection_settings_honors_tuning_overrides_and_rejects_malformed_ones(
@@ -128,17 +135,34 @@ def test_load_collection_settings_honors_tuning_overrides_and_rejects_malformed_
     monkeypatch.setenv("ANALYTICS_COLLECTION_INTERVAL_SECONDS", "120")
     monkeypatch.setenv("ANALYTICS_COLLECTION_PARALLELISM", "2")
 
-    settings = load_collection_settings()
+    settings = load_collection_settings(None)
     assert settings.interval_seconds == 120
     assert settings.parallelism == 2
 
     monkeypatch.setenv("ANALYTICS_COLLECTION_PARALLELISM", "many")
     with pytest.raises(AnalyticsConfigError, match="ANALYTICS_COLLECTION_PARALLELISM"):
-        load_collection_settings()
+        load_collection_settings(None)
 
     # Zero would silently disable bounds (GNU timeout treats 0 as no timeout;
     # a zero pool has no workers), so non-positive overrides must be refused.
     monkeypatch.setenv("ANALYTICS_COLLECTION_PARALLELISM", "2")
     monkeypatch.setenv("ANALYTICS_COLLECTION_WORKSPACE_TIMEOUT_SECONDS", "0")
     with pytest.raises(AnalyticsConfigError, match="workspace_timeout_seconds"):
-        load_collection_settings()
+        load_collection_settings(None)
+
+
+def test_gen2_credentials_from_dict_entry_honor_expiry() -> None:
+    now = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
+    entry = {
+        "private_key_pem": "KEY-MATERIAL",
+        "certificate": "ssh-ed25519-cert-v01@openssh.com AAAA",
+        "expires_at": (now + timedelta(hours=7)).isoformat(),
+        "role": "analytics",
+    }
+    credentials = gen2_credentials_from_dict_entry(entry, now)
+    assert credentials == ManagementSshCredentials(
+        private_key_pem=SecretStr("KEY-MATERIAL"), certificate="ssh-ed25519-cert-v01@openssh.com AAAA"
+    )
+    assert "KEY-MATERIAL" not in repr(credentials)
+    assert gen2_credentials_from_dict_entry(None, now) is None
+    assert gen2_credentials_from_dict_entry({**entry, "expires_at": now.isoformat()}, now) is None

@@ -1,0 +1,3 @@
+`POST /hosts/lease` accepts an optional exact-match `box_generation` field, modeled on `region` (absent = unconstrained; pre-gen-2 NULL rows count as generation 1), so tests and operators can target a specific slice-fleet generation during mixed-generation windows (turnover, the CI split fleet) instead of leasing-and-releasing until lucky. Additive wire change; old clients are unaffected.
+
+Migration 037 renames the `bare_metal_servers` WireGuard columns to spell the protocol out (`wireguard_address` / `wireguard_public_key`), backfilled from the old `wg_address` / `wg_public_key`, which stay dual-written and readable during the rollout window (CLEANUP markers state when they can drop).

@@ -23,13 +23,17 @@ import click
 from loguru import logger
 from pydantic import AnyHttpUrl
 from pydantic import AnyUrl
+from pydantic import Field
 from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
+from imbue.minds.config.data_types import ManagementPlaneConfig
 from imbue.minds.config.loader import load_client_config
 from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.envs.paths import active_env_name_or_none
+from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import VaultReadError
 from imbue.minds.envs.primitives import VaultSecretNotFoundError
 from imbue.minds.envs.vault_reader import VaultPath
@@ -39,6 +43,7 @@ from imbue.minds_admin.cli._activated_env import PRODUCTION_ENV_NAME
 from imbue.minds_admin.cli._activated_env import STAGING_ENV_NAME
 from imbue.minds_admin.cli._activated_env import tier_for_env_name
 from imbue.minds_admin.envs.providers.analytics_analysts import AnalyticsAnalystAdminContext
+from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
 from imbue.mngr_imbue_cloud.config import CONNECTOR_URL_ENV_VAR
 from imbue.mngr_imbue_cloud.connector.client import ImbueCloudConnectorClient
 from imbue.mngr_ovh.config import OvhProviderConfig
@@ -297,6 +302,78 @@ def make_admin_connector_client(connector_url: str | None) -> ImbueCloudConnecto
     return ImbueCloudConnectorClient(base_url=AnyUrl(resolve_admin_connector_url(connector_url)))
 
 
+# The Vault fields of a tier's ``<vault_prefix>/storage`` entry the cutover's
+# S3 transfers need (schema: .minds/template/storage.sh, the same keys the
+# connector's ``storage.read_storage_config`` reads).
+_REQUIRED_STORAGE_VAULT_FIELDS: Final[tuple[str, ...]] = (
+    "WORKSPACE_STORAGE_S3_ENDPOINT",
+    "WORKSPACE_STORAGE_S3_REGION",
+    "WORKSPACE_STORAGE_S3_ACCESS_KEY",
+    "WORKSPACE_STORAGE_S3_SECRET_KEY",
+    "WORKSPACE_STORAGE_BUCKET",
+    "WORKSPACE_STORAGE_KEK",
+)
+
+
+class WorkspaceStorageConfig(FrozenModel):
+    """The tier's workspace-artifact bucket as the operator tooling reaches it (the connector's shape)."""
+
+    s3_endpoint: str = Field(description="S3-compatible endpoint URL")
+    s3_region: str = Field(description="S3 region name")
+    access_key_id: SecretStr = Field(description="S3 access key id")
+    secret_access_key: SecretStr = Field(description="S3 secret access key")
+    bucket: str = Field(description="The tier bucket")
+    kek_base64: SecretStr = Field(description="Base64 32-byte tier key that wraps per-transfer age identities")
+    key_prefix: str = Field(description="The env's key prefix inside the bucket ('' for a dedicated tier bucket)")
+
+
+@pure
+def workspace_storage_config_from_secret(
+    secret: Mapping[str, str], vault_prefix: str, key_prefix: str
+) -> WorkspaceStorageConfig:
+    """Build the storage config from a tier's ``<vault_prefix>/storage`` entry (refusing a half-populated one)."""
+    missing_fields = [field for field in _REQUIRED_STORAGE_VAULT_FIELDS if not secret.get(field)]
+    if missing_fields:
+        raise click.ClickException(
+            f"Vault entry {vault_prefix}/storage is missing {', '.join(missing_fields)}; see "
+            ".minds/template/storage.sh for the schema and apps/minds/docs/deploy/reference/workspace-stop-start.md "
+            "for how to populate it."
+        )
+    return WorkspaceStorageConfig(
+        s3_endpoint=secret["WORKSPACE_STORAGE_S3_ENDPOINT"],
+        s3_region=secret["WORKSPACE_STORAGE_S3_REGION"],
+        access_key_id=SecretStr(secret["WORKSPACE_STORAGE_S3_ACCESS_KEY"]),
+        secret_access_key=SecretStr(secret["WORKSPACE_STORAGE_S3_SECRET_KEY"]),
+        bucket=secret["WORKSPACE_STORAGE_BUCKET"],
+        kek_base64=SecretStr(secret["WORKSPACE_STORAGE_KEK"]),
+        key_prefix=key_prefix,
+    )
+
+
+def resolve_workspace_storage_config() -> WorkspaceStorageConfig:
+    """Resolve the activated tier's workspace-artifact bucket + KEK from its ``storage`` Vault entry."""
+    env_name = active_env_name_or_none()
+    if env_name is None:
+        raise click.ClickException(
+            "No minds env is activated: `minds-admin env activate <env>` first (the cutover reads the tier's "
+            "storage Vault entry)."
+        )
+    tier = tier_for_env_name(env_name)
+    deploy_config = load_deploy_config(tier)
+    vault_prefix = str(deploy_config.vault_path_prefix).rstrip("/")
+    try:
+        secret = read_vault_kv(VaultPath(f"{vault_prefix}/storage"))
+    except VaultReadError as exc:
+        raise click.ClickException(
+            f"Could not read the storage Vault entry ({vault_prefix}/storage) for env '{env_name}': {exc}"
+        ) from exc
+    # The same rule `env deploy` stamps into the connector's storage secret, so
+    # the cutover reads and writes exactly the keyspace the env's connector uses.
+    return workspace_storage_config_from_secret(
+        secret, vault_prefix, workspace_storage_key_prefix(DevEnvName(env_name), deploy_config.lifecycle)
+    )
+
+
 # The Vault fields of a tier's ``<vault_prefix>/ovh`` entry that the bare-metal
 # ordering flows require (schema: .minds/template/ovh.sh; the entry's
 # OVH_CLOUD_PROJECT_ID is relay-only and not needed here).
@@ -398,6 +475,34 @@ def boxes_collector_install_config_from_secret(
         ingest_url=AnyHttpUrl(f"https://telemetry.{telemetry_domain}"),
         ingest_authorization_header_value=SecretStr(credential),
     )
+
+
+def resolve_management_plane_config_or_none() -> ManagementPlaneConfig | None:
+    """Resolve the activated tier's ``[management_plane]`` table, or None (logged) when absent.
+
+    None -- no activated env, or a tier whose ``deploy.toml`` has no such table
+    -- means the tier's gen-2 management plane is unconfigured: prep brings up
+    WireGuard with no operator peers and installs no ``:22`` lockdown, and the
+    ``minds-admin wireguard`` commands refuse with a pointer. A present-but-invalid
+    table raises (via the loader), never degrades.
+    """
+    env_name = active_env_name_or_none()
+    if env_name is None:
+        logger.info(
+            "No minds env is activated, so there is no tier whose [management_plane] config applies; "
+            "gen-2 management-plane features (operator WireGuard peers, the :22 lockdown) are skipped."
+        )
+        return None
+    tier = tier_for_env_name(env_name)
+    management_plane_config = load_deploy_config(tier).management_plane
+    if management_plane_config is None:
+        logger.info(
+            "Tier '{}' has no [management_plane] table in its deploy.toml (apps/minds/imbue/minds/config/envs/{}/); "
+            "gen-2 management-plane features (operator WireGuard peers, the :22 lockdown) are skipped.",
+            tier,
+            tier,
+        )
+    return management_plane_config
 
 
 def resolve_boxes_collector_install_config_or_none() -> CollectorInstallConfig | None:

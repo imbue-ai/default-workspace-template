@@ -1,0 +1,1 @@
+`minds-admin env deploy` threads the tier's Modal proxy environment (`management_plane.toml` `[modal_proxy].environment_name`) into the connector deploy as `MINDS_CONNECTOR_MODAL_PROXY_ENVIRONMENT`, so the shared dev proxy (which lives in the `main` Modal environment) resolves from every per-env deploy.

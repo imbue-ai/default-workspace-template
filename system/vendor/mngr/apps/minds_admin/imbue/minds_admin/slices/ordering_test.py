@@ -1,3 +1,4 @@
+import base64
 import time
 from typing import cast
 
@@ -7,8 +8,11 @@ from imbue.minds_admin.slices.ordering import _ReinstallStartAttempt
 from imbue.minds_admin.slices.ordering import _looks_like_service_name
 from imbue.minds_admin.slices.ordering import _read_address_tolerating_missing_service
 from imbue.minds_admin.slices.ordering import build_box_host_key_postinstall_script
+from imbue.minds_admin.slices.ordering import build_gen2_reinstall_storage
 from imbue.minds_admin.slices.ordering import derive_server_specs
+from imbue.minds_admin.slices.ordering import derive_uplink_mbps_from_option_codes
 from imbue.minds_admin.slices.ordering import extract_order_id
+from imbue.minds_admin.slices.ordering import parse_uplink_mbps_from_bandwidth_option_code
 from imbue.minds_admin.slices.ordering import select_eco_option_codes
 from imbue.minds_admin.slices.ordering import start_os_reinstall
 from imbue.minds_admin.slices.ordering import summarize_checkout_prices
@@ -247,6 +251,27 @@ def test_build_box_host_key_postinstall_script_installs_ed25519_and_drops_other_
     assert "ssh_host_ecdsa_key" in script
     # ... and restarts sshd so the new key takes effect.
     assert "restart" in script and "ssh" in script
+    # A gen-1 reinstall installs no CA trust.
+    assert "mngr_user_ca.pub" not in script
+
+
+def test_build_box_host_key_postinstall_script_installs_the_tier_ca_trust_for_a_gen2_box() -> None:
+    ca = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKECA minds-dev-ssh-ca"
+    script = build_box_host_key_postinstall_script(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKEKEYBODY\n-----END OPENSSH PRIVATE KEY-----",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5FAKE box",
+        ssh_ca_public_key=ca,
+    )
+    # The bootstrap user accepts operator certificates from the first boot, so the
+    # reinstall's static login key is a throwaway the prep removes.
+    assert f"cat > /etc/ssh/mngr_user_ca.pub <<'MNGR_SSH_CA_FILE'\n{ca}\n" in script
+    assert "cat > /etc/ssh/principals/debian <<'MNGR_SSH_CA_FILE'\nmngr-operator\n" in script
+    # The CA files are world-readable (sshd reads them as root; the tight umask
+    # is scoped to the host private key above them).
+    assert "umask 022" in script
+    assert "chmod 0644 /etc/ssh/mngr_user_ca.pub" in script
+    assert script.index("umask 022") < script.index("mngr_user_ca.pub")
+    assert script.index("mngr_user_ca.pub") < script.index("systemctl restart ssh")
 
 
 class _FakeReinstallClient:
@@ -263,14 +288,19 @@ class _FakeReinstallClient:
 def test_start_os_reinstall_injects_a_known_host_key_and_returns_its_public_half() -> None:
     client = _FakeReinstallClient()
     result = start_os_reinstall(
-        cast(OvhVpsClient, client), service_name="ns1.example", ssh_public_key="ssh-ed25519 AAAAclient"
+        cast(OvhVpsClient, client),
+        service_name="ns1.example",
+        ssh_public_key="ssh-ed25519 AAAAclient",
+        ssh_ca_public_key="ssh-ed25519 AAAAca minds-dev-ssh-ca",
     )
     assert result.task_id == 4242
     # The reinstall request injects our login key AND a post-install script (the
-    # private host-key delivery channel), and we get back the host PUBLIC key to pin.
+    # private host-key delivery channel, plus the CA trust), and we get back the
+    # host PUBLIC key to pin.
     customizations = client.calls[0]["customizations"]
     assert customizations["sshKey"] == "ssh-ed25519 AAAAclient"
-    assert customizations["postInstallationScript"]
+    postinstall = base64.b64decode(customizations["postInstallationScript"]).decode()
+    assert "ssh-ed25519 AAAAca minds-dev-ssh-ca" in postinstall
     assert result.box_host_public_key.startswith("ssh-ed25519 ")
 
 
@@ -292,6 +322,7 @@ def _reinstall_attempt(client: object) -> _ReinstallStartAttempt:
         service_name="ns1.example",
         os_template="debian12_64",
         customizations={"sshKey": "ssh-ed25519 AAAAclient", "postInstallationScript": "x"},
+        storage=None,
     )
 
 
@@ -415,3 +446,76 @@ def test_wait_for_dedicated_server_address_polls_through_a_404_to_the_address() 
     )
     assert address == "51.81.154.217"
     assert client.call_count == 3
+
+
+def test_start_os_reinstall_omits_storage_by_default_and_sends_it_when_given() -> None:
+    default_client = _FakeReinstallClient()
+    start_os_reinstall(
+        cast(OvhVpsClient, default_client), service_name="ns1.example", ssh_public_key="ssh-ed25519 AAAAclient"
+    )
+    # No storage key at all when unset, so the template's default scheme applies.
+    assert "storage" not in default_client.calls[0]
+
+    storage_client = _FakeReinstallClient()
+    start_os_reinstall(
+        cast(OvhVpsClient, storage_client),
+        service_name="ns1.example",
+        ssh_public_key="ssh-ed25519 AAAAclient",
+        storage=build_gen2_reinstall_storage(),
+    )
+    assert storage_client.calls[0]["storage"] == build_gen2_reinstall_storage()
+
+
+def test_gen2_reinstall_storage_layout_ends_with_the_fill_remaining_xfs_partition() -> None:
+    (storage,) = build_gen2_reinstall_storage()
+    layout = storage["partitioning"]["layout"]
+
+    # Every partition is md-mirrored; the XFS storage partition is last with
+    # size 0 (fill the remaining space) at the mount point the prep's storage
+    # check and the slice backend key on.
+    assert all(entry["raidLevel"] == 1 for entry in layout)
+    assert [entry["mountPoint"] for entry in layout] == ["/boot", "/", "/srv/mngr-slices"]
+    assert layout[-1] == {"mountPoint": "/srv/mngr-slices", "fileSystem": "xfs", "raidLevel": 1, "size": 0}
+    # Fixed sizes everywhere else, so exactly one partition can fill the disk.
+    assert all(entry["size"] > 0 for entry in layout[:-1])
+    # No swap partition by design: the prep provisions the mirrored swapfile
+    # and wipes raw swap partitions, so a layout swap would be born retired.
+    assert all(entry["fileSystem"] != "swap" for entry in layout)
+
+
+@pytest.mark.parametrize(
+    ("option_code", "expected"),
+    [
+        ("bandwidth-1000-unguaranteed-rise-gen2-us", 1000),
+        ("bandwidth-3000-unguaranteed-rise-gen2-us", 3000),
+        # The vRack option of the same rate is the internal link, not the shaped uplink.
+        ("vrack-bandwidth-1000-24rise01-v1-us", None),
+        ("ram-64g-ecc-3200-24rise01-v1-us", None),
+        ("bandwidth-unmetered-us", None),
+    ],
+)
+def test_parse_uplink_mbps_from_bandwidth_option_code(option_code: str, expected: int | None) -> None:
+    assert parse_uplink_mbps_from_bandwidth_option_code(option_code) == expected
+
+
+def test_derive_uplink_mbps_reads_the_one_public_bandwidth_code_among_the_selected_options() -> None:
+    codes = [
+        "ram-64g-ecc-3200-24rise01-v1-us",
+        "softraid-2x512nvme-24rise01-v1-us",
+        "bandwidth-1000-unguaranteed-rise-gen2-us",
+        "vrack-bandwidth-1000-24rise01-v1-us",
+    ]
+    assert derive_uplink_mbps_from_option_codes(codes) == 1000
+
+
+def test_derive_uplink_mbps_is_none_without_a_parseable_public_bandwidth_code() -> None:
+    assert derive_uplink_mbps_from_option_codes(["ram-64g-ecc-3200-24rise01-v1-us"]) is None
+    assert derive_uplink_mbps_from_option_codes(["vrack-bandwidth-1000-24rise01-v1-us"]) is None
+    assert derive_uplink_mbps_from_option_codes([]) is None
+    # Two public bandwidth codes is not a cart this tooling builds; refuse rather than guess.
+    assert (
+        derive_uplink_mbps_from_option_codes(
+            ["bandwidth-1000-unguaranteed-rise-gen2-us", "bandwidth-3000-unguaranteed-rise-gen2-us"]
+        )
+        is None
+    )

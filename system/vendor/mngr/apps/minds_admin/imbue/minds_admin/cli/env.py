@@ -69,6 +69,10 @@ from imbue.minds_admin.cli.pool import tear_down_env_pool_slices
 from imbue.minds_admin.envs.generation import delete_generation_id as real_delete_generation_id
 from imbue.minds_admin.envs.generation import ensure_generation_id as real_ensure_generation_id
 from imbue.minds_admin.envs.health_check import await_apps_healthy as real_await_apps_healthy
+from imbue.minds_admin.envs.local_process_preflight import EnvLocalProcessesStillRunningError
+from imbue.minds_admin.envs.local_process_preflight import describe_env_local_holders
+from imbue.minds_admin.envs.local_process_preflight import find_env_local_holders
+from imbue.minds_admin.envs.local_process_preflight import stop_env_local_processes
 from imbue.minds_admin.envs.local_store import env_root_exists
 from imbue.minds_admin.envs.local_store import read_analytics_override
 from imbue.minds_admin.envs.local_store import write_analytics_override
@@ -1368,6 +1372,15 @@ def env_deploy(
 
 @env.command("destroy")
 @click.option(
+    "--stop-local-processes",
+    is_flag=True,
+    default=False,
+    help=(
+        "SIGTERM the minds desktop backend and the `mngr latchkey forward` supervisor still running against "
+        "this env's root before tearing anything down (by default their presence refuses the destroy)."
+    ),
+)
+@click.option(
     "--keep-agents",
     is_flag=True,
     default=False,
@@ -1391,7 +1404,7 @@ def env_deploy(
     ),
 )
 @click.pass_context
-def env_destroy(ctx: click.Context, keep_agents: bool, yes_i_mean_staging: bool) -> None:
+def env_destroy(ctx: click.Context, keep_agents: bool, stop_local_processes: bool, yes_i_mean_staging: bool) -> None:
     """Tear down every resource ``minds-admin env deploy`` provisioned for the activated env.
 
     Refuses hard-coded when no env is activated. Refuses hard-coded when
@@ -1435,6 +1448,20 @@ def env_destroy(ctx: click.Context, keep_agents: bool, yes_i_mean_staging: bool)
             credentials = _load_dev_credentials_from_vault(str(deploy_config.vault_path_prefix), cg=cg)
         except VaultReadError as exc:
             raise click.ClickException(str(exc)) from exc
+
+        # Anything on this machine still running against the env root (the
+        # desktop, the latchkey supervisor) would be stranded by the remote
+        # teardown and keeps writing into the root while it is removed, so it
+        # is refused (or, on request, stopped) before anything remote goes.
+        env_root = env_root_dir(DevEnvName(env_name))
+        holders = find_env_local_holders(env_root)
+        if holders.is_anything_running:
+            if not stop_local_processes:
+                raise click.ClickException(describe_env_local_holders(env_root, holders))
+            try:
+                stop_env_local_processes(holders)
+            except EnvLocalProcessesStillRunningError as exc:
+                raise click.ClickException(str(exc)) from exc
 
         # Tear down the env's unleased pool slices on their bare-metal boxes BEFORE
         # destroy_env deletes the per-env DB (after which the slice rows -- and thus

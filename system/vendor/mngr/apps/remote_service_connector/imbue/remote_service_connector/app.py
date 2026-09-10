@@ -9,12 +9,13 @@ definitions (web app + crons).
 
 This file is deployed by file path (``modal deploy app.py``), so Modal ships
 just this file (as top-level module ``app``) plus the packages added via
-``add_local_python_source`` below (this package and ``imbue.modal_app_kit``).
-Anything else from the monorepo must NOT be imported by the shipped modules --
-it would work locally and crash the container at import time. This file itself
-is excluded from the package source mount, so package modules can never import
-``imbue.remote_service_connector.app``. See libs/modal_app_kit/README.md for
-the full deployment model.
+``add_local_python_source`` below: this package, ``imbue.modal_app_kit``, the
+shared ``imbue.mngr_imbue_cloud.slices.gen2_scripts`` subpackage, and
+``imbue.imbue_common``. Anything else from the monorepo must NOT be imported by
+the shipped modules -- it would work locally and crash the container at import
+time. This file itself is excluded from the package source mount, so package
+modules can never import ``imbue.remote_service_connector.app``. See
+libs/modal_app_kit/README.md for the full deployment model.
 
 Secrets are environment-scoped so the same code can back a production,
 staging, or ad-hoc deploy without editing this file. ``MNGR_DEPLOY_ENV`` is
@@ -27,6 +28,8 @@ them at request time (see ``/version``).
 import functools
 import logging
 import os
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import modal
@@ -36,13 +39,16 @@ from supertokens_python.framework.fastapi import get_middleware as get_supertoke
 import imbue.remote_service_connector.cloudflare as cloudflare_module
 import imbue.remote_service_connector.entitlements as entitlements_module
 import imbue.remote_service_connector.r2.stores as r2_stores_module
+import imbue.remote_service_connector.ssh_certs as ssh_certs_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.sync as sync_module
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
+from imbue.modal_app_kit.deploy import forwarded_env_secret
 from imbue.modal_app_kit.deploy import read_custom_domains
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
 from imbue.modal_app_kit.deploy import read_min_containers
+from imbue.modal_app_kit.deploy import read_modal_proxy
 from imbue.modal_app_kit.deploy import read_scaledown_window
 from imbue.modal_app_kit.deploy import stamped_secret
 from imbue.modal_app_kit.image import locate_image_requirements
@@ -67,8 +73,18 @@ from imbue.remote_service_connector.relay_health import probe_relay_healthz
 from imbue.remote_service_connector.relay_health import run_relay_health_sweep
 from imbue.remote_service_connector.relays import get_relay_store
 from imbue.remote_service_connector.retention import run_backup_retention_reap
+from imbue.remote_service_connector.ssh_certs import SSH_CERT_DICT_KEY_ANALYTICS
+from imbue.remote_service_connector.ssh_certs import SSH_CERT_DICT_KEY_CONNECTOR
+from imbue.remote_service_connector.ssh_certs import SSH_CERT_DICT_NAME
+from imbue.remote_service_connector.ssh_certs import SSH_CERT_REFRESH_CRON
+from imbue.remote_service_connector.ssh_certs import SshCertificateBundle
 from imbue.remote_service_connector.stop_start import run_transition_supervisor
 from imbue.remote_service_connector.stop_start import run_transition_watchdog
+from imbue.remote_service_connector.vault_ssh_signer import VaultSshSignerNotConfiguredError
+from imbue.remote_service_connector.vault_ssh_signer import certificate_refresh_summary
+from imbue.remote_service_connector.vault_ssh_signer import is_refresh_overdue
+from imbue.remote_service_connector.vault_ssh_signer import load_vault_ssh_signer_config
+from imbue.remote_service_connector.vault_ssh_signer import sign_management_bundles
 from imbue.remote_service_connector.web import web_app
 
 # Named under ``imbue`` because Modal mounts this entrypoint as module ``app``,
@@ -112,6 +128,16 @@ _SCALEDOWN_WINDOW = read_scaledown_window("MINDS_CONNECTOR_SCALEDOWN_WINDOW")
 # deploy outside the wrapper.
 _CUSTOM_DOMAINS = read_custom_domains("MINDS_CONNECTOR_CUSTOM_DOMAINS")
 
+# The tier's Modal Proxy (static egress IPs), attached to every connector
+# function -- the web app and the supervisor/cron functions alike -- so ALL
+# connector egress (in particular the paramiko SSH to gen-2 boxes, whose
+# management sshd allowlists exactly these IPs; specs/slice-fleet-gen2) leaves
+# from the proxy's static addresses. ``minds-admin env deploy`` threads the
+# tier's proxy name (from its ``deploy.toml`` ``[management_plane]`` table) here at ``modal
+# deploy`` time; None (the default, and every tier without a proxy) keeps
+# direct egress from Modal's dynamic IPs.
+_MODAL_PROXY = read_modal_proxy("MINDS_CONNECTOR_MODAL_PROXY_NAME", "MINDS_CONNECTOR_MODAL_PROXY_ENVIRONMENT")
+
 # The `service` tag / server_name Bugsink events carry, distinguishing this
 # app from the other reporters on the tier's shared instance.
 _SENTRY_SERVICE_NAME = "remote-service-connector"
@@ -130,6 +156,15 @@ _SENTRY_SERVICE_NAME = "remote-service-connector"
 # the path ``accounts_web.frontend_dist_dir`` reads. The directory may be
 # absent on a bare ``modal deploy`` from a checkout that never built it -- the
 # accounts pages then serve a 503 placeholder rather than failing the deploy.
+#
+# Two more monorepo packages ride the same source mount: the gen-2 slice script
+# renderers the stop/start supervisor shares with the imbue_cloud plugin and
+# the operator tooling (``imbue.mngr_imbue_cloud.slices.gen2_scripts``, mounted
+# as a namespace subpackage -- its parents' ``__init__.py`` do not ship), and
+# ``imbue.imbue_common`` for the frozen-model base those renderers use. Only the
+# stdlib/pydantic-only modules of ``imbue_common`` may be imported by shipped
+# code (its logging/secret modules need packages the image lacks); the
+# transitive import guard in ``test_project_ratchets.py`` enforces that.
 _ACCOUNTS_FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 _WEB_CHROME_FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend_web" / "dist"
 _base_image = pinned_image(locate_image_requirements(Path(__file__)))
@@ -140,6 +175,8 @@ if _WEB_CHROME_FRONTEND_DIST.is_dir():
 image = _base_image.add_local_python_source(
     "imbue.remote_service_connector",
     "imbue.modal_app_kit",
+    "imbue.mngr_imbue_cloud.slices.gen2_scripts",
+    "imbue.imbue_common",
     ignore=shipped_python_source_ignore,
 )
 app = modal.App(name=f"rsc-{_DEPLOY_ENV}", image=image)
@@ -151,18 +188,28 @@ def _connector_secrets() -> list[modal.Secret]:
         stamped_secret("cloudflare", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("supertokens", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("neon", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        # CLEANUP: drop the pool-ssh secret once the gen-1 -> gen-2 cutover has
+        # run on every tier (phase 6 of blueprint/slice-fleet-cutover); gen-2
+        # management SSH is by certificate (the ssh_cert_refresh cron below).
         stamped_secret("pool-ssh", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        stamped_secret("ssh-ca", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("litellm-connector", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("sharing", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("storage", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         stamped_secret("sentry", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
         deploy_metadata_secret(_DEPLOY_ENV, _MINDS_DEPLOY_ID),
+        # The proxy vars must reach the container's import-time environment:
+        # the Proxy is a function dependency, and read_modal_proxy has to
+        # evaluate identically at deploy time and in-container or the
+        # dependency lists mismatch and container startup fails.
+        forwarded_env_secret(("MINDS_CONNECTOR_MODAL_PROXY_NAME", "MINDS_CONNECTOR_MODAL_PROXY_ENVIRONMENT")),
     ]
 
 
 @app.function(
     name="api",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Warm-pool size driven by ``_MIN_CONTAINERS`` at the top of this
     # module: defaults to 1 for production / staging (avoid cold-boot
     # penalty on auth / lease / share hits from the desktop client) and
@@ -228,6 +275,7 @@ def fastapi_app() -> FastAPI:
 @app.function(
     name="cleanup_removing_pool_hosts",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Hourly slice-box reconcile audit. Scoped to this env's stamped slices; it
     # only alerts (never auto-deletes), so it is safe on a box shared by multiple
     # dev envs.
@@ -264,6 +312,7 @@ def _init_supertokens_once() -> None:
 @app.function(
     name="r2_quota_sweep",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Hourly storage-quota sweep, offset from the slice reconcile so the two
     # crons don't contend for a cold container at the top of the hour.
     schedule=modal.Cron("30 * * * *"),
@@ -291,6 +340,7 @@ def _r2_quota_sweep() -> dict[str, int]:
 @app.function(
     name="backup_retention_reap",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Hourly destroyed-workspace backup reap, offset from the other crons.
     # Work is bounded per pass (record + object budgets) and resumable, so a
     # single invocation never approaches the timeout.
@@ -365,6 +415,7 @@ def _pool_gauge_sweep() -> dict[str, int]:
 @app.function(
     name="relay_health_sweep",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Every-minute relay liveness sweep: probes each active relay's /healthz
     # and keeps the region DNS record sets in step (2 consecutive failures pull
     # an IP, 1 success restores, never below the full active set). Health only
@@ -398,6 +449,7 @@ def _relay_health_sweep() -> dict[str, int]:
 @app.function(
     name="workspace_transition_supervisor",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # One supervisor drives one workspace's stop/start transition end to end.
     # It only SSH-polls a box status file every ~15s and finalizes DB state,
     # so it runs on the smallest resource footprint Modal offers; the 2h
@@ -430,9 +482,87 @@ def _spawn_transition_supervisor(host_db_id: str, transition_id: str) -> None:
 stop_start_module.spawner.hook = _spawn_transition_supervisor
 
 
+def _ssh_cert_dict() -> modal.Dict:
+    """The per-Modal-environment Dict holding the management SSH certificate bundles (see ``ssh_certs``)."""
+    return modal.Dict.from_name(SSH_CERT_DICT_NAME, create_if_missing=True)
+
+
+def _read_ssh_cert_bundle_entry(dict_key: str) -> dict[str, str] | None:
+    return _ssh_cert_dict().get(dict_key)
+
+
+# Every SSH-bearing function reads its gen-2 credentials through this hook; the
+# shipped modules never import modal themselves.
+ssh_certs_module.bundle_source.reader = _read_ssh_cert_bundle_entry
+
+
+@app.function(
+    name="ssh_cert_refresh",
+    secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
+    schedule=modal.Cron(SSH_CERT_REFRESH_CRON),
+    timeout=300,
+)
+def ssh_cert_refresh() -> dict[str, str]:
+    """Mint fresh gen-2 management SSH certificates from the tier's Vault CA into the Dict.
+
+    The only connector function that talks to Vault (with the tier's AppRole).
+    Runs every couple of hours, and ``minds-admin env deploy`` runs it once
+    after every connector deploy so a fresh env is never left without a
+    certificate. With the ``ssh-ca`` secret still unpopulated (a tier whose
+    SSH CA is not brought up yet) it logs and does nothing, so a deploy before
+    the Vault bring-up still succeeds.
+    """
+    configure_logging()
+    init_sentry(_SENTRY_SERVICE_NAME, "RSC_SENTRY_DSN")
+    with capture_and_reraise():
+        return _ssh_cert_refresh()
+
+
+def _warn_if_stored_certificates_are_going_overdue() -> None:
+    """Escalate when a previously-signed certificate is nearing expiry while a refresh cannot run.
+
+    A tier whose SSH CA has never been brought up has nothing stored yet --
+    expected, and not logged here. A tier that WAS working and then lost its
+    AppRole (a rotated/revoked credential, or a Vault outage) still has its
+    last-signed bundle in the Dict; once that bundle is overdue for refresh,
+    gen-2 management SSH is about to go dark.
+    """
+    now = datetime.now(timezone.utc)
+    for dict_key in (SSH_CERT_DICT_KEY_CONNECTOR, SSH_CERT_DICT_KEY_ANALYTICS):
+        entry = _read_ssh_cert_bundle_entry(dict_key)
+        if entry is None:
+            continue
+        bundle = SshCertificateBundle.from_dict_entry(entry)
+        if is_refresh_overdue(bundle.expires_at, now):
+            logger.error(
+                "The stored '%s' management SSH certificate is overdue for refresh (expires %s) and the refresh "
+                "cannot run: gen-2 management SSH will fail once it expires",
+                dict_key,
+                bundle.expires_at.isoformat(),
+            )
+
+
+def _ssh_cert_refresh() -> dict[str, str]:
+    try:
+        config = load_vault_ssh_signer_config(_DEPLOY_ENV)
+    except VaultSshSignerNotConfiguredError as exc:
+        _warn_if_stored_certificates_are_going_overdue()
+        logger.error("Skipping the management SSH certificate refresh: %s", exc)
+        return {}
+    bundles = sign_management_bundles(config)
+    certificate_dict = _ssh_cert_dict()
+    for dict_key, bundle in bundles.items():
+        certificate_dict[dict_key] = bundle.to_dict_entry()
+    summary = certificate_refresh_summary(bundles)
+    logger.info("Refreshed the management SSH certificates: %s", summary)
+    return summary
+
+
 @app.function(
     name="workspace_transition_watchdog",
     secrets=_connector_secrets(),
+    proxy=_MODAL_PROXY,
     # Hourly watchdog for orphaned transitions: rows stuck in stopping/starting
     # (or stopped-with-a-leftover-VM) whose supervisor heartbeat went stale
     # (connector redeploy, Modal eviction, supervisor timeout) are taken over

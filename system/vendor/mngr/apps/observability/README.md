@@ -61,6 +61,7 @@ uv run observability provision --tier dev --ovh-region US-EAST-VA-1 --ssh-public
 uv run observability deploy --host <ip> --tier dev --telemetry-hostname telemetry.minds-dev.com
 uv run observability dns --hostname telemetry.minds-dev.com --ip <ip>
 uv run observability provision-accounts --ssh-host <ip>
+uv run observability provision-alerts --ssh-host <ip> --tier dev
 uv run observability render-collector-install --role box --tier dev --ingest-url https://telemetry.minds-dev.com \
     --credential-env-var OBSERVABILITY_INGEST_CREDENTIAL --out /tmp/install.sh
 ```
@@ -117,6 +118,17 @@ DSNs land in the tier's `sentry` Vault entry (written by the glue script),
 which `minds-admin env deploy` stamps into the reporting services' Modal secret.
 Vault schema: `.minds/template/bugsink.sh` -> `secrets/minds/<tier>/bugsink`.
 The operator runbook is `apps/minds/docs/deploy/setup/bugsink.md`.
+
+## Alerting
+
+Gen-2 slice boxes evaluate their tier-1 abuse/integrity conditions on-box
+(the prep-installed `mngr-box-telemetry` collector, rendered by
+`minds_admin`) and emit `MNGR_BOX_SIGNAL` marker lines into the `box_logs`
+stream. `observability provision-alerts` idempotently provisions one
+OpenObserve alert rule per signal, delivering payload-free notifications
+(rule name, stream, tier, time -- never log content) to a direct
+GitHub-issue webhook, with an optional SMTP fallback. See
+`apps/minds/docs/deploy/gen2-telemetry.md` for the operator runbook.
 
 ## Retention
 

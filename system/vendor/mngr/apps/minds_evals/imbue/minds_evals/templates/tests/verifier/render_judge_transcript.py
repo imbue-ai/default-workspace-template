@@ -100,7 +100,9 @@ def _as_the_client_reads_it(message: str) -> str:
 # transcript, a subagent's prose. Those routinely quote `Created <id>-step-<suffix>: ...` lines that
 # the agent did not write and the client never saw, and rendering them as the agent's progress-view
 # copy grades it on someone else's words.
-EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput"})
+# A tool name is matched exactly as the trajectory records it, so each harness's spelling of the
+# shell is listed: claude calls it `Bash`, pi-coding calls it `bash`.
+EXECUTING_TOOLS: frozenset[str] = frozenset({"Bash", "BashOutput", "bash"})
 
 
 def _observation_text(step: dict[str, Any]) -> str:

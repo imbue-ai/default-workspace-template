@@ -1,0 +1,5 @@
+New `blueprint/slice-fleet-variable-sizing/gen2-turnover-notes.md`: raw observations from the dev canary's conversion/drain/management-plane session (drain ergonomics, restore/conversion routing and timing, Modal proxy environment scoping), to be folded into the `gen2-turnover.md` runbook when slice-fleet phase 5 writes it.
+
+The observability Vault schema gains `OBSERVABILITY_ALERTS_GITHUB_TOKEN`: the shared fine-grained GitHub token (`mngr-openobserve-alerts`, Issues read/write on mngr-internal only) that `provision-alerts` stores in each tier's OpenObserve issue-webhook destination. The config resolver exports it, so the just recipes pick it up from Vault instead of a hand-exported variable. The dev tier's alerting is armed with it.
+
+The slice-fleet spec's phase-3/4 sections and open questions are updated with the canary's answers (proxy environment scoping and the 1-IP limit, the ~6-minute conversion duration, the per-tier alert-arming/token-sharing procedure), and the slice-fleet handoff gains the agreed follow-up work items (wg -> WireGuard conversion, the credential-expiry reminder job, the generation lease filter, WireGuard in the bake/prep tooling).

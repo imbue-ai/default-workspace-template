@@ -67,7 +67,28 @@ running (leased) -> stopping -> stopped -> starting -> running
   stopped even while its retained local VM still occupies a physical slot
   (pool capacity itself is enforced by real slot occupancy on the boxes).
   Stopping is always allowed; create checks both caps; start re-checks the
-  running cap.
+  running cap. Machine sizing adds two more (specs/slice-fleet):
+  `max_active_machine_units` (units summed across running machines, a pending
+  resize counted at its target) and `max_total_machine_disk_gb` (data-disk GB
+  across running + stopped; the resize request is the grant point, since disk
+  never changes at stop). Lowering a quota below usage refuses new
+  grants/starts but never kills running machines.
+- **Machine sizing at start** (gen-2; specs/slice-fleet): the start is what
+  applies a pending resize. A restart-in-place re-checks the box's two
+  budgets under the allocation lock, rewrites the env file at the target
+  size, and grows the data-disk qcow2; when the origin box lacks room it
+  falls back to the restore path, whose reserve renders the env at the
+  target size on whichever candidate box fits (an explicit grow resizes the
+  downloaded data disk before boot). When every candidate refuses for
+  capacity, the restore destroys just enough unleased `available` pool rows
+  (fewest-evictions box first, the eviction visible as `pool_rows_evicted`)
+  and retries; when even eviction cannot fit the size, the start fails back
+  to `stopped` with a "try a smaller size or try again later" error and the
+  `machine_resize_placement_impossible` metric. A successful start restamps
+  the row's current size and clears the targets; in-guest every-boot oneshots
+  grow the data filesystem and re-cap the workspace container's memory, so no
+  management-plane access into the guest is needed. Gen-2 stop uploads record
+  the disks' measured qcow2 virtual sizes in the artifact manifest.
 
 ## Provisioning a tier (operator, once)
 
@@ -115,6 +136,13 @@ the connector's default hour-long instant-restart window.
 
 ## Operations
 
+- `minds-admin workspaces start <host-db-id>` starts a `stopped` row on its
+  owner's behalf (no ownership or quota check) -- the gen-2 cutover's
+  pre-window step (see [gen2-cutover.md](./gen2-cutover.md)). While the
+  cutover holds a gen-1 row parked (placement and artifact manifest both
+  cleared), both the owner's and the operator's start answer 409
+  `workspace_migrating`; the row comes back on its own when the cutover
+  restores it.
 - `minds-admin workspaces abandon <host-db-id> --reason ...`
   marks a row on a permanently dead box `crashed` (retries stop; the user
   restores from backup; artifacts are reclaimed at release). Releasing a

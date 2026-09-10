@@ -8,6 +8,7 @@ client-driven steps are exercised live against a real order.
 """
 
 import base64
+import re
 import time
 from collections import defaultdict
 from collections.abc import Mapping
@@ -31,6 +32,12 @@ from imbue.mngr.providers.ssh_utils import generate_ed25519_host_keypair
 from imbue.mngr.utils.polling import poll_for_value
 from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_ROOT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GEN2_BOOT_PARTITION_GIB
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GEN2_ROOT_PARTITION_GIB
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import SSH_CA_BOX_BOOTSTRAP_USER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import SSH_CA_PRINCIPAL_OPERATOR
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.ssh_ca import render_ssh_ca_trust_shell_section
 from imbue.mngr_ovh.client import OvhVpsClient
 from imbue.mngr_vps.errors import VpsApiError
 
@@ -43,6 +50,46 @@ ECO_ORDER_OS: Final[str] = "none_64.en"
 ECO_ORDER_REGION: Final[str] = "united_states"
 # Default OS template reinstalled onto a delivered box (matches the box already in the fleet).
 DEFAULT_REINSTALL_OS_TEMPLATE: Final[str] = "debian12_64"
+# OS template a gen-2 box reinstalls with (Debian 13 "trixie"; offered by the
+# OVH API for our box models -- verified via compatibleTemplates, and the
+# template's filesystem set includes xfs with custom partitioning allowed).
+GEN2_REINSTALL_OS_TEMPLATE: Final[str] = "debian13_64"
+
+# Gen-2 custom partition layout (specs/slice-fleet-gen2): md-mirrored ext4
+# root plus the XFS storage partition the slice backend reflink-carves from.
+# The /boot size mirrors debian13_64's default scheme; the root holds only the
+# OS, journald, apt and the prep artifacts -- the swapfile and the image tar
+# cache live on the storage partition, whose measured size is what the gen-2
+# disk budget accounts (``gen2_scripts.sizing``). Deliberately NO swap
+# partition: the prep provisions the md-mirrored swapfile and wipes any raw
+# swap partition it finds, so a layout swap would be created only to be
+# retired on first prep.
+_GEN2_BOOT_PARTITION_MIB: Final[int] = GEN2_BOOT_PARTITION_GIB * 1024
+_GEN2_ROOT_PARTITION_MIB: Final[int] = GEN2_ROOT_PARTITION_GIB * 1024
+
+
+@pure
+def build_gen2_reinstall_storage() -> list[dict[str, Any]]:
+    """The reinstall ``storage`` payload for a gen-2 box (one softraid-1 disk group).
+
+    Shape per OVH's ``dedicated.server.reinstall.Storage`` model: an ordered
+    ``partitioning.layout``, each entry md-mirrored across the disk group
+    (``raidLevel: 1``), with the XFS storage partition last at ``size: 0``
+    (fill the remaining space). Its mount point is the gen-2 storage root the
+    prep's storage check and the slice backend both key on.
+    """
+    return [
+        {
+            "partitioning": {
+                "layout": [
+                    {"mountPoint": "/boot", "fileSystem": "ext4", "raidLevel": 1, "size": _GEN2_BOOT_PARTITION_MIB},
+                    {"mountPoint": "/", "fileSystem": "ext4", "raidLevel": 1, "size": _GEN2_ROOT_PARTITION_MIB},
+                    {"mountPoint": GEN2_STORAGE_ROOT, "fileSystem": "xfs", "raidLevel": 1, "size": 0},
+                ]
+            }
+        }
+    ]
+
 
 # Eco option families the operator explicitly chooses. Every *other* family OVH
 # flags mandatory is auto-picked (and must have exactly one offer). Deriving the
@@ -51,6 +98,12 @@ DEFAULT_REINSTALL_OS_TEMPLATE: Final[str] = "debian12_64"
 # cheaper SK line ships no ``vrack`` option) still orders cleanly, while optional
 # add-on families (``mandatory`` false, e.g. backups) are never silently added.
 _USER_SELECTED_OPTION_FAMILIES: Final[tuple[str, ...]] = ("memory", "storage")
+
+# The eco catalog's public-uplink option codes carry the rate in Mbit/s
+# (``bandwidth-1000-unguaranteed-rise-gen2-us``). The vRack option of the same
+# rate is ``vrack-bandwidth-1000-...``, which this anchored pattern does not
+# match: only the public uplink is shaped.
+_BANDWIDTH_OPTION_CODE_RE: Final[re.Pattern[str]] = re.compile(r"^bandwidth-(\d+)-")
 
 _DELIVERY_POLL_INTERVAL_SECONDS: Final[float] = 60.0
 _DELIVERY_TIMEOUT_SECONDS: Final[float] = 4 * 60 * 60.0
@@ -131,6 +184,32 @@ def _resolve_explicit_option_for_family(
             f"Offered: {_format_eco_offers(family_options)}"
         )
     raise BareMetalConfigError(f"choose exactly one --option for the {family} family, got {selected}")
+
+
+@pure
+def parse_uplink_mbps_from_bandwidth_option_code(option_code: str) -> int | None:
+    """The public uplink rate a ``bandwidth-<mbps>-...`` option code declares, or None for any other code."""
+    match = _BANDWIDTH_OPTION_CODE_RE.match(option_code)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+@pure
+def derive_uplink_mbps_from_option_codes(option_codes: Sequence[str]) -> int | None:
+    """The declared uplink of the one public-bandwidth option among a cart's selected option codes.
+
+    None when no selected code is a parseable ``bandwidth-<mbps>-...`` code, in
+    which case the operator must name the rate explicitly.
+    """
+    rates = [
+        rate
+        for rate in (parse_uplink_mbps_from_bandwidth_option_code(code) for code in option_codes)
+        if rate is not None
+    ]
+    if len(rates) != 1:
+        return None
+    return rates[0]
 
 
 @pure
@@ -456,14 +535,27 @@ def wait_for_dedicated_server_address(
     return address
 
 
-def build_box_host_key_postinstall_script(host_private_key_pem: str, host_public_key_openssh: str) -> str:
-    """Render the OVH post-install bash that installs our generated ed25519 host key.
+def build_box_host_key_postinstall_script(
+    host_private_key_pem: str,
+    host_public_key_openssh: str,
+    # The tier's SSH CA public key for a gen-2 box: the bootstrap user then
+    # accepts operator certificates from the first boot, so the reinstall needs
+    # no durable static key. None keeps a gen-1 box on its static pool key.
+    ssh_ca_public_key: str | None = None,
+) -> str:
+    """Render the OVH post-install bash that installs our generated ed25519 host key (and, on gen-2, the CA trust).
 
     Writes the private key + its ``.pub`` into ``/etc/ssh``, removes OVH's other
     host key types so only our pinned ed25519 key is ever offered (ed25519-only),
-    and restarts sshd. Delivered inline (base64) in the authenticated reinstall
-    request body, so the private key never travels over a public URL.
+    installs the tier CA trust for the bootstrap user when given, and restarts
+    sshd. Delivered inline (base64) in the authenticated reinstall request body,
+    so the private key never travels over a public URL.
     """
+    ca_trust_section = (
+        render_ssh_ca_trust_shell_section(ssh_ca_public_key, {SSH_CA_BOX_BOOTSTRAP_USER: SSH_CA_PRINCIPAL_OPERATOR})
+        if ssh_ca_public_key is not None
+        else ""
+    )
     return f"""\
 #!/bin/bash
 set -eu
@@ -479,7 +571,8 @@ chmod 644 /etc/ssh/ssh_host_ed25519_key.pub
 chown root:root /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub
 # ed25519-only: drop the other host key types so only our pinned key is offered.
 rm -f /etc/ssh/ssh_host_rsa_key* /etc/ssh/ssh_host_ecdsa_key* /etc/ssh/ssh_host_dsa_key*
-systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+umask 022
+{ca_trust_section}systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
 """
 
 
@@ -513,14 +606,19 @@ class _ReinstallStartAttempt(FrozenModel):
     service_name: str
     os_template: str
     customizations: dict[str, Any]
+    # The reinstall's ``storage`` body (custom partitioning); None sends no
+    # storage key at all, so the template's default scheme applies.
+    storage: list[dict[str, Any]] | None
 
     def __call__(self) -> tuple[Any] | None:
+        body: dict[str, Any] = {"operatingSystem": self.os_template, "customizations": self.customizations}
+        if self.storage is not None:
+            body["storage"] = self.storage
         try:
             task = self.client.call_api(
                 "POST",
                 f"/dedicated/server/{self.service_name}/reinstall",
-                operatingSystem=self.os_template,
-                customizations=self.customizations,
+                **body,
             )
             return (task,)
         except VpsApiError as e:
@@ -538,8 +636,15 @@ def start_os_reinstall(
     client: OvhVpsClient,
     *,
     service_name: str,
+    # The key the OS image authorizes for its bootstrap user: the pool key on
+    # gen-1; a per-setup throwaway on gen-2, where the CA trust below is the
+    # durable access path and prep deletes the throwaway's authorized_keys.
     ssh_public_key: str,
+    ssh_ca_public_key: str | None = None,
     os_template: str = DEFAULT_REINSTALL_OS_TEMPLATE,
+    # Custom partitioning for the reinstall (the gen-2 XFS storage layout from
+    # build_gen2_reinstall_storage); None keeps the template's default scheme.
+    storage: list[dict[str, Any]] | None = None,
 ) -> BoxReinstallStart:
     """Reinstall the box's OS with our SSH key, injecting a host key we generated.
 
@@ -556,7 +661,9 @@ def start_os_reinstall(
     host key is stable regardless of how many retries it takes.
     """
     host_private_key_pem, host_public_key_openssh = generate_ed25519_host_keypair()
-    postinstall_script = build_box_host_key_postinstall_script(host_private_key_pem, host_public_key_openssh)
+    postinstall_script = build_box_host_key_postinstall_script(
+        host_private_key_pem, host_public_key_openssh, ssh_ca_public_key=ssh_ca_public_key
+    )
     postinstall_b64 = base64.b64encode(postinstall_script.encode()).decode()
     with log_span("Reinstalling {} with OS {}", service_name, os_template):
         attempt = _ReinstallStartAttempt(
@@ -564,6 +671,7 @@ def start_os_reinstall(
             service_name=service_name,
             os_template=os_template,
             customizations={"sshKey": ssh_public_key, "postInstallationScript": postinstall_b64},
+            storage=storage,
         )
         result, _polls, _elapsed = poll_for_value(
             attempt,

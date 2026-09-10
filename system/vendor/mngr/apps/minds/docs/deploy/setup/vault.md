@@ -56,8 +56,14 @@ secrets/minds/<tier>/sentry      # error-reporting DSNs; empty until
                                  #   `just provision-bugsink` fills them
                                  #   (see bugsink-bringup.md)
 secrets/minds/<tier>/sharing
+secrets/minds/<tier>/ssh-ca      # the connector's AppRole for the tier's SSH CA
+                                 #   (see "SSH certificate authority" below)
 secrets/minds/<tier>/supertokens
 ```
+
+`pool-ssh` is the gen-1 slice fleet's static management key and goes away
+with the last gen-1 box (phase 6 of the gen-1 -> gen-2 cutover); gen-2
+boxes authorize no static key at all.
 
 The self-hosted Bugsink error tracker's own config lives in
 `secrets/minds/<tier>/bugsink` (every tier except ci; dev holds the SHARED
@@ -140,6 +146,75 @@ use `vault kv metadata delete` so the listing is clean too.
 (the values `minds-admin env deploy` generates per developer for a dev env)
 are **not** stored in Vault -- they live on the developer's machine
 only in `~/.minds-<name>/secrets.toml` (mode 0600).
+
+## SSH certificate authority (gen-2 management SSH)
+
+Gen-2 slice boxes, the slice VMs on them, and the workspace containers
+inside those VMs trust **one SSH certificate authority per tier** for
+management access instead of a shared static key
+(imbue-ai/mngr-internal#850). The CA lives in Vault's SSH secrets engine,
+one mount per tier, and is managed by terraform in the
+[imbue-ai/vault](https://github.com/imbue-ai/vault) repo
+(`terraform/minds_ssh_ca.tf`):
+
+```
+minds-<tier>-ssh/               # one mount per tier: minds-dev-ssh, minds-ci-ssh, minds-staging-ssh, minds-production-ssh
+minds-<tier>-ssh/config/ca      # the CA keypair (generated in Vault; the private half never leaves it)
+minds-<tier>-ssh/sign/operator  # minds-admin: 12h certificates, principals mngr-operator,mngr-service,mngr-vm,mngr-container
+minds-<tier>-ssh/sign/connector # the connector's refresh cron: 8h certificates, mngr-service,mngr-vm,mngr-container
+minds-<tier>-ssh/sign/analytics # the same cron, for the analytics collector: mngr-vm,mngr-container
+```
+
+Who may sign what is a Vault policy: every employee signs `operator`
+certificates on `minds-dev-ssh` and `minds-ci-ssh` (the `employee` policy); the
+`minds_staging` / `minds_production` OIDC roles sign on their own tier's
+mount; the CI env role (`minds_ci_env_gh`) signs on `minds-ci-ssh`. The connector
+holds an **AppRole** per tier (`minds-connector-<tier>`) whose only
+capability is `sign/connector` and `sign/analytics` on its own mount --
+no kv-v2 secrets.
+
+Hosts pin the CA's *public* key: it is committed as `[ssh_ca] public_key`
+in the tier's `deploy.toml` and installed by gen-2 box prep, the slice
+carve's cloud-init, and the container setup. Bringing a tier's CA up:
+
+```bash
+# 1. In the imbue-ai/vault checkout: terraform apply creates the mount, CA,
+#    roles, policies, and the connector AppRole for every tier.
+# 2. Read the CA public key and commit it to
+#    apps/minds/imbue/minds/config/envs/<tier>/deploy.toml as [ssh_ca] public_key
+#    (in the same PR, drop the tier from the pinned
+#    test_committed_deploy_tomls_have_no_ssh_ca_until_the_tier_brings_one_up in
+#    apps/minds/imbue/minds/config/loader_test.py, which exists so this flip is
+#    deliberate):
+vault read -field=public_key minds-<tier>-ssh/config/ca
+# 3. Mint the connector's AppRole credentials into the tier's ssh-ca entry
+#    (the secret-id is deliberately not in terraform state):
+vault read -field=role_id auth/approle/role/minds-connector-<tier>/role-id
+vault write -f -field=secret_id auth/approle/role/minds-connector-<tier>/secret-id
+#    -> VAULT_SSH_APPROLE_ROLE_ID / VAULT_SSH_APPROLE_SECRET_ID via
+#       uv run scripts/push_vault_from_file.py <tier> ssh-ca <filled .minds/template/ssh-ca.sh>
+# 4. minds-admin env deploy: pushes the ssh-ca Modal Secret and runs the
+#    connector's ssh_cert_refresh function once, so the tier's certificate
+#    Dict is populated before the first request needs it.
+```
+
+Operators never handle a certificate by hand: any `minds-admin` command that
+dials a gen-2 box signs (and re-signs when under 6h remain) the key at
+`~/.mindsadmin/<tier>/ssh_id` through your own `vault login`, writing the
+certificate beside it as `ssh_id-cert.pub`. A raw `ssh -i
+~/.mindsadmin/<tier>/ssh_id ...` picks the certificate up automatically.
+`MINDS_ADMIN_IDENTITY_DIR` relocates the `~/.mindsadmin` root (for a CI
+run or a shared machine that should not keep an operator identity in the
+home directory). Revoking a person is removing them from the Vault role's
+allowlist: their outstanding certificate expires within 12h and no host
+carries anything of theirs to clean up.
+
+Rotating the CA itself (a suspected CA-key compromise) is the one expensive
+operation: `vault write -f minds-<tier>-ssh/config/ca` (after deleting the old
+one) mints a new keypair, and every gen-2 box, VM, and container on the
+tier must be re-prepped / re-baked to pin the new public key, then
+`deploy.toml` updated. Rotating the connector's AppRole secret-id is cheap:
+mint a new one, update the `ssh-ca` entry, redeploy.
 
 ## Populating a tier
 

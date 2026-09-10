@@ -340,6 +340,7 @@ dependencies = [
     { name = "imbue-mngr" },
     { name = "loguru" },
     { name = "pydantic" },
+    { name = "python-debian" },
     { name = "tenacity" },
 ]
 
@@ -352,6 +353,7 @@ requires-dist = [
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "python-debian", specifier = ">=1.1.1" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 
@@ -2501,13 +2503,16 @@ name = "imbue-minds-admin"
 version = "0.1.0"
 source = { editable = "apps/minds_admin" }
 dependencies = [
+    { name = "apt-mirror" },
     { name = "boto3" },
     { name = "click" },
     { name = "concurrency-group" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "imbue-common" },
     { name = "imbue-mngr" },
     { name = "imbue-mngr-imbue-cloud" },
+    { name = "imbue-mngr-latchkey" },
     { name = "imbue-mngr-lima" },
     { name = "imbue-mngr-ovh" },
     { name = "imbue-mngr-vps" },
@@ -2524,13 +2529,16 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "apt-mirror", editable = "apps/apt_mirror" },
     { name = "boto3" },
     { name = "click", specifier = ">=8.0" },
     { name = "concurrency-group", editable = "libs/concurrency_group" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "imbue-common", editable = "libs/imbue_common" },
     { name = "imbue-mngr", editable = "libs/mngr" },
     { name = "imbue-mngr-imbue-cloud", editable = "libs/mngr_imbue_cloud" },
+    { name = "imbue-mngr-latchkey", editable = "libs/mngr_latchkey" },
     { name = "imbue-mngr-lima", editable = "libs/mngr_lima" },
     { name = "imbue-mngr-ovh", editable = "libs/mngr_ovh" },
     { name = "imbue-mngr-vps", editable = "libs/mngr_vps" },
@@ -2593,7 +2601,7 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=2.2.0" },
     { name = "overlay", editable = "libs/overlay" },
     { name = "packaging", specifier = ">=21.0" },
-    { name = "paramiko", specifier = ">=3.0" },
+    { name = "paramiko", specifier = ">=3.2" },
     { name = "pluggy", specifier = ">=1.5.0" },
     { name = "psutil", specifier = ">=7.2" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -5405,6 +5413,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
+]
+
+[[package]]
+name = "python-debian"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/75/36/f90e7d006dd9311a6185f1c34b403dd6d76ff583e7962c56e9374c462a48/python_debian-1.1.1.tar.gz", hash = "sha256:fe4fc3dc798dbf1f0ef5865e2b1b4f7cc0352b6a511b25ab7594906c64a73629", size = 127956, upload-time = "2026-06-07T11:06:58.282Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6e/47/e184f0004e63dbc49c4bad5e811218f66bece1b519f80b06a619b42e6ec3/python_debian-1.1.1-py3-none-any.whl", hash = "sha256:f98ae013e8e5310e49041cc3860a7105df73af73d4ff1d8afb474770d328a6ad", size = 138101, upload-time = "2026-06-07T11:06:56.632Z" },
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ import pytest
 
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
+from imbue.minds.deployment_tests.helpers import LEASE_MAX_BOX_GENERATION
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
@@ -211,6 +212,7 @@ def test_lease_quota_check_passes_through_for_under_quota_account(
                 "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderTestKeyForQuotaCheck",
                 "host_name": "quota-check-probe",
                 "attributes": {"cpus": 999999},
+                "max_box_generation": LEASE_MAX_BOX_GENERATION,
             },
         )
         if response.status_code == 200:

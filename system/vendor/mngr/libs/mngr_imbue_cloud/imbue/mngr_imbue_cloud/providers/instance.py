@@ -149,8 +149,10 @@ from imbue.mngr_imbue_cloud.providers.listing import derive_host_state_from_raw
 from imbue.mngr_imbue_cloud.providers.listing import derive_offline_note_from_raw
 from imbue.mngr_imbue_cloud.providers.rebuild import build_delegated_vps_provider
 from imbue.mngr_imbue_cloud.providers.rebuild import build_slice_rebuild_provider
+from imbue.mngr_imbue_cloud.providers.slice_provider import read_container_ca_trust_files_from_vm
 from imbue.mngr_imbue_cloud.providers.wipe import build_pool_host_wipe_script
 from imbue.mngr_imbue_cloud.repo_identity import canonicalize_repo_source
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.wire_types import LeaseResult
 from imbue.mngr_imbue_cloud.wire_types import LeasedHostInfo
 from imbue.mngr_imbue_cloud.wire_types import WorkspaceInfo
@@ -371,6 +373,18 @@ def leased_info_from_workspace(workspace: WorkspaceInfo) -> LeasedHostInfo:
         outer_host_public_key=workspace.outer_host_public_key,
         container_host_public_key=workspace.container_host_public_key,
     )
+
+
+@pure
+def should_read_container_ca_trust_from_vm(*, is_slice: bool, box_generation: int) -> bool:
+    """Whether a leased container rebuild must re-read the tier CA trust from its slice VM.
+
+    Only a gen-2 slice's container trusts a CA (the connector and analytics
+    reach it by certificate, never by a static key); every other rebuild
+    (an OVH host, or a gen-1 slice) authorizes keys the normal way and needs
+    no CA trust files.
+    """
+    return is_slice and box_generation >= FIRST_QEMU_BOX_GENERATION
 
 
 def _workspace_start_failed_error(host_id: HostId, transition_error: str | None) -> WorkspaceStartFailedError:
@@ -1923,8 +1937,8 @@ class ImbueCloudProvider(BaseProviderInstance):
         )
         tmp_private_key, tmp_public_key, public_key_text = self._prepare_pending_keypair()
         try:
-            # Region constraints are NOT relaxed: a hard ``region`` requirement
-            # still applies to the rebuilt host.
+            # The region constraint is NOT relaxed: the hard requirement still
+            # applies to the rebuilt host.
             lease_result = self.client.lease_host(
                 token,
                 relaxed_attributes,
@@ -2042,6 +2056,17 @@ class ImbueCloudProvider(BaseProviderInstance):
             )
         combined_authorized_keys = tuple(authorized_keys or ()) + (per_host_public_key,)
         with self._outer_for_leased_vps(host_id, lease_result) as outer:
+            # A gen-2 slice's container trusts the tier's SSH CA (the connector and
+            # analytics reach it by certificate, never by a static key); the
+            # rebuilt container must keep that trust, and the VM is where the
+            # bake left the CA.
+            rebuilt_container_ssh_config_files = (
+                read_container_ca_trust_files_from_vm(outer)
+                if should_read_container_ca_trust_from_vm(
+                    is_slice=is_slice, box_generation=lease_result.box_generation
+                )
+                else ()
+            )
             delegated_provider.teardown_container_on_existing_vps(outer, host_id)
             # Re-apply the full idempotent host setup on the leased VPS before
             # rebuilding, so a host baked with an old version (or before runsc
@@ -2080,6 +2105,7 @@ class ImbueCloudProvider(BaseProviderInstance):
                 lifecycle=lifecycle,
                 known_hosts=known_hosts,
                 authorized_keys=combined_authorized_keys,
+                extra_ssh_config_files=rebuilt_container_ssh_config_files,
             )
         # The rebuilt container's host key is the delegated provider's own
         # (injected into the container at rebuild), so it is known locally without
@@ -2492,8 +2518,8 @@ class ImbueCloudProvider(BaseProviderInstance):
             # unrecoverable.
             start_container_sshd(outer, container_id)
             self._wait_for_container_sshd(leased)
-        # A restart may have rebooted the VM (replaying cidata over the SSH
-        # material); make the host build below run a full adoption
+        # A restart may have rebooted the VM (on gen-1, replaying cidata over
+        # the SSH material); make the host build below run a full adoption
         # re-verification rather than the durable already-verified path.
         self._adoption_attempted_host_ids.discard(str(host_id))
         invalidate_adoption_verification(self._host_state_dir(host_id))
@@ -2561,7 +2587,8 @@ class ImbueCloudProvider(BaseProviderInstance):
         self._move_host_pins_to_new_endpoints(host_id, started)
         self._ensure_outer_host_key_known(started)
         self._ensure_container_host_key_known(started)
-        # The relocation may have re-run cloud-init from the uploaded cidata;
+        # A gen-1 relocation re-runs cloud-init from the uploaded cidata (a
+        # gen-2 one never does, but the address and ports still changed);
         # force a full adoption re-verification on the next host build.
         self._adoption_attempted_host_ids.discard(str(host_id))
         invalidate_adoption_verification(self._host_state_dir(host_id))

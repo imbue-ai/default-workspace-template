@@ -6,6 +6,7 @@ from imbue.minds_admin.cli._tier_secrets import observability_tier_for_env_name
 from imbue.minds_admin.cli._tier_secrets import ovh_config_from_vault_secret
 from imbue.minds_admin.cli._tier_secrets import resolve_analytics_analyst_admin_context
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
+from imbue.minds_admin.cli._tier_secrets import workspace_storage_config_from_secret
 from imbue.observability.primitives import CollectorRole
 from imbue.observability.primitives import ObservabilityTierName
 
@@ -112,3 +113,21 @@ def test_resolve_analytics_analyst_admin_context_without_activation_gives_an_act
     with pytest.raises(click.ClickException) as exc_info:
         resolve_analytics_analyst_admin_context()
     assert "minds-admin env activate" in str(exc_info.value)
+
+
+def test_workspace_storage_config_from_secret_requires_every_field_and_keeps_the_prefix() -> None:
+    secret = {
+        "WORKSPACE_STORAGE_S3_ENDPOINT": "https://s3.us-west-or.io.cloud.ovh.us",
+        "WORKSPACE_STORAGE_S3_REGION": "us-west-or",
+        "WORKSPACE_STORAGE_S3_ACCESS_KEY": "AKIA",
+        "WORKSPACE_STORAGE_S3_SECRET_KEY": "secret",
+        "WORKSPACE_STORAGE_BUCKET": "mngr-workspaces-dev",
+        "WORKSPACE_STORAGE_KEK": "a2Vr" * 11,
+        "WORKSPACE_STOP_RETENTION_SECONDS": "",
+    }
+    config = workspace_storage_config_from_secret(secret, "secrets/minds/dev", "dev-josh/")
+    assert config.bucket == "mngr-workspaces-dev"
+    assert config.key_prefix == "dev-josh/"
+    assert config.secret_access_key.get_secret_value() == "secret"
+    with pytest.raises(click.ClickException, match="WORKSPACE_STORAGE_KEK"):
+        workspace_storage_config_from_secret({**secret, "WORKSPACE_STORAGE_KEK": ""}, "secrets/minds/dev", "")

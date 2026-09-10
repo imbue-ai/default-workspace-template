@@ -1,0 +1,3 @@
+Add `specs/slice-fleet-gen2/spec.md`: the design for the second-generation imbue_cloud slice fleet -- replacing lima with raw qemu + systemd, per-VM routed-tap kernel networking with nftables (DNAT/SNAT, counters, connection ceilings, fair-share bandwidth, management-plane block), Debian 13 boxes via drain-and-repave turnover, management-plane lockdown (Modal Proxy + WireGuard), and network-abuse telemetry/alerting through the existing OpenObserve pipeline, phased over many PRs.
+
+Record in `uncertainties.md` that the imbue_cloud slice VM guest image (Debian 12, from mngr_lima's default) silently diverged from the default-workspace-template's trixie parity pin, verified live on a baked staging slice; the gen-2 spec assumes the trixie parity intent is correct.

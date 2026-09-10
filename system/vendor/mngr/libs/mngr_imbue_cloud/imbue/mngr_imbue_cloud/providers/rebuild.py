@@ -1,6 +1,3 @@
-from collections.abc import Mapping
-from typing import Any
-
 from loguru import logger
 
 from imbue.imbue_common.pure import pure
@@ -10,7 +7,11 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr_imbue_cloud.config import ImbueCloudProviderConfig
 from imbue.mngr_imbue_cloud.providers.slice_provider import SliceVpsDockerProvider
 from imbue.mngr_imbue_cloud.providers.slice_provider import SliceVpsDockerProviderConfig
-from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
+from imbue.mngr_imbue_cloud.slices.bare_metal import GEN2_CONTAINER_TMPFS_START_ARGS
+from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_memory_mib
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_guest_memory_mib
+from imbue.mngr_imbue_cloud.slices.slice_client import build_slice_vm_client
 from imbue.mngr_imbue_cloud.wire_types import LeaseResult
 from imbue.mngr_vps.config import VpsProviderConfig
 from imbue.mngr_vps.instance import MinimalVpsProvider
@@ -19,18 +20,22 @@ from imbue.mngr_vps.vps_client import ExternallyManagedVpsClient
 
 
 @pure
-def _slice_memory_mib_from_lease_attributes(attributes: Mapping[str, Any]) -> int | None:
-    """The leased slice's RAM in MiB, from its row's stamped ``memory_gb`` attribute.
+def _slice_memory_mib_from_lease(lease_result: LeaseResult) -> int | None:
+    """The RAM the leased machine's guest actually has, in MiB (None when its size is unknown).
 
-    Every slice row is stamped with ``memory_gb`` at bake time; None (legacy rows
-    or a non-numeric value) means the rebuilt container gets no memory cap.
+    The container cap is derived from this exactly as the bake derives it: a gen-2
+    guest boots with its units minus the per-machine holdback (what its own
+    reconcile oneshot sees in MemTotal), a gen-1 lima guest with its full units.
     """
-    memory_gb = attributes.get("memory_gb")
-    if isinstance(memory_gb, bool) or not isinstance(memory_gb, (int, float)):
+    # CLEANUP: make ``LeaseResult.memory_units`` required and drop this None
+    # branch once every tier's connector serves the sizing columns (the release
+    # carrying the slice-fleet cutover deployed to staging and production).
+    units = lease_result.memory_units
+    if units is None or units <= 0:
         return None
-    if memory_gb <= 0:
-        return None
-    return int(memory_gb * 1024)
+    if lease_result.box_generation >= FIRST_QEMU_BOX_GENERATION:
+        return compute_machine_guest_memory_mib(units)
+    return compute_slice_memory_mib(units)
 
 
 @pure
@@ -81,6 +86,33 @@ def build_delegated_vps_provider(
     )
 
 
+@pure
+def build_slice_rebuild_config(
+    config: ImbueCloudProviderConfig, lease_result: LeaseResult
+) -> SliceVpsDockerProviderConfig:
+    """The slice provider config for rebuilding the container on a leased slice.
+
+    A gen-2 slice's guest ships the gVisor runtime in its image, so the
+    rebuilt container runs under the account config's ``docker_runtime``
+    (the per-account block sets ``runsc``) with its hardening ``default_start_args`` plus the
+    gen-2 tmpfs mounts -- exactly the shape the bake creates. A gen-1 (lima)
+    guest has no runsc, so its rebuild stays plain runc with no extra args.
+    """
+    # The guest's RAM (from the lease's sizing column) sizes the rebuilt
+    # container's memory cap, exactly as the bake sizes the original container's.
+    slice_memory_mib = _slice_memory_mib_from_lease(lease_result)
+    is_gen2 = lease_result.box_generation >= FIRST_QEMU_BOX_GENERATION
+    return SliceVpsDockerProviderConfig(
+        host_dir=config.host_dir,
+        container_ssh_port=config.container_ssh_port,
+        box_public_address=lease_result.vps_address,
+        box_generation=lease_result.box_generation,
+        slice_memory_mib=slice_memory_mib,
+        docker_runtime=config.docker_runtime if is_gen2 else None,
+        default_start_args=(tuple(config.default_start_args) + GEN2_CONTAINER_TMPFS_START_ARGS if is_gen2 else ()),
+    )
+
+
 def build_slice_rebuild_provider(
     *,
     name: ProviderInstanceName,
@@ -91,44 +123,41 @@ def build_slice_rebuild_provider(
     """Construct a slice provider to rebuild the container on a leased slice VM.
 
     A slice's container is published inside the VM on the standard guest port
-    (``container_ssh_port``, which lima forwards to a box host port) but is
+    (``container_ssh_port``, which the box forwards to a host port) but is
     reached from outside at the lease's forwarded ``container_ssh_port`` / VM
     root ``ssh_port``. The slice provider already splits publish vs connect
     ports via these per-host-port fields, so the rebuild (teardown +
-    ``create_host_on_existing_vps``) targets the right ports. runsc/gVisor is
-    not used (the VM is the isolation boundary; its Docker is plain runc).
+    ``create_host_on_existing_vps``) targets the right ports. The container
+    runtime and start args follow the lease's generation
+    (:func:`build_slice_rebuild_config`).
     """
-    # The slice's RAM (stamped on its row) sizes the rebuilt container's memory
-    # cap, exactly as the bake sizes the original container's.
-    slice_memory_mib = _slice_memory_mib_from_lease_attributes(lease_result.attributes)
-    if slice_memory_mib is None:
+    slice_config = build_slice_rebuild_config(config, lease_result)
+    if slice_config.slice_memory_mib is None:
         logger.warning(
-            "Lease {} has no usable memory_gb attribute; rebuilding the container without a memory cap",
+            "Lease {} carries no machine size (an older connector); rebuilding the container without a memory cap",
             lease_result.host_db_id,
         )
-    slice_config = SliceVpsDockerProviderConfig(
-        host_dir=config.host_dir,
-        container_ssh_port=config.container_ssh_port,
-        box_public_address=lease_result.vps_address,
-        slice_memory_mib=slice_memory_mib,
-    )
     # The rebuild never carves/destroys a VM (it only tears down + rebuilds the
     # container on the already-leased slice via the forwarded ports below), so
-    # the lima client's box-SSH coordinates are unused here; pass the address
-    # for completeness and no pool key (limactl is never invoked on this path).
-    lima_client = LimaSliceVpsClient(
+    # the slice client's box-SSH coordinates are unused here regardless of the
+    # box's generation; pass the address for completeness and no pool key (no
+    # box-side slice command is ever invoked on this path).
+    slice_client = build_slice_vm_client(
+        box_generation=lease_result.box_generation,
         box_address=lease_result.vps_address,
+        box_ssh_port=22,
         box_ssh_user=slice_config.box_ssh_user,
         private_key_path=None,
+        box_host_public_key=None,
     )
     provider = SliceVpsDockerProvider(
         name=name,
         host_dir=config.host_dir,
         mngr_ctx=mngr_ctx,
         config=slice_config,
-        vps_client=lima_client,
+        vps_client=slice_client,
         slice_config=slice_config,
-        lima_client=lima_client,
+        slice_client=slice_client,
     )
     # Point the per-host-port seams at the lease's box-forwarded ports so the
     # rebuild's outer (VM root) and container connections target the box.

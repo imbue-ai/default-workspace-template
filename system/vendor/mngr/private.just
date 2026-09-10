@@ -1665,7 +1665,7 @@ server-audit:
 # without charging; the real order records a bare_metal_servers row at 'ordered'
 # and echoes its server id for `just server-await-delivery` / `just server-setup`.
 #
-#   just server-order --dry-run --plan-code 24sys032-us --region vin --memory-gb 128 --storage softraid-2x960nvme ...
+#   just server-order --dry-run --plan-code 24sys03-v1-us --region vin --memory-gb 128 --storage softraid-2x960nvme ...
 [group("minds ops")]
 server-order *args:
     uv run minds-admin server order {{args}}

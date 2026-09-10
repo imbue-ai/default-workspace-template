@@ -14,20 +14,22 @@ of per-developer dynamic envs on top of the dev tier:
 
 Each tier has its own Modal account, Neon account, Cloudflare account,
 SuperTokens account, OAuth clients, bare-metal box supplier account
-(currently OVH), Anthropic key, and pool-management SSH keypair. There
-is zero cross-tier reach.
+(currently OVH), Anthropic key, and management SSH authority (a Vault SSH
+CA per tier for gen-2 boxes, `minds-<tier>-ssh`; a static pool keypair per tier
+for the remaining gen-1 boxes). There is zero cross-tier reach.
 
 That extends to bare-metal boxes: a box belongs to exactly one tier.
 Sharing one *within* a tier is fine and routine (several `dev-<user>`
 envs on one dev box); sharing one *across* tiers is not, because each
-tier has its own pool keypair. A box serving two tiers is a box both
-tiers' keys can SSH, so each tier's operators and connector gain
-`limactl` -- and so root -- over the other's workspaces, and neither
-tier's reap will ever reclaim the other's slices. Baking a slice
-onto a box that carries another tier's slices -- or whose lima user
-authorizes more than that one tier's pool key -- is refused before
-anything is carved. `just server-audit` reports the same condition
-without needing a bake to fail.
+tier has its own SSH authority. A box serving two tiers is a box both
+tiers' credentials can SSH, so each tier's operators and connector gain
+the slice helper -- and so root -- over the other's workspaces, and
+neither tier's reap will ever reclaim the other's slices. Baking a slice
+onto a box that carries another tier's slices -- or whose service user
+authorizes a static key it should not (one on gen-1, none on gen-2), or
+whose pinned SSH CA is not the tier's -- is refused before anything is
+carved. `just server-audit` reports the same condition without needing a
+bake to fail.
 
 ## Per-env data root
 

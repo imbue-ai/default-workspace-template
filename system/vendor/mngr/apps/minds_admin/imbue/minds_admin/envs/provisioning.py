@@ -1408,7 +1408,7 @@ def _expected_litellm_proxy_url(
             assert_never(unreachable)
 
 
-def _workspace_storage_key_prefix(name: DevEnvName, lifecycle: DeployLifecycleConfig) -> str:
+def workspace_storage_key_prefix(name: DevEnvName, lifecycle: DeployLifecycleConfig) -> str:
     """The env's keyspace inside its tier's workspace-storage bucket.
 
     Per-env-Modal-env tiers (dev / ci) share their tier's bucket, so each env
@@ -1493,7 +1493,7 @@ def _compute_secret_overrides(
     # stop/start artifacts (and their cleanup) disjoint within the shared
     # tier bucket.
     if lifecycle.modal_env_strategy == ModalEnvStrategy.PER_ENV:
-        overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": _workspace_storage_key_prefix(name, lifecycle)}
+        overrides["storage"] = {"WORKSPACE_STORAGE_KEY_PREFIX": workspace_storage_key_prefix(name, lifecycle)}
     # Git-owned storage knobs win over stale Vault values, so deploy.toml is
     # the source of truth for the tier's retention window.
     if storage is not None and storage.stop_retention_seconds is not None:
@@ -1709,7 +1709,7 @@ def destroy_env(
         parent_concurrency_group,
     )
     if is_workspace_storage_configured(storage_values):
-        storage_prefix = _workspace_storage_key_prefix(name, lifecycle)
+        storage_prefix = workspace_storage_key_prefix(name, lifecycle)
         with info_span("Deleting workspace-storage artifacts for env {!r}", str(name)):
             providers.delete_workspace_storage_prefix(storage_values, storage_prefix)
     else:

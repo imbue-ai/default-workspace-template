@@ -65,6 +65,7 @@ import imbue.remote_service_connector.litellm_client as litellm_client_mod
 import imbue.remote_service_connector.r2.stores as r2_stores_mod
 import imbue.remote_service_connector.share_broker as share_broker_module
 import imbue.remote_service_connector.signup_hardening as signup_hardening_module
+import imbue.remote_service_connector.ssh_certs as ssh_certs_module
 import imbue.remote_service_connector.stop_start as stop_start_module
 import imbue.remote_service_connector.storage as connector_storage_module
 import imbue.remote_service_connector.suspension as suspension_module
@@ -1139,8 +1140,8 @@ class FakePoolRow:
     leased_to_user: str | None
     leased_at: str | None
     released_at: str | None
-    lima_instance_name: str | None
-    lima_disk_name: str | None
+    slice_instance_name: str | None
+    slice_disk_name: str | None
     bare_metal_server_id: UUID | None
     outer_host_public_key: str | None
     container_host_public_key: str | None
@@ -1153,6 +1154,12 @@ class FakePoolRow:
     transition_error: str | None
     transition_id: str | None
     transition_failure_count: int
+    # Nullable like the real column: a pre-gen-2 row carries NULL (= gen 1).
+    box_generation: int | None
+    memory_units: int
+    target_memory_units: int | None
+    disk_gb: int
+    target_disk_gb: int | None
 
 
 def _row_attributes(row: "FakePoolRow") -> dict[str, Any]:
@@ -1215,8 +1222,8 @@ def _make_pool_row(
     row.attributes = None
     row.region = region
     # Slice-specific tests set these explicitly.
-    row.lima_instance_name = None
-    row.lima_disk_name = None
+    row.slice_instance_name = None
+    row.slice_disk_name = None
     row.bare_metal_server_id = None
     row.outer_host_public_key = outer_host_public_key
     row.container_host_public_key = container_host_public_key
@@ -1229,6 +1236,13 @@ def _make_pool_row(
     row.transition_error = None
     row.transition_id = None
     row.transition_failure_count = 0
+    row.box_generation = 1
+    # The default machine size (specs/slice-fleet): 8 units and the 44 GB
+    # data disk every row records (a gen-1 row at its post-cutover size).
+    row.memory_units = 8
+    row.target_memory_units = None
+    row.disk_gb = 44
+    row.target_disk_gb = None
     return row
 
 
@@ -1319,6 +1333,81 @@ class FakeCursor:
             found = self._backend.find_pool_row(params[0])
             if found is not None:
                 self._results = [(found.status,)]
+
+        elif query_lower.startswith("select box_generation, vps_address, artifact_manifest from pool_hosts"):
+            # workspaces.py: the cutover's parked-gen-1-row guard.
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results = [(found.box_generation, found.vps_address, found.artifact_manifest)]
+
+        elif query_lower.startswith("select coalesce(sum(greatest(memory_units"):
+            # The active-machine-units quota sum: running rows at the larger
+            # of current/target units.
+            user_id_prefix = params[0]
+            total = 0
+            for row in self._backend.pool_rows:
+                if row.leased_to_user != user_id_prefix or row.status not in ("leased", "stopping", "starting"):
+                    continue
+                total += max(row.memory_units, row.target_memory_units or 0)
+            self._results = [(total,)]
+
+        elif query_lower.startswith("select coalesce(sum(greatest(disk_gb"):
+            # The total-machine-disk quota sum: running + stopped rows at the
+            # larger of current/target disk.
+            user_id_prefix = params[0]
+            total = 0
+            for row in self._backend.pool_rows:
+                if row.leased_to_user != user_id_prefix or row.status not in (
+                    "leased",
+                    "stopping",
+                    "starting",
+                    "stopped",
+                ):
+                    continue
+                total += max(row.disk_gb, row.target_disk_gb or 0)
+            self._results = [(total,)]
+
+        elif query_lower.startswith("select leased_to_user, status, box_generation, memory_units"):
+            # machines.py: the resize validation read.
+            found = self._backend.find_pool_row(params[0])
+            if found is not None:
+                self._results = [
+                    (
+                        found.leased_to_user,
+                        found.status,
+                        found.box_generation,
+                        found.memory_units,
+                        found.target_memory_units,
+                        found.disk_gb,
+                        found.target_disk_gb,
+                    )
+                ]
+
+        elif query_lower.startswith("update pool_hosts set target_memory_units"):
+            # machines.py: stamp (or clear) the resize targets.
+            new_target_units, new_target_disk, raw_id = params
+            found = self._backend.find_pool_row(raw_id)
+            if found is not None:
+                found.target_memory_units = new_target_units
+                found.target_disk_gb = new_target_disk
+                self.rowcount = 1
+
+        elif query_lower.startswith("select id, status, memory_units, disk_gb from pool_hosts"):
+            # stop_start eviction planning: every row placed on one box.
+            server_id = UUID(params[0]) if isinstance(params[0], str) else params[0]
+            for row in self._backend.pool_rows:
+                if row.bare_metal_server_id == server_id:
+                    self._results.append((row.host_id, row.status, row.memory_units, row.disk_gb))
+
+        elif query_lower.startswith("update pool_hosts set status = 'removing', released_at = now()") and (
+            "returning" in query_lower
+        ):
+            # stop_start eviction: CAS-claim an available row for destruction.
+            found = self._backend.find_pool_row(params[0])
+            if found is not None and found.status == "available":
+                found.status = "removing"
+                self._results = [(found.slice_instance_name, found.slice_disk_name, found.box_generation)]
+                self.rowcount = 1
 
         elif query_lower.startswith("select leased_to_user, id, status"):
             # workspaces.py: owned-workspace read (ownership column + info columns).
@@ -1420,13 +1509,33 @@ class FakeCursor:
                 found.artifact_manifest = None
                 found.wrapped_dek = None
                 found.artifact_generation = int(generation)
+                # A successful start applies any pending resize (SQL COALESCEs
+                # + target clears).
+                if found.target_memory_units is not None:
+                    found.memory_units = found.target_memory_units
+                if found.target_disk_gb is not None:
+                    # GREATEST semantics: disk never shrinks, so a stale target
+                    # below the recorded size is clamped.
+                    found.disk_gb = max(found.disk_gb, found.target_disk_gb)
+                found.target_memory_units = None
+                found.target_disk_gb = None
                 found.transition_error = None
                 found.transition_failure_count = 0
                 found.transition_heartbeat_at = None
                 self.rowcount = 1
 
         elif query_lower.startswith("update pool_hosts set status = 'leased', vps_address"):
-            vps_address, ssh_port, container_ssh_port, server_id, raw_id, transition_id = params
+            (
+                vps_address,
+                ssh_port,
+                container_ssh_port,
+                server_id,
+                box_generation,
+                applied_units,
+                applied_disk_gb,
+                raw_id,
+                transition_id,
+            ) = params
             found = self._backend.find_pool_row(raw_id)
             if found is not None and found.status == "starting" and found.transition_id == transition_id:
                 found.status = "leased"
@@ -1434,6 +1543,13 @@ class FakeCursor:
                 found.ssh_port = ssh_port
                 found.container_ssh_port = container_ssh_port
                 found.bare_metal_server_id = UUID(server_id) if isinstance(server_id, str) else server_id
+                found.box_generation = int(box_generation)
+                if applied_units is not None:
+                    found.memory_units = int(applied_units)
+                if applied_disk_gb is not None:
+                    found.disk_gb = int(applied_disk_gb)
+                found.target_memory_units = None
+                found.target_disk_gb = None
                 found.stop_requested_at = None
                 found.stopped_at = None
                 found.transition_error = None
@@ -1504,24 +1620,36 @@ class FakeCursor:
                 if box["status"] == "ready"
             ]
 
+        elif query_lower.startswith("select exists(select 1 from pool_hosts where box_generation <= %s)"):
+            # The lease's update-required probe: whether the tier holds any row
+            # at or below the client's declared generation, and any row above it.
+            cap = int(params[0])
+            self._results = [
+                (
+                    any(int(row.box_generation or 1) <= cap for row in self._backend.pool_rows),
+                    any(int(row.box_generation or 1) > cap for row in self._backend.pool_rows),
+                )
+            ]
+
         elif "from pool_hosts" in query_lower and "status = 'available'" in query_lower:
             # The connector serialises the request attributes via json.dumps
             # before passing them to the SQL bind parameter, so we always get
             # a JSON string here. A hard ``region`` (WHERE clause), if present,
-            # follows it in the param tuple.
+            # follows it in the param tuple; the generation cap is always the
+            # last param (its clause is appended after the optional region).
             raw = params[0]
             requested = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            # A hard ``region`` bind param, when present, always immediately
-            # follows the attributes JSON param (index 0), so its index is 1.
-            hard_region: str | None = None
-            if "and region = %s" in query_lower:
-                hard_region = params[1]
+            # The hard ``region`` bind param, when present, follows the
+            # attributes JSON param (index 0).
+            hard_region: str | None = params[1] if "and region = %s" in query_lower else None
+            max_box_generation = int(params[-1]) if "box_generation <= %s" in query_lower else None
             candidate_rows = [
                 row
                 for row in self._backend.pool_rows
                 if row.status == "available"
                 and _attributes_contain(_row_attributes(row), requested)
                 and (hard_region is None or row.region == hard_region)
+                and (max_box_generation is None or int(row.box_generation or 1) <= max_box_generation)
             ]
             if candidate_rows:
                 chosen = candidate_rows[0]
@@ -1537,6 +1665,9 @@ class FakeCursor:
                         _row_attributes(chosen),
                         chosen.outer_host_public_key,
                         chosen.container_host_public_key,
+                        chosen.box_generation,
+                        chosen.memory_units,
+                        chosen.disk_gb,
                     )
                 ]
 
@@ -1571,6 +1702,7 @@ class FakeCursor:
                             row.host_id_str,
                             row.container_host_public_key,
                             row.agent_id,
+                            row.box_generation,
                         )
                     ]
                     break
@@ -1601,7 +1733,7 @@ class FakeCursor:
             and "select leased_to_user" in query_lower
         ):
             # The release projection (``hosts._read_pool_row_for_release``
-            # reads it, in this column order). The connector stringifies the
+            # reads it, in this column order, ``box_generation`` last). The connector stringifies the
             # UUID before passing it as a bind param (psycopg2 can't adapt
             # Python ``UUID`` directly), so accept either form.
             raw_host_id = params[0]
@@ -1612,11 +1744,12 @@ class FakeCursor:
                         (
                             row.leased_to_user,
                             row.status,
-                            row.lima_instance_name,
-                            row.lima_disk_name,
+                            row.slice_instance_name,
+                            row.slice_disk_name,
                             row.bare_metal_server_id,
                             row.host_id_str,
                             row.agent_id,
+                            row.box_generation,
                         )
                     ]
                     break
@@ -2165,11 +2298,16 @@ class FakeConnection:
 
     Open/close bookkeeping feeds the backend's ``open_connection_count`` so
     tests can assert on connection lifetime (e.g. that no DB connection is
-    held across a Cloudflare call).
+    held across a Cloudflare call). ``with conn:`` is a transaction the way it
+    is in psycopg2: pool-row updates made inside it are rolled back when the
+    block exits with an exception (rows inserted inside it are kept -- the
+    lease and release flows only ever update existing rows), so a test can
+    tell a refusal raised mid-transaction from one raised after the commit.
     """
 
     _backend: "FakePoolBackend"
     _is_closed: bool
+    _pool_rows_at_transaction_start: list[tuple[FakePoolRow, dict[str, Any]]] | None
 
     def cursor(self) -> FakeCursor:
         return _make_fake_cursor(self._backend)
@@ -2183,16 +2321,24 @@ class FakeConnection:
             self._backend.open_connection_count -= 1
 
     def __enter__(self) -> "FakeConnection":
+        self._pool_rows_at_transaction_start = [(row, dict(vars(row))) for row in self._backend.pool_rows]
         return self
 
-    def __exit__(self, *args: Any) -> None:
-        pass
+    def __exit__(self, exc_type: type[BaseException] | None, *args: Any) -> None:
+        snapshot = self._pool_rows_at_transaction_start
+        self._pool_rows_at_transaction_start = None
+        if exc_type is None or snapshot is None:
+            return
+        for row, saved_fields in snapshot:
+            vars(row).clear()
+            vars(row).update(saved_fields)
 
 
 def _make_fake_connection(backend: "FakePoolBackend") -> FakeConnection:
     conn = FakeConnection()
     conn._backend = backend
     conn._is_closed = False
+    conn._pool_rows_at_transaction_start = None
     backend.open_connection_count += 1
     return conn
 
@@ -2283,6 +2429,9 @@ class FakePoolBackend:
     # Recorded slice-VM teardowns (the box SSH is faked); set
     # ``slice_teardown_should_fail`` to simulate a teardown that cannot complete.
     slice_teardowns: list[tuple[Any, Any, str | None, str | None]]
+    # The box_generation each recorded teardown was dispatched for, parallel
+    # to ``slice_teardowns``.
+    slice_teardown_generations: list[int]
     slice_teardown_should_fail: bool
     # Seeded bare_metal_servers rows for stop/start supervisor tests.
     box_rows: list[dict[str, Any]]
@@ -2309,11 +2458,21 @@ class FakePoolBackend:
     reserve_rc: int
     reserve_stdout: str
     reserve_stderr: str
+    resize_rc: int
+    resize_stdout: str
+    resize_stderr: str
+    # When non-empty, each reserve.sh run pops the next (rc, stdout, stderr)
+    # (the last entry repeats) -- lets eviction tests refuse first, then admit.
+    reserve_response_sequence: list[tuple[int, str, str]]
     # When set, the restore rollback's ``limactl delete`` leaves the instance
     # config behind, so the box reports the VM survived.
     cleanup_vm_survives: bool
     spawned_supervisors: list[str]
     spawned_supervisor_tokens: list[tuple[str, str]]
+    # The Dict keys read for gen-2 management certificates, and whether the fake
+    # Dict holds none (the refresh cron has not run) so those reads refuse.
+    ssh_cert_bundle_reads: list[str]
+    is_ssh_cert_bundle_missing: bool
     box_command_should_fail_matching: str | None
     box_command_callback: Any
     sleep_callback: Any
@@ -2521,21 +2680,33 @@ class FakePoolBackend:
         self,
         server_id: UUID,
         public_address: str = "10.9.9.9",
-        lima_service_user: str = "limahost",
+        slice_service_user: str = "slicehost",
         box_host_public_key: str = "ssh-ed25519 AAAA boxkey",
         slot_count: int = 6,
         status: str = "ready",
         region: str = "vin",
+        box_generation: int = 1,
+        uplink_mbps: int = 1000,
+        disk_gb: int | None = 3000,
+        ram_gb: int | None = 128,
+        cpu_threads: int | None = 16,
+        cpu_overcommit_ratio: float | None = 2.0,
     ) -> dict[str, Any]:
         """Seed a bare_metal_servers row for stop/start supervisor tests."""
         box = {
             "id": server_id,
             "public_address": public_address,
-            "lima_service_user": lima_service_user,
+            "slice_service_user": slice_service_user,
             "box_host_public_key": box_host_public_key,
             "slot_count": slot_count,
             "status": status,
             "region": region,
+            "box_generation": box_generation,
+            "uplink_mbps": uplink_mbps,
+            "disk_gb": disk_gb,
+            "ram_gb": ram_gb,
+            "cpu_threads": cpu_threads,
+            "cpu_overcommit_ratio": cpu_overcommit_ratio,
         }
         self.box_rows.append(box)
         return box
@@ -2548,13 +2719,20 @@ class FakePoolBackend:
         return None
 
     def box_tuple(self, box: dict[str, Any]) -> tuple[Any, ...]:
-        """Project a box row into the SELECT column order stop_start uses."""
+        """Project a box row into the SELECT column order stop_start uses (_BOX_ROW_COLUMNS)."""
         return (
             box["id"],
             box["public_address"],
-            box["lima_service_user"],
+            box["slice_service_user"],
             box["box_host_public_key"],
             box["slot_count"],
+            box["box_generation"],
+            box["status"],
+            box["uplink_mbps"],
+            box["disk_gb"],
+            box["ram_gb"],
+            box["cpu_threads"],
+            box["cpu_overcommit_ratio"],
         )
 
     def find_pool_row(self, raw_id: Any) -> "FakePoolRow | None":
@@ -2583,6 +2761,11 @@ class FakePoolBackend:
             row.transition_error,
             row.outer_host_public_key,
             row.container_host_public_key,
+            row.box_generation,
+            row.memory_units,
+            row.target_memory_units,
+            row.disk_gb,
+            row.target_disk_gb,
         )
 
     def workspace_supervisor_tuple(self, row: "FakePoolRow") -> tuple[Any, ...]:
@@ -2597,8 +2780,8 @@ class FakePoolBackend:
             row.ssh_user,
             row.container_ssh_port,
             row.bare_metal_server_id,
-            row.lima_instance_name,
-            row.lima_disk_name,
+            row.slice_instance_name,
+            row.slice_disk_name,
             row.region,
             row.stop_requested_at,
             row.artifact_manifest,
@@ -2606,6 +2789,11 @@ class FakePoolBackend:
             row.artifact_generation,
             row.transition_id,
             row.transition_failure_count,
+            row.box_generation,
+            row.memory_units,
+            row.target_memory_units,
+            row.disk_gb,
+            row.target_disk_gb,
         )
 
     def run_box_command_fake(
@@ -2633,7 +2821,16 @@ class FakePoolBackend:
         if "kill -0" in command:
             return (0 if self.transfer_alive else 1), "", ""
         if "reserve.sh" in command:
+            if self.reserve_response_sequence:
+                response = (
+                    self.reserve_response_sequence[0]
+                    if len(self.reserve_response_sequence) == 1
+                    else self.reserve_response_sequence.pop(0)
+                )
+                return response
             return self.reserve_rc, self.reserve_stdout, self.reserve_stderr
+        if "resize.sh" in command:
+            return self.resize_rc, self.resize_stdout, self.resize_stderr
         if command.startswith("[ -d "):
             return (0 if self.vm_exists_on_origin else 1), "", ""
         return 0, "", ""
@@ -2658,6 +2855,18 @@ class FakePoolBackend:
             raise OSError(f"simulated storage outage deleting prefix {prefix}")
         self.deleted_prefixes.append(prefix)
         return 0
+
+    def read_ssh_cert_bundle_fake(self, dict_key: str) -> dict[str, str] | None:
+        """The gen-2 management certificate a fake Dict would hold; the SSH seams above never parse it."""
+        self.ssh_cert_bundle_reads.append(dict_key)
+        if self.is_ssh_cert_bundle_missing:
+            return None
+        return {
+            "private_key_pem": "fake-management-key-pem",
+            "certificate": "ssh-ed25519-cert-v01@openssh.com AAAAfakecert",
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=8)).isoformat(),
+            "role": dict_key,
+        }
 
     def record_spawned_supervisor(self, host_db_id: str, transition_id: str) -> None:
         self.spawned_supervisors.append(host_db_id)
@@ -2684,6 +2893,8 @@ class FakePoolBackend:
             (stop_start_module, "_write_box_file", self.write_box_file_fake),
             (stop_start_module, "_sleep", self.sleep_fake),
             (stop_start_module.spawner, "hook", self.record_spawned_supervisor),
+            (ssh_certs_module.bundle_source, "reader", self.read_ssh_cert_bundle_fake),
+            (ssh_certs_module.bundle_source, "cached_bundle", None),
             (connector_storage_module, "read_storage_config", self.read_storage_config_fake),
             (connector_storage_module, "is_storage_configured", self.is_storage_configured_fake),
             (connector_storage_module, "delete_prefix", self.delete_prefix_fake),
@@ -2878,13 +3089,15 @@ class FakePoolBackend:
         self,
         host_db_id: Any,
         bare_metal_server_id: Any,
-        lima_instance_name: str | None,
-        lima_disk_name: str | None,
+        slice_instance_name: str | None,
+        slice_disk_name: str | None,
+        box_generation: int,
     ) -> None:
         """Record a slice teardown (the real box SSH is not exercised in unit tests)."""
         if self.slice_teardown_should_fail:
             raise PoolHostCleanupError(f"simulated slice teardown failure for {host_db_id}")
-        self.slice_teardowns.append((host_db_id, bare_metal_server_id, lima_instance_name, lima_disk_name))
+        self.slice_teardowns.append((host_db_id, bare_metal_server_id, slice_instance_name, slice_disk_name))
+        self.slice_teardown_generations.append(box_generation)
 
     def append_authorized_key(
         self,
@@ -2960,6 +3173,7 @@ class FakePoolBackend:
         outer_host_public_key: str | None = _FAKE_OUTER_HOST_PUBLIC_KEY,
         container_host_public_key: str | None = _FAKE_CONTAINER_HOST_PUBLIC_KEY,
         attributes: dict[str, Any] | None = None,
+        box_generation: int = 1,
     ) -> FakePoolRow:
         """Add an available host to the in-memory pool."""
         row = _make_pool_row(
@@ -2978,6 +3192,7 @@ class FakePoolBackend:
         )
         if attributes is not None:
             row.attributes = attributes
+        row.box_generation = box_generation
         self.pool_rows.append(row)
         return row
 
@@ -3039,8 +3254,8 @@ class FakePoolBackend:
         # An interrupted release of a leased slice row retains its box link and
         # lima names, which is what makes its VM teardown retryable.
         row.bare_metal_server_id = UUID("00000000-0000-0000-0000-0000000000b1")
-        row.lima_instance_name = f"mngr-slice-test-{host_id.hex}"
-        row.lima_disk_name = f"mngr-slice-test-{host_id.hex}-data"
+        row.slice_instance_name = f"mngr-slice-test-{host_id.hex}"
+        row.slice_disk_name = f"mngr-slice-test-{host_id.hex}-data"
         self.pool_rows.append(row)
         return row
 
@@ -3132,12 +3347,19 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.reserve_rc = 0
     backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
     backend.reserve_stderr = ""
+    backend.resize_rc = 0
+    backend.resize_stdout = "MNGR_RESIZE_APPLIED 22000 22001 3\n"
+    backend.resize_stderr = ""
+    backend.reserve_response_sequence = []
     backend.cleanup_vm_survives = False
     backend.spawned_supervisors = []
     backend.spawned_supervisor_tokens = []
+    backend.ssh_cert_bundle_reads = []
+    backend.is_ssh_cert_bundle_missing = False
     backend.box_command_should_fail_matching = None
     backend.box_command_callback = None
     backend.sleep_callback = None
+    backend.slice_teardown_generations = []
     return backend
 
 
@@ -3320,6 +3542,8 @@ FREE_PLAN_VALUES: Final[dict[str, float]] = {
     "max_total_bucket_bytes": 25 * 1024**3,
     "monthly_llm_spend_usd": 0.0,
     "max_active_synced_workspaces": 200,
+    "max_active_machine_units": 8,
+    "max_total_machine_disk_gb": 140,
 }
 EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 2,
@@ -3328,6 +3552,8 @@ EXPLORER_PLAN_VALUES: Final[dict[str, float]] = {
     "max_total_bucket_bytes": 50 * 1024**3,
     "monthly_llm_spend_usd": 0.0,
     "max_active_synced_workspaces": 200,
+    "max_active_machine_units": 16,
+    "max_total_machine_disk_gb": 280,
 }
 ALLY_PLAN_VALUES: Final[dict[str, float]] = {
     "max_remote_workspaces": 10,
@@ -3336,6 +3562,8 @@ ALLY_PLAN_VALUES: Final[dict[str, float]] = {
     "max_total_bucket_bytes": 500 * 1024**3,
     "monthly_llm_spend_usd": 1000.0,
     "max_active_synced_workspaces": 200,
+    "max_active_machine_units": 80,
+    "max_total_machine_disk_gb": 1400,
 }
 
 

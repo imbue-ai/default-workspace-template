@@ -39,6 +39,24 @@ def admin_stop_workspace(host_db_id: str, connector_url: str | None, api_key: st
     emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id))
 
 
+@workspaces_admin.command(name="start")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_start_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Start the stopped workspace HOST_DB_ID regardless of owner (no quota check).
+
+    The owner's start transition without the ownership and quota checks: the
+    operator is bringing back a workspace its user already had running. Used
+    by the gen-2 cutover runbook to start every stopped gen-1 workspace before
+    the window so the drain can harvest it live. Idempotent -- a workspace
+    already running/starting reports its status; a row the cutover has parked
+    is refused as migrating.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_start_workspace(resolve_admin_api_key(api_key), host_db_id))
+
+
 @workspaces_admin.command(name="release")
 @click.argument("host_db_id")
 @paid_auth_options

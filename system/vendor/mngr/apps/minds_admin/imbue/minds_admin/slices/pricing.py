@@ -13,6 +13,7 @@ from imbue.mngr_imbue_cloud.data_types import SlicePricingRow
 from imbue.mngr_imbue_cloud.data_types import SliceStorageOption
 from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import OvhCatalogPricingError
+from imbue.mngr_imbue_cloud.slices.bare_metal import assert_gen2_box_disk_fits_default_machines
 from imbue.mngr_imbue_cloud.slices.bare_metal import choose_raid_level
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_budget_gib
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_slice_disk_gib
@@ -337,6 +338,14 @@ def _build_region_row(
         )
     storage_options.sort(key=lambda option: option.usable_disk_gb)
 
+    # The gen-2 units-valid indicator (specs/slice-fleet): whether this base
+    # storage could be ordered as a gen-2 box at all.
+    try:
+        assert_gen2_box_disk_fits_default_machines(ram_gb=server_ram_gb, disk_gb=base_usable_gb)
+        is_units_valid = True
+    except BareMetalConfigError:
+        is_units_valid = False
+
     return SlicePricingRow(
         plan_code=plan_code,
         server_model=server_model,
@@ -356,6 +365,7 @@ def _build_region_row(
         amortized_monthly_usd=amortized_monthly,
         price_per_slice_usd=price_per_slice,
         storage_options=tuple(storage_options),
+        is_units_valid=is_units_valid,
     )
 
 

@@ -1,0 +1,9 @@
+Integration branch for the imbue_cloud slice-fleet generation 2 program (raw qemu slices with routed-tap networking on Debian 13 boxes, replacing lima), merged together with `main` and the three pre-cutover fix PRs: imbue-ai/mngr-internal#857 (SSH certificates from Vault, #850), #855 (DHCP placement, #849) and #856 (the upstream artifact mirror, #851). The per-change details live in this directory's constituent entries, listed below.
+
+Connector support for gen-2 slices: migrations 034-041 (generation, WireGuard, machine sizing, baking rows, generic slice column names), the gen-2 stop/start supervisor and restore path (placement-free cidata, no cloud-init replay), machine resizing, the `max_box_generation` lease filter and `workspace_migrating` guard, and certificate-based management SSH refreshed by the `ssh_cert_refresh` cron.
+
+Constituent entries: `new-fleet-base.md`, `new-fleet-runsc-prototype.md`, `new-fleet-phase-2.md`, `new-fleet-phase-3.md`, `new-fleet-phase-4-impl.md`, `new-fleet-phase-5.5.md`, `mngr-variable-sizing.md`, `mngr-machine-size-display.md`, `mngr-slice-fleet-gen2-phase-2.md`, `mngr-slice-fleet-gen2-phase-3.md`, `mngr-new-fleet-testing.md`, `mngr-slice-fleet-canary-followups.md`, `mngr-finish-new-fleet-canary-testing.md`, `mngr-identify-new-fleet-issues.md`, `mngr-design-network-observation.md`, `mngr-lima-rename.md`, `mngr-ssh-authority-in-vault.md`, `mngr-remove-init-via-dhcp.md`
+
+Gen-2 small follow-ups: the `ssh_cert_refresh` cron signs against the renamed Vault SSH CA mount `minds-<tier>-ssh` (was `ssh-<tier>`; imbue-ai/vault#11 after review). The name comes from the shared `ssh_ca_vault_mount(tier)`, so only the prose and the test fixtures changed here.
+
+Gen-2 small follow-ups: comment-only -- the Modal Proxy the connector's functions attach to at `modal deploy` comes from the `[management_plane]` table of the tier's `deploy.toml` (the separate `management_plane.toml` was merged into it).

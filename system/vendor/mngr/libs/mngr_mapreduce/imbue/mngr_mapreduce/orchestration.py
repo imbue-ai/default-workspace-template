@@ -59,23 +59,34 @@ def _run_render_report(
         return None
 
 
+def _mapper_metadata_list(
+    all_agents: list[MapperInfo],
+    error_summary_by_agent_id: dict[str, str],
+    launch_failures: list[AgentMetadata],
+) -> list[AgentMetadata]:
+    """Build the metadata list for the current state of the map phase.
+
+    Launch failures come first, then one row per launched agent, carrying
+    whatever failure the polling loop recorded for it.
+    """
+    return [
+        *launch_failures,
+        *(
+            _mapper_metadata_for(info, error_summary=error_summary_by_agent_id.get(str(info.agent_id)))
+            for info in all_agents
+        ),
+    ]
+
+
 def _render_polling_tick(
     recipe: MapReduceRecipe,
     ctx: MapReduceContext,
     all_agents: list[MapperInfo],
-    timed_out_ids: set[str],
+    error_summary_by_agent_id: dict[str, str],
     launch_failures: list[AgentMetadata],
 ) -> None:
-    """Render the report for the current mid-poll state.
-
-    Builds a fresh metadata list (launch failures + per-agent rows) so the
-    recipe's renderer sees the current state, including timed-out agents
-    that don't have any extracted outputs on disk.
-    """
-    metadata: list[AgentMetadata] = list(launch_failures)
-    for info in all_agents:
-        error = "Agent was stopped because the timeout was reached." if str(info.agent_id) in timed_out_ids else None
-        metadata.append(_mapper_metadata_for(info, error_summary=error))
+    """Render the report for the current mid-poll state."""
+    metadata = _mapper_metadata_list(all_agents, error_summary_by_agent_id, launch_failures)
     _run_render_report(recipe, ctx, metadata, reducer=None)
 
 
@@ -154,7 +165,9 @@ def launch_and_poll_mappers(
     remaining_tasks = list(tasks)
     pending_ids: set[str] = set()
     agent_id_to_info: dict[str, MapperInfo] = {}
-    timed_out_ids: set[str] = set()
+    # The single source of truth for "this mapper failed, and why": both the
+    # mid-poll renders and the returned metadata read their summaries from here.
+    error_summary_by_agent_id: dict[str, str] = {}
     # Used by launch_mappers_up_to_limit (the batched-launch path) to
     # dedupe sanitized task slugs across the whole run. The non-batched
     # path doesn't enter that helper, so the set stays empty there.
@@ -182,7 +195,7 @@ def launch_and_poll_mappers(
     }
 
     launch_mappers_up_to_limit(**launch_kwargs)
-    _render_polling_tick(recipe, ctx, all_agents, timed_out_ids, launch_failures)
+    _render_polling_tick(recipe, ctx, all_agents, error_summary_by_agent_id, launch_failures)
 
     while pending_ids or remaining_tasks:
         now = time.monotonic()
@@ -195,7 +208,11 @@ def launch_and_poll_mappers(
 
             if is_agent_outputs_ready(mngr_ctx, config.provider_name, host.id, agent_id):
                 logger.info("Mapper '{}' published outputs, finalizing", info.agent_name)
-                _finalize_mapper(recipe, ctx, mngr_ctx, config.provider_name, host, info, stopper)
+                is_extracted = _finalize_mapper(recipe, ctx, mngr_ctx, config.provider_name, host, info, stopper)
+                if not is_extracted:
+                    error_summary_by_agent_id[agent_id_str] = (
+                        "Mapper published an archive but it could not be extracted."
+                    )
                 pending_ids.discard(agent_id_str)
                 changed = True
                 continue
@@ -209,13 +226,13 @@ def launch_and_poll_mappers(
                 )
                 stopper.submit(host, agent_id, info.agent_name)
                 pending_ids.discard(agent_id_str)
-                timed_out_ids.add(agent_id_str)
+                error_summary_by_agent_id[agent_id_str] = "Agent was stopped because the timeout was reached."
                 changed = True
 
         launch_mappers_up_to_limit(**launch_kwargs)
 
         if changed:
-            _render_polling_tick(recipe, ctx, all_agents, timed_out_ids, launch_failures)
+            _render_polling_tick(recipe, ctx, all_agents, error_summary_by_agent_id, launch_failures)
 
         if not pending_ids and not remaining_tasks:
             break
@@ -230,20 +247,7 @@ def launch_and_poll_mappers(
         )
         time.sleep(poll_interval_seconds)
 
-    return [
-        *launch_failures,
-        *(
-            _mapper_metadata_for(
-                info,
-                error_summary=(
-                    "Agent was stopped because the timeout was reached."
-                    if str(info.agent_id) in timed_out_ids
-                    else None
-                ),
-            )
-            for info in all_agents
-        ),
-    ]
+    return _mapper_metadata_list(all_agents, error_summary_by_agent_id, launch_failures)
 
 
 def wait_for_reducer(

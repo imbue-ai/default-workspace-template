@@ -32,6 +32,7 @@ import pytest
 
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
+from imbue.minds.deployment_tests.helpers import LEASE_MAX_BOX_GENERATION
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 from imbue.minds.deployment_tests.testing import handle_no_pool_capacity
 from imbue.mngr.utils.polling import poll_for_value
@@ -164,6 +165,7 @@ def test_workspace_stop_uploads_frees_slot_and_start_restores(
                 "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderTestKeyForStopStart",
                 "host_name": "stop-start-probe",
                 "attributes": {},
+                "max_box_generation": LEASE_MAX_BOX_GENERATION,
             },
         )
         if lease.status_code == 503:

@@ -42,6 +42,8 @@ from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.imbue_common.logging import setup_logging
 from imbue.imbue_common.pure import pure
+from imbue.observability.alert_provisioning import AlertProvisioningConfig
+from imbue.observability.alert_provisioning import ensure_box_alerting
 from imbue.observability.bugsink_api import mint_bugsink_api_token_over_ssh
 from imbue.observability.bugsink_api import provision_bugsink_projects
 from imbue.observability.bugsink_remote_install import await_bugsink_serving
@@ -97,6 +99,7 @@ R2_ENDPOINT_ENV_VAR: Final[str] = "OBSERVABILITY_R2_ENDPOINT"
 R2_BUCKET_ENV_VAR: Final[str] = "OBSERVABILITY_R2_BUCKET"
 R2_ACCESS_KEY_ID_ENV_VAR: Final[str] = "OBSERVABILITY_R2_ACCESS_KEY_ID"
 R2_SECRET_ACCESS_KEY_ENV_VAR: Final[str] = "OBSERVABILITY_R2_SECRET_ACCESS_KEY"
+ALERTS_GITHUB_TOKEN_ENV_VAR: Final[str] = "OBSERVABILITY_ALERTS_GITHUB_TOKEN"
 ORIGIN_TLS_CERT_FILE_ENV_VAR: Final[str] = "OBSERVABILITY_ORIGIN_TLS_CERT_FILE"
 ORIGIN_TLS_KEY_FILE_ENV_VAR: Final[str] = "OBSERVABILITY_ORIGIN_TLS_KEY_FILE"
 CLOUDFLARE_API_TOKEN_ENV_VAR: Final[str] = "CLOUDFLARE_API_TOKEN"
@@ -106,6 +109,10 @@ _INGEST_CREDENTIAL_ENV_VAR_BY_SENDER: Final[dict[SenderClass, str]] = {
     SenderClass.BOXES: "INGEST_CREDENTIAL_BOXES",
     SenderClass.RELAYS: "INGEST_CREDENTIAL_RELAYS",
 }
+
+# Where the box-signal alert webhook files issues by default (the gen-2
+# telemetry design's destination repo; specs/slice-fleet-gen2).
+DEFAULT_ALERTS_GITHUB_REPOSITORY: Final[str] = "imbue-ai/mngr-internal"
 
 _DEFAULT_FLAVOR_NAME: Final[str] = "d2-4"
 _DEFAULT_IMAGE_NAME: Final[str] = "Debian 13"
@@ -365,15 +372,17 @@ def _wait_for_openobserve_ready(client: httpx.Client, base_url: str) -> None:
 
 
 @contextmanager
-def _openobserve_api_over_ssh_tunnel(ssh_host: str, ssh_user: str, group_name: str) -> Iterator[OpenObserveHttpApi]:
-    """Yield a root-authenticated API client for one instance, through a short-lived SSH tunnel.
+def _root_api_over_ssh_tunnel(ssh_user: str, ssh_host: str, group_name: str) -> Iterator[OpenObserveHttpApi]:
+    """Yield a root-authenticated api reached over a short-lived SSH tunnel to the instance's loopback.
 
     The API is only reachable on the instance's loopback (the public gate
-    exposes ingest routes only). ssh binds the -L port as soon as it
-    authenticates, which says nothing about the remote service -- and the
-    provisioning recipe runs seconds after ``deploy`` (re)started openobserve
-    (whose first boot migrates the metadata store before its HTTP server
-    answers) -- so the API itself is waited for before yielding.
+    exposes ingest routes only). Root credentials come from the usual
+    OBSERVABILITY_* variables. The tunnel
+    waits for the local port AND for the OpenObserve API itself: ssh binds the
+    -L port as soon as it authenticates, which says nothing about the remote
+    service -- and the provisioning recipes run seconds after ``deploy``
+    (re)started openobserve (whose first boot migrates the metadata store
+    before its HTTP server answers).
     """
     root_email = _require_env(ROOT_EMAIL_ENV_VAR)
     root_password = _require_env(ROOT_PASSWORD_ENV_VAR)
@@ -392,7 +401,7 @@ def _openobserve_api_over_ssh_tunnel(ssh_host: str, ssh_user: str, group_name: s
                 f"{ssh_user}@{ssh_host}",
             ],
             is_checked_by_group=False,
-            name=f"observability-tunnel-{ssh_host}",
+            name=f"{group_name}-tunnel-{ssh_host}",
         )
         try:
             _wait_for_local_port(local_port, tunnel_process)
@@ -427,7 +436,7 @@ def provision_accounts(ssh_host: str, ssh_user: str) -> None:
         sender_class: os.environ.get(env_var_name, "")
         for sender_class, env_var_name in _INGEST_CREDENTIAL_ENV_VAR_BY_SENDER.items()
     }
-    with _openobserve_api_over_ssh_tunnel(ssh_host, ssh_user, "observability-provision-accounts") as api:
+    with _root_api_over_ssh_tunnel(ssh_user, ssh_host, "observability-provision-accounts") as api:
         credential_by_sender = ensure_sender_credentials(api, existing_credential_by_sender)
         is_applied_by_stream = apply_log_stream_retention(api, LOGS_RETENTION_DAYS)
     _emit_json(
@@ -445,6 +454,47 @@ def provision_accounts(ssh_host: str, ssh_user: str) -> None:
     )
 
 
+@main.command(name="provision-alerts")
+@click.option("--ssh-host", required=True, help="Instance host IP (the API is reached over an SSH tunnel)")
+@click.option("--ssh-user", default="debian", show_default=True, help="SSH user on the instance host")
+@click.option("--tier", required=True, help="Tier this instance serves (production / staging / dev)")
+@click.option(
+    "--github-repository",
+    default=DEFAULT_ALERTS_GITHUB_REPOSITORY,
+    show_default=True,
+    help="GitHub 'owner/repo' the issue webhook posts alerts to",
+)
+@click.option(
+    "--email-recipient",
+    "email_recipients",
+    multiple=True,
+    help=(
+        "SMTP fallback recipient (repeatable). Omit to skip the email destination entirely; the instance "
+        "also needs server-side SMTP configuration before email delivery works."
+    ),
+)
+def provision_alerts(
+    ssh_host: str, ssh_user: str, tier: str, github_repository: str, email_recipients: tuple[str, ...]
+) -> None:
+    """Provision the tier's box-signal alerting (templates, destinations, alert rules); print the result as JSON.
+
+    Idempotent create-or-converge: re-running re-applies the rendered
+    payloads, so template or rule changes reach the instance by re-running.
+    The GitHub token comes from OBSERVABILITY_ALERTS_GITHUB_TOKEN (never
+    argv); root credentials from the usual OBSERVABILITY_* variables. The API
+    is loopback-only, so the calls run through a short-lived SSH tunnel.
+    """
+    provisioning_config = AlertProvisioningConfig(
+        tier=ObservabilityTierName(tier),
+        github_repository=github_repository,
+        github_token=SecretStr(_require_env(ALERTS_GITHUB_TOKEN_ENV_VAR)),
+        email_recipients=tuple(email_recipients),
+    )
+    with _root_api_over_ssh_tunnel(ssh_user, ssh_host, "observability-provision-alerts") as api:
+        report = ensure_box_alerting(api, provisioning_config)
+    _emit_json({"created": list(report.created), "updated": list(report.updated)})
+
+
 @main.command(name="import-dashboards")
 @click.option("--ssh-host", required=True, help="Instance host IP (the API is reached over an SSH tunnel)")
 @click.option("--ssh-user", default="debian", show_default=True, help="SSH user on the instance host")
@@ -457,7 +507,7 @@ def import_dashboards(ssh_host: str, ssh_user: str) -> None:
     ``imbue/observability/dashboards/``, then re-import everywhere.
     """
     definitions = load_dashboard_definitions(dashboard_definitions_dir())
-    with _openobserve_api_over_ssh_tunnel(ssh_host, ssh_user, "observability-import-dashboards") as api:
+    with _root_api_over_ssh_tunnel(ssh_user, ssh_host, "observability-import-dashboards") as api:
         actions = ensure_dashboards(api, definitions)
     _emit_json(
         {

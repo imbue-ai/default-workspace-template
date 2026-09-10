@@ -64,6 +64,8 @@ from imbue.mngr_imbue_cloud.providers.instance import _advance_workspace_start
 from imbue.mngr_imbue_cloud.providers.instance import _read_first_existing_host_record
 from imbue.mngr_imbue_cloud.providers.instance import _resolve_fast_path_attributes
 from imbue.mngr_imbue_cloud.providers.instance import leased_info_from_workspace
+from imbue.mngr_imbue_cloud.providers.instance import should_read_container_ca_trust_from_vm
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.wire_types import LeasedHostInfo
 from imbue.mngr_imbue_cloud.wire_types import WorkspaceInfo
 from imbue.mngr_imbue_cloud.wire_types import WorkspaceStatus
@@ -1601,6 +1603,17 @@ def test_leased_info_from_workspace_rejects_missing_placement() -> None:
 
     with pytest.raises(ImbueCloudConnectorError):
         leased_info_from_workspace(workspace)
+
+
+def test_should_read_container_ca_trust_from_vm_only_for_a_gen2_slice() -> None:
+    # Only a gen-2 slice's container trusts a CA; an OVH host (is_slice=False)
+    # and a gen-1 slice both authorize keys the normal way.
+    assert should_read_container_ca_trust_from_vm(is_slice=True, box_generation=FIRST_QEMU_BOX_GENERATION) is True
+    assert should_read_container_ca_trust_from_vm(is_slice=True, box_generation=FIRST_QEMU_BOX_GENERATION - 1) is False
+    assert should_read_container_ca_trust_from_vm(is_slice=False, box_generation=FIRST_QEMU_BOX_GENERATION) is False
+    assert (
+        should_read_container_ca_trust_from_vm(is_slice=False, box_generation=FIRST_QEMU_BOX_GENERATION - 1) is False
+    )
 
 
 class _CannedWorkspaceClient(ImbueCloudConnectorClient):
