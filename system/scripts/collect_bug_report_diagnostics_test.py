@@ -1886,6 +1886,61 @@ def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
         ]
 
 
+def test_a_withheld_class_does_not_also_claim_it_was_merely_trimmed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The two notes a class can carry contradict each other.
+
+    A class can be trimmed by its byte budget and then withheld by the scan, and
+    the trimmed note is the one that reads as reassurance: "one file was left
+    out" says the rest arrived. When nothing arrived, that is the wrong
+    conclusion to leave a reader holding -- the very reading the trimmed note
+    was added to prevent, pointed the other way.
+    """
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=secret)
+    log_dir = tmp_path / "supervisor"
+    _write_log(
+        log_dir, "system_interface-stdout.log", mtime=time.time(), content="up\n"
+    )
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    _write_agent_log(
+        agents_dir, "oldest", "app_server.log", mtime=now - 100, content="x" * 400
+    )
+    # The newest is what the budget keeps and the scan then finds a secret in,
+    # so the class is both trimmed and withheld.
+    _write_agent_log(
+        agents_dir,
+        "newest",
+        "app_server.log",
+        mtime=now,
+        content="export API_KEY={}\n{}".format(secret, "y" * 400),
+    )
+    module = _load_collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=_write_mngr_stub(tmp_path, agents=("oldest", "newest")),
+        supervisord_conf=conf,
+        workspace_dir=tmp_path / "workspace",
+        scan_gate_dir=gate,
+        agents_dir=agents_dir,
+    )
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 500)
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert not any(name.startswith("agent-logs/") for name in archive.namelist()), (
+            archive.namelist()
+        )
+        assert _notes_lines(archive) == [
+            "agent logs: withheld: the secret scan reported findings"
+        ]
+
+
 def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

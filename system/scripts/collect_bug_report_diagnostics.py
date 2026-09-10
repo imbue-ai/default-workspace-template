@@ -1021,6 +1021,11 @@ def main(argv: Sequence[str]) -> None:
     # not in the archive, one line here says so. The archive is the only
     # channel back to the report.
     notes: list[str] = []
+    # How many files each class's byte budget left out, said in the notes only
+    # for a class that actually ships: a class the scan then withholds sent
+    # nothing at all, and "it arrived minus one file" is the wrong thing to hand
+    # a reader who is holding none of it.
+    dropped_by_key: dict[str, int] = {}
 
     # The classes the archive is built from, each released or withheld on its
     # own so one chat carrying a secret costs the report its conversations and
@@ -1029,10 +1034,7 @@ def main(argv: Sequence[str]) -> None:
     collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
     if "--logs" in flags:
         log_members, dropped_logs = collect_log_members()
-        if dropped_logs:
-            notes.append(
-                "workspace logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_logs)
-            )
+        dropped_by_key[WORKSPACE_LOGS_KEY] = dropped_logs
         collected.append(
             (
                 WORKSPACE_LOGS_KEY,
@@ -1055,10 +1057,7 @@ def main(argv: Sequence[str]) -> None:
         )
         if not agent_log_members:
             notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
-        elif dropped_agent_logs:
-            notes.append(
-                "agent logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_agent_logs)
-            )
+        dropped_by_key[AGENT_LOGS_KEY] = dropped_agent_logs
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
 
         # Its own class, not part of the agent logs above: a harness log db is
@@ -1068,10 +1067,7 @@ def main(argv: Sequence[str]) -> None:
         log_db_members, dropped_log_dbs = collect_agent_log_db_members(
             scan_timeout_seconds
         )
-        if dropped_log_dbs:
-            notes.append(
-                "agent log databases: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_log_dbs)
-            )
+        dropped_by_key[AGENT_LOG_DB_KEY] = dropped_log_dbs
         collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
 
     if "--transcript" in flags:
@@ -1120,6 +1116,9 @@ def main(argv: Sequence[str]) -> None:
         if key in withheld:
             notes.append("{}: {}".format(label, withheld[key]))
             continue
+        dropped = dropped_by_key.get(key, 0)
+        if dropped:
+            notes.append("{}: {}".format(label, NOTE_TRIMMED_TO_BUDGET.format(dropped)))
         members.extend(class_members)
 
     # The notes ride inside the archive itself, so a reader learns what was
