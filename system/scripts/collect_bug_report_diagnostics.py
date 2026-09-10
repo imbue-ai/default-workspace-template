@@ -349,9 +349,15 @@ def read_log_db(path: str) -> str:
         # bumped schema can hand back a NULL level or a ts that is not a number --
         # neither of which is a sqlite3.Error. Unguarded, that ends the whole
         # collection and the report arrives with nothing in it at all.
+        #
+        # OSError belongs in this list because a ts outside the platform's time_t
+        # is what ``datetime.fromtimestamp`` raises it for, and a ts moved to
+        # nanoseconds is exactly that -- the plainest form the anticipated schema
+        # bump could take. Nothing here touches the filesystem (the rows are
+        # already fetched), so there is no file-level OSError for it to swallow.
         try:
             line = format_log_db_row(ts, ts_nanos, level, target, body or "")
-        except (TypeError, ValueError, OverflowError) as e:
+        except (TypeError, ValueError, OverflowError, OSError) as e:
             return "(unreadable: {!r})".format(e)
         cost = len(line.encode("utf-8")) + 1
         if cost > budget:
