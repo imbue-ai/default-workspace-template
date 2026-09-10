@@ -966,9 +966,9 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
 /** Retire the launcher a just-opened tab was asked for from. */
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
-  if (!isLauncherPanel(panelId)) return;
   const panel = dockview.panels.find((candidate) => candidate.id === panelId);
-  if (panel) dockview.removePanel(panel);
+  if (panel === undefined || parsePanelParams(panel.params)?.kind !== "launcher") return;
+  dockview.removePanel(panel);
 }
 
 // The one focus change that must NOT fold launchers away: revealing an instance the view
