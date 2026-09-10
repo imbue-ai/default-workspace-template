@@ -42,6 +42,50 @@ Write tests and optimize in parallel, if possible. Avoid running full test suite
 unless necessary, such as at the very end. The long tail is often review passes
 and full test suites at the end of hardening.
 
+## The scope file
+
+Every run computes the creation's footprint once, before any other work, and
+writes it to the path the task frontmatter's `scope_file` names -- Step 1's
+`eval` exposes it as `SCOPE_FILE`, and it sits beside your task file at
+`data/.tasks/harden/<slug>/scope.json`:
+
+```bash
+mkdir -p "$(dirname "$SCOPE_FILE")"
+
+# TYPE app (an app with an app.toml) -- from the manifest:
+uv run app-manifest footprint system/apps/<package>/app.toml \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+
+# TYPE skill -- by path:
+uv run app-manifest footprint --for-path .agents/skills/<name> \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+```
+
+`DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
+recorded at dispatch as the one *before* the work being hardened began, so the
+scope file's `diff` covers the committed change you are verifying as well as
+your own commits. Fail loudly if it is unset. A creation with no manifest -- a
+pre-manifest app, a standalone service, the system interface -- has nothing to
+resolve: its footprint is its own directory plus its supervisord section, and
+the run carries no scope file.
+
+The file records `primary` (the creation's own directories), `wiring` (the
+`system/supervisord.conf` sections that run it), `references` (what its
+manifest claims outside its directory -- a skill that drives it, a script, a
+doc), `context` (paths to read but never change), `conventions`,
+`exclude` (a hard denylist of globs), and `diff` (the branch's changed files,
+split into those inside the footprint and `outside_footprint`). Three consumers
+read it: the test selection in `type-app.md`, the freshness check the lead runs
+before merging (`.agents/shared/references/harden-contention.md`), and the
+review invocations in `verification.md`. Regenerate it whenever the footprint
+moves under you -- when you register a `[[references]]` entry, or when you add a
+supervisord section.
+
+A non-empty `diff.outside_footprint` is a claim to settle before you report. For
+each path, either add a `[[references]]` entry to the app's `app.toml` -- when
+the file genuinely belongs to the creation -- or name it in your final report
+under `Outside footprint:`, one line each on why it changed on this branch.
+
 ## Testing and hardening contract
 
 - **Write or extend thorough tests** that assert on markers which are true if

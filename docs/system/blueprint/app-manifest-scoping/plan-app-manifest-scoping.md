@@ -65,7 +65,7 @@ A `[references]` table with sub-tables (`[references.slack-inbox-refresh]`) is a
 | `references[].note` | Optional one line: why the artifact belongs to the app and which surface it uses. This is what tells a reviewer which contract to check. |
 | `scope.exclude` | Optional list of repo-root-relative globs. Two uses: paths that are never considered even when they changed (generated frontend bundles, vendored assets, fixtures), and subdirectories carved out of an allow-listed path. The list is a denylist and is non-exhaustive by design: it is combined with the built-in excludes below, and anything simply absent from the footprint is "not in scope", not "excluded". |
 
-Globs appear only in `scope.exclude`, where "match many, deny all" is the wanted semantics; a reference is a declaration of ownership and stays literal, so validation is exact and each entry can explain itself. Exclude matching uses the standard library (`pathlib.PurePath.full_match`, Python 3.13; the root venv runs 3.13.7 and `app_manifest` declares `>=3.11`, so the floor is raised to 3.13 or the matcher falls back to `fnmatch` on older interpreters). No new dependency.
+Globs appear only in `scope.exclude`, where "match many, deny all" is the wanted semantics; a reference is a declaration of ownership and stays literal, so validation is exact and each entry can explain itself. Exclude matching uses `pathspec` (gitwildmatch, the same semantics as `.gitignore`), a new dependency of `app_manifest`. CI runs Python 3.12 (`.github/workflows/ci.yml`), so the standard library's `PurePath.full_match` (3.13) is not available, and `fnmatch` has no `**` semantics.
 
 Built-in excludes, applied to every footprint and never listed in a manifest: `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/static/**` (build output), `**/.venv/**`.
 
@@ -203,5 +203,5 @@ Toy fixture and measurement:
 - Review agents and their reading instructions (read-only, out of scope): `~/.claude/plugins/marketplaces/imbue-code-guardian/plugins/imbue-code-guardian/agents/{verify-and-fix,analyze-architecture,validate-diff}.md`; skills `autofix/SKILL.md`, `verify-architecture/SKILL.md`.
 - Hand-derived footprints: `.agents/shared/worker/references/type-app.md`; `.agents/shared/references/harden-contention.md` (freshness check); `.agents/skills/publish-template/SKILL.md` §1.
 - Declared-path precedent: `system/services/env_converge/src/env_converge/template_manifest.py`, `Recipe.include`.
-- Exclude-glob matching: `pathlib.PurePath.full_match` (Python 3.13 standard library).
+- Exclude-glob matching: `pathspec` (gitwildmatch); CI Python version in `.github/workflows/ci.yml`.
 - Worker template and reviewer flags: `.mngr/settings.toml`, `[create_templates.worker]`.

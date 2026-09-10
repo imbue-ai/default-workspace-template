@@ -17,12 +17,18 @@ from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from app_manifest.primitives import DisplayName
+from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
+from app_manifest.primitives import ReferenceNote
+from app_manifest.primitives import ReferencePath
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
+
+# Where an app package sits, as the location rules for references read it.
+APPS_DIRECTORY_PARTS: Final[tuple[str, str]] = ("system", "apps")
 
 DEFAULT_PRIORITY: Final[PriorityName] = PriorityName("user")
 
@@ -54,6 +60,23 @@ class AppAction(FrozenModel):
     params: tuple[ActionParam, ...] = Field(default=(), description="The create body's documented params")
 
 
+class AppReference(FrozenModel):
+    """An artifact outside the app's own directory that belongs to the app."""
+
+    path: ReferencePath = Field(description="The literal repo-root-relative file or directory")
+    note: ReferenceNote | None = Field(
+        default=None, description="One line: why it belongs to the app and which surface it uses"
+    )
+
+
+class ScopeRules(FrozenModel):
+    """What an app's footprint leaves out on top of the built-in exclusions."""
+
+    exclude: tuple[ExcludeGlob, ...] = Field(
+        default=(), description="Repo-root-relative gitignore-style globs no pass ever considers"
+    )
+
+
 class DefaultShortcut(FrozenModel):
     """The rail row a new project is seeded with for this app."""
 
@@ -81,6 +104,12 @@ class AppManifest(FrozenModel):
         description="The app's place among the New Tab page's leading tiles (lower first); "
         "an app without one follows every ranked app",
     )
+    references: tuple[AppReference, ...] = Field(
+        default=(), description="The artifacts outside the app's directory that belong to it"
+    )
+    scope: ScopeRules = Field(
+        default_factory=ScopeRules, description="The app's own exclusions from its footprint"
+    )
     handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
 
     @model_validator(mode="before")
@@ -100,6 +129,11 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError("actions are only allowed with instances = true")
         if self.handles:
             raise InvalidManifestValueError("handles must be absent or empty in this release")
+        reference_paths = [reference.path for reference in self.references]
+        if len(set(reference_paths)) != len(reference_paths):
+            raise InvalidManifestValueError(
+                f"reference paths must be unique, got {reference_paths}"
+            )
         action_ids = [action.id for action in self.actions]
         if len(set(action_ids)) != len(action_ids):
             raise InvalidManifestValueError(f"action ids must be unique, got {action_ids}")
@@ -119,8 +153,79 @@ def describe_validation_error(error: ValidationError) -> str:
     return f"field {location!r}: {first['msg']}"
 
 
-def load_manifest(path: Path) -> AppManifest:
-    """Read and validate an app.toml, also checking that the icon it names exists beside it."""
+def repo_root_for_manifest(manifest_path: Path) -> Path | None:
+    """The repo root a manifest at ``system/apps/<package>/app.toml`` sits in, or None off that layout."""
+    resolved = manifest_path.resolve()
+    if len(resolved.parents) < 4:
+        return None
+    system_directory_name, apps_directory_name = APPS_DIRECTORY_PARTS
+    if resolved.parents[1].name != apps_directory_name:
+        return None
+    if resolved.parents[2].name != system_directory_name:
+        return None
+    return resolved.parents[3]
+
+
+def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
+    """The manifest's own app directory as a repo-relative path with a trailing slash, when it is inside the root."""
+    app_directory = manifest_path.resolve().parent
+    if not app_directory.is_relative_to(repo_root):
+        return None
+    return f"{app_directory.relative_to(repo_root).as_posix()}/"
+
+
+def _describe_reference_location_problem(
+    reference: AppReference, own_app_directory: str | None, repo_root: Path
+) -> str | None:
+    """Return why a reference may not name where it does, given the app's own directory."""
+    if own_app_directory is not None and (
+        reference.path == own_app_directory.rstrip("/")
+        or reference.path.startswith(own_app_directory)
+    ):
+        return (
+            f"reference {str(reference.path)!r} is inside the app's own directory "
+            f"{own_app_directory!r}, which is already implicit"
+        )
+    parts = reference.path.split("/")
+    # A file that sits directly in system/apps/ (its README) is not an app; only a
+    # reference into a sibling app's directory is.
+    is_in_another_app = (
+        tuple(parts[:2]) == APPS_DIRECTORY_PARTS
+        and len(parts) > 2
+        and repo_root.joinpath(*APPS_DIRECTORY_PARTS, parts[2]).is_dir()
+    )
+    if is_in_another_app:
+        return (
+            f"reference {str(reference.path)!r} names another app's directory; an app-to-app "
+            "dependency belongs in pyproject.toml, where it is already derivable"
+        )
+    return None
+
+
+def _check_references_against_repo_root(
+    path: Path, manifest: AppManifest, repo_root: Path
+) -> None:
+    """Raises ManifestLoadError when a reference sits where it may not, or names nothing that exists."""
+    own_app_directory = app_package_directory(repo_root, path)
+    for reference in manifest.references:
+        problem = _describe_reference_location_problem(reference, own_app_directory, repo_root)
+        if problem is not None:
+            raise ManifestLoadError(f"manifest {path} is invalid: {problem}")
+        if not (repo_root / reference.path).exists():
+            raise ManifestLoadError(
+                f"manifest {path} references {str(reference.path)!r}, which does not exist under {repo_root}"
+            )
+
+
+def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
+    """Read and validate an app.toml, also checking that the icon it names exists beside it.
+
+    The reference rules that need the manifest's place in the tree (every reference exists, and
+    none names this app's own directory or another app's) are checked against ``repo_root`` when
+    it is given, and otherwise against the root derived from a manifest that sits at
+    ``system/apps/<package>/app.toml``. A manifest anywhere else (a temp directory in a test)
+    with no explicit root skips those checks; the value rules still apply.
+    """
     try:
         raw_text = path.read_text(encoding="utf-8")
     except OSError as e:
@@ -135,6 +240,9 @@ def load_manifest(path: Path) -> AppManifest:
         raise ManifestLoadError(f"manifest {path} is invalid: {describe_validation_error(e)}") from e
     if manifest.icon is not None and not (path.parent / manifest.icon).is_file():
         raise ManifestLoadError(f"manifest {path} names icon {str(manifest.icon)!r}, which does not exist beside it")
+    resolved_repo_root = repo_root.resolve() if repo_root is not None else repo_root_for_manifest(path)
+    if resolved_repo_root is not None:
+        _check_references_against_repo_root(path, manifest, resolved_repo_root)
     return manifest
 
 

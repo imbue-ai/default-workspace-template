@@ -57,8 +57,12 @@ tk start "$TICKET_ID"
 
 ## Step 2: Write the task file
 
-Frontmatter carries `operation: heal`, the `type`, and the worker reporting
-fields (per `.agents/shared/references/worker-reporting.md`). The body describes
+Frontmatter carries `operation: heal`, the `type`, the worker reporting
+fields (per `.agents/shared/references/worker-reporting.md`), `scope_file`
+(where the worker writes the creation's computed footprint at the start of its
+run -- you name the path, the worker creates the file), and `diff_base` (your
+`HEAD` at dispatch: the fix does not exist yet, so the worker's own commits are
+the whole diff). The body describes
 the failure and anchors the worker's search with verbatim quotes (the user's
 request, the failing command or error, any tool output that exposed the
 misbehavior). Without anchors the worker scans the wrong region of your
@@ -68,6 +72,8 @@ transcript.
 cat > data/.tasks/harden/heal-$TARGET/task.md << TASK_EOF
 ---
 finish_report_path: data/.tasks/harden/heal-$TARGET/reports/report.md
+scope_file: data/.tasks/harden/heal-$TARGET/scope.json
+diff_base: $(git rev-parse HEAD)
 operation: heal
 type: skill
 ---

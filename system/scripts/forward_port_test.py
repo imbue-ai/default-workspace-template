@@ -855,6 +855,37 @@ def test_a_manifest_missing_its_icon_file_does_not_brick_an_existing_apps_restar
     assert row["icon"] == _ICON
 
 
+def test_registration_ignores_the_manifests_references_and_scope_tables(
+    tmp_path: Path,
+) -> None:
+    """The footprint tables describe an app for review and test passes, not for the runtime.
+
+    Registration copies only the keys it owns, so a reference to something that has been
+    deleted -- or any other footprint mistake -- can never crash-loop the app at start.
+    """
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        _FULL_MANIFEST
+        + '\n[[references]]\npath = ".agents/skills/files-refresh"\n'
+        'note = "Reindexes the tree; calls POST /api/reindex"\n'
+        '\n[[references]]\npath = "system/scripts/run_files.sh"\n'
+        '\n[scope]\nexclude = ["system/apps/files/frontend/dist/**"]\n',
+    )
+
+    result = _run(
+        ["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file
+    )
+
+    assert result.returncode == 0, result.stderr
+    row = _read_apps(apps_file)[0]
+    assert "references" not in row
+    assert "scope" not in row
+    # The keys the manifest does own still land, so this is not a vacuous pass.
+    assert row["display_name"] == "File Viewer"
+    assert row["priority"] == "files"
+
+
 # --- the stdlib writer ------------------------------------------------------------
 
 

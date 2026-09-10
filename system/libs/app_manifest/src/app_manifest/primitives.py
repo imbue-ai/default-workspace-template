@@ -199,3 +199,113 @@ class IconPath(str):
         return core_schema.no_info_after_validator_function(
             cls, core_schema.str_schema()
         )
+
+
+# A reference names one literal artifact, so a path that could match many is refused
+# outright rather than expanded: the manifest is a declaration of ownership, and every
+# entry has to be checkable against the tree exactly.
+GLOB_CHARACTERS: Final[tuple[str, ...]] = ("*", "?", "[", "]")
+
+# Trees a reference may never name: the vendored subtrees are not this repo's to own,
+# and everything under data/ is gitignored runtime state that no review or test pass
+# should be pointed at.
+FORBIDDEN_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("system/vendor/", "data/")
+
+MAX_REFERENCE_NOTE_LENGTH: Final[int] = 200
+
+
+@pure
+def describe_repo_relative_path_problem(value: str, field_name: str) -> str | None:
+    """Return why ``value`` cannot be a repo-root-relative POSIX path, or None when it can."""
+    if not value or not value.strip():
+        return f"{field_name} must not be empty"
+    if value.startswith("/"):
+        return f"invalid {field_name} {value!r}: must be relative to the repo root, not absolute"
+    if "\\" in value:
+        return f"invalid {field_name} {value!r}: paths are POSIX, so backslashes are not allowed"
+    if ".." in value.split("/"):
+        return f"invalid {field_name} {value!r}: '..' segments are not allowed"
+    return None
+
+
+@pure
+def describe_reference_path_problem(value: str) -> str | None:
+    """Return why ``value`` cannot be a reference path, or None when it can."""
+    problem = describe_repo_relative_path_problem(value, "reference path")
+    if problem is not None:
+        return problem
+    if value.endswith("/"):
+        return f"invalid reference path {value!r}: name a directory without a trailing slash"
+    for character in GLOB_CHARACTERS:
+        if character in value:
+            return (
+                f"invalid reference path {value!r}: a reference is a literal path, but this "
+                f"contains the glob character {character!r}"
+            )
+    for prefix in FORBIDDEN_REFERENCE_PREFIXES:
+        if value.startswith(prefix):
+            return f"invalid reference path {value!r}: nothing under {prefix!r} can be referenced"
+    return None
+
+
+class RepoRelativePath(str):
+    """A POSIX path relative to the repo root, as a creation's footprint names its parts."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_repo_relative_path_problem(value, "path")
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+class ReferencePath(RepoRelativePath):
+    """A literal repo-root-relative file or directory that an app declares it owns."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_reference_path_problem(value)
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return str.__new__(cls, value)
+
+
+class ExcludeGlob(RepoRelativePath):
+    """A repo-root-relative gitignore-style glob naming paths a footprint never considers."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = describe_repo_relative_path_problem(value, "exclude glob")
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return str.__new__(cls, value)
+
+
+class ReferenceNote(str):
+    """One line saying why a referenced artifact belongs to an app and which surface it uses."""
+
+    def __new__(cls, value: str) -> Self:
+        if not value.strip():
+            raise InvalidManifestValueError("a reference note must not be empty")
+        if "\n" in value or "\r" in value:
+            raise InvalidManifestValueError(
+                f"invalid reference note {value!r}: a note is a single line"
+            )
+        if len(value) > MAX_REFERENCE_NOTE_LENGTH:
+            raise InvalidManifestValueError(
+                f"a reference note must be at most {MAX_REFERENCE_NOTE_LENGTH} characters, got {len(value)}"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )

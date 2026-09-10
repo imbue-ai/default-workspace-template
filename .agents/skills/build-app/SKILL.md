@@ -184,7 +184,9 @@ What gets generated:
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
-  editing it).
+  editing it). Anything you build for this app outside `system/apps/<package>/`
+  -- a skill that drives it, a script, a doc -- is registered in the same file
+  under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
   the app's own tool environment exposes.
