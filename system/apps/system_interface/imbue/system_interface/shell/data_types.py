@@ -121,8 +121,9 @@ def with_panel_params_address(dockview: dict[str, Any], panel_id: str, address: 
     }
 
 
-# CLEANUP: drop this fold, the ``tabs`` mention in the docstrings that cite it, and the two tests of the older
-# shape (``test_a_layout_in_the_older_shape_reads_as_params_only`` in data_types_test.py and
+# CLEANUP: drop this fold, the ``_fold_legacy_tabs`` validators on ``LayoutRecord`` and ``LayoutSaveRequest`` that
+# call it, the ``tabs`` mention in the docstrings that cite it, and the two tests of the older shape
+# (``test_a_layout_in_the_older_shape_reads_as_params_only`` in data_types_test.py and
 # ``test_a_save_in_the_older_shape_is_folded_into_the_panels_params`` in routes_test.py) once every workspace has
 # saved a layout with a shell from after the workspace app model's params-only layout files: a file written by
 # the older shell carried a ``tabs`` block beside the dockview document, and that block was the truth of each
