@@ -347,7 +347,7 @@ class LayoutStore(MutableModel):
         return rewritten
 
     def rebind_tab(self, tab_id: TabId, address: Address, now: datetime) -> list[StoredLayout]:
-        """Point every tab record carrying ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
+        """Point every panel whose params carry ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
         return self._rewrite_layouts_everywhere(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
 
     def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:
