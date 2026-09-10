@@ -1232,12 +1232,14 @@ def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
 
-    members = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == [
         "agent-logs/newest/app_server.log",
         "agent-logs/middle/app_server.log",
     ]
+    # The count is what lets the archive say it is short rather than look complete.
+    assert dropped == 1
 
 
 def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
@@ -1254,7 +1256,7 @@ def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 100)
 
-    members = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
 
@@ -1274,7 +1276,7 @@ def test_agent_log_members_stay_unique_when_two_agent_names_sanitize_alike(
     stub = _write_mngr_stub(tmp_path, agents=("chat 1", "chat+1"))
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert sorted(name for name, _, _ in members) == [
         "agent-logs/chat_1/app_server-2.log",
@@ -1294,12 +1296,13 @@ def test_the_service_log_class_stops_at_its_byte_budget(tmp_path: Path) -> None:
     module = _load_collector(supervisor_log_dir=log_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
 
-    members = module.collect_log_members()
+    members, dropped = module.collect_log_members()
 
     assert [name for name, _, _ in members] == [
         "logs/newest.log",
         "logs/middle.log",
     ]
+    assert dropped == 1
 
 
 def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
@@ -1323,7 +1326,7 @@ def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
     )
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members = module.collect_agent_log_members(5.0, is_pane_included=False)
+    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=False)
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
     # Not merely absent from the archive -- never captured, so nothing to leak.
@@ -1354,7 +1357,7 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 700)
     _rebind(module.__dict__, "MAX_PANE_CLASS_BYTES", 700)
 
-    members = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
     names = [name for name, _, _ in members]
 
     assert sum(1 for name in names if name.endswith("app_server.log")) == 2
@@ -1415,3 +1418,52 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
             "collection-notes.txt",
         ]
         assert _notes_lines(archive) == ["agent logs: withheld: the secret scan reported findings"]
+
+
+def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A trimmed class must not read like a complete one.
+
+    The archive is the only channel back to the report, so a reader who opens
+    `agent-logs/` and finds one agent has to be able to tell "the others wrote
+    nothing" from "the others did not fit". Without the note, the wrong reading
+    is the natural one -- and it is the wrong reading exactly when it matters,
+    because the budget bites on the busy multi-agent workspaces.
+    """
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    log_dir = tmp_path / "supervisor"
+    _write_log(
+        log_dir, "system_interface-stdout.log", mtime=time.time(), content="interface started\n"
+    )
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    for index, name in enumerate(("oldest", "newest")):
+        _write_agent_log(
+            agents_dir, name, "app_server.log", mtime=now - 100 + index, content="x" * 400
+        )
+    module = _load_collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=_write_mngr_stub(tmp_path, agents=("oldest", "newest")),
+        supervisord_conf=conf,
+        workspace_dir=tmp_path / "workspace",
+        scan_gate_dir=gate,
+        agents_dir=agents_dir,
+    )
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 500)
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == [
+            "metadata.json",
+            "logs/system_interface.log",
+            "agent-logs/newest/app_server.log",
+            "collection-notes.txt",
+        ]
+        assert _notes_lines(archive) == [
+            "agent logs: 1 file(s) were left out to fit the collection's size budget"
+        ]

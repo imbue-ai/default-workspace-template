@@ -17,10 +17,11 @@ first. With BOTH flags each running agent also contributes an
 ``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
 into its pane, so its scrollback needs the chats consent as well as the logs
 one. Each of the three classes is scanned and released or
-withheld on its own. Anything requested that was withheld is a plain-words line
-in the archive's own ``collection-notes.txt`` member, so the archive explains
-itself; a content type that was not requested appears in neither the members
-nor the notes.
+withheld on its own. Anything requested that is not in the archive whole -- a
+class withheld by the secret scan, or one the size budget could not fit -- is a
+plain-words line in the archive's own ``collection-notes.txt`` member, so the
+archive explains itself; a content type that was not requested appears in
+neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
@@ -174,6 +175,10 @@ NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothi
 NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
 NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
 NOTE_NO_AGENT_LOGS = "no agent wrote a harness log to collect"
+# A class the byte budget could not fit whole. Said out loud because otherwise a
+# trimmed class reads exactly like a complete one, and "the harness that broke
+# wrote nothing" is the wrong conclusion to leave a reader holding.
+NOTE_TRIMMED_TO_BUDGET = "{} file(s) were left out to fit the collection's size budget"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
@@ -309,28 +314,32 @@ def build_metadata() -> dict[str, object]:
 
 def take_within_byte_budget(
     members: Sequence[tuple[str, str, float]], budget_bytes: int
-) -> list[tuple[str, str, float]]:
-    """The longest prefix of ``members`` whose contents fit in ``budget_bytes``.
+) -> tuple[list[tuple[str, str, float]], int]:
+    """The longest prefix of ``members`` fitting ``budget_bytes``, and how many were dropped.
 
     A prefix rather than a best-fit selection: callers order newest-first, so
     stopping at the budget drops the least recent members, and a reader can
     tell what is missing (older) from what is there. The first member always
     rides even when it alone overruns, so a single outsized log cannot empty
     the class.
+
+    The dropped count is returned because the archive is the only channel back
+    to the report: a trimmed class has to be able to say so, or a reader cannot
+    tell it from a complete one.
     """
     kept: list[tuple[str, str, float]] = []
     spent = 0
-    for member in members:
+    for index, member in enumerate(members):
         cost = len(member[1].encode("utf-8"))
         if kept and spent + cost > budget_bytes:
-            break
+            return kept, len(members) - index
         kept.append(member)
         spent += cost
-    return kept
+    return kept, 0
 
 
-def collect_log_members() -> list[tuple[str, str, float]]:
-    """One member per log file, as ``(member name, content, mtime)``.
+def collect_log_members() -> tuple[list[tuple[str, str, float]], int]:
+    """One member per log file, as ``(member name, content, mtime)``, and the budget's drop count.
 
     Separate members rather than one concatenated file: the payload is an
     archive, so there is no reason to make a reader split headed sections apart
@@ -378,8 +387,8 @@ def capture_pane(address: str, timeout: float) -> str | None:
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
 
 
-def collect_agent_log_members(timeout: float, is_pane_included: bool) -> list[tuple[str, str, float]]:
-    """The harness diagnostics for every agent, as ``(member name, content, mtime)``.
+def collect_agent_log_members(timeout: float, is_pane_included: bool) -> tuple[list[tuple[str, str, float]], int]:
+    """The harness diagnostics for every agent, as ``(member name, content, mtime)``, and the drop count.
 
     Agents run in tmux, not under supervisord, so none of this reaches the
     service logs the other half collects: without it a report carries what a
@@ -393,6 +402,10 @@ def collect_agent_log_members(timeout: float, is_pane_included: bool) -> list[tu
 
     ``is_pane_included`` carries the chats consent: the pane holds the rendered
     conversation, so it rides only when the user asked for their chats too.
+
+    The two budgets' drop counts are summed: the note they feed says the archive
+    is short, and which of the two did the trimming is not something a reader
+    can act on.
     """
     log_members: list[tuple[str, str, float]] = []
     pane_members: list[tuple[str, str, float]] = []
@@ -419,9 +432,9 @@ def collect_agent_log_members(timeout: float, is_pane_included: bool) -> list[tu
             )
             pane_members.append((member, pane, time.time()))
     log_members.sort(key=lambda item: item[2], reverse=True)
-    return take_within_byte_budget(log_members, MAX_LOG_CLASS_BYTES) + take_within_byte_budget(
-        pane_members, MAX_PANE_CLASS_BYTES
-    )
+    kept_logs, dropped_logs = take_within_byte_budget(log_members, MAX_LOG_CLASS_BYTES)
+    kept_panes, dropped_panes = take_within_byte_budget(pane_members, MAX_PANE_CLASS_BYTES)
+    return kept_logs + kept_panes, dropped_logs + dropped_panes
 
 
 def safe_member_component(text: str) -> str:
@@ -789,24 +802,29 @@ def main(argv: Sequence[str]) -> None:
     # members ride the archive in this order.
     collected: list[tuple[str, str, list[tuple[str, str, float]]]] = []
     if "--logs" in flags:
+        log_members, dropped_logs = collect_log_members()
+        if dropped_logs:
+            notes.append("workspace logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_logs))
         collected.append(
             (
                 WORKSPACE_LOGS_KEY,
                 "workspace logs",
                 [
                     (METADATA_MEMBER_NAME, json.dumps(build_metadata(), indent=2), time.time()),
-                    *collect_log_members(),
+                    *log_members,
                 ],
             )
         )
         # The pane needs the chats consent as well as this one: it is where a TUI
         # harness renders the conversation, so its scrollback is chat content and
         # not only diagnostics.
-        agent_log_members = collect_agent_log_members(
+        agent_log_members, dropped_agent_logs = collect_agent_log_members(
             scan_timeout_seconds, is_pane_included="--transcript" in flags
         )
         if not agent_log_members:
             notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
+        elif dropped_agent_logs:
+            notes.append("agent logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_agent_logs))
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
 
     if "--transcript" in flags:
