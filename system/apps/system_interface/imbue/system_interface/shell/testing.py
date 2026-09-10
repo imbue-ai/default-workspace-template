@@ -23,6 +23,7 @@ from pydantic import Field
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
@@ -195,6 +196,11 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
         if raw is not None:
             messages.append(json.loads(raw))
     return messages
+
+
+def addresses_by_panel_id(dockview: dict[str, Any] | None) -> dict[str, Address]:
+    """Each instance panel's address, keyed by dockview panel id: how the layout assertions read a document."""
+    return {panel_id: params.address for panel_id, params in instance_panel_params_by_id(dockview).items()}
 
 
 def layout_showing(*addresses: Address) -> LayoutRecord:

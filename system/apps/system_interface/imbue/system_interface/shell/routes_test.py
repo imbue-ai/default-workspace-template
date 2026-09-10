@@ -12,7 +12,6 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
@@ -26,6 +25,7 @@ from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeInstanceFetcher
 from imbue.system_interface.shell.testing import TEST_NOW
 from imbue.system_interface.shell.testing import TEST_TERMINAL_URL
+from imbue.system_interface.shell.testing import addresses_by_panel_id
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
@@ -79,10 +79,6 @@ def _panel_addresses(layout: dict[str, Any]) -> list[str]:
     return [panel["address"] for panel in layout["panels"]]
 
 
-def _stored_addresses(dockview: dict[str, Any] | None) -> list[str]:
-    return [str(params.address) for params in instance_panel_params_by_id(dockview).values()]
-
-
 # ---------- section 5 ----------
 
 
@@ -111,12 +107,10 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
     )
 
     assert response.status_code == 204
-    assert _stored_addresses(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).dockview) == [
-        str(_TERMINAL_2)
-    ]
-    assert _stored_addresses(shell.layouts.read_layout("everything", "c2", DeviceKind.DESKTOP).dockview) == [
-        str(_TERMINAL_2)
-    ]
+    alpha = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
+    everything = shell.layouts.read_layout("everything", "c2", DeviceKind.DESKTOP)
+    assert list(addresses_by_panel_id(alpha.dockview).values()) == [_TERMINAL_2]
+    assert list(addresses_by_panel_id(everything.dockview).values()) == [_TERMINAL_2]
     assert shell.projects.get_project("alpha").tabs == (_TERMINAL_2,)
     messages = drain_messages(client_queue)
     rebound = [message for message in messages if message["type"] == "tab_rebound"]
@@ -417,7 +411,7 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
     assert client.post("/api/layouts/everything", json={**body, "save_id": "nope"}).status_code == 400
 
     own = client.get("/api/layouts/everything?client=c1").get_json()
-    assert _stored_addresses(own["dockview"]) == [str(_TERMINAL_1)]
+    assert list(addresses_by_panel_id(own["dockview"]).values()) == [_TERMINAL_1]
     assert "tabs" not in own and own["updated_at"] == saved.get_json()["updated_at"]
     seeded = client.get("/api/layouts/everything?client=c2&device=desktop").get_json()
     assert seeded["dockview"] == own["dockview"]
@@ -516,7 +510,7 @@ def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskCl
     )
 
     seeded = client.get("/api/layouts/everything?client=c2&device=desktop").get_json()
-    assert seeded["device_kind"] == "mobile" and _stored_addresses(seeded["dockview"]) == [str(_FILES)]
+    assert seeded["device_kind"] == "mobile" and list(addresses_by_panel_id(seeded["dockview"]).values()) == [_FILES]
 
 
 # ---------- the broadcast endpoint ----------
@@ -681,7 +675,7 @@ def test_document_ops_edit_the_target_clients_file_and_announce_the_write(client
     assert _panel_addresses(answer["layout"]) == [str(_TERMINAL_1)]
     # The file is the truth: written for this client, filed into the project, and announced with a shell-minted id.
     stored = shell.layouts.read_client_layout("alpha", "c1")
-    assert stored is not None and _stored_addresses(stored.dockview) == [str(_TERMINAL_1)]
+    assert stored is not None and list(addresses_by_panel_id(stored.dockview).values()) == [_TERMINAL_1]
     assert stored.dockview is not None and stored.dockview["grid"]["root"]["type"] == "branch"
     assert shell.projects.get_project("alpha").tabs == (_TERMINAL_1,)
     messages = drain_messages(client_queue)
@@ -882,7 +876,7 @@ def test_open_of_a_bare_app_creates_through_the_relay_inside_the_op(
     stub_source.is_ready = False
     assert _broadcast(client, "open", {"address": "app:stub"}).status_code == 503
     stored = _shell(app).layouts.read_client_layout("everything", "c1")
-    assert stored is not None and len(_stored_addresses(stored.dockview)) == 2
+    assert stored is not None and len(addresses_by_panel_id(stored.dockview)) == 2
 
 
 def test_transient_ops_reach_the_target_clients_windows(client: FlaskClient, app: Flask) -> None:
