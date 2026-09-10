@@ -12,8 +12,8 @@ plain ``cat`` follows supervisord's ``[include]`` -- all but
 reading ``system/supervisord.conf.d/`` under its literal name.
 
 That makes the glob a real contract, and one that fails *open*: a reader that
-misses the drop-ins still parses a valid config, just a nearly empty one, and
-its assertions pass over a single program. These tests pin the contract so that
+misses the drop-ins still parses a valid config, just an empty one, and its
+assertions pass over nothing at all. These tests pin the contract so that
 degradation is loud.
 """
 
@@ -28,9 +28,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 _DROPIN_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 
-# system_interface is the one program this change leaves in the main config; moving it is the
-# follow-up. Its being there guards nothing: the cross-repo reader is gated below.
-_MAIN_CONFIG_PROGRAMS = frozenset({"system_interface"})
+# supervisord.conf declares no programs of its own: every one lives in a
+# drop-in. Kept as a named empty set so a future carve-out has an obvious home
+# and the assertions below stay readable.
+_MAIN_CONFIG_PROGRAMS: frozenset[str] = frozenset()
 
 _SECTION_RE = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE)
 
@@ -58,6 +59,18 @@ def _parse_main_config() -> configparser.ConfigParser:
     return parser
 
 
+def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
+    """The program and event-listener names a parsed config declares itself.
+
+    Its ``[include]``\\ s are not followed, so this is what that one file says.
+    """
+    return {
+        section.partition(":")[2]
+        for section in parser.sections()
+        if section.startswith(("program:", "eventlistener:"))
+    }
+
+
 def test_include_glob_matches_every_dropin_file() -> None:
     """Every file in supervisord.conf.d/ is reached by the config's own glob.
 
@@ -78,17 +91,14 @@ def test_include_glob_matches_every_dropin_file() -> None:
 def test_every_program_is_discoverable_through_the_include_glob() -> None:
     """Reading the main config plus its globs finds every declared program.
 
-    This is the read every consumer performs. If it ever returns just
-    ``system_interface``, a consumer is silently asserting over one program out
-    of fifteen -- which is exactly how the OOM band checks degraded when the
-    drop-ins were introduced.
+    This is the read every consumer performs. If the glob expansion is wrong it
+    returns whatever the main config declares on its own -- now nothing -- so a
+    consumer silently asserts over an empty set. That is how the OOM band checks
+    degraded when the drop-ins were introduced, when the main config still held
+    ``system_interface`` and made the emptiness look like one real program.
     """
     parser = _parse_main_config()
-    discovered = {
-        section.partition(":")[2]
-        for section in parser.sections()
-        if section.startswith(("program:", "eventlistener:"))
-    }
+    discovered = _programs_declared_in(parser)
     for path in _expand_include_patterns(parser):
         discovered.update(_SECTION_RE.findall(path.read_text()))
 
@@ -96,10 +106,6 @@ def test_every_program_is_discoverable_through_the_include_glob() -> None:
     assert discovered == expected, (
         f"programs reachable through the include glob ({sorted(discovered)}) do not "
         f"match the drop-in files plus the main config's own programs ({sorted(expected)})"
-    )
-    assert len(discovered) > len(_MAIN_CONFIG_PROGRAMS), (
-        "only the main config's own programs were discovered -- the [include] "
-        "expansion is not finding the drop-ins"
     )
 
 
