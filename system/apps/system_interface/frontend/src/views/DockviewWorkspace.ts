@@ -208,13 +208,13 @@ let isApplyingLayout = false;
 // handed to the renderers' ``init``. Nothing here keeps a second copy.
 
 /** The open panel with ``panelId``, or undefined when no panel of that id is open. */
-function openPanel(panelId: string): IDockviewPanel | undefined {
+function panelById(panelId: string): IDockviewPanel | undefined {
   return dockview?.panels.find((candidate) => candidate.id === panelId);
 }
 
 /** The params dockview holds for an open panel; null for a panel that is not open or carries none it can read. */
 function panelParamsOf(panelId: string): PanelParams | null {
-  const panel = openPanel(panelId);
+  const panel = panelById(panelId);
   return panel === undefined ? null : parsePanelParams(panel.params);
 }
 
@@ -457,7 +457,7 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
       {
         label: "Close tab",
         iconName: "close",
-        run: () => openPanel(panelId)?.api.close(),
+        run: () => panelById(panelId)?.api.close(),
       },
     ];
   }
@@ -466,7 +466,7 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
     share: shareActionForApp(resolved.app),
     addToProjects: () => openMembershipDialog(resolved.address, resolved.instance.title),
     rename: () => tabHandlesByPanelId.get(panelId)?.beginTitleEdit(),
-    closeTab: () => openPanel(panelId)?.api.close(),
+    closeTab: () => panelById(panelId)?.api.close(),
     // The tab never offers this: unfiling is what you want while looking at the project's list
     // of what it shows; the rail's row menu carries it.
     removeFromProject: null,
@@ -971,7 +971,7 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
 /** Retire the launcher a just-opened tab was asked for from. */
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
-  const panel = openPanel(panelId);
+  const panel = panelById(panelId);
   if (panel === undefined || parsePanelParams(panel.params)?.kind !== "launcher") return;
   dockview.removePanel(panel);
 }
@@ -1187,7 +1187,7 @@ function openAddressInGroup(address: string, targetGroup: DockviewGroupPanel | n
   revealedOpenPanelId = null;
   if (openPanelId !== null) {
     revealedOpenPanelId = openPanelId;
-    const panel = openPanel(openPanelId);
+    const panel = panelById(openPanelId);
     if (panel) dockview.setActivePanel(panel);
     flashPanelTab(openPanelId);
     return openPanelId;
@@ -1504,7 +1504,7 @@ function dropPanelsForAddress(address: string, options: { keepPage?: boolean } =
  * under the new address. What a tab_rebound push (or a save-time reconcile) does.
  */
 function rebindPanel(panelId: string, address: string): void {
-  const panel = openPanel(panelId);
+  const panel = panelById(panelId);
   if (panel === undefined) return;
   const params = parsePanelParams(panel.params);
   if (params === null || params.kind !== "instance" || params.address === address) return;
@@ -1675,7 +1675,7 @@ async function applyLayout(layout: { dockview: SerializedDockview | null } | nul
     for (const duplicatePanelId of duplicateLiveKeyPanelIds(
       dv.panels.map((panel) => ({ panelId: panel.id, key: liveKeyForPanel(parsePanelParams(panel.params)) })),
     )) {
-      const panel = openPanel(duplicatePanelId);
+      const panel = panelById(duplicatePanelId);
       if (panel) dv.removePanel(panel);
     }
   }
