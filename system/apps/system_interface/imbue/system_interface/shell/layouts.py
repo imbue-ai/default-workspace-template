@@ -22,6 +22,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.data_types import InstancePanelParams
 from imbue.system_interface.shell.data_types import LayoutEditOutcome
 from imbue.system_interface.shell.data_types import LayoutRecord
 from imbue.system_interface.shell.data_types import instance_panel_params_by_id
@@ -47,6 +48,14 @@ class StoredLayout(FrozenModel):
     view_id: ViewId = Field(description="The view the layout arranges")
     client_id: ClientId = Field(description="The client that owns it")
     layout: LayoutRecord = Field(description="The arrangement")
+
+
+class FoundTab(FrozenModel):
+    """One panel showing a tab, with the layout file that holds it and the params that named the tab."""
+
+    stored: StoredLayout = Field(description="The layout file the panel is in")
+    panel_id: str = Field(description="The dockview panel id")
+    params: InstancePanelParams = Field(description="The panel's params, as read from the file")
 
 
 @pure
@@ -299,13 +308,13 @@ class LayoutStore(MutableModel):
             for params in instance_panel_params_by_id(stored.layout.dockview).values()
         }
 
-    def find_tab(self, tab_id: TabId) -> list[tuple[StoredLayout, str]]:
-        """Every (layout, panel id) whose panel params carry ``tab_id``."""
-        found: list[tuple[StoredLayout, str]] = []
+    def find_tab(self, tab_id: TabId) -> list[FoundTab]:
+        """Every panel whose params carry ``tab_id``, with the params as read so a caller need not parse again."""
+        found: list[FoundTab] = []
         for stored in self.all_client_layouts():
             for panel_id, params in instance_panel_params_by_id(stored.layout.dockview).items():
                 if params.tab_id == tab_id:
-                    found.append((stored, panel_id))
+                    found.append(FoundTab(stored=stored, panel_id=panel_id, params=params))
         return found
 
     def _rewrite_seeds(self, transform: Callable[[LayoutRecord], LayoutRecord], now: datetime) -> None:
