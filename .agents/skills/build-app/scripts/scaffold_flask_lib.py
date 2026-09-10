@@ -342,7 +342,9 @@ class ManifestError(Exception):
 
 
 def _declared_port() -> int:
-    url = tomllib.loads(MANIFEST_PATH.read_text(encoding="utf-8"))["url"]
+    url = tomllib.loads(MANIFEST_PATH.read_text(encoding="utf-8")).get("url")
+    if url is None:
+        raise ManifestError(f'{{MANIFEST_PATH}} declares no url; add url = "http://localhost:<port>"')
     port = urlsplit(url).port
     if port is None:
         raise ManifestError(f"{{MANIFEST_PATH}} declares url {{url!r}}, which names no port")
