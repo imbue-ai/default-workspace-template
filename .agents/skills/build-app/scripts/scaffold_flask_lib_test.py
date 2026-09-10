@@ -183,6 +183,29 @@ def test_a_dropin_the_include_glob_would_not_read_is_refused(tmp_path: Path) -> 
     assert not (root / "system/apps").exists()
 
 
+def test_a_glob_that_cannot_reach_into_the_dropin_directory_is_refused(tmp_path: Path) -> None:
+    """A glob's wildcard does not cross a directory separator, and neither may the guard.
+
+    ``files = *.conf`` reaches the files beside the config and nothing deeper, so a
+    drop-in in ``supervisord.conf.d/`` is a file supervisord never reads. Matching
+    the whole path in one go would call this a match -- ``*`` is happy to swallow
+    ``supervisord.conf.d/`` -- and the scaffold would report success on an app that
+    never starts.
+    """
+    root = _make_workspace(
+        tmp_path / "workspace",
+        {},
+        main_conf=_MAIN_CONF.replace("files = supervisord.conf.d/*.conf", "files = *.conf"),
+    )
+
+    result = _scaffold(root, "news")
+
+    assert result.returncode != 0
+    assert "no [include] glob" in result.stderr
+    assert not (root / "system/supervisord.conf.d/news.conf").exists()
+    assert not (root / "system/apps").exists()
+
+
 def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: Path) -> None:
     """The port pre-flight follows the declared globs, so a renamed directory is still scanned."""
     root = _make_workspace(

@@ -156,6 +156,25 @@ def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
     return files
 
 
+def _is_matched_by_glob(path: Path, pattern: str) -> bool:
+    """Whether ``glob.glob(pattern)`` would name ``path``, were ``path`` on disk.
+
+    Matched component by component rather than with one ``fnmatch`` over the whole
+    string: ``fnmatch``'s ``*`` happily matches ``/``, so it calls a pattern like
+    ``<dir>/*.conf`` a match for a file one directory deeper, which glob never
+    yields. Component-wise is exactly non-recursive glob's rule, which is how both
+    supervisord and ``_supervisord_conf_files`` expand these patterns.
+    """
+    path_parts = path.parts
+    pattern_parts = Path(pattern).parts
+    if len(path_parts) != len(pattern_parts):
+        return False
+    return all(
+        fnmatch.fnmatch(part, pattern_part)
+        for part, pattern_part in zip(path_parts, pattern_parts)
+    )
+
+
 def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
     """The drop-in ``name``'s program belongs in: ``<supervisord.conf>.d/<name>.conf``.
 
@@ -170,7 +189,7 @@ def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
     """
     path = supervisord_conf.parent / f"{supervisord_conf.name}.d" / f"{name}.conf"
     patterns = _supervisord_include_globs(supervisord_conf)
-    if not any(fnmatch.fnmatch(str(path), pattern) for pattern in patterns):
+    if not any(_is_matched_by_glob(path, pattern) for pattern in patterns):
         sys.exit(
             f"error: no [include] glob in {supervisord_conf} matches {path} "
             f"(globs: {patterns or 'none declared'}), so supervisord would never "
