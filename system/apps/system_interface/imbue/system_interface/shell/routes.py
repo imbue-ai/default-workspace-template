@@ -239,8 +239,8 @@ def tab_instance(tab_id: str) -> ResponseReturnValue:
     found = shell.layouts.find_tab(TabId(tab_id))
     if not found:
         raise LayoutNotFoundError(f"No tab {tab_id!r} in any client layout")
-    for stored, panel_id in found:
-        shown = instance_panel_params_by_id(stored.layout.dockview)[panel_id].address
+    for found_tab in found:
+        shown = found_tab.params.address
         if shown.app != report.app:
             return _detail(f"tab {tab_id!r} shows {shown}, not the app {report.app!r}", HTTP_BAD_REQUEST)
     address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))

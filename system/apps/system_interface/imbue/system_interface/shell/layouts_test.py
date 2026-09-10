@@ -92,7 +92,7 @@ def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
     store = LayoutStore(state_directory=tmp_path)
     store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
     store.save_browser_layout("alpha", "c1", _layout(), None, TEST_NOW)
-    assert [(str(stored.view_id), panel_id) for stored, panel_id in store.find_tab(_TAB_B)] == [
+    assert [(str(found.stored.view_id), found.panel_id) for found in store.find_tab(_TAB_B)] == [
         ("alpha", "p2"),
         ("everything", "p2"),
     ]
