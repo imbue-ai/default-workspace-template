@@ -2040,6 +2040,10 @@ function renderLiveContent(surface: LiveSurface): m.Children {
   });
 }
 
+const UNRECOVERABLE_PANEL_TEXT =
+  "This tab's contents could not be restored. Close it and open it again from the sidebar.";
+const UNLISTED_PANEL_TEXT = "This tab's app no longer lists it.";
+
 /**
  * A dockview panel is only a place: an empty div dockview creates,
  * positions, hides and disposes at will, standing in for a live page that outlives it.
@@ -2056,8 +2060,7 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
     init(parameters) {
       const params = parsePanelParams(parameters.params);
       if (params === null || params.kind !== "instance") {
-        console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
-        element.appendChild(createPlaceholderElement(UNRECOVERABLE_PANEL_TEXT));
+        element.appendChild(unrecoverablePanelElement(panelId));
         return;
       }
       if (panelsPrunedByRestore.has(panelId)) {
@@ -2082,10 +2085,6 @@ function closeActiveTabFromEmbedder(): void {
   activePanel.api.close();
 }
 
-const UNRECOVERABLE_PANEL_TEXT =
-  "This tab's contents could not be restored. Close it and open it again from the sidebar.";
-const UNLISTED_PANEL_TEXT = "This tab's app no longer lists it.";
-
 function createPlaceholderElement(text: string): HTMLElement {
   const element = document.createElement("div");
   element.className = "dockview-panel-unrecoverable";
@@ -2099,11 +2098,16 @@ function createPlaceholderElement(text: string): HTMLElement {
   return element;
 }
 
+/** The placeholder a panel nothing can be shown for gets, logged so a damaged file can be traced. */
+function unrecoverablePanelElement(panelId: string): HTMLElement {
+  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  return createPlaceholderElement(UNRECOVERABLE_PANEL_TEXT);
+}
+
 /** A panel of a component this build does not know (a file written by some other build). */
 function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
-  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
   return {
-    element: createPlaceholderElement(UNRECOVERABLE_PANEL_TEXT),
+    element: unrecoverablePanelElement(panelId),
     init() {},
     dispose() {},
   };
