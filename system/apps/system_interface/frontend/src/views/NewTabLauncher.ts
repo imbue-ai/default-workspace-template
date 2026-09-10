@@ -721,7 +721,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     return m(
       "section",
       {
-        class: "new-tab-templates mt-10",
+        // Its own standoff from the offers above it, kept tighter than it was: the section
+        // already starts below the fold on a 13-inch laptop, and the shelves inside it now carry
+        // the separation that this margin used to have to imply.
+        class: "new-tab-templates mt-8",
         oncreate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
         onupdate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
       },
@@ -761,9 +764,12 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         ? null
         : m("section", { class: "new-tab-templates mt-6" }, [
             m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, SEARCH_TEMPLATES_TITLE),
+            // Three to a row, not four: a result card is the rail's card, and the rail's is now
+            // 333px wide. A quarter-width cell would show the same template as a visibly smaller,
+            // harder-clamped card, and the two treatments would drift apart.
             m(
               "div",
-              { class: "grid grid-cols-4 gap-6 px-2" },
+              { class: "grid grid-cols-3 gap-6 px-2" },
               templates.map((template) =>
                 m(TemplateCard, { key: template.slug, template, isFill: true, onPick: openDetail }),
               ),

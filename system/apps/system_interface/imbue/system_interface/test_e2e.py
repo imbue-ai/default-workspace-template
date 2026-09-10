@@ -122,6 +122,27 @@ _CATALOG_DOCUMENT = catalog_document(
     shelves=[{"key": "popular", "title": "Most popular", "slugs": [_CATALOG_TEMPLATE_SLUG]}],
 )
 
+# A catalog shaped for the shelves' reading order rather than for the adopt path: one row of six
+# cards, so the rail overflows and pages, and the descriptions run long, short and absent, since
+# those are what pull a card's byline off the line its neighbours' sit on.
+_RAMP_SHELF_KEY = "popular"
+_RAMP_SHELF_TITLE = "Most popular"
+_RAMP_LONG_SLUG = "wordy"
+_RAMP_SHORT_SLUG = "terse"
+_RAMP_EMPTY_SLUG = "silent"
+_RAMP_LONG_DESCRIPTION = (
+    "A Gmail inbox digest and one-click triage app: a skill classifies recent mail into actionable "
+    "buckets, and a web view lets you read and clear each item without ever opening the inbox itself."
+)
+_RAMP_SLUGS = (_RAMP_LONG_SLUG, _RAMP_SHORT_SLUG, _RAMP_EMPTY_SLUG, "fourth", "fifth", "sixth")
+_RAMP_CATALOG_DOCUMENT = catalog_document(
+    catalog_template_document(_RAMP_LONG_SLUG, description=_RAMP_LONG_DESCRIPTION, author="someone", thumbnail=""),
+    catalog_template_document(_RAMP_SHORT_SLUG, description="A short one.", author="someone", thumbnail=""),
+    catalog_template_document(_RAMP_EMPTY_SLUG, description="", author="someone", thumbnail=""),
+    *(catalog_template_document(slug, author="someone", thumbnail="") for slug in _RAMP_SLUGS[3:]),
+    shelves=[{"key": _RAMP_SHELF_KEY, "title": _RAMP_SHELF_TITLE, "slugs": list(_RAMP_SLUGS)}],
+)
+
 
 class E2EServer(FrozenModel):
     """Handle to a running e2e server and its fixtures."""
@@ -1222,6 +1243,116 @@ def test_new_tab_start_something_seeds_a_chat_with_the_tiles_prompt(tmp_path: Pa
         )
         if not is_seeded:
             pytest.fail(f"the tile never created a seeded chat: {server.stub_source.calls}")
+
+
+def _is_card_sliced_at(shelf: Any, edge: str) -> bool:
+    """Whether one of a shelf's cards straddles that edge of its rail -- the partial card that is
+    how the row says it scrolls."""
+    return bool(
+        shelf.evaluate(
+            """(shelf, edge) => {
+                const rail = shelf.querySelector('.new-tab-template-rail').getBoundingClientRect();
+                return [...shelf.querySelectorAll('.new-tab-template-card')].some((card) => {
+                    const box = card.getBoundingClientRect();
+                    return box.left < rail[edge] - 1 && box.right > rail[edge] + 1;
+                });
+            }""",
+            edge,
+        )
+    )
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_template_shelves_read_top_down_and_keep_their_cards_on_one_line(tmp_path: Path, page: Page) -> None:
+    """The shelf heading wins over a card title by a size, every card says what its template is in
+    two lines, and cards stay aligned however long those two lines' worth of text actually is.
+
+    This is the hierarchy the page is for: a stranger scanning it has to be able to tell a row's
+    name from a card's name, and one card from the next, before clicking anything. The sizes are
+    read off the rendered page rather than off the class strings, since a role utility that failed
+    to compile would leave the markup right and the page flat.
+    """
+    with _running_e2e_server(
+        tmp_path, _PORT + 26, is_catalog_offered=True, catalog_body=_RAMP_CATALOG_DOCUMENT
+    ) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+
+        shelf = page.locator(f'.new-tab-template-shelf[data-shelf="{_RAMP_SHELF_KEY}"]')
+        expect(shelf).to_have_count(1, timeout=15000)
+        heading = shelf.locator(".new-tab-template-shelf-title")
+        expect(heading).to_have_text(_RAMP_SHELF_TITLE)
+
+        def _font_size(locator: Any) -> float:
+            return float(locator.evaluate("element => getComputedStyle(element).fontSize").removesuffix("px"))
+
+        long_card = shelf.locator(f'.new-tab-template-card[data-template="{_RAMP_LONG_SLUG}"]')
+        heading_size = _font_size(heading)
+        title_size = _font_size(long_card.locator(".new-tab-template-title"))
+        description_size = _font_size(long_card.locator(".new-tab-template-description"))
+        assert heading_size > title_size, f"the shelf heading ({heading_size}px) does not top a card title"
+        assert title_size > description_size, f"a card title ({title_size}px) does not top its description"
+
+        # Two lines, and exactly two: the long description is cut off rather than pushing the card
+        # taller, and the empty one still holds the space open.
+        line_box = long_card.locator(".new-tab-template-description").evaluate(
+            "element => ({clientHeight: element.clientHeight, scrollHeight: element.scrollHeight,"
+            " lineHeight: parseFloat(getComputedStyle(element).lineHeight)})"
+        )
+        assert line_box["scrollHeight"] > line_box["clientHeight"], "the long description was never clamped"
+        assert abs(line_box["clientHeight"] - 2 * line_box["lineHeight"]) <= 1, (
+            f"the description is not two lines tall: {line_box}"
+        )
+
+        # Every card in the row sits on the same lines, whatever its description says.
+        offsets = shelf.evaluate(
+            """shelf => [...shelf.querySelectorAll('.new-tab-template-card')].map((card) => {
+                const box = card.getBoundingClientRect();
+                const description = card.querySelector('.new-tab-template-description').getBoundingClientRect();
+                return [Math.round(box.height), Math.round(description.top - box.top),
+                        Math.round(description.height)];
+            })"""
+        )
+        assert len(offsets) == len(_RAMP_SLUGS), f"the row lost cards: {offsets}"
+        assert len(set(map(tuple, offsets))) == 1, f"the cards do not line up: {offsets}"
+
+        # The rail still slices a card at its right edge, and the arrows still page it: the row is
+        # wider than the rail, so the last card on screen is cut and only the "more" arrow shows.
+        rail = shelf.locator(".new-tab-template-rail")
+        extent = rail.evaluate("rail => ({client: rail.clientWidth, scroll: rail.scrollWidth, left: rail.scrollLeft})")
+        assert extent["scroll"] > extent["client"], f"the rail does not overflow, so nothing is sliced: {extent}"
+        assert extent["left"] == 0
+        assert _is_card_sliced_at(shelf, "right"), "no card is sliced by the rail's right edge"
+        expect(shelf.locator('[data-rail-page="previous"]')).to_have_count(0)
+
+        # One page is one visible width along -- give or take a card, since the rail snaps to card
+        # boundaries, which is what stops a page from leaving a card sliced at BOTH edges. Six
+        # cards is more than two rail widths, so a page lands mid-rail with both arrows standing.
+        card_pitch = extent["scroll"] / len(_RAMP_SLUGS)
+        shelf.locator('[data-rail-page="next"]').click()
+        paged = poll_until(
+            lambda: abs(rail.evaluate("rail => rail.scrollLeft") - extent["client"]) < card_pitch,
+            timeout=10.0,
+            poll_interval=0.1,
+        )
+        if not paged:
+            landed = rail.evaluate("rail => [rail.scrollLeft, rail.scrollWidth, rail.clientWidth]")
+            pytest.fail(f"the arrow never paged the rail a visible width along: {extent} landed={landed}")
+        expect(shelf.locator('[data-rail-page="previous"]')).to_have_count(1, timeout=5000)
+        expect(shelf.locator('[data-rail-page="next"]')).to_have_count(1)
+        assert _is_card_sliced_at(shelf, "left"), "no card is sliced by the rail's left edge"
+
+        # And back: the rail's start is a card boundary, so paging left off the first page returns
+        # it exactly, and the "previous" arrow stands down again.
+        shelf.locator('[data-rail-page="previous"]').click()
+        returned = poll_until(
+            lambda: rail.evaluate("rail => rail.scrollLeft") <= 1, timeout=10.0, poll_interval=0.1
+        )
+        if not returned:
+            pytest.fail(f"paging back never returned the rail to its start: {extent}")
+        expect(shelf.locator('[data-rail-page="previous"]')).to_have_count(0, timeout=5000)
+        expect(shelf.locator('[data-rail-page="next"]')).to_have_count(1)
 
 
 @pytest.mark.timeout(60, func_only=False)

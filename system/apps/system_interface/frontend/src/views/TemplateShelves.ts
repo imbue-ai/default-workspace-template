@@ -1,10 +1,17 @@
 /**
  * The "Start from a template" cards and rails of the New Tab page: a card is a template's drawing
- * in a 3:2 frame with its title and byline under it; a shelf is a heading over a sideways rail of
- * cards that shows three and a half at a time, pages one visible width with the arrows overlaying
- * its ends (each a full-height strip that fades the rail out under it), and scrolls freely with
- * the trackpad. Picking a card is the launcher's business (it opens the detail dialog), so both
- * components only report the pick.
+ * in a 3:2 frame with its title, a two-line description and its byline under it; a shelf is a
+ * heading over a sideways rail of cards that shows two and a half at a time, pages one visible
+ * width with the arrows overlaying its ends (each a full-height strip that fades the rail out
+ * under it), and scrolls freely with the trackpad. Picking a card is the launcher's business (it
+ * opens the detail dialog), so both components only report the pick.
+ *
+ * The type ramp is the point of the section, and it runs shelf heading -> card title ->
+ * description -> byline: ``type-heading`` (18px semibold) over ``type-label`` (14px semibold) over
+ * ``type-helper`` on secondary over ``type-helper`` on faint. Only the heading grows -- one step,
+ * to the role above the one it had. Below it the ramp is carried by weight, colour and the space
+ * around each line rather than by more size, because the section already starts below the fold on
+ * a 13-inch laptop and every pixel of type spent here pushes the first card further down.
  *
  * The rail arithmetic (which arrows to show, where a page lands) is exported as pure functions so
  * it can be tested without a DOM.
@@ -18,9 +25,20 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 const CARD_FALLBACK_GLYPH_SIZE = 20;
 const RAIL_ARROW_GLYPH_SIZE = 16;
 
-// A card is sized so the rail shows exactly three and a half: with three 24px gaps before the
-// half one, 3.5w + 3*24px is the rail's width. The sliced card is what says the rail scrolls.
-const CARD_WIDTH_CLASS = "w-[calc((100%-72px)/3.5)]";
+// A card is sized so the rail shows exactly two and a half: with two 24px gaps before the half
+// one, 2.5w + 2*24px is the rail's width. The sliced card is what says the rail scrolls.
+//
+// Two and a half rather than the three and a half this rail used to show. The drawings are
+// screenshots of real app interfaces, and the rail lives in the page's 896px column whatever the
+// window is, so at three and a half a card measured 231px and its drawing 231x154 -- too small
+// on a 13-inch laptop to read as anything but a coloured box, which is the whole of the
+// complaint this section answers. At two and a half the card measures 333px and the drawing
+// 333x222, and the title gets about 48 characters, which is every title the catalog carries.
+const CARD_WIDTH_CLASS = "w-[calc((100%-48px)/2.5)]";
+
+// The description reserves both its lines whether or not it fills them, so every card in a rail
+// puts its byline on the same baseline no matter how long -- or how empty -- its description is.
+const CARD_DESCRIPTION_CLASS = "type-helper mt-0.5 line-clamp-2 min-h-[2lh] text-secondary";
 
 /** What a rail measures about itself, read off the scroll container. */
 export interface RailExtent {
@@ -50,7 +68,8 @@ export interface TemplateCardAttrs {
   onPick: (template: CatalogTemplate) => void;
 }
 
-/** One template as a card: its drawing (or a glyph when there is none or it failed to load), its title, its byline. */
+/** One template as a card: its drawing (or a glyph when there is none or it failed to load), its
+ *  title, the catalog's one-line description clamped to two lines, its byline. */
 export function TemplateCard(): m.Component<TemplateCardAttrs> {
   return {
     view(vnode) {
@@ -73,10 +92,11 @@ export function TemplateCard(): m.Component<TemplateCardAttrs> {
               "group-hover:shadow-overlay",
             glyphSize: CARD_FALLBACK_GLYPH_SIZE,
           }),
-          m("span", { class: "mt-2 block truncate text-(length:--font-size-body) text-primary" }, template.title),
+          m("span", { class: "new-tab-template-title type-label mt-2 block truncate text-primary" }, template.title),
+          m("span", { class: `new-tab-template-description ${CARD_DESCRIPTION_CLASS}` }, template.description),
           template.author === ""
             ? null
-            : m("span", { class: "type-helper block truncate text-faint" }, `by ${template.author}`),
+            : m("span", { class: "type-helper mt-0.5 block truncate text-faint" }, `by ${template.author}`),
         ],
       );
     },
@@ -155,8 +175,10 @@ export function TemplateShelves(): m.Component<TemplateShelvesAttrs> {
 
   function shelfView(shelf: ResolvedShelf, onPick: (template: CatalogTemplate) => void): m.Vnode {
     const paging = railPaging(railExtentByShelf.get(shelf.key) ?? { scrollLeft: 0, clientWidth: 0, scrollWidth: 0 });
-    return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-4 first:mt-0", "data-shelf": shelf.key }, [
-      m("h3", { class: "type-label px-2 text-primary" }, shelf.title),
+    // A row stands off from the one above it by more than its heading stands off from its own
+    // cards: that gap is what makes a row read as its own tray rather than as more of the wall.
+    return m("section", { key: shelf.key, class: "new-tab-template-shelf mt-6 first:mt-0", "data-shelf": shelf.key }, [
+      m("h3", { class: "new-tab-template-shelf-title type-heading px-2 text-primary" }, shelf.title),
       // The scroller takes the column's padding as its own so a hovered card's lift has room
       // inside the scroll box, and the arrows overlay its ends.
       m("div", { class: "relative mt-2" }, [
