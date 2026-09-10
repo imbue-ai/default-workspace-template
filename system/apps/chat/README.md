@@ -9,9 +9,9 @@ browser-side contract.
 
 ## What it serves
 
-The `chat` program (`system/supervisord.conf`) runs `chat-app`, the console
-script of this package, from its own uv tool environment (installed by
-`system/scripts/build_workspace.sh` with the mngr harness plugins
+The `chat` program (declared in `system/supervisord.conf.d/chat.conf`) runs
+`chat-app`, the console script of this package, from its own uv tool environment
+(installed by `system/scripts/build_workspace.sh` with the mngr harness plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
 its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 `mngr observe` for the workspace's agents, and serves:
