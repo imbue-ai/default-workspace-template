@@ -299,7 +299,9 @@ def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
 
     Only a copy that is not the one behind ``mngr`` on this apply's PATH is
     removed: its tool environment, and the console script that points into it.
-    Returns what was removed.
+    Deliberately outside the snapshot and rollback envelope: the copy was never
+    part of the served environment and is stale by construction, so even an
+    apply that rolls back leaves the machine repaired. Returns what was removed.
     """
     canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if canonical is None:

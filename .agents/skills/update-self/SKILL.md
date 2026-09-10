@@ -408,7 +408,8 @@ installed instead of a live build; the apply installs them only as a pair (one
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
-affected environments, re-runs `system/scripts/setup_system.sh` when a file it
+affected environments, removes any stale copy of the mngr tool that would
+shadow the refreshed one, re-runs `system/scripts/setup_system.sh` when a file it
 reads changed, pre-flights the merged backend (the shell, and the chat app in its
 side-effect-free `--preflight` mode, since the chat is the process that imports
 mngr and the harness plugins), installs or builds the frontend
