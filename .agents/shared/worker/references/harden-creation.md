@@ -58,15 +58,16 @@ than destroy it, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
   its boundary in prose. Say in the body that it runs only its scope's tests and
-  **skips the review gates**, because you run them once on the merged result,
-  and that a small out-of-scope edit is allowed but must be listed in its `done`
-  report.
+  **skips the "Review gates" section below**, because you run that verification
+  once on the merged result, and that a small out-of-scope edit is allowed but
+  must be listed in its `done` report.
 - When a sibling's `question` decides a shared interface, use your judgement per
   case; the default is to message the affected sibling with the decision
   immediately (`mngr message`) rather than let it find out at merge time.
 - Merge the siblings in a fixed order and resolve any conflicts yourself. Then
-  run the full suite, the ratchets, and both review gates once on the merged
-  result, and report `done` with the same body a direct pass would.
+  run exactly the verification a direct pass runs -- the "Review gates" section
+  below: the full suite and the ratchets -- once on the merged result, and
+  report `done` with the same body a direct pass would.
 
 Weigh the cost before splitting: every sibling pays a venv converge and a plugin
 install before it does any work, and on a small creation that overhead can
@@ -187,8 +188,9 @@ evicts is not hardened, no matter how well-tested its happy path is.
 2. Ensure that tests pass. If there are long running tests, this is the moment to run them
 3. Fix failing tests with narrowly targeted changes
 
-If your own task file says your lead runs the gates on the merged result -- the
-scoped-sibling case above -- skip this section and run only your scope's tests.
+If your own task file says your lead runs this verification on the merged
+result -- the scoped-sibling case above -- skip this section and run only your
+scope's tests.
 
 When complete, report back to the lead.
 

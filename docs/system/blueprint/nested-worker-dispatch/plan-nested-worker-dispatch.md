@@ -6,7 +6,7 @@
 - This work makes dispatch **level-agnostic**. A lead is any agent that runs `create_worker.py launch` and polls for a report; a worker is any agent that reads a task file and pushes a report. A worker may be a lead. Nothing in the contract depends on which level an agent is at.
 - Three contract changes carry that: the launcher stamps the task file's own exact path into its frontmatter (no glob); the launcher labels every worker with its lead, so a lead's idle detection can tell "finished without reporting" from "waiting on its own children"; and worker-side reporting becomes a launcher subcommand every worker calls instead of prose every worker re-derives.
 - The harden worker is no longer installed as a skill. A harden task file tells the worker to follow `.agents/shared/worker/SKILL.md` from its own checkout, which it already has. The provisioning script and its template line are deleted.
-- The harden worker may split its pass across parallel sibling workers. This is one paragraph of permission and constraints in the harden contract, not a new mode: the lead decides the split, siblings run only their scope's tests, and the lead runs the full suite and both review gates once on the merged result.
+- The harden worker may split its pass across parallel sibling workers. This is one paragraph of permission and constraints in the harden contract, not a new mode: the lead decides the split, siblings run only their scope's tests, and the lead runs the full suite and ratchets once on the merged result.
 - Lead prompting stays minimal. The lead is a capable agent that makes decisions; the procedures encode only what it cannot know: orchestration steps and infrastructure requirements.
 - Correctness is proven at three levels: contract tests over the prose and scripts (no mngr); a live claude release test of a two-level dispatch with a `question` round trip; and a minds_evals comparison of a `direct` harden pass against a `parallel` one on the todo app.
 
@@ -41,13 +41,13 @@
 
 **Parallel harden pass**
 
-- The harden contract permits the worker to split its pass across sibling workers launched via launch-task. The worker decides the split for the creation at hand (for a Flask app: backend and frontend), writes one task file per sibling with the boundary described in prose, and states in each task body that the sibling runs only its scope's tests and skips the review gates because its lead runs them on the merged result. A sibling may make small out-of-scope edits and lists them in its `done` report.
+- The harden contract permits the worker to split its pass across sibling workers launched via launch-task. The worker decides the split for the creation at hand (for a Flask app: backend and frontend), writes one task file per sibling with the boundary described in prose, and states in each task body that the sibling runs only its scope's tests and skips the contract's review-gates verification because its lead runs it on the merged result. A sibling may make small out-of-scope edits and lists them in its `done` report.
 - When a sibling's `question` decides a shared interface, the lead uses its judgement per case; messaging the affected sibling immediately with the decision is the documented default.
-- The lead merges the siblings in a fixed order, resolves conflicts itself, then runs the full suite, ratchets, and both review gates once on the merged result before reporting `done` with the same body a direct pass would.
+- The lead merges the siblings in a fixed order, resolves conflicts itself, then runs the full suite and ratchets (the contract's review gates) once on the merged result before reporting `done` with the same body a direct pass would.
 
 **Removed**
 
-- `.agents/shared/scripts/install_worker_skills.sh`, its test, and the `worker` template's install line. The template keeps the stop-hook env, git-worktree transfer, venv converge, and plugin install (a direct worker still runs the review gates).
+- `.agents/shared/scripts/install_worker_skills.sh`, its test, and the `worker` template's install line. The template keeps the stop-hook env, git-worktree transfer, venv converge, and plugin install (kept so a worker can run the code-guardian gates when a flow asks for them).
 - The `<TASK_FILE_GLOB>` substitution in task bodies. The worker already holds its exact path.
 - The `mkdir/mv` consume snippet and the `git worktree list | head -1` fallback in the reporting prose.
 
@@ -93,7 +93,7 @@
 - `.agents/shared/references/worker-reporting.md`: shrinks to the `report` call, the report body shapes, and "the push is the ready signal".
 - `.agents/shared/references/lead-proxy.md`: the intermediate-lead rules (answer-or-re-raise a child's `question`; forward answers verbatim), `await` archiving in place of the consume snippet, the idle-tolerance note, the `clobber` rationale, the sub-worker lifecycle (stop in place, never destroy), and the merge commit naming the worker.
 - `.agents/shared/worker/SKILL.md`: Step 1 parses the exact path from the message; Step 3 says `question` is valid on every run.
-- `.agents/shared/worker/references/harden-creation.md`: the parallel-pass paragraph (permission, the lead decides the split, siblings run scoped tests and no gates, the lead merges in order, resolves conflicts, and runs the full suite, ratchets, and both gates once).
+- `.agents/shared/worker/references/harden-creation.md`: the parallel-pass paragraph (permission, the lead decides the split, siblings run scoped tests and no gates, the lead merges in order, resolves conflicts, and runs the full suite and ratchets once).
 - `.agents/shared/worker/references/op-crystallize.md`, `op-update.md`, `op-heal.md`: `question` added to every shape's valid names; the crystallize clause tying it to the creation reference removed.
 - `.agents/shared/worker/references/verification.md` and `type-system-interface.md`: the sentences that say `question` exists only where an operation defines it.
 - `.agents/skills/crystallize-creation`, `update-creation`, `heal-creation`, `update-system-interface`, `build-app`: "use the installed `harden-worker` sub-skill" becomes "follow `.agents/shared/worker/SKILL.md`"; the sentence "the `worker` template installs the generic `harden-worker` sub-skill" is removed.
