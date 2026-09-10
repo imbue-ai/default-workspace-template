@@ -227,20 +227,25 @@ class AutoOpenReactor(MutableModel):
     freshness: timedelta = Field(default=AUTO_OPEN_FRESHNESS, description="How long a held open stays owed")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    # agent id -> when the chat was created (None when mngr did not say), for the freshness cut.
-    _pending_created_at: dict[str, datetime | None] = PrivateAttr(default_factory=dict)
+    # agent id -> when the chat was created, for the freshness cut.
+    _pending_created_at: dict[str, datetime] = PrivateAttr(default_factory=dict)
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
     def note_appeared(self, agent_id: str, labels: Mapping[str, str], created_at: datetime | None) -> None:
-        """A labeled agent the observe stream just added is owed its open unless it already had it."""
+        """A labeled agent the observe stream just added is owed its open unless it already had it.
+
+        A chat mngr gave no creation time for is owed it from now: the hold has to expire on
+        the same rule as every other one, or it is retried for the life of the process and
+        pops a tab of any age at whoever eventually connects.
+        """
         if not is_auto_open_labeled(labels) or self.ledger.is_delivered(agent_id):
             return
         with self._lock:
             if agent_id in self._pending_created_at:
                 return
-            self._pending_created_at[agent_id] = created_at
+            self._pending_created_at[agent_id] = created_at if created_at is not None else self.clock()
         self._wake.set()
 
     def seed_at_startup(self, agents: Mapping[str, tuple[Mapping[str, str], datetime | None]]) -> None:
@@ -256,7 +261,7 @@ class AutoOpenReactor(MutableModel):
         for agent_id, (labels, created_at) in agents.items():
             if not is_auto_open_labeled(labels) or self.ledger.is_delivered(agent_id):
                 continue
-            if self._is_fresh(created_at):
+            if created_at is None or self._is_fresh(created_at):
                 self.note_appeared(agent_id, labels, created_at)
             else:
                 self.ledger.mark_delivered(agent_id)
@@ -326,7 +331,5 @@ class AutoOpenReactor(MutableModel):
         with self._lock:
             self._pending_created_at.pop(agent_id, None)
 
-    def _is_fresh(self, created_at: datetime | None) -> bool:
-        if created_at is None:
-            return True
+    def _is_fresh(self, created_at: datetime) -> bool:
         return self.clock() - created_at < self.freshness
