@@ -61,7 +61,7 @@ class InstancePanelParams(FrozenModel):
 
     # The browser owns this object and may add keys the shell does not know; reading tolerates them, and
     # the shell edits the stored dict in place rather than round-tripping it through this model.
-    model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     address: Address = Field(description="The instance the panel shows")
     tab_id: TabId = Field(
