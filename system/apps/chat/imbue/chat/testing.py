@@ -648,6 +648,10 @@ def running_workspace(
                 "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
                 "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
+                # Committing the account below rewrites the workspace's create defaults beside
+                # mngr's project config, which the writer finds through this; without it they
+                # land in the .mngr of whatever directory the suite runs from.
+                "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
             },

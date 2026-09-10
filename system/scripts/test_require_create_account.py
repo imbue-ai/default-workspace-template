@@ -91,8 +91,10 @@ def test_mngr_refuses_the_create_quoting_the_message(tmp_path: Path) -> None:
 def test_the_create_of_the_workspace_itself_never_reaches_the_gate(
     tmp_path: Path,
 ) -> None:
-    """Outside any agent the committed entry's shell test short-circuits before python3 is even named, so a
-    machine with no python3 creates workspaces all the same; the create then fails on mngr's own terms."""
+    """A create from a plain user shell: the committed entry's shell test short-circuits before python3 is
+    even named, so a machine without one creates workspaces all the same (an agent on that machine has
+    MNGR_AGENT_ID and does start a python3; what spares it the refusal is its own work dir, which the unit
+    tests cover). The create then fails on mngr's own terms."""
     result = _mngr_create_in_a_gated_project(tmp_path, {})
 
     assert result.returncode != 0
