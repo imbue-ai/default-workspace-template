@@ -42,6 +42,36 @@ Write tests and optimize in parallel, if possible. Avoid running full test suite
 unless necessary, such as at the very end. The long tail is often review passes
 and full test suites at the end of hardening.
 
+## Splitting the pass across sub-workers
+
+When the creation has genuinely independent areas -- a Flask app's backend and
+its frontend, say -- you may split the pass across sibling sub-workers instead
+of doing all of it yourself. Nothing prescribes the split: you decide it for the
+creation at hand, or decide there is none worth making.
+
+Launch each sibling with the launch-task skill exactly as a chat agent would
+(`.agents/skills/launch-task/SKILL.md`). You are its lead, and the rules that
+are yours are in `.agents/shared/references/lead-proxy.md` under "When you are a
+worker yourself": answer a sibling's `question` yourself or re-raise it to your
+own lead, merge exactly one level with `--no-ff`, stop a finished sibling rather
+than destroy it, and await it with `--timeout 60m`.
+
+- Each sibling's task file carries the same `operation` and `type` as yours plus
+  its boundary in prose. Say in the body that it runs only its scope's tests and
+  **skips the review gates**, because you run them once on the merged result,
+  and that a small out-of-scope edit is allowed but must be listed in its `done`
+  report.
+- When a sibling's `question` decides a shared interface, use your judgement per
+  case; the default is to message the affected sibling with the decision
+  immediately (`mngr message`) rather than let it find out at merge time.
+- Merge the siblings in a fixed order and resolve any conflicts yourself. Then
+  run the full suite, the ratchets, and both review gates once on the merged
+  result, and report `done` with the same body a direct pass would.
+
+Weigh the cost before splitting: every sibling pays a venv converge and a plugin
+install before it does any work, and on a small creation that overhead can
+exceed what the parallelism saves.
+
 ## Testing and hardening contract
 
 - **Write or extend thorough tests** that assert on markers which are true if
@@ -156,6 +186,9 @@ evicts is not hardened, no matter how well-tested its happy path is.
 1. Ensure all in-flight changes have settled and are committed
 2. Ensure that tests pass. If there are long running tests, this is the moment to run them
 3. Fix failing tests with narrowly targeted changes
+
+If your own task file says your lead runs the gates on the merged result -- the
+scoped-sibling case above -- skip this section and run only your scope's tests.
 
 When complete, report back to the lead.
 
