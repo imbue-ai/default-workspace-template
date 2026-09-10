@@ -26,7 +26,10 @@ def _dockview() -> dict[str, Any]:
             },
             "orientation": "HORIZONTAL",
         },
-        "panels": {"p1": {"params": instance_panel_params_json(_FILES, _TAB, 0)}, "p2": {"params": {"kind": "launcher"}}},
+        "panels": {
+            "p1": {"params": instance_panel_params_json(_FILES, _TAB, 0)},
+            "p2": {"params": {"kind": "launcher"}},
+        },
         "activeGroup": "g1",
     }
 

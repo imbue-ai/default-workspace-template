@@ -32,11 +32,11 @@ from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import LayoutSaveRequest
 from imbue.system_interface.shell.data_types import Shortcut
 from imbue.system_interface.shell.data_types import TabInstanceReport
 from imbue.system_interface.shell.data_types import effective_actions
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import Direction
 from imbue.system_interface.shell.dockview_document import Placement
 from imbue.system_interface.shell.dockview_document import add_panel
