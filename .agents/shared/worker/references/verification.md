@@ -18,21 +18,47 @@ the fallback is always more coverage, never less. A scoped-down or hand-rolled
 substitute reported as "review" is worse than no gate at all, because it reads as
 coverage that does not exist.
 
-When `type` is app, skill, or service, `{creation_context}` in the invocations
-below is this paragraph, pasted verbatim:
+## The scope brief
+
+Both invocations carry the run's footprint into the review agents through
+`$ARGUMENTS`, which each gate skill forwards verbatim into its sub-agent brief.
+When `type` is app, skill, or service, `{scope_brief}` below is this block,
+pasted verbatim with `<SCOPE_FILE>` replaced by the scope file's path
+(`data/.tasks/harden/<slug>/scope.json`, per `harden-creation.md`):
 
     The creation is a user's own and lives only in this workspace. Judge it
-    against the conventions for its type (`type-<TYPE>.md`,
-    `system/apps/README.md`), not against `system_interface`'s patterns, and
-    do not flag portability to environments the creation will never run in.
+    against the conventions listed in the scope file below, not against
+    `system_interface`'s patterns, and do not flag portability to environments
+    the creation will never run in.
+
+    The creation's footprint is declared in <SCOPE_FILE>. Read, in this order:
+    the diff; every file under `primary`; the `wiring` sections named there, in
+    the files they name; every `references` path -- for a skill reference, its
+    `SKILL.md` and its `scripts/`, so you see how it invokes the app; every
+    `context` path, read-only; the `conventions` list.
+
+    Never read a path matching `exclude`; the scope file itself is the one
+    exception.
+
+    Do not read other apps, or any path outside the footprint, unless you are
+    following a concrete import, call, URL, or file path from inside the
+    footprint, or a finding cannot be confirmed without it.
+
+    List every file you read outside the footprint and the conventions under
+    `Expanded to:` in your report, with the reason for each.
+
+    Check the consumer contract in both directions: a change to the app's
+    routes, CLI, or stored data shape has to be reflected in every `references`
+    entry that uses that surface, and a change inside a referenced skill,
+    script, or doc has to match the app's current surface. Flag any drift.
 
 ### Verify Architecture
 
 Run architecture verification before autofix.
 
     /verify-architecture Run fully unattended: never call AskUserQuestion.
-    In Phase 3, pass the analysis agent the creation context verbatim
-    alongside the problem description: {creation_context}
+    In Phase 3, pass the analysis agent this scope brief verbatim alongside
+    the problem description: {scope_brief}
 
 ### Autofix
 
@@ -44,8 +70,8 @@ the keep/revert judgment to you:
     /autofix Run fully unattended: never call AskUserQuestion. Run the fix
     loop a single time, not 10 times. Leave every fix commit applied, and
     report the fix commits (hash + full message). Do not revert anything yourself
-    -- the caller will decide. Include this context in the description you
-    pass to agents: {creation_context}
+    -- the caller will decide. Include this scope brief verbatim in the
+    description you pass to agents: {scope_brief}
 
 Then review those fix commits against what this branch is meant to do. You hold
 the task context the fix subagents run without, so you are the right judge of

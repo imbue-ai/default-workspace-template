@@ -42,6 +42,59 @@ Write tests and optimize in parallel, if possible. Avoid running full test suite
 unless necessary, such as at the very end. The long tail is often review passes
 and full test suites at the end of hardening.
 
+## The scope file
+
+Every run over a creation with a footprint -- an app with an `app.toml`, or a
+skill -- computes that footprint and writes it to the path the task
+frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
+`SCOPE_FILE`, and it sits beside your task file at
+`data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
+the creation already exists on disk; for a skill you are building from scratch
+(a skill `crystallize`), compute it as soon as the skill directory exists,
+since the command refuses a path that is not there:
+
+```bash
+mkdir -p "$(dirname "$SCOPE_FILE")"
+
+# TYPE app (an app with an app.toml) -- from the manifest:
+uv run app-manifest footprint system/apps/<package>/app.toml \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+
+# TYPE skill -- by path:
+uv run app-manifest footprint --for-path .agents/skills/<name> \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+```
+
+`DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
+recorded at dispatch as the one *before* the work being hardened began, so the
+scope file's `diff` covers the committed change you are verifying, and -- once
+you regenerate it -- your own commits too. Fail loudly if it is unset.
+
+A creation with no manifest -- a pre-manifest app, a standalone service, the
+system interface -- has nothing to resolve: its footprint is its own directory
+plus its supervisord section, and the run carries no scope file.
+
+The file records `primary` (the creation's own directories), `wiring` (the
+`system/supervisord.conf` sections that run it), `references` (what its
+manifest claims outside its directory -- a skill that drives it, a script, a
+doc), `context` (paths to read but never change), `conventions`, `exclude` (a
+hard denylist of globs), and `diff` (the branch's changed files, split into
+those inside the footprint and `outside_footprint`). Three consumers read it:
+the test selection in `type-app.md`, the freshness check the lead runs before
+merging (`.agents/shared/references/harden-contention.md`), and the review
+invocations in `verification.md`. Regenerate it whenever the footprint
+moves under you -- when you register a `[[references]]` entry, or when you add a
+supervisord section -- and once more immediately before your final report, after
+committing everything, so the `diff` it carries includes every commit you made
+(the diff reads commits only; an uncommitted edit is invisible to it).
+
+A non-empty `diff.outside_footprint` in that final scope file is a claim to
+settle before you report. For each path, either add a `[[references]]` entry to
+the app's `app.toml` -- when the file genuinely belongs to the creation -- or
+name it in your final report under `Outside footprint:`, one line each on why it
+changed on this branch. A skill run's one sanctioned edit inside an app
+directory, the `[[references]]` entry it adds to that app's manifest, sits under
+the scope file's `context` and is counted as inside the footprint.
 ## Splitting the pass across sub-workers
 
 When the creation has genuinely independent areas -- a Flask app's backend and
@@ -57,7 +110,9 @@ own lead, merge exactly one level with `--no-ff`, stop a finished sibling rather
 than destroy it, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
-  its boundary in prose. Say in the body that it runs only its scope's tests and
+  its boundary in prose; when your run carries a scope file, give the sibling its
+  own `scope_file` path beside its task file and your `diff_base`, since Step 1
+  fails loudly without them. Say in the body that it runs only its scope's tests and
   **skips the "Review gates" section below**, because you run that verification
   once on the merged result, and that a small out-of-scope edit is allowed but
   must be listed in its `done` report.

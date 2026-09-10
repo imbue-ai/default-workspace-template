@@ -23,6 +23,9 @@ There are two shapes, selected by which creation you are crystallizing:
   `final-creation` (Stage 6).
 - Gate, either shape: `question`, mid-flight, whenever the answer is not in
   your task file or the repo.
+- Milestones: `type: milestone`, any slug you choose (see
+  `.agents/shared/references/worker-reporting.md`); non-blocking -- you never
+  stop your turn for one.
 - Terminal statuses: `done`, `stuck`.
 
 In the pre-existing/confirmed-live shape, emit no stage gates -- just
@@ -68,6 +71,18 @@ Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
 testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 
+**Pre-existing shape (app):** once the app's own tests pass on your branch,
+commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
+reports (non-blocking)". Name it for what is true at that commit, and make its
+`## Tested` section list exactly what you ran here and what you have not. The
+lead may merge that commit and let the user start using the hardened build
+while you work through the rest of the pass, so do not stop your turn: push it
+and go straight on to Stage 4.
+
+**Reconstruct shape (skill):** do not declare a milestone yet. The user has
+approved only an outline, and a skill whose scenarios have never run is not
+worth putting in front of them; the milestone comes at the end of Stage 4.
+
 ## Stage 4: Scenarios
 
 Hand-craft and run scenarios that exercise the creation end-to-end (happy path
@@ -75,6 +90,17 @@ plus realistic edge cases). Your creation reference gives the scenario specifics
 (for a skill, the scenario template and the fixture-based tests for any external
 data parsing). Fix the creation when a scenario fails; fix the scenario when the
 creation is right but the scenario was wrong.
+
+**Reconstruct shape (skill):** once the scenarios pass and
+`uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>` prints
+`ok`, commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
+reports (non-blocking)". Name it for what is true at that commit; its
+`## Tested` section lists the scenarios you ran and their results, the
+validation, and what you have not run (the review gates are still ahead). The
+lead may merge that commit so the user can start using the skill while you run
+the review gates and prepare the final gate, so do not stop your turn: push it
+and go straight on to Stage 5. Declaring a further milestone later is at your
+discretion.
 
 ## Stage 5: Review gates
 
@@ -93,6 +119,8 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
 - Scenarios run: <list, with pass/fail>
 - Shape changes from the sample: <none, or the output-schema / field / CLI /
   exit-code deltas a consumer or surface would need to adapt to>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
@@ -100,7 +128,14 @@ terminal report.
 
 In the **pre-existing/confirmed-live shape**, skip the final gate: commit and
 emit `name: done` once tests and gates pass. The user already confirmed the
-shape live, and the lead reveals/refreshes after merge.
+shape live, and the lead reveals/refreshes after merge. The `done` body carries
+the two footprint lines from `harden-creation.md`:
+
+```
+Committed on branch `<branch-name>`. Ready to merge.
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
+```
 
 ## If you need to give up
 

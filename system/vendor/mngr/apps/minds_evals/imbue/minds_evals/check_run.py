@@ -7,10 +7,11 @@ grades a timed-out trial as an ordinary result, so nothing else tells the two ap
 ``verifier/reward-details.json`` (did the structural gates hold, what did the judges say) and
 ``agent/verification/manifest.json`` (was anything left unmeasured).
 
-The gate is deliberately narrow. A trial is charged for not running and for failing a structural
-gate; it is never charged for a judge score, which is statistical and drifts between runs. An
-`error` in the evidence manifest fails the run because it is the harness that broke, not the
-workspace -- the same `failed` versus `error` split the collector and the verifier already rest on.
+The gate is deliberately narrow. A trial is charged for not running, for failing a structural gate,
+and for observably running on a model other than the one its harness config asked for; it is never
+charged for a judge score, which is statistical and drifts between runs. An `error` in the evidence
+manifest fails the run because it is the harness that broke, not the workspace -- the same `failed`
+versus `error` split the collector and the verifier already rest on.
 """
 
 import json
@@ -97,9 +98,10 @@ def _load_optional_json_object(path: Path) -> dict[str, Any] | None:
 # _reward_dicts, _criteria and is_gates_dimension_passed below are mirrored by _reward_dicts,
 # _criteria and _gates_all_passed in templates/tests/verifier/finalize.py, which decides the same gate
 # verdict inside the verifier container. They cannot be shared: that file runs on stdlib and
-# rewardkit alone, with no imbue package. Keep the two in step. The deliberate difference is
-# _criterion_value below, which finalize.py has no counterpart for -- this side must always reach a
-# verdict, where finalize.py is entitled to raise on a malformed file.
+# rewardkit alone, with no imbue package. Keep the two in step. Two helpers are deliberately local to
+# one side: _criterion_value below, because this side must always reach a verdict where finalize.py is
+# entitled to raise on a malformed file; and finalize.py's _is_gates_dimension_scored, because only
+# that side decides whether a trial is graded at all.
 @pure
 def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     """The per-reward detail dicts for one dimension of reward-details.json.
@@ -142,7 +144,9 @@ def is_gates_dimension_passed(reward_details: Mapping[str, Any] | None) -> bool:
     """Whether every structural gate criterion scored above zero.
 
     A dimension with no criteria at all counts as not passed: it means the verifier never scored the
-    gates, which is not the same claim as the gates holding.
+    gates, which is not the same claim as the gates holding. The verifier errors such a trial rather
+    than grading it, so what this side is reading there is a trial the run already fails on its
+    harbor status.
     """
     if reward_details is None:
         return False
@@ -247,6 +251,46 @@ def _describe_incompletion(result: TrialResult | None, state: Mapping[str, Any] 
 
 
 @pure
+def _harness_config_block(state: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    """The harness settings the trial was asked to run on, nested inside the arm block its state
+    file records the whole treatment in, or an empty block when the state file says nothing about
+    them -- every trial written before arms existed, and any trial that died before the sign-in."""
+    arm = (state or {}).get("arm")
+    harness_config = arm.get("harness_config") if isinstance(arm, Mapping) else None
+    return harness_config if isinstance(harness_config, Mapping) else {}
+
+
+@pure
+def _model_confirmation(harness_config: Mapping[str, Any]) -> bool | None:
+    """Whether the trial's transcript confirmed it ran on the model its harness config asked for.
+
+    None wherever the record does not say plainly: it is written as null by a driver that could not
+    tell, and is absent altogether from a state file written before arms existed.
+    """
+    is_confirmed = harness_config.get("is_model_confirmed")
+    return is_confirmed if isinstance(is_confirmed, bool) else None
+
+
+@pure
+def _describe_wrong_model(harness_config: Mapping[str, Any]) -> str:
+    """Why the trial's model is a failure, or empty when it is not one.
+
+    Only a config that asked for a model is judged on this, and only a plain false is a failure:
+    null is what the driver writes wherever it cannot tell (no transcript was captured, or the
+    catalog id has no known reported name), and that is silence rather than evidence of a wrong
+    model.
+    """
+    requested_model = str(harness_config.get("model") or "")
+    if not requested_model or _model_confirmation(harness_config) is not False:
+        return ""
+    raw_observed = harness_config.get("observed_models")
+    observed = [str(model) for model in raw_observed] if isinstance(raw_observed, list) else []
+    return "the run asked for {} but the trial answered on {}".format(
+        requested_model, ", ".join(observed) or "no model the record names"
+    )
+
+
+@pure
 def _trial_reward(result: TrialResult | None) -> float | None:
     if result is None or result.verifier_result is None or result.verifier_result.rewards is None:
         return None
@@ -287,6 +331,7 @@ def _read_trial_check(trial_dir: Path) -> TrialCheck:
     manifest = _load_optional_json_object(manifest_path)
     incompletion_reason = _describe_incompletion(result, state)
     state_values = state or {}
+    harness_config = _harness_config_block(state)
     return TrialCheck(
         trial_name=trial_dir.name,
         case_id=str(state_values.get("case_name") or ""),
@@ -296,6 +341,10 @@ def _read_trial_check(trial_dir: Path) -> TrialCheck:
         error_entry_ids=_collect_error_entry_ids(manifest, manifest_path),
         reward=_trial_reward(result),
         judge_scores=collect_judge_scores(reward_details),
+        lane=str(harness_config.get("lane") or ""),
+        requested_model=str(harness_config.get("model") or ""),
+        is_model_confirmed=_model_confirmation(harness_config),
+        wrong_model_reason=_describe_wrong_model(harness_config),
         modal_environment_name=str(state_values.get("modal_environment_name") or ""),
         mngr_sha=str(state_values.get("mngr_sha") or ""),
         dwt_sha=str(state_values.get("dwt_sha") or ""),
@@ -341,6 +390,30 @@ def _format_marker(is_ok: bool) -> str:
 
 
 @pure
+def _format_arm_cell(trial: TrialCheck) -> str:
+    """The harness half of the trial's arm as one cell: what it asked to run on, and what the
+    transcript said about it. The pinned pair that completes the arm has columns of its own beside
+    this one.
+
+    The failure takes the cell whenever there is one, the way the completion column carries its own
+    reason, so a run that answered on the wrong model says so where it is read.
+    """
+    if trial.wrong_model_reason:
+        return trial.wrong_model_reason
+    if not trial.lane and not trial.requested_model:
+        return "-"
+    if not trial.requested_model:
+        # The default harness config requests no model at all, so there is nothing for the
+        # transcript to confirm and no name to print but the workspace's own default.
+        return "{} default".format(trial.lane or "-")
+    return "{} {} {}".format(
+        trial.lane or "-",
+        trial.requested_model,
+        "confirmed" if trial.is_model_confirmed else "unconfirmed",
+    )
+
+
+@pure
 def _as_table_cell(text: str) -> str:
     """Free text in a markdown cell. A pipe or a newline in it would end the cell, and every cell
     here carries free text: exception messages carry anything, and case ids, trial names, entry ids
@@ -354,13 +427,14 @@ def render_summary_markdown(run_check: RunCheck) -> str:
     header_lines = [
         "## minds-evals: {} -- {}".format(run_check.job_name, _format_marker(run_check.is_passed)),
         "",
-        "| trial | case | completed | gates | errored evidence | reward | judge scores | modal env | mngr | dwt |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| trial | case | arm | completed | gates | errored evidence | reward | judge scores | modal env | mngr | dwt |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     trial_lines = [
-        "| {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
+        "| {} | {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
             _as_table_cell(trial.trial_name),
             _as_table_cell(trial.case_id) or "-",
+            _as_table_cell(_format_arm_cell(trial)),
             _format_marker(True) if trial.is_completed else _as_table_cell(trial.incompletion_reason),
             _format_marker(trial.is_gates_passed),
             _as_table_cell(", ".join(trial.error_entry_ids)) or "none",

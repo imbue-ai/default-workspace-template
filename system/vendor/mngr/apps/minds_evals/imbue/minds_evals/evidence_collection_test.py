@@ -92,7 +92,6 @@ def _case_config(expectations: Expectations | None, verification_timeout_seconds
         dwt_repo="https://example.invalid/dwt.git",
         dwt_branch="main",
         dwt_sha="d" * 40,
-        avg_word_count_baseline=100.0,
         step=None,
         expectations=expand_expectations(expectations) if expectations is not None else None,
         authored_expectations=expectations,

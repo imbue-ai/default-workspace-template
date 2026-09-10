@@ -82,11 +82,19 @@ echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
 
 The frontmatter carries `operation: crystallize`, the `type`,
 `finish_report_path` (the report destination the lead polls; see
-`.agents/shared/references/worker-reporting.md`), and an optional
-`source_artifacts_dir`. The body *describes* the work and -- for a skill
-reconstructed from the transcript -- anchors the worker's search with verbatim
-quotes (the user's original ask, key decisions, tool outputs that defined the
-recipe). Without anchors the worker scans the wrong region of your transcript.
+`.agents/shared/references/worker-reporting.md`), `scope_file` (where the worker
+writes the creation's computed footprint at the start of its run -- you name the
+path, the worker creates the file), `diff_base` (the commit before the work
+being hardened began: your `HEAD` at dispatch for a skill reconstructed from
+the transcript; for `type: app`, the parent of the commit that added the app's
+manifest, `$(git rev-parse "$(git log --diff-filter=A --format=%H -1 --
+system/apps/<package>/app.toml)^")`, so the scope file's diff covers the
+scaffold and everything built on it), and an optional `source_artifacts_dir`.
+Both keys are omitted for a `type: service` task, which has no footprint. The body *describes* the
+work and -- for a skill reconstructed from the transcript -- anchors the
+worker's search with verbatim quotes (the user's original ask, key decisions,
+tool outputs that defined the recipe). Without anchors the worker scans the
+wrong region of your transcript.
 Describe invariants and state constraints; do **not** enumerate subcommands,
 flow steps, or argparse surfaces -- those are the worker's decisions.
 
@@ -95,6 +103,8 @@ flow steps, or argparse surfaces -- those are the worker's decisions.
 cat << FRONTMATTER_EOF
 ---
 finish_report_path: data/.tasks/harden/crystallize-$NAME/reports/report.md
+scope_file: data/.tasks/harden/crystallize-$NAME/scope.json
+diff_base: $(git rev-parse HEAD)
 operation: crystallize
 type: skill
 FRONTMATTER_EOF
@@ -127,6 +137,15 @@ Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
 reads `operation` and `type` from this frontmatter and follows the matching
 references. When you reach a gate or terminal status, push a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
+
+## Milestones
+Do not save everything for the end. As soon as the creation is genuinely usable
+on your branch -- for an app, once its tests pass; for a skill, once your
+scenarios pass -- commit and declare a milestone (non-blocking, per your
+reporting protocol): the lead merges the first usable version as soon as you
+declare it, so the user can start using the creation while you finish the
+review gates. Name it for what is true at that commit, and have its `## Tested`
+section say exactly what you ran there and what you have not.
 
 ## Success criteria
 - The creation is committed on your branch, tested, and passes the review gates.
@@ -188,13 +207,23 @@ Flow-specific substitutions:
   `data/.tasks/harden/crystallize-$NAME/reports/report.md`
 - Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`; `await`
   archives each report it prints under
-  `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
+  `data/.tasks/harden/crystallize-$NAME/reports/consumed/` (a milestone keeps
+  its own file name there, so a deferred one can still be merged later)
+- Milestones dir: `data/.tasks/harden/crystallize-$NAME/reports/milestones/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
   **app** → none (the worker merges straight to `done`).
+- Milestones: any name, non-blocking → provisional merge per `lead-proxy.md`'s
+  "Milestone reports: provisional merge". Provisional go-live is the minimum
+  that makes the creation usable: **skill** → it is on disk at
+  `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
+  still runs only on `done`.
 - Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
   `launch-task/references/worker-failure.md`).
 
 ## Step 6: Go live
+
+A provisional milestone merge does not change this step: it runs only on `done`,
+and the `done` merge brings the remainder of the branch.
 
 On `done`, after merging the worker's branch:
 
