@@ -156,7 +156,7 @@ class GoalTurnSource(TurnSource):
 * The transcript and state files reach the verifier via declared artifacts: `artifacts = ["/logs/agent/full_transcript.jsonl", "/logs/agent/state.json"]` in `task.toml`, re-materialized at their original paths in the verifier container.
 * `tests/verifier/test.sh` runs `uvx --from 'harbor-rewardkit==0.2.0' rewardkit /tests`.
 * The criteria descriptions are written fresh in rewardkit's idiom but preserve the intent of the current `_JUDGE_PROMPT` dimensions ("how an AI agent talks to a non-technical client it is building software for").
-* Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the raw avg-word-count value also lands in `agent_result.metadata`.
+* Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the driver's own `average_words_per_turn` and `average_words_per_message` also land in `agent_result.metadata`, for observability only.
 * The judge model is pinned in `judge.toml`; its key arrives through `[verifier.env]`.
 * Re-grading finished rollouts without re-running them: `harbor trial regrade` (replaces the old two-pass `launch` / `evaluate` split).
 
@@ -169,11 +169,11 @@ class GoalTurnSource(TurnSource):
 | `conciseness_score` (1-10) | `judge.toml` criterion `conciseness` | likert `points = 10`, `(s-1)/9` | 1.0 |
 | `nontechnical_language_score` (1-10) | `judge.toml` criterion `nontechnical_language` | likert `points = 10`, `(s-1)/9` | 1.0 |
 | `proactive_score` (1-10) | `judge.toml` criterion `proactive` | likert `points = 10`, `(s-1)/9` | 1.0 |
-| `avg_word_count` (reported, unscored) | `checks.py` wordiness guard: passes unless avg words per agent turn exceeds `avg_word_count_baseline * 1.1` (the negated-criterion idiom: scores the behavior the agent should NOT exhibit) | binary, 0 or 1 | 1.0 |
+| `avg_word_count` (reported, unscored) | `quality/message_lengths.py` message-length guard: each message is held to the limit for its role in the turn -- a status line, or the turn's answer -- and the criterion is the fraction of turns that keep both | fraction, 0 to 1 | 1.0 |
 | only `finished` cases scored (`N/A` otherwise) | `checks.py` structural gates: transcript parses, agent engaged with distinct non-stub replies, all turns completed, not timed out; a failed gate zeroes the reward via `finalize.py` (see Implementation corrections -- rewardkit's `required_pass` cannot express this) and is marked in `reward-details.json` | binary gate | gate (no weight) |
 
-* `reward` = weighted mean of the four scored criteria above, gated by the structural checks; with equal weights the wordiness guard is 25% of the reward, which is the primary knob to adjust at review time.
-* `avg_word_count_baseline` is written into `tests/case.json` by the generator; its default is an unmeasured seed, and it is overridable per config, so the way to ground it is to measure the mean over a batch of real runs and set it there.
+* `reward` = weighted mean of the scored criteria above, gated by the structural checks. The knob to adjust at review time is the criterion set of each dimension and the split `finalize.py` applies between them.
+* The message-length limits in `quality/message_lengths.py` are the guard's whole configuration: the bar is a property of the writing rather than of the eval config, so there is no per-config baseline to ground.
 * `judge.toml` sketch:
 
 ```toml

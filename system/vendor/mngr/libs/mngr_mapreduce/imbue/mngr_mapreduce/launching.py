@@ -67,6 +67,11 @@ REDUCER_INPUTS_DIRNAME = ".mapreduce_inputs"
 # within the run. Value is an ``AgentKind`` string.
 ROLE_LABEL_KEY = "mapreduce_role"
 
+# Label key carrying the id of the task a mapper was launched for, so a
+# rediscovered run can be keyed by task rather than by agent name. Only
+# mappers have one.
+TASK_ID_LABEL_KEY = "mapreduce_task_id"
+
 # Fraction of a run's requested hosts that may fail to create before the run is
 # abandoned. Agents are placed round-robin over whatever hosts came back, so a
 # collapsed pool silently multiplies how many agents share each surviving host,
@@ -185,13 +190,15 @@ def _build_agent_options(
     config: LaunchConfig,
     kind: AgentKind,
     initial_message: str | None = None,
+    task_id: str | None = None,
     target_path: Path | None = None,
     transfer_mode: TransferMode = TransferMode.GIT_MIRROR,
 ) -> CreateAgentOptions:
     """Build CreateAgentOptions for a map-reduce agent.
 
     ``kind`` is stamped onto ``label_options`` as the ``mapreduce_role`` label,
-    overriding any prior value carried on ``config``.
+    overriding any prior value carried on ``config``. ``task_id`` is stamped as
+    the ``mapreduce_task_id`` label; only mappers have one.
 
     ``target_path`` overrides where the agent's work_dir is placed on the
     host (used to pin the snapshotter to ``/code``). ``transfer_mode``
@@ -203,7 +210,10 @@ def _build_agent_options(
     from a snapshot sources from the host's own ``/code``).
     """
     is_remote = config.provider_name.lower() != LOCAL_PROVIDER_NAME
-    label_options = AgentLabelOptions(labels={**config.label_options.labels, ROLE_LABEL_KEY: kind.value})
+    labels = {**config.label_options.labels, ROLE_LABEL_KEY: kind.value}
+    if task_id is not None:
+        labels[TASK_ID_LABEL_KEY] = task_id
+    label_options = AgentLabelOptions(labels=labels)
     return CreateAgentOptions(
         agent_type=config.agent_type,
         name=agent_name,
@@ -228,6 +238,7 @@ def _create_agent(
     mngr_ctx: MngrContext,
     kind: AgentKind,
     initial_message: str | None = None,
+    task_id: str | None = None,
     existing_host: OnlineHostInterface | None = None,
     host_name: HostName | None = None,
 ) -> CreateAgentResult:
@@ -281,27 +292,27 @@ def _create_agent(
 
     if kind is AgentKind.SNAPSHOTTER:
         source_location = HostLocation(host=config.source_host, path=config.source_dir)
-        agent_options = _build_agent_options(
-            agent_name,
-            branch_name,
-            config,
-            kind,
-            initial_message=initial_message,
-            target_path=_HOST_CODE_DIR,
-        )
+        target_path = _HOST_CODE_DIR
+        transfer_mode = TransferMode.GIT_MIRROR
     elif existing_host is not None and config.snapshot is not None:
         source_location = HostLocation(host=existing_host, path=_HOST_CODE_DIR)
-        agent_options = _build_agent_options(
-            agent_name,
-            branch_name,
-            config,
-            kind,
-            initial_message=initial_message,
-            transfer_mode=TransferMode.GIT_WORKTREE,
-        )
+        target_path = None
+        transfer_mode = TransferMode.GIT_WORKTREE
     else:
         source_location = HostLocation(host=config.source_host, path=config.source_dir)
-        agent_options = _build_agent_options(agent_name, branch_name, config, kind, initial_message=initial_message)
+        target_path = None
+        transfer_mode = TransferMode.GIT_MIRROR
+
+    agent_options = _build_agent_options(
+        agent_name,
+        branch_name,
+        config,
+        kind,
+        initial_message=initial_message,
+        task_id=task_id,
+        target_path=target_path,
+        transfer_mode=transfer_mode,
+    )
 
     return api_create(
         source_location=source_location,
@@ -336,6 +347,7 @@ def _launch_mapper(
         mngr_ctx=mngr_ctx,
         kind=AgentKind.MAPPER,
         initial_message=initial_message,
+        task_id=task.id,
         existing_host=existing_host,
         host_name=host_name,
     )

@@ -130,17 +130,28 @@ def test_prevent_exit_stack() -> None:
 
 
 # harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
-# every driver method that touches the box or the workspace has to be too. Reads of the workspace
-# cannot be made synchronous here; keep new async surface to what those interfaces force. The one
-# await that is not forced by those interfaces is the `asyncio.to_thread` around the simulated
-# client's model call: harbor runs every concurrent trial on one event loop, so a blocking HTTP
-# call left inline would stall every other trial's polling and deadlines. Most of the count is the
-# tests, which drive that same async agent and so cannot be synchronous either; a test that drives
-# one more trial moves this by several without adding any async surface to the driver. A stepped
-# case calls that same async agent once per step, so its per-step file placement and its per-step
-# evidence and trajectory publication are more of the same forced surface, not new.
+# every call that reaches the box or the workspace has to be async too. `driver.py`,
+# `minds_bridge.py` and `evidence_collection.py` are that forced surface, and `driver_test.py`,
+# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it, so all six are
+# excluded: their hits track how many trials the tests exercise rather than how much async the
+# project chooses. Within those files, keep new async to what harbor's interfaces force.
+# What remains counted is the async that is optional. Today that is two LiteLLM proxy callbacks in
+# `resources/box_proxy_hooks.py`, whose signatures the proxy fixes, plus three test strings naming
+# the `create_worker.py await` subcommand, which the regex reads as the keyword. Any increase is
+# new optional async, which belongs in blocking code instead.
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(360))
+    rc.check_async_await(
+        _DIR,
+        snapshot(5),
+        (
+            "driver.py",
+            "driver_test.py",
+            "minds_bridge.py",
+            "minds_bridge_test.py",
+            "evidence_collection.py",
+            "mock_environment_test.py",
+        ),
+    )
 
 
 # --- Hardcoded paths ---
