@@ -14,6 +14,7 @@ import {
   UnfoldVertical,
 } from "lucide-react";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -82,6 +83,19 @@ import {
   UiFlowsViewer,
   useUiFlows,
 } from "~/components/trajectory/ui-flows-viewer";
+import {
+  buildTimeline,
+  indexSubagents,
+  isStillRunning,
+  runKey,
+  SubagentDisclosure,
+  SubagentModeToggle,
+  SubagentRails,
+  SubagentRunHeader,
+  subagentsByStep,
+  type Subagent,
+  type SubagentMode,
+} from "~/components/trajectory/subagents";
 import { CodeBlock } from "~/components/ui/code-block";
 import { Markdown } from "~/components/ui/markdown";
 import {
@@ -1706,6 +1720,124 @@ function StepDurationBar({
   );
 }
 
+// How delegated agents attach to the steps that spawned them. Absent for the steps the interaction
+// tab synthesizes out of a recorded exchange, which carry no observation to reference one from.
+interface SubagentNesting {
+  index: Map<string, Subagent>;
+  /** How deep the steps being drawn already sit: 0 for the trajectory itself, 1 for what it
+   *  delegated, and so on. It picks the shade of the rail the delegated steps hang behind. */
+  depth: number;
+  openIds: ReadonlySet<string>;
+  onToggle: (trajectoryId: string) => void;
+}
+
+/** One step, drawn the same wherever it comes from, with room under it for what it delegated. */
+function TrajectoryStepBlock({
+  step,
+  agentName,
+  jobName,
+  trialName,
+  selectedStep,
+  expandAll,
+  prevTimestamp,
+  startTimestamp,
+  highlighted = false,
+  setRef,
+  children,
+}: {
+  step: Step;
+  agentName: string | null;
+  jobName: string;
+  trialName: string;
+  selectedStep: string | null;
+  expandAll: boolean;
+  prevTimestamp: string | null;
+  startTimestamp: string | null;
+  highlighted?: boolean;
+  setRef?: (element: HTMLDivElement | null) => void;
+  children?: React.ReactNode;
+}) {
+  const annotation = harnessAnnotation(step);
+  const boundary = isStepBoundary(annotation) ? annotation : null;
+  // A harness annotation is carried on a `system` step, since ATIF has no source for it.
+  const source: StepSource = boundary !== null ? "harness" : step.source;
+  const tone: StepTone = source === "system" ? "muted" : "default";
+
+  return (
+    <div
+      ref={setRef}
+      className={cn(
+        stepVariants({ source }),
+        highlighted && "bg-primary/10 dark:bg-primary/20"
+      )}
+    >
+      {boundary !== null ? (
+        <StepBoundaryDivider step={step} annotation={boundary} />
+      ) : (
+        <>
+          <div className="mb-3">
+            <StepHeader
+              step={step}
+              agentName={agentName}
+              prevTimestamp={prevTimestamp}
+              startTimestamp={startTimestamp}
+            />
+          </div>
+          <StepContent
+            step={step}
+            jobName={jobName}
+            trialName={trialName}
+            selectedStep={selectedStep}
+            expandAll={expandAll}
+            tone={tone}
+          />
+        </>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/** A delegated agent's own steps, collapsed under a header that names it. */
+function NestedSubagent({
+  subagent,
+  nesting,
+  jobName,
+  trialName,
+  selectedStep,
+  expandAll,
+}: {
+  subagent: Subagent;
+  nesting: SubagentNesting;
+  jobName: string;
+  trialName: string;
+  selectedStep: string | null;
+  expandAll: boolean;
+}) {
+  return (
+    <SubagentDisclosure
+      subagent={subagent}
+      depth={nesting.depth + 1}
+      open={nesting.openIds.has(subagent.trajectoryId)}
+      onToggle={() => nesting.onToggle(subagent.trajectoryId)}
+    >
+      <TrajectoryStepsContent
+        steps={subagent.trajectory.steps}
+        agentName={subagent.trajectory.agent.name}
+        jobName={jobName}
+        trialName={trialName}
+        selectedStep={selectedStep}
+        expandAll={expandAll}
+        nesting={{
+          ...nesting,
+          index: indexSubagents(subagent.trajectory),
+          depth: nesting.depth + 1,
+        }}
+      />
+    </SubagentDisclosure>
+  );
+}
+
 function TrajectoryStepsContent({
   steps,
   agentName,
@@ -1715,6 +1847,7 @@ function TrajectoryStepsContent({
   expandAll,
   highlightedStepIndex = null,
   setStepRef,
+  nesting,
 }: {
   steps: Step[];
   agentName: string | null;
@@ -1724,57 +1857,140 @@ function TrajectoryStepsContent({
   expandAll: boolean;
   highlightedStepIndex?: number | null;
   setStepRef?: (index: number, element: HTMLDivElement | null) => void;
+  nesting?: SubagentNesting;
 }) {
+  const spawned =
+    nesting === undefined
+      ? null
+      : subagentsByStep(steps, nesting.index);
+  // One delegated agent, drawn the same whether a step spawned it or nothing in the document did.
+  const renderNested = (subagent: Subagent) =>
+    nesting === undefined ? null : (
+      <NestedSubagent
+        key={subagent.trajectoryId}
+        subagent={subagent}
+        nesting={nesting}
+        jobName={jobName}
+        trialName={trialName}
+        selectedStep={selectedStep}
+        expandAll={expandAll}
+      />
+    );
+
   return (
     <div>
-      {steps.map((trajectoryStep, idx) => {
-        const annotation = harnessAnnotation(trajectoryStep);
-        const boundary = isStepBoundary(annotation) ? annotation : null;
-        // A harness annotation is carried on a `system` step, since ATIF has no source for it.
-        const source: StepSource =
-          boundary !== null ? "harness" : trajectoryStep.source;
-        const tone: StepTone = source === "system" ? "muted" : "default";
+      {steps.map((trajectoryStep, idx) => (
+        <TrajectoryStepBlock
+          key={trajectoryStep.step_id}
+          step={trajectoryStep}
+          agentName={agentName}
+          jobName={jobName}
+          trialName={trialName}
+          selectedStep={selectedStep}
+          expandAll={expandAll}
+          prevTimestamp={idx > 0 ? steps[idx - 1]?.timestamp ?? null : null}
+          startTimestamp={steps[0]?.timestamp ?? null}
+          highlighted={highlightedStepIndex === idx}
+          setRef={
+            setStepRef === undefined
+              ? undefined
+              : (element) => setStepRef(idx, element)
+          }
+        >
+          {(spawned?.perStep[idx] ?? []).map(renderNested)}
+        </TrajectoryStepBlock>
+      ))}
+      {(spawned?.unattributed ?? []).map(renderNested)}
+    </div>
+  );
+}
 
-        return (
-          <div
-            key={trajectoryStep.step_id}
-            ref={(element) => setStepRef?.(idx, element)}
-            className={cn(
-              stepVariants({ source }),
-              highlightedStepIndex === idx &&
-                "bg-primary/10 dark:bg-primary/20"
-            )}
-          >
-            {boundary !== null ? (
-              <StepBoundaryDivider
-                step={trajectoryStep}
-                annotation={boundary}
+/** Every agent's steps in one list, in the order they happened, headed where the timeline changes
+ *  hands. Only the viewed trajectory's own steps carry a step ref, since that is what the duration
+ *  bar above scrolls to. */
+function TrajectoryTimelineContent({
+  trajectory,
+  agentName,
+  jobName,
+  trialName,
+  selectedStep,
+  expandAll,
+  highlightedStepIndex,
+  setStepRef,
+}: {
+  trajectory: Trajectory;
+  agentName: string | null;
+  jobName: string;
+  trialName: string;
+  selectedStep: string | null;
+  expandAll: boolean;
+  highlightedStepIndex: number | null;
+  setStepRef: (index: number, element: HTMLDivElement | null) => void;
+}) {
+  const rows = useMemo(() => buildTimeline(trajectory), [trajectory]);
+  // Where each agent first takes the timeline, which is what tells an opening from a resumption.
+  const firstRunPositions = useMemo(() => {
+    const positions = new Map<string, number>();
+    rows.forEach((row, position) => {
+      const key = runKey(row);
+      if (row.startsRun && !positions.has(key)) positions.set(key, position);
+    });
+    return positions;
+  }, [rows]);
+
+  return (
+    <div>
+      {rows.map((row, position) => (
+        <Fragment
+          key={`${runKey(row)}#${row.step.step_id}`}
+        >
+          {row.startsRun && (
+            <SubagentRails lineage={row.lineage}>
+              <SubagentRunHeader
+                lineage={row.lineage}
+                kind={row.subagent?.kind ?? null}
+                // The same fallback the step headers beneath use, so an unnamed root is called the
+                // one thing throughout. `agentName` has already been resolved against the
+                // trajectory's own `agent.name`, which is why there is nothing else to try.
+                rootLabel={agentName ?? "agent"}
+                runLength={row.runLength}
+                // Null for the viewed trajectory, whose whole step count the card header above
+                // already prints; only its resumptions have something of their own to report.
+                totalLength={row.subagent?.trajectory.steps.length ?? null}
+                isRunning={
+                  row.subagent !== null && isStillRunning(row.subagent)
+                }
+                depth={row.depth}
+                isFirstRun={
+                  firstRunPositions.get(runKey(row)) === position
+                }
               />
-            ) : (
-              <>
-                <div className="mb-3">
-                  <StepHeader
-                    step={trajectoryStep}
-                    agentName={agentName}
-                    prevTimestamp={
-                      idx > 0 ? steps[idx - 1]?.timestamp ?? null : null
-                    }
-                    startTimestamp={steps[0]?.timestamp ?? null}
-                  />
-                </div>
-                <StepContent
-                  step={trajectoryStep}
-                  jobName={jobName}
-                  trialName={trialName}
-                  selectedStep={selectedStep}
-                  expandAll={expandAll}
-                  tone={tone}
-                />
-              </>
-            )}
-          </div>
-        );
-      })}
+            </SubagentRails>
+          )}
+          <SubagentRails lineage={row.lineage}>
+            <TrajectoryStepBlock
+              step={row.step}
+              agentName={row.subagent?.trajectory.agent.name ?? agentName}
+              jobName={jobName}
+              trialName={trialName}
+              selectedStep={selectedStep}
+              expandAll={expandAll}
+              // Both read across the timeline rather than within one agent, so the step header's
+              // elapsed figures sum along the order they are read in. The gap that opens a
+              // delegated agent's first row is then the wait before it said anything, which
+              // nothing else on the page shows.
+              prevTimestamp={rows[position - 1]?.step.timestamp ?? null}
+              startTimestamp={rows[0]?.step.timestamp ?? null}
+              highlighted={row.depth === 0 && highlightedStepIndex === row.index}
+              setRef={
+                row.depth === 0
+                  ? (element) => setStepRef(row.index, element)
+                  : undefined
+              }
+            />
+          </SubagentRails>
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -1819,6 +2035,19 @@ function TrajectoryViewer({
     number | null
   >(null);
   const stepAgentName = agentName ?? trajectory?.agent?.name ?? null;
+
+  const subagentIndex = useMemo(() => indexSubagents(trajectory), [trajectory]);
+  const [subagentMode, setSubagentMode] = useState<SubagentMode>("nested");
+  const [openSubagents, setOpenSubagents] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const toggleSubagent = useCallback((trajectoryId: string) => {
+    setOpenSubagents((open) => {
+      const next = new Set(open);
+      if (!next.delete(trajectoryId)) next.add(trajectoryId);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (highlightTimeoutRef.current) {
@@ -1907,41 +2136,70 @@ function TrajectoryViewer({
             )}
           </div>
         </div>
-        {trajectory.steps.length > 0 && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="shrink-0 text-muted-foreground"
-            title={allExpanded ? "Collapse all" : "Expand all"}
-            aria-label={allExpanded ? "Collapse all" : "Expand all"}
-            onClick={() => setAllExpanded((expanded) => !expanded)}
-          >
-            {allExpanded ? (
-              <FoldVertical className="size-4" aria-hidden="true" />
-            ) : (
-              <UnfoldVertical className="size-4" aria-hidden="true" />
-            )}
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-3">
+          {subagentIndex.size > 0 && (
+            <SubagentModeToggle
+              mode={subagentMode}
+              onModeChange={setSubagentMode}
+            />
+          )}
+          {trajectory.steps.length > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground"
+              title={allExpanded ? "Collapse all" : "Expand all"}
+              aria-label={allExpanded ? "Collapse all" : "Expand all"}
+              onClick={() => setAllExpanded((expanded) => !expanded)}
+            >
+              {allExpanded ? (
+                <FoldVertical className="size-4" aria-hidden="true" />
+              ) : (
+                <UnfoldVertical className="size-4" aria-hidden="true" />
+              )}
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="pb-0">
         <StepDurationBar
           steps={trajectory.steps}
           onStepClick={handleStepClick}
         />
-        <TrajectoryStepsContent
-          steps={trajectory.steps}
-          agentName={stepAgentName}
-          jobName={jobName}
-          trialName={trialName}
-          selectedStep={selectedStep}
-          expandAll={allExpanded}
-          highlightedStepIndex={highlightedStepIndex}
-          setStepRef={(index, element) => {
-            stepRefs.current[index] = element;
-          }}
-        />
+        {subagentMode === "flat" && subagentIndex.size > 0 ? (
+          <TrajectoryTimelineContent
+            trajectory={trajectory}
+            agentName={stepAgentName}
+            jobName={jobName}
+            trialName={trialName}
+            selectedStep={selectedStep}
+            expandAll={allExpanded}
+            highlightedStepIndex={highlightedStepIndex}
+            setStepRef={(index, element) => {
+              stepRefs.current[index] = element;
+            }}
+          />
+        ) : (
+          <TrajectoryStepsContent
+            steps={trajectory.steps}
+            agentName={stepAgentName}
+            jobName={jobName}
+            trialName={trialName}
+            selectedStep={selectedStep}
+            expandAll={allExpanded}
+            highlightedStepIndex={highlightedStepIndex}
+            setStepRef={(index, element) => {
+              stepRefs.current[index] = element;
+            }}
+            nesting={{
+              index: subagentIndex,
+              depth: 0,
+              openIds: openSubagents,
+              onToggle: toggleSubagent,
+            }}
+          />
+        )}
       </CardContent>
     </Card>
   );

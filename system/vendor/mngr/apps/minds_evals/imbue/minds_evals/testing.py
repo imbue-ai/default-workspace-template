@@ -9,6 +9,7 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds_evals import evidence_collection
 from imbue.minds_evals.data_types import CheckStatus
+from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
 
 # The scheduled CI workflow. It hard-codes things this package also decides -- the Modal
@@ -476,6 +477,13 @@ WORKER_LAUNCH_COMMAND: Final[str] = (
     "--template worker --runtime-dir data/.tasks/harden/crystallize-todo/ --task-file " + WORKER_TASK_FILE
 )
 CHAT_WORK_DIR: Final[str] = "/home/user/workspace"
+
+
+def worker_launch(name: str = WORKER_NAME, depth: int = 0, lead_name: str = "") -> WorkerLaunch:
+    """The launch `scan_worker_launches` would have found for the worker these fixtures describe."""
+    return WorkerLaunch(
+        name=name, tool_call_id=WORKER_LAUNCH_CALL_ID, task_file=WORKER_TASK_FILE, depth=depth, lead_name=lead_name
+    )
 
 
 def worker_launch_step(step_id: int) -> dict[str, Any]:

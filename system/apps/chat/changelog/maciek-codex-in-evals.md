@@ -1,0 +1,3 @@
+The OpenAI provider offers "Use an API key" alongside "Continue with ChatGPT": paste a raw OpenAI key and the account is signed in, with no one-time code to type into a browser on another device. The key is written to the account's `auth.json` in the API-key mode codex reads, the same file the device flow produces, so binding, re-auth and every chat on the account work exactly as before. This is the only way to mint an OpenAI account without a person present, which is what lets automated runs use codex.
+
+`codex login status` -- what decides whether a sign-in is committed -- only checks that a credential is present, so a mistyped key is accepted at the field and reported when the chat takes its first turn.

@@ -170,19 +170,27 @@ jobs:
         id: evals-diff
         # The libs/ paths are the project's in-repo editable dependencies,
         # direct and transitive: a change to any of them reaches this project's
-        # venv without touching apps/minds_evals. The list must equal the
+        # venv without touching apps/minds_evals. That list must equal the
         # editable sources in apps/minds_evals/uv.lock, which
         # test_meta_ratchets.py enforces -- add a path dep there and this gate
         # fails until it is listed here.
         #
-        # The workflow files after them are not dependencies: the suite reads
-        # them and asserts against them, so a change to one can break a test
-        # without touching the project. The scheduled workflow's
+        # apps/modal_litellm is NOT a dependency and is deliberately listed
+        # anyway (the ratchet above would not miss it, since it only reads the
+        # lock): the eval box image installs that app's image_requirements.txt
+        # export by path, and minds_bridge_test guards that the export is still
+        # where the Dockerfile looks. Without this entry, the PR that moves the
+        # export skips the only job that runs that guard.
+        #
+        # The workflow files at the end are not dependencies either: the suite
+        # reads them and asserts against them, so a change to one can break a
+        # test without touching the project. The scheduled workflow's
         # CI_ENVIRONMENT_PREFIX is pinned to the environment name a CI trial
         # creates, because a mismatch leaks live Modal environments in silence.
         run: |
           if git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" -- \
               apps/minds_evals \
+              apps/modal_litellm \
               libs/concurrency_group \
               libs/imbue_common \
               libs/mngr \

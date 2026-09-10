@@ -89,13 +89,15 @@ only way harbor gets the dependencies it declares. Practical consequences:
   app or the monorepo packages it depends on.
 - Type checking is split, because `imbue/minds_evals/resources/` and `imbue/minds_evals/templates/`
   are shipped as source into environments this project does not itself depend on. `resources/` runs
-  in the box against the monorepo venv (importing `mngr_forward`, `litellm`, and `playwright`), so
-  this project excludes it and the root workspace checks it instead. `templates/` runs in the
-  verifier container, whose only foreign import is `rewardkit` -- a dev dependency here purely so
-  this project *can* check them, which it does; it is the root workspace that skips them. The
-  repo-root `test_meta_ratchets.py` keeps the two configs from excluding the same path at once (it
-  runs on every PR, unlike this project's path-gated job), and `rewardkit_pin_test.py` here keeps
-  the dev-group `rewardkit` on the verifier container's own pin.
+  in the box against the monorepo venv (importing `mngr_forward` and `playwright`) -- except the
+  proxy hooks, which the proxy loads from the box's own `/opt/eval_proxy` venv, whose `litellm` is
+  the version the monorepo venv is pinned to -- so this project excludes it and the root workspace
+  checks it instead. `templates/` runs in the verifier container, whose only foreign import is
+  `rewardkit` -- a dev dependency here purely so this project *can* check them, which it does; it
+  is the root workspace that skips them. The repo-root `test_meta_ratchets.py` keeps the two configs
+  from excluding the same path at once (it runs on every PR, unlike this project's path-gated job),
+  and `rewardkit_pin_test.py` here keeps the dev-group `rewardkit` on the verifier container's own
+  pin.
 - Coverage omits both directories: neither runs in the dev process.
 
 ## Usage

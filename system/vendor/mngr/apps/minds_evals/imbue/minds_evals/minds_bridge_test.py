@@ -8,6 +8,9 @@ from typing import Final
 import pytest
 from harbor.environments.base import ExecResult
 
+from imbue.imbue_common.modal_image_requirements import IMAGE_REQUIREMENTS_FILENAME
+from imbue.imbue_common.modal_image_requirements import image_pinned_app_dir
+from imbue.imbue_common.modal_image_requirements import image_requirements_path
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals.errors import BoxCommandError
 from imbue.minds_evals.errors import ModalNameBudgetError
@@ -56,6 +59,7 @@ from imbue.minds_evals.mock_environment_test import curl_stdout
 from imbue.minds_evals.mock_environment_test import failed_result
 from imbue.minds_evals.mock_environment_test import mngr_exec_json
 from imbue.minds_evals.mock_environment_test import ok_result
+from imbue.minds_evals.template_loading import TEMPLATES_DIR
 
 
 def test_load_modal_token_env_reads_the_active_profile(tmp_path: Path) -> None:
@@ -779,6 +783,53 @@ def test_the_tunnel_and_proxy_log_beside_the_backend(tmp_path: Path) -> None:
     assert "> {} 2>&1".format(service_log_path(minds_bridge.TUNNEL_LOG_FILENAME)) in tunnel_command
     proxy_command = proxy_environment.exec_commands[-1]
     assert "> {} 2>&1".format(service_log_path(minds_bridge.PROXY_LOG_FILENAME)) in proxy_command
+
+
+def test_the_proxy_is_served_by_its_own_litellm(tmp_path: Path) -> None:
+    """The workspace venv's litellm cannot serve -- it carries no [proxy] extra -- and every
+    `uv run` in the box re-syncs that venv, so a proxy borrowing it would die at startup or lose its
+    dependencies mid-trial."""
+    environment = MockBoxEnvironment(tmp_path, [])
+
+    asyncio.run(start_proxy(environment, {}, "model_list: []", "sk-up", "sk-trial", 4000))
+
+    command = environment.exec_commands[-1]
+    assert minds_bridge.BOX_PROXY_LITELLM_PATH in command
+    assert "uv run" not in command
+
+
+# The pin set the box image builds the proxy venv from. Derived from the same layout helper
+# modal_litellm's own drift test resolves its export through, so the two apps cannot disagree about
+# where it lives; the Dockerfile names it repo-root-relative, reading it out of the staged clone it
+# builds from.
+_PROXY_PIN_PACKAGE: Final[str] = "modal-litellm"
+_PROXY_IMAGE_REQUIREMENTS: Final[str] = "{}/{}".format(
+    image_pinned_app_dir(_PROXY_PIN_PACKAGE), IMAGE_REQUIREMENTS_FILENAME
+)
+
+
+def test_the_box_image_builds_the_venv_the_proxy_is_started_from() -> None:
+    """Two files, one path: the image creates the venv and fills it, the driver runs the litellm
+    inside it. A venv created but left empty -- or filled through some other interpreter -- has no
+    litellm to start, and the trial fails bring-up in the box, where the host sees only a log."""
+    dockerfile = (TEMPLATES_DIR / "environment" / "Dockerfile").read_text()
+
+    (venv_line,) = [line for line in dockerfile.splitlines() if "uv venv" in line]
+    (install_line,) = [line for line in dockerfile.splitlines() if "uv pip install" in line]
+
+    assert minds_bridge.BOX_PROXY_VENV_DIR in venv_line
+    assert "--python {}".format(minds_bridge.BOX_PROXY_VENV_DIR) in install_line
+    assert "--require-hashes" in install_line
+    assert _PROXY_IMAGE_REQUIREMENTS in install_line
+
+
+def test_the_proxy_pin_set_the_box_image_installs_is_committed() -> None:
+    """The image reads that export by a path spelled out across app boundaries, and modal_litellm
+    keeps it current knowing nothing of this consumer. Unchecked here, a move of the export shows up
+    as a failed image build, minutes into a run on Modal."""
+    repo_root = Path(__file__).resolve().parents[4]
+
+    assert image_requirements_path(repo_root, _PROXY_PIN_PACKAGE).is_file()
 
 
 def test_snapshots_stay_under_the_agent_logs_dir(tmp_path: Path) -> None:
