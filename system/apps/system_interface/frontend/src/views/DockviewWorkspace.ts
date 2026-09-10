@@ -28,6 +28,7 @@ import {
   type IDockviewPanel,
   type IHeaderActionsRenderer,
   type ITabRenderer,
+  type PanelUpdateEvent,
   type SerializedDockview,
   type TabPartInitParameters,
 } from "dockview-core";
@@ -639,6 +640,14 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   // Whether this instance is a row in the tab-overflow dropdown rather than a tab on the strip.
   let isOverflowRow = false;
   let wasTabDraggable: boolean | null = null;
+  // What the tab shows, as dockview hands it over: in ``init``, and again through ``update`` when a
+  // rebind repoints the panel. Kept here rather than looked up through the open panel, because
+  // ``init`` runs before dockview lists the panel among its ``panels``.
+  let params: PanelParams | null = null;
+
+  /** The instance the tab shows, resolved against the inventory; null for a launcher or an unlisted address. */
+  const resolvedInstance = (): ResolvedInstance | null =>
+    params === null || params.kind === "launcher" ? null : findInstance(params.address);
 
   const refreshTitleFade = (): void => {
     const mask = isTitleTruncated(content.scrollWidth, content.clientWidth)
@@ -653,7 +662,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     refreshTitleFade();
   };
 
-  const isRenameable = (): boolean => resolvedInstanceForPanel(options.id)?.instance.renameable === true;
+  const isRenameable = (): boolean => resolvedInstance()?.instance.renameable === true;
 
   const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
 
@@ -691,8 +700,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     if (!isCommitting) return;
     const title = normalizeTabTitle(typed);
     if (title === null || title === content.textContent) return;
-    const params = instanceParamsOf(options.id);
-    if (params === null) return;
+    if (params === null || params.kind !== "instance") return;
     renameAddress(params.address, title);
   };
 
@@ -721,7 +729,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 
   const statusDotTooltip = attachHoverTooltip(statusDot);
   const updateStatusDot = (): void => {
-    const resolved = resolvedInstanceForPanel(options.id);
+    const resolved = resolvedInstance();
     if (resolved === null) {
       statusDot.style.display = "none";
       statusDotTooltip.setText(null);
@@ -736,7 +744,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     element,
     init(parameters: TabPartInitParameters) {
       content.textContent = parameters.api.title ?? parameters.title ?? "";
-      const params = parsePanelParams(parameters.params);
+      params = parsePanelParams(parameters.params);
       kindIcon.innerHTML = tabIconMarkupForPanel(params);
       disposables.push(
         parameters.api.onDidTitleChange((event) => {
@@ -808,6 +816,10 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       });
       updateActionsVisibility();
       tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
+    },
+    update(event: PanelUpdateEvent) {
+      params = parsePanelParams(event.params);
+      updateStatusDot();
     },
     dispose() {
       // A tab torn down mid-edit (a pushed view switch, a rebind, a prune) gets no blur for its
