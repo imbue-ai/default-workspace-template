@@ -205,9 +205,8 @@ def addresses_by_panel_id(dockview: dict[str, Any] | None) -> dict[str, Address]
 
 def layout_showing(*addresses: Address) -> LayoutRecord:
     """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each panel's params carrying a fixed tab id."""
-    panel_ids = [f"p{index}" for index in range(len(addresses))]
-    params_by_panel_id = {
-        f"p{index}": instance_panel_params_json(address, TabId(f"tab-{index:016x}"), 0)
+    panels = {
+        f"p{index}": {"id": f"p{index}", "params": instance_panel_params_json(address, TabId(f"tab-{index:016x}"), 0)}
         for index, address in enumerate(addresses)
     }
     return LayoutRecord(
@@ -216,7 +215,7 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
                 "root": {
                     "type": "branch",
                     "data": [
-                        {"type": "leaf", "data": {"views": panel_ids, "activeView": "p0", "id": "g0"}, "size": 1200}
+                        {"type": "leaf", "data": {"views": list(panels), "activeView": "p0", "id": "g0"}, "size": 1200}
                     ],
                     "size": 800,
                 },
@@ -224,7 +223,7 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
                 "height": 800,
                 "orientation": "HORIZONTAL",
             },
-            "panels": {panel_id: {"id": panel_id, "params": params_by_panel_id[panel_id]} for panel_id in panel_ids},
+            "panels": panels,
             "activeGroup": "g0",
         }
         if addresses
