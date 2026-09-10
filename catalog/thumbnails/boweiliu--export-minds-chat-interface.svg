@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="export minds chat interface: a web console with an agent list and a chat pane">
+  <!-- Bespoke grayscale thumbnail: a miniature of the Chat Bridge web console.
+       Left rail = agent list with live status dots; right pane = a conversation
+       driven by the same REST API. Mock data only. -->
+  <rect x="0.5" y="0.5" width="239" height="159" rx="11" fill="#ffffff" stroke="#cfcfcf"/>
+
+  <!-- window header with title-dot cluster and a bridge/link motif at right -->
+  <path d="M0.5 12 A11 11 0 0 1 11.5 0.5 H228.5 A11 11 0 0 1 239.5 12 V24 H0.5 Z" fill="#f6f6f6" stroke="#e4e4e4"/>
+  <circle cx="14" cy="12" r="2.2" fill="#c4c4c4"/>
+  <circle cx="22" cy="12" r="2.2" fill="#c4c4c4"/>
+  <circle cx="30" cy="12" r="2.2" fill="#c4c4c4"/>
+  <!-- bridge glyph: two endpoints joined by a link, suggesting the API bridge -->
+  <circle cx="205" cy="12" r="2.4" fill="#1a1a1a"/>
+  <line x1="208.5" y1="12" x2="221.5" y2="12" stroke="#8c8c8c" stroke-width="1.4"/>
+  <circle cx="225" cy="12" r="2.4" fill="#1a1a1a"/>
+
+  <!-- rail / pane divider -->
+  <line x1="92" y1="24" x2="92" y2="159.5" stroke="#e4e4e4"/>
+
+  <!-- left rail: agent list -->
+  <!-- selected agent (highlight) -->
+  <rect x="8" y="34" width="76" height="20" rx="4" fill="#f0f0f0"/>
+  <circle cx="17" cy="44" r="3" fill="#1a1a1a"/>
+  <rect x="25" y="40" width="46" height="4.5" rx="2.25" fill="#3a3a3a"/>
+  <rect x="25" y="47" width="30" height="3.5" rx="1.75" fill="#c4c4c4"/>
+
+  <circle cx="17" cy="66" r="3" fill="#8c8c8c"/>
+  <rect x="25" y="62" width="52" height="4.5" rx="2.25" fill="#9a9a9a"/>
+  <rect x="25" y="69" width="34" height="3.5" rx="1.75" fill="#d9d9d9"/>
+
+  <circle cx="17" cy="86" r="3" fill="#c4c4c4"/>
+  <rect x="25" y="82" width="40" height="4.5" rx="2.25" fill="#9a9a9a"/>
+  <rect x="25" y="89" width="44" height="3.5" rx="1.75" fill="#d9d9d9"/>
+
+  <circle cx="17" cy="106" r="3" fill="#8c8c8c"/>
+  <rect x="25" y="102" width="50" height="4.5" rx="2.25" fill="#9a9a9a"/>
+  <rect x="25" y="109" width="28" height="3.5" rx="1.75" fill="#d9d9d9"/>
+
+  <circle cx="17" cy="126" r="3" fill="#c4c4c4"/>
+  <rect x="25" y="122" width="44" height="4.5" rx="2.25" fill="#9a9a9a"/>
+  <rect x="25" y="129" width="38" height="3.5" rx="1.75" fill="#d9d9d9"/>
+
+  <!-- right pane: conversation -->
+  <!-- incoming bubble -->
+  <rect x="102" y="36" width="86" height="20" rx="6" fill="#f0f0f0"/>
+  <rect x="108" y="42" width="70" height="3.5" rx="1.75" fill="#b8b8b8"/>
+  <rect x="108" y="49" width="46" height="3.5" rx="1.75" fill="#cfcfcf"/>
+
+  <!-- outgoing bubble (ink) -->
+  <rect x="140" y="64" width="90" height="24" rx="6" fill="#1a1a1a"/>
+  <rect x="146" y="70" width="74" height="3.5" rx="1.75" fill="#dcdcdc"/>
+  <rect x="146" y="77" width="60" height="3.5" rx="1.75" fill="#9a9a9a"/>
+
+  <!-- incoming bubble (streaming: trailing caret) -->
+  <rect x="102" y="96" width="80" height="20" rx="6" fill="#f0f0f0"/>
+  <rect x="108" y="102" width="58" height="3.5" rx="1.75" fill="#b8b8b8"/>
+  <rect x="108" y="109" width="40" height="3.5" rx="1.75" fill="#cfcfcf"/>
+  <rect x="151" y="108" width="2" height="6" rx="1" fill="#1a1a1a"/>
+
+  <!-- send box -->
+  <rect x="102" y="132" width="126" height="18" rx="9" fill="#ffffff" stroke="#d0d0d0"/>
+  <rect x="110" y="139" width="60" height="4" rx="2" fill="#d9d9d9"/>
+  <circle cx="219" cy="141" r="6" fill="#1a1a1a"/>
+  <path d="M216.4 141 L221.2 141 M219 138.8 L221.4 141 L219 143.2" stroke="#ffffff" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

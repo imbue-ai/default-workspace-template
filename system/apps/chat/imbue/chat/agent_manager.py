@@ -158,6 +158,7 @@ def _build_chat_create_command(
     extra_role_templates: tuple[str, ...] = (),
     project_id: str = "",
     account_args: Sequence[str] = (),
+    initial_message: str = "",
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat agent on a given harness.
 
@@ -208,6 +209,11 @@ def _build_chat_create_command(
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
+    # The seeded first message rides the create too, for the same reason: mngr delivers it
+    # once the harness signals readiness, exactly as the ``first`` template's ``/welcome``
+    # does (a CLI ``--message`` takes precedence over a template's).
+    if initial_message:
+        cmd.extend(["--message", initial_message])
     return cmd
 
 
@@ -1112,13 +1118,15 @@ class AgentManager:
                 taken.append(proto.name)
         return taken
 
-    def reserve_chat(self, project_id: str = "") -> CreatedChatAgent:
+    def reserve_chat(self, project_id: str = "", message: str = "") -> CreatedChatAgent:
         """Mint a chat with nothing to launch it on yet.
 
         The instance exists from this moment (the shell docks its page under the id mngr
         will give it), in the awaiting-account phase: the page shows the provider chooser,
         and a sign-in launches it through ``create_chat_agent`` with this id. The name is
         the first free "Chat N", counted like a launch's, so the reservation holds it.
+        ``message`` is kept on the reservation and sent by that launch, so a chat seeded
+        with a prompt still opens on it after the sign-in it had to wait for.
         """
         agent_id = str(AgentId())
         with self._lock:
@@ -1129,6 +1137,7 @@ class AgentManager:
                 agent_id=agent_id,
                 name=display_name,
                 project_id=project_id,
+                message=message,
                 phase=ProvisionalChatPhase.AWAITING_ACCOUNT,
             )
             self._proto_agents[agent_id] = proto
@@ -1156,6 +1165,7 @@ class AgentManager:
         project_id: str = "",
         account_id: str = "",
         agent_id: str = "",
+        message: str = "",
     ) -> CreatedChatAgent:
         """Create a chat agent in the primary agent's work dir on the given harness.
 
@@ -1186,6 +1196,12 @@ class AgentManager:
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
         used one. With no accounts at all the create is refused (the instances API reserves
         the chat instead, see ``reserve_chat``).
+
+        ``message`` is the first message the chat sends once it runs, delivered by ``mngr
+        create --message`` after the harness signals readiness (the path ``/welcome`` takes).
+        A seeded chat does not claim the workspace's first chat: the ``first`` template and its
+        ``/welcome`` still go to the first plain chat. A reserved chat keeps the message it was
+        minted with, so a launch that names one beside ``agent_id`` is refused like a name.
         """
         try:
             account = resolve_binding(account_id)
@@ -1197,9 +1213,10 @@ class AgentManager:
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
-        if agent_id and (explicit_name or project_id):
+        if agent_id and (explicit_name or project_id or message):
             raise AgentCreationError(
-                f"Chat {agent_id} keeps the name and project it was minted with; a launch cannot rename or refile it"
+                f"Chat {agent_id} keeps the name, project, and first message it was minted with; "
+                "a launch cannot rename, refile, or reseed it"
             )
 
         # Name resolution and proto registration happen under one lock hold, so a
@@ -1217,6 +1234,7 @@ class AgentManager:
                     raise AgentCreationError(f"Chat {agent_id} is not waiting to be launched")
                 display_name = reserved.name
                 project_id = reserved.project_id
+                message = reserved.message
             else:
                 agent_id = str(AgentId())
                 taken_names = self._taken_names_locked()
@@ -1239,6 +1257,7 @@ class AgentManager:
                 name=display_name,
                 project_id=project_id,
                 account_id=account.id,
+                message=message,
                 phase=ProvisionalChatPhase.CREATING,
             )
             self._proto_agents[agent_id] = proto
@@ -1275,7 +1294,10 @@ class AgentManager:
         # to FAIL must give it back -- otherwise a workspace whose first create died on a bad
         # credential or an OOM never delivers `/welcome` at all, and nothing in the app can
         # reset it. Released on every failure path in `_run_creation`.
-        is_first_chat = claim_first_chat()
+        #
+        # A chat seeded with its own first message leaves the claim alone: its prompt is what
+        # the user asked for, and the welcome still greets the first plain chat.
+        is_first_chat = message == "" and claim_first_chat()
         if is_first_chat:
             extra_role_templates = (*extra_role_templates, "first")
 
@@ -1288,6 +1310,7 @@ class AgentManager:
             extra_role_templates,
             project_id,
             account_args,
+            initial_message=message,
         )
 
         self._broadcaster.broadcast_proto_agent_created(proto)

@@ -30,7 +30,8 @@ every parser:
   the two in sync.
 
 - **Error snippets.** A failed call must stay glanceable without a fetch, so
-  :func:`error_snippet` keeps its first line resident.
+  :func:`error_snippet` keeps its first line resident -- except for a call a Claude Code hook
+  refused, which gets no snippet (the workspace steering the agent is not a fault to flag).
 """
 
 import json
@@ -215,14 +216,25 @@ def tk_stamp(content: str) -> str:
     return joined[:MAX_TK_STAMP_LENGTH]
 
 
+# How Claude Code reports a call that one of the workspace's hooks refused: the call's own
+# error text, opening ``<Event>:<Tool> hook error:`` (``PreToolUse:Bash hook error: [...]``).
+# The tool half admits hyphens: MCP tools arrive as ``mcp__<server>__<tool>`` and their names may
+# carry them.
+_HOOK_BLOCK_ERROR_RE: Final[re.Pattern[str]] = re.compile(r"^\w+(?::[\w-]+)? hook error:")
+
+
 def error_snippet(content: str) -> str:
     """The first non-empty line of a failed call's output, capped -- the resident glance.
 
     The full error text still loads on expand like any other output; this just keeps a
-    failure recognisable in the collapsed row without a fetch.
+    failure recognisable in the collapsed row without a fetch. A call a hook refused gets no
+    snippet: that is the workspace steering the agent, not the command failing, and the
+    hook's message under a collapsed row reads as a fault to whoever is watching.
     """
     for line in content.splitlines():
         stripped = line.strip()
         if stripped:
+            if _HOOK_BLOCK_ERROR_RE.match(stripped):
+                return ""
             return stripped[:MAX_ERROR_SNIPPET_LENGTH]
     return ""
