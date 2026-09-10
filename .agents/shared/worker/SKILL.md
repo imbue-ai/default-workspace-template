@@ -18,16 +18,21 @@ just routes you to the right ones.
 
 Your task file was synced to your worktree, and its frontmatter names its own
 path in `task_file`. Pass that exact path to the parser to extract the lead
-address and the report destination (plus the `operation` and `type` fields the
-lead set in frontmatter):
+address, the report destination, and the scope file path (plus the `operation`
+and `type` fields the lead set in frontmatter):
 
 ```bash
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 This sets `TASK_FILE`, `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and
-`TYPE`. Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply
-both.
+`TYPE`, plus `SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint.
+Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both. When
+`TYPE` is `skill`, or `app` and the app has an `app.toml`, also fail loudly if
+`SCOPE_FILE` or `DIFF_BASE` is unset: `SCOPE_FILE` is where you write the
+creation's footprint, and `DIFF_BASE` is the commit that footprint's diff is
+taken from (`harden-creation.md` has the command). A pre-manifest app, a
+`service`, or a `system-interface` run carries neither.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.
@@ -41,7 +46,7 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 
 | Load when | Reference | What it gives you |
 |---|---|---|
-| every run | `harden-creation.md` | the universal contract: the bar, isolation, reporting, testing/hardening, review gates, preserve-and-surface, give-up |
+| every run | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, testing/hardening, review gates, preserve-and-surface, give-up |
 | every run | `op-<OPERATION>.md` | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
 | every run | `type-<TYPE>.md` | the creation itself: where it lives, how to run/test it in isolation, how to edit it safely |
 | every run | `worker-reporting.md` **[shared]** | the report-file procedure and task-file frontmatter schema (Step 3 uses it) |

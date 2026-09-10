@@ -71,10 +71,15 @@ Substitutions for this task:
 - `<TASK_FILE>` -> the `task_file` path stamped in this file's frontmatter
 - Valid `name:` values: `question` (a mid-flight gate, valid at any
   point of any run), `done` / `stuck` (terminal).
+- Milestones (`type: milestone`, any name; non-blocking) follow
+  `worker-reporting.md`'s "Milestone reports": a file under
+  `milestones/` beside `report.md`, pushed the same way; its
+  `<RUNTIME_REPORTS_DIR>` is `dirname "$FINISH_REPORT_PATH"`.
 
 For a mid-flight `question` gate, stop your turn after reporting -- the
 lead replies via `mngr message` and you resume. For terminal statuses,
-the run ends.
+the run ends. A milestone is the exception: it never stops your turn --
+push it and carry straight on.
 BODY_EOF
 } > data/.tasks/launch-task/$NAME/task.md
 ```
@@ -152,10 +157,15 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
-- Consumed dir (where `await` archives each report it prints):
-  `data/.tasks/launch-task/$NAME/reports/consumed/`
+- Consumed dir (where `await` archives each report it prints; a milestone
+  keeps its own file name there): `data/.tasks/launch-task/$NAME/reports/consumed/`
+- Milestones dir: `data/.tasks/launch-task/$NAME/reports/milestones/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
+- Milestone names: any name; non-blocking -- handle per `lead-proxy.md`'s
+  "Milestone reports: provisional merge" (provisionally merge the pinned
+  `commit:` or defer it, then re-arm the poll; `await` has already archived
+  the file either way, and the worker keeps working regardless).
 - Terminal statuses: `done` (merge); `stuck` (failure flow).
 
 ## Guidelines

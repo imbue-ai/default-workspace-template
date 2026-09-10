@@ -119,7 +119,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   label: the tab renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates). Short and
+  prefixes are reserved for workspace hostname coordinates), and it must not
+  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+  `host`, `env`), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used in `system/supervisord.conf` (`system_interface`,
   `browser`, etc. are reserved by the scaffolder).
@@ -184,7 +186,9 @@ What gets generated:
   and `program` (its supervisord program). `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
-  editing it).
+  editing it). Anything you build for this app outside `system/apps/<package>/`
+  -- a skill that drives it, a script, a doc -- is registered in the same file
+  under `[[references]]` with a `note` naming the surface it uses.
 - `system/apps/<package>/pyproject.toml` -- declares
   `[project.scripts] <name> = "<package>.runner:main"`, the entry point
   the app's own tool environment exposes.

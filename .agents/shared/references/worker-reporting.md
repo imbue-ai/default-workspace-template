@@ -62,7 +62,9 @@ At each gate or terminal status:
 
 3. Stop your turn. For gate reports, the lead sends the user's reply via
    `mngr message` and you resume; for terminal reports, the lead acts on the
-   report and the run ends.
+   report and the run ends. Only gates and terminal statuses stop your turn:
+   the milestone reports below are non-blocking, and you keep working straight
+   through one.
 
 The push is the ready signal -- it only happens once you are finished writing.
 Do not report a partial.
@@ -90,6 +92,86 @@ may stop mid-flight and ask its lead, on every operation. Use it when the
 answer is not in your task file or the repo. Your lead answers what it can
 itself; a lead that is itself a worker re-raises the question to its own lead
 and forwards the answer back down.
+
+## Milestone reports (non-blocking)
+
+A **milestone** names one commit on your branch that is already worth using
+before the pass finishes. It is not a gate: the lead may merge that exact
+commit while you carry on. Declare one at the first commit where the creation
+runs end to end, and again at any later commit that is a real step up. Your
+operation reference (or, for a plain task, the task file) may say *when*; the
+name is always yours to pick.
+
+1. **Commit first.** The lead merges the exact commit you name; leave the tree
+   clean.
+
+2. **Write the milestone file** at
+   `<RUNTIME_REPORTS_DIR>/milestones/<sha7>-<name>.md`, where
+   `<RUNTIME_REPORTS_DIR>` is `$(dirname "$FINISH_REPORT_PATH")` (create the
+   directory if missing) -- one file per milestone, beside `report.md`, never
+   in its slot:
+
+   ```bash
+   mkdir -p <RUNTIME_REPORTS_DIR>/milestones
+   COMMIT="$(git rev-parse HEAD)"          # the full sha for the frontmatter
+   MILESTONE_FILE="<RUNTIME_REPORTS_DIR>/milestones/${COMMIT:0:7}-<name>.md"
+   ```
+
+   ```
+   ---
+   type: milestone
+   name: <free-form slug chosen by the worker>
+   commit: <full sha on the worker's branch>
+   branch: mngr/<worker-name>
+   ---
+
+   <what is usable now and how to use it, addressed to the user>
+
+   ## Tested
+   <what has been verified at this commit: the exact test commands or suites
+   run and their result, scenarios exercised, review gates passed -- and,
+   explicitly, what has NOT been run yet>
+
+   ## Still pending
+   <what the worker will do next before `done`>
+   ```
+
+   `<name>` is a kebab-case slug (`[a-z0-9]+(-[a-z0-9]+)*`) you choose to
+   describe what is true at that commit; there is no fixed list. The short sha
+   in the filename makes the same name at a later commit a new event.
+
+   `## Tested` is **required** and is for the lead: it says how much trust the
+   build deserves, and the lead skips re-running anything you name as passing
+   at this exact commit. Name what you actually ran and its result, and say
+   plainly what you have not run yet.
+
+3. **Sync the reports directory to the lead** -- the same push the `report`
+   subcommand makes, spelled out because a milestone has no subcommand yet:
+
+   ```bash
+   mngr rsync ./<RUNTIME_REPORTS_DIR>/ \
+       "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
+       --uncommitted-changes=clobber
+   ```
+
+   `clobber`, never `merge`: the destination is gitignored `data/`, and `merge`
+   would push onto the git stash every worktree of the repo shares (see
+   `lead-proxy.md`'s "`mngr rsync` rationale").
+
+   When `LEAD_AGENT` is unset/empty or the push fails, use the same-repo
+   fallback, copying into the lead's `milestones/` directory:
+
+   ```bash
+   LEAD_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+   mkdir -p "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")/milestones"
+   cp "$MILESTONE_FILE" "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")/milestones/"
+   ```
+
+4. **Continue working.** Do not stop your turn or wait for the lead. Delivery
+   is best-effort: if both the push and the fallback fail, keep going -- `done`
+   still hands over the whole branch. Every later push re-delivers the file
+   (you keep your copy); the lead's `await` recognises one it has already
+   returned by its name, so that is harmless.
 
 ## Terminal status report bodies
 
