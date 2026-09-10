@@ -129,12 +129,13 @@ or terminal status, push a report to the lead per its reporting protocol; the
 destination is `finish_report_path`.
 
 ## Milestones
-Do not save everything for the end. As soon as the creation runs end to end on
-your branch, commit and declare a milestone (non-blocking, per your reporting
-protocol): the lead merges the first usable version as soon as you declare it,
-so the user can start using the creation while you keep hardening. Name it for
-what is true at that commit, and have its `## Tested` section say exactly what
-you ran there and what you have not.
+Do not save everything for the end. As soon as the creation is genuinely usable
+on your branch -- for an app, once its tests pass; for a skill, once your
+scenarios pass -- commit and declare a milestone (non-blocking, per your
+reporting protocol): the lead merges the first usable version as soon as you
+declare it, so the user can start using the creation while you finish the
+review gates. Name it for what is true at that commit, and have its `## Tested`
+section say exactly what you ran there and what you have not.
 
 ## Success criteria
 - The creation is committed on your branch, tested, and passes the review gates.
