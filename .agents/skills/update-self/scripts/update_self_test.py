@@ -4814,6 +4814,27 @@ def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
     assert stale_shim.exists()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every home")
+def test_a_home_this_process_cannot_read_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A non-root run (the skill's own tests in CI) cannot look inside /root;
+    # nothing it cannot read is something it could remove.
+    refreshed_shim, _ = _install_tool(
+        tmp_path / "root", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
+    sealed_tools = tmp_path / "home" / ".local" / "share" / "uv" / "tools"
+    sealed_tools.mkdir(parents=True)
+    sealed_tools.chmod(0)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = _RecordingRunner()
+    runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
+    try:
+        assert update_environment.remove_shadowing_mngr_installs(runner) == []
+    finally:
+        sealed_tools.chmod(0o755)
+
+
 def test_the_only_mngr_install_is_never_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
