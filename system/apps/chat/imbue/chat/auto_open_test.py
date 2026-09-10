@@ -5,11 +5,20 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from typing import Any
+
+import pytest
+from app_instances.sidecar import serve_in_background
+from app_instances.testing import LOOPBACK_HOST
+from app_instances.testing import free_port
+from flask import Flask
+from flask import jsonify
 
 from imbue.chat.auto_open import AUTO_OPEN_FRESHNESS
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
+from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
 from imbue.chat.testing import RecordingShell
 
@@ -167,3 +176,29 @@ def test_the_disconnected_shell_reaches_nobody() -> None:
     shell = DisconnectedShell()
     assert shell.connected_client_ids() == []
     assert shell.open_chat("chat-1", "c1") is False
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    (
+        ({"clients": [{"id": "c1", "is_connected": True}, {"id": "c2", "is_connected": False}]}, ["c1"]),
+        ({"clients": []}, []),
+        ({}, []),
+        ({"clients": {"c1": True}}, []),
+        ({"clients": "c1"}, []),
+        ([{"id": "c1", "is_connected": True}], []),
+        ({"clients": [{"is_connected": True}, "c2"]}, []),
+    ),
+    ids=("the-contract", "nobody", "no-key", "a-map", "a-string", "a-bare-list", "entries-without-an-id"),
+)
+def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_the_flush_thread(
+    body: Any, expected: list[str]
+) -> None:
+    """The flush thread's own catch does not cover a KeyError or TypeError from reading this, so an
+    answer the shell should never give would end the thread and silently stop surfacing every tab."""
+    application = Flask("stub-shell")
+    application.add_url_rule("/api/clients", view_func=lambda: jsonify(body), endpoint="clients")
+    port = free_port()
+
+    with serve_in_background(LOOPBACK_HOST, port, application):
+        assert ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}").connected_client_ids() == expected
