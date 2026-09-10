@@ -1442,8 +1442,13 @@ def _local_supervisord_configs(repo_root: Path = Path()) -> list[Path]:
 
     The globs come out of the config, the same way the source's do, so a workspace holding its
     drop-ins somewhere other than ``supervisord.conf.d/`` still has all of its ports scanned.
+
+    Paths come back absolute: supervisord takes ``here`` from
+    ``os.path.dirname(os.path.abspath(<config>))``, and a relative one would be substituted into
+    a ``%(here)s`` pattern and then joined onto itself, so every drop-in would be looked for one
+    directory deeper than it is and none would be found.
     """
-    main = repo_root / "system/supervisord.conf"
+    main = Path(os.path.abspath(repo_root / "system/supervisord.conf"))
     if not main.is_file():
         return []
     parser = configparser.ConfigParser(interpolation=None, strict=False)

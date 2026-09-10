@@ -503,6 +503,35 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     assert [port.name for port in ports].count("system_interface") == 1
 
 
+def test_local_supervisord_configs_follow_a_here_relative_include_glob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # supervisord resolves %(here)s to the ABSOLUTE directory of the config declaring it. Left
+    # relative, the substituted pattern gets joined back onto that same relative directory, so
+    # every drop-in is looked for one level deeper than it is and none is found -- and a scan
+    # that finds no drop-in calls every app's port free, which is how a collision reaches the
+    # far side of a migration instead of being caught before it.
+    (tmp_path / "system" / "programs.d").mkdir(parents=True)
+    (tmp_path / "system" / "supervisord.conf").write_text(
+        "[supervisord]\nnodaemon=true\n\n[include]\nfiles = %(here)s/programs.d/*.conf\n"
+    )
+    (tmp_path / "system" / "programs.d" / "todo.conf").write_text(
+        '[program:todo]\ncommand=bash -c "python3 system/scripts/forward_port.py '
+        '--name todo --url http://localhost:8099 && todo-app"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+
+    ports = [
+        port
+        for conf in migrate_workspace._local_supervisord_configs()
+        for port in migrate_workspace.parse_supervisord_ports(
+            conf.read_text(encoding="utf-8")
+        )
+    ]
+
+    assert [(port.name, port.port) for port in ports] == [("todo", 8099)]
+
+
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
     current = migrate_workspace.parse_apps_registry(
         '[[apps]]\nname = "dashboard"\nurl = "http://localhost:8091"\n'
