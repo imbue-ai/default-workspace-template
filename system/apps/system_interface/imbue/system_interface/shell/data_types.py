@@ -60,7 +60,8 @@ class InstancePanelParams(FrozenModel):
     """The ``params`` dockview stores on a panel showing an instance: the one place a tab's identity lives (contracts.md section 6)."""
 
     # The browser owns this object and may add keys the shell does not know; reading tolerates them, and
-    # the shell edits the stored dict in place rather than round-tripping it through this model.
+    # the shell edits the stored dict itself (``with_panel_params_address``, which keeps every other key)
+    # rather than round-tripping it through this model.
     model_config = ConfigDict(extra="ignore")
 
     address: Address = Field(description="The instance the panel shows")
