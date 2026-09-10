@@ -49,16 +49,21 @@ App specifics:
   ```
 
   ```bash
-  # from the repo root, over every referenced directory that holds tests:
-  uv run pytest $(jq -r '.references[].path' "$SCOPE_FILE" \
-      | while read -r p; do [ -d "$p" ] && ls "$p"/*_test.py "$p"/test_*.py >/dev/null 2>&1 && echo "$p"; done)
+  # from the repo root, over every referenced directory that holds tests
+  # anywhere beneath it (a skill keeps its tests under scripts/):
+  REFERENCE_TEST_DIRS=$(jq -r '.references[].path' "$SCOPE_FILE" | while read -r p; do
+      [ -d "$p" ] && [ -n "$(find "$p" -name '*_test.py' -o -name 'test_*.py' | head -1)" ] && echo "$p"
+  done)
+  [ -n "$REFERENCE_TEST_DIRS" ] && uv run pytest $REFERENCE_TEST_DIRS
   ```
 
-  Every `primary` directory gets its own project-root run when the creation has
-  more than one; a referenced file, or a directory with no tests under it, is
-  left out of the run, and the ratchet file of any referenced project that has
-  one is run too. A pre-manifest app carries no scope file, so the
-  app-directory run is its whole test set.
+  The guard on `REFERENCE_TEST_DIRS` matters: a bare `uv run pytest` from the
+  repo root runs the whole monorepo suite, vendored code included. Every
+  `primary` directory gets its own project-root run when the creation has more
+  than one; a referenced file, or a directory with no tests beneath it, is left
+  out of the run, and the ratchet file of any referenced project that has one is
+  run too. A pre-manifest app carries no scope file, so the app-directory run is
+  its whole test set.
 
 ## Working in isolation
 

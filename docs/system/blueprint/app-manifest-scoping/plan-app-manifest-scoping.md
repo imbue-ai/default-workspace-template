@@ -67,7 +67,7 @@ A `[references]` table with sub-tables (`[references.slack-inbox-refresh]`) is a
 
 Globs appear only in `scope.exclude`, where "match many, deny all" is the wanted semantics; a reference is a declaration of ownership and stays literal, so validation is exact and each entry can explain itself. Exclude matching uses `pathspec` (gitwildmatch, the same semantics as `.gitignore`), a new dependency of `app_manifest`. CI runs Python 3.12 (`.github/workflows/ci.yml`), so the standard library's `PurePath.full_match` (3.13) is not available, and `fnmatch` has no `**` semantics.
 
-Built-in excludes, applied to every footprint and never listed in a manifest: `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/static/**` (build output), `**/.venv/**`.
+Built-in excludes, applied to every footprint and never listed in a manifest: `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/dist/**` (build output), `**/.venv/**`.
 
 The kind of a reference (skill, script, doc, service) is derivable from the path prefix, so there is no `kind` field to drift.
 
@@ -117,8 +117,8 @@ Figure: the manifest and the supervisord config feed one footprint computation; 
 - `primary`, `wiring`, `references` are the footprint, copied through from the manifest as literal paths.
 - `conventions` is a fixed, short list keyed by creation type.
 - `exclude` is the union of the built-in excludes and the manifest's `[scope] exclude`. It is a hard denylist: a file matching it is out even when it changed and even when it sits under a footprint path. Everything else outside the footprint is neither listed nor forbidden; the read budget below governs it.
-- `diff.outside_footprint` is the diff's files that are neither in the footprint nor excluded. Non-empty means either a missing reference or a change that does not belong on this branch.
-- For a skill creation the same command runs with `--for-path .agents/skills/<name>`: the skill is `primary`, and the owning app's public surface (its `runner.py` routes, CLI entry points, `app.toml`) is added as read-only context.
+- `diff.outside_footprint` is the diff's files that are neither in the footprint, nor under `context`, nor excluded. Non-empty means either a missing reference or a change that does not belong on this branch.
+- For a skill creation the same command runs with `--for-path .agents/skills/<name>` (the path must exist, since a mistyped path would make the freshness check read as "fresh"): the skill is `primary`, and the owning apps' directories are added as `context`, read-only apart from the `[[references]]` entry the skill run adds to their manifests.
 
 The same scope file drives, with no further hand derivation:
 

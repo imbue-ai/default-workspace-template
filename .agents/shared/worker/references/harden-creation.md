@@ -44,10 +44,13 @@ and full test suites at the end of hardening.
 
 ## The scope file
 
-Every run computes the creation's footprint once, before any other work, and
-writes it to the path the task frontmatter's `scope_file` names -- Step 1's
-`eval` exposes it as `SCOPE_FILE`, and it sits beside your task file at
-`data/.tasks/harden/<slug>/scope.json`:
+Every app or skill run computes the creation's footprint and writes it to the
+path the task frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
+`SCOPE_FILE`, and it sits beside your task file at
+`data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
+the creation already exists on disk; for a skill you are building from scratch
+(a skill `crystallize`), compute it as soon as the skill directory exists,
+since the command refuses a path that is not there:
 
 ```bash
 mkdir -p "$(dirname "$SCOPE_FILE")"
@@ -63,8 +66,8 @@ uv run app-manifest footprint --for-path .agents/skills/<name> \
 
 `DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
 recorded at dispatch as the one *before* the work being hardened began, so the
-scope file's `diff` covers the committed change you are verifying as well as
-your own commits. Fail loudly if it is unset. A creation with no manifest -- a
+scope file's `diff` covers the committed change you are verifying, and -- once
+you regenerate it -- your own commits too. Fail loudly if it is unset. A creation with no manifest -- a
 pre-manifest app, a standalone service, the system interface -- has nothing to
 resolve: its footprint is its own directory plus its supervisord section, and
 the run carries no scope file.
@@ -79,12 +82,16 @@ read it: the test selection in `type-app.md`, the freshness check the lead runs
 before merging (`.agents/shared/references/harden-contention.md`), and the
 review invocations in `verification.md`. Regenerate it whenever the footprint
 moves under you -- when you register a `[[references]]` entry, or when you add a
-supervisord section.
+supervisord section -- and once more immediately before your final report, so
+the `diff` it carries includes every commit you made.
 
-A non-empty `diff.outside_footprint` is a claim to settle before you report. For
-each path, either add a `[[references]]` entry to the app's `app.toml` -- when
-the file genuinely belongs to the creation -- or name it in your final report
-under `Outside footprint:`, one line each on why it changed on this branch.
+A non-empty `diff.outside_footprint` in that final scope file is a claim to
+settle before you report. For each path, either add a `[[references]]` entry to
+the app's `app.toml` -- when the file genuinely belongs to the creation -- or
+name it in your final report under `Outside footprint:`, one line each on why it
+changed on this branch. A skill run's one sanctioned edit inside an app
+directory, the `[[references]]` entry it adds to that app's manifest, sits under
+the scope file's `context` and is counted as inside the footprint.
 
 ## Testing and hardening contract
 

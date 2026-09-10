@@ -24,6 +24,7 @@ from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
+from app_manifest.primitives import is_path_covered_by
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 
@@ -178,10 +179,7 @@ def _describe_reference_location_problem(
     reference: AppReference, own_app_directory: str | None, repo_root: Path
 ) -> str | None:
     """Return why a reference may not name where it does, given the app's own directory."""
-    if own_app_directory is not None and (
-        reference.path == own_app_directory.rstrip("/")
-        or reference.path.startswith(own_app_directory)
-    ):
+    if own_app_directory is not None and is_path_covered_by(own_app_directory, reference.path):
         return (
             f"reference {str(reference.path)!r} is inside the app's own directory "
             f"{own_app_directory!r}, which is already implicit"
@@ -202,6 +200,21 @@ def _describe_reference_location_problem(
     return None
 
 
+def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
+    """The first component of a reference that is itself a symlink, or None when none is.
+
+    Git reports a changed file under the real directory and never under a symlink to it
+    (``.claude/skills`` is a tracked symlink to ``.agents/skills``), so a reference that
+    goes through one covers nothing at all.
+    """
+    walked = repo_root
+    for segment in reference_path.split("/"):
+        walked = walked / segment
+        if walked.is_symlink():
+            return walked.relative_to(repo_root).as_posix()
+    return None
+
+
 def _check_references_against_repo_root(
     path: Path, manifest: AppManifest, repo_root: Path
 ) -> None:
@@ -214,6 +227,13 @@ def _check_references_against_repo_root(
         if not (repo_root / reference.path).exists():
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which does not exist under {repo_root}"
+            )
+        symlinked_component = _find_symlinked_component(repo_root, reference.path)
+        if symlinked_component is not None:
+            raise ManifestLoadError(
+                f"manifest {path} references {str(reference.path)!r}, which goes through the symlink "
+                f"{symlinked_component!r}; git never reports a changed file through a symlink, so the "
+                "reference would cover nothing -- name the real path instead"
             )
 
 
