@@ -184,13 +184,16 @@ _CAPTURE_BUILDER = "supervisord_config_capture_command"
 _CAPTURE_CONF_CONSTANT = "SUPERVISORD_CONF_RELATIVE_PATH"
 
 
-def _vendored_capture_command(repo_root: Path) -> str | None:
-    """The shell the vendored evals capture would run against ``repo_root``, or None if it has none.
+def _lifted_capture_sources() -> dict[str, str]:
+    """Whichever of the two names the vendored capture defines at module level, as source text.
 
     Lifted out of the source rather than imported: the module it lives in pulls in the whole
     minds_evals dependency tree (harbor, modal, pydantic), none of which this repo installs. Only
     the builder and the one constant it formats in are taken, with decorators stripped -- the
     ``@pure`` marker comes from a package that is not here either.
+
+    Returns what it found rather than all-or-nothing, so the caller can say which name went
+    missing instead of naming whichever one it checked first.
     """
     sources: dict[str, str] = {}
     for node in ast.parse(_VENDORED_EVALS_CAPTURE.read_text()).body:
@@ -200,8 +203,11 @@ def _vendored_capture_command(repo_root: Path) -> str | None:
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             if node.target.id == _CAPTURE_CONF_CONSTANT and node.value is not None:
                 sources[node.target.id] = "{} = {}".format(node.target.id, ast.unparse(node.value))
-    if sources.keys() != {_CAPTURE_BUILDER, _CAPTURE_CONF_CONSTANT}:
-        return None
+    return sources
+
+
+def _vendored_capture_command(sources: dict[str, str], repo_root: Path) -> str:
+    """The shell the vendored evals capture would run against ``repo_root``."""
     namespace: dict[str, object] = {}
     exec("\n".join(sources[name] for name in (_CAPTURE_CONF_CONSTANT, _CAPTURE_BUILDER)), namespace)
     builder = namespace[_CAPTURE_BUILDER]
@@ -286,15 +292,17 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
         "re-point this test at its new path -- do not drop the check."
     )
 
-    command = _vendored_capture_command(_REPO_ROOT)
-    assert command is not None, (
-        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} defines no {_CAPTURE_BUILDER!r}, so it "
-        "reads the main config alone and would find no program for anything this template declares "
-        f"in {_DROPIN_DIR.relative_to(_REPO_ROOT)}.\n\n"
+    sources = _lifted_capture_sources()
+    missing = sorted({_CAPTURE_BUILDER, _CAPTURE_CONF_CONSTANT} - sources.keys())
+    assert not missing, (
+        f"{_VENDORED_EVALS_CAPTURE.relative_to(_REPO_ROOT)} defines no {missing} at module level, "
+        "so it reads the main config alone and would find no program for anything this template "
+        f"declares in {_DROPIN_DIR.relative_to(_REPO_ROOT)}.\n\n"
         "This is the release gate, not a broken test: land the include-aware capture in mngr, then "
-        "re-sync system/vendor/mngr. If the builder was instead RENAMED upstream, re-point this "
+        "re-sync system/vendor/mngr. If either name was instead RENAMED upstream, re-point this "
         "test at the new name -- do not drop the check."
     )
+    command = _vendored_capture_command(sources, _REPO_ROOT)
     captured = subprocess.run(
         ["bash", "-c", command], capture_output=True, text=True, cwd="/", timeout=60
     ).stdout
