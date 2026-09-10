@@ -1461,6 +1461,10 @@ def test_start_observe_spawns_long_lived_subprocess(
     # otherwise running pytest from inside a mngr-managed worktree would inherit
     # a config with ``is_allowed_in_pytest = false`` and the child would abort.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    # And at an empty project config dir: the account this module's autouse fixture commits
+    # writes a settings.local.toml into the shared one, which carries no
+    # ``is_allowed_in_pytest`` and so would make the child abort the same way.
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "mngr-project-config"))
     # And at an empty host dir: with the developer's real ~/.mngr, the spawned
     # observe enumerates their live agents and queries tmux about them, which
     # trips the tmux resource guard on any machine with running agents. The
