@@ -206,7 +206,9 @@ let isApplyingLayout = false;
 //
 // Dockview is the one authority: what a panel shows is the ``params`` dockview keeps on it
 // (``PanelParams``), passed to ``addPanel``, restored by ``fromJSON``, serialized by ``toJSON``, and
-// handed to the renderers' ``init``. Nothing here keeps a second copy.
+// handed to the renderers' ``init`` (then ``update``). Nothing here keeps a map of its own to hold in
+// step with dockview's panel list: the lookups below read the open panels, and a renderer holds only
+// what dockview last handed it.
 
 /** The open panel with ``panelId``, or undefined when no panel of that id is open. */
 function panelById(panelId: string): IDockviewPanel | undefined {
