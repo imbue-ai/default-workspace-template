@@ -853,8 +853,8 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         assert archive.namelist() == [
             "metadata.json",
             "logs/system_interface.log",
-            "agent-logs/agent-older/pane.txt",
             "agent-logs/agent-newer/app_server.log",
+            "agent-logs/agent-older/pane.txt",
             "chats/agent-newer-codex.jsonl",
             "chats/agent-older-claude.jsonl",
         ]
@@ -926,7 +926,12 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
     )
     module = _load_collector(
         supervisor_log_dir=log_dir,
-        mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
+        mngr_binary=_write_mngr_stub(
+            tmp_path,
+            agents=tuple(chats),
+            events_by_agent=chats,
+            panes_by_agent={"agent-a": "the whole conversation\n"},
+        ),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
@@ -937,7 +942,8 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         # Logs only: metadata, the service logs and the agent's own -- no chats,
-        # and no notes.
+        # and no notes. The pane is absent too: it holds the rendered
+        # conversation, so declining chats declines it.
         assert archive.namelist() == [
             "metadata.json",
             "logs/system_interface.log",
@@ -1226,7 +1232,7 @@ def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
 
-    members = module.collect_agent_log_members(5.0)
+    members = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == [
         "agent-logs/newest/app_server.log",
@@ -1248,7 +1254,7 @@ def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 100)
 
-    members = module.collect_agent_log_members(5.0)
+    members = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
 
@@ -1268,7 +1274,7 @@ def test_agent_log_members_stay_unique_when_two_agent_names_sanitize_alike(
     stub = _write_mngr_stub(tmp_path, agents=("chat 1", "chat+1"))
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
-    members = module.collect_agent_log_members(5.0)
+    members = module.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert sorted(name for name, _, _ in members) == [
         "agent-logs/chat_1/app_server-2.log",
@@ -1294,3 +1300,62 @@ def test_the_service_log_class_stops_at_its_byte_budget(tmp_path: Path) -> None:
         "logs/newest.log",
         "logs/middle.log",
     ]
+
+
+def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
+    tmp_path: Path,
+) -> None:
+    """The pane is the conversation, rendered.
+
+    A TUI harness draws the chat into its pane, so `mngr capture --full` returns
+    the conversation whatever else it also returns. The two checkboxes are
+    independent, so a user who asks for logs and declines chats must not have
+    their conversation shipped anyway under the logs consent -- the UI has
+    already told them the chats were withheld. The harness log files, which are
+    diagnostics and not conversation, still ride.
+    """
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir, "chatty", "app_server.log", mtime=time.time(), content="daemon up\n"
+    )
+    stub = _write_mngr_stub(
+        tmp_path, agents=("chatty",), panes_by_agent={"chatty": "the whole conversation\n"}
+    )
+    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = module.collect_agent_log_members(5.0, is_pane_included=False)
+
+    assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
+    # Not merely absent from the archive -- never captured, so nothing to leak.
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    assert "capture " not in invocations
+
+
+def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
+    tmp_path: Path,
+) -> None:
+    """Panes are captured at collection time, so under one shared newest-first
+    budget every pane would sort above every real harness log and spend the
+    budget before the log of the agent that actually broke was reached. Their own
+    budget is what keeps the two from competing."""
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    for name in ("one", "two", "three"):
+        _write_agent_log(
+            agents_dir, name, "app_server.log", mtime=now - 100, content="log-" + "x" * 300
+        )
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("one", "two", "three"),
+        panes_by_agent={name: "pane-" + "y" * 300 for name in ("one", "two", "three")},
+    )
+    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+    # Room for two members in each class, had they been competing for one budget.
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 700)
+    _rebind(module.__dict__, "MAX_PANE_CLASS_BYTES", 700)
+
+    members = module.collect_agent_log_members(5.0, is_pane_included=True)
+    names = [name for name, _, _ in members]
+
+    assert sum(1 for name in names if name.endswith("app_server.log")) == 2
+    assert sum(1 for name in names if name.endswith("pane.txt")) == 2

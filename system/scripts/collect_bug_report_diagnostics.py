@@ -9,11 +9,14 @@ third-party imports), targeting the container's system python3 (3.11+).
 Prints exactly one line -- the base64 of a zip -- and nothing at all when no
 content type was requested. Under --logs the zip holds ``metadata.json`` plus
 one ``logs/<program>.log`` member per collected service log, and one
-``agent-logs/<agent-name>/<file>`` per harness log or captured tmux pane --
-services run under supervisord and agents run under tmux, so the two halves
-come from different places and neither sees the other's failures. Under
---transcript it holds one ``chats/<agent-name>-<harness>.jsonl`` per selected
-agent conversation, newest first. Each of the three is scanned and released or
+``agent-logs/<agent-name>/<file>`` per harness log -- services run under
+supervisord and agents run under tmux, so the two halves come from different
+places and neither sees the other's failures. Under --transcript it holds one
+``chats/<agent-name>-<harness>.jsonl`` per selected agent conversation, newest
+first. With BOTH flags each running agent also contributes an
+``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
+into its pane, so its scrollback needs the chats consent as well as the logs
+one. Each of the three classes is scanned and released or
 withheld on its own. Anything requested that was withheld is a plain-words line
 in the archive's own ``collection-notes.txt`` member, so the archive explains
 itself; a content type that was not requested appears in neither the members
@@ -140,11 +143,22 @@ AGENTS_DIR = os.path.dirname(os.environ.get("MNGR_AGENT_STATE_DIR", ""))
 # `fetch_transcript` already leaves the set of harnesses to mngr.
 AGENT_LOG_GLOBS = ("*.log", "logs/*.log", "plugin/*/home/tui_log/*.log")
 
-# The visible pane of an agent's primary tmux window, captured for harnesses
-# that write no log file at all (claude, pi-coding and opencode render into the
-# pane), where a crash banner is the only record there will ever be.
+# The scrollback of an agent's primary tmux window, captured for harnesses whose
+# crash output only ever reaches the screen.
+#
+# It needs BOTH consents, which is why it is not simply part of the logs class:
+# a TUI harness renders the conversation into its pane, so the scrollback is
+# chat content as much as it is diagnostics. A user who asks for logs and
+# declines to send their chats has declined this too.
 PANE_MEMBER_NAME = "pane.txt"
 MAX_PANE_LINES = 1000
+
+# Panes are budgeted apart from the harness log files rather than competing with
+# them. They are captured now, so they would sort newest under any shared
+# newest-first budget and displace the log files of the agent that actually
+# broke; and being the only record for a harness that writes no file, they must
+# not be squeezed out by a busy one either.
+MAX_PANE_CLASS_BYTES = 512 * 1024
 
 # The window of modification times the zip format can record, as a DOS date
 # packing the year into 7 bits from 1980: 1980-01-01 to 2107-12-31, both UTC.
@@ -356,7 +370,7 @@ def select_agent_log_files(agent_id: str) -> list[str]:
 
 
 def capture_pane(address: str, timeout: float) -> str | None:
-    """One agent's visible tmux pane, or None when it could not be captured.
+    """One agent's tmux scrollback, or None when it could not be captured.
 
     ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
     report asks a workspace what happened, it does not boot anything to find
@@ -369,7 +383,7 @@ def capture_pane(address: str, timeout: float) -> str | None:
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
 
 
-def collect_agent_log_members(timeout: float) -> list[tuple[str, str, float]]:
+def collect_agent_log_members(timeout: float, is_pane_included: bool) -> list[tuple[str, str, float]]:
     """The harness diagnostics for every agent, as ``(member name, content, mtime)``.
 
     Agents run in tmux, not under supervisord, so none of this reaches the
@@ -378,10 +392,15 @@ def collect_agent_log_members(timeout: float) -> list[tuple[str, str, float]]:
 
     Every agent contributes, for the same reason every agent contributes a
     transcript -- the chat a user filed from is rarely the only one that
-    matters. Members are ordered newest-first across all agents before the
-    class budget is applied, so a quiet agent never crowds out the busy one.
+    matters. Log files are ordered newest-first before the class budget is
+    applied, so a quiet agent never crowds out the busy one; panes fill their own
+    budget so the two never compete (see ``MAX_PANE_CLASS_BYTES``).
+
+    ``is_pane_included`` carries the chats consent: the pane holds the rendered
+    conversation, so it rides only when the user asked for their chats too.
     """
-    members: list[tuple[str, str, float]] = []
+    log_members: list[tuple[str, str, float]] = []
+    pane_members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
     for name, address, agent_id in list_agents(timeout):
         agent_dir_member = safe_member_component(name)
@@ -394,16 +413,20 @@ def collect_agent_log_members(timeout: float) -> list[tuple[str, str, float]]:
                 ),
                 used_names,
             )
-            members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
+            log_members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
+        if not is_pane_included:
+            continue
         pane = capture_pane(address, timeout)
         if pane is not None:
             member = unique_member_name(
                 "{}/{}/{}".format(AGENT_LOG_MEMBER_DIR, agent_dir_member, PANE_MEMBER_NAME),
                 used_names,
             )
-            members.append((member, pane, time.time()))
-    members.sort(key=lambda item: item[2], reverse=True)
-    return take_within_byte_budget(members, MAX_LOG_CLASS_BYTES)
+            pane_members.append((member, pane, time.time()))
+    log_members.sort(key=lambda item: item[2], reverse=True)
+    return take_within_byte_budget(log_members, MAX_LOG_CLASS_BYTES) + take_within_byte_budget(
+        pane_members, MAX_PANE_CLASS_BYTES
+    )
 
 
 def safe_member_component(text: str) -> str:
@@ -787,7 +810,12 @@ def main(argv: Sequence[str]) -> None:
                 ],
             )
         )
-        agent_log_members = collect_agent_log_members(scan_timeout_seconds)
+        # The pane needs the chats consent as well as this one: it is where a TUI
+        # harness renders the conversation, so its scrollback is chat content and
+        # not only diagnostics.
+        agent_log_members = collect_agent_log_members(
+            scan_timeout_seconds, is_pane_included="--transcript" in flags
+        )
         if not agent_log_members:
             notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
