@@ -16,6 +16,7 @@ from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppOriginUrl
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
@@ -67,6 +68,7 @@ class AppManifest(FrozenModel):
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
+    url: AppOriginUrl | None = Field(default=None, description="Where the app serves its own pages; the port every static reader finds it by")
     instances: bool = Field(default=False, description="Whether the app serves the instances API")
     instances_url: InstancesUrl | None = Field(default=None, description="Where the instances API is served when not at the app URL")
     critical: bool = Field(default=False, description="No Stop verb; snapshot-and-rollback target in the update apply")
@@ -94,6 +96,10 @@ class AppManifest(FrozenModel):
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
+        if self.instances_url is not None and self.instances_url == self.url:
+            raise InvalidManifestValueError(
+                f"instances_url {self.instances_url!r} is the app's own url; one socket cannot serve both"
+            )
         if self.instances_url is not None and not self.instances:
             raise InvalidManifestValueError("instances_url is only allowed with instances = true")
         if self.actions and not self.instances:
