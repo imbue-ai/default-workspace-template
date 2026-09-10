@@ -173,7 +173,7 @@ NOTES_MEMBER_NAME = "collection-notes.txt"
 NOTE_SCANNER_UNAVAILABLE = "withheld: the secret scanner could not run, so nothing it was to check was released"
 NOTE_SECRETS_FOUND = "withheld: the secret scan reported findings"
 NOTE_NO_CHAT_TRANSCRIPT = "no chat transcripts exist in this workspace"
-NOTE_NO_AGENT_LOGS = "no agent wrote a harness log or held a pane to capture"
+NOTE_NO_AGENT_LOGS = "no agent wrote a harness log to collect"
 
 FINDING_MARKER = "SECRET SCAN FINDING"
 # Every marker scan_secrets.sh prints for "one of my two mandatory scanners did
