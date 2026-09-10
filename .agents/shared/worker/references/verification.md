@@ -1,9 +1,5 @@
 # Verification
 
-No run loads this file: the two gates below are parked in the harden pass, so
-`harden-creation.md` does not list it. The invocations stay correct for a
-by-hand run.
-
 Run the repo's review gates -- `/verify-architecture` and `/autofix` -- and
 fix what they flag **before** writing the final gate report, so the user sees
 a single report that already reflects the review verdicts rather than a
