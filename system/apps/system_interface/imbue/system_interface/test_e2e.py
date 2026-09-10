@@ -1461,7 +1461,9 @@ def test_two_windows_of_one_client_mirror_a_server_made_arrangement(tmp_path: Pa
             # The windows applied the file rather than saving their own copies over it: the stamp holds.
             second.wait_for_timeout(3000)
             assert json.loads(layout_files[0].read_text())["updated_at"] == stamp
-            assert [panel["params"]["address"] for panel in stored["dockview"]["panels"].values()] == [_FIXTURE_ADDRESS]
+            assert [panel["params"]["address"] for panel in stored["dockview"]["panels"].values()] == [
+                _FIXTURE_ADDRESS
+            ]
             assert "tabs" not in stored
         finally:
             second.close()
