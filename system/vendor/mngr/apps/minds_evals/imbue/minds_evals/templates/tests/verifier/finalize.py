@@ -10,13 +10,16 @@ Cases that declare expectations split that earned score evenly between conversat
 delivered outcome: a great app described badly and a great description of no app are equally
 imperfect. Cases without expectations are unchanged.
 
-The harness then takes a fixed share of whatever that came to; see HARNESS_SHARE for why.
+The harness then takes a fixed share of whatever that came to; see HARNESS_SHARE for why. On a
+harness that dimension does not measure -- anything but claude, see render_harness_report.py -- it is
+not scored at all, and the composition drops its share rather than charging the trial for it.
 
 Grading-infrastructure failures must NOT be graded as a legitimate 0.0: they leave the reward file
 absent so harbor errors the trial instead. That covers a judge API/auth error, rewardkit not
-producing a parseable reward file, a case file that does not say what this case expects, and outcome
-evidence that could not be measured at all (an expectations case that finished with an absent or
-empty evidence manifest, or a declared check class whose every recorded entry is an error).
+producing a parseable reward file, a case file that does not say what this case expects, structural
+gates that were never scored, and outcome evidence that could not be measured at all (an
+expectations case that finished with an absent or empty evidence manifest, or a declared check class
+whose every recorded entry is an error).
 rewardkit soft-handles a judge timeout by recording the criterion as 0.0 with an ``error`` and
 exiting 0, which would otherwise masquerade as a real low score.
 
@@ -29,7 +32,6 @@ agent improvement.
 
 import json
 import sys
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,11 @@ DETAILS_PATH = Path("/logs/verifier/reward-details.json")
 # Under /logs/agent, harbor's contract for where a task's declared artifacts are re-materialized at
 # their original absolute paths.
 STATE_PATH = Path("/logs/agent/state.json")
+# Which harness the trial ran on and whether harness_quality scored it, as render_harness_report.py
+# settled it in the same verifier pass. It arrives as a file rather than as a module both scripts
+# import, because rewardkit imports every .py at the criteria root by file path with nothing on the
+# import path, and a sibling import in either would abort the grade before a criterion ran.
+HARNESS_PATH = Path("/logs/agent/harness.json")
 # /tests is harbor's contract for where the task's tests directory lands in the container.
 CASE_PATH = Path("/tests/case.json")
 # The evidence bundle: a declared artifact, so it re-materializes under /logs/agent too.
@@ -56,8 +63,12 @@ OUTCOME_SHARE = 0.5
 # looks like an agent that skipped review. A fifth is enough that a wholly broken harness costs more
 # than any judge delta we have measured, without letting shared infrastructure noise swamp what the
 # agent actually did. Applied to whatever the trial earned on quality and outcome, so the parity
-# between those two is untouched.
+# between those two is untouched, and only on the harness the dimension can measure.
 HARNESS_SHARE = 0.2
+
+# What an unrecorded harness reads as, so that a missing record grades a trial on every dimension
+# rather than quietly dropping one.
+DEFAULT_HARNESS = "claude"
 
 # Which expanded check list makes a class scored, mirroring outcome/checks.py's registration rule.
 SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app", "http_checks": "http"}
@@ -71,14 +82,19 @@ SCORED_CLASS_BY_EXPECTATION_KEY = {"files_checks": "files", "app_checks": "app",
 # part broke.
 
 
-# The three helpers below are mirrored by _reward_dicts / _criteria / is_gates_dimension_passed in
-# minds_evals/check_run.py, which decides the same gate verdict host-side. They cannot be shared:
-# this file runs inside the slim rewardkit verifier container, which has stdlib and rewardkit and no
-# imbue package. Keep the two in step. They differ on purpose in one respect, and one only:
-# check_run coerces a criterion value it cannot read to zero, because it must always reach a
-# verdict, where here a malformed reward-details file is a verifier bug and raising is the right
-# answer. Anything else the two decide differently is a bug -- the two ends of one trial would then
-# disagree about whether it passed, with nothing saying so.
+# _reward_dicts, _criteria and _gates_all_passed below are mirrored by _reward_dicts, _criteria and
+# is_gates_dimension_passed in minds_evals/check_run.py, which decides the same gate verdict
+# host-side. They cannot be shared: this file runs inside the slim rewardkit verifier container,
+# which has stdlib and rewardkit and no imbue package. Keep the two in step. They differ on purpose
+# in one respect, and one only: check_run coerces a criterion value it cannot read to zero, because
+# it must always reach a verdict, where here a malformed reward-details file is a verifier bug and
+# raising is the right answer. Anything else the two decide differently is a bug -- the two ends of
+# one trial would then disagree about whether it passed, with nothing saying so. _gates_all_passed
+# therefore still answers for a dimension nothing scored, even though finalize() diagnoses that as a
+# grading failure before asking: the answer has to match check_run's, which reads the same file for a
+# trial that already errored. _is_gates_dimension_scored is outside the mirror: only this side
+# decides whether a trial is graded at all, so only this side has to tell an unscored gate from a
+# failed one.
 def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     """The per-reward detail dicts for one dimension. rewardkit emits a single dict when a dimension
     directory yields one Reward, or a list of dicts when it yields several (e.g. a judge .toml plus
@@ -90,8 +106,20 @@ def _reward_dicts(dimension: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _criteria(reward_dict: dict[str, Any]) -> Iterable[dict[str, Any]]:
-    return (entry for entry in reward_dict.get("criteria", []) if isinstance(entry, dict))
+def _criteria(reward_dict: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_criteria = reward_dict.get("criteria")
+    if not isinstance(raw_criteria, list):
+        return []
+    return [entry for entry in raw_criteria if isinstance(entry, dict)]
+
+
+def _is_gates_dimension_scored(details: dict[str, Any]) -> bool:
+    """Whether the gates dimension carries any criterion at all, whatever those criteria say.
+
+    The gates are programmatic criteria with no judge behind them, so a details file that scores none
+    of them describes a verifier that did not run rather than a trial that failed them.
+    """
+    return any(_criteria(reward_dict) for reward_dict in _reward_dicts(details.get("gates")))
 
 
 def _gates_all_passed(details: dict[str, Any]) -> bool:
@@ -129,6 +157,21 @@ def _load_json(path: Path) -> dict[str, Any]:
     except (OSError, ValueError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _harness_record(harness_path: Path) -> tuple[str, bool]:
+    """Which harness the trial ran on and whether harness_quality scored it.
+
+    A record that is absent or not of the shape the pre-step writes reads as a scored claude trial:
+    losing a dimension over a record this script could not read would silently change what the trial
+    was scored on.
+    """
+    record = _load_json(harness_path)
+    name = record.get("name")
+    is_harness_quality_scored = record.get("is_harness_quality_scored")
+    if not isinstance(name, str) or not name or not isinstance(is_harness_quality_scored, bool):
+        return DEFAULT_HARNESS, True
+    return name, is_harness_quality_scored
 
 
 def _is_timed_out(state_path: Path) -> bool:
@@ -241,7 +284,7 @@ def _evidence_failure(
     return None
 
 
-def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any]) -> float:
+def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any], is_harness_quality_scored: bool) -> float:
     """What the trial earned: its conversation and delivery, discounted by how well its harness held.
 
     Every dimension is read the same way: absent means 0.0. There is no compat branch for a trial
@@ -250,6 +293,11 @@ def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any]) -> flo
     captured, so a regrade of an old trial grades it on the current verifier's dimensions and
     restates its reward. Forgiving an absent harness score would only have covered rewardkit failing
     to emit the dimension, which is a worse trial, not a better one.
+
+    The one dimension that can be absent without that being a failure is `harness_quality` on a
+    harness it does not measure, where its share is dropped instead of scored. Dropping it rather
+    than redistributing it over the other dimensions is what keeps the reward on the same range and
+    with the same meaning on every harness.
     """
     quality = float(rewards.get("quality", 0.0))
     earned = (
@@ -257,6 +305,8 @@ def _earned_reward(rewards: dict[str, Any], expectations: dict[str, Any]) -> flo
         if expectations
         else quality
     )
+    if not is_harness_quality_scored:
+        return earned
     return (1.0 - HARNESS_SHARE) * earned + HARNESS_SHARE * float(rewards.get("harness_quality", 0.0))
 
 
@@ -270,7 +320,14 @@ def _fail_as_grading_error(reason: str, reward_path: Path) -> int:
     return 1
 
 
-def finalize(reward_path: Path, details_path: Path, state_path: Path, case_path: Path, manifest_path: Path) -> int:
+def finalize(
+    reward_path: Path,
+    details_path: Path,
+    state_path: Path,
+    case_path: Path,
+    manifest_path: Path,
+    harness_path: Path,
+) -> int:
     """Compose the gated reward from the files at these paths; the exit code for the verifier."""
     try:
         rewards = json.loads(reward_path.read_text())
@@ -289,6 +346,11 @@ def finalize(reward_path: Path, details_path: Path, state_path: Path, case_path:
     if judge_error is not None:
         return _fail_as_grading_error("judge call failed ({})".format(judge_error[:200]), reward_path)
 
+    # Before the gate verdict is read, because an unscored gate and a failed one are indistinguishable
+    # in it, and only one of them is the agent's doing.
+    if not _is_gates_dimension_scored(details):
+        return _fail_as_grading_error("the verifier scored no structural gates", reward_path)
+
     # Outcome evidence is only load-bearing on a trial whose gates passed; a timed-out trial scores
     # zero on structure alone and must not be reported as a harness failure.
     is_gated_open = _gates_all_passed(details)
@@ -297,10 +359,18 @@ def finalize(reward_path: Path, details_path: Path, state_path: Path, case_path:
         if evidence_failure is not None:
             return _fail_as_grading_error(evidence_failure, reward_path)
 
-    rewards["reward"] = round(_earned_reward(rewards, expectations) if is_gated_open else 0.0, 4)
+    # The harness decides whether harness_quality is part of the composition at all, and the
+    # pre-step that renders its inputs is where that was decided and the dimension removed.
+    harness, is_harness_quality_scored = _harness_record(harness_path)
+    earned = _earned_reward(rewards, expectations, is_harness_quality_scored) if is_gated_open else 0.0
+    rewards["reward"] = round(earned, 4)
     reward_path.write_text(json.dumps(rewards, indent=2))
 
     details["timed_out"] = _is_timed_out(state_path)
+    # Which harness the trial ran on, and whether harness_quality measured it. Stamped on every
+    # trial, so that a dimension missing from the details reads as one that does not apply to this
+    # harness rather than as one that failed to emit.
+    details["harness"] = {"name": harness, "is_harness_quality_scored": is_harness_quality_scored}
     evidence_marker = _evidence_marker(manifest_path)
     if evidence_marker is not None:
         details["outcome_evidence"] = evidence_marker
@@ -315,6 +385,7 @@ def main() -> int:
         state_path=STATE_PATH,
         case_path=CASE_PATH,
         manifest_path=MANIFEST_PATH,
+        harness_path=HARNESS_PATH,
     )
 
 
