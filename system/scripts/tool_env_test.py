@@ -21,18 +21,19 @@ def _run(snippet: str, *, home: Path, tool_home: Path) -> str:
     return result.stdout
 
 
-def _install_mngr_tool(home: Path) -> tuple[Path, Path]:
+def _install_mngr_tool(home: Path, *, shebang_prefix: str = "#!") -> tuple[Path, Path]:
     """A uv-tool-shaped mngr environment under ``home``, plus its console script.
 
     Shaped the way uv lays one out, because the cleanup reads the script's shebang to
-    decide which environment it belongs to.
+    decide which environment it belongs to. ``shebang_prefix`` spells that marker, so a
+    test can hand it the whitespace-separated form as well.
     """
     env_dir = home / ".local" / "share" / "uv" / "tools" / _MNGR_TOOL
     (env_dir / "bin").mkdir(parents=True)
     (env_dir / "uv-receipt.toml").write_text("")
     script = home / ".local" / "bin" / "mngr"
     script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(f"#!{env_dir}/bin/python\n")
+    script.write_text(f"{shebang_prefix}{env_dir}/bin/python\n")
     return env_dir, script
 
 
@@ -106,6 +107,23 @@ def test_the_console_script_goes_even_when_home_is_spelled_differently_than_the_
         home=runtime_home,
         tool_home=image_home,
     )
+
+    assert not shadow_env.exists()
+    assert not shadow_script.exists()
+
+
+def test_the_console_script_goes_when_its_shebang_has_a_space_after_the_marker(
+    tmp_path: Path,
+) -> None:
+    """The update apply reads the same shebang with a ``strip()`` before splitting
+    (update_environment.py::_tool_location), so the two must agree on a `#! /path`
+    spelling; disagreeing here removes the environment and strands the script on PATH."""
+    runtime_home = tmp_path / "home" / "user"
+    image_home = tmp_path / "root"
+    shadow_env, shadow_script = _install_mngr_tool(runtime_home, shebang_prefix="#! ")
+    _install_mngr_tool(image_home)
+
+    _run("tool_env_drop_shadowing_mngr", home=runtime_home, tool_home=image_home)
 
     assert not shadow_env.exists()
     assert not shadow_script.exists()
