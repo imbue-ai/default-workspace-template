@@ -1,14 +1,27 @@
-"""Unit tests for the grade-time harness-report renderer. It ships as a self-contained
-verifier-container script under templates/tests/verifier/ (stdlib only, not a package module), so the
-`harness_report_renderer` fixture loads it by file path."""
+"""Unit tests for the grade-time harness-report renderer, which also settles which harness the trial
+ran on and whether `harness_quality` applies to it. It ships as a self-contained verifier-container
+script under templates/tests/verifier/ (stdlib only, not a package module), so the
+`harness_report_renderer` fixture loads it by file path; the `finalize` fixture loads the reader of
+the record it writes."""
 
 import json
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
+
+from imbue.minds_evals.data_types import ArmRecord
+from imbue.minds_evals.data_types import HarnessConfigRecord
+from imbue.minds_evals.data_types import TrajectoryProvenance
+from imbue.minds_evals.data_types import UsageSource
+from imbue.minds_evals.testing import atif_document
+from imbue.minds_evals.trajectory import build_hand_built_trajectory
+from imbue.minds_evals.usage import summarize_workspace_usage
+
 # The argument each tool carries its payload under, so a step reads the way the real document does.
-PAYLOAD_KEYS = {"Bash": "command", "Read": "file_path", "Agent": "prompt"}
+# `bash` is pi-coding's name for the shell claude calls `Bash`.
+PAYLOAD_KEYS = {"Bash": "command", "bash": "command", "Read": "file_path", "Agent": "prompt"}
 
 
 def _step(
@@ -424,3 +437,217 @@ def test_an_unreadable_or_malformed_counts_file_scores_clean_rather_than_abortin
     assert harness_checks.scope_score("main", tmp_path / "not-json.json") == 1.0
     (tmp_path / "wrong-shape.json").write_text(json.dumps({"main": {"scored_total": "lots"}}))
     assert harness_checks.scope_score("main", tmp_path / "wrong-shape.json") == 1.0
+
+
+def test_pis_lowercase_shell_output_is_read_as_testimony_about_the_harness(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # pi-coding names the shell `bash`, and what it prints is the same evidence claude's `Bash`
+    # output is. A tool set that knows only claude's spelling classifies none of it -- the result is
+    # not a lower score but no score at all, since nothing but an errored result is left to scan.
+    steps = [
+        _step(
+            1,
+            command="uv run pytest",
+            observation="ModuleNotFoundError: No module named 'playwright'",
+            tool="bash",
+        )
+    ]
+
+    report, counts = harness_report_renderer.render_harness_report(steps, "LEAD AGENT")
+
+    assert counts == {"missing_module": 1}
+    assert "No module named 'playwright'" in report
+
+
+def test_the_harness_is_the_one_the_captured_document_names(harness_report_renderer: ModuleType) -> None:
+    workspace_document = atif_document()
+
+    assert harness_report_renderer.harness_of_document(workspace_document) == "claude"
+    assert (
+        harness_report_renderer.harness_of_document({**workspace_document, "agent": {"name": "pi-coding"}})
+        == "pi-coding"
+    )
+    assert harness_report_renderer.harness_of_document({**workspace_document, "agent": {"name": "codex"}}) == "codex"
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        pytest.param({}, id="nothing_at_all"),
+        pytest.param({"steps": []}, id="no_agent_block"),
+        pytest.param({"agent": {}}, id="no_name"),
+        pytest.param({"agent": {"name": ""}}, id="empty_name"),
+        pytest.param({"agent": "claude"}, id="agent_not_an_object"),
+        # What mngr writes when it cannot resolve the agent's type, which is a document that says
+        # nothing rather than a harness of its own.
+        pytest.param({"agent": {"name": "unknown"}}, id="unresolved_agent_type"),
+    ),
+)
+def test_a_document_that_names_no_harness_is_read_as_claude(
+    harness_report_renderer: ModuleType, document: dict[str, Any]
+) -> None:
+    # A document this pass cannot place has to keep every dimension rather than losing one.
+    assert harness_report_renderer.harness_of_document(document) == "claude"
+
+
+def _pi_arm_block() -> dict[str, Any]:
+    """An arm block naming pi, as it reaches the verifier on a captured document's provenance."""
+    return {"harness_config": {"harness": "pi-coding"}}
+
+
+def _hand_built_document(arm: ArmRecord) -> dict[str, Any]:
+    """The fallback trajectory the driver builds when the workspace could not hand over its own."""
+    built = build_hand_built_trajectory(
+        [{"role": "user", "text": "Build it"}, {"role": "agent", "text": "Done."}],
+        TrajectoryProvenance(
+            driver_name="minds-persona-driver",
+            driver_version="0.1.0",
+            decider_model="claude-opus-4-8",
+            decider_turns=(),
+            harbor_session_id="session-1",
+            case_id="todo-app",
+            usage_source=UsageSource.TRANSCRIPT,
+            arm=arm,
+        ),
+        summarize_workspace_usage(()),
+        timestamp="2026-09-01T00:00:00Z",
+        boundaries=(),
+    )
+    assert built is not None
+    return built.to_json_dict()
+
+
+def test_the_drivers_hand_built_fallback_is_not_read_as_a_harness_of_its_own(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # The fallback document names the DRIVER in `agent.name`, because there was no captured document
+    # to take a harness from. Reading that as the harness would strip harness_quality from every
+    # claude trial whose transcript capture failed.
+    document = _hand_built_document(ArmRecord())
+
+    assert document["agent"]["name"] == "minds-persona-driver"
+    assert harness_report_renderer.harness_of_document(document) == "claude"
+
+
+def test_a_fallback_trajectory_takes_the_harness_from_the_config_the_driver_recorded(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # The harness config's harness is read back from the workspace's accounts listing rather than
+    # from any document, so it is there even on a trial whose transcript capture failed -- which is
+    # the only way such a trial can be kept off claude's judges.
+    document = _hand_built_document(ArmRecord(harness_config=HarnessConfigRecord(lane="api-key", harness="pi-coding")))
+
+    assert harness_report_renderer.harness_of_document(document) == "pi-coding"
+
+
+def test_a_captured_document_names_its_own_harness_whatever_the_arm_recorded(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # The criteria are shaped after the agent that WROTE the trajectory, so on the shape that carries
+    # that fact, it is the fact that decides.
+    document = {
+        **atif_document(),
+        "extra": {"minds_evals": {"source": "workspace", "arm": _pi_arm_block()}},
+    }
+
+    assert harness_report_renderer.harness_of_document(document) == "claude"
+
+
+def test_a_captured_document_whose_agent_type_is_unresolved_falls_back_to_the_arm(
+    harness_report_renderer: ModuleType,
+) -> None:
+    # mngr writes `unknown` into a captured document too, and the arm is then the only thing left
+    # that says what ran. Reading the placeholder as an answer would put a pi trajectory in front of
+    # claude's judges and charge it the harness share of a dimension that measured nothing.
+    document = {
+        **atif_document(),
+        "agent": {"name": "unknown"},
+        "extra": {"minds_evals": {"source": "workspace", "arm": _pi_arm_block()}},
+    }
+
+    assert harness_report_renderer.harness_of_document(document) == "pi-coding"
+
+
+def test_an_absent_or_unreadable_trajectory_is_read_as_claude(
+    harness_report_renderer: ModuleType, tmp_path: Path
+) -> None:
+    # A trajectory this script cannot read is a grading fault, and taking a dimension away over one
+    # would quietly change what the trial was scored on.
+    (tmp_path / "not-json.json").write_text("{not json")
+    (tmp_path / "not-a-document.json").write_text("[1, 2]")
+
+    for name in ("absent.json", "not-json.json", "not-a-document.json"):
+        document = harness_report_renderer.load_trajectory_document(tmp_path / name)
+        assert harness_report_renderer.harness_of_document(document) == "claude"
+
+
+def _dimension_dir_with_a_judge(tmp_path: Path) -> Path:
+    """The harness_quality dimension as it sits in the criteria tree the verifier image ships."""
+    dimension_dir = tmp_path / "harness_quality"
+    dimension_dir.mkdir()
+    (dimension_dir / "judge_main.toml").write_text("[judge]\n")
+    (dimension_dir / "checks.py").write_text("# criteria\n")
+    return dimension_dir
+
+
+def _prepare(harness_report_renderer: ModuleType, tmp_path: Path, document: dict[str, Any] | None) -> dict[str, Any]:
+    """Settle the harness_quality applicability of a trial whose trajectory is the given document,
+    over a criteria tree that has the dimension in it."""
+    trajectory_path = tmp_path / "trajectory.json"
+    if document is not None:
+        trajectory_path.write_text(json.dumps(document))
+    return harness_report_renderer.prepare_harness_quality(
+        trajectory_path=trajectory_path,
+        harness_path=tmp_path / "harness.json",
+        dimension_dir=_dimension_dir_with_a_judge(tmp_path),
+    )
+
+
+def test_a_claude_trial_keeps_the_harness_quality_dimension(
+    harness_report_renderer: ModuleType, tmp_path: Path
+) -> None:
+    record = _prepare(harness_report_renderer, tmp_path, atif_document())
+
+    assert record == {"name": "claude", "is_harness_quality_scored": True}
+    assert (tmp_path / "harness_quality" / "judge_main.toml").is_file()
+    assert json.loads((tmp_path / "harness.json").read_text()) == record
+
+
+def test_a_pi_coding_trial_takes_the_harness_quality_dimension_out_of_the_criteria_tree(
+    harness_report_renderer: ModuleType, tmp_path: Path
+) -> None:
+    # rewardkit scores whatever dimension directories it finds, so removing the directory is the only
+    # way to stop two opus judges from being paid to score claude signatures against a pi trajectory
+    # that cannot contain any -- and to keep the 1.0 they would return out of the reward.
+    record = _prepare(harness_report_renderer, tmp_path, {**atif_document(), "agent": {"name": "pi-coding"}})
+
+    assert record == {"name": "pi-coding", "is_harness_quality_scored": False}
+    assert not (tmp_path / "harness_quality").exists()
+    assert json.loads((tmp_path / "harness.json").read_text()) == record
+
+
+def test_a_trial_whose_trajectory_is_missing_keeps_the_dimension_it_always_had(
+    harness_report_renderer: ModuleType, tmp_path: Path
+) -> None:
+    # A trajectory this pass cannot read is a grading fault rather than another harness, and the
+    # dimension has to survive it: dropping it would quietly restate the reward of a claude trial.
+    record = _prepare(harness_report_renderer, tmp_path, None)
+
+    assert record == {"name": "claude", "is_harness_quality_scored": True}
+    assert (tmp_path / "harness_quality" / "judge_main.toml").is_file()
+
+
+def test_the_harness_record_is_written_in_the_shape_the_reward_composition_reads(
+    harness_report_renderer: ModuleType, finalize: ModuleType, tmp_path: Path
+) -> None:
+    # The writer and the reader of this contract are in two scripts that cannot import each other,
+    # so a renamed key would pass both suites and silently grade every pi trial on claude's terms.
+    _prepare(harness_report_renderer, tmp_path, {**atif_document(), "agent": {"name": "pi-coding"}})
+
+    assert finalize._harness_record(tmp_path / "harness.json") == ("pi-coding", False)
+    assert finalize.DEFAULT_HARNESS == harness_report_renderer.CLAUDE_HARNESS
+    # The path is as much of the contract as the keys, and the test above drives both scripts against
+    # a tmp_path that hides a disagreement: a record written where the reader does not look reads as
+    # a claude trial, so every pi trial would be charged for the dimension just taken away from it.
+    assert harness_report_renderer.HARNESS_PATH == finalize.HARNESS_PATH

@@ -160,7 +160,6 @@ def _goal_case_config() -> CaseConfig:
         dwt_repo="https://example.invalid/dwt.git",
         dwt_branch="main",
         dwt_sha="c" * 40,
-        avg_word_count_baseline=100.0,
         step=None,
         expectations=None,
         authored_expectations=None,

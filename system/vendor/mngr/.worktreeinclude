@@ -1,0 +1,24 @@
+# Gitignored files copied into worktrees managed by Claude Code and the local
+# Codex desktop app. Claude Code uses this for `--worktree`, `EnterWorktree`, and
+# isolated subagents; Codex uses it for chats started in Worktree mode. Both copy
+# a path only when it is listed here AND gitignored, so tracked files cannot be
+# pulled in by accident. Syntax is .gitignore's.
+#
+# Keep this to per-checkout *configuration*. Each isolated Claude subagent or
+# Codex worktree chat can get a separate checkout, so every entry may be fanned
+# out across dozens of directories: a credential must never be listed, and
+# neither must a file that points at one.
+
+# The code-review plugin's local overrides. A worktree without them falls back to
+# the committed .reviewer/settings.json, whose verify_conversation source list is
+# far wider than one session's transcripts.
+.reviewer/settings.local.json
+
+# Claude permissions and env already granted for this checkout, so an isolated
+# Claude agent does not re-prompt for each one.
+.claude/settings.local.json
+
+# Deliberately NOT listed: .mngr/settings.local.toml. Its `env_file` is a
+# repo-relative .env holding a GitHub token -- copying the pointer alone leaves a
+# create-template that fails on use, and copying both would spread the token into
+# every agent worktree.
