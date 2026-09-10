@@ -14,25 +14,27 @@ authored by a *newer* flow than the launcher that provisioned the worker
 (update-self stages the target version's prose for an older lead), and a
 worker that finished its task must never be structurally unable to say
 so -- with no address, the worker falls back to the same-repo delivery
-in `worker-reporting.md`. Beyond those two, any additional top-level
-string fields the lead sets are passed through to the worker -- so leads
-can attach flow-specific context (a ticket id, a feature flag, a list of
-staged inputs) without each new key requiring a parser change.
+in `worker-reporting.md`. `task_file` -- the task file's own path,
+stamped by the same launch -- is optional on the same terms and for the
+same reason. Beyond those, any additional top-level string fields the
+lead sets are passed through to the worker -- so leads can attach
+flow-specific context (a ticket id, a feature flag, a list of staged
+inputs) without each new key requiring a parser change.
 
-The positional argument is a path that may contain a shell-style glob
-(e.g. ``data/.tasks/harden/*/task.md``). The helper resolves the
-glob itself and fails loudly if zero or multiple files match -- so a
-worker whose runtime layout drifts (missing task file, or two copies
-landing in the same tree) cannot silently parse the wrong thing.
-Quote the pattern in the shell (``'data/.tasks/harden/*/task.md'``)
-so the literal glob reaches this script.
+The positional argument is an exact path to one task file -- no globs,
+no searching. A worker is handed its task file's exact path in the
+message that launched it (``launch`` stamps ``task_file`` into the
+frontmatter for exactly this), so there is nothing to resolve: a
+dispatch nested two levels deep, or two sibling workers under one lead,
+can all use the same directory names and still name distinct files.
 
 On success (exit 0) prints shell-evalable ``KEY=value`` lines to
 stdout (values quoted via ``shlex.quote`` so whitespace and shell
-metacharacters survive). The required fields come first in fixed
+metacharacters survive). The well-known fields come first in fixed
 order; any extra string fields follow alphabetically:
 
     LEAD_AGENT=crystallize-test
+    TASK_FILE=data/.tasks/harden/update-foo/task.md
     FINISH_REPORT_PATH=data/.tasks/harden/update-foo/reports/report.md
     TICKET_ID=task-42
 
@@ -43,16 +45,15 @@ Extra string keys must be valid POSIX shell identifiers (so the
 variable instead of being parsed as a command). A key like
 ``staged-inputs`` fails loud rather than silently disappearing.
 
-On any failure -- no glob match, multiple glob matches, file missing,
-no/broken frontmatter, any required field missing, wrong type, empty
-string, or an extra key that isn't a valid shell identifier -- prints a
-human-readable error to stderr and exits 1.
+On any failure -- file missing, no/broken frontmatter, any required
+field missing, wrong type, empty string, or an extra key that isn't a
+valid shell identifier -- prints a human-readable error to stderr and
+exits 1.
 """
 
 from __future__ import annotations
 
 import argparse
-import glob
 import re
 import shlex
 import sys
@@ -62,31 +63,15 @@ from typing import Any
 import yaml
 
 _REQUIRED_FIELDS = ("finish_report_path",)
-# Optional address field: validated like a required field when present, but a
-# task file without it parses (with a stderr warning) -- see module docstring.
+# Optional fields the launcher stamps: validated like a required field when
+# present, but a task file without one still parses (with a stderr warning for
+# the address) -- see module docstring.
 _ADDRESS_FIELD = "lead_agent"
+_TASK_FILE_FIELD = "task_file"
+_OPTIONAL_KNOWN_FIELDS = (_ADDRESS_FIELD, _TASK_FILE_FIELD)
 # Fixed emission order for the well-known fields (address first when present).
-_ORDERED_KNOWN_FIELDS = (_ADDRESS_FIELD, *_REQUIRED_FIELDS)
+_ORDERED_KNOWN_FIELDS = (_ADDRESS_FIELD, _TASK_FILE_FIELD, *_REQUIRED_FIELDS)
 _SHELL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def resolve(pattern: str) -> Path:
-    """Return the single path matching ``pattern`` (treated as a glob).
-
-    Raises ``ValueError`` if zero or more than one paths match. A
-    literal (non-glob) path still goes through this function -- if the
-    path exists, glob returns a single-element list; if not, glob
-    returns an empty list and we report it as a missing match.
-    """
-    matches = sorted(glob.glob(pattern))
-    if not matches:
-        raise ValueError(f"no task file matches pattern: {pattern}")
-    if len(matches) > 1:
-        joined = ", ".join(matches)
-        raise ValueError(
-            f"pattern matches {len(matches)} files (want exactly 1): {joined}"
-        )
-    return Path(matches[0])
 
 
 def _split_frontmatter(text: str) -> dict[str, Any]:
@@ -116,13 +101,15 @@ def parse(task_file: Path) -> dict[str, str]:
     """Return all top-level string fields after validating the well-known ones.
 
     Required fields (``finish_report_path``) must be present, string-typed,
-    and non-empty -- any violation raises ``ValueError``. ``lead_agent`` is
-    validated the same way when present, but its *absence* only warns on
-    stderr (see module docstring: a task file authored by a newer flow than
-    the launcher may legitimately lack it, and the worker then uses the
-    same-repo fallback delivery). Beyond those, all other top-level
-    string-valued keys are passed through; non-string values are silently
-    dropped. Extra keys must also be valid POSIX shell identifiers
+    and non-empty -- any violation raises ``ValueError``. ``lead_agent`` and
+    ``task_file`` are validated the same way when present, but their *absence*
+    is not fatal (see module docstring: a task file authored by a newer flow
+    than the launcher may legitimately lack them). A missing ``lead_agent``
+    additionally warns on stderr, because the worker then has no push address
+    and must fall back to same-repo delivery; a missing ``task_file`` costs the
+    worker nothing it did not already have, so it passes quietly. Beyond those,
+    all other top-level string-valued keys are passed through; non-string values
+    are silently dropped. Extra keys must also be valid POSIX shell identifiers
     (``[A-Za-z_][A-Za-z0-9_]*``) so the downstream ``eval`` actually defines
     a variable rather than silently parsing the rendered line as a command
     lookup.
@@ -130,8 +117,10 @@ def parse(task_file: Path) -> dict[str, str]:
     if not task_file.is_file():
         raise ValueError(f"task file not found: {task_file}")
     frontmatter = _split_frontmatter(task_file.read_text(encoding="utf-8"))
-    for field in _REQUIRED_FIELDS + (_ADDRESS_FIELD,):
+    for field in _REQUIRED_FIELDS + _OPTIONAL_KNOWN_FIELDS:
         if field not in frontmatter:
+            if field in _REQUIRED_FIELDS:
+                raise ValueError(f"frontmatter is missing required field `{field}`")
             if field == _ADDRESS_FIELD:
                 print(
                     f"warning: task frontmatter has no `{_ADDRESS_FIELD}` (the "
@@ -140,8 +129,7 @@ def parse(task_file: Path) -> dict[str, str]:
                     "in worker-reporting.md.",
                     file=sys.stderr,
                 )
-                continue
-            raise ValueError(f"frontmatter is missing required field `{field}`")
+            continue
         value = frontmatter[field]
         if not isinstance(value, str):
             raise ValueError(
@@ -179,19 +167,18 @@ def _render(fields: dict[str, str]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "pattern",
+        "task_file",
+        type=Path,
         help=(
-            "Path or shell-style glob pattern resolving to exactly one "
-            "worker task file (markdown with YAML frontmatter). Quote "
-            "the pattern in the shell so the literal glob reaches this "
-            "script."
+            "Exact path to the worker task file (markdown with YAML "
+            "frontmatter). Not a glob: the worker is handed this path in "
+            "the message that launched it."
         ),
     )
     args = parser.parse_args()
 
     try:
-        task_file = resolve(args.pattern)
-        fields = parse(task_file)
+        fields = parse(args.task_file)
     except ValueError as exc:
         print(f"invalid task frontmatter: {exc}", file=sys.stderr)
         return 1

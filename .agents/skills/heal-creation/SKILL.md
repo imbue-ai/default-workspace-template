@@ -90,11 +90,11 @@ behavior.
 what outputs are correct. Describe success; the incident itself is above.>
 
 ## What to do
-Use the installed \`harden-worker\` sub-skill. It reads \`operation\` and
-\`type\` from this frontmatter and follows the matching references:
-reproduce the failure, find the root cause, apply a minimal fix, re-run 2-3
-fresh scenarios, and push through the single final-creation gate. Push reports
-to the lead per its reporting protocol.
+Read and follow \`.agents/shared/worker/SKILL.md\` from your own checkout. It
+reads \`operation\` and \`type\` from this frontmatter and follows the matching
+references: reproduce the failure, find the root cause, apply a minimal fix,
+re-run 2-3 fresh scenarios, and push through the single final-creation gate.
+Push reports to the lead per its reporting protocol.
 
 ## Success criteria
 - The incident reproduces against the current creation before the fix.

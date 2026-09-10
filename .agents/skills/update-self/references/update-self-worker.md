@@ -231,7 +231,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ## 6. Report back
 
-Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
+Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
 `data/.tasks/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
 `data/.tasks/update-self/reports`). Valid `name:` values:
 

@@ -5,6 +5,30 @@
 # ///
 """Worker-creation driver for the launch-task family of skills.
 
+The dispatch contract this script carries is *level-agnostic*: "lead" and
+"worker" are roles in a single dispatch, not fixed positions in a hierarchy.
+Any agent that runs ``launch`` and polls for a report is a lead -- a chat agent
+at the top, or a worker that dispatches work of its own. Nothing here depends
+on which level the launching agent sits at, so a worker launches a sub-worker
+with exactly the commands a chat agent uses.
+
+Two stamps in the task file's frontmatter make that work without any path or
+address being re-derived downstream:
+
+``lead_agent``
+    The launching agent's own name (its ``MNGR_AGENT_NAME``), so the worker
+    knows exactly which agent to push its report to. The same value is also
+    attached to the worker's agent as a ``--label lead_agent=<lead>``, so a
+    lead can find its own workers -- and its workers' workers -- in
+    ``mngr list`` without consulting any task file.
+
+``task_file``
+    The task file's own path, relative to the repo root. The worker receives
+    the task file as its message and reads that exact path back out of it, so
+    it never has to guess where its task file landed. Exact paths are what
+    keep nesting unambiguous: two levels of dispatch can use the same
+    directory names without colliding.
+
 Four subcommands cover the lead-side lifecycle:
 
 ``launch``
@@ -61,9 +85,10 @@ and syncs the directory alongside the runtime dir -- no extra CLI flag.
 
 Launch lifecycle commands:
 
-    mngr create <NAME> -t <TEMPLATE>
-    mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=merge
-    mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=merge
+    mngr create <NAME> -t <TEMPLATE> --label agent_created=true
+                                     --label lead_agent=<LEAD>
+    mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=clobber
+    mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=clobber
                 (when frontmatter declares it)
     mngr message <NAME> --message-file <TASK_FILE>
 
@@ -72,8 +97,13 @@ the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
 rsync copy directory *contents* into the destination. The local source is
 ``./``-prefixed so mngr reads it as a path rather than an agent name, while the
 agent destination stays repo-relative so mngr resolves it against the worker's
-workdir. The ``--uncommitted-changes=merge`` flag is required (see
-``.agents/shared/references/lead-proxy.md``).
+workdir. The destination is always a runtime dir under gitignored ``data/``, so
+``--uncommitted-changes=clobber`` is the right mode: there is nothing tracked at
+the destination for the sync to overwrite, and unlike ``merge`` it does not run
+``git stash push -u`` / pop on the worker's tree. That matters because the git
+stash stack is shared by every worktree of the repo: two dispatches syncing at
+once (a lead and one of its workers, or two siblings) would pop each other's
+entries and corrupt both trees.
 
 Why ``mngr message`` *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
@@ -262,7 +292,22 @@ def _set_frontmatter_field(text: str, key: str, value: str) -> str:
     return "\n".join(lines)
 
 
-def _ensure_lead_agent(task_file: Path) -> int | None:
+class _LeadResolution(NamedTuple):
+    """The outcome of resolving (and stamping) the lead in a task file.
+
+    Exactly one of the two fields carries the answer: ``exit_code`` is set when
+    the lead could not be resolved at all (launch must abort with it), and
+    ``lead_name`` is set when it could. Both are ``None`` in the one benign
+    case where there is nothing to stamp and nothing to fail on -- a task file
+    with no frontmatter block at all, which launch tolerates (schema validation
+    is the worker's job) and which simply yields no lead label.
+    """
+
+    lead_name: str | None
+    exit_code: int | None
+
+
+def _ensure_lead_agent(task_file: Path) -> _LeadResolution:
     """Stamp the launching agent as the report recipient in the task file.
 
     The agent running ``launch`` *is* the lead that polls for the worker's
@@ -280,8 +325,10 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     ``$...``) in that case is fatal (exit 2) rather than launching an
     unaddressable worker.
 
-    Returns exit code ``2`` on unrecoverable misconfiguration; otherwise
-    ``None``.
+    Returns the resolved lead's name, which launch also attaches to the worker
+    as a ``lead_agent`` label -- the launcher resolves it once and both uses
+    read the same answer. On unrecoverable misconfiguration the returned
+    ``exit_code`` is ``2`` instead.
     """
     text = task_file.read_text(encoding="utf-8")
     # Invalid frontmatter YAML has already raised in launch's preflight
@@ -289,31 +336,29 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     # is allowed to propagate.
     frontmatter, _body = _split_frontmatter(text)
     if frontmatter is None:
-        return None
+        return _LeadResolution(lead_name=None, exit_code=None)
     current = frontmatter.get("lead_agent")
     lead_name = os.environ.get("MNGR_AGENT_NAME")
     if lead_name:
-        if current == lead_name:
-            return None
-        task_file.write_text(
-            _set_frontmatter_field(text, "lead_agent", lead_name), encoding="utf-8"
-        )
-        print(
-            f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
-            file=sys.stderr,
-        )
-        return None
+        if current != lead_name:
+            task_file.write_text(
+                _set_frontmatter_field(text, "lead_agent", lead_name), encoding="utf-8"
+            )
+            print(
+                f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
+                file=sys.stderr,
+            )
+        return _LeadResolution(lead_name=lead_name, exit_code=None)
     # No launcher identity in the environment: fall back to the file's own value.
-    resolved = isinstance(current, str) and current.strip() and "$" not in current
-    if resolved:
-        return None
+    if isinstance(current, str) and current.strip() and "$" not in current:
+        return _LeadResolution(lead_name=current, exit_code=None)
     print(
         "create_worker: lead_agent is unresolved "
         f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have no "
         "address to send its report to.",
         file=sys.stderr,
     )
-    return 2
+    return _LeadResolution(lead_name=None, exit_code=2)
 
 
 class Runner:
@@ -364,8 +409,16 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
     ``mngr rsync`` takes ``SOURCE DESTINATION``: the local ``source_dir`` first,
     then the ``<name>:<path>`` agent endpoint. The directory form (trailing
     slash on both sides) makes rsync copy the directory *contents* into the
-    destination rather than nesting it, and ``--uncommitted-changes=merge``
-    keeps the worker's post-create uncommitted state from refusing the sync.
+    destination rather than nesting it, and ``--uncommitted-changes=clobber``
+    keeps uncommitted state on either side from refusing the sync.
+
+    ``clobber`` rather than ``merge``: every directory synced this way is a
+    runtime dir under gitignored ``data/``, so there is nothing tracked at the
+    destination that overwriting could lose. ``merge`` would instead wrap the
+    sync in ``git stash push -u`` and a pop -- and the git stash stack is shared
+    by every worktree of the repo, so two dispatches syncing at the same time (a
+    lead and one of its own workers, or two siblings) can pop each other's
+    entries and leave both trees wrong.
 
     Two path details are load-bearing (see lead-proxy.md § "mngr rsync
     rationale"):
@@ -387,10 +440,64 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
             "rsync",
             local_source,
             f"{name}:{rel}",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         check=True,
     )
+
+
+def _repo_relative_task_path(task_file: Path, runner: Runner) -> str:
+    """``task_file``'s path relative to the repo root, as a POSIX string.
+
+    The repo root comes from ``git rev-parse --show-toplevel`` (through the same
+    ``runner`` the cleanliness probe uses), not from this script's own location:
+    launch may be invoked from any subdirectory of the repo, and the worker
+    resolves the stamped path against *its* worktree root, so anything
+    cwd-relative would break the moment a lead launches from somewhere other
+    than the root.
+
+    Falls back to the path exactly as given (POSIX-normalized) when git cannot
+    answer -- not a repo, git unavailable, or the task file living outside the
+    repo. There is nothing to relativize against in those cases, and a launch
+    outside a repo has bigger problems that ``mngr create`` will surface in its
+    own terms.
+    """
+    result = runner.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    toplevel = (getattr(result, "stdout", "") or "").strip()
+    if getattr(result, "returncode", 0) != 0 or not toplevel:
+        return task_file.as_posix()
+    try:
+        relative = task_file.resolve().relative_to(Path(toplevel).resolve())
+    except ValueError:
+        return task_file.as_posix()
+    return relative.as_posix()
+
+
+def _ensure_task_file_path(task_file: Path, runner: Runner) -> None:
+    """Stamp the task file's own repo-relative path into its frontmatter.
+
+    The worker receives the task file as the body of its first message, so
+    without this it would have to guess where the copy on disk landed. With it,
+    the worker reads its exact path straight out of the message it was handed
+    -- which is what lets two levels of dispatch (or two siblings) use the same
+    directory names without either one resolving the other's task file.
+
+    A file with no frontmatter block is left untouched, matching
+    ``_set_frontmatter_field``: launch tolerates a body-only task file and
+    leaves schema validation to the worker's parser.
+    """
+    text = task_file.read_text(encoding="utf-8")
+    stamped = _set_frontmatter_field(
+        text, "task_file", _repo_relative_task_path(task_file, runner)
+    )
+    if stamped == text:
+        return
+    task_file.write_text(stamped, encoding="utf-8")
 
 
 def _worktree_is_clean(runner: Runner) -> bool:
@@ -512,27 +619,34 @@ def launch(
     # Stamp the lead agent (this launcher) into the task file before creating
     # the worker, so the report has a valid return address and an unaddressable
     # case fails fast rather than after provisioning.
-    lead_rc = _ensure_lead_agent(task_file)
-    if lead_rc is not None:
-        return lead_rc
+    lead = _ensure_lead_agent(task_file)
+    if lead.exit_code is not None:
+        return lead.exit_code
+    # Stamp the task file's own path too, so the worker reads where its task
+    # file is instead of searching for it.
+    _ensure_task_file_path(task_file, runner)
 
+    create_argv = [
+        "mngr",
+        "create",
+        name,
+        "-t",
+        template,
+        # Marks this as an agent-created (worker) agent so the OOM
+        # agent-tagging hook puts it in the worker-agent band -- shed
+        # before user-created agents (but after every agent's
+        # subprocesses) under memory pressure.
+        "--label",
+        "agent_created=true",
+    ]
+    if lead.lead_name is not None:
+        # The same lead the task file now names, as a label on the agent
+        # itself: it makes the lead/worker edge visible in ``mngr list``, so a
+        # lead can see its own workers (and, at any depth, whether one of them
+        # is waiting on children of its own) without opening a task file.
+        create_argv += ["--label", f"lead_agent={lead.lead_name}"]
     try:
-        runner.run(
-            [
-                "mngr",
-                "create",
-                name,
-                "-t",
-                template,
-                # Marks this as an agent-created (worker) agent so the OOM
-                # agent-tagging hook puts it in the worker-agent band -- shed
-                # before user-created agents (but after every agent's
-                # subprocesses) under memory pressure.
-                "--label",
-                "agent_created=true",
-            ],
-            check=True,
-        )
+        runner.run(create_argv, check=True)
     except subprocess.CalledProcessError as exc:
         # mngr's own refusals (a duplicate name the listing could not reveal,
         # a dirty tree) are printed by mngr itself; the launch reports the

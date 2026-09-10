@@ -152,7 +152,7 @@ When syncing reports (or the initial runtime dir to the worker):
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
-    --uncommitted-changes=merge
+    --uncommitted-changes=clobber
 ```
 
 - `mngr rsync` takes `SOURCE DESTINATION` (positional): the local source dir
@@ -167,9 +167,10 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
   through to rsync verbatim, so the trailing slash is load-bearing: it makes
   rsync copy directory *contents* into the destination instead of nesting the
   dir under it. Syncing a single file fails -- rsync wants a directory.
-- `--uncommitted-changes=merge` is required. The worker's worktree has
-  uncommitted changes immediately after creation (the installed worker
-  sub-skills under `.agents/skills/`), so the default `fail` mode would refuse
-  the sync.
+- `--uncommitted-changes=clobber` is required. Both endpoints routinely carry
+  uncommitted local state, so the default `fail` mode would refuse the sync.
+  `clobber` is safe here because every destination sits under gitignored
+  `data/`: nothing tracked is overwritten, and nothing is pushed onto the git
+  stash that every worktree of the repo shares.
 - There is no `mngr file put` subcommand -- `mngr rsync` is the correct
   mechanism.

@@ -90,8 +90,13 @@ def _write_task(task: Path, source_artifacts_dir: str | None) -> None:
     task.write_text(f"---\n{fm}---\n\nbody\n")
 
 
-def test_happy_path_no_artifacts(tmp_path: Path) -> None:
+def test_happy_path_no_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runtime, task, _ = _make_layout(tmp_path)
+    # Outside an mngr agent the file's own `lead_agent: lead` is the resolved
+    # lead, and that is what the label must carry.
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -106,6 +111,7 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
             "create",
@@ -114,13 +120,15 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
         ],
         [
             "mngr",
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         ["mngr", "message", "demo-worker", "--message-file", str(task)],
     ]
@@ -148,19 +156,21 @@ def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         [
             "mngr",
             "rsync",
             f"{artifacts}/",
             f"demo-worker:{artifacts}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
 
-def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
+def test_emitted_mngr_argv_accepted_by_live_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Every ``mngr ...`` argv launch actually emits must be accepted by the
     live mngr CLI surface.
 
@@ -172,6 +182,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     """
     runtime, task, artifacts = _make_layout(tmp_path)
     _write_task(task, str(artifacts))
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -191,6 +202,12 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     # expectation this test exists to replace) -- assert_mngr_argv_valid is what
     # confronts each argv with the live CLI.
     assert len(mngr_calls) == 4
+    # Vacuity guard for the two argv details this launch newly depends on: the
+    # lead label and the clobber sync mode have to be *in* what we validate,
+    # or the loop below would prove nothing about either.
+    flat = [word for argv in mngr_calls for word in argv]
+    assert "lead_agent=real-lead" in flat
+    assert "--uncommitted-changes=clobber" in flat
     for argv in mngr_calls:
         assert_mngr_argv_valid(argv)
 
@@ -229,7 +246,7 @@ def test_relative_runtime_dir_is_prefixed_for_local_source(
             "rsync",
             f"./{rel_runtime}/",
             f"demo-worker:{rel_runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
@@ -328,6 +345,7 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
     assert rc == 0
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
         ["mngr", "message"],
@@ -433,7 +451,7 @@ def test_malformed_frontmatter_does_not_abort_launch(tmp_path: Path) -> None:
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
@@ -468,6 +486,8 @@ def test_lead_agent_stamped_from_env_over_literal(
         "worker",
         "--label",
         "agent_created=true",
+        "--label",
+        "lead_agent=real-lead",
     ] in [c.argv for c in runner.calls]
 
 
@@ -563,6 +583,216 @@ def test_resolved_lead_agent_used_as_fallback_without_env(
     assert "lead_agent: lead" in task.read_text()
 
 
+# --- task_file stamping -----------------------------------------------------
+
+
+def _toplevel_result(path: Path) -> _StubResult:
+    """What ``git rev-parse --show-toplevel`` prints for a repo at ``path``."""
+    return _StubResult(stdout=f"{path}\n")
+
+
+def test_repo_relative_task_path_resolves_against_the_real_git_toplevel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Against a real git repo and the real ``Runner``: the stamped path is
+    relative to the repo root even when launch runs from a subdirectory.
+
+    A lead may launch from anywhere in its checkout, and the worker resolves the
+    stamped path against *its own* worktree root -- so anything cwd-relative
+    would point at nothing on the other side.
+    """
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    task = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "task.md"
+    task.parent.mkdir(parents=True)
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    monkeypatch.chdir(tmp_path / "data" / ".tasks")
+
+    relative = create_worker_mod._repo_relative_task_path(
+        Path("launch-task/demo/task.md"), create_worker_mod.Runner()
+    )
+
+    assert relative == "data/.tasks/launch-task/demo/task.md"
+
+
+def test_repo_relative_task_path_falls_back_for_a_file_outside_the_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task file that is not under the repo root has no repo-relative form, so
+    the path is stamped as given rather than mangled into a wrong one."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    outside = tmp_path / "elsewhere" / "task.md"
+    outside.parent.mkdir()
+    outside.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    monkeypatch.chdir(repo)
+
+    relative = create_worker_mod._repo_relative_task_path(
+        outside, create_worker_mod.Runner()
+    )
+
+    assert relative == outside.as_posix()
+
+
+def test_launch_stamps_the_task_file_path_relative_to_the_repo_root(
+    tmp_path: Path,
+) -> None:
+    """launch writes the task file's own repo-relative path into its
+    frontmatter, so the worker reads where its task file is instead of
+    searching for it."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert "task_file: data/.tasks/launch-task/demo/task.md" in task.read_text(), (
+        task.read_text()
+    )
+    # The stamp lands before the worker is created, so the file the worker is
+    # messaged already names itself.
+    stamp_position = next(
+        i for i, c in enumerate(runner.calls) if c.argv[:2] == ["git", "rev-parse"]
+    )
+    create_position = next(
+        i for i, c in enumerate(runner.calls) if c.argv[:2] == ["mngr", "create"]
+    )
+    assert stamp_position < create_position
+
+
+def test_launch_from_a_subdirectory_stamps_the_same_repo_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamped path does not depend on where the lead ran launch from: a
+    relative --task-file resolved from a subdirectory yields the same
+    repo-relative path as an absolute one from the root."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.chdir(runtime.parent)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=Path("demo"),
+        task_file=Path("demo/task.md"),
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert "task_file: data/.tasks/launch-task/demo/task.md" in task.read_text()
+
+
+def test_launch_leaves_a_task_file_without_frontmatter_unstamped(
+    tmp_path: Path,
+) -> None:
+    """No frontmatter block means nowhere to stamp: the file is passed through
+    byte for byte (schema validation is the worker's job, not launch's)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    body = "no frontmatter here, just a body\n"
+    task.write_text(body)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert task.read_text() == body
+
+
+def test_launch_stamps_the_path_as_given_when_git_cannot_answer(
+    tmp_path: Path,
+) -> None:
+    """Outside a git repo (or with git unavailable) there is no root to
+    relativize against, so the path is stamped exactly as the caller gave it
+    rather than launch guessing."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("git", "rev-parse"),
+        _StubResult(returncode=128, stderr="fatal: not a git repository"),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert f"task_file: {task.as_posix()}" in task.read_text()
+
+
+# --- the lead_agent label ---------------------------------------------------
+
+
+def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label names the agent that will actually poll for the report: when
+    the launcher can name itself, its identity beats whatever the task file
+    said -- the same precedence the stamped `lead_agent` follows, resolved once
+    and used for both."""
+    runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
+    monkeypatch.setenv("MNGR_AGENT_NAME", "outer-worker")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="inner-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
+    assert create_argv[-2:] == ["--label", "lead_agent=outer-worker"]
+    assert "lead_agent=lead" not in create_argv
+    # The label and the stamp agree, so a worker's own record and its task file
+    # never name different leads.
+    assert "lead_agent: outer-worker" in task.read_text()
+
+
+def test_no_lead_label_when_the_task_file_has_no_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no frontmatter there is no lead to resolve and nothing was stamped,
+    so the create carries no lead label rather than an invented one."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("no frontmatter here, just a body\n")
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
+    assert not any(arg.startswith("lead_agent=") for arg in create_argv)
+    assert "--label" in create_argv  # the agent_created label still rides along
+
+
 def test_set_frontmatter_field_replaces_inserts_and_ignores_bodyless() -> None:
     replaced = create_worker_mod._set_frontmatter_field(
         "---\nlead_agent: old\nx: 1\n---\nbody\n", "lead_agent", "new"
@@ -631,7 +861,11 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
     )
     assert rc == 2
     # Nothing past the create runs: no sync, no task message.
-    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "create"]]
+    assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "status"],
+        ["git", "rev-parse"],
+        ["mngr", "create"],
+    ]
 
 
 def _launch_argv(runtime: Path, task: Path) -> list[str]:
@@ -673,10 +907,13 @@ def _make_state_dir_with_converter(tmp_path: Path) -> Path:
     return state_dir
 
 
-def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
+def test_common_transcript_flushed_before_message_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When state_dir has the converter, launch flushes it right before the message."""
     runtime, task, _ = _make_layout(tmp_path)
     state_dir = _make_state_dir_with_converter(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -693,6 +930,7 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
             "create",
@@ -701,13 +939,15 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
         ],
         [
             "mngr",
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         [expected_script, "--single-pass"],
         ["mngr", "message", "demo-worker", "--message-file", str(task)],
@@ -1270,7 +1510,7 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
 
 
 def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Regression: launch_sync calls launch(), whose stale-report guard refuses to
     # launch when anything sits at finish_report_path. destroy() removes the
@@ -1280,6 +1520,7 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     # repeatedly with the same task file -- hence the same report path -- must not
     # be blocked by its own previous report. So launch_sync moves the collected
     # report aside into consumed/ (archived, not deleted) once it is collected.
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
@@ -1325,6 +1566,8 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
         ]
     ]
     # The second run's report is archived under a disambiguated name -- the first

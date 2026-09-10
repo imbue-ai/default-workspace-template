@@ -40,10 +40,11 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
 Only fall back to this path when the default doesn't apply: `mngr start` itself fails to bring the agent back, the worker is wedged in a way that another claude session can't unstick, or the agent has already been destroyed and you're recovering from its leftover worktree. In normal "claude crashed once" cases, restart instead.
 
-1. Locate the worktree at `/home/user/worktrees/<worker>-<hash>/` and inspect what's there:
+1. Locate the worktree and inspect what's there. Do not assume a path: `mngr list --format jsonl` reports each agent's `work_dir`, and the record for `<worker>` is correct at any nesting level (a sub-worker's worktree hangs off its own lead's, not off the main checkout).
 
    ```bash
-   cd /home/user/worktrees/<worker>-<hash>/
+   mngr list --format jsonl        # read work_dir from the record for <worker>
+   cd <work_dir>
    git status
    git diff
    ```

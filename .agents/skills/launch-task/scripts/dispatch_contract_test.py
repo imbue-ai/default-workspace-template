@@ -11,12 +11,18 @@ names. Each hand has its own unit tests; nothing else checks that they agree.
 These tests take the prose literally -- they execute the real fenced ``bash``
 blocks that write task files and parse the real ``create_worker.py`` argvs the
 prose contains -- so a drift in any hand (a renamed flag, a moved runtime dir,
-a task file the worker's glob no longer finds) fails here instead of in a live
-worker.
+a task file the worker cannot parse at the path it was handed) fails here
+instead of in a live worker.
 
-The dispatching skills are discovered, not listed: any markdown under
-``.agents/skills`` or ``.agents/shared`` whose fenced code both writes a
-``task.md`` by heredoc and invokes ``create_worker.py launch``.
+The dispatching skills are discovered, not listed: any ``SKILL.md`` under
+``.agents/skills`` whose fenced code both writes a ``task.md`` by heredoc and
+invokes ``create_worker.py launch``. Only skills dispatch -- a reference under
+``references/`` documents the moves, and the shared material under
+``.agents/shared`` is read by workers -- so a task-file block found anywhere
+else is prose about dispatch, not a dispatcher. Every ``create_worker.py``
+invocation in *all* of that prose is still checked against the real parser
+below; it is only the run-the-block-and-launch pair that needs a real
+dispatcher.
 """
 
 from __future__ import annotations
@@ -37,8 +43,8 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 # is four directories up.
 _REPO_ROOT = _SCRIPTS_DIR.parents[3]
 _SHARED_SCRIPTS_DIR = _REPO_ROOT / ".agents" / "shared" / "scripts"
-_PROSE_ROOTS = (_REPO_ROOT / ".agents" / "skills", _REPO_ROOT / ".agents" / "shared")
-_HARDEN_WORKER_SKILL = _REPO_ROOT / ".agents" / "shared" / "worker" / "SKILL.md"
+_SKILLS_ROOT = _REPO_ROOT / ".agents" / "skills"
+_PROSE_ROOTS = (_SKILLS_ROOT, _REPO_ROOT / ".agents" / "shared")
 
 
 def _load_script_module(path: Path) -> Any:
@@ -57,10 +63,6 @@ parse_task_frontmatter = _load_script_module(
 # A fenced block opened by three or more backticks and closed by the same
 # number, so a block that nests a ``` fence (opened with ````) is taken whole.
 _FENCED_CODE = re.compile(r"^(`{3,})[^\n]*\n(.*?)^\1[ \t]*$", re.DOTALL | re.MULTILINE)
-# The worker-side glob a task body hands its worker, per worker-reporting.md.
-_TASK_FILE_GLOB_SUBSTITUTION = re.compile(r"`<TASK_FILE_GLOB>`\s*->\s*`([^`]+)`")
-# The glob the installed harden-worker skill parses its task file from.
-_PARSE_INVOCATION_GLOB = re.compile(r"parse_task_frontmatter\.py\s+'([^']+)'")
 
 # Placeholder values for the slots the prose leaves to the agent. Shell
 # variables are supplied through the environment the block runs in; the
@@ -93,12 +95,21 @@ class _CleanResult:
 
 @dataclass
 class _RecordingRunner(create_worker.Runner):
-    """Records every command launch would run instead of spawning ``mngr``."""
+    """Records every command launch would run instead of spawning ``mngr``.
 
+    The two real git probes launch makes before it creates anything are
+    answered here: ``git status --porcelain`` reads as a clean tree, and ``git
+    rev-parse --show-toplevel`` names ``repo_root`` -- the temporary directory
+    each test runs the prose in, standing in for the lead's checkout.
+    """
+
+    repo_root: Path
     calls: list[_RecordedCall] = field(default_factory=list)
 
     def run(self, argv: Sequence[str], **kwargs):
         self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
+        if list(argv)[:2] == ["git", "rev-parse"]:
+            return _CleanResult(stdout=f"{self.repo_root}\n")
         return _CleanResult()
 
 
@@ -107,7 +118,20 @@ def _fenced_blocks(text: str) -> list[str]:
 
 
 def _prose_files() -> list[Path]:
+    """Every markdown file that may contain a ``create_worker.py`` invocation."""
     return sorted(p for root in _PROSE_ROOTS for p in root.rglob("*.md"))
+
+
+def _dispatcher_candidates() -> list[Path]:
+    """The files a dispatcher can be found in: skill entry points.
+
+    A skill's own ``SKILL.md`` is the only place a dispatch is actually
+    performed. Its ``references/`` describe the moves and the shared worker
+    material under ``.agents/shared`` is read from the far side of the
+    dispatch, so scanning either would find prose *about* task files and try to
+    run it as a dispatcher.
+    """
+    return sorted(_SKILLS_ROOT.glob("*/SKILL.md"))
 
 
 def _launcher_invocations(block: str) -> list[list[str]]:
@@ -151,7 +175,7 @@ class _Dispatcher:
 
 def _dispatchers() -> list[_Dispatcher]:
     found: list[_Dispatcher] = []
-    for prose in _prose_files():
+    for prose in _dispatcher_candidates():
         blocks = _fenced_blocks(prose.read_text(encoding="utf-8"))
         task_blocks = [b for b in blocks if "task.md" in b and "<<" in b]
         launches = [
@@ -261,38 +285,27 @@ def _run_task_block(dispatcher: _Dispatcher, cwd: Path) -> Path:
     return task_file
 
 
-def _worker_glob_for(task_text: str, frontmatter: dict[str, str]) -> str:
-    """The glob the worker will parse this task file from.
-
-    A task body may hand its worker the glob directly (the
-    ``<TASK_FILE_GLOB>`` substitution from worker-reporting.md); otherwise a
-    harden flow (frontmatter ``operation``) relies on the glob baked into the
-    installed harden-worker skill.
-    """
-    handed = _TASK_FILE_GLOB_SUBSTITUTION.search(task_text)
-    if handed is not None:
-        return handed.group(1)
-    assert "operation" in frontmatter, (
-        "task body names no `<TASK_FILE_GLOB>` and is not a harden flow -- the "
-        "worker has no way to know where its task file is"
-    )
-    baked = _PARSE_INVOCATION_GLOB.search(_HARDEN_WORKER_SKILL.read_text())
-    assert baked is not None, f"{_HARDEN_WORKER_SKILL}: no parse invocation"
-    return baked.group(1)
-
-
 @pytest.mark.parametrize("dispatcher", _DISPATCHERS, ids=[d.name for d in _DISPATCHERS])
-def test_task_block_writes_a_file_the_worker_parses_and_finds(
+def test_task_block_writes_a_file_the_worker_parses_at_the_path_launch_names(
     dispatcher: _Dispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The skill's own task-file block, run verbatim, yields a task file that
-    the worker-side parser accepts, whose report path sits inside the runtime
-    dir the launch syncs, and that the worker's glob resolves to."""
-    monkeypatch.chdir(tmp_path)
-    task_file = _run_task_block(dispatcher, tmp_path)
-    runtime_dir = Path(dispatcher.launch_option("--runtime-dir"))
+    the worker-side parser accepts *at the exact path the launch passes*, and
+    whose report path sits inside the runtime dir the launch syncs.
 
-    frontmatter = parse_task_frontmatter.parse(task_file)
+    The exact path is the whole contract on the worker's side: it is handed
+    that path in its task message and parses it directly, so a block that
+    writes its file anywhere other than where the launch points is a dispatch
+    that cannot be read on arrival.
+    """
+    monkeypatch.chdir(tmp_path)
+    _run_task_block(dispatcher, tmp_path)
+    runtime_dir = Path(dispatcher.launch_option("--runtime-dir"))
+    # Exactly the string the launch passes as --task-file, parsed as-is: no
+    # resolving, no globbing, no absolute path built by the test.
+    named_path = Path(dispatcher.launch_option("--task-file"))
+
+    frontmatter = parse_task_frontmatter.parse(named_path)
 
     report_path = Path(frontmatter["finish_report_path"])
     # The runtime dir is what launch rsyncs into the worker, and the worker
@@ -303,13 +316,9 @@ def test_task_block_writes_a_file_the_worker_parses_and_finds(
     )
     assert report_path.name == "report.md"
     if dispatcher.name in {"crystallize-creation", "update-creation", "heal-creation"}:
-        # The harden-worker skill dispatches on these two fields.
+        # The generic worker dispatches on these two fields.
         assert frontmatter["operation"] == dispatcher.name.removesuffix("-creation")
         assert frontmatter["type"]
-    resolved = parse_task_frontmatter.resolve(
-        _worker_glob_for(task_file.read_text(), frontmatter)
-    )
-    assert resolved.resolve() == task_file.resolve()
 
 
 @pytest.mark.parametrize("dispatcher", _DISPATCHERS, ids=[d.name for d in _DISPATCHERS])
@@ -319,11 +328,12 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     """Running the launch the prose specifies, on the task file the prose
     writes: the lead's poll target is the worker's report path, the runtime
     dir holding it is what gets synced, the task file is what gets messaged,
-    and the launcher stamps the lead's address so the worker's parse sees it."""
+    and the launcher stamps (and labels) the lead's address and stamps the task
+    file's own path, so the worker's parse sees both."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MNGR_AGENT_NAME", _LEAD_NAME)
     task_file = _run_task_block(dispatcher, tmp_path)
-    runner = _RecordingRunner()
+    runner = _RecordingRunner(repo_root=tmp_path)
     launch_argv = [_substitute(word) for word in dispatcher.launch_argv]
 
     rc = create_worker.main(launch_argv, runner=runner)
@@ -339,7 +349,7 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
         "rsync",
         f"./{runtime_dir}",
         f"{worker_name}:{runtime_dir}",
-        "--uncommitted-changes=merge",
+        "--uncommitted-changes=clobber",
     ] in argvs
     assert argvs[-1] == [
         "mngr",
@@ -354,4 +364,11 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     assert create_worker._read_finish_report_path(task_file) == Path(
         frontmatter["finish_report_path"]
     )
+    # Both stamps the worker depends on landed, and both name what the launch
+    # itself used: the lead that will poll for the report, and the very path
+    # the task file was messaged from (repo-relative -- tmp_path stands in for
+    # the lead's checkout root).
     assert frontmatter["lead_agent"] == _LEAD_NAME
+    assert frontmatter["task_file"] == dispatcher.launch_option("--task-file")
+    create_argv = next(argv for argv in argvs if argv[:2] == ["mngr", "create"])
+    assert create_argv[-2:] == ["--label", f"lead_agent={_LEAD_NAME}"]
