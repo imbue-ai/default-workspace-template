@@ -5,11 +5,11 @@
  * A layout is the serialized dockview grid, and nothing beside it: what each panel shows lives in
  * the ``params`` dockview keeps on the panel (``PanelParams`` below), so there is no second copy
  * of a tab's identity to fall out of step with the grid. The client's layout file on the shell
- * is the truth of the arrangement: this window writes it for
- * the user's own gestures, the shell writes it for agent ops, and every write is announced as
- * ``layout_updated`` so the client's other windows refetch. Each save carries a save id this
- * window minted (so it can skip the echo of its own writes) and the stamp of the arrangement it
- * was based on (so a save over a newer arrangement is refused rather than clobbering it).
+ * is the truth of the arrangement: this window writes it for the user's own gestures, the shell
+ * writes it for agent ops, and every write is announced as ``layout_updated`` so the client's
+ * other windows refetch. Each save carries a save id this window minted (so it can skip the echo
+ * of its own writes) and the stamp of the arrangement it was based on (so a save over a newer
+ * arrangement is refused rather than clobbering it).
  */
 
 import type { SerializedDockview } from "dockview-core";
