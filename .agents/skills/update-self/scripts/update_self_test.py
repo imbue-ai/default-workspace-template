@@ -4773,9 +4773,8 @@ def _install_mngr_tool(home: Path) -> tuple[Path, Path]:
 def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
     apply_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A pre-0.4.3 apply left a second install under $HOME, first on every login
-    # shell's PATH and never refreshed again. Removing it is not gated on the
-    # merge's manifests: the box is already broken, whatever this release changes.
+    # Not gated on the merge's manifests: the box is already broken, whatever
+    # this release changes.
     refreshed_shim, refreshed_tools = _install_mngr_tool(tmp_path / "root")
     stale_shim, stale_tools = _install_mngr_tool(tmp_path / "home")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
