@@ -373,6 +373,11 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
         # only an ephemeral log line -- otherwise a non-zero helper result.json is
         # invisible in the durable events stream.
         logger.error("Snapshot step failed: {}", e)
+        # A tick that never reaches restic is still a tick that took no backup,
+        # so it counts toward the escalation the same way a failed restic run
+        # does -- otherwise a workspace whose every snapshot fails backs up
+        # never and alarms never.
+        state.consecutive_backup_failures += 1
         write_event(
             state.events_dir,
             make_event(
@@ -380,8 +385,10 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
                 tick_id=state.current_tick_id,
                 method=state.capabilities.method.value,
                 error_message=str(e),
+                consecutive_failures=state.consecutive_backup_failures,
             ),
         )
+        _maybe_emit_repeated_failure_alarm(state)
         return None
     write_event(
         state.events_dir,

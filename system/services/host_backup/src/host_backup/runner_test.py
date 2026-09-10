@@ -182,6 +182,38 @@ def test_take_snapshot_emits_snapshot_failed_event_on_failure(tmp_path: Path) ->
     assert failed_events[0]["tick_id"] == "tick-under-test"
     assert failed_events[0]["method"] == "OUTER_TRIGGER"
     assert failed_events[0]["error_message"]
+    # A tick that took no backup, counted as one -- but not yet loud.
+    assert failed_events[0]["consecutive_failures"] == 1
+    assert state.consecutive_backup_failures == 1
+    assert not [
+        event for event in events if event["type"] == "BACKUP_REPEATEDLY_FAILING"
+    ]
+
+
+def test_take_snapshot_emits_the_alarm_after_the_threshold(tmp_path: Path) -> None:
+    """Ticks that keep dying at the snapshot step escalate, the same as ticks that die at restic.
+
+    A workspace whose snapshots the backup cannot read fails here every time,
+    so if this step sat outside the escalation it would back up never and alarm
+    never.
+    """
+    events_dir = tmp_path / "events"
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.OUTER_TRIGGER))
+    state.events_dir = events_dir
+    state.current_tick_id = "tick-under-test"
+    state.consecutive_backup_failures = CONSECUTIVE_FAILURE_ALARM_THRESHOLD - 1
+
+    assert _take_snapshot(state=state) is None
+
+    assert state.consecutive_backup_failures == CONSECUTIVE_FAILURE_ALARM_THRESHOLD
+    alarms = [
+        event
+        for event in _read_events(events_dir)
+        if event["type"] == "BACKUP_REPEATEDLY_FAILING"
+    ]
+    assert len(alarms) == 1
+    assert alarms[0]["consecutive_failures"] == CONSECUTIVE_FAILURE_ALARM_THRESHOLD
+    assert alarms[0]["threshold"] == CONSECUTIVE_FAILURE_ALARM_THRESHOLD
 
 
 def _read_events(events_dir: Path) -> list[dict[str, object]]:
