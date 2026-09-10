@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -57,6 +58,8 @@ def test_the_shape_comes_from_the_method_not_the_harness() -> None:
     assert flow_shape(get_method("openai", "device")) is FlowShape.CODE_THEN_WAIT
     assert flow_shape(get_method("opencode-go", "api_key")) is FlowShape.PASTE
     assert flow_shape(get_method("anthropic", "api_key")) is FlowShape.PASTE
+    # The same lane as the device flow above, with the other shape.
+    assert flow_shape(get_method("openai", "api_key")) is FlowShape.PASTE
 
 
 def test_a_paste_flow_writes_pi_auth_json_and_commits(service: AuthFlowService, tmp_path: Path) -> None:
@@ -109,6 +112,29 @@ def test_a_claude_key_lands_in_the_account_settings_env(service: AuthFlowService
     (account,) = read_index(tmp_path).accounts
     settings = json.loads((tmp_path / ".minds" / "accounts" / account.id / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_API_KEY"] == "sk-ant-xyz"
+
+
+def test_a_codex_key_lands_in_the_account_auth_json(service: AuthFlowService, tmp_path: Path) -> None:
+    """The file codex reads its credential from, written directly in its API-key shape rather than
+    the token shape a device login leaves there -- which is what makes an OpenAI account mintable
+    without a person at a browser."""
+    started = service.start("openai", "api_key")
+    assert started.shape is FlowShape.PASTE
+
+    status = service.submit_key(started.flow_id, "sk-openai-123")
+
+    assert status.state is FlowState.OK
+    (account,) = read_index(tmp_path).accounts
+    assert account.display == "OpenAI"
+    assert harness_for(account) is HarnessType.CODEX
+    account_path = tmp_path / ".minds" / "accounts" / account.id
+    path = account_path / "auth.json"
+    assert json.loads(path.read_text()) == {"auth_mode": "apikey", "OPENAI_API_KEY": "sk-openai-123"}
+    # codex writes its own auth.json 0600, and this file holds the same secret.
+    assert path.stat().st_mode & 0o077 == 0
+    # A device login writes its own credential wherever codex keeps one; a paste writes this file
+    # and nothing else, so the store pin beside it is what decides whether codex reads it at all.
+    assert 'cli_auth_credentials_store = "file"' in (account_path / "config.toml").read_text()
 
 
 def test_seeding_happens_before_the_credential_is_written(service: AuthFlowService, tmp_path: Path) -> None:
@@ -306,22 +332,34 @@ def test_an_abandoned_re_auth_leaves_the_live_account_alone(service: AuthFlowSer
     assert read_index(tmp_path).accounts == (account,)
 
 
-def test_a_rejected_re_auth_key_puts_the_working_one_back(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("lane_id", "key_provider"),
+    # Both sinks that write an account's auth.json, since the rollback restores whatever the
+    # lane's sink put there and the per-lane part of it is naming that file at all.
+    [("opencode-go", "opencode-go"), ("openai", None)],
+)
+def test_a_rejected_re_auth_key_puts_the_working_one_back(
+    tmp_path: Path, lane_id: str, key_provider: str | None
+) -> None:
     """The probe needs the file in place to answer, so the write comes first -- but the
     folder is a live account, and a rejected key left there breaks every bound agent
     silently, at its next turn, with the row still saying the account is fine."""
     verdicts = [SignedIn.YES, SignedIn.NO]
     service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: verdicts.pop(0))
-    started = service.start("opencode-go", "api_key")
-    service.submit_key(started.flow_id, "good-key", "opencode-go")
+    started = service.start(lane_id, "api_key")
+    service.submit_key(started.flow_id, "good-key", key_provider)
     (account,) = read_index(tmp_path).accounts
     path = tmp_path / ".minds" / "accounts" / account.id / "auth.json"
+    accepted = path.read_text()
+    assert "good-key" in accepted
 
-    again = service.start("opencode-go", "api_key", account_id=account.id)
-    status = service.submit_key(again.flow_id, "bad-key", "opencode-go")
+    again = service.start(lane_id, "api_key", account_id=account.id)
+    status = service.submit_key(again.flow_id, "bad-key", key_provider)
 
     assert status.state is FlowState.FAILED
-    assert json.loads(path.read_text())["opencode-go"]["key"] == "good-key"
+    # Byte for byte what the accepted key wrote: a restore that put the key back but lost the rest
+    # of the file would leave the account just as broken.
+    assert path.read_text() == accepted
     assert read_index(tmp_path).accounts == (account,)
 
 
