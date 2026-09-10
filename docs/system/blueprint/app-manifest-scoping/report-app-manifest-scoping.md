@@ -34,16 +34,16 @@ Two things vary between arms, and the table's `Reference` and `Brief` columns na
 
 The three combinations run: no reference with the old brief (the control, what a workspace had before this branch); reference with the old brief (the manifest alone, no instruction to use it); reference with the scope brief (the branch as designed). The fourth combination, scope brief without a reference, was not run: the brief reads the scope file, and a scope file with no references is the same footprint the old brief's two docs already describe.
 
-| Invocation | Reference | Brief | Files read | In footprint | Outside | Repo-wide greps | Lines returned | Wall s | Cost $ | Found the stale skill |
-|---|---|---|---|---|---|---|---|---|---|---|
-| verify-architecture | no | old | 13 | 10 | 1 | 1 | 692 | 238 | 1.59 | yes |
-| verify-architecture | yes | old | 15 | 10 | 3 | 3 | 971 | 600 | 1.77 | yes |
-| verify-architecture | yes | scope brief | 17 | 13 | 1 | 1 | 730 | 228 | 1.45 | yes |
-| autofix | no | old | 12 | 7 | 3 | 3 | 679 | 372 | 2.17 | yes, 2 fix commits |
-| autofix | yes | old | 12 | 6 | 4 | 3 | 826 | 402 | 2.36 | yes, 4 fix commits |
-| autofix | yes | scope brief | 16 | 10 | 2 | 1 | 1063 | 386 | 2.60 | yes, 3 fix commits |
+| Invocation | Reference | Brief | Files read | In footprint | Outside | Repo-wide greps | Lines returned | Tests run, in footprint | Tests run, outside | Wall s | Cost $ | Found the stale skill |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| verify-architecture | no | old | 13 | 10 | 1 | 1 | 692 | app | none | 238 | 1.59 | yes |
+| verify-architecture | yes | old | 15 | 10 | 3 | 3 | 971 | app (twice), skill | none | 600 | 1.77 | yes |
+| verify-architecture | yes | scope brief | 17 | 13 | 1 | 1 | 730 | none (drove the app's test client instead) | none | 228 | 1.45 | yes |
+| autofix | no | old | 12 | 7 | 3 | 3 | 679 | app (twice), skill | whole root suite (2,300+ tests); `agy_shim` suite in a base-branch worktree | 372 | 2.17 | yes, 2 fix commits |
+| autofix | yes | old | 12 | 6 | 4 | 3 | 826 | app (twice) | `test_app_manifests.py` | 402 | 2.36 | yes, 4 fix commits |
+| autofix | yes | scope brief | 16 | 10 | 2 | 1 | 1063 | app, skill | `test_app_manifests.py` | 386 | 2.60 | yes, 3 fix commits |
 
-"In footprint" counts files under `primary`, `wiring`, `references`, or the three convention docs; "outside" is everything else in the repo except `.reviewer/` and `data/`.
+"In footprint" counts files under `primary`, `wiring`, `references`, or the three convention docs; "outside" is everything else in the repo except `.reviewer/` and `data/`. The two "tests run" columns list every pytest invocation the arm made: "app" is `cd system/apps/toy_notes && uv run pytest` (16 tests), "skill" is `uv run pytest .agents/skills/toy-notes-digest` (2 tests); `test_app_manifests.py` sits outside the footprint but is the repo-wide check of the manifest the branch touches.
 
 What the numbers say:
 
