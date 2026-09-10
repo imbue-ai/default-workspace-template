@@ -1498,9 +1498,7 @@ class AgentManager:
                     )
                     self._agents[agent_info.id] = agent_state
                 self._is_agent_list_known = True
-            self._auto_open.seed_at_startup(
-                {agent_info.id: (agent_info.labels, agent_info.create_time) for agent_info in agents}
-            )
+            self._auto_open.seed_at_startup({agent_info.id: agent_info.labels for agent_info in agents})
 
             for agent_info in agents:
                 self._ensure_activity_tracking(agent_info.id)
@@ -1752,17 +1750,17 @@ class AgentManager:
             self._message_stamps.forget(agent_id)
             self._auto_open.forget(agent_id)
 
-        # The first listing seeds the reactor (a chat found at startup is owed its tab only
-        # while fresh); after that, every agent that appears is a candidate.
+        # The first listing seeds the reactor (what a workspace already had is judged against
+        # the ledger); after that, every agent that appears is a candidate.
         if not was_agent_list_known:
             self._auto_open.seed_at_startup(
-                {agent_id: (dict(agent.labels), agent.create_time) for agent_id, agent in details_by_id.items()}
+                {agent_id: dict(agent.labels) for agent_id, agent in details_by_id.items()}
             )
         else:
             for agent_id in added_agent_ids:
                 added = details_by_id.get(agent_id)
                 if added is not None:
-                    self._auto_open.note_appeared(agent_id, dict(added.labels), added.create_time)
+                    self._auto_open.note_appeared(agent_id, dict(added.labels))
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the

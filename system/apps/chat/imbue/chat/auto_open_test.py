@@ -1,9 +1,6 @@
 """Tests for the reactor that surfaces an app-launched chat's tab: once, to the clients connected when it can."""
 
 import json
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +11,6 @@ from app_instances.testing import free_port
 from flask import Flask
 from flask import jsonify
 
-from imbue.chat.auto_open import AUTO_OPEN_FRESHNESS
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
@@ -22,18 +18,11 @@ from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
 from imbue.chat.testing import RecordingShell
 
-_NOW = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
 _LABELED = {"assist": "true"}
 
 
-def _clock() -> datetime:
-    return _NOW
-
-
 def _reactor(shell: RecordingShell, ledger: AutoOpenLedger | None = None) -> AutoOpenReactor:
-    return AutoOpenReactor(
-        ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell, clock=_clock
-    )
+    return AutoOpenReactor(ledger=ledger if ledger is not None else AutoOpenLedger(path=None), shell=shell)
 
 
 def test_only_the_two_auto_open_labels_ask_for_a_tab() -> None:
@@ -47,7 +36,7 @@ def test_a_labeled_chat_is_opened_once_in_every_connected_client_and_recorded() 
     shell = RecordingShell(client_ids=["c1", "c2"])
     reactor = _reactor(shell)
 
-    reactor.note_appeared("chat-1", _LABELED, _NOW)
+    reactor.note_appeared("chat-1", _LABELED)
     reactor.flush()
     reactor.flush()
 
@@ -60,7 +49,7 @@ def test_an_unlabeled_chat_is_ignored() -> None:
     shell = RecordingShell(client_ids=["c1"])
     reactor = _reactor(shell)
 
-    reactor.note_appeared("chat-1", {"user_created": "true"}, _NOW)
+    reactor.note_appeared("chat-1", {"user_created": "true"})
     reactor.flush()
 
     assert shell.opens == []
@@ -71,7 +60,7 @@ def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
     """The app starts the chat while the user is still on their way in; the open must wait for them."""
     shell = RecordingShell()
     reactor = _reactor(shell)
-    reactor.note_appeared("chat-1", _LABELED, _NOW)
+    reactor.note_appeared("chat-1", _LABELED)
 
     reactor.flush()
     assert shell.opens == []
@@ -87,7 +76,7 @@ def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
 def test_a_refused_open_keeps_the_chat_pending() -> None:
     shell = RecordingShell(client_ids=["c1"], refused_client_ids=["c1"])
     reactor = _reactor(shell)
-    reactor.note_appeared("chat-1", _LABELED, _NOW)
+    reactor.note_appeared("chat-1", _LABELED)
 
     reactor.flush()
 
@@ -99,80 +88,76 @@ def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
     """The update run restarts this app; the tab it already surfaced must not pop again."""
     path = tmp_path / "ledger.json"
     first = _reactor(RecordingShell(client_ids=["c1"]), AutoOpenLedger(path=path))
-    first.note_appeared("chat-1", _LABELED, _NOW)
+    first.note_appeared("chat-1", _LABELED)
     first.flush()
 
     shell = RecordingShell(client_ids=["c1"])
     second = _reactor(shell, AutoOpenLedger(path=path))
-    second.note_appeared("chat-1", _LABELED, _NOW)
+    second.note_appeared("chat-1", _LABELED)
     second.flush()
 
     assert shell.opens == []
 
 
-def test_the_startup_seed_holds_a_fresh_undelivered_chat_and_settles_the_rest() -> None:
-    """A recent labeled chat nobody was shown is still owed its tab after a restart; an old one, or
-    one already delivered, is left as the saved layout has it and never pops later."""
+def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name() -> None:
+    """A labeled chat nobody was shown is still owed its tab after a restart, however long it has
+    waited; one the ledger names is left as the saved layout has it and never pops later."""
     ledger = AutoOpenLedger(path=None)
     ledger.mark_delivered("delivered")
     shell = RecordingShell()
     reactor = _reactor(shell, ledger)
 
     reactor.seed_at_startup(
-        {
-            "fresh": (_LABELED, _NOW - timedelta(hours=1)),
-            "old": (_LABELED, _NOW - AUTO_OPEN_FRESHNESS - timedelta(minutes=1)),
-            "delivered": (_LABELED, _NOW),
-            "plain": ({"user_created": "true"}, _NOW),
-        }
+        {"waiting": _LABELED, "delivered": _LABELED, "plain": {"user_created": "true"}},
     )
 
-    assert reactor.pending_agent_ids() == {"fresh"}
-    assert ledger.is_delivered("old")
+    assert reactor.pending_agent_ids() == {"waiting"}
     assert not ledger.is_delivered("plain")
     shell.client_ids = ["c1"]
     reactor.flush()
-    assert shell.opens == [("fresh", "c1")]
+    assert shell.opens == [("waiting", "c1")]
 
 
-def test_a_held_open_expires_with_the_chats_freshness() -> None:
-    shell = RecordingShell()
-    reactor = _reactor(shell)
-    reactor.note_appeared("chat-1", _LABELED, _NOW - AUTO_OPEN_FRESHNESS - timedelta(seconds=1))
+def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_popping_every_tab(
+    tmp_path: Path,
+) -> None:
+    """The first boot that keeps a ledger meets every chat the app ever labeled here, going back to
+    the workspace's first day, and cannot tell the one owed a tab from the rest -- so it opens none
+    of them, and leaves the ledger the next boot reads for real."""
+    path = tmp_path / "ledger.json"
+    shell = RecordingShell(client_ids=["c1"])
+    reactor = _reactor(shell, AutoOpenLedger(path=path))
 
-    shell.client_ids = ["c1"]
+    reactor.seed_at_startup({"old-1": _LABELED, "old-2": _LABELED, "plain": {"user_created": "true"}})
     reactor.flush()
 
     assert shell.opens == []
-    assert reactor.pending_agent_ids() == set()
-    assert reactor.ledger.is_delivered("chat-1")
+    assert path.exists()
+
+    next_boot = _reactor(shell, AutoOpenLedger(path=path))
+    next_boot.seed_at_startup({"old-1": _LABELED, "old-2": _LABELED, "since": _LABELED})
+    next_boot.flush()
+
+    assert shell.opens == [("since", "c1")]
 
 
-def test_a_chat_with_no_creation_time_is_held_from_when_it_was_seen_rather_than_forever() -> None:
-    """mngr always says when it made an agent, but the reactor's input allows it not to; an open
-    that could never go stale would be retried for the life of the process and pop a tab of any
-    age at whoever eventually connected."""
-    now = _NOW
+def test_a_fresh_workspace_adopting_nothing_still_leaves_a_ledger_behind(tmp_path: Path) -> None:
+    """Without the file the next boot cannot tell "nothing was ever delivered here" from "the record
+    is gone", and would adopt away the very chat this feature exists to surface."""
+    path = tmp_path / "ledger.json"
     shell = RecordingShell()
-    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell, clock=lambda: now)
-    reactor.note_appeared("chat-1", _LABELED, None)
+    reactor = _reactor(shell, AutoOpenLedger(path=path))
 
-    reactor.flush()
-    assert reactor.pending_agent_ids() == {"chat-1"}
+    reactor.seed_at_startup({})
 
-    now = _NOW + AUTO_OPEN_FRESHNESS + timedelta(seconds=1)
-    shell.client_ids = ["c1"]
-    reactor.flush()
-
-    assert shell.opens == []
-    assert reactor.pending_agent_ids() == set()
-    assert reactor.ledger.is_delivered("chat-1")
+    assert path.exists()
+    assert AutoOpenLedger(path=path).is_history_known
 
 
 def test_a_removed_chat_is_forgotten_everywhere() -> None:
     ledger = AutoOpenLedger(path=None)
     reactor = _reactor(RecordingShell(), ledger)
-    reactor.note_appeared("pending", _LABELED, _NOW)
+    reactor.note_appeared("pending", _LABELED)
     ledger.mark_delivered("done")
 
     reactor.forget("pending")
@@ -182,14 +167,17 @@ def test_a_removed_chat_is_forgotten_everywhere() -> None:
     assert not ledger.is_delivered("done")
 
 
-def test_a_ledger_of_the_wrong_shape_starts_empty_with_a_warning(tmp_path: Path, loguru_records: list[str]) -> None:
-    """Starting empty in silence is the one failure that re-pops every delivered tab."""
+def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """Reading it as an empty history rather than a lost one re-pops every tab it named."""
     path = tmp_path / "ledger.json"
     path.write_text(json.dumps(["chat-1"]))
 
     ledger = AutoOpenLedger(path=path)
 
     assert not ledger.is_delivered("chat-1")
+    assert not ledger.is_history_known
     assert any("wrong shape" in record for record in loguru_records)
 
 
