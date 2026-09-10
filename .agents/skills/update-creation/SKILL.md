@@ -86,6 +86,14 @@ worker has a convenience index (the change is also on its branch on disk):
 COMMIT_RANGE="HEAD~1..HEAD"   # widen to cover all commits implementing the change
 git log --format='%H %s' "$COMMIT_RANGE" > data/.tasks/harden/update-$TARGET/commit.log
 git log -p "$COMMIT_RANGE"    > data/.tasks/harden/update-$TARGET/commit.diff
+DIFF_BASE_REF="${COMMIT_RANGE%%..*}"   # the commit before the change
+```
+
+For the **emergent** origin there is no committed change yet, so the diff base
+is your current commit:
+
+```bash
+DIFF_BASE_REF=HEAD
 ```
 
 Write the task file. Frontmatter carries `operation: update`, the `type`,
@@ -103,7 +111,7 @@ cat > data/.tasks/harden/update-$TARGET/task.md << TASK_EOF
 ---
 finish_report_path: data/.tasks/harden/update-$TARGET/reports/report.md
 scope_file: data/.tasks/harden/update-$TARGET/scope.json
-diff_base: $(git rev-parse "${COMMIT_RANGE%%..*}")
+diff_base: $(git rev-parse "$DIFF_BASE_REF")
 operation: update
 type: skill
 ---

@@ -7,7 +7,6 @@ from imbue.imbue_common.primitives import NonEmptyStr
 from pydantic import Field
 
 from app_manifest.errors import AppManifestError
-from app_manifest.manifest import AppManifest
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
@@ -30,6 +29,23 @@ class ReferenceLookupRow(FrozenModel):
     note: ReferenceNote | None = Field(description="The note the manifest wrote on that entry")
 
 
+# Every command reads the same tree, so they take the same option. The footprint commands
+# resolve it to the directory the command was run from when it is absent; validate-manifest
+# leaves it unresolved, because there "no root" is a meaningful third state.
+_repo_root_option = click.option(
+    "--repo-root",
+    "repo_root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="The repo root every path is relative to (default: the current directory, "
+    "except for validate-manifest, which derives it from the manifest's own location).",
+)
+
+
+def _resolved_repo_root(repo_root: Path | None) -> Path:
+    return (repo_root if repo_root is not None else Path.cwd()).resolve()
+
+
 @click.group()
 def app_manifest_cli() -> None:
     """Inspect and validate workspace app manifests."""
@@ -37,10 +53,15 @@ def app_manifest_cli() -> None:
 
 @app_manifest_cli.command("validate-manifest")
 @click.argument("manifest_path", type=click.Path(path_type=Path))
-def validate_manifest(manifest_path: Path) -> None:
-    """Validate an app.toml (and that the icon it names exists); exit non-zero with the reason otherwise."""
+@_repo_root_option
+def validate_manifest(manifest_path: Path, repo_root: Path | None) -> None:
+    """Validate an app.toml (and that the icon it names exists); exit non-zero with the reason otherwise.
+
+    Without --repo-root the reference location checks run against the root a manifest at
+    ``system/apps/<package>/app.toml`` implies, and are skipped for a manifest anywhere else.
+    """
     try:
-        manifest = load_manifest(manifest_path)
+        manifest = load_manifest(manifest_path, repo_root=repo_root)
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
     click.echo(f"ok: {manifest.name} ({manifest.display_name})")
@@ -54,13 +75,7 @@ def validate_manifest(manifest_path: Path) -> None:
     default=None,
     help="Compute a skill footprint for this repo-root-relative path instead of an app's manifest.",
 )
-@click.option(
-    "--repo-root",
-    "repo_root",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="The repo root every path is relative to (default: the current directory).",
-)
+@_repo_root_option
 @click.option(
     "--diff-base",
     "diff_base",
@@ -84,7 +99,7 @@ def footprint(
     """Write the scope file for one creation: its own paths, its wiring, and what it references."""
     if manifest_path is not None and for_path is not None:
         raise click.UsageError("pass either a manifest path or --for-path, not both")
-    resolved_repo_root = (repo_root if repo_root is not None else Path.cwd()).resolve()
+    resolved_repo_root = _resolved_repo_root(repo_root)
     try:
         if manifest_path is not None:
             scope = _app_scope(resolved_repo_root, manifest_path)
@@ -92,14 +107,11 @@ def footprint(
             scope = compute_skill_scope(resolved_repo_root, RepoRelativePath(for_path))
         else:
             raise click.UsageError("pass either a manifest path or --for-path")
-        described_scope = (
-            scope
-            if diff_base is None
-            else with_diff_against_base(scope, resolved_repo_root, diff_base)
-        )
+        if diff_base is not None:
+            scope = with_diff_against_base(scope, resolved_repo_root, diff_base)
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
-    _emit_scope_file(described_scope, out_path)
+    _emit_scope_file(scope, out_path)
 
 
 def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
@@ -125,16 +137,10 @@ def _emit_scope_file(scope: CreationScope, out_path: Path | None) -> None:
     required=True,
     help="The repo-root-relative path to look up; one JSON object per referencing app is printed.",
 )
-@click.option(
-    "--repo-root",
-    "repo_root",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="The repo root every path is relative to (default: the current directory).",
-)
+@_repo_root_option
 def references(for_path: str, repo_root: Path | None) -> None:
     """Print every app whose manifest declares that it owns this path; nothing at all when none does."""
-    resolved_repo_root = (repo_root if repo_root is not None else Path.cwd()).resolve()
+    resolved_repo_root = _resolved_repo_root(repo_root)
     try:
         matches = find_referencing_manifests(resolved_repo_root, RepoRelativePath(for_path))
     except AppManifestError as e:
@@ -145,9 +151,8 @@ def references(for_path: str, repo_root: Path | None) -> None:
 
 
 def _lookup_row(repo_root: Path, match: ManifestReferenceMatch) -> ReferenceLookupRow:
-    manifest: AppManifest = match.manifest
     return ReferenceLookupRow(
-        app=NonEmptyStr(manifest.name),
+        app=NonEmptyStr(match.manifest.name),
         manifest=RepoRelativePath(match.manifest_path.resolve().relative_to(repo_root).as_posix()),
         path=match.reference.path,
         note=match.reference.note,

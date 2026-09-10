@@ -24,12 +24,13 @@ Extract the lead address, the report destination, and the scope file path
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/harden/*/task.md')"
 ```
 
-This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `SCOPE_FILE`, `DIFF_BASE`,
-`OPERATION`, and `TYPE`. Fail loudly if `OPERATION`, `TYPE`, `SCOPE_FILE`, or
-`DIFF_BASE` is unset -- the lead must supply all four. `SCOPE_FILE` is where
-you write the creation's footprint in your first step, and `DIFF_BASE` is the
-commit that footprint's diff is taken from; `harden-creation.md` has the
-command.
+This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and `TYPE`, plus
+`SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint. Fail loudly
+if `OPERATION` or `TYPE` is unset -- the lead must supply both. When `TYPE` is
+`app` or `skill`, also fail loudly if `SCOPE_FILE` or `DIFF_BASE` is unset:
+`SCOPE_FILE` is where you write the creation's footprint, and `DIFF_BASE` is
+the commit that footprint's diff is taken from (`harden-creation.md` has the
+command). A `service` or `system-interface` run carries neither.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.

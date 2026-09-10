@@ -21,9 +21,10 @@ The models behind a workspace app's two descriptions:
   `ScopeRules` (`exclude`), `load_manifest(path, repo_root=None)` (reads,
   validates, checks the icon file exists beside the manifest, and -- against the
   repo root, given or derived from a `system/apps/<package>/app.toml` layout --
-  that every reference exists and sits neither in the app's own directory nor in
-  another app's), `repo_root_for_manifest`, `app_package_directory`, and
-  `manifest_icon_path(manifest_path, manifest)`.
+  that every reference exists, sits neither in the app's own directory nor in
+  another app's, and goes through no symlinked directory, which git never
+  reports a changed file through), `repo_root_for_manifest`,
+  `app_package_directory`, and `manifest_icon_path(manifest_path, manifest)`.
 - `app_manifest.registry`: `RegistryRow` (absent keys read as the contract's
   defaults; unknown keys are ignored so a newer registration script never hides
   an app from an older reader), `read_registry(path)` (a row that fails
@@ -37,18 +38,25 @@ The models behind a workspace app's two descriptions:
   `[program:*]` blocks out of `system/supervisord.conf`;
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
-  `app.toml` is skipped, but a manifest that fails to load raises rather than
-  being passed over). `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and
+  `app.toml` is skipped, and so is a manifest that fails to load, with a warning
+  naming it -- `system/test_app_manifests.py` is the loud check for that, and one
+  app's stale reference must not block every other creation's footprint).
+  `compute_skill_scope` refuses a path that does not exist, because git ignores a
+  pathspec that matches nothing and a mistyped path would read as "unchanged".
+  `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and
   `SKILL_CONVENTIONS` are the fixed lists. Exclude matching is `pathspec`
   gitignore syntax; a failing git command raises `ScopeComputationError` rather
   than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `ActionId`, `InstancesUrl`, `PriorityName`, `ProgramName`,
-  `RepoRelativePath`, `ReferencePath`, `ExcludeGlob`, `ReferenceNote`) and
+  `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
+  gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
   `system/scripts/forward_port_test.py` keeps them identical).
-- The `app-manifest validate-manifest <path>` command, for the build-app
-  scaffold and tests.
+- The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
+  build-app scaffold and tests. Without `--repo-root` the reference location
+  checks run against the root the `system/apps/<package>/app.toml` layout implies,
+  and a manifest anywhere else skips them.
 
 ## The footprint commands
 
@@ -73,7 +81,7 @@ goes to stdout; with it, the parent directories are created.
   "references": [{"path": ".agents/skills/slack-inbox-refresh", "note": "...", "kind": "skill"}],
   "context": [],
   "conventions": ["system/apps/README.md", ".agents/shared/worker/references/type-app.md", "docs/system/style_guide.md"],
-  "exclude": ["system/vendor/**", "data/**", "**/node_modules/**", "**/static/**", "**/.venv/**"],
+  "exclude": ["system/vendor/**", "data/**", "**/node_modules/**", "**/dist/**", "**/.venv/**"],
   "diff": null
 }
 ```
@@ -88,16 +96,21 @@ goes to stdout; with it, the parent directories are created.
   first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
-- `context` is read-only surface: empty for an app; for a `--for-path` scope,
-  the primary directory of every app whose manifest references that path.
+- `context` is the surface a creation is judged against: empty for an app; for a
+  `--for-path` scope, the primary directory of every app whose manifest
+  references that path. A change under it counts as inside the footprint,
+  because a skill's one sanctioned edit outside its own directory is the
+  `[[references]]` entry it adds to the owning app's `app.toml`.
 - `conventions` is a fixed list keyed by creation type, not checked for
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
 - `diff` is null unless `--diff-base` is given, and then reports the base's full
-  sha, every file the diff changed, and `outside_footprint`: the changed files
-  that are neither under a `primary` path, nor a `wiring` file, nor under a
-  reference, nor matched by `exclude`. A non-empty `outside_footprint` means
-  either a missing reference or a change that does not belong on the branch.
+  sha, every file the diff changed (from the three-dot form, so what the base
+  branch did after the fork is not the creation's change), and
+  `outside_footprint`: the changed files that are neither under a `primary` path,
+  nor a `wiring` file, nor under a reference, nor under a `context` entry, nor
+  matched by `exclude`. A non-empty `outside_footprint` means either a missing
+  reference or a change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that

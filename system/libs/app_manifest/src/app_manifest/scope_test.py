@@ -2,12 +2,13 @@ import json
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
-from app_manifest.errors import ManifestLoadError
 from app_manifest.errors import ScopeComputationError
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
+from app_manifest.primitives import is_path_covered_by
 from app_manifest.scope import BUILT_IN_EXCLUDES
 from app_manifest.scope import CreationScope
 from app_manifest.scope import CreationType
@@ -16,41 +17,17 @@ from app_manifest.scope import compute_app_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
 from app_manifest.scope import find_wiring_sections
-from app_manifest.scope import is_path_covered_by
 from app_manifest.scope import reference_kind_for_path
 from app_manifest.scope import render_scope_file
 from app_manifest.scope import with_diff_against_base
+from app_manifest.testing import NEWS_MANIFEST
+from app_manifest.testing import build_news_workspace
 from app_manifest.testing import commit_everything
 from app_manifest.testing import init_git_repository
+from app_manifest.testing import run_git
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_conf
-
-_NEWS_MANIFEST = """
-name = "news"
-display_name = "News"
-icon = "icon.svg"
-
-[[references]]
-path = ".agents/skills/news-refresh"
-note = "Fetches stories on a schedule; calls POST /api/ingest"
-
-[[references]]
-path = "system/scripts/run_news.sh"
-
-[scope]
-exclude = ["docs/generated/**", "data/**"]
-"""
-
-
-def _build_news_workspace(repo_root: Path) -> Path:
-    """A repo-shaped tree holding the news app, everything it references, and a supervisord conf."""
-    manifest_path = write_app_manifest(repo_root, "news", _NEWS_MANIFEST, is_icon_written=True)
-    write_repo_file(repo_root, "system/apps/news/runner.py", "ROUTES = ('/api/ingest',)\n")
-    write_repo_file(repo_root, ".agents/skills/news-refresh/SKILL.md", "# refresh\n")
-    write_repo_file(repo_root, "system/scripts/run_news.sh", "#!/bin/sh\nexit 0\n")
-    write_supervisord_conf(repo_root, ("program:news", "program:news-fetcher", "program:files"))
-    return manifest_path
 
 
 # --- reference kinds ------------------------------------------------------------
@@ -99,7 +76,7 @@ def test_a_footprint_entry_covers_itself_and_what_is_beneath_it(
 def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
     tmp_path: Path,
 ) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     wiring = find_wiring_sections(tmp_path, manifest)
@@ -112,7 +89,7 @@ def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
 def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
     tmp_path: Path,
 ) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     write_supervisord_conf(tmp_path, ("program:files", "program:chat"))
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
@@ -120,7 +97,7 @@ def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
 
 
 def test_wiring_is_empty_when_there_is_no_supervisord_conf_at_all(tmp_path: Path) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     (tmp_path / "system" / "supervisord.conf").unlink()
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
@@ -130,7 +107,7 @@ def test_wiring_is_empty_when_there_is_no_supervisord_conf_at_all(tmp_path: Path
 def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
     tmp_path: Path,
 ) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     (tmp_path / "system" / "supervisord.conf").write_text("[program:news\ncommand=x\n")
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
@@ -144,7 +121,7 @@ def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
 def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventions(
     tmp_path: Path,
 ) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     scope = compute_app_scope(tmp_path, manifest_path, manifest)
@@ -173,7 +150,7 @@ def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventio
 def test_the_built_in_excludes_come_first_and_a_repeated_manifest_glob_is_dropped(
     tmp_path: Path,
 ) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     scope = compute_app_scope(tmp_path, manifest_path, manifest)
@@ -183,7 +160,7 @@ def test_the_built_in_excludes_come_first_and_a_repeated_manifest_glob_is_droppe
 
 
 def test_a_manifest_outside_the_repo_root_cannot_have_a_footprint(tmp_path: Path) -> None:
-    manifest_path = _build_news_workspace(tmp_path / "workspace")
+    manifest_path = build_news_workspace(tmp_path / "workspace")
     manifest = load_manifest(manifest_path, repo_root=tmp_path / "workspace")
 
     with pytest.raises(ScopeComputationError, match="not inside the repo root"):
@@ -191,7 +168,7 @@ def test_a_manifest_outside_the_repo_root_cannot_have_a_footprint(tmp_path: Path
 
 
 def test_the_rendered_scope_file_is_indented_json_ending_in_a_newline(tmp_path: Path) -> None:
-    manifest_path = _build_news_workspace(tmp_path)
+    manifest_path = build_news_workspace(tmp_path)
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     rendered = render_scope_file(compute_app_scope(tmp_path, manifest_path, manifest))
@@ -212,7 +189,7 @@ def test_the_rendered_scope_file_is_indented_json_ending_in_a_newline(tmp_path: 
 def test_the_reverse_lookup_finds_the_app_that_declares_a_referenced_directory(
     tmp_path: Path,
 ) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
 
     matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
 
@@ -224,7 +201,7 @@ def test_the_reverse_lookup_finds_the_app_that_declares_a_referenced_directory(
 def test_the_reverse_lookup_matches_a_file_beneath_a_referenced_directory(
     tmp_path: Path,
 ) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
 
     matches = find_referencing_manifests(
         tmp_path, RepoRelativePath(".agents/skills/news-refresh/SKILL.md")
@@ -234,13 +211,13 @@ def test_the_reverse_lookup_matches_a_file_beneath_a_referenced_directory(
 
 
 def test_the_reverse_lookup_returns_nothing_for_a_path_no_app_claims(tmp_path: Path) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
 
     assert find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/unowned")) == ()
 
 
 def test_the_reverse_lookup_skips_an_app_directory_with_no_manifest(tmp_path: Path) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
     write_repo_file(tmp_path, "system/apps/legacy/runner.py", "\n")
 
     matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
@@ -248,18 +225,29 @@ def test_the_reverse_lookup_skips_an_app_directory_with_no_manifest(tmp_path: Pa
     assert [match.manifest.name for match in matches] == ["news"]
 
 
-def test_the_reverse_lookup_raises_on_a_manifest_it_cannot_load(tmp_path: Path) -> None:
-    _build_news_workspace(tmp_path)
+def test_the_reverse_lookup_skips_a_manifest_it_cannot_load_and_warns(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
     write_app_manifest(tmp_path, "broken", 'name = "broken"\n', is_icon_written=False)
+    captured: list[str] = []
+    sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
+    try:
+        matches = find_referencing_manifests(
+            tmp_path, RepoRelativePath(".agents/skills/news-refresh")
+        )
+    finally:
+        logger.remove(sink_id)
 
-    with pytest.raises(ManifestLoadError, match="broken"):
-        find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
+    # One app's stale manifest must not hide every other app's claim on the skill.
+    assert [match.manifest.name for match in matches] == ["news"]
+    assert len(captured) == 1
+    assert "broken" in captured[0]
+    assert "display_name" in captured[0]
 
 
 def test_a_skill_scope_is_its_own_directory_plus_the_owning_apps_as_context(
     tmp_path: Path,
 ) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
 
     scope = compute_skill_scope(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
 
@@ -282,7 +270,7 @@ def test_a_skill_scope_is_its_own_directory_plus_the_owning_apps_as_context(
 def test_a_skill_scope_for_a_single_file_keeps_the_file_as_its_primary_path(
     tmp_path: Path,
 ) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
 
     scope = compute_skill_scope(tmp_path, RepoRelativePath("system/scripts/run_news.sh"))
 
@@ -290,8 +278,17 @@ def test_a_skill_scope_for_a_single_file_keeps_the_file_as_its_primary_path(
     assert list(scope.context) == ["system/apps/news/"]
 
 
+def test_a_skill_scope_refuses_a_path_that_does_not_exist(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+
+    # git ignores a pathspec that matches nothing, so a mistyped path would otherwise read
+    # as a creation whose every file is unchanged.
+    with pytest.raises(ScopeComputationError, match="does not exist"):
+        compute_skill_scope(tmp_path, RepoRelativePath(".agents/skills/news-refersh"))
+
+
 def test_a_skill_scope_for_a_path_no_app_claims_has_no_context(tmp_path: Path) -> None:
-    _build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
     write_repo_file(tmp_path, ".agents/skills/unowned/SKILL.md", "# unowned\n")
 
     scope = compute_skill_scope(tmp_path, RepoRelativePath(".agents/skills/unowned"))
@@ -299,11 +296,42 @@ def test_a_skill_scope_for_a_path_no_app_claims_has_no_context(tmp_path: Path) -
     assert scope.context == ()
 
 
+def test_a_change_to_the_owning_apps_manifest_is_inside_a_skill_scopes_footprint(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "workspace"
+    build_news_workspace(repo_root)
+    init_git_repository(repo_root)
+    base_sha = commit_everything(repo_root, "base")
+    write_repo_file(repo_root, ".agents/skills/news-refresh/SKILL.md", "# refresh, updated\n")
+    write_app_manifest(
+        repo_root,
+        "news",
+        NEWS_MANIFEST + '\n[[references]]\npath = "docs/system/news.md"\n',
+        is_icon_written=True,
+    )
+    write_repo_file(repo_root, "docs/system/news.md", "# news\n")
+    # A change to the owning app's code is not the skill's to make, so it stays outside.
+    write_repo_file(repo_root, "system/apps/news/runner.py", "ROUTES = ('/api/ingest', '/api/x')\n")
+    commit_everything(repo_root, "the skill claims a doc through its owning app")
+
+    scope = compute_skill_scope(repo_root, RepoRelativePath(".agents/skills/news-refresh"))
+    scope_with_diff = with_diff_against_base(scope, repo_root, base_sha)
+
+    assert scope_with_diff.diff is not None
+    assert "system/apps/news/app.toml" in scope_with_diff.diff.files
+    # Only the owning app's manifest counts as inside the skill's footprint.
+    assert scope_with_diff.diff.outside_footprint == (
+        "docs/system/news.md",
+        "system/apps/news/runner.py",
+    )
+
+
 # --- the diff -------------------------------------------------------------------
 
 
 def _commit_news_workspace_base(repo_root: Path) -> str:
-    _build_news_workspace(repo_root)
+    build_news_workspace(repo_root)
     write_repo_file(repo_root, "docs/system/style_guide.md", "# style\n")
     write_repo_file(repo_root, "docs/generated/api.md", "generated\n")
     write_repo_file(repo_root, "data/.apps/news/stories.json", "[]\n")
@@ -350,7 +378,7 @@ def test_an_excluded_file_is_never_reported_outside_the_footprint(tmp_path: Path
     base_sha = _commit_news_workspace_base(repo_root)
     # One excluded file inside the app directory, and one excluded file outside every
     # footprint path -- the second is what only the exclude list can account for.
-    write_repo_file(repo_root, "system/apps/news/static/bundle.js", "console.log(1)\n")
+    write_repo_file(repo_root, "system/apps/news/frontend/dist/bundle.js", "console.log(1)\n")
     write_repo_file(repo_root, "docs/generated/api.md", "regenerated\n")
     write_repo_file(repo_root, "data/.apps/news/stories.json", '[{"id": 1}]\n')
     commit_everything(repo_root, "regenerated output only")
@@ -359,7 +387,7 @@ def test_an_excluded_file_is_never_reported_outside_the_footprint(tmp_path: Path
 
     assert scope_with_diff.diff is not None
     assert "docs/generated/api.md" in scope_with_diff.diff.files
-    assert "system/apps/news/static/bundle.js" in scope_with_diff.diff.files
+    assert "system/apps/news/frontend/dist/bundle.js" in scope_with_diff.diff.files
     assert scope_with_diff.diff.outside_footprint == ()
 
 
@@ -374,3 +402,46 @@ def test_a_diff_base_that_does_not_resolve_raises_rather_than_reporting_no_chang
 
     with pytest.raises(ScopeComputationError, match="rev-parse"):
         with_diff_against_base(scope, repo_root, "no-such-ref-9f13c2")
+
+
+def test_the_diff_reports_a_non_ascii_name_and_a_name_with_a_space_as_the_paths_they_are(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "workspace"
+    base_sha = _commit_news_workspace_base(repo_root)
+    write_repo_file(repo_root, "system/apps/news/caf\u00e9.md", "# accented\n")
+    write_repo_file(repo_root, "system/apps/news/two words.md", "# spaced\n")
+    commit_everything(repo_root, "files whose names git would otherwise quote")
+
+    scope_with_diff = _news_scope_with_diff(repo_root, base_sha)
+
+    # Without core.quotePath=false and -z, git renders the first as "caf\303\251.md", which is
+    # not a path at all, and RepoRelativePath refuses the backslashes outright.
+    assert scope_with_diff.diff is not None
+    assert sorted(scope_with_diff.diff.files) == [
+        "system/apps/news/caf\u00e9.md",
+        "system/apps/news/two words.md",
+    ]
+    assert scope_with_diff.diff.outside_footprint == ()
+
+
+def test_the_diff_against_a_diverged_base_reports_only_the_branchs_own_changes(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "workspace"
+    _commit_news_workspace_base(repo_root)
+    run_git(repo_root, ("checkout", "-q", "-b", "feature"))
+    write_repo_file(repo_root, "system/apps/news/runner.py", "ROUTES = ('/api/entries',)\n")
+    commit_everything(repo_root, "the change under review")
+    run_git(repo_root, ("checkout", "-q", "main"))
+    write_repo_file(repo_root, "docs/system/style_guide.md", "# style, advanced after the fork\n")
+    commit_everything(repo_root, "the base branch moves on")
+    run_git(repo_root, ("checkout", "-q", "feature"))
+
+    scope_with_diff = _news_scope_with_diff(repo_root, "main")
+
+    # The three-dot form diffs from the merge base, so what the base branch did after the
+    # fork is not this creation's change.
+    assert scope_with_diff.diff is not None
+    assert list(scope_with_diff.diff.files) == ["system/apps/news/runner.py"]
+    assert scope_with_diff.diff.outside_footprint == ()

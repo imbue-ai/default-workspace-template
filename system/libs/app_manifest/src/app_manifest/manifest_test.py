@@ -11,9 +11,9 @@ from app_manifest.manifest import (
     load_manifest,
     manifest_icon_path,
 )
-from app_manifest.testing import write_app_manifest, write_repo_file
-
-_ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
+from app_manifest.testing import APP_ICON_MARKUP
+from app_manifest.testing import write_app_manifest
+from app_manifest.testing import write_repo_file
 
 
 def _full_manifest_data() -> dict[str, object]:
@@ -323,7 +323,7 @@ def test_unknown_keys_are_rejected() -> None:
 def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> None:
     app_dir = tmp_path / uuid4().hex
     app_dir.mkdir()
-    (app_dir / "icon.svg").write_text(_ICON)
+    (app_dir / "icon.svg").write_text(APP_ICON_MARKUP)
     manifest_path = app_dir / "app.toml"
     manifest_path.write_text(
         'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
@@ -445,6 +445,31 @@ def test_reference_paths_that_are_not_literal_repo_relative_paths_are_rejected(
         )
 
 
+@pytest.mark.parametrize(
+    ("reference_path", "expected_problem"),
+    [
+        ("./docs/news.md", "'.' segments"),
+        ("docs/./news.md", "'.' segments"),
+        ("docs/news/.", "'.' segments"),
+        ("docs//news.md", "empty segments"),
+    ],
+)
+def test_a_reference_path_with_a_dot_or_an_empty_segment_is_rejected(
+    reference_path: str, expected_problem: str
+) -> None:
+    # git names a changed file in normalized form, so a path with a hole in it never matches
+    # anything the diff reports, however real the artifact at the end of it is.
+    with pytest.raises(ValidationError, match=expected_problem):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "references": [{"path": reference_path}],
+            }
+        )
+
+
 def test_a_reference_path_naming_a_glob_says_so() -> None:
     with pytest.raises(ValidationError, match="glob character"):
         AppManifest.model_validate(
@@ -496,6 +521,18 @@ def test_exclude_globs_must_be_repo_relative(exclude_glob: str) -> None:
                 "display_name": "News",
                 "icon": "icon.svg",
                 "scope": {"exclude": [exclude_glob]},
+            }
+        )
+
+
+def test_an_exclude_glob_cannot_negate_its_way_past_the_built_in_excludes() -> None:
+    with pytest.raises(ValidationError, match="denylist"):
+        AppManifest.model_validate(
+            {
+                "name": "news",
+                "display_name": "News",
+                "icon": "icon.svg",
+                "scope": {"exclude": ["!system/vendor/mngr/**"]},
             }
         )
 
@@ -576,12 +613,32 @@ def test_load_manifest_accepts_a_reference_to_a_file_directly_under_the_apps_dir
     assert [reference.path for reference in manifest.references] == ["system/apps/README.md"]
 
 
+def test_load_manifest_rejects_a_reference_that_goes_through_a_symlinked_directory(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+        '[[references]]\npath = ".claude/skills/news-refresh"\n',
+        is_icon_written=True,
+    )
+    write_repo_file(tmp_path, ".agents/skills/news-refresh/SKILL.md", "# refresh\n")
+    # The repo's own .claude/skills is a tracked symlink to .agents/skills, and git reports a
+    # changed file only under the real directory, so a reference through it covers nothing.
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "skills").symlink_to(Path("..") / ".agents" / "skills")
+
+    with pytest.raises(ManifestLoadError, match="symlink"):
+        load_manifest(manifest_path, repo_root=tmp_path)
+
+
 def test_load_manifest_off_the_apps_layout_skips_the_location_rules_until_a_root_is_given(
     tmp_path: Path,
 ) -> None:
     loose_directory = tmp_path / uuid4().hex
     loose_directory.mkdir()
-    (loose_directory / "icon.svg").write_text(_ICON)
+    (loose_directory / "icon.svg").write_text(APP_ICON_MARKUP)
     manifest_path = loose_directory / "app.toml"
     manifest_path.write_text(_REFERENCING_MANIFEST)
 

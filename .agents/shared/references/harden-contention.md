@@ -74,7 +74,7 @@ Run these in order before `git merge`:
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
    SCOPE=/tmp/harden-freshness-scope.json
-   # an app or a service with a manifest:
+   # an app with a manifest:
    uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE"
    # a skill:
    uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE"

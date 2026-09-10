@@ -16,6 +16,7 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
+from app_manifest.errors import ManifestLoadError
 from app_manifest.errors import ScopeComputationError
 from app_manifest.manifest import APPS_DIRECTORY_PARTS
 from app_manifest.manifest import MANIFEST_FILENAME
@@ -27,9 +28,10 @@ from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
+from app_manifest.primitives import is_path_covered_by
 
 # The wiring file every supervised app has a block in.
-SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
+_SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
 
 # Applied to every footprint and never written in a manifest: vendored subtrees, gitignored
 # runtime state, installed dependencies, and build output are nobody's creation.
@@ -37,7 +39,7 @@ BUILT_IN_EXCLUDES: Final[tuple[ExcludeGlob, ...]] = (
     ExcludeGlob("system/vendor/**"),
     ExcludeGlob("data/**"),
     ExcludeGlob("**/node_modules/**"),
-    ExcludeGlob("**/static/**"),
+    ExcludeGlob("**/dist/**"),
     ExcludeGlob("**/.venv/**"),
 )
 
@@ -55,8 +57,8 @@ SKILL_CONVENTIONS: Final[tuple[RepoRelativePath, ...]] = (
 
 # A git command that has not finished by the hard timeout is broken rather than slow; one that
 # takes longer than the warning threshold is a repository worth looking at before it breaks.
-GIT_HARD_TIMEOUT_SECONDS: Final[float] = 60.0
-GIT_SLOW_THRESHOLD_SECONDS: Final[float] = 15.0
+_GIT_HARD_TIMEOUT_SECONDS: Final[float] = 60.0
+_GIT_SLOW_THRESHOLD_SECONDS: Final[float] = 15.0
 
 # pathspec's pattern factory for gitignore syntax, which is what an exclude glob is written in.
 _EXCLUDE_PATTERN_STYLE: Final[str] = "gitignore"
@@ -153,25 +155,9 @@ def reference_kind_for_path(path: ReferencePath) -> ReferenceKind:
 
 
 @pure
-def is_path_covered_by(footprint_entry: str, candidate: str) -> bool:
-    """Whether ``candidate`` is the footprint entry itself or sits beneath it."""
-    if footprint_entry.endswith("/"):
-        return candidate.startswith(footprint_entry)
-    return candidate == footprint_entry or candidate.startswith(f"{footprint_entry}/")
-
-
-@pure
 def _deduplicated(globs: Sequence[ExcludeGlob]) -> tuple[ExcludeGlob, ...]:
-    kept: list[ExcludeGlob] = []
-    for glob in globs:
-        if glob not in kept:
-            kept.append(glob)
-    return tuple(kept)
-
-
-@pure
-def _without_trailing_slash(target_path: RepoRelativePath) -> str:
-    return target_path.rstrip("/")
+    """The globs in the order given, with every repeat after the first dropped."""
+    return tuple(dict.fromkeys(globs))
 
 
 def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[WiringSection, ...]:
@@ -181,10 +167,13 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     """
     parser = configparser.ConfigParser(interpolation=None)
     try:
-        parser.read(repo_root / SUPERVISORD_CONF)
+        parser.read(repo_root / _SUPERVISORD_CONF)
     except configparser.Error as e:
-        raise ScopeComputationError(f"cannot parse {repo_root / SUPERVISORD_CONF}: {e}") from e
+        raise ScopeComputationError(f"cannot parse {repo_root / _SUPERVISORD_CONF}: {e}") from e
     own_section = f"program:{manifest.program}"
+    # The sidecar rule is a prefix match, so it assumes no unrelated program is named with
+    # the app's name plus a hyphen: an app called "share" would claim a "share-gateway"
+    # program that is nobody's sidecar.
     sidecar_prefix = f"program:{manifest.name}-"
     owned_sections = tuple(
         NonEmptyStr(section)
@@ -193,7 +182,7 @@ def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[Wiring
     )
     if not owned_sections:
         return ()
-    return (WiringSection(path=SUPERVISORD_CONF, sections=owned_sections),)
+    return (WiringSection(path=_SUPERVISORD_CONF, sections=owned_sections),)
 
 
 def find_referencing_manifests(
@@ -201,14 +190,24 @@ def find_referencing_manifests(
 ) -> tuple[ManifestReferenceMatch, ...]:
     """Every app whose manifest declares ``target_path`` as its own, in manifest path order.
 
-    An app directory with no ``app.toml`` is skipped, but a manifest that fails to load raises:
-    a broken manifest must never quietly hide the app that owns a skill.
+    An app directory with no ``app.toml`` is skipped, and so is a manifest that fails to load:
+    the loud check for a broken manifest is ``system/test_app_manifests.py``, and one app's
+    stale reference must not block every other creation's footprint and freshness check.
     """
-    normalized_target = _without_trailing_slash(target_path)
+    normalized_target = target_path.rstrip("/")
     apps_directory = repo_root.joinpath(*APPS_DIRECTORY_PARTS)
     matches: list[ManifestReferenceMatch] = []
     for manifest_path in sorted(apps_directory.glob(f"*/{MANIFEST_FILENAME}")):
-        manifest = load_manifest(manifest_path, repo_root=repo_root)
+        try:
+            manifest = load_manifest(manifest_path, repo_root=repo_root)
+        except ManifestLoadError as e:
+            logger.warning(
+                "Skipping {} while looking up what owns {}, because it does not load: {}",
+                manifest_path,
+                normalized_target,
+                e,
+            )
+            continue
         for reference in manifest.references:
             if is_path_covered_by(reference.path, normalized_target):
                 matches.append(
@@ -225,12 +224,13 @@ def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifes
     package_directory = app_package_directory(repo_root, manifest_path)
     if package_directory is None:
         raise ScopeComputationError(f"manifest {manifest_path} is not inside the repo root {repo_root}")
+    resolved_manifest_path = manifest_path.resolve()
     return CreationScope(
         creation=CreationIdentity(
             type=CreationType.APP,
             name=NonEmptyStr(manifest.name),
-            package=NonEmptyStr(manifest_path.resolve().parent.name),
-            manifest=RepoRelativePath(manifest_path.resolve().relative_to(repo_root).as_posix()),
+            package=NonEmptyStr(resolved_manifest_path.parent.name),
+            manifest=RepoRelativePath(resolved_manifest_path.relative_to(repo_root).as_posix()),
         ),
         primary=(RepoRelativePath(package_directory),),
         wiring=find_wiring_sections(repo_root, manifest),
@@ -250,10 +250,20 @@ def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifes
 
 
 def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> CreationScope:
-    """The footprint of a skill (or any other non-app path), with the apps that own it as context."""
-    normalized_target = _without_trailing_slash(target_path)
-    is_directory = (repo_root / normalized_target).is_dir()
-    primary_entry = f"{normalized_target}/" if is_directory else normalized_target
+    """The footprint of a skill (or any other non-app path), with the apps that own it as context.
+
+    Raises ScopeComputationError when nothing is there: the freshness check feeds ``primary``
+    into ``git diff -- <paths>``, which silently ignores a pathspec that matches nothing, so a
+    mistyped path would otherwise read as a creation with no changes at all.
+    """
+    normalized_target = target_path.rstrip("/")
+    target = repo_root / normalized_target
+    if not target.exists():
+        raise ScopeComputationError(
+            f"{normalized_target!r} does not exist under {repo_root}, so a footprint over it would "
+            "cover nothing rather than the creation it names"
+        )
+    primary_entry = f"{normalized_target}/" if target.is_dir() else normalized_target
     owning_directories = [
         app_package_directory(repo_root, match.manifest_path)
         for match in find_referencing_manifests(repo_root, target_path)
@@ -281,19 +291,21 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
 def is_accounted_for_by_scope(
     candidate: RepoRelativePath, scope: CreationScope, exclude_spec: pathspec.PathSpec
 ) -> bool:
-    """Whether a changed file sits inside the footprint or is excluded outright."""
+    """Whether a changed file sits inside the footprint or is excluded outright.
+
+    Of each context directory only its manifest counts as inside: a skill's one sanctioned
+    edit outside its own directory is the ``[[references]]`` entry it adds to the owning
+    app's ``app.toml``; a change to the app's code stays outside the skill's footprint.
+    """
     if exclude_spec.match_file(candidate):
         return True
-    for primary_entry in scope.primary:
-        if is_path_covered_by(primary_entry, candidate):
-            return True
-    for wiring in scope.wiring:
-        if wiring.path == candidate:
-            return True
-    for reference in scope.references:
-        if is_path_covered_by(reference.path, candidate):
-            return True
-    return False
+    if any(wiring.path == candidate for wiring in scope.wiring):
+        return True
+    context_manifests = (f"{context.rstrip('/')}/{MANIFEST_FILENAME}" for context in scope.context)
+    if candidate in context_manifests:
+        return True
+    owned_entries = (*scope.primary, *(reference.path for reference in scope.references))
+    return any(is_path_covered_by(entry, candidate) for entry in owned_entries)
 
 
 def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
@@ -306,7 +318,7 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
             cwd=repo_root,
             capture_output=True,
             text=True,
-            timeout=GIT_HARD_TIMEOUT_SECONDS,
+            timeout=_GIT_HARD_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -316,7 +328,7 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
             f"{' '.join(command)} failed in {repo_root} (exit {completed.returncode}): {completed.stderr.strip()}"
         )
     elapsed_seconds = time.monotonic() - started_at
-    if elapsed_seconds > GIT_SLOW_THRESHOLD_SECONDS:
+    if elapsed_seconds > _GIT_SLOW_THRESHOLD_SECONDS:
         logger.warning(
             "Took {:.1f}s to run {} in {}, which is far slower than reading a diff should be",
             elapsed_seconds,
@@ -329,11 +341,15 @@ def _run_git(repo_root: Path, arguments: Sequence[str]) -> str:
 def with_diff_against_base(scope: CreationScope, repo_root: Path, diff_base: str) -> CreationScope:
     """The same scope with its diff filled in from the changed files between a base and HEAD."""
     base_sha = NonEmptyStr(_run_git(repo_root, ("rev-parse", f"{diff_base}^{{commit}}")).strip())
-    changed_file_lines = _run_git(
-        repo_root, ("diff", "--name-only", f"{base_sha}...HEAD")
-    ).splitlines()
+    # A NUL-separated listing with quoting off is the only form every filename survives: git
+    # otherwise renders a non-ASCII name as an escaped, double-quoted string, which is not the
+    # path it changed, and a name with a newline in it would split across lines.
+    diff_output = _run_git(
+        repo_root,
+        ("-c", "core.quotePath=false", "diff", "--name-only", "-z", f"{base_sha}...HEAD"),
+    )
     changed_files = tuple(
-        RepoRelativePath(line) for line in changed_file_lines if line.strip()
+        RepoRelativePath(entry) for entry in diff_output.split("\0") if entry
     )
     exclude_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, scope.exclude)
     outside_footprint = tuple(
