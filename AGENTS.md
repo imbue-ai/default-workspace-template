@@ -270,11 +270,13 @@ If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running
 
 ```bash
 . system/scripts/_tool_env.sh && tool_env_pin
+plugin_paths="$(python3 system/scripts/list_mngr_plugins.py --tool mngr)"
+test -n "$plugin_paths"
 uv tool install -e system/vendor/mngr/libs/mngr --reinstall \
-    $(python3 system/scripts/list_mngr_plugins.py --tool mngr | sed 's|^|--with-editable |')
+    $(printf -- '--with-editable %s ' $plugin_paths)
 ```
 
-(The vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr` -- installing the root fails with a setuptools flat-layout error. `system/config/mngr_plugins.toml` is the plugin list; `uv tool list` shows what is installed.) The `tool_env_pin` line is not optional: uv's tool directories follow `$HOME`, which for an agent is `/home/user`, while the `mngr` you are trying to fix is the one on `PATH` under `/root/.local/bin`. Without the pin the install reports success into a directory nothing runs from, and leaves the broken copy exactly as it was. Do NOT split this into an install followed by `mngr plugin add`: installing the base alone rebuilds the environment from it and drops every extra, so between the two commands the tool cannot parse its own `[agent_types.*]` config -- and if the second one never runs, it stays that way, which breaks `mngr create --template chat` and with it the app's whole update path. Then try running the command again.
+(The vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr` -- installing the root fails with a setuptools flat-layout error. `system/config/mngr_plugins.toml` is the plugin list; `uv tool list` shows what is installed.) The list goes into a variable and is asserted non-empty on its own line rather than being substituted straight into the install: a command substitution inside an argument list contributes only its text, so `set -e` cannot see the lister fail there, and an empty list would install the base package alone -- which is the broken mngr described below, now installed by the very command meant to repair it. The `tool_env_pin` line is not optional: uv's tool directories follow `$HOME`, which for an agent is `/home/user`, while the `mngr` you are trying to fix is the one on `PATH` under `/root/.local/bin`. Without the pin the install reports success into a directory nothing runs from, and leaves the broken copy exactly as it was. Do NOT split this into an install followed by `mngr plugin add`: installing the base alone rebuilds the environment from it and drops every extra, so between the two commands the tool cannot parse its own `[agent_types.*]` config -- and if the second one never runs, it stays that way, which breaks `mngr create --template chat` and with it the app's whole update path. Then try running the command again.
 
 If you get a failure when trying to commit the first time, just try committing again (the pre-commit hook returns a non-zero exit code when ruff reformats files).
 
