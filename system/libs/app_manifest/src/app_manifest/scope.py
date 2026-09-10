@@ -30,7 +30,7 @@ from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
 
-# The wiring file every supervised app has a block in.
+# The shared wiring file where every supervised app has its block.
 _SUPERVISORD_CONF: Final[RepoRelativePath] = RepoRelativePath("system/supervisord.conf")
 
 # Applied to every footprint and never written in a manifest: vendored subtrees, gitignored
@@ -118,7 +118,9 @@ class ScopeReference(FrozenModel):
 class DiffSummary(FrozenModel):
     """A branch's changed files, and the ones the footprint does not account for."""
 
-    base: NonEmptyStr = Field(description="The full sha the diff was taken against")
+    base: NonEmptyStr = Field(
+        description="The full sha of the requested base; the diff runs from its merge base with HEAD"
+    )
     files: tuple[RepoRelativePath, ...] = Field(description="Every file the diff changed")
     outside_footprint: tuple[RepoRelativePath, ...] = Field(
         description="The changed files that are neither in the footprint nor excluded"
@@ -135,7 +137,7 @@ class CreationScope(FrozenModel):
     context: tuple[RepoRelativePath, ...] = Field(description="Read-only surfaces the creation is judged against")
     conventions: tuple[RepoRelativePath, ...] = Field(description="The convention docs for this creation type")
     exclude: tuple[ExcludeGlob, ...] = Field(description="Globs no pass considers, built-ins first")
-    diff: DiffSummary | None = Field(description="The diff against a base, when one was asked for")
+    diff: DiffSummary | None = Field(description="The diff against a base, when the caller asks for one")
 
 
 class ManifestReferenceMatch(FrozenModel):
@@ -194,6 +196,7 @@ def find_referencing_manifests(
     the loud check for a broken manifest is ``system/test_app_manifests.py``, and one app's
     stale reference must not block every other creation's footprint and freshness check.
     """
+    repo_root = repo_root.resolve()
     normalized_target = target_path.rstrip("/")
     apps_directory = repo_root.joinpath(*APPS_DIRECTORY_PARTS)
     matches: list[ManifestReferenceMatch] = []
@@ -219,12 +222,50 @@ def find_referencing_manifests(
     return tuple(matches)
 
 
+def _check_excludes_leave_the_footprint(
+    repo_root: Path, exclude: Sequence[ExcludeGlob], footprint_entries: Sequence[RepoRelativePath]
+) -> None:
+    """Raises when the excludes swallow a footprint entry whole: a manifest that excludes its
+    own directory or a reference would leave every pass blind to it with nothing in
+    ``outside_footprint`` to say so. Carving a subdirectory out of an entry is the
+    intended use and passes."""
+    exclude_spec = pathspec.PathSpec.from_lines(_EXCLUDE_PATTERN_STYLE, exclude)
+    for entry in footprint_entries:
+        entry_path = repo_root / entry
+        if entry_path.is_dir():
+            files = [
+                candidate.relative_to(repo_root).as_posix()
+                for candidate in entry_path.rglob("*")
+                if candidate.is_file()
+            ]
+        else:
+            files = [entry]
+        if files and all(exclude_spec.match_file(file) for file in files):
+            raise ScopeComputationError(
+                f"the exclude globs cover {str(entry)!r}, which is part of the footprint"
+            )
+
+
 def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifest) -> CreationScope:
     """The footprint of the app a manifest describes, with no diff attached yet."""
+    repo_root = repo_root.resolve()
     package_directory = app_package_directory(repo_root, manifest_path)
     if package_directory is None:
         raise ScopeComputationError(f"manifest {manifest_path} is not inside the repo root {repo_root}")
     resolved_manifest_path = manifest_path.resolve()
+    primary = (RepoRelativePath(package_directory),)
+    references = tuple(
+        ScopeReference(
+            path=reference.path,
+            note=reference.note,
+            kind=reference_kind_for_path(reference.path),
+        )
+        for reference in manifest.references
+    )
+    exclude = _deduplicated(BUILT_IN_EXCLUDES + manifest.scope.exclude)
+    _check_excludes_leave_the_footprint(
+        repo_root, exclude, (*primary, *(reference.path for reference in references))
+    )
     return CreationScope(
         creation=CreationIdentity(
             type=CreationType.APP,
@@ -232,19 +273,12 @@ def compute_app_scope(repo_root: Path, manifest_path: Path, manifest: AppManifes
             package=NonEmptyStr(resolved_manifest_path.parent.name),
             manifest=RepoRelativePath(resolved_manifest_path.relative_to(repo_root).as_posix()),
         ),
-        primary=(RepoRelativePath(package_directory),),
+        primary=primary,
         wiring=find_wiring_sections(repo_root, manifest),
-        references=tuple(
-            ScopeReference(
-                path=reference.path,
-                note=reference.note,
-                kind=reference_kind_for_path(reference.path),
-            )
-            for reference in manifest.references
-        ),
+        references=references,
         context=(),
         conventions=APP_CONVENTIONS,
-        exclude=_deduplicated(BUILT_IN_EXCLUDES + manifest.scope.exclude),
+        exclude=exclude,
         diff=None,
     )
 
@@ -256,6 +290,7 @@ def compute_skill_scope(repo_root: Path, target_path: RepoRelativePath) -> Creat
     into ``git diff -- <paths>``, which silently ignores a pathspec that matches nothing, so a
     mistyped path would otherwise read as a creation with no changes at all.
     """
+    repo_root = repo_root.resolve()
     normalized_target = target_path.rstrip("/")
     target = repo_root / normalized_target
     if not target.exists():
@@ -301,8 +336,7 @@ def is_accounted_for_by_scope(
         return True
     if any(wiring.path == candidate for wiring in scope.wiring):
         return True
-    context_manifests = (f"{context.rstrip('/')}/{MANIFEST_FILENAME}" for context in scope.context)
-    if candidate in context_manifests:
+    if any(candidate == f"{context.rstrip('/')}/{MANIFEST_FILENAME}" for context in scope.context):
         return True
     owned_entries = (*scope.primary, *(reference.path for reference in scope.references))
     return any(is_path_covered_by(entry, candidate) for entry in owned_entries)

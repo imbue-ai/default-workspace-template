@@ -27,10 +27,11 @@ eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/har
 This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and `TYPE`, plus
 `SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint. Fail loudly
 if `OPERATION` or `TYPE` is unset -- the lead must supply both. When `TYPE` is
-`app` or `skill`, also fail loudly if `SCOPE_FILE` or `DIFF_BASE` is unset:
-`SCOPE_FILE` is where you write the creation's footprint, and `DIFF_BASE` is
-the commit that footprint's diff is taken from (`harden-creation.md` has the
-command). A `service` or `system-interface` run carries neither.
+`skill`, or `app` and the app has an `app.toml`, also fail loudly if
+`SCOPE_FILE` or `DIFF_BASE` is unset: `SCOPE_FILE` is where you write the
+creation's footprint, and `DIFF_BASE` is the commit that footprint's diff is
+taken from (`harden-creation.md` has the command). A pre-manifest app, a
+`service`, or a `system-interface` run carries neither.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.
@@ -55,8 +56,8 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 | `TYPE` is `app` or `system-interface` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
 
 `verification.md` is in the same directory but appears in no row: the two
-code-guardian gates it invokes are parked, so no run loads it. It is kept
-current so its invocations are correct when they are run by hand or re-wired.
+code-guardian gates it invokes are parked, so no run loads it. Its invocations
+stay correct for a by-hand run.
 
 The two conditional cases that need defining:
 

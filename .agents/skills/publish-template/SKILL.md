@@ -196,8 +196,8 @@ footprint system/apps/<package>/app.toml` prints the app's footprint -- its own
 directory (`primary`), the `system/supervisord.conf` sections that run it
 (`wiring`), and the skills, scripts and docs its manifest claims
 (`references`). Propose that set as the include paths, plus anything the user
-named that the manifest does not claim, instead of reasoning the footprint out
-by hand. The user still confirms it in plain language at the scope gate below.
+named that the manifest does not claim. The user still confirms it in plain
+language at the scope gate below.
 
 **The scope gate: confirm BEFORE any assembly work -- before treating the
 include set as final, and before dispatching the worker (§3). This is a hard

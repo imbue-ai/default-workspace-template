@@ -1,6 +1,6 @@
 # Plan: app manifest scoping for review and hardening
 
-Design phase. Nothing here is implemented; the "Changes" section is the proposed work list. This effort stands alone: the code-guardian plugin is out of scope and is not modified.
+The design as approved. The "Changes" section is the work list it was implemented from; what shipped, what was measured, and what is still open is in `report-app-manifest-scoping.md` beside this file (the toy fixture named under "Measuring it in a toy setting" lives in a separate worktree and is not merged). This effort stands alone: the code-guardian plugin is out of scope and is not modified.
 
 ## Summary
 
@@ -63,7 +63,7 @@ A `[references]` table with sub-tables (`[references.slack-inbox-refresh]`) is a
 |---|---|
 | `references[].path` | Required. A literal repo-root-relative file or directory; no globs. Must exist (checked by `validate-manifest` and by a repo-wide test, so a deleted skill or a mistyped path fails loudly). Rejected when under the app's own directory (implicit), `system/vendor/`, `data/` (gitignored), or `system/apps/<other app>/` (an app-to-app dependency is a `pyproject.toml` dependency and is derivable). Duplicate entries are rejected. A family of related artifacts is listed one entry each, so every entry can carry its own `note`; a directory entry covers everything beneath it. |
 | `references[].note` | Optional one line: why the artifact belongs to the app and which surface it uses. This is what tells a reviewer which contract to check. |
-| `scope.exclude` | Optional list of repo-root-relative globs. Two uses: paths that are never considered even when they changed (generated frontend bundles, vendored assets, fixtures), and subdirectories carved out of an allow-listed path. The list is a denylist and is non-exhaustive by design: it is combined with the built-in excludes below, and anything simply absent from the footprint is "not in scope", not "excluded". |
+| `scope.exclude` | Optional list of repo-root-relative globs. Two uses: paths that are never considered even when they changed (generated frontend bundles, vendored assets, fixtures), and subdirectories carved out of an allow-listed path. The list is a denylist and is not exhaustive: it combines with the built-in excludes below, and anything absent from the footprint is "not in scope" rather than "excluded". |
 
 Globs appear only in `scope.exclude`, where "match many, deny all" is the wanted semantics; a reference is a declaration of ownership and stays literal, so validation is exact and each entry can explain itself. Exclude matching uses `pathspec` (gitwildmatch, the same semantics as `.gitignore`), a new dependency of `app_manifest`. CI runs Python 3.12 (`.github/workflows/ci.yml`), so the standard library's `PurePath.full_match` (3.13) is not available, and `fnmatch` has no `**` semantics.
 
@@ -133,7 +133,7 @@ The same scope file drives, with no further hand derivation:
 
 One channel: `$ARGUMENTS` on `/autofix` and `/verify-architecture`. Both skills already forward caller text into the sub-agent brief ("Include this context in the description you pass to agents"; "pass the analysis agent the creation context verbatim"). `verification.md` is rewritten so its two invocations pass the scope file path, the read budget, and the expansion rule, replacing the `{creation_context}` paragraph. The consumer-contract check (a change to an app's routes, CLI, or stored data shape must be reflected in every referenced artifact that uses that surface, and the reverse) is part of that same instruction text. Nothing in the plugin, `.reviewer/settings.json`, or the issue categories changes.
 
-`verification.md` stays unloaded by `harden-creation.md`: the gates remain parked. The rewrite is so that the invocations are correct the day they are re-wired, and so the toy measurement below can run them by hand.
+`verification.md` stays unloaded by `harden-creation.md`: the gates remain parked. Its invocations stay correct for a by-hand run, which is how the toy measurement below exercises them.
 
 ### The read budget and the expansion rule
 

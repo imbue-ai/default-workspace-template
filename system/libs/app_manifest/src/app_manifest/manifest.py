@@ -28,7 +28,7 @@ from app_manifest.primitives import is_path_covered_by
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 
-# Where an app package sits, as the location rules for references read it.
+# The directory every app package sits in, which the reference location rules key on.
 APPS_DIRECTORY_PARTS: Final[tuple[str, str]] = ("system", "apps")
 
 DEFAULT_PRIORITY: Final[PriorityName] = PriorityName("user")
@@ -175,29 +175,16 @@ def app_package_directory(repo_root: Path, manifest_path: Path) -> str | None:
     return f"{app_directory.relative_to(repo_root).as_posix()}/"
 
 
-def _describe_reference_location_problem(
-    reference: AppReference, own_app_directory: str | None, repo_root: Path
-) -> str | None:
-    """Return why a reference may not name where it does, given the app's own directory."""
-    if own_app_directory is not None and is_path_covered_by(own_app_directory, reference.path):
-        return (
-            f"reference {str(reference.path)!r} is inside the app's own directory "
-            f"{own_app_directory!r}, which is already implicit"
-        )
-    parts = reference.path.split("/")
+def _is_inside_another_apps_directory(repo_root: Path, reference_path: ReferencePath) -> bool:
+    """Whether a reference reaches into some app package under system/apps/."""
+    parts = reference_path.split("/")
     # A file that sits directly in system/apps/ (its README) is not an app; only a
-    # reference into a sibling app's directory is.
-    is_in_another_app = (
+    # reference into an app's directory is.
+    return (
         tuple(parts[:2]) == APPS_DIRECTORY_PARTS
         and len(parts) > 2
         and repo_root.joinpath(*APPS_DIRECTORY_PARTS, parts[2]).is_dir()
     )
-    if is_in_another_app:
-        return (
-            f"reference {str(reference.path)!r} names another app's directory; an app-to-app "
-            "dependency belongs in pyproject.toml, where it is already derivable"
-        )
-    return None
 
 
 def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) -> str | None:
@@ -221,9 +208,17 @@ def _check_references_against_repo_root(
     """Raises ManifestLoadError when a reference sits where it may not, or names nothing that exists."""
     own_app_directory = app_package_directory(repo_root, path)
     for reference in manifest.references:
-        problem = _describe_reference_location_problem(reference, own_app_directory, repo_root)
-        if problem is not None:
-            raise ManifestLoadError(f"manifest {path} is invalid: {problem}")
+        if own_app_directory is not None and is_path_covered_by(own_app_directory, reference.path):
+            raise ManifestLoadError(
+                f"manifest {path} is invalid: reference {str(reference.path)!r} is inside the app's "
+                f"own directory {own_app_directory!r}, which is already implicit"
+            )
+        if _is_inside_another_apps_directory(repo_root, reference.path):
+            raise ManifestLoadError(
+                f"manifest {path} is invalid: reference {str(reference.path)!r} names another app's "
+                "directory; an app-to-app dependency belongs in pyproject.toml, where it is already "
+                "derivable"
+            )
         if not (repo_root / reference.path).exists():
             raise ManifestLoadError(
                 f"manifest {path} references {str(reference.path)!r}, which does not exist under {repo_root}"

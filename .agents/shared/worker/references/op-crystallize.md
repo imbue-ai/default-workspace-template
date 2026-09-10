@@ -92,6 +92,8 @@ report with this body plus an "Approve and save? (yes / no with notes)" prompt:
 - Scenarios run: <list, with pass/fail>
 - Shape changes from the sample: <none, or the output-schema / field / CLI /
   exit-code deltas a consumer or surface would need to adapt to>
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
 ```
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
@@ -99,7 +101,14 @@ terminal report.
 
 In the **pre-existing/confirmed-live shape**, skip the final gate: commit and
 emit `name: done` once tests and gates pass. The user already confirmed the
-shape live, and the lead reveals/refreshes after merge.
+shape live, and the lead reveals/refreshes after merge. The `done` body carries
+the two footprint lines from `harden-creation.md`:
+
+```
+Committed on branch `<branch-name>`. Ready to merge.
+- References registered: <none, or one path per line>
+- Outside footprint: <none, or one path per line with why it changed>
+```
 
 ## If you need to give up
 

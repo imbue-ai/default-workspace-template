@@ -39,14 +39,13 @@ The models behind a workspace app's two descriptions:
   `find_referencing_manifests(repo_root, target_path)` is the reverse lookup
   from an owned path to the apps that claim it (an app directory with no
   `app.toml` is skipped, and so is a manifest that fails to load, with a warning
-  naming it -- `system/test_app_manifests.py` is the loud check for that, and one
-  app's stale reference must not block every other creation's footprint).
+  naming it -- `system/test_app_manifests.py` is the loud check for that, so one
+  app's stale reference does not block every other creation's footprint).
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
   pathspec that matches nothing and a mistyped path would read as "unchanged".
-  `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and
-  `SKILL_CONVENTIONS` are the fixed lists. Exclude matching is `pathspec`
-  gitignore syntax; a failing git command raises `ScopeComputationError` rather
-  than reporting an empty diff.
+  `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and `SKILL_CONVENTIONS` are the fixed
+  lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
+  raises `ScopeComputationError` rather than reporting an empty diff.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `ActionId`, `InstancesUrl`, `PriorityName`, `ProgramName`,
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
@@ -55,8 +54,8 @@ The models behind a workspace app's two descriptions:
   `system/scripts/forward_port_test.py` keeps them identical).
 - The `app-manifest validate-manifest <path> [--repo-root DIR]` command, for the
   build-app scaffold and tests. Without `--repo-root` the reference location
-  checks run against the root the `system/apps/<package>/app.toml` layout implies,
-  and a manifest anywhere else skips them.
+  checks run against the root the `system/apps/<package>/app.toml` layout
+  implies, and a manifest anywhere else skips them.
 
 ## The footprint commands
 
@@ -91,16 +90,19 @@ goes to stdout; with it, the parent directories are created.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
 - `wiring` is the `system/supervisord.conf` sections the app owns: its own
-  `program:<program>` block plus every `program:<name>-<role>` sidecar. Empty
+  `program:<program>` block plus every `program:<name>-<role>` sidecar (a
+  sidecar not named after its app, such as the browser's `xvfb`, is not found,
+  and an unrelated program that happens to share the prefix is). Empty
   when the conf runs none of them, which is the normal state before an app is
   first registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a
   `--for-path` scope, the primary directory of every app whose manifest
-  references that path. A change under it counts as inside the footprint,
-  because a skill's one sanctioned edit outside its own directory is the
-  `[[references]]` entry it adds to the owning app's `app.toml`.
+  references that path. Of each context directory only its `app.toml` counts as
+  inside the footprint, because a skill's one sanctioned edit outside its own
+  directory is the `[[references]]` entry it adds there; a change to the app's
+  code is reported outside.
 - `conventions` is a fixed list keyed by creation type, not checked for
   existence.
 - `exclude` is the built-in globs followed by the manifest's own, deduplicated.
@@ -108,8 +110,8 @@ goes to stdout; with it, the parent directories are created.
   sha, every file the diff changed (from the three-dot form, so what the base
   branch did after the fork is not the creation's change), and
   `outside_footprint`: the changed files that are neither under a `primary` path,
-  nor a `wiring` file, nor under a reference, nor under a `context` entry, nor
-  matched by `exclude`. A non-empty `outside_footprint` means either a missing
+  nor a `wiring` file, nor under a reference, nor a `context` entry's
+  `app.toml`, nor matched by `exclude`. A non-empty `outside_footprint` means either a missing
   reference or a change that does not belong on the branch.
 
 `app-manifest references --for-path <path>` prints one JSON object per line

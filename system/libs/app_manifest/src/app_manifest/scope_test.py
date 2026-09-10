@@ -5,6 +5,7 @@ import pytest
 from loguru import logger
 
 from app_manifest.errors import ScopeComputationError
+from app_manifest.manifest import AppManifest
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
@@ -28,6 +29,21 @@ from app_manifest.testing import run_git
 from app_manifest.testing import write_app_manifest
 from app_manifest.testing import write_repo_file
 from app_manifest.testing import write_supervisord_conf
+
+
+# --- the news workspace every case below is built on ----------------------------
+
+
+def _news_manifest_path(repo_root: Path) -> Path:
+    return repo_root / "system" / "apps" / "news" / "app.toml"
+
+
+def _news_manifest(repo_root: Path) -> AppManifest:
+    return load_manifest(_news_manifest_path(repo_root), repo_root=repo_root)
+
+
+def _news_app_scope(repo_root: Path) -> CreationScope:
+    return compute_app_scope(repo_root, _news_manifest_path(repo_root), _news_manifest(repo_root))
 
 
 # --- reference kinds ------------------------------------------------------------
@@ -76,10 +92,9 @@ def test_a_footprint_entry_covers_itself_and_what_is_beneath_it(
 def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
     tmp_path: Path,
 ) -> None:
-    manifest_path = build_news_workspace(tmp_path)
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
+    build_news_workspace(tmp_path)
 
-    wiring = find_wiring_sections(tmp_path, manifest)
+    wiring = find_wiring_sections(tmp_path, _news_manifest(tmp_path))
 
     assert len(wiring) == 1
     assert wiring[0].path == "system/supervisord.conf"
@@ -89,30 +104,27 @@ def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
 def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
     tmp_path: Path,
 ) -> None:
-    manifest_path = build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
     write_supervisord_conf(tmp_path, ("program:files", "program:chat"))
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
-    assert find_wiring_sections(tmp_path, manifest) == ()
+    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path)) == ()
 
 
 def test_wiring_is_empty_when_there_is_no_supervisord_conf_at_all(tmp_path: Path) -> None:
-    manifest_path = build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
     (tmp_path / "system" / "supervisord.conf").unlink()
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
-    assert find_wiring_sections(tmp_path, manifest) == ()
+    assert find_wiring_sections(tmp_path, _news_manifest(tmp_path)) == ()
 
 
 def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
     tmp_path: Path,
 ) -> None:
-    manifest_path = build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
     (tmp_path / "system" / "supervisord.conf").write_text("[program:news\ncommand=x\n")
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     with pytest.raises(ScopeComputationError, match="supervisord.conf"):
-        find_wiring_sections(tmp_path, manifest)
+        find_wiring_sections(tmp_path, _news_manifest(tmp_path))
 
 
 # --- the app scope --------------------------------------------------------------
@@ -121,10 +133,9 @@ def test_an_unparseable_supervisord_conf_raises_rather_than_yielding_no_wiring(
 def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventions(
     tmp_path: Path,
 ) -> None:
-    manifest_path = build_news_workspace(tmp_path)
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
+    build_news_workspace(tmp_path)
 
-    scope = compute_app_scope(tmp_path, manifest_path, manifest)
+    scope = _news_app_scope(tmp_path)
 
     assert scope.creation.type is CreationType.APP
     assert scope.creation.name == "news"
@@ -150,13 +161,61 @@ def test_an_app_scope_carries_the_apps_own_paths_wiring_references_and_conventio
 def test_the_built_in_excludes_come_first_and_a_repeated_manifest_glob_is_dropped(
     tmp_path: Path,
 ) -> None:
-    manifest_path = build_news_workspace(tmp_path)
+    build_news_workspace(tmp_path)
+
+    scope = _news_app_scope(tmp_path)
+
+    # ``data/**`` is both a built-in and written in this manifest; it appears once, in built-in order.
+    assert list(scope.exclude) == list(BUILT_IN_EXCLUDES) + ["docs/generated/**"]
+
+
+@pytest.mark.parametrize("exclude_glob", ["system/apps/news/**", ".agents/skills/news-refresh/**"])
+def test_an_exclude_that_swallows_a_footprint_entry_is_refused(tmp_path: Path, exclude_glob: str) -> None:
+    # Excluding the app's own directory or a referenced skill whole would leave
+    # outside_footprint empty no matter what changed; carving out a subdirectory is fine.
+    build_news_workspace(tmp_path)
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+        '[[references]]\npath = ".agents/skills/news-refresh"\n'
+        f'[scope]\nexclude = ["{exclude_glob}"]\n',
+        is_icon_written=True,
+    )
+    manifest = load_manifest(manifest_path, repo_root=tmp_path)
+
+    with pytest.raises(ScopeComputationError, match="part of the footprint"):
+        compute_app_scope(tmp_path, manifest_path, manifest)
+
+
+def test_an_exclude_that_carves_out_a_subdirectory_is_accepted(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    write_repo_file(tmp_path, "system/apps/news/frontend/dist/bundle.js", "x\n")
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
+        '[scope]\nexclude = ["system/apps/news/frontend/dist/**"]\n',
+        is_icon_written=True,
+    )
     manifest = load_manifest(manifest_path, repo_root=tmp_path)
 
     scope = compute_app_scope(tmp_path, manifest_path, manifest)
 
-    # ``data/**`` is both a built-in and written in this manifest; it appears once, in built-in order.
-    assert list(scope.exclude) == list(BUILT_IN_EXCLUDES) + ["docs/generated/**"]
+    assert "system/apps/news/frontend/dist/**" in scope.exclude
+
+
+def test_an_unresolved_repo_root_is_resolved_before_use(tmp_path: Path) -> None:
+    # macOS hands out /tmp for /private/tmp; a caller passing the unresolved form must
+    # get the same footprint as one passing the resolved form.
+    build_news_workspace(tmp_path.resolve())
+    unresolved_root = Path(str(tmp_path).replace(str(tmp_path.resolve()), str(tmp_path), 1))
+
+    scope = compute_app_scope(
+        unresolved_root, _news_manifest_path(unresolved_root), _news_manifest(unresolved_root)
+    )
+
+    assert list(scope.primary) == ["system/apps/news/"]
 
 
 def test_a_manifest_outside_the_repo_root_cannot_have_a_footprint(tmp_path: Path) -> None:
@@ -168,10 +227,9 @@ def test_a_manifest_outside_the_repo_root_cannot_have_a_footprint(tmp_path: Path
 
 
 def test_the_rendered_scope_file_is_indented_json_ending_in_a_newline(tmp_path: Path) -> None:
-    manifest_path = build_news_workspace(tmp_path)
-    manifest = load_manifest(manifest_path, repo_root=tmp_path)
+    build_news_workspace(tmp_path)
 
-    rendered = render_scope_file(compute_app_scope(tmp_path, manifest_path, manifest))
+    rendered = render_scope_file(_news_app_scope(tmp_path))
 
     assert rendered.endswith("}\n")
     assert '\n  "primary": [' in rendered
@@ -341,10 +399,7 @@ def _commit_news_workspace_base(repo_root: Path) -> str:
 
 
 def _news_scope_with_diff(repo_root: Path, base_sha: str) -> CreationScope:
-    manifest_path = repo_root / "system" / "apps" / "news" / "app.toml"
-    manifest = load_manifest(manifest_path, repo_root=repo_root)
-    scope = compute_app_scope(repo_root, manifest_path, manifest)
-    return with_diff_against_base(scope, repo_root, base_sha)
+    return with_diff_against_base(_news_app_scope(repo_root), repo_root, base_sha)
 
 
 def test_the_diff_lists_every_changed_file_and_only_the_unaccounted_ones_as_outside(
@@ -396,12 +451,9 @@ def test_a_diff_base_that_does_not_resolve_raises_rather_than_reporting_no_chang
 ) -> None:
     repo_root = tmp_path / "workspace"
     _commit_news_workspace_base(repo_root)
-    manifest_path = repo_root / "system" / "apps" / "news" / "app.toml"
-    manifest = load_manifest(manifest_path, repo_root=repo_root)
-    scope = compute_app_scope(repo_root, manifest_path, manifest)
 
     with pytest.raises(ScopeComputationError, match="rev-parse"):
-        with_diff_against_base(scope, repo_root, "no-such-ref-9f13c2")
+        with_diff_against_base(_news_app_scope(repo_root), repo_root, "no-such-ref-9f13c2")
 
 
 def test_the_diff_reports_a_non_ascii_name_and_a_name_with_a_space_as_the_paths_they_are(

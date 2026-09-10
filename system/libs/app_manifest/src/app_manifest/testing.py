@@ -82,6 +82,7 @@ def commit_everything(repo_root: Path, message: str) -> str:
     run_git(repo_root, ("commit", "-q", "-m", message))
     return run_git(repo_root, ("rev-parse", "HEAD")).strip()
 
+
 def build_news_workspace(repo_root: Path) -> Path:
     """A repo-shaped tree holding the news app, everything it references, and a supervisord conf."""
     manifest_path = write_app_manifest(repo_root, "news", NEWS_MANIFEST, is_icon_written=True)
