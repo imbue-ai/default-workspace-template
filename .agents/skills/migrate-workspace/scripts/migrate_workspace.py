@@ -733,6 +733,40 @@ def parse_supervisord_ports(text: str) -> list[AppPort]:
     return ports
 
 
+# The manifest filename every app ships beside its package.
+APP_MANIFEST_FILENAME = "app.toml"
+
+
+def parse_app_manifest_ports(toml_text: str) -> list[AppPort]:
+    """Extract the ports an app's ``app.toml`` declares.
+
+    An app declares the origin it serves its own pages at as ``url``, and a second
+    port as ``instances_url`` when it serves the instances API beside a wrapped
+    server. Reading the manifests matters for the same reason reading the program
+    blocks does, only more so: an app that registers itself at runtime names no port
+    in its supervisord command at all, so for chat, files and terminal the manifest
+    is the only committed record of the port they hold.
+    """
+    parsed = tomllib.loads(toml_text)
+    name = parsed.get("name")
+    if not name:
+        return []
+    ports: list[AppPort] = []
+    for url_key in ("url", "instances_url"):
+        url = parsed.get(url_key, "")
+        match = re.search(r":(\d+)", str(url))
+        if match is not None:
+            ports.append(
+                AppPort(
+                    name=name,
+                    port=int(match.group(1)),
+                    url=str(url),
+                    found_in=f"{APP_MANIFEST_FILENAME} {url_key}",
+                )
+            )
+    return ports
+
+
 # The registry's array-of-tables key: ``applications`` pre-rename, ``apps``
 # after. Both hold ``name`` + ``url`` entries, so one parser covers a source of
 # either vintage.
@@ -1065,6 +1099,16 @@ def _list_remote_supervisord_dropins(target: SshTarget, dropin_dir: str) -> list
     return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
 
+def _list_remote_app_manifests(target: SshTarget, apps_dir: str) -> list[str]:
+    """The source's ``system/apps/*/app.toml`` paths, or [] when it has no such directory."""
+    quoted = _shell_quote(apps_dir)
+    listing = run_remote(
+        target,
+        f"if [ -d {quoted} ]; then ls -1 {quoted}/*/{APP_MANIFEST_FILENAME} 2>/dev/null || true; fi",
+    )
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
     """Read many remote files in as few round trips as possible, keyed by path.
 
@@ -1376,13 +1420,21 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
     # extra round trip) and read them in the same batched pass; a source predating
     # the split declares its programs in the main config, which is already listed.
     remote_paths.extend(
-        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf.d")
+        _list_remote_supervisord_dropins(
+            target, f"{repo_root}/system/supervisord.conf.d"
+        )
     )
+    # An app that registers itself at runtime declares its port only in its
+    # manifest, so the manifests are read too -- and they are committed, unlike the
+    # registry, so a source whose apps never started still reports their ports.
+    remote_paths.extend(_list_remote_app_manifests(target, f"{repo_root}/system/apps"))
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
     for path, text in sorted(remote_files.items()):
         if path.endswith(".conf"):
             source_ports.extend(parse_supervisord_ports(text))
+        elif path.rsplit("/", 1)[-1] == APP_MANIFEST_FILENAME:
+            source_ports.extend(parse_app_manifest_ports(text))
         else:
             source_ports.extend(parse_apps_registry(text))
     local_ports = _local_ports()
@@ -1410,6 +1462,8 @@ def _local_ports() -> list[AppPort]:
     # after the migration, not here.
     for conf in _local_supervisord_configs():
         ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
+    for manifest in sorted(Path("system/apps").glob(f"*/{APP_MANIFEST_FILENAME}")):
+        ports.extend(parse_app_manifest_ports(manifest.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
         ports.extend(parse_apps_registry(registry.read_text(encoding="utf-8")))
