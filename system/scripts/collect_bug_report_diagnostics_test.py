@@ -1441,6 +1441,38 @@ def test_a_log_db_the_collector_cannot_read_reports_itself_rather_than_raising(
     assert module.read_log_db(str(db_path)).startswith("(unreadable:")
 
 
+def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """A shape change inside a row costs the report the db, not the whole run.
+
+    A db that opens and queries fine can still hand back a value the render
+    cannot use: SQLite stores what it was given rather than what the column was
+    declared as, so a bumped schema writing a text ``ts`` survives ``NOT NULL``
+    and ``INTEGER`` alike. That is not a ``sqlite3.Error``, so unguarded it
+    would propagate out of ``main()`` and the host would get no archive at all.
+    """
+    agents_dir = tmp_path / "agents"
+    db_path = _write_log_db(agents_dir, "chatty", [])
+    connection = sqlite3.connect(db_path)
+    with connection:
+        connection.execute(
+            "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                "not-a-number",
+                1,
+                "TRACE",
+                "codex_app_server::message_processor",
+                "unformattable",
+            ),
+        )
+    connection.close()
+    module = _load_collector(agents_dir=agents_dir)
+
+    assert module.read_log_db(str(db_path)).startswith("(unreadable:")
+
+
 def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
