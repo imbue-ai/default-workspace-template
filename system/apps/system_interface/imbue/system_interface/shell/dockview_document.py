@@ -1,7 +1,7 @@
 """The pure editor over a client's serialized dockview document (contracts.md section 12).
 
-A layout file holds dockview's own ``toJSON`` output plus one tab record per panel. Dockview's
-grid is a tree: the root is a branch laid out along ``grid.orientation``, every nested branch
+A layout file holds dockview's own ``toJSON`` output, whose per-panel ``params`` name what each
+tab shows (``data_types.instance_panel_params_by_id`` reads them). Dockview's grid is a tree: the root is a branch laid out along ``grid.orientation``, every nested branch
 flips orientation, and a leaf is a group of tabs (``views``) with an ``activeView`` and an ``id``.
 A node's ``size`` is its extent along its parent's axis and its cross extent is its parent's
 ``size``; dockview lays the tree out proportionally on load, so the numbers only need to be in
@@ -21,7 +21,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import TabRecord
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
+from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import PanelNotFoundError
 from imbue.system_interface.shell.layouts import strip_panel_from_dockview
@@ -33,7 +34,7 @@ NOMINAL_ROOT_WIDTH: Final[int] = 1200
 NOMINAL_ROOT_HEIGHT: Final[int] = 800
 
 # The frontend's panel components, as its ``createComponent`` names them; a New Tab launcher's
-# panel id carries the prefix and has no tab record.
+# panel id carries the prefix and its params name no instance.
 INSTANCE_COMPONENT: Final[str] = "instance"
 CUSTOM_TAB_COMPONENT: Final[str] = "custom"
 LAUNCHER_PANEL_ID_PREFIX: Final[str] = "new-tab-"
@@ -78,13 +79,14 @@ def is_launcher_panel_id(panel_id: str) -> bool:
 @pure
 def panel_id_for_address(layout: LayoutRecord, address: Address) -> str | None:
     """The panel showing ``address``: exact, or any instance of the app for a bare app address."""
-    for panel_id, tab in layout.tabs.items():
-        if tab.address == address:
+    params_by_id = instance_panel_params_by_id(layout.dockview)
+    for panel_id, params in params_by_id.items():
+        if params.address == address:
             return panel_id
     if address.key is not None:
         return None
-    for panel_id, tab in layout.tabs.items():
-        if tab.address.app == address.app:
+    for panel_id, params in params_by_id.items():
+        if params.address.app == address.app:
             return panel_id
     return None
 
@@ -186,13 +188,13 @@ def _new_leaf(group_id: str, panel_id: str) -> dict[str, Any]:
     return {"type": "leaf", "data": {"views": [panel_id], "activeView": panel_id, "id": group_id}}
 
 
-def _panel_entry(panel_id: str, address: Address, title: str) -> dict[str, Any]:
+def _panel_entry(panel_id: str, address: Address, tab_id: TabId, title: str) -> dict[str, Any]:
     return {
         "id": panel_id,
         "contentComponent": INSTANCE_COMPONENT,
         "tabComponent": CUSTOM_TAB_COMPONENT,
         "title": title,
-        "params": {"kind": INSTANCE_COMPONENT, "address": str(address), "tabId": panel_id},
+        "params": instance_panel_params_json(address, tab_id, 0),
     }
 
 
@@ -401,22 +403,18 @@ def add_panel(layout: LayoutRecord, address: Address, tab_id: TabId, title: str,
         if layout.dockview is not None
         else _empty_document(placement.group_id, panel_id)
     )
-    document.setdefault("panels", {})[panel_id] = _panel_entry(panel_id, address, title)
+    document.setdefault("panels", {})[panel_id] = _panel_entry(panel_id, address, tab_id, title)
     if layout.dockview is None:
         docked = document
     else:
         docked = _dock(document, panel_id, placement)
-    tabs = {**layout.tabs, panel_id: TabRecord(address=address, tab_id=tab_id, last_focused_ms=0)}
-    return layout.model_copy_update(
-        to_update(layout.field_ref().dockview, docked),
-        to_update(layout.field_ref().tabs, tabs),
-    )
+    return layout.model_copy_update(to_update(layout.field_ref().dockview, docked))
 
 
 @pure
 def remove_panel(layout: LayoutRecord, panel_id: str) -> LayoutRecord:
     """The layout without ``panel_id``; a grid that empties leaves ``dockview`` None."""
-    if layout.dockview is None or panel_id not in layout.tabs:
+    if layout.dockview is None or panel_id not in instance_panel_params_by_id(layout.dockview):
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
     document = _repaired_document(copy.deepcopy(layout.dockview), f"{panel_id}-repaired")
     detached = _detach_panel_from_grid(document, panel_id)
@@ -424,11 +422,7 @@ def remove_panel(layout: LayoutRecord, panel_id: str) -> LayoutRecord:
         detached["panels"].pop(panel_id, None)
         if not detached["panels"]:
             detached = None
-    tabs = {other: tab for other, tab in layout.tabs.items() if other != panel_id}
-    return layout.model_copy_update(
-        to_update(layout.field_ref().dockview, detached),
-        to_update(layout.field_ref().tabs, tabs),
-    )
+    return layout.model_copy_update(to_update(layout.field_ref().dockview, detached))
 
 
 @pure
@@ -465,8 +459,8 @@ def _is_already_placed(document: dict[str, Any], panel_id: str, placement: Place
 
 @pure
 def move_panel(layout: LayoutRecord, panel_id: str, placement: Placement) -> LayoutRecord:
-    """The layout with ``panel_id`` taken out of its group and docked per ``placement`` (its page and tab record kept)."""
-    if layout.dockview is None or panel_id not in layout.tabs:
+    """The layout with ``panel_id`` taken out of its group and docked per ``placement`` (its page and params kept)."""
+    if layout.dockview is None or panel_id not in instance_panel_params_by_id(layout.dockview):
         raise PanelNotFoundError(f"no panel {panel_id!r} in the arrangement")
     if placement.anchor_panel_id == panel_id:
         raise LayoutOpError(f"cannot move {panel_id!r} relative to itself")
