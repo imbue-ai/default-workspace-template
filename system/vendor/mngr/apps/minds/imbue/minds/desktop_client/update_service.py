@@ -16,6 +16,7 @@ from pydantic import PrivateAttr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.minds.config.data_types import InstallationPaths
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
@@ -24,9 +25,11 @@ from imbue.minds.desktop_client.backup_workspace_scripts import BACKUP_GATE_PROB
 from imbue.minds.desktop_client.backup_workspace_scripts import GATE_RESULT_MARKER
 from imbue.minds.desktop_client.backup_workspace_scripts import build_workspace_script_command
 from imbue.minds.desktop_client.backup_workspace_scripts import extract_marker_json
+from imbue.minds.desktop_client.skill_chat import AccountBindingState
 from imbue.minds.desktop_client.skill_chat import SkillSupport
 from imbue.minds.desktop_client.skill_chat import check_skill_support
 from imbue.minds.desktop_client.skill_chat import generate_chat_name
+from imbue.minds.desktop_client.skill_chat import resolve_account_binding
 from imbue.minds.desktop_client.skill_chat import spawn_skill_chat
 from imbue.minds.desktop_client.ui_models import UiWorkspaceUpdate
 from imbue.minds.desktop_client.update_apply_window import UpdateAgentLiveness
@@ -78,7 +81,31 @@ class UpdateDispatchOutcome(UpperCaseStrEnum):
     """The workspace predates the update-self skill; there is nothing to run."""
     UNREACHABLE = auto()
     """The workspace could not be probed or started."""
+    NO_ACCOUNT = auto()
+    """The workspace named no signed-in account the update agent could run on."""
     SPAWN_FAILED = auto()
+    """The workspace was reachable, but the create did not land; its verdict says why when it gave one."""
+
+
+class UpdateDispatch(FrozenModel):
+    """What a dispatch did, and the workspace's own words when it did not go out.
+
+    A carrier rather than the bare outcome: SPAWN_FAILED is the one outcome
+    whose cause the enum cannot name.
+    """
+
+    outcome: UpdateDispatchOutcome = Field(description="What the dispatch did")
+    failure_detail: str = Field(
+        default="",
+        description="The workspace's verdict on a failed spawn; '' when it gave none, and for every other outcome",
+    )
+
+    @property
+    def log_description(self) -> str:
+        """This dispatch in one log line: the outcome, and the workspace's verdict when it gave one."""
+        if not self.failure_detail:
+            return self.outcome.value
+        return f"{self.outcome.value}: {self.failure_detail}"
 
 
 class OnUpdateRunFinishedCallback(Protocol):
@@ -128,7 +155,7 @@ class WorkspaceUpdateService(MutableModel):
 
     # -- Dispatch ---------------------------------------------------------
 
-    def dispatch_update(self, agent_id: AgentId, *, target_override: str | None = None) -> UpdateDispatchOutcome:
+    def dispatch_update(self, agent_id: AgentId, *, target_override: str | None = None) -> UpdateDispatch:
         """Start an update run in ``agent_id``, returning what happened.
 
         ``target_override`` was confirmed at the app's version field when it was
@@ -143,12 +170,12 @@ class WorkspaceUpdateService(MutableModel):
         if not self.state_store.try_begin_run(
             agent_id, chat_agent_name=chat_name, target_override=target_override or ""
         ):
-            return UpdateDispatchOutcome.ALREADY_RUNNING
+            return UpdateDispatch(outcome=UpdateDispatchOutcome.ALREADY_RUNNING)
         is_dispatched = False
         try:
-            outcome = self._start_claimed_run(agent_id, chat_name, target_override)
-            is_dispatched = outcome is UpdateDispatchOutcome.DISPATCHED
-            return outcome
+            dispatch = self._start_claimed_run(agent_id, chat_name, target_override)
+            is_dispatched = dispatch.outcome is UpdateDispatchOutcome.DISPATCHED
+            return dispatch
         finally:
             # Conditional on STARTING: a spawn that timed out after creating the
             # chat has a live run the sweep may already have entered as RUNNING,
@@ -158,42 +185,53 @@ class WorkspaceUpdateService(MutableModel):
                     agent_id, UpdateActivity.IDLE, only_from=frozenset({UpdateActivity.STARTING})
                 )
 
-    def _start_claimed_run(
-        self, agent_id: AgentId, chat_name: str, target_override: str | None
-    ) -> UpdateDispatchOutcome:
+    def _start_claimed_run(self, agent_id: AgentId, chat_name: str, target_override: str | None) -> UpdateDispatch:
         """Do the work of a dispatch that has already won the run slot."""
         # A start no-ops against a running host, so this is unconditional rather
         # than gated on a possibly-stale discovery answer.
         if not self.start_workspace(agent_id):
-            return UpdateDispatchOutcome.UNREACHABLE
+            return UpdateDispatch(outcome=UpdateDispatchOutcome.UNREACHABLE)
         support = check_skill_support(self.mngr_caller, agent_id, UPDATE_SKILL_NAME)
         match support:
             case SkillSupport.UNSUPPORTED:
-                return UpdateDispatchOutcome.UNSUPPORTED
+                return UpdateDispatch(outcome=UpdateDispatchOutcome.UNSUPPORTED)
             case SkillSupport.UNREACHABLE:
-                return UpdateDispatchOutcome.UNREACHABLE
+                return UpdateDispatch(outcome=UpdateDispatchOutcome.UNREACHABLE)
             case SkillSupport.SUPPORTED:
                 pass
-        if not spawn_skill_chat(
+        # An unbound chat reaches a config dir holding no credential, so it can never take a turn.
+        binding = resolve_account_binding(self.mngr_caller, agent_id)
+        match binding.state:
+            case AccountBindingState.UNREACHABLE:
+                return UpdateDispatch(outcome=UpdateDispatchOutcome.UNREACHABLE)
+            case AccountBindingState.UNAVAILABLE:
+                return UpdateDispatch(outcome=UpdateDispatchOutcome.NO_ACCOUNT)
+            case AccountBindingState.BOUND | AccountBindingState.NOT_REQUIRED:
+                pass
+        spawn = spawn_skill_chat(
             self.mngr_caller,
             agent_id,
+            account_args=binding.create_args,
             chat_name=chat_name,
             # Read here rather than carried from the press: a schedule armed days ago is not
             # evidence about the backups this run is actually about to go without.
             message=build_update_chat_message(
                 target_override=target_override, is_backup_configured=self.is_backup_configured(agent_id)
             ),
-        ):
-            return UpdateDispatchOutcome.SPAWN_FAILED
+        )
+        if not spawn.is_started:
+            return UpdateDispatch(outcome=UpdateDispatchOutcome.SPAWN_FAILED, failure_detail=spawn.failure_detail)
         self.state_store.set_activity(agent_id, UpdateActivity.RUNNING)
-        return UpdateDispatchOutcome.DISPATCHED
+        return UpdateDispatch(outcome=UpdateDispatchOutcome.DISPATCHED)
 
     def dispatch_for_scheduler(self, agent_id: AgentId, target_ref: str) -> bool:
         """The scheduler's dispatch hook: whether the run went out."""
-        outcome = self.dispatch_update(agent_id, target_override=target_ref or None)
-        if outcome is not UpdateDispatchOutcome.DISPATCHED:
-            logger.info("Scheduled update for {} did not dispatch: {}", agent_id, outcome.value)
-        return outcome is UpdateDispatchOutcome.DISPATCHED
+        dispatch = self.dispatch_update(agent_id, target_override=target_ref or None)
+        if dispatch.outcome is not UpdateDispatchOutcome.DISPATCHED:
+            # An unattended run has no one at the screen, so the log line is the
+            # only place its refusal is written down.
+            logger.info("Scheduled update for {} did not dispatch: {}", agent_id, dispatch.log_description)
+        return dispatch.outcome is UpdateDispatchOutcome.DISPATCHED
 
     # -- Scheduling -------------------------------------------------------
 

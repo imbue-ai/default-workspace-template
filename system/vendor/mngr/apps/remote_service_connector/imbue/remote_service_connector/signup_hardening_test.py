@@ -29,9 +29,7 @@ _CLEAN_IP = "203.0.113.77"
 _CLEAN_SUBNET = "203.0.113.0/24"
 
 
-# ---------------------------------------------------------------------------
 # Pure helpers
-# ---------------------------------------------------------------------------
 
 
 def test_subnet_for_client_ip_aggregates_v4_to_a_slash_24() -> None:
@@ -197,9 +195,7 @@ def test_ipinfo_provider_folds_residential_proxies_into_the_proxy_flag(
     assert classify_reputation(reputation) is SignupIpVerdict.SUSPICIOUS
 
 
-# ---------------------------------------------------------------------------
 # Password signup gate (enforced tiers)
-# ---------------------------------------------------------------------------
 
 
 def _make_production_signup_client(
@@ -404,9 +400,7 @@ def test_dev_tiers_record_the_verdict_but_never_refuse(monkeypatch: pytest.Monke
     assert attempts[0]["outcome"] == "allowed"
 
 
-# ---------------------------------------------------------------------------
 # Google OAuth account-creation gate
-# ---------------------------------------------------------------------------
 
 
 def _make_production_oauth_client(

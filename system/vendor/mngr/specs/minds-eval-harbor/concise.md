@@ -54,7 +54,7 @@ These four forks were decided with the user before writing this spec.
 * The same case data is also written to `tests/case.json` for the verifier's programmatic checks (expected turn counts).
 * `environment/` is identical across all tasks in a dataset: an adapted copy of the box `Dockerfile` and `entrypoint.sh` (owned by the new app) plus a staged shallow clone of mngr-internal at the resolved SHA (port of `box._fetch_mngr_source`).
 * The old harness's in-box app overlay (`box._stage_app_overlay`, and the Dockerfile's `rm -rf`/`COPY` of the harness package) is dropped from the adapted Dockerfile: the driver is host-side, so no harness code runs inside the box.
-* Because the environment context is byte-identical across tasks, Modal's image-layer cache builds the box image once per mngr SHA and every other task in the job reuses it (`Image.from_dockerfile` builds on Modal's builders, same as today's `box.ensure`).
+* Because the environment context is byte-identical across tasks, the box image is built once per mngr SHA and every other task in the job reuses it (`Image.from_dockerfile` builds on Modal's builders, same as today's `box.ensure`). (Correction: there is no *layer* cache to speak of -- `from_dockerfile` compiles the whole file into one build whose key is every instruction plus the context, so any change rebuilds all of it; see Implementation corrections.)
 * Each task directory carries its own ~50 MB mngr clone (roughly 400 MB on disk for an 8-case dataset); Modal deduplicates the upload by content hash, so only local disk pays for the copies.
 * Per-case data must never leak into `environment/`, or the cache key diverges and every task rebuilds the image.
 * `task.toml` template highlights:
@@ -156,7 +156,7 @@ class GoalTurnSource(TurnSource):
 * The transcript and state files reach the verifier via declared artifacts: `artifacts = ["/logs/agent/full_transcript.jsonl", "/logs/agent/state.json"]` in `task.toml`, re-materialized at their original paths in the verifier container.
 * `tests/verifier/test.sh` runs `uvx --from 'harbor-rewardkit==0.2.0' rewardkit /tests`.
 * The criteria descriptions are written fresh in rewardkit's idiom but preserve the intent of the current `_JUDGE_PROMPT` dimensions ("how an AI agent talks to a non-technical client it is building software for").
-* Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the raw avg-word-count value also lands in `agent_result.metadata`.
+* Raw judge answers and per-criterion values live in each trial's `verifier/reward-details.json`; the driver's own `average_words_per_turn` and `average_words_per_message` also land in `agent_result.metadata`, for observability only.
 * The judge model is pinned in `judge.toml`; its key arrives through `[verifier.env]`.
 * Re-grading finished rollouts without re-running them: `harbor trial regrade` (replaces the old two-pass `launch` / `evaluate` split).
 
@@ -169,11 +169,11 @@ class GoalTurnSource(TurnSource):
 | `conciseness_score` (1-10) | `judge.toml` criterion `conciseness` | likert `points = 10`, `(s-1)/9` | 1.0 |
 | `nontechnical_language_score` (1-10) | `judge.toml` criterion `nontechnical_language` | likert `points = 10`, `(s-1)/9` | 1.0 |
 | `proactive_score` (1-10) | `judge.toml` criterion `proactive` | likert `points = 10`, `(s-1)/9` | 1.0 |
-| `avg_word_count` (reported, unscored) | `checks.py` wordiness guard: passes unless avg words per agent turn exceeds `avg_word_count_baseline * 1.1` (the negated-criterion idiom: scores the behavior the agent should NOT exhibit) | binary, 0 or 1 | 1.0 |
+| `avg_word_count` (reported, unscored) | `quality/message_lengths.py` message-length guard: each message is held to the limit for its role in the turn -- a status line, or the turn's answer -- and the criterion is the fraction of turns that keep both | fraction, 0 to 1 | 1.0 |
 | only `finished` cases scored (`N/A` otherwise) | `checks.py` structural gates: transcript parses, agent engaged with distinct non-stub replies, all turns completed, not timed out; a failed gate zeroes the reward via `finalize.py` (see Implementation corrections -- rewardkit's `required_pass` cannot express this) and is marked in `reward-details.json` | binary gate | gate (no weight) |
 
-* `reward` = weighted mean of the four scored criteria above, gated by the structural checks; with equal weights the wordiness guard is 25% of the reward, which is the primary knob to adjust at review time.
-* `avg_word_count_baseline` is written into `tests/case.json` by the generator; its default is an unmeasured seed, and it is overridable per config, so the way to ground it is to measure the mean over a batch of real runs and set it there.
+* `reward` = weighted mean of the scored criteria above, gated by the structural checks. The knob to adjust at review time is the criterion set of each dimension and the split `finalize.py` applies between them.
+* The message-length limits in `quality/message_lengths.py` are the guard's whole configuration: the bar is a property of the writing rather than of the eval config, so there is no per-config baseline to ground.
 * `judge.toml` sketch:
 
 ```toml
@@ -193,7 +193,7 @@ points = 10
 ## Oracle
 
 * `solution/solve.sh` writes a canned near-perfect transcript (and matching state/snapshot placeholders) into `/logs/agent/`, without booting Minds, so `harbor run -a oracle` exercises generation, environment build, verification, and results end-to-end.
-* After the first box-image build on Modal's builders (10-20 min, then layer-cached), oracle runs complete in minutes.
+* After the first box-image build on Modal's builders, oracle runs complete in minutes. (Correction: that build is about two and a half minutes, not the 10-20 estimated here; see Implementation corrections.)
 * Because the judges are LLMs, oracle runs assert `reward >= 0.8` rather than exactly 1.0 (deviation from the adapter guideline of oracle == 100%, which assumes deterministic verifiers).
 
 ## Results, CI, and archival
@@ -235,7 +235,7 @@ the old-vs-new justification lives in that PR's description.
 ## Risks
 
 * **Bridged workspace access**: the driver reaches the workspace's chat app via box-exec + `mngr ssh` + curl, so each poll is a Modal exec round trip. Poll intervals of a few seconds keep this well under rate limits, but PR1 must verify latency is acceptable end-to-end.
-* **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized by the Modal layer cache; boot cost is accepted for isolation.
+* **Per-trial backend boot**: every trial boots its own box (Electron + backend), adding a few minutes per trial that the shared-box design amortized across a batch. Image-build cost is amortized across the dataset, since every task shares one image; boot cost is accepted for isolation.
 * **Workspace sandbox leaks**: if the harbor runner is killed hard (no `finally`), nested sandboxes survive until their 3h timeout; the driver's cleanup plus the timeout backstop bound the cost.
 * **Judge nondeterminism**: rewardkit likert judges make oracle assertions and cross-run comparisons statistical, not exact; PR2 must report means over multiple trials (`-k/--n-attempts`) rather than single runs.
 * **uvx cache staleness**: `uvx harbor` resolved a stale 0.5.0 in testing. Harbor is therefore a pinned uv dependency of the app (invoked as `uv run --project apps/minds_evals harbor`), and the only remaining uvx call -- rewardkit inside `tests/verifier/test.sh` -- pins its version explicitly.
@@ -259,3 +259,4 @@ Where the built harness (PR #344) diverged from the design above. These correct 
 * **Timeouts / context.** The agent-level setup timeout is raised via `--agent-setup-timeout-multiplier` (harbor exposes no CLI flag for `override_setup_timeout_sec`). The ATIF trajectory is written at the end of `run()`, because harbor only calls `populate_context_post_run` when the agent context is still empty and this driver always populates it.
 * **Operating model.** Each trial boots its own 6-CPU/16-GB box, so a full run is a **scheduled/nightly regression job, not a per-PR gate**; the run recipe takes a `concurrency` arg (set to the case count for one wave) and sizes the separate verifier env down to 2 CPU/4 GB.
 * **Glue size.** The "~150 lines of topology-specific glue" estimate was low; the driver plus bridge total ~1100 lines (the bridged poll/observability, clean-conversation extraction, and cleanup verification account for most of the excess).
+* **Image cache and build time.** The design says "Modal's image-layer cache" and estimates 10-20 minutes for the first build. Measured, both are wrong in the same direction: `Image.from_dockerfile` compiles the whole file into ONE image build with no per-instruction cache, keyed on every command plus the build context together, and that build takes about two and a half minutes cold (apt ~41 s, `uv sync` ~30 s, playwright ~27 s, pnpm ~17 s, ~25 s of fixed Modal overhead) and about 10 s on a hit. The consequence the design got right for the wrong reason still holds -- per-case data in `environment/` makes every task pay its own build -- but the corollary it invites does not: reordering instructions to keep the expensive ones "above" a change buys nothing, because one changed byte in the staged mngr clone rebuilds all of it. Moving the third-party steps out of the per-SHA build is the only thing that would.

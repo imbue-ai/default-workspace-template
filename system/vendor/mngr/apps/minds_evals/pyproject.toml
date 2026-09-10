@@ -6,6 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "harbor[modal]==0.22.0",
+    # Declared even though harbor's [modal] extra already installs it:
+    # cleanup_environments drives the Modal SDK directly (listing and deleting the
+    # environments a run leaves behind), so an import of it is this project's own
+    # requirement rather than a detail of how harbor reaches Modal. The floor is
+    # harbor's own for that extra.
+    "modal>=1.5.1",
     "anthropic>=0.40",
     "click>=8.0.0",
     "loguru>=0.7",
@@ -21,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minds-evals = "imbue.minds_evals.generate:main"
+minds-evals = "imbue.minds_evals.cli:main"
 
 # This project is deliberately NOT a member of the monorepo's uv workspace (the
 # root pyproject.toml excludes it) and resolves against its own uv.lock. harbor
@@ -46,13 +52,6 @@ required-version = ">=0.10"
 # Keep it equal to DEPENDENCY_COOLDOWN in scripts/release.py, which
 # scripts/release_test.py enforces.
 exclude-newer = "14 days"
-# CLEANUP: delete this override once harbor-rewardkit 0.2.0 (published 2026-08-22) is older than the
-# window above, which it becomes on 2026-09-05. The cooldown exists to keep a freshly published
-# registry artifact out of the code that grades trials, and here it cannot: the verifier container
-# resolves rewardkit itself with `uvx`, which honours no cooldown, so the graded version is whatever
-# `templates/tests/verifier/test.sh` names. All this pin does is let the type checker see that same
-# version; holding it a release behind would check the criteria against a rewardkit no trial runs.
-exclude-newer-package = { harbor-rewardkit = "2026-08-23T00:00:00Z" }
 
 [tool.uv.sources]
 # The upstream git tag for the same release the PyPI wheel carries. Pinned to the
@@ -123,14 +122,16 @@ concurrency = ["multiprocessing", "thread"]
 omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
 
 [tool.ty.src]
-# resources/ is shipped as source into the eval box and runs against the monorepo
-# venv, importing mngr_forward and litellm, which this project does not depend on.
-# It is type-checked by the root workspace instead -- the box runs that venv, so it
-# is the accurate environment for it; the root [tool.ty.src] exclude deliberately
-# does not cover it. Anything listed here must stay checked there:
-# test_meta_ratchets.py reads this list and probes the root's ty for each path, so
-# excluding a path here without un-excluding it at the root fails that check. Every
-# entry must name a directory or a file, since the probe hands it straight to ty.
+# resources/ is shipped as source into the eval box, importing mngr_forward and
+# litellm, which this project does not depend on. It is type-checked by the root
+# workspace instead -- the box runs that venv, so it is the accurate environment
+# for it, and it stays accurate for the proxy hooks, which the box loads from its
+# own /opt/eval_proxy venv: that venv installs the litellm version the root
+# workspace is ==-pinned to. The root [tool.ty.src] exclude deliberately does not
+# cover it. Anything listed here must stay checked there: test_meta_ratchets.py
+# reads this list and probes the root's ty for each path, so excluding a path here
+# without un-excluding it at the root fails that check. Every entry must name a
+# directory or a file, since the probe hands it straight to ty.
 #
 # templates/ is NOT excluded. Those files also run elsewhere (the verifier
 # container), but their only foreign import is rewardkit, which the dev group

@@ -22,8 +22,10 @@ import os
 import socket
 import sys
 from collections.abc import Iterator
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 import click
@@ -39,6 +41,7 @@ from tenacity import wait_fixed
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.imbue_common.logging import setup_logging
+from imbue.imbue_common.pure import pure
 from imbue.observability.bugsink_api import mint_bugsink_api_token_over_ssh
 from imbue.observability.bugsink_api import provision_bugsink_projects
 from imbue.observability.bugsink_remote_install import await_bugsink_serving
@@ -68,6 +71,7 @@ from imbue.observability.primitives import TelemetryHostname
 from imbue.observability.remote_install import deploy_instance
 from imbue.observability.remote_install import run_root_script_over_ssh
 from imbue.share_relay.provisioning import OvhPublicCloudRelayProvisioner
+from imbue.share_relay.provisioning import RelayProvisioningError
 from imbue.share_relay.provisioning import cloud_project_id_from_env
 from imbue.share_relay.provisioning import make_ovh_client_from_env
 from imbue.share_relay.provisioning import pick_public_ipv4
@@ -523,20 +527,28 @@ def install_collector(
     logger.info("Installed collector (role {}, tier {}) on {}", role, tier, host)
 
 
+@pure
+def _instance_listing_row(instance: Mapping[str, Any]) -> dict[str, Any]:
+    """One `observability list` output row; `ip` is None until the instance has a public IPv4."""
+    try:
+        public_ipv4: str | None = pick_public_ipv4(dict(instance))
+    except RelayProvisioningError:
+        public_ipv4 = None
+    return {
+        "name": instance.get("name"),
+        "instance_id": instance.get("id"),
+        "status": instance.get("status"),
+        "region": instance.get("region"),
+        "ip": public_ipv4,
+    }
+
+
 @main.command(name="list")
 @click.option("--name-prefix", default=INSTANCE_NAME_PREFIX, show_default=True, help="Instance name prefix to list")
 def list_instances(name_prefix: str) -> None:
-    """List observability instances in the OVH Public Cloud project."""
+    """List observability instances in the OVH Public Cloud project (name, id, status, region, public IP)."""
     provisioner = _make_provisioner()
-    rows = [
-        {
-            "name": instance.get("name"),
-            "instance_id": instance.get("id"),
-            "status": instance.get("status"),
-            "region": instance.get("region"),
-        }
-        for instance in provisioner.list_relay_instances(name_prefix)
-    ]
+    rows = [_instance_listing_row(instance) for instance in provisioner.list_relay_instances(name_prefix)]
     _emit_json(rows)
 
 

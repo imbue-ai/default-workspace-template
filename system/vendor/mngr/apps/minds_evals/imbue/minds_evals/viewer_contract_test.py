@@ -11,7 +11,29 @@ from typing import Final
 from harbor.viewer import create_app
 from starlette.routing import Route
 
+from imbue.minds_evals.data_types import StepBoundary
+from imbue.minds_evals.data_types import TrajectoryProvenance
+from imbue.minds_evals.data_types import UsageSource
+from imbue.minds_evals.data_types import WorkerState
+from imbue.minds_evals.testing import WORKER_AGENT_ID
+from imbue.minds_evals.testing import WORKER_NAME
+from imbue.minds_evals.testing import atif_document_with_worker_launch
+from imbue.minds_evals.testing import worker_document
+from imbue.minds_evals.testing import worker_launch
+from imbue.minds_evals.trajectory import EmbeddedWorker
+from imbue.minds_evals.trajectory import STEP_BOUNDARY_KIND
+from imbue.minds_evals.trajectory import build_hand_built_trajectory
+from imbue.minds_evals.trajectory import graft_worker_trajectories
+from imbue.minds_evals.usage import summarize_workspace_usage
+from imbue.mngr.agents.trajectory_build import MNGR_SUBAGENT_KIND
+
 VIEWER_API_CLIENT: Final[Path] = Path(__file__).parents[2] / "viewer" / "app" / "lib" / "api.ts"
+VIEWER_HARNESS_ANNOTATION: Final[Path] = (
+    Path(__file__).parents[2] / "viewer" / "app" / "components" / "trajectory" / "harness-annotation.tsx"
+)
+VIEWER_SUBAGENTS: Final[Path] = (
+    Path(__file__).parents[2] / "viewer" / "app" / "components" / "trajectory" / "subagents.tsx"
+)
 # Every call in the client is built from this prefix, so it is the anchor for finding them.
 _CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"\$\{API_BASE\}(/api/[^`]*)")
 _INTERPOLATION: Final[re.Pattern[str]] = re.compile(r"\$\{[^}]*\}")
@@ -100,4 +122,81 @@ def test_the_vendored_client_only_calls_routes_harbor_registers(tmp_path: Path) 
 def test_the_client_is_where_this_expects_it() -> None:
     """The extraction above silently passes on an empty file, so the fixture itself is asserted."""
     assert VIEWER_API_CLIENT.is_file()
+    assert VIEWER_HARNESS_ANNOTATION.is_file()
+    assert VIEWER_SUBAGENTS.is_file()
     assert len(_client_route_shapes()) > 20
+
+
+def _tsx_constant(path: Path, name: str) -> str:
+    """The value of a `const NAME = "value";` declaration in the vendored TypeScript."""
+    match = re.search(rf'const {name} = "([^"]*)";', path.read_text())
+    assert match is not None, f"{name} is not declared in {path}"
+    return match.group(1)
+
+
+def test_the_viewer_reads_the_extra_namespace_the_harness_writes() -> None:
+    """The harness tags its own steps in ATIF `extra` and the viewer styles them from that tag, but
+    the two sides are a Python dict and a TypeScript literal with nothing between them. A rename on
+    either side would not fail anything -- the boundaries would just quietly stop being drawn."""
+    source = VIEWER_HARNESS_ANNOTATION.read_text()
+    namespace = _tsx_constant(VIEWER_HARNESS_ANNOTATION, "HARNESS_NAMESPACE")
+    boundary_kind = _tsx_constant(VIEWER_HARNESS_ANNOTATION, "STEP_BOUNDARY")
+
+    built = build_hand_built_trajectory(
+        [{"role": "user", "text": "Now change it"}],
+        TrajectoryProvenance(
+            driver_name="minds-persona-driver",
+            driver_version="0.1.0",
+            decider_model="claude-opus-4-8",
+            decider_turns=(),
+            harbor_session_id="session-1",
+            case_id="todo-app",
+            usage_source=UsageSource.TRANSCRIPT,
+        ),
+        summarize_workspace_usage(()),
+        timestamp="2026-09-01T00:00:00Z",
+        boundaries=(
+            StepBoundary(
+                name="adjust-requirements",
+                started_at="2026-09-01T00:00:00Z",
+                conversation_index=0,
+                opening_message="Now change it",
+            ),
+        ),
+    )
+
+    assert built is not None
+    marker = built.to_json_dict()["steps"][0]
+    assert marker["extra"] == {namespace: {"kind": boundary_kind, "step_name": "adjust-requirements"}}
+    assert boundary_kind == STEP_BOUNDARY_KIND
+    # The divider's label comes from this field, so the viewer's read of it must stay valid.
+    assert "namespace.step_name" in source
+
+
+def test_the_viewer_reads_the_worker_block_the_harness_writes() -> None:
+    """A worker the harness grafts on is named, labelled and marked still-running from an `extra`
+    block that no schema owns: the harness writes the dict and the viewer reads keys out of it, with
+    nothing between them. A rename on either side would leave every delegated agent labelled with
+    the viewer's own fallback, or silently drop the marker that says a transcript stops mid-flight."""
+    kind_key = _tsx_constant(VIEWER_SUBAGENTS, "SUBAGENT_KIND_KEY")
+    worker_key = _tsx_constant(VIEWER_SUBAGENTS, "WORKER_KEY")
+    name_key = _tsx_constant(VIEWER_SUBAGENTS, "WORKER_NAME_KEY")
+    state_key = _tsx_constant(VIEWER_SUBAGENTS, "WORKER_STATE_KEY")
+    running_state = _tsx_constant(VIEWER_SUBAGENTS, "RUNNING_STATE")
+
+    grafted = graft_worker_trajectories(
+        atif_document_with_worker_launch(),
+        [
+            EmbeddedWorker(
+                launch=worker_launch(),
+                document=worker_document(WORKER_AGENT_ID),
+                state=WorkerState.RUNNING,
+                report_path="",
+            )
+        ],
+    )
+
+    embedded = grafted["subagent_trajectories"][-1]
+    assert embedded["extra"][kind_key] == MNGR_SUBAGENT_KIND
+    assert embedded["extra"][worker_key][name_key] == WORKER_NAME
+    assert embedded["extra"][worker_key][state_key] == running_state

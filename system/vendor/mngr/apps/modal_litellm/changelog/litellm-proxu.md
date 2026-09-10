@@ -1,0 +1,1 @@
+The `image` group's hash-locked export is now also what `apps/minds_evals` installs into its eval boxes, where the in-box LiteLLM proxy behind `--ak proxy=true` is served from. Noted beside the pin, because a deliberate litellm bump here moves that proxy too.

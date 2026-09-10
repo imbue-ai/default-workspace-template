@@ -13,6 +13,7 @@ from imbue.mngr.primitives import TransferMode
 from imbue.mngr_mapreduce.data_types import AgentKind
 from imbue.mngr_mapreduce.data_types import LaunchConfig
 from imbue.mngr_mapreduce.launching import ROLE_LABEL_KEY
+from imbue.mngr_mapreduce.launching import TASK_ID_LABEL_KEY
 from imbue.mngr_mapreduce.launching import _build_agent_options
 from imbue.mngr_mapreduce.launching import _make_reducer_identity
 from imbue.mngr_mapreduce.launching import is_host_pool_failure_ratio_exceeded
@@ -102,6 +103,29 @@ def test_build_agent_options_stamps_role_label_for_each_kind() -> None:
     for kind in (AgentKind.MAPPER, AgentKind.SNAPSHOTTER, AgentKind.REDUCER):
         opts = _build_agent_options(AgentName("test"), "branch", _make_config(), kind)
         assert opts.label_options.labels.get(ROLE_LABEL_KEY) == kind.value
+
+
+# A TMR task id is a pytest node id, so the label value carries slashes,
+# colons and brackets.
+_PYTEST_NODE_ID_TASK_ID = "libs/mngr/imbue/mngr/api/create_test.py::test_create_agent[modal-snapshot]"
+
+
+def test_build_agent_options_stamps_task_id_label_on_a_mapper() -> None:
+    """The reintegrate flow keys mappers by this label, so every mapper must carry it."""
+    opts = _build_agent_options(
+        AgentName("test"), "branch", _make_config(), AgentKind.MAPPER, task_id=_PYTEST_NODE_ID_TASK_ID
+    )
+    assert opts.label_options.labels == {
+        ROLE_LABEL_KEY: AgentKind.MAPPER.value,
+        TASK_ID_LABEL_KEY: _PYTEST_NODE_ID_TASK_ID,
+    }
+
+
+def test_build_agent_options_omits_task_id_label_for_the_reducer_and_snapshotter() -> None:
+    """Neither agent belongs to a task, and reintegrate selects on the role label alone."""
+    for kind in (AgentKind.REDUCER, AgentKind.SNAPSHOTTER):
+        opts = _build_agent_options(AgentName("test"), "branch", _make_config(), kind)
+        assert TASK_ID_LABEL_KEY not in opts.label_options.labels
 
 
 def test_build_agent_options_target_path_pins_work_dir() -> None:

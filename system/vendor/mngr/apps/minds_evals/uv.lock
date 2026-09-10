@@ -11,9 +11,6 @@ resolution-markers = [
 exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P14D"
 
-[options.exclude-newer-package]
-harbor-rewardkit = "2026-08-23T00:00:00Z"
-
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -1841,6 +1838,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "imbue-mngr-usage" },
     { name = "loguru" },
+    { name = "modal" },
     { name = "pydantic" },
 ]
 
@@ -1865,6 +1863,7 @@ requires-dist = [
     { name = "imbue-common", editable = "../../libs/imbue_common" },
     { name = "imbue-mngr-usage", editable = "../../libs/mngr_usage" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "modal", specifier = ">=1.5.1" },
     { name = "pydantic", specifier = ">=2.11" },
 ]
 

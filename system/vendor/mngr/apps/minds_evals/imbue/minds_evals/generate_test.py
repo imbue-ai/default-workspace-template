@@ -15,7 +15,6 @@ from rewardkit.runner import discover
 
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
-from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_MAX_EXCHANGES
 from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
@@ -45,11 +44,16 @@ from imbue.minds_evals.generate import load_eval_config
 from imbue.minds_evals.generate import render_min_reward_toml
 from imbue.minds_evals.generate import render_oracle_trajectory_json
 from imbue.minds_evals.generate import render_prompt_entry_prose
-from imbue.minds_evals.generate import resolve_remote_tip
+from imbue.minds_evals.generate import resolve_remote_ref
 from imbue.minds_evals.generate import step_files_box_dir
 from imbue.minds_evals.generate import worst_case_exchange_count
 from imbue.minds_evals.minds_bridge import EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
+from imbue.minds_evals.template_loading import load_template_module
+from imbue.minds_evals.testing import create_branch
 from imbue.minds_evals.testing import make_local_git_repo
+from imbue.minds_evals.testing import tag_commit
+
+_RENDERER = load_template_module("tests/verifier/render_judge_transcript.py", "minds_evals_generate_test_renderer")
 
 
 def _write_config(tmp_path: Path, config: dict[str, object]) -> Path:
@@ -81,7 +85,6 @@ def test_load_eval_config_parses_cases_and_defaults(tmp_path: Path) -> None:
     assert config.mngr_branch == "main"
     assert config.dwt_repo == DEFAULT_DWT_REPO
     assert config.timeout_seconds == 1800.0
-    assert config.avg_word_count_baseline == DEFAULT_AVG_WORD_COUNT_BASELINE
     assert [case.case_id for case in config.cases] == ["todo-app", "case-2"]
     assert config.cases[1].persona == ""
 
@@ -263,6 +266,8 @@ def test_generate_dataset_renders_a_goal_entry_into_both_case_copies_and_the_ora
         config_path=_write_config(tmp_path, config),
         output_dir=tmp_path / "dataset",
         mngr_repo=str(mngr_repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
     )
 
     task_dir = task_dirs[0]
@@ -288,17 +293,58 @@ def test_derive_case_id_prefers_explicit_id_and_falls_back_to_position() -> None
     assert derive_case_id({}, 2) == "case-3"
 
 
-def test_resolve_remote_tip_returns_the_branch_tip(tmp_path: Path) -> None:
+def test_resolve_remote_ref_returns_the_branch_tip(tmp_path: Path) -> None:
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
 
-    assert resolve_remote_tip(str(repo.repo_dir), "main") == repo.commit_shas[-1]
+    assert resolve_remote_ref(str(repo.repo_dir), "main") == repo.commit_shas[-1]
 
 
-def test_resolve_remote_tip_raises_for_missing_branch(tmp_path: Path) -> None:
+def test_resolve_remote_ref_returns_a_lightweight_tags_commit(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    tag_commit(repo.repo_dir, "minds-v0.0.1", repo.commit_shas[0])
+
+    assert resolve_remote_ref(str(repo.repo_dir), "minds-v0.0.1") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_peels_an_annotated_tag_to_its_commit(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    tag_commit(repo.repo_dir, "minds-v0.0.2", repo.commit_shas[0], is_annotated=True)
+
+    # An annotated tag's own sha is a tag object nothing can be checked out at, so resolving to it
+    # would produce a dataset whose recorded SHA no clone can reach.
+    assert resolve_remote_ref(str(repo.repo_dir), "minds-v0.0.2") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_prefers_a_tag_over_a_branch_of_the_same_name(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    create_branch(repo.repo_dir, "ambiguous", repo.commit_shas[-1])
+    tag_commit(repo.repo_dir, "ambiguous", repo.commit_shas[0])
+
+    assert resolve_remote_ref(str(repo.repo_dir), "ambiguous") == repo.commit_shas[0]
+
+
+def test_resolve_remote_ref_takes_a_full_sha_without_reaching_the_remote() -> None:
+    sha = "0123456789abcdef0123456789abcdef01234567"
+
+    # The repo does not exist, so anything that consulted the remote would fail here.
+    assert resolve_remote_ref("/nonexistent/repo-4712.git", sha) == sha
+
+
+def test_resolve_remote_ref_does_not_take_a_sha_with_a_trailing_newline_at_its_word(tmp_path: Path) -> None:
+    """A SHA read out of a file keeps its newline, and a pattern anchored with `$` would accept it
+    and hand it to `git fetch` intact -- failing deep in the clone rather than where the shape is
+    decided."""
     repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
 
     with pytest.raises(GitSourceError, match="not found"):
-        resolve_remote_tip(str(repo.repo_dir), "no-such-branch-8471")
+        resolve_remote_ref(str(repo.repo_dir), repo.commit_shas[0] + "\n")
+
+
+def test_resolve_remote_ref_raises_for_missing_ref(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=1)
+
+    with pytest.raises(GitSourceError, match="not found"):
+        resolve_remote_ref(str(repo.repo_dir), "no-such-branch-8471")
 
 
 def _dir_content_digest(root: Path) -> str:
@@ -316,7 +362,9 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
     config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
     output_dir = tmp_path / "dataset"
 
-    task_dirs = generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    task_dirs = generate_dataset(
+        config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir), mngr_ref=None, dwt_ref=None
+    )
 
     assert [task_dir.name for task_dir in task_dirs] == ["todo-app", "case-2"]
     expected_sha = repo.commit_shas[-1]
@@ -375,6 +423,14 @@ def test_generate_dataset_writes_complete_byte_identical_tasks(tmp_path: Path) -
         oracle_trajectory = json.loads(render_oracle_trajectory_json(case_config))
         assert [step["source"] for step in oracle_trajectory["steps"]] == ["user", "agent"] * len(case_config.prompts)
         assert oracle_trajectory["extra"]["minds_evals"]["source"] == "hand_built"
+        # The oracle has to carry tool output, or both grade-time pre-steps read an empty document and
+        # `-a oracle` scores a free 10 on the timeline and a clean 1.0 on both harness criteria while
+        # exercising none of their code.
+        first_agent_step = next(step for step in oracle_trajectory["steps"] if step["source"] == "agent")
+        rendered = _RENDERER.render_judge_transcript(oracle_trajectory["steps"])
+        assert first_agent_step["tool_calls"][0]["function_name"] == "Bash"
+        assert "[PROGRESS · step declared]" in rendered
+        assert "[PROGRESS · step done]" in rendered
         assert json.dumps(oracle_trajectory, indent=2) in solve_text
 
     # environment/ must be byte-identical across tasks or the Modal image cache diverges.
@@ -401,7 +457,13 @@ def test_generate_dataset_emits_the_outcome_dimension_only_for_expectation_cases
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     # rewardkit turns every immediate tests/ subdirectory into a scoring dimension, so a case with
     # nothing to score must not get the directory at all -- otherwise it would emit a partial
@@ -436,7 +498,13 @@ def test_generate_dataset_expands_expectations_identically_into_both_copies(tmp_
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     task_dir = output_dir / "todo-app"
     tests_case = json.loads((task_dir / "tests" / "case.json").read_text())
@@ -469,7 +537,13 @@ def test_generate_dataset_fabricates_a_green_oracle_bundle_for_expectation_cases
     )
     output_dir = tmp_path / "dataset"
 
-    generate_dataset(config_path=_write_config(tmp_path, config), output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+    generate_dataset(
+        config_path=_write_config(tmp_path, config),
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
+    )
 
     solve_text = (output_dir / "todo-app" / "solution" / "solve.sh").read_text()
     assert "/logs/agent/verification/manifest.json" in solve_text
@@ -500,7 +574,37 @@ def test_generate_dataset_rejects_nonempty_output_dir(tmp_path: Path) -> None:
     (output_dir / "leftover.txt").write_text("stale")
 
     with pytest.raises(EvalConfigError, match="not empty"):
-        generate_dataset(config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir))
+        generate_dataset(
+            config_path=config_path, output_dir=output_dir, mngr_repo=str(repo.repo_dir), mngr_ref=None, dwt_ref=None
+        )
+
+
+def test_generate_dataset_pins_the_overriding_refs_instead_of_the_configs(tmp_path: Path) -> None:
+    repo = make_local_git_repo(tmp_path, "fake-mngr", commit_count=2)
+    dwt_repo = make_local_git_repo(tmp_path, "fake-dwt", commit_count=2)
+    # Tags on the FIRST commit of each repo, so resolving them to the branch tip would be visible.
+    tag_commit(repo.repo_dir, "minds-v9.9.9", repo.commit_shas[0], is_annotated=True)
+    tag_commit(dwt_repo.repo_dir, "minds-v9.9.9", dwt_repo.commit_shas[0])
+    config_path = _write_config(tmp_path, _valid_config(dwt_repo=str(dwt_repo.repo_dir)))
+    output_dir = tmp_path / "dataset"
+
+    task_dirs = generate_dataset(
+        config_path=config_path,
+        output_dir=output_dir,
+        mngr_repo=str(repo.repo_dir),
+        mngr_ref="minds-v9.9.9",
+        dwt_ref="minds-v9.9.9",
+    )
+
+    task_config = tomllib.loads((task_dirs[0] / "task.toml").read_text())
+    assert task_config["metadata"]["mngr_sha"] == repo.commit_shas[0]
+    assert task_config["metadata"]["dwt_sha"] == dwt_repo.commit_shas[0]
+    # The metadata's ref fields name what was actually used, not what the config file said.
+    assert task_config["metadata"]["mngr_branch"] == "minds-v9.9.9"
+    assert task_config["metadata"]["dwt_branch"] == "minds-v9.9.9"
+    # The staged clone is the tagged commit's tree, not the branch tip's.
+    staged_readme = (task_dirs[0] / "environment" / "mngr" / "README.md").read_text()
+    assert staged_readme == "fake-mngr revision 0\n"
 
 
 def _stepped_config() -> dict[str, Any]:
@@ -577,6 +681,8 @@ def _generate_one_task(tmp_path: Path, config: dict[str, Any]) -> Path:
         config_path=_write_config(tmp_path, config),
         output_dir=tmp_path / "dataset",
         mngr_repo=str(mngr_repo.repo_dir),
+        mngr_ref=None,
+        dwt_ref=None,
     )
     return task_dirs[0]
 
@@ -1017,24 +1123,24 @@ def test_a_stepped_case_can_outlast_the_one_workspace_its_steps_share() -> None:
 
 
 def test_generate_dataset_warns_before_it_builds_a_stepped_case_too_long_for_its_workspace(
-    tmp_path: Path, logged_warnings: list[str]
+    tmp_path: Path, captured_log_messages: list[str]
 ) -> None:
     config = _stepped_config()
     config["timeout_seconds"] = EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS
 
     _generate_stepped_task(tmp_path, config)
 
-    assert any("the one workspace they share is capped at" in message for message in logged_warnings)
+    assert any("the one workspace they share is capped at" in message for message in captured_log_messages)
 
 
 def test_generate_dataset_never_holds_a_flat_case_to_the_cross_step_lifetime(
-    tmp_path: Path, logged_warnings: list[str]
+    tmp_path: Path, captured_log_messages: list[str]
 ) -> None:
     """A flat case's one `run()` creates the workspace and tears it down, so there is no lifetime
     spanning steps to exceed however long its budget is."""
     _generate_one_task(tmp_path, _valid_config(timeout_seconds=10 * EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS))
 
-    assert not any("workspace they share" in message for message in logged_warnings)
+    assert not any("workspace they share" in message for message in captured_log_messages)
 
 
 def test_generate_dataset_passes_each_steps_reward_floor_through_to_harbor(tmp_path: Path) -> None:

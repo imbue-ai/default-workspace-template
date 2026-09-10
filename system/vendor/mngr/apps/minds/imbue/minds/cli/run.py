@@ -67,6 +67,7 @@ from imbue.minds.desktop_client.laptop_agent_types_seed import seed_laptop_agent
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClient
 from imbue.minds.desktop_client.latchkey.gateway_client import LatchkeyGatewayClientError
 from imbue.minds.desktop_client.latchkey.handlers.accounts import AccountsPermissionGrantHandler
+from imbue.minds.desktop_client.latchkey.handlers.custom_service import CustomServiceGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.file_sharing import FileSharingGrantHandler
 from imbue.minds.desktop_client.latchkey.handlers.messaging import MngrMessageSender
 from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPermissionGrantHandler
@@ -308,15 +309,14 @@ def run(
     except DockerCleanupError as exc:
         logger.warning("Could not start the Docker state container at launch: {}", exc)
 
-    # Spawn (or adopt) a detached ``mngr latchkey forward`` supervisor.
-    # The supervisor owns the shared latchkey gateway + per-agent reverse
-    # tunnels; running it as a detached subprocess (rather than the inline
-    # ``LatchkeyDiscoveryHandler``/``SSHTunnelManager`` wiring that used to
-    # live here) means a minds restart adopts the existing instance instead
-    # of tearing every tunnel down and re-establishing it. We do *not*
-    # terminate it on minds shutdown -- mirroring how minds already leaves
-    # the gateway running detached so agents in containers/VMs keep working
-    # across desktop-client restarts.
+    # Spawn a detached ``mngr latchkey forward`` supervisor. It owns the
+    # shared latchkey gateway + per-agent reverse tunnels. On every minds
+    # start it is terminated and respawned (see
+    # ``_restart_mngr_latchkey_forward_supervisor``) so it always runs the
+    # current code with the current env; the reverse tunnels are
+    # re-established as discovery re-fires. We do *not* terminate it on
+    # minds shutdown -- it keeps running detached so agents in
+    # containers/VMs keep working across desktop-client restarts.
     gateway_client = LatchkeyGatewayClient.from_latchkey(latchkey)
 
     # Build the supervisor once and keep the handle: the startup restart runs on
@@ -443,8 +443,10 @@ def run(
         access=MachineAccess(
             latchkey=latchkey,
             concurrency_group=root_concurrency_group,
-            # Resolved per call: the state the resolver lives in does not exist yet.
-            get_backend_resolver=lambda: get_state().backend_resolver,
+            # The resolver itself, not a lookup through the app state: machine
+            # operations also run on background threads (an auto-registration
+            # push), where ``get_state()``'s ``current_app`` is unbound.
+            backend_resolver=backend_resolver,
         )
     )
     # Loading the provider set imports every installed provider plugin, which is
@@ -454,7 +456,7 @@ def run(
     latchkey_permission_handler = LatchkeyPermissionGrantHandler(
         data_dir=data_directory,
         latchkey=latchkey,
-        services_catalog=ServicesCatalog(),
+        services_catalog=ServicesCatalog(latchkey_directory=latchkey.latchkey_directory),
         mngr_message_sender=mngr_message_sender,
         gateway_client=gateway_client,
         carry_grant_to_machine=machine_operator.connect_service_with_permissions,
@@ -480,6 +482,13 @@ def run(
         gateway_client=gateway_client,
         mngr_message_sender=mngr_message_sender,
         push_permissions_to_machine=push_permissions_to_machine,
+    )
+    custom_service_handler = CustomServiceGrantHandler(
+        data_dir=data_directory,
+        latchkey=latchkey,
+        gateway_client=gateway_client,
+        mngr_message_sender=mngr_message_sender,
+        carry_grant_to_machine=machine_operator.connect_service_with_permissions,
     )
     imbue_cloud_cli = ImbueCloudCli(
         mngr_caller=mngr_caller,
@@ -579,6 +588,7 @@ def run(
     # laptop sleep restarts from the wake instead of convicting a workspace of
     # seconds during which no probe ran at all.
     system_interface_health_tracker = SystemInterfaceHealthTracker(sleep_tracker=sleep_tracker)
+    sleep_tracker.add_on_wake_callback(system_interface_health_tracker.invalidate_recovery_progress_after_wake)
 
     # The plugin reports every backend failure it observes; minds decides which
     # ones count. Only envelopes carrying no status code, or an infrastructure
@@ -766,6 +776,7 @@ def run(
             file_sharing_handler,
             workspace_permission_handler,
             accounts_permission_handler,
+            custom_service_handler,
         ),
         server_port=port,
         mngr_forward_port=mngr_forward_port,
@@ -954,10 +965,10 @@ def _restart_mngr_latchkey_forward_supervisor(supervisor: LatchkeyForwardSupervi
     """Restart the detached ``mngr latchkey forward`` supervisor on minds startup.
 
     Uses :meth:`LatchkeyForwardSupervisor.restart` rather than
-    ``ensure_running`` so that minds upgrades always run with a
-    freshly-spawned supervisor: an older supervisor running stale
-    code from a previous minds version is terminated and replaced
-    on every minds start. A running supervisor that minds is happy
+    ``ensure_running`` so that minds upgrades run with a freshly-spawned
+    supervisor: an older supervisor running stale code from a previous
+    minds version is terminated and replaced on every minds start, unless
+    another minds claims the directory first in the gap between the two. A running supervisor that minds is happy
     to adopt does not exist in practice -- the supervisor's lifetime
     is tied to the gateway it owns, and the gateway is a minds-only
     consumer today. Restarting on every minds start is also what

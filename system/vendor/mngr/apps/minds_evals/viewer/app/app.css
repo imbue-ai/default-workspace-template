@@ -58,6 +58,18 @@ html.dark {
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
+  --color-step-user: var(--step-user);
+  --color-step-user-surface: var(--step-user-surface);
+  --color-step-harness: var(--step-harness);
+  --color-step-harness-surface: var(--step-harness-surface);
+  --color-subagent-rail-1: var(--subagent-rail-1);
+  --color-subagent-rail-2: var(--subagent-rail-2);
+  --color-subagent-rail-3: var(--subagent-rail-3);
+  --color-subagent-rail-4: var(--subagent-rail-4);
+  --color-subagent-label-1: var(--subagent-label-1);
+  --color-subagent-label-2: var(--subagent-label-2);
+  --color-subagent-label-3: var(--subagent-label-3);
+  --color-subagent-label-4: var(--subagent-label-4);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
@@ -89,6 +101,24 @@ html.dark {
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
+  /* The simulated user's turns, and the harness's own annotations. */
+  --step-user: oklch(0.55 0.13 250);
+  --step-user-surface: oklch(0.968 0.017 250);
+  --step-harness: oklch(0.62 0.11 85);
+  --step-harness-surface: oklch(0.972 0.02 85);
+  /* The rail marking a delegated agent's steps, one shade per level of delegation: the deeper the
+     delegation, the darker the yellow. Nesting past the last shade reuses it. */
+  --subagent-rail-1: oklch(0.66 0.14 85);
+  --subagent-rail-2: oklch(0.55 0.12 85);
+  --subagent-rail-3: oklch(0.44 0.1 85);
+  --subagent-rail-4: oklch(0.33 0.08 85);
+  /* The same scale for the label beside each rail, shifted so text at this size stays legible:
+     a 2px line reads at a lightness that a word does not. Both scales are picked to clear WCAG on
+     the card they sit on -- 4.5:1 for the labels, 3:1 for the rails, at every level. */
+  --subagent-label-1: oklch(0.55 0.13 85);
+  --subagent-label-2: oklch(0.46 0.11 85);
+  --subagent-label-3: oklch(0.37 0.09 85);
+  --subagent-label-4: oklch(0.28 0.07 85);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -123,6 +153,20 @@ html.dark {
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
+  --step-user: oklch(0.7 0.12 250);
+  --step-user-surface: oklch(0.245 0.028 250);
+  --step-harness: oklch(0.75 0.11 85);
+  --step-harness-surface: oklch(0.245 0.028 85);
+  /* Darkening on a dark ground costs contrast rather than gaining it, so both scales descend less
+     far than their light counterparts: the last shade of each still clears the ground it sits on. */
+  --subagent-rail-1: oklch(0.85 0.13 85);
+  --subagent-rail-2: oklch(0.76 0.12 85);
+  --subagent-rail-3: oklch(0.67 0.11 85);
+  --subagent-rail-4: oklch(0.58 0.1 85);
+  --subagent-label-1: oklch(0.88 0.13 85);
+  --subagent-label-2: oklch(0.8 0.12 85);
+  --subagent-label-3: oklch(0.72 0.11 85);
+  --subagent-label-4: oklch(0.64 0.1 85);
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);

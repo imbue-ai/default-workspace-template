@@ -35,8 +35,38 @@ class InstructionParseError(MindsEvalsError, ValueError):
     ...
 
 
+class JobReadError(MindsEvalsError, ValueError):
+    """Raised when a harbor job directory cannot be read as a finished run at all.
+
+    Distinct from a run that failed: a job whose artifacts cannot be parsed has not been judged, and
+    reporting it as a failing run would put a harness fault on the eval's record."""
+
+    ...
+
+
 class TrajectoryDocumentError(MindsEvalsError, ValueError):
     """Raised when a trajectory document captured from the workspace is not valid ATIF."""
+
+    ...
+
+
+class CleanupScopeError(MindsEvalsError, ValueError):
+    """Raised when an environment-cleanup request names a scope that could reach environments the
+    caller did not create."""
+
+    ...
+
+
+class ModalNameBudgetError(MindsEvalsError, ValueError):
+    """Raised when a derived Modal name would exceed the length Modal, or mngr on its way there,
+    would silently truncate it to -- which would make the name this app records different from the
+    one that gets created."""
+
+    ...
+
+
+class ModalAdminError(MindsEvalsError, RuntimeError):
+    """Raised when the Modal SDK cannot answer an environment listing or deletion the cleanup needs."""
 
     ...
 

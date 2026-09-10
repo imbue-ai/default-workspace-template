@@ -1,0 +1,1 @@
+`observability list` now includes each instance's public IPv4 as an `ip` field (null until the instance has one), so `just list-observability-instances` / `just list-bugsink-instances` are a durable source for the SSH-tunnel target IPs that the bug-investigation skills need.
