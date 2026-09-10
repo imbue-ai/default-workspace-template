@@ -337,11 +337,15 @@ DATA_DIR = Path(os.environ.get("{env_var}", "data/.apps/{name}"))
 MANIFEST_PATH = Path("system/apps/{package}/app.toml")
 
 
+class ManifestError(Exception):
+    """The app's manifest does not say where the app serves."""
+
+
 def _declared_port() -> int:
     url = tomllib.loads(MANIFEST_PATH.read_text(encoding="utf-8"))["url"]
     port = urlsplit(url).port
     if port is None:
-        raise ValueError(f"{{MANIFEST_PATH}} declares url {{url!r}}, which names no port")
+        raise ManifestError(f"{{MANIFEST_PATH}} declares url {{url!r}}, which names no port")
     return port
 
 

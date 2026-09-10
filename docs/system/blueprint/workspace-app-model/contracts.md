@@ -31,7 +31,8 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `display_name` | string | yes | | Non-empty, at most 64 characters. What users see. |
 | `icon` | string | unless `internal` | | Path relative to the manifest, `.svg`, validated by `forward_port.py`'s `validate_icon` at registration. |
 | `instances` | bool | no | `false` | `true` exposes the instances API. |
-| `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`. |
+| `url` | string | no | | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the app serves its own pages. The declaration every static reader consults: `forward_port.py` registers it when the command passes no `--url`, and the build-app port pre-flight and `migrate-workspace`'s port scan both read it here. An app whose supervisord command names no port because it registers itself at runtime (`chat`, `files`, `terminal`) still holds the port as a constant in its own source; `system/test_app_manifests.py` pins the two together. May not name the same port as `instances_url`. |
+| `instances_url` | string | no | the app URL | `http://127.0.0.1:<port>` or `http://localhost:<port>`; where the shell reaches the instances API. Only allowed with `instances = true`, and may not name the same port as `url`. |
 | `critical` | bool | no | `false` | No Stop verb; snapshot-and-rollback target in the apply. |
 | `priority` | string | no | `"user"` | A key of `SERVICE_BANDS` in `oom_priority.bands`, or `user`. |
 | `program` | string | no | `name` | The supervisord program that runs the app. |
@@ -45,13 +46,13 @@ A single-instance app (`instances = false`) has exactly one synthesized action, 
 
 Built-in manifests:
 
-| App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
-|---|---|---|---|---|---|---|
-| `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
-| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
-| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
+| App | `url` | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
+|---|---|---|---|---|---|---|---|
+| `system_interface` | `http://localhost:8000` | false | | true | `system_interface` | none | none; also `internal = true` |
+| `chat` | `http://localhost:8010` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
+| `terminal` | `http://localhost:7681` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
+| `files` | `http://localhost:8300` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
+| `browser` | `http://localhost:8081` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
 
 Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
@@ -64,7 +65,7 @@ Each `[[apps]]` row:
 
 | Key | Source | Notes |
 |---|---|---|
-| `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `icon`, `internal`, and `program` from the manifest when one is given) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
+| `name`, `url`, `label`, `icon`, `internal`, `program` | the registration (`name`, `url`, `icon`, `internal`, and `program` from the manifest when one is given; `--url` overrides the manifest's `url`) | `label` is the unguessable origin label, minted at first registration, and is never an identifier. |
 | `display_name` | manifest | Absent on manifest-less rows; the shell then uses `name`. |
 | `instances` | manifest | Absent reads as `false`. |
 | `instances_url` | manifest | Absent reads as `url`. |
@@ -74,7 +75,7 @@ Each `[[apps]]` row:
 | `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
 | `launcher_rank` | manifest | Integer; absent reads as none. |
 
-`forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
+`forward_port.py --manifest <path>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name. The row's `url` is the manifest's, unless `--url <url>` is passed, which overrides it so a run serving somewhere else registers where it actually is; one of the two must name a URL.
 `--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way.
 `--remove` deletes the row.
 The script validates only what it copies from files; the shell validates every row against the `RegistryRow` model on read and logs and skips a row that fails, so a hand-edited registry degrades to a missing app rather than a crashed shell.

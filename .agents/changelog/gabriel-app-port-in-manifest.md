@@ -15,6 +15,8 @@ workspace and exits with an error rather than reporting nothing is bound.
 
 A scaffolded app now names its port once, in its manifest: the generated program
 command no longer repeats it, and the generated runner reads it from `app.toml`
-(the `<APP>_PORT` override still works). migrate-workspace reads the manifests on
+(the `<APP>_PORT` override still works). The three built-ins that register
+themselves still hold a matching constant in their own source, which a new guard
+pins to the manifest. migrate-workspace reads the manifests on
 both sides when it reconciles ports, so an app that never started on the source
 still reports the port it holds.
