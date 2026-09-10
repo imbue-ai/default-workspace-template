@@ -65,9 +65,14 @@ class InstancePanelParams(FrozenModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     address: Address = Field(description="The instance the panel shows")
-    tab_id: TabId = Field(alias="tabId", description="The page's id: minted when the page was first opened, shared by every panel showing it")
+    tab_id: TabId = Field(
+        alias="tabId",
+        description="The page's id: minted when the page was first opened, shared by every panel showing it",
+    )
     last_focused_ms: int = Field(
-        default=0, alias="lastFocusedMs", description="Epoch milliseconds the panel was last the active one, 0 when never"
+        default=0,
+        alias="lastFocusedMs",
+        description="Epoch milliseconds the panel was last the active one, 0 when never",
     )
 
 
