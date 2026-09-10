@@ -36,6 +36,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 import pexpect
 from loguru import logger as _loguru_logger
@@ -866,11 +867,14 @@ def write_claude_env(account_path: Path, managed_env: Mapping[str, str]) -> None
 
 def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
     """The files a sink writes, so a rejected credential can be rolled back."""
-    if sink is PasteSink.PI_AUTH_JSON:
-        return (account_path / "auth.json",)
-    if sink is PasteSink.CLAUDE_ENV:
-        return (account_path / "settings.json",)
-    raise FlowError(f"{sink} has no writer yet")
+    match sink:
+        # pi and codex both name their credential auth.json; what differs is the shape inside it.
+        case PasteSink.PI_AUTH_JSON | PasteSink.CODEX_AUTH_JSON:
+            return (account_path / "auth.json",)
+        case PasteSink.CLAUDE_ENV:
+            return (account_path / "settings.json",)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple[Path, ...]:
@@ -946,17 +950,27 @@ def _credentials_restored_on_error(paths: Sequence[Path]) -> Iterator[Mapping[Pa
 
 def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider: str | None, lane: Lane) -> str:
     """Write a pasted credential and return the provider noun the account is named after."""
-    if sink is PasteSink.PI_AUTH_JSON:
-        provider_id = key_provider or (lane.key_providers[0].provider_id if lane.key_providers else lane.id)
-        display = next((k.display for k in lane.key_providers if k.provider_id == provider_id), lane.provider_name)
-        path = account_path / "auth.json"
-        # One provider per folder is our rule, not pi's -- pi's auth.json is a map and would
-        # happily hold several. Writing exactly one is what keeps an account's model list
-        # scoped to the provider its row claims.
-        path.write_text(json.dumps({provider_id: {"type": "api_key", "key": api_key}}, indent=2) + "\n")
-        path.chmod(0o600)
-        return display
-    if sink is PasteSink.CLAUDE_ENV:
-        write_claude_env(account_path, claude_env_from_paste(api_key))
-        return lane.provider_name
-    raise FlowError(f"{sink} has no writer yet")
+    match sink:
+        case PasteSink.PI_AUTH_JSON:
+            provider_id = key_provider or (lane.key_providers[0].provider_id if lane.key_providers else lane.id)
+            display = next((k.display for k in lane.key_providers if k.provider_id == provider_id), lane.provider_name)
+            path = account_path / "auth.json"
+            # One provider per folder is our rule, not pi's -- pi's auth.json is a map and would
+            # happily hold several. Writing exactly one is what keeps an account's model list
+            # scoped to the provider its row claims.
+            path.write_text(json.dumps({provider_id: {"type": "api_key", "key": api_key}}, indent=2) + "\n")
+            path.chmod(0o600)
+            return display
+        case PasteSink.CODEX_AUTH_JSON:
+            path = account_path / "auth.json"
+            # The same file the device flow ends up writing, in the shape codex reads as
+            # API-key mode: `auth_mode` spelled the way codex serialises it, and no `tokens`.
+            # The key alone would resolve the same way; naming the mode leaves nothing inferred.
+            path.write_text(json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": api_key}, indent=2) + "\n")
+            path.chmod(0o600)
+            return lane.provider_name
+        case PasteSink.CLAUDE_ENV:
+            write_claude_env(account_path, claude_env_from_paste(api_key))
+            return lane.provider_name
+        case _ as unreachable:
+            assert_never(unreachable)
