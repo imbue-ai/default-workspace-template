@@ -119,7 +119,7 @@ export function liveSurfaceKeys(): LiveKey[] {
  * The page for ``key``, creating it on first open.
  *
  * ``mountContent`` runs exactly once per instance, ever: the mount outlives every pane that
- * shows it, so an existing page is handed back untouched -- same document, same params, same
+ * shows it, so an existing page is handed back untouched -- same document, same tab id, same
  * scroll position -- no matter what the caller was about to render into it.
  */
 export function ensureLiveSurface(
