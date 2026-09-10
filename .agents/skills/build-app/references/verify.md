@@ -1,54 +1,41 @@
-# Verifying an app
+# Verifying an App
 
-Run both checks. `curl` confirms the backend answers on its registered
-port; Playwright catches rendering bugs that `curl` misses (a blank
-page, JS errors, a marker that never appears).
+Verification confirms that your app is registered, responds on its port, and renders correctly.
 
-Both checks run against `http://127.0.0.1:<port>/` -- the URL you
-registered with `forward_port.py`. The browser-facing origin
-(`http://<name>.<workspace-host>/`) is served by the host-side
-forwarder and is **not reachable from inside the container**, so
-in-container verification targets the local port directly. That is an
-honest proxy for the tab: nothing rewrites or transforms traffic
-between the origin and your port, so a page that renders correctly at
-`http://127.0.0.1:<port>/` renders identically in the tab. What it
-cannot prove is the registration itself, so check that too (step 0).
+> In-container checks target `http://127.0.0.1:<port>/`. The browser origin (`http://<name>.<workspace-host>/`) is routed by the host-side forwarder and is not directly reachable from inside the container.
 
-## Step 0: confirm the registration
+---
+
+## 1. Confirm Registration
+
+Verify that the service name and backend URL appear in the workspace app registry:
 
 ```bash
 grep -A1 '<name>' data/.state/apps.toml
 ```
 
-The service name must appear with the URL you expect. If it is
-missing, `forward_port.py` was not run, failed (e.g. an invalid,
-non-DNS-safe name), or registered a different name (the manifest's
-`name` for a `--manifest` line, the `--name` flag otherwise) -- the tab
-would show the forwarder's loading page forever.
+If missing: Confirm `forward_port.py` executed successfully and the service name is valid and DNS-safe.
 
-## Step 1: curl the registered backend
+---
+
+## 2. Check HTTP Endpoint
+
+Query the registered backend port:
 
 ```bash
 curl -sf http://127.0.0.1:<port>/ -o /dev/null -w "%{http_code}\n"
 ```
 
-`<port>` is the port in the service's `forward_port.py --url` (see
-`system/supervisord.conf` or `data/.state/apps.toml`). Expected: `200`.
+Expected output: `200`.
 
-Common failures:
+- **Connection refused**: The app crashed or failed to start. Run `supervisorctl status <name>` and check `/var/log/supervisor/<name>-stderr.log`.
+- **200 OK but tab displays loading page**: The registered port in `apps.toml` differs from the port the app bound, or the registered name does not match the tab name. See [cross-flow-gotchas.md](cross-flow-gotchas.md).
 
-- **Connection refused** -- the app crashed or never came up. Check
-  `supervisorctl status <name>` and
-  `/var/log/supervisor/<name>-stderr.log`.
-- **200 here but the tab shows the loading page** -- the registered
-  URL doesn't match the port the app actually bound, or the name in
-  `apps.toml` doesn't match the tab's service name. See
-  cross-flow-gotchas.md.
+---
 
-## Step 2: Playwright assertion
+## 3. Verify UI Rendering (Playwright)
 
-`curl` alone does not catch rendering bugs. Use Playwright
-(preinstalled in the root venv per `CLAUDE.md`):
+Use a headless Playwright assertion to verify that the frontend renders without JavaScript errors:
 
 ```python
 # /tmp/verify_<name>.py
@@ -58,16 +45,15 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page()
     page.goto("http://127.0.0.1:<port>/", wait_until="networkidle")
-    title = page.title()
-    body = page.content()
-    print("title:", title)
-    print("body len:", len(body))
-    assert "<your-expected-marker>" in body, body[:500]
+    content = page.content()
+    assert "<expected-marker>" in content, f"Marker missing. Page head: {content[:500]}"
     browser.close()
 ```
 
-Run with `uv run python /tmp/verify_<name>.py`.
+Run the check:
 
-Pick a marker that **only** appears when your app rendered correctly
--- a heading, a data-driven element. Do not assert on `<html>` or
-`<body>`; those appear in error pages too.
+```bash
+uv run python /tmp/verify_<name>.py
+```
+
+Assert on a specific text string or element rendered only by your app (avoid asserting on generic tags like `<html>` or `<body>`).
