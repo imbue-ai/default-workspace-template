@@ -206,8 +206,9 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
 
 def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
     # Scaffolding an app -- the routine action the build-app skill documents --
-    # writes the package under ``system/apps/``, appends a supervisord program
-    # block, and relocks so the root lockfile covers the new workspace member.
+    # writes the package under ``system/apps/``, writes the program's own
+    # ``system/supervisord.conf.d/<name>.conf`` drop-in, and relocks so the root
+    # lockfile covers the new workspace member.
     # None of that moves what this process resolved, so the banner must stay
     # down: firing on every app a user builds is how a banner stops being read.
     # Every file ``scaffold_flask_lib.py`` writes is listed, so a rule that
@@ -221,7 +222,7 @@ def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> 
         repo,
         "scaffold a new app",
         "uv.lock",
-        "system/supervisord.conf",
+        "system/supervisord.conf.d/finances.conf",
         "system/apps/finances/pyproject.toml",
         "system/apps/finances/app.toml",
         "system/apps/finances/README.md",
