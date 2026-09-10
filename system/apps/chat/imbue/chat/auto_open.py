@@ -55,14 +55,6 @@ DEFAULT_LEDGER_PATH: Final[Path] = Path("data/.apps/chat/auto_opened_chats.json"
 
 _DELIVERED_KEY: Final = "delivered"
 
-# Tab the chat into the group the client already has active, rather than the ``open`` op's
-# default of docking it to the right of that group. The default only merges into a group that
-# already lies in the direction, and the active group is usually the rightmost one, so it split
-# a new column open every time. The op names no ``relative_to``: there is no address out here to
-# anchor to, and without one the shell anchors on the client's own active group, which is where
-# the user is looking.
-_WITHIN_ACTIVE_GROUP: Final = "within"
-
 
 def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
@@ -189,15 +181,7 @@ class ShellLayoutClient(FrozenModel):
         ]
 
     def open_chat(self, agent_id: str, client_id: str) -> bool:
-        body = {
-            "op": "open",
-            "args": {
-                "address": chat_address(agent_id),
-                "client": client_id,
-                "direction": _WITHIN_ACTIVE_GROUP,
-            },
-            "requester": "",
-        }
+        body = {"op": "open", "args": {"address": chat_address(agent_id), "client": client_id}, "requester": ""}
         try:
             response = httpx.post(
                 f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS

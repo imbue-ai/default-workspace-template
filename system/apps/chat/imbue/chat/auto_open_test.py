@@ -13,7 +13,6 @@ from app_instances.testing import LOOPBACK_HOST
 from app_instances.testing import free_port
 from flask import Flask
 from flask import jsonify
-from flask import request
 
 from imbue.chat.auto_open import AUTO_OPEN_FRESHNESS
 from imbue.chat.auto_open import AutoOpenLedger
@@ -224,24 +223,3 @@ def test_a_client_list_of_the_wrong_shape_reads_as_nobody_rather_than_killing_th
 
     with serve_in_background(LOOPBACK_HOST, port, application):
         assert ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}").connected_client_ids() == expected
-
-
-def test_an_open_tabs_into_the_active_group_rather_than_splitting_a_column_open() -> None:
-    """The op's ``direction`` default is ``right``, which merges only into a group that already lies
-    that way; the active group is usually the rightmost, so the default made a new column each time."""
-    posted: list[dict[str, Any]] = []
-    application = Flask("stub-shell")
-    application.add_url_rule(
-        "/api/layout/broadcast",
-        view_func=lambda: (posted.append(request.get_json()), jsonify({"ok": True}))[1],
-        endpoint="broadcast",
-        methods=["POST"],
-    )
-    port = free_port()
-
-    with serve_in_background(LOOPBACK_HOST, port, application):
-        assert ShellLayoutClient(shell_url=f"http://{LOOPBACK_HOST}:{port}").open_chat("chat-1", "c1") is True
-
-    (body,) = posted
-    assert body["op"] == "open"
-    assert body["args"] == {"address": "app:chat?instance=chat-1", "client": "c1", "direction": "within"}
