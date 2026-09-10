@@ -21,11 +21,12 @@ There are two shapes, selected by which creation you are crystallizing:
 
 - Gates (reconstruct shape only): `outline-approval` (Stage 2),
   `final-creation` (Stage 6).
+- Gate, either shape: `question`, mid-flight, whenever the answer is not in
+  your task file or the repo.
 - Terminal statuses: `done`, `stuck`.
 
-In the pre-existing/confirmed-live shape, emit no gates; you may emit a
-mid-flight `question` only if your creation reference allows it, and you finish
-with `done` or `stuck`.
+In the pre-existing/confirmed-live shape, emit no stage gates -- just
+`question` if you need one -- and finish with `done` or `stuck`.
 
 ## Stage 1: Reconstruct (reconstruct shape only)
 

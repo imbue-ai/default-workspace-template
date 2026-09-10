@@ -163,8 +163,8 @@ Flow-specific substitutions:
 
 - Worker name: `update-$TARGET`; branch: `mngr/update-$TARGET`
 - Poll path: `data/.tasks/harden/update-$TARGET/reports/report.md`; reports dir
-  `data/.tasks/harden/update-$TARGET/reports/`; consumed
-  `data/.tasks/harden/update-$TARGET/reports/consumed/`
+  `data/.tasks/harden/update-$TARGET/reports/`; `await` archives each report it
+  prints under `data/.tasks/harden/update-$TARGET/reports/consumed/`
 - Gates: `outline-approval` (emergent only -- the design gate) and
   `final-creation` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --

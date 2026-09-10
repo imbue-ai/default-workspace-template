@@ -72,16 +72,19 @@ the crystallize shape), it carries that itself, keyed by type.
 
 ## Step 3: Report back to the lead
 
-Follow `.agents/shared/references/worker-reporting.md` for the report-file
-procedure. The `eval` in Step 1 already set the variables it needs. Substitute:
-
-- `<RUNTIME_REPORTS_DIR>` -> the directory part of `FINISH_REPORT_PATH`
-  (i.e. `dirname "$FINISH_REPORT_PATH"`).
+Report with the launcher's `report` subcommand -- write the body to a file and
+hand that file over -- exactly as
+`.agents/shared/references/worker-reporting.md` describes. The `eval` in Step 1
+already set the variables it needs, and the subcommand derives the report
+destination and the lead's address from `TASK_FILE` itself, so there is nothing
+to substitute.
 
 The valid `name:` values for gates and terminal statuses come from your
 operation reference -- it is the authority on which gates fire for your
 operation × type combination (e.g. a crystallized app emits no gates; a
-crystallized skill emits `outline-approval` then `final-creation`).
+crystallized skill emits `outline-approval` then `final-creation`). On top of
+whatever it lists, `question` (`type: gate`) is valid on every run: any worker
+may stop mid-flight and ask its lead, whatever the operation.
 
 That is the entire worker. Everything else is in the references you loaded in
 Step 2.
