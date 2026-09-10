@@ -1503,7 +1503,11 @@ def test_dropping_on_a_tab_draws_a_line_and_on_a_pane_draws_a_wash(tmp_path: Pat
         )
         line_x = tab_overlay["left"] if tab_overlay["side"] == "left" else tab_overlay["right"]
         seam_x = target_box["x"] if tab_overlay["side"] == "left" else target_box["x"] + target_box["width"]
-        assert abs(line_x - seam_x) <= 1, (
+        # The overlay is inset inside the tab, so the line lands a pixel in from the seam. Two
+        # pixels of slack rather than one: the real offset is 1.000x px and float noise in the two
+        # measurements pushes it either side of an exactly-one bound, which made this flaky. The
+        # bound is still far tighter than a tab is wide, so it still says "on that seam".
+        assert abs(line_x - seam_x) <= 2, (
             f"the {tab_overlay['side']} line should sit on that edge ({seam_x}), got {line_x}"
         )
 
