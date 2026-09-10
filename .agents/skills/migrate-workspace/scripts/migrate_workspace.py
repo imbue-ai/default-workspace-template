@@ -1425,10 +1425,10 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    # Every program lives in its own supervisord.conf.d drop-in, so scanning
-    # only the main config would see no ports at all and report every real app as
-    # free -- collisions would surface as two programs bound to the same port
-    # after the migration, not here.
+    # Every program lives in its own drop-in, under whichever directory this config's
+    # [include] globs name, so scanning only the main config would see no ports at all
+    # and report every real app as free -- collisions would surface as two programs
+    # bound to the same port after the migration, not here.
     for conf in _local_supervisord_configs(Path()):
         ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
