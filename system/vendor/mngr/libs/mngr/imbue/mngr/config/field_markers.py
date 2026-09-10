@@ -22,13 +22,12 @@ class SettingsPatchField:
     even for non-overlapping keys, which an assign would clobber. Every other field
     stays assign-by-default.
 
-    Two of the fields carrying this marker (``ClaudeAgentConfig.settings_overrides``,
-    ``AntigravityAgentConfig.settings_overrides``) live on plugin subclasses, and one
-    (``CommandDefaults.defaults``) inside a registry entry; the base ``merge_with``
-    reads the marker generically, so core never has to know the fields' names. Because such a field accumulates
-    (combine, never assign), a higher layer that merely adds keys is a superset and
-    cannot narrow; only a bare assign that drops a non-empty aggregate *inside* the
-    patch is surfaced as a narrowing (by the overlay merge, at any depth).
+    A marked field may live on a plugin subclass or inside a registry entry; the base
+    ``merge_with`` reads the marker generically, so core never has to know its name
+    (``config/README.md`` names the fields carrying it today). Because such a field
+    accumulates (combine, never assign), a higher layer that merely adds keys is a
+    superset and cannot narrow; only a bare assign that drops a non-empty aggregate
+    *inside* the patch is surfaced as a narrowing (by the overlay merge, at any depth).
     """
 
 

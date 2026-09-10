@@ -622,9 +622,9 @@ class MngrConfig(FrozenModel):
 
         The narrowings are the single config-load narrowing detector: cross-scope
         bare-drops of a non-empty aggregate by a higher-precedence layer -- both ordinary
-        assign-by-default field drops (e.g. ``agent_types.<name>.cli_args``,
-        ``commands.create.defaults.env``) and ``SettingsPatchField`` drops *inside* an
-        accumulating settings patch (e.g. ``agent_types.<name>.settings_overrides.<key>...``).
+        assign-by-default field drops (e.g. ``agent_types.<name>.cli_args``) and
+        ``SettingsPatchField`` drops *inside* an accumulating settings patch (e.g.
+        ``commands.create.defaults.env``, ``agent_types.<name>.settings_overrides.<key>...``).
         ``Static*`` atomic aggregates are exempt via the override-side re-marking. The loader
         routes the whole list into its flag-gated narrowing aggregation; callers that only
         need the merged value drop the second element explicitly.
