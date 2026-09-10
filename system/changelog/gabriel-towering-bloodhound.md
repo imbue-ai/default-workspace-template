@@ -20,9 +20,12 @@ one no longer costs the report its service logs or its chats.
 Two limits changed to go with it. Each log class now fills to a total byte budget
 newest-first, so one busy harness cannot hand the secret scanner more plaintext than it
 can read inside the host's budget -- without which the report would time out rather than
-arrive trimmed. Panes get their own budget rather than competing with the log files: they
-are captured at collection time, so under a shared newest-first budget they would sort
-above every real harness log and displace the logs of the agent that actually broke. And
-the per-file line cap rose from 200 to 2000: the per-file read cap was already what
-bounded a member, so the line cap was discarding lines that had been read, and a chatty
-service can write 200 lines in under a second.
+arrive trimmed. A class the budget could not fit whole says so, and how many files it
+left out, in `collection-notes.txt`: otherwise a trimmed class reads exactly like a
+complete one, and "the harness that broke wrote nothing" is the wrong conclusion to hand
+someone diagnosing that harness. Panes get their own budget rather than competing with
+the log files: they are captured at collection time, so under a shared newest-first
+budget they would sort above every real harness log and displace the logs of the agent
+that actually broke. And the per-file line cap rose from 200 to 2000: the per-file read
+cap was already what bounded a member, so the line cap was discarding lines that had
+been read, and a chatty service can write 200 lines in under a second.
