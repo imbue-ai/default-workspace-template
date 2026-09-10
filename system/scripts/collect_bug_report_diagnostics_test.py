@@ -68,8 +68,15 @@ def _load_collector(
     supervisord_conf: Path | None = None,
     workspace_dir: Path | None = None,
     scan_gate_dir: Path | None = None,
+    agents_dir: Path | None = None,
 ) -> ModuleType:
-    """Load a fresh copy of the collector with its container paths redirected."""
+    """Load a fresh copy of the collector with its container paths redirected.
+
+    ``agents_dir`` is left at the collector's own default when a test does not
+    name one -- that default is empty outside an agent's env, so a test that
+    says nothing about agent logs collects none rather than reading whatever
+    mngr tree the machine running the suite happens to have.
+    """
     spec = importlib.util.spec_from_file_location(
         "collect_bug_report_diagnostics_under_test", _SCRIPT_PATH
     )
@@ -87,12 +94,30 @@ def _load_collector(
         _rebind(namespace, "WORKSPACE_DIR", str(workspace_dir))
     if scan_gate_dir is not None:
         _rebind(namespace, "SCAN_GATE_DIR", str(scan_gate_dir))
+    if agents_dir is not None:
+        _rebind(namespace, "AGENTS_DIR", str(agents_dir))
     return module
 
 
 def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / name
+    path.write_text(content, encoding="utf-8")
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _write_agent_log(
+    agents_dir: Path, agent_name: str, relative_path: str, *, mtime: float, content: str = ""
+) -> Path:
+    """One harness log inside an agent's state dir, at the layout mngr writes.
+
+    ``relative_path`` is written verbatim under the agent's own directory, so a
+    test names the real shape it is standing in for (``app_server.log``,
+    ``logs/agy_cli.log``, ``plugin/codex/home/tui_log/codex-tui.log``).
+    """
+    path = agents_dir / _agent_id_for(agent_name) / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     os.utime(path, (mtime, mtime))
     return path
@@ -132,27 +157,42 @@ def _mngr_stub_for_chats(tmp_path: Path, chats: Mapping[str, str]) -> Path:
     return _write_mngr_stub(tmp_path, agents=tuple(chats), events_by_agent=chats)
 
 
+def _agent_id_for(name: str) -> str:
+    """The stub's agent id for an agent name, matching what its listing reports."""
+    return f"agent-{name}"
+
+
 def _write_mngr_stub(
     tmp_path: Path,
     *,
     agents: Sequence[str] = (),
     events_by_agent: Mapping[str, str] | None = None,
+    panes_by_agent: Mapping[str, str] | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
-    The collector asks mngr two things -- which agents exist, and what was said
-    in one -- so the stub answers exactly those two shapes: the pipe template
-    ``{name}|{name}@{host.name}.{host.provider_name}`` for ``list``, and raw
-    JSONL for ``event``. The event target arrives as the pinned
-    ``name@host.provider`` address the listing handed out, so the stub keys its
-    canned events by the name in front of the ``@``.
+    The collector asks mngr three things -- which agents exist, what was said in
+    one, and what is on one's pane -- so the stub answers exactly those three
+    shapes: the pipe template
+    ``{name}|{name}@{host.name}.{host.provider_name}|{id}`` for ``list``, raw
+    JSONL for ``event``, and pane text for ``capture``. Both per-agent targets
+    arrive as the pinned ``name@host.provider`` address the listing handed out,
+    so the stub keys its canned answers by the name in front of the ``@``. An
+    agent with no canned pane exits nonzero, as the real ``mngr capture`` does
+    for an agent that is not running.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
         (events_dir / agent_name).write_text(events, encoding="utf-8")
-    listing = "".join(f"{name}|{name}@stub-host.local\n" for name in agents)
+    panes_dir = tmp_path / "stub-panes"
+    panes_dir.mkdir(parents=True, exist_ok=True)
+    for agent_name, pane in (panes_by_agent or {}).items():
+        (panes_dir / agent_name).write_text(pane, encoding="utf-8")
+    listing = "".join(
+        f"{name}|{name}@stub-host.local|{_agent_id_for(name)}\n" for name in agents
+    )
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
@@ -170,6 +210,12 @@ def _write_mngr_stub(
         f'  f="{events_dir}/$agent_name"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "capture" ]; then\n'
+        '  agent_name="${2%%@*}"\n'
+        f'  f="{panes_dir}/$agent_name"\n'
+        '  if [ -f "$f" ]; then cat "$f"; exit 0; fi\n'
+        "  exit 1\n"
         "fi\n"
         "exit 1\n",
         encoding="utf-8",
@@ -297,7 +343,7 @@ def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
 def test_collector_caps_match_the_documented_limits() -> None:
     module = _load_collector()
     assert module.MAX_LOG_FILES == 100
-    assert module.MAX_LINES_PER_LOG == 200
+    assert module.MAX_LINES_PER_LOG == 2000
     assert module.MIN_TRANSCRIPT_COUNT == 5
     assert module.LOG_RECENCY_WINDOW_SECONDS == 24 * 60 * 60
 
@@ -386,9 +432,9 @@ def test_every_agent_is_a_transcript_candidate(
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
-        ("chatty", "chatty@stub-host.local"),
-        ("system-services", "system-services@stub-host.local"),
-        ("worker", "worker@stub-host.local"),
+        ("chatty", "chatty@stub-host.local", "agent-chatty"),
+        ("system-services", "system-services@stub-host.local", "agent-system-services"),
+        ("worker", "worker@stub-host.local", "agent-worker"),
     ]
 
 
@@ -755,8 +801,9 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The clean path: exactly one line of base64, decoding to one zip with the
-    logs member and each recent chat as its own member, newest chat first, and
-    no notes member -- nothing was withheld, so there is nothing to say."""
+    service logs, each agent's harness logs and captured pane, and each recent
+    chat as its own member, newest chat first, and no notes member -- nothing
+    was withheld, so there is nothing to say."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -773,13 +820,30 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         "agent-older": _chat_events("agent-older", age_seconds=600, source="claude"),
         "agent-newer": _chat_events("agent-newer", age_seconds=60, source="codex"),
     }
-    mngr_stub = _mngr_stub_for_chats(tmp_path, chats)
+    # The codex-shaped agent writes a daemon log; the claude-shaped one writes
+    # nothing and is only readable through its pane, which is the split B1 and
+    # B2 exist to cover.
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir,
+        "agent-newer",
+        "app_server.log",
+        mtime=now,
+        content="op.dispatch.shutdown\n",
+    )
+    mngr_stub = _write_mngr_stub(
+        tmp_path,
+        agents=tuple(chats),
+        events_by_agent=chats,
+        panes_by_agent={"agent-older": "claude crashed here\n"},
+    )
     module = _load_collector(
         supervisor_log_dir=log_dir,
         mngr_binary=mngr_stub,
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
+        agents_dir=agents_dir,
     )
 
     module.main(["--logs", "--transcript"])
@@ -789,6 +853,8 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         assert archive.namelist() == [
             "metadata.json",
             "logs/system_interface.log",
+            "agent-logs/agent-older/pane.txt",
+            "agent-logs/agent-newer/app_server.log",
             "chats/agent-newer-codex.jsonl",
             "chats/agent-older-claude.jsonl",
         ]
@@ -796,6 +862,14 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
         assert (
             "interface started"
             in archive.read("logs/system_interface.log").decode("utf-8")
+        )
+        assert (
+            "op.dispatch.shutdown"
+            in archive.read("agent-logs/agent-newer/app_server.log").decode("utf-8")
+        )
+        assert (
+            "claude crashed here"
+            in archive.read("agent-logs/agent-older/pane.txt").decode("utf-8")
         )
         metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
         assert set(metadata) == {"workspace", "host_health", "services"}
@@ -832,7 +906,8 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
 ) -> None:
     """--logs alone must not mention the transcript anywhere, even in a workspace
     that has chats -- an unrequested type appears in neither the members nor the
-    notes."""
+    notes. The agent logs ride this flag rather than --transcript, so they are
+    here: they are diagnostics about the harness, not the conversation."""
     gate = tmp_path / "gate"
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
@@ -845,19 +920,29 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
     chats = {"agent-a": _chat_events("chatty")}
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir, "agent-a", "app_server.log", mtime=time.time(), content="daemon up\n"
+    )
     module = _load_collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
+        agents_dir=agents_dir,
     )
 
     module.main(["--logs"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
-        # Logs only: metadata plus the service logs -- no chats, and no notes.
-        assert archive.namelist() == ["metadata.json", "logs/system_interface.log"]
+        # Logs only: metadata, the service logs and the agent's own -- no chats,
+        # and no notes.
+        assert archive.namelist() == [
+            "metadata.json",
+            "logs/system_interface.log",
+            "agent-logs/agent-a/app_server.log",
+        ]
 
 
 def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
@@ -915,9 +1000,10 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
 def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A finding in the logs costs the logs alone; the clean chats still ship.
-    The content-matching gate proves the scan read the staged logs PLAINTEXT --
-    the finding is against bytes the collector staged, not a predicted name."""
+    """A finding in the service logs costs those alone; the clean agent logs and
+    chats still ship. The content-matching gate proves the scan read the staged
+    logs PLAINTEXT -- the finding is against bytes the collector staged, not a
+    predicted name."""
     secret = "AKIAIOSFODNN7EXAMPLE"
     gate = tmp_path / "gate"
     _write_content_matching_stub_scan_gate(gate, secret=secret)
@@ -931,20 +1017,33 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
     chats = {"agent-clean": _chat_events("clean")}
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir,
+        "agent-clean",
+        "app_server.log",
+        mtime=time.time(),
+        content="nothing secret here\n",
+    )
     module = _load_collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=gate,
+        agents_dir=agents_dir,
     )
 
     module.main(["--logs", "--transcript"])
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
-        # Every logs member goes, metadata included; the clean chat still
-        # ships, and the notes say what happened to the logs.
-        assert archive.namelist() == ["chats/agent-clean-claude.jsonl", "collection-notes.txt"]
+        # Every service-logs member goes, metadata included; the clean agent log
+        # and chat still ship, and the notes say what happened to the logs.
+        assert archive.namelist() == [
+            "agent-logs/agent-clean/app_server.log",
+            "chats/agent-clean-claude.jsonl",
+            "collection-notes.txt",
+        ]
         assert _notes_lines(archive) == ["workspace logs: withheld: the secret scan reported findings"]
 
 
@@ -962,12 +1061,17 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
     chats = {"agent-a": _chat_events("chatty")}
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir, "agent-a", "app_server.log", mtime=time.time(), content="daemon up\n"
+    )
     module = _load_collector(
         supervisor_log_dir=log_dir,
         mngr_binary=_mngr_stub_for_chats(tmp_path, chats),
         supervisord_conf=conf,
         workspace_dir=tmp_path / "workspace",
         scan_gate_dir=tmp_path / "absent-gate",
+        agents_dir=agents_dir,
     )
 
     module.main(["--logs", "--transcript"])
@@ -976,6 +1080,7 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         assert archive.namelist() == ["collection-notes.txt"]
         assert _notes_lines(archive) == [
             "workspace logs: withheld: the secret scanner could not run, so nothing it was to check was released",
+            "agent logs: withheld: the secret scanner could not run, so nothing it was to check was released",
             "recent chats: withheld: the secret scanner could not run, so nothing it was to check was released",
         ]
 
@@ -1015,3 +1120,177 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
             "chats/agent-b-claude.jsonl",
             "chats/agent-a-claude.jsonl",
         ]
+
+
+# --- Agent (harness) logs ---
+
+
+def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
+    tmp_path: Path,
+) -> None:
+    """The globs have to cover where each harness actually logs, or a report is
+    silent about the harness that broke.
+
+    codex writes a bare ``app_server.log`` next to a ``tui_log`` tail under its
+    plugin dir, antigravity writes under ``logs/``. ``events/`` must stay out:
+    it holds the conversation the chats half already collects.
+    """
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    for relative_path in (
+        "app_server.log",
+        "logs/agy_cli.log",
+        "plugin/codex/home/tui_log/codex-tui.log",
+    ):
+        _write_agent_log(agents_dir, "chatty", relative_path, mtime=now, content="x\n")
+    _write_agent_log(
+        agents_dir, "chatty", "events/logs/converted.log", mtime=now, content="converted\n"
+    )
+    module = _load_collector(agents_dir=agents_dir)
+
+    collected = {os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")}
+
+    assert collected == {"app_server.log", "agy_cli.log", "codex-tui.log"}
+
+
+def test_an_agent_log_nothing_has_written_to_in_a_day_is_left_behind(
+    tmp_path: Path,
+) -> None:
+    """Same recency rule as the service logs: a harness that has been quiet for
+    over a day describes an earlier workspace, not the one the bug was filed
+    from, and only spends the class budget."""
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    _write_agent_log(agents_dir, "chatty", "app_server.log", mtime=now, content="fresh\n")
+    _write_agent_log(
+        agents_dir, "chatty", "logs/stale.log", mtime=now - 25 * 60 * 60, content="old\n"
+    )
+    module = _load_collector(agents_dir=agents_dir)
+
+    collected = [os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")]
+
+    assert collected == ["app_server.log"]
+
+
+def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
+    """A bug report asks a workspace what happened; it does not boot anything in
+    order to ask. ``--no-start`` is what keeps filing a report from waking a
+    stopped agent, and ``--full`` is what makes the capture worth having -- the
+    visible pane alone is usually just the prompt."""
+    stub = _write_mngr_stub(
+        tmp_path, agents=("chatty",), panes_by_agent={"chatty": "on screen\n"}
+    )
+    module = _load_collector(mngr_binary=stub)
+
+    assert module.capture_pane("chatty@stub-host.local", 5.0) == "on screen"
+
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    capture_calls = [
+        line for line in invocations.splitlines() if line.startswith("capture ")
+    ]
+    assert capture_calls == ["capture chatty@stub-host.local --full --no-start"]
+
+
+def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> None:
+    """A stopped agent has no pane to read, and mngr says so by failing. That is
+    an absence, not an error the report should carry."""
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",))
+    module = _load_collector(mngr_binary=stub)
+
+    assert module.capture_pane("chatty@stub-host.local", 5.0) is None
+
+
+def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
+    tmp_path: Path,
+) -> None:
+    """The class budget is what keeps one busy harness from spending the whole
+    scan on itself.
+
+    codex's app-server writes megabytes an hour, so without a budget across the
+    class a workspace with several codex chats would hand the scanner more
+    plaintext than it can read inside the host's budget -- and the report would
+    time out rather than arrive trimmed. Newest-first, so what survives is what
+    was being written when the bug was filed.
+    """
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    for name, age, content in (
+        ("oldest", 300, "o" * 400),
+        ("middle", 200, "m" * 400),
+        ("newest", 100, "n" * 400),
+    ):
+        _write_agent_log(
+            agents_dir, name, "app_server.log", mtime=now - age, content=content
+        )
+    stub = _write_mngr_stub(tmp_path, agents=("oldest", "middle", "newest"))
+    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
+
+    members = module.collect_agent_log_members(5.0)
+
+    assert [name for name, _, _ in members] == [
+        "agent-logs/newest/app_server.log",
+        "agent-logs/middle/app_server.log",
+    ]
+
+
+def test_one_outsized_agent_log_still_rides_rather_than_emptying_the_class(
+    tmp_path: Path,
+) -> None:
+    """A single log bigger than the whole budget must not leave the class empty:
+    the one file that overran is far likelier to hold the bug than nothing at
+    all is."""
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir, "chatty", "app_server.log", mtime=time.time(), content="x" * 5000
+    )
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",))
+    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 100)
+
+    members = module.collect_agent_log_members(5.0)
+
+    assert [name for name, _, _ in members] == ["agent-logs/chatty/app_server.log"]
+
+
+def test_agent_log_members_stay_unique_when_two_agent_names_sanitize_alike(
+    tmp_path: Path,
+) -> None:
+    """Two agents whose names reduce to the same safe component would otherwise
+    pack the same member twice, and the second would clobber the first when a
+    reader extracts the archive."""
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    for name in ("chat 1", "chat+1"):
+        _write_agent_log(
+            agents_dir, name, "app_server.log", mtime=now, content=f"from {name}\n"
+        )
+    stub = _write_mngr_stub(tmp_path, agents=("chat 1", "chat+1"))
+    module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
+
+    members = module.collect_agent_log_members(5.0)
+
+    assert sorted(name for name, _, _ in members) == [
+        "agent-logs/chat_1/app_server-2.log",
+        "agent-logs/chat_1/app_server.log",
+    ]
+
+
+def test_the_service_log_class_stops_at_its_byte_budget(tmp_path: Path) -> None:
+    """The per-file read cap does not bound the class: a hundred logs at that cap
+    is 25MB of plaintext for the scanner to read inside the host's budget."""
+    log_dir = tmp_path / "supervisor"
+    now = time.time()
+    for index, name in enumerate(("oldest", "middle", "newest")):
+        _write_log(
+            log_dir, f"{name}-stdout.log", mtime=now - 300 + index * 100, content="x" * 400
+        )
+    module = _load_collector(supervisor_log_dir=log_dir)
+    _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
+
+    members = module.collect_log_members()
+
+    assert [name for name, _, _ in members] == [
+        "logs/newest.log",
+        "logs/middle.log",
+    ]
