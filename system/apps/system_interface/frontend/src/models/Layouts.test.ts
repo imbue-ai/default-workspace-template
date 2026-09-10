@@ -118,6 +118,12 @@ describe("dockview panel params", () => {
     return dock;
   }
 
+  function disposeDock(dock: DockviewComponent): void {
+    const container = dock.element.parentElement;
+    dock.dispose();
+    container?.remove();
+  }
+
   it("hands the params of addPanel to init, round-trips them through toJSON and fromJSON, and keeps updates", () => {
     const seen: Record<string, unknown>[] = [];
     const dock = buildDock(seen);
@@ -142,5 +148,7 @@ describe("dockview panel params", () => {
     expect(panelParamsInDocument(restored.toJSON())).toEqual({
       "tab-0000000000000001": { ...params, lastFocusedMs: 7 },
     });
+    disposeDock(dock);
+    disposeDock(restored);
   });
 });
