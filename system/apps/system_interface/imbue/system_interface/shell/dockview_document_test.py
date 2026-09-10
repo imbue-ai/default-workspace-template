@@ -3,7 +3,6 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.dockview_document import Direction
 from imbue.system_interface.shell.dockview_document import HORIZONTAL
@@ -21,6 +20,7 @@ from imbue.system_interface.shell.errors import PanelNotFoundError
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
+from imbue.system_interface.shell.testing import addresses_by_panel_id
 
 _FILES = Address("app:files")
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
@@ -33,10 +33,6 @@ _TAB_D = TabId("tab-000000000000000d")
 
 def _panel(panel_id: str, address: Address, tab_id: TabId) -> dict[str, Any]:
     return {"id": panel_id, "params": instance_panel_params_json(address, tab_id, 0)}
-
-
-def _addresses_by_panel_id(layout: LayoutRecord) -> dict[str, str]:
-    return {panel_id: str(params.address) for panel_id, params in instance_panel_params_by_id(layout.dockview).items()}
 
 
 def _leaf(group_id: str, *views: str, size: int) -> dict[str, Any]:
@@ -109,7 +105,7 @@ def test_adding_to_a_never_arranged_view_builds_a_root_branch_dockview_accepts()
     panel = dockview["panels"][str(_TAB_A)]
     assert panel["contentComponent"] == "instance" and panel["tabComponent"] == "custom" and panel["title"] == "Files"
     assert panel["params"] == {"kind": "instance", "address": str(_FILES), "tabId": str(_TAB_A), "lastFocusedMs": 0}
-    assert _addresses_by_panel_id(added) == {str(_TAB_A): str(_FILES)}
+    assert addresses_by_panel_id(added.dockview) == {str(_TAB_A): _FILES}
 
 
 def test_adding_with_no_anchor_tabs_into_the_active_group_and_drops_its_launcher() -> None:
@@ -196,7 +192,9 @@ def test_removing_a_panel_collapses_its_group_and_the_wrapper_it_leaves_behind()
     assert [child["type"] for child in root["data"]] == ["leaf", "leaf"]
     assert root["data"][1]["data"]["id"] == "g2" and root["data"][1]["size"] == 600
     assert removed.dockview["activeGroup"] == "g1"
-    assert set(_addresses_by_panel_id(removed)) == {"pa", "pb"} and str(_TAB_C) not in removed.dockview["panels"]
+    assert (
+        set(addresses_by_panel_id(removed.dockview)) == {"pa", "pb"} and str(_TAB_C) not in removed.dockview["panels"]
+    )
 
     last_two = remove_panel(removed, "pb")
     assert last_two.dockview is not None and [leaf["data"]["id"] for leaf in _leaves(last_two.dockview)] == ["g1"]
@@ -223,7 +221,7 @@ def test_a_document_without_a_grid_is_repaired_into_one_group_by_every_op() -> N
     removed = remove_panel(gridless, "pa")
     assert removed.dockview is not None
     assert [leaf["data"]["views"] for leaf in _leaves(removed.dockview)] == [["pb"]]
-    assert set(_addresses_by_panel_id(removed)) == {"pb"}
+    assert set(addresses_by_panel_id(removed.dockview)) == {"pb"}
     # The panel an add docks lands beside the repaired group only, not in it as well.
     added = add_panel(gridless, _TERMINAL_2, _TAB_C, "Terminal 2", _placement("pb", Direction.BELOW))
     assert added.dockview is not None
@@ -245,7 +243,7 @@ def test_move_relocates_a_panel_keeping_its_record_and_is_a_noop_within_its_own_
     moved = move_panel(layout, "pa", _placement("pb", Direction.WITHIN))
     assert moved.dockview is not None
     assert [leaf["data"]["views"] for leaf in _leaves(moved.dockview)] == [["pb", "pa"]]
-    assert _addresses_by_panel_id(moved) == _addresses_by_panel_id(layout)
+    assert addresses_by_panel_id(moved.dockview) == addresses_by_panel_id(layout.dockview)
     assert set(moved.dockview["panels"]) == {"pa", "pb"}
     assert move_panel(moved, "pa", _placement("pb", Direction.WITHIN)) == moved
 

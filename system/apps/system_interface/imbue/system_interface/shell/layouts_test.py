@@ -20,6 +20,7 @@ from imbue.system_interface.shell.primitives import ClientId
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
 from imbue.system_interface.shell.testing import TEST_NOW
+from imbue.system_interface.shell.testing import addresses_by_panel_id
 
 _FILES = Address("app:files")
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
@@ -58,10 +59,6 @@ def _layout(device_kind: DeviceKind = DeviceKind.DESKTOP) -> LayoutRecord:
         device_kind=device_kind,
         updated_at=None,
     )
-
-
-def _addresses_by_panel_id(layout: LayoutRecord) -> dict[str, Address]:
-    return {panel_id: params.address for panel_id, params in instance_panel_params_by_id(layout.dockview).items()}
 
 
 def test_read_falls_back_from_own_to_seed_to_empty(tmp_path: Path) -> None:
@@ -105,7 +102,7 @@ def test_tabs_are_found_and_rebound_by_id(tmp_path: Path) -> None:
     assert rebound_params["p2"].last_focused_ms == 20
     assert store.find_tab(TabId("tab-00000000000000ff")) == []
     # The seeds follow, so a client that arrives later starts from the rebound tab too.
-    assert _addresses_by_panel_id(store.read_layout("alpha", "c9", DeviceKind.DESKTOP))["p2"] == rebound
+    assert addresses_by_panel_id(store.read_layout("alpha", "c9", DeviceKind.DESKTOP).dockview)["p2"] == rebound
     untouched = _layout()
     assert rebind_tab_in_layout(untouched, TabId("tab-00000000000000ff"), rebound) is untouched
 
@@ -116,7 +113,7 @@ def test_removed_addresses_leave_every_layout_and_its_grid(tmp_path: Path) -> No
     rewritten = store.remove_addresses_everywhere([_TERMINAL_1], TEST_NOW)
     assert len(rewritten) == 1
     layout = store.read_layout("everything", "c1", DeviceKind.DESKTOP)
-    assert set(_addresses_by_panel_id(layout)) == {"p1"}
+    assert set(addresses_by_panel_id(layout.dockview)) == {"p1"}
     assert layout.dockview is not None
     assert set(layout.dockview["panels"]) == {"p1"}
     assert layout.dockview["grid"]["root"]["data"][0]["data"]["views"] == ["p1"]
@@ -170,15 +167,15 @@ def test_an_edit_reads_the_stored_arrangement_at_the_write_and_skips_a_change_of
     first = store.edit_client_layout(
         "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=1)
     )
-    assert first.is_written is True and set(_addresses_by_panel_id(first.layout)) == {"p2"}
-    assert _addresses_by_panel_id(seen[0]).keys() == {"p1", "p2"}
+    assert first.is_written is True and set(addresses_by_panel_id(first.layout.dockview)) == {"p2"}
+    assert addresses_by_panel_id(seen[0].dockview).keys() == {"p1", "p2"}
     assert store.read_client_layout("everything", "c1") == first.layout
     # The edit is handed what is stored when it runs, not an earlier snapshot: a browser save in between is what it sees.
     store.save_browser_layout("everything", "c1", _layout(), first.layout.updated_at, TEST_NOW + timedelta(seconds=2))
     second = store.edit_client_layout(
         "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=3)
     )
-    assert _addresses_by_panel_id(seen[-1]).keys() == {"p1", "p2"} and second.is_written is True
+    assert addresses_by_panel_id(seen[-1].dockview).keys() == {"p1", "p2"} and second.is_written is True
     # An edit that changes nothing is neither written nor stamped.
     third = store.edit_client_layout(
         "everything", "c1", DeviceKind.DESKTOP, drop_files, TEST_NOW + timedelta(seconds=4)
@@ -192,10 +189,13 @@ def test_the_shells_own_write_leaves_the_seed_alone(tmp_path: Path) -> None:
     store.save_browser_layout("everything", "c1", _layout(), None, TEST_NOW)
     edited = strip_address_from_layout(_layout(), _FILES)
     written = store.write_client_layout("everything", "c1", edited, TEST_NOW + timedelta(seconds=1))
-    assert set(_addresses_by_panel_id(written)) == {"p2"}
+    assert set(addresses_by_panel_id(written.dockview)) == {"p2"}
     assert store.read_client_layout("everything", "c1") == written
     assert store.read_client_layout("everything", "c9") is None
-    assert set(_addresses_by_panel_id(store.read_layout("everything", "c9", DeviceKind.DESKTOP))) == {"p1", "p2"}
+    assert set(addresses_by_panel_id(store.read_layout("everything", "c9", DeviceKind.DESKTOP).dockview)) == {
+        "p1",
+        "p2",
+    }
 
 
 def test_strip_helpers_are_pure_over_the_dockview_shape() -> None:
