@@ -6,6 +6,8 @@ metadata:
   crystallized: true
 ---
 
+IMPORTANT: The user will be actively waiting for completion of every step. So prioritize speed and responsiveness. In particular: Think briefly about which steps can be parallelized, and delegate them to subagents early to run in parallel. Avoid long-running synchronous bash commands if possible, while the user is waiting for your initial mock or next response.
+
 # How to build an app
 
 An "app" here is something the user can click on as a tab in
