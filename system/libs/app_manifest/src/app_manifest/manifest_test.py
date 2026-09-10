@@ -157,51 +157,35 @@ def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "instances_url",
-    [
-        "https://127.0.0.1:8301",
-        "http://0.0.0.0:8301",
-        "http://127.0.0.1",
-        "http://127.0.0.1:8301/",
-        "127.0.0.1:8301",
-        "http://127.0.0.1:0",
-        "http://127.0.0.1:70000",
-        "http://127.0.0.1:8301\n",
-    ],
+# Every way a value can fail the loopback origin rule: wrong scheme, a host that is not
+# loopback, no port, a path, no scheme, a port outside the usable range, trailing space.
+_BAD_LOOPBACK_ORIGINS = (
+    "https://127.0.0.1:8300",
+    "http://0.0.0.0:8300",
+    "http://localhost",
+    "http://localhost:8300/",
+    "localhost:8300",
+    "http://localhost:0",
+    "http://localhost:70000",
+    "http://localhost:8300\n",
 )
-def test_instances_url_must_be_a_bare_loopback_origin_with_a_usable_port(
-    instances_url: str,
+
+
+@pytest.mark.parametrize("field", ["url", "instances_url"])
+@pytest.mark.parametrize("value", _BAD_LOOPBACK_ORIGINS)
+def test_an_origin_a_manifest_declares_must_be_bare_loopback_with_a_usable_port(
+    field: str, value: str
 ) -> None:
-    with pytest.raises(ValidationError, match="invalid instances_url"):
+    """``url`` and ``instances_url`` are one rule, so one table covers both."""
+    with pytest.raises(ValidationError, match=f"invalid {field}"):
         AppManifest.model_validate(
             {
                 "name": "news",
                 "display_name": "News",
                 "icon": "icon.svg",
                 "instances": True,
-                "instances_url": instances_url,
+                field: value,
             }
-        )
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://127.0.0.1:8300",
-        "http://0.0.0.0:8300",
-        "http://localhost",
-        "http://localhost:8300/",
-        "localhost:8300",
-        "http://localhost:0",
-        "http://localhost:70000",
-        "http://localhost:8300\n",
-    ],
-)
-def test_url_must_be_a_bare_loopback_origin_with_a_usable_port(url: str) -> None:
-    with pytest.raises(ValidationError, match="invalid url"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": "icon.svg", "url": url}
         )
 
 
