@@ -1,1 +1,0 @@
-Documentation only: the `WORKSPACE_DIR` comment in `runner.py` now points at `system/supervisord.conf.d/host-backup.conf` for the `directory=` it mirrors, matching what the README already said. The value, the program and the entry points are unchanged.
