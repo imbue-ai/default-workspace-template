@@ -45,7 +45,7 @@ export function parsePanelParams(value: unknown): PanelParams | null {
 export function panelParamsInDocument(dockview: SerializedDockview): Record<string, PanelParams> {
   const found: Record<string, PanelParams> = {};
   for (const [panelId, entry] of Object.entries(dockview.panels ?? {})) {
-    const params = parsePanelParams((entry as { params?: unknown }).params);
+    const params = parsePanelParams(entry.params);
     if (params !== null) found[panelId] = params;
   }
   return found;
