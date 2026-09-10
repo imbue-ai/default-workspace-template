@@ -62,9 +62,7 @@ def test_make_snapshot_taker_raises_when_btrfs_local_missing_paths() -> None:
 # --- OuterTriggerSnapshotTaker (faked outer helper) ---
 
 
-def _outer_trigger_capabilities(
-    tmp_path: Path, *, read_subpath: str | None = "home"
-) -> BackupCapabilities:
+def _outer_trigger_capabilities(tmp_path: Path) -> BackupCapabilities:
     """Capabilities whose read dir is a real directory the fake helper populates."""
     return BackupCapabilities(
         method=SnapshotMethod.OUTER_TRIGGER,
@@ -74,7 +72,7 @@ def _outer_trigger_capabilities(
         snapshot_read_path=tmp_path / "snapshots" / "current",
         trigger_dir=tmp_path / "trigger",
         outer_helper_timeout_seconds=10.0,
-        read_subpath=read_subpath,
+        read_subpath="home",
     )
 
 
@@ -129,9 +127,9 @@ def _start_fake_outer_helper(
                     and payload.get("operation") == "snapshot"
                 ):
                     snapshot_dir = read_dir / str(payload.get("request_id", ""))
-                    for entry in snapshot_entries:
-                        (snapshot_dir / entry).mkdir(parents=True, exist_ok=True)
                     snapshot_dir.mkdir(parents=True, exist_ok=True)
+                    for entry in snapshot_entries:
+                        (snapshot_dir / entry).mkdir(exist_ok=True)
                 response = {
                     "request_id": payload.get("request_id", ""),
                     "operation": payload.get("operation", ""),
