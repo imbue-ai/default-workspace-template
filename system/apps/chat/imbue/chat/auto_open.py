@@ -155,14 +155,30 @@ class ShellLayoutClient(FrozenModel):
     shell_url: str = Field(description="The shell's base URL, without a trailing slash")
 
     def connected_client_ids(self) -> list[str]:
+        # An answer of the wrong shape reads as no clients, rather than subscripting blind: an
+        # exception here escapes the flush thread's own catch and ends it for the life of the
+        # process, and a reactor with no thread surfaces no tab and says nothing about it.
         try:
             response = httpx.get(f"{self.shell_url}/api/clients", timeout=SHELL_POST_TIMEOUT_SECONDS)
             response.raise_for_status()
-            clients = response.json().get("clients", [])
+            payload = response.json()
         except (httpx.HTTPError, ValueError) as e:
             logger.debug("Could not list the shell's clients at {}: {}", self.shell_url, e)
             return []
-        return [str(client["id"]) for client in clients if client.get("is_connected")]
+        clients = payload.get("clients") if isinstance(payload, dict) else None
+        if not isinstance(clients, list):
+            logger.warning(
+                "Ignoring a client list of the wrong shape from the shell at {} (expected a JSON object with a "
+                "'clients' list, got {})",
+                self.shell_url,
+                type(payload).__name__,
+            )
+            return []
+        return [
+            str(client["id"])
+            for client in clients
+            if isinstance(client, dict) and client.get("is_connected") and client.get("id")
+        ]
 
     def open_chat(self, agent_id: str, client_id: str) -> bool:
         body = {"op": "open", "args": {"address": chat_address(agent_id), "client": client_id}, "requester": ""}
