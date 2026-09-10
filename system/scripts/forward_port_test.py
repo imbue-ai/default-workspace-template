@@ -936,6 +936,68 @@ def test_a_registry_whose_apps_are_not_tables_is_refused_by_name(
     assert str(apps_file) in str(excinfo.value)
 
 
+def test_a_manifest_url_registers_without_the_url_flag(tmp_path: Path) -> None:
+    """The manifest is the declaration a static reader consults, so it is enough on its own."""
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        'name = "files"\ndisplay_name = "File Viewer"\nicon = "icon.svg"\n'
+        'url = "http://localhost:8300"\n',
+    )
+
+    result = _run(["--manifest", str(manifest)], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["url"] == "http://localhost:8300"
+
+
+def test_the_url_flag_overrides_what_the_manifest_declares(tmp_path: Path) -> None:
+    """A run serving somewhere else -- a test on an ephemeral port -- registers where it is.
+
+    The row records the port the app is actually reachable at, so the flag has to win
+    over the declaration rather than the other way round.
+    """
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        'name = "files"\ndisplay_name = "File Viewer"\nicon = "icon.svg"\n'
+        'url = "http://localhost:8300"\n',
+    )
+
+    result = _run(
+        ["--manifest", str(manifest), "--url", "http://localhost:8399"], apps_file
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["url"] == "http://localhost:8399"
+
+
+def test_a_manifest_without_a_url_still_needs_the_url_flag(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path, 'name = "files"\ndisplay_name = "File Viewer"\nicon = "icon.svg"\n'
+    )
+
+    result = _run(["--manifest", str(manifest)], apps_file)
+
+    assert result.returncode != 0
+    assert "--url is required" in result.stderr
+    assert not apps_file.exists()
+
+
+def test_a_non_string_manifest_url_is_rejected(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path,
+        'name = "files"\ndisplay_name = "File Viewer"\nicon = "icon.svg"\nurl = 8300\n',
+    )
+
+    result = _run(["--manifest", str(manifest)], apps_file)
+
+    assert result.returncode != 0
+    assert "url must be a string" in result.stderr
+
+
 def test_a_legacy_registry_written_by_tomlkit_is_read_and_rewritten_intact(
     tmp_path: Path,
 ) -> None:

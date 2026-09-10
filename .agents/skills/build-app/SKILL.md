@@ -185,10 +185,11 @@ is taken, or the manifest check, the tool install or `uv sync` fails.
 What gets generated:
 
 - `system/apps/<package>/app.toml` -- the app's manifest: its registered
-  `name`, `display_name`, `icon`, `instances = false` (one tab),
-  `priority = "user"` (shed before any built-in under memory pressure),
-  and `program` (its supervisord program). `forward_port.py --manifest`
-  reads it on every start; the scaffold checks it with `uv run app-manifest
+  `name`, `display_name`, `icon`, `url` (the loopback origin the app
+  serves at -- the one place its port is written), `instances = false`
+  (one tab), `priority = "user"` (shed before any built-in under memory
+  pressure), and `program` (its supervisord program).
+  `forward_port.py --manifest` reads it on every start; the scaffold checks it with `uv run app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it).
 - `system/apps/<package>/pyproject.toml` -- declares
@@ -230,7 +231,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && <name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml && <name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -508,10 +509,15 @@ it as `system/apps/<name>/app.toml` (like the `files` app):
 name = "<name>"
 display_name = "<What users see>"
 icon = "icon.svg"
+url = "http://localhost:<port>"
 instances = false
 priority = "user"
 program = "<name>"
 ```
+
+`url` is the port the wrapped server listens on. Declare it here rather than on
+the registration call: it is what the port pre-flight reads, so an app whose port
+lives only in a third-party tool's own flags is still accounted for.
 
 Then add a `[program:<name>]` block as its own
 `system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
@@ -524,7 +530,7 @@ shed before any built-in service under memory pressure (see
 
 ```ini
 [program:<name>]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port> && <existing_start_command>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml && <existing_start_command>"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -536,7 +542,7 @@ Two valid shapes:
 
   ```ini
   [program:docs-viewer]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml --url http://localhost:8090 && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/docs-viewer/app.toml && jupyter notebook --port 8090 --ip 127.0.0.1 --no-browser"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -548,7 +554,7 @@ Two valid shapes:
   # system/scripts/run_<name>.sh
   #!/usr/bin/env bash
   set -euo pipefail
-  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml --url http://localhost:<port>
+  python3 system/scripts/forward_port.py --manifest system/apps/<name>/app.toml
   exec <existing_start_command>
   ```
 
@@ -578,6 +584,7 @@ Used by both paths (the scaffolder generates the call; the escape
 hatch has you write it directly).
 
 ```
+python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml
 python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url URL
 python3 system/scripts/forward_port.py --name NAME --url URL --icon-file PATH
 python3 system/scripts/forward_port.py --name NAME --remove
@@ -605,7 +612,10 @@ Flags:
   (reserved for workspace hostname coordinates). Registration fails
   loudly on an invalid name.
 - `--url`: full URL where the app is reachable from inside the
-  container (e.g. `http://localhost:8090`).
+  container (e.g. `http://localhost:8090`). Optional with `--manifest`
+  when the manifest declares `url`; passing it overrides the
+  declaration, which is what lets a throwaway instance on a spare port
+  register where it actually is.
 - `--icon-file`: path to the app's `.svg` icon (SVG only -- no
   rasters), drawn instead of the generic letter monogram. **Required
   when creating a new entry** (unless `--internal` or `--no-icon`);

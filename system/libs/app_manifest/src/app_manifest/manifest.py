@@ -20,6 +20,7 @@ from app_manifest.primitives import AppOriginUrl
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import IconPath
 from app_manifest.primitives import InstancesUrl
+from app_manifest.primitives import loopback_url_port
 from app_manifest.primitives import PriorityName
 from app_manifest.primitives import ProgramName
 
@@ -96,9 +97,16 @@ class AppManifest(FrozenModel):
     def _check_cross_field_rules(self) -> Self:
         if self.icon is None and not self.internal:
             raise InvalidManifestValueError("icon is required unless internal = true")
-        if self.instances_url is not None and self.instances_url == self.url:
+        if (
+            self.instances_url is not None
+            and self.url is not None
+            and loopback_url_port(self.instances_url) == loopback_url_port(self.url)
+        ):
+            # Compared by port, not by string: the house spelling writes the app's own
+            # url as ``localhost`` and its instances_url as ``127.0.0.1``, so the same
+            # socket is routinely named two different ways.
             raise InvalidManifestValueError(
-                f"instances_url {self.instances_url!r} is the app's own url; one socket cannot serve both"
+                f"instances_url {self.instances_url!r} names the same port as url {self.url!r}; one socket cannot serve both"
             )
         if self.instances_url is not None and not self.instances:
             raise InvalidManifestValueError("instances_url is only allowed with instances = true")
