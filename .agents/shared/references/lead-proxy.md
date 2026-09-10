@@ -152,8 +152,9 @@ is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
 its tab refreshed. The calling skill's end-of-pass work (post-crystallize
 migration, closing the ticket) still waits for `done`.
 
-Tell the user in one line what is usable, what is still pending, and that the
-build is provisional -- verified only as far as `## Tested` states.
+Tell the user in one line and in non-technical language what's been updated: 
+  "Added a reusable skill."
+  "Created an MVP app, using it now while it continues to be improved."
 
 Consume the file whether or not you merged (the sha stays in its name, so a
 deferred milestone can be merged later):
