@@ -90,25 +90,19 @@ Do not sync a partial report.
 
 ## Milestone reports (non-blocking)
 
-A **milestone** says that one specific commit on your branch is already worth
-using, well before the pass finishes. It is not a gate: nothing is asked of the
-lead, nothing is waited for, and you do not stop your turn. The lead may merge
-that exact commit and let the user start using the creation while you carry on
-hardening.
+A **milestone** names one commit on your branch that is already worth using
+before the pass finishes. It is not a gate: the lead may merge that exact
+commit while you carry on. Declare one at the first commit where the creation
+runs end to end, and again at any later commit that is a real step up. Your
+operation reference (or, for a plain task, the task file) may say *when*; the
+name is always yours to pick.
 
-Declare one whenever you reach a commit the lead could start using before
-`done` -- typically the first commit at which the creation runs end to end, and
-again at any later commit that is a real step up in what works. Your operation
-reference (or, for a plain task, the task file) may say *when* its flow expects
-a milestone; the name is always yours to pick.
-
-1. **Commit first.** The lead merges the exact commit you name, so make the
-   commit before you write the file, and leave the tree clean.
+1. **Commit first.** The lead merges the exact commit you name; leave the tree
+   clean.
 
 2. **Write the milestone file** at
    `<RUNTIME_REPORTS_DIR>/milestones/<sha7>-<name>.md` (create the directory if
-   missing). It sits beside `report.md`, one file per milestone, so it never
-   competes for the single `report.md` slot:
+   missing) -- one file per milestone, beside `report.md`, never in its slot:
 
    ```bash
    mkdir -p <RUNTIME_REPORTS_DIR>/milestones
@@ -135,21 +129,16 @@ a milestone; the name is always yours to pick.
    <what the worker will do next before `done`>
    ```
 
-   `<name>` is a kebab-case slug (`[a-z0-9]+(-[a-z0-9]+)*`) that you choose to
-   describe what is true at that commit. There is no fixed list of milestone
-   names and nothing validates them -- pick the words that fit this task.
-   Because the commit's short sha is in the filename, declaring the same name
-   again at a later commit is a new file, and so a new event for the lead.
+   `<name>` is a kebab-case slug (`[a-z0-9]+(-[a-z0-9]+)*`) you choose to
+   describe what is true at that commit; there is no fixed list. The short sha
+   in the filename makes the same name at a later commit a new event.
 
-   The `## Tested` section is **required**, and it is written for the lead: it
-   says how much trust this build deserves, and it lets the lead skip
-   re-running anything you name as passing at this exact commit (anything you
-   do not name, the lead may run itself). Name the commands, suites, scenarios,
-   and review gates you actually ran and their result, and say plainly what you
-   have not run yet.
+   `## Tested` is **required** and is for the lead: it says how much trust the
+   build deserves, and the lead skips re-running anything you name as passing
+   at this exact commit. Name what you actually ran and its result, and say
+   plainly what you have not run yet.
 
-3. **Sync the reports directory to the lead**, exactly as in step 2 of the
-   reporting procedure above -- same `mngr rsync`, same same-repo fallback:
+3. **Sync the reports directory to the lead**, exactly as in step 2 above:
 
    ```bash
    mngr rsync ./<RUNTIME_REPORTS_DIR>/ \
@@ -157,10 +146,8 @@ a milestone; the name is always yours to pick.
        --uncommitted-changes=merge
    ```
 
-   The push carries the whole directory, so the new `milestones/` file rides
-   along with it and the lead's own `consumed/` is left untouched. When
-   `LEAD_AGENT` is unset/empty or the push fails, use the same-repo fallback,
-   copying into the lead's `milestones/` directory:
+   When `LEAD_AGENT` is unset/empty or the push fails, use the same-repo
+   fallback, copying into the lead's `milestones/` directory:
 
    ```bash
    LEAD_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
@@ -168,10 +155,9 @@ a milestone; the name is always yours to pick.
    cp "$MILESTONE_FILE" "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")/milestones/"
    ```
 
-4. **Continue working.** Do not stop your turn, and do not wait for the lead to
-   acknowledge or merge. Delivery is best-effort: if both the push and the
-   fallback fail, keep going -- your `done` report still hands over the whole
-   branch.
+4. **Continue working.** Do not stop your turn or wait for the lead. Delivery
+   is best-effort: if both the push and the fallback fail, keep going -- `done`
+   still hands over the whole branch.
 
 ## Terminal status report bodies
 

@@ -1063,9 +1063,8 @@ def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
 def _write_milestone(report_path: Path, filename: str, body: str) -> Path:
     """Drop a milestone file into ``milestones/`` beside the report path.
 
-    The directory layout is spelled out here rather than taken from the module
-    under test, so the on-disk contract the worker's rsync has to hit is
-    asserted independently of the code that reads it.
+    The layout is spelled out rather than taken from the module under test so
+    the on-disk contract is asserted independently.
     """
     milestones_dir = report_path.parent / "milestones"
     milestones_dir.mkdir(parents=True, exist_ok=True)
@@ -1086,9 +1085,7 @@ def _mark_consumed(report_path: Path, filename: str) -> Path:
 def test_await_returns_a_milestone_when_no_report_exists(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An unconsumed milestone ends the poll exactly like a report does: its
-    contents on stdout and exit 0, plus its own path on stderr so the lead knows
-    which file to move into consumed/ once it has acted on it."""
+    """An unconsumed milestone ends the poll like a report: contents out, path on stderr."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
@@ -1116,9 +1113,7 @@ def test_await_returns_a_milestone_when_no_report_exists(
 def test_await_prefers_the_report_over_an_unconsumed_milestone(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """report.md wins any poll where both are present: a gate or terminal status
-    is the more important event, and the milestone is still there to be returned
-    by the next re-armed poll."""
+    """report.md wins when both are present; the milestone waits for the next poll."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
@@ -1148,9 +1143,7 @@ def test_await_prefers_the_report_over_an_unconsumed_milestone(
 def test_await_skips_a_milestone_whose_basename_is_already_consumed(
     tmp_path: Path,
 ) -> None:
-    """A worker re-delivers every milestone it ever wrote on each later push, so
-    one the lead already moved into consumed/ must be inert -- await keeps
-    polling and reaches its timeout rather than replaying old news."""
+    """A re-delivered milestone whose basename is in consumed/ is inert."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
@@ -1173,9 +1166,7 @@ def test_await_skips_a_milestone_whose_basename_is_already_consumed(
 
 
 def test_await_returns_the_oldest_unconsumed_milestone_first(tmp_path: Path) -> None:
-    """Milestones come back in declaration order (oldest mtime first) so the lead
-    merges them in the order the worker reached them. The filenames are chosen so
-    alphabetical order contradicts mtime order -- only mtime ordering passes."""
+    """Oldest mtime first; the filenames are chosen so name order would disagree."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
@@ -1201,8 +1192,7 @@ def test_await_returns_the_oldest_unconsumed_milestone_first(tmp_path: Path) -> 
 
 
 def test_await_ignores_milestones_when_the_watch_is_disabled(tmp_path: Path) -> None:
-    """watch_milestones=False is the non-interactive contract (launch_sync): an
-    unconsumed milestone must not end the wait, which runs on to its timeout."""
+    """watch_milestones=False (the launch_sync contract) lets the wait run to timeout."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
@@ -1227,9 +1217,7 @@ def test_await_ignores_milestones_when_the_watch_is_disabled(tmp_path: Path) -> 
 def test_launch_refuses_on_an_unconsumed_milestone_until_it_is_moved_aside(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A leftover milestone blocks a relaunch for the same reason a leftover
-    report does -- await would hand the caller the previous run's news as if it
-    came from the new worker. Moving it into consumed/ clears the guard."""
+    """A leftover milestone blocks a relaunch like a leftover report; consuming it clears the guard."""
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
@@ -1489,15 +1477,10 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
 def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
     tmp_path: Path,
 ) -> None:
-    """launch_sync's callers want exactly one terminal result, so a milestone the
-    worker declares mid-run must not end the wait: the run keeps going and
-    reports the terminal status. Once that is in hand the milestone is archived
-    into consumed/ like the report, so the next launch_sync on the same task
-    file is not refused by launch's milestone guard.
+    """A mid-run milestone neither ends the wait nor blocks the next launch_sync.
 
-    The milestone lands *after* launch (a pre-existing one is refused by the
-    stale-report guard), so the "worker" declares it on the first poll sleep and
-    finishes on the second.
+    The milestone lands on the first poll sleep (a pre-existing one would be
+    refused at launch) and the terminal report on the second.
     """
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
@@ -1825,29 +1808,24 @@ def test_a_refused_mngr_create_is_reported_not_raised(
 
 # --- the git bookkeeping a provisional milestone merge relies on ---------------
 #
-# create_worker.py only *delivers* a milestone; the lead then merges the pinned
-# commit while the worker keeps hardening. The two tests below run real git in a
-# scratch repo to prove the two claims the spec makes about what happens next --
-# that a provisional merge advances the merge-base so the later `done` merge
-# brings only the remainder (and the freshness check still covers exactly the
-# post-milestone window), and that reverting a provisional merge really does
-# leave its commits as ancestors, so the change stays out of a later `done`
-# merge until the revert is itself reverted.
+# create_worker.py only delivers a milestone; the lead merges the pinned commit.
+# These two tests run real git to prove the spec's two claims about what follows:
+# a provisional merge advances the merge-base so `done` brings only the
+# remainder, and reverting one leaves its commits as ancestors, so the change
+# stays out of `done` until the revert is itself reverted.
 
 _CREATION_FILENAME = "skill.md"
 
-# Nine well-separated lines: the worker's two commits touch line 2 and line 8,
-# far enough apart that the merges below exercise merge bookkeeping rather than
-# git's conflict resolution.
+# The worker's two commits touch lines 2 and 8: far enough apart that the merges
+# exercise bookkeeping, not conflict resolution.
 _CREATION_BASE_TEXT = "".join(f"line{i}\n" for i in range(1, 10))
 
 
 def _git(repo: Path, *args: str) -> str:
     """Run one git command in ``repo`` and return its trimmed stdout.
 
-    Identity comes from the environment and the user's own git configuration is
-    switched off, so the repo behaves identically on a developer machine and on
-    a CI runner with no global config.
+    Identity is pinned and the user's git config disabled, so a developer's
+    gpgsign or hooks cannot make the test flaky.
     """
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -1896,14 +1874,10 @@ def _commit_creation_line(
 def test_provisional_merge_advances_the_merge_base_so_done_brings_the_rest(
     tmp_path: Path,
 ) -> None:
-    """A provisional merge of the milestone commit composes with the later
-    ``done`` merge of the same branch.
+    """The merge-base advances to the milestone, so ``done`` brings only the rest.
 
-    This is the git half of the spec's claim: because the milestone commit is
-    already an ancestor of the lead's HEAD, the merge-base advances to it, the
-    ``done`` merge brings only the post-milestone commits (the milestone commit
-    never lands twice), and the freshness check the lead runs before merging
-    covers exactly the window since the provisional merge.
+    The milestone commit lands once, and the lead's freshness check covers
+    exactly the window since the provisional merge.
     """
     if shutil.which("git") is None:
         pytest.skip("git is not on PATH")
@@ -1960,14 +1934,7 @@ def test_provisional_merge_advances_the_merge_base_so_done_brings_the_rest(
 def test_reverting_a_provisional_merge_hides_it_from_done_until_reinstated(
     tmp_path: Path,
 ) -> None:
-    """Rolling a provisional merge back is a rejection, not a free action.
-
-    This is the git half of the spec's revert rule: ``git revert -m 1`` undoes
-    the milestone's change but leaves its commits as ancestors of HEAD, so a
-    later ``done`` merge of the same branch silently omits them -- the lead has
-    to reinstate with ``git revert <revert-commit>`` (or supersede the pass)
-    first. Both halves are asserted here.
-    """
+    """``git revert -m 1`` leaves the commits as ancestors, so ``done`` omits them until the revert is reverted."""
     if shutil.which("git") is None:
         pytest.skip("git is not on PATH")
     lead, worker = _make_lead_repo_and_worker_worktree(tmp_path)

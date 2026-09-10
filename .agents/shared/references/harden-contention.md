@@ -91,22 +91,19 @@ and a provisional milestone merge alike:
 ### Provisional milestone merges
 
 A worker can declare a **milestone** mid-pass: a commit it says is already worth
-using, delivered non-blocking (`.agents/shared/references/worker-reporting.md`
-for the worker's side, `lead-proxy.md`'s "Milestone reports: provisional merge"
-for the lead's). Merging one runs the same three checks above -- lease,
-freshness, abort on conflict -- with the merge target pinned to the milestone's
-`commit:` rather than the branch tip.
+using (`worker-reporting.md` for the worker's side, `lead-proxy.md`'s
+"Milestone reports: provisional merge" for the lead's). Merging one runs the
+same three checks above, with the target pinned to the milestone's `commit:`
+rather than the branch tip.
 
 This is the **one sanctioned way not-yet-hardened work reaches the lead's
-branch**. It is labelled as such in the merge commit (`Provisional merge of
-<worker> at milestone <name>`), and it is verified only as far as that
-milestone's `## Tested` section states -- assume nothing beyond it.
+branch**. The merge commit says so (`Provisional merge of <worker> at milestone
+<name>`), and it is verified only as far as the milestone's `## Tested` states.
 
-The freshness rule composes rather than breaking. The provisional merge advances
+The freshness rule composes: the provisional merge advances
 `git merge-base HEAD "$WORKER_BRANCH"` to the milestone commit, so at `done` the
-same check covers exactly the window since that merge: the `done` merge brings
-only the post-milestone commits, and a foreground edit to the creation inside
-that window makes the pass stale by the usual rule.
+same check covers exactly the window since that merge, and a foreground edit
+inside it makes the pass stale by the usual rule.
 
 ## Superseding a stale pass (coalescing)
 
