@@ -312,7 +312,12 @@ def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
     for home in homes:
         tools = home / ".local" / "share" / "uv" / "tools"
         stale_env = tools / MNGR_TOOL_NAME
-        if not stale_env.is_dir() or tools.resolve() == canonical_tools:
+        try:
+            is_present = stale_env.is_dir()
+        except PermissionError:
+            # A home this process cannot read (a non-root run) holds nothing it could remove.
+            is_present = False
+        if not is_present or tools.resolve() == canonical_tools:
             continue
         shim = home / ".local" / "bin" / MNGR_EXECUTABLE
         shim_location = _tool_location(shim, MNGR_TOOL_NAME)
