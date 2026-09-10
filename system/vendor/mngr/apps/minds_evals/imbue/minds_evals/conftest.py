@@ -38,3 +38,9 @@ def harness_report_renderer() -> ModuleType:
 def harness_checks() -> ModuleType:
     """The harness_quality programmatic criteria that ship into every generated dataset."""
     return load_template_module("tests/verifier/harness_quality/checks.py", "minds_evals_harness_checks")
+
+
+@pytest.fixture(scope="session")
+def finalize() -> ModuleType:
+    """The reward-composition script that ships into every generated dataset."""
+    return load_template_module("tests/verifier/finalize.py", "minds_evals_finalize")

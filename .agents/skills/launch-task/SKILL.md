@@ -68,11 +68,13 @@ its parent directory back to the lead. Substitutions for this task:
   i.e. `dirname "$FINISH_REPORT_PATH"` (your worktree path matches the
   lead's destination for this flow)
 - Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
-  (terminal).
+  (terminal), plus `milestone` reports (`type: milestone`, any name;
+  non-blocking, see `worker-reporting.md`).
 
 For a mid-flight `question` gate, stop your turn after pushing -- the
 lead replies via `mngr message` and you resume. For terminal statuses,
-the run ends.
+the run ends. A milestone is the exception: it never stops your turn --
+push it and carry straight on.
 BODY_EOF
 } > data/.tasks/launch-task/$NAME/task.md
 ```
@@ -141,8 +143,13 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
 - Consumed dir: `data/.tasks/launch-task/$NAME/reports/consumed/`
+- Milestones dir: `data/.tasks/launch-task/$NAME/reports/milestones/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
+- Milestone names: any name; non-blocking -- handle per `lead-proxy.md`'s
+  "Milestone reports: provisional merge" (provisionally merge the pinned
+  `commit:`, consume the file either way, re-arm the poll; the worker keeps
+  working regardless).
 - Terminal statuses: `done` (merge); `stuck` (failure flow).
 
 ## Guidelines

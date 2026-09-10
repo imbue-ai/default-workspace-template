@@ -7,6 +7,7 @@ bring-up and turn loop can be exercised end to end."""
 import asyncio
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
@@ -52,9 +53,22 @@ def curl_stdout(body: str, status: int = 200) -> str:
     return mngr_exec_json("{}\n{}".format(body, status))
 
 
-# The account the mock workspace's sign-in endpoint mints; a chat created against anything else is
+# The account the mock workspace's sign-in endpoints mint; a chat created against anything else is
 # bound to an account that does not exist.
 MOCK_ACCOUNT_ID: Final[str] = "acct-mock-1"
+
+# The flow id the accounts endpoint answers a started sign-in with, and which the key is then
+# submitted against.
+MOCK_ACCOUNT_FLOW_ID: Final[str] = "flow-mock-1"
+
+# What the workspace lists as the harness of an account, by the lane it was minted on. The account
+# decides the harness, which is why signing in on a lane is how a run chooses one.
+MOCK_HARNESS_BY_LANE: Final[Mapping[str, str]] = {
+    "anthropic": "claude",
+    "api-key": "pi-coding",
+    "openrouter": "pi-coding",
+    "opencode-go": "pi-coding",
+}
 
 # The exchange the workspace's first chat is given on creation. Every first chat gets it, so it is
 # not a per-test choice: the `first` create template carries `/welcome` as the chat's initial
@@ -121,6 +135,23 @@ class ConversationModel:
         # retries a send until its deadline, so this is how a send that never lands is exercised.
         self.refused_send_index: int | None = None
         self.signed_in_account_ids: list[str] = []
+        # The lane the workspace was signed in on, which decides the harness it lists the minted
+        # account under. Empty until a sign-in has happened.
+        self.signed_in_lane = ""
+        # What the accounts flow settles with, for a key the harness could not use.
+        self.account_flow_failure_detail = ""
+        # Whether a settled flow names the account it minted. It is allowed not to, and then the
+        # chat is created against whichever account the workspace picks for itself.
+        self.is_signed_in_account_named = True
+        # The model choices posted at the chat, and what the endpoint answers them with: a status
+        # other than 200 is a workspace that would not take the choice.
+        self.model_choice_commands: list[str] = []
+        self.model_choice_status = 200
+        self.model_choice_detail = ""
+        # What the chat reports once a model choice has been taken. On claude the switch is typed
+        # into the session as slash commands, so the agent really is busy for a moment afterwards;
+        # empty leaves the chat in whatever state it was already reporting.
+        self.chat_state_after_model_choice = ""
         # The chat, once one exists: the create-chat calls made, and the account it bound to.
         self.create_chat_commands: list[str] = []
         self.chat_account_id: str = ""
@@ -187,14 +218,41 @@ class ConversationModel:
         created = {"agent_id": self.chat_agent_id, "name": self.chat_agent_name, "display_name": requested_name}
         return curl_stdout(json.dumps(created), status=201)
 
+    def _handle_accounts_call(self, command: str) -> str:
+        """The accounts surface: starting a sign-in flow, submitting the key against it, and the
+        listing a caller reads the minted account's harness back from."""
+        if "/api/accounts/flow/" in command:
+            if self.account_flow_failure_detail:
+                return curl_stdout(json.dumps({"state": "failed", "detail": self.account_flow_failure_detail}))
+            self.signed_in_account_ids.append(MOCK_ACCOUNT_ID)
+            if not self.is_signed_in_account_named:
+                return curl_stdout(json.dumps({"state": "ok", "detail": None}))
+            return curl_stdout(json.dumps({"state": "ok", "detail": None, "account_id": MOCK_ACCOUNT_ID}))
+        lane_match = re.search(r'"lane_id":\s*"([^"]+)"', command)
+        if lane_match is not None:
+            self.signed_in_lane = lane_match.group(1)
+            return curl_stdout(json.dumps({"flow_id": MOCK_ACCOUNT_FLOW_ID}))
+        accounts = [
+            {
+                "id": account_id,
+                "lane": self.signed_in_lane,
+                "harness": MOCK_HARNESS_BY_LANE.get(self.signed_in_lane, ""),
+            }
+            for account_id in self.signed_in_account_ids
+        ]
+        return curl_stdout(json.dumps({"accounts": accounts}))
+
     def handle(self, command: str) -> str | None:
         """Return the curl-body stdout for a chat app call, or None if this command is not
         one (so the caller falls back to scripted rules)."""
+        if "/api/accounts" in command:
+            return self._handle_accounts_call(command)
         if "/api/claude-auth/submit-credentials" in command:
             self.submitted_credential_commands.append(command)
             # An account exists only where the workspace really ended up in an authenticated mode.
             if self.expected_auth_mode != "none":
                 self.signed_in_account_ids.append(MOCK_ACCOUNT_ID)
+                self.signed_in_lane = "anthropic"
             signed_in = {
                 "account_id": MOCK_ACCOUNT_ID,
                 "display": "eval",
@@ -212,6 +270,13 @@ class ConversationModel:
             return mngr_exec_json("")
         if "/api/agents/create-chat" in command:
             return self._handle_create_chat(command)
+        if "/api/agents/{}/model".format(self.chat_agent_id) in command:
+            self.model_choice_commands.append(command)
+            if self.model_choice_status != 200:
+                return curl_stdout(json.dumps({"detail": self.model_choice_detail}), status=self.model_choice_status)
+            if self.chat_state_after_model_choice:
+                self.chat_state = self.chat_state_after_model_choice
+            return curl_stdout(json.dumps({"status": "ok"}))
         if "/api/agents/{}/message".format(self.chat_agent_id) in command:
             if self.refused_send_index == self._turn_index + 1:
                 # An unparseable body is what the bridge sees when a send does not land.
