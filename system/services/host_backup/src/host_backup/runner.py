@@ -263,6 +263,12 @@ def _run_one_tick(
     _refresh_environment_record(state=state)
     snapshot_result = _take_snapshot(state=state)
     if snapshot_result is None:
+        # The step can fail on a snapshot the helper has already created (one
+        # whose layout the backup cannot read is exactly that), and this is the
+        # only thing that reclaims them, so an aborted tick still has to run it
+        # or the outer host gains a snapshot an hour for as long as the failure
+        # lasts.
+        _cleanup_snapshot(state=state, snapshot=None)
         return
     try:
         backup_succeeded = _run_restic_backup(
@@ -367,6 +373,11 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
         # only an ephemeral log line -- otherwise a non-zero helper result.json is
         # invisible in the durable events stream.
         logger.error("Snapshot step failed: {}", e)
+        # A tick that never reaches restic is still a tick that took no backup,
+        # so it counts toward the escalation the same way a failed restic run
+        # does -- otherwise a workspace whose every snapshot fails backs up
+        # never and alarms never.
+        state.consecutive_backup_failures += 1
         write_event(
             state.events_dir,
             make_event(
@@ -374,8 +385,10 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
                 tick_id=state.current_tick_id,
                 method=state.capabilities.method.value,
                 error_message=str(e),
+                consecutive_failures=state.consecutive_backup_failures,
             ),
         )
+        _maybe_emit_repeated_failure_alarm(state)
         return None
     write_event(
         state.events_dir,
@@ -393,12 +406,15 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
     return result
 
 
-def _cleanup_snapshot(*, state: _LoopState, snapshot: SnapshotResult) -> None:
+def _cleanup_snapshot(*, state: _LoopState, snapshot: SnapshotResult | None) -> None:
     """Reclaim snapshots after the backup; emit one SNAPSHOT_DELETED per deletion.
 
     For outer_trigger this prunes old snapshots down to max_local_snapshots; for
     btrfs_local it deletes the single `current` snapshot; for direct it is a
     no-op (and emits nothing).
+
+    `snapshot` is None when the tick aborted at the snapshot step, which leaves
+    nothing to name as the target of a cleanup that then fails itself.
     """
     try:
         taker = make_snapshot_taker(state.capabilities)
@@ -408,28 +424,26 @@ def _cleanup_snapshot(*, state: _LoopState, snapshot: SnapshotResult) -> None:
         # then a failure event naming the exact snapshot whose deletion failed.
         logger.warning("Snapshot cleanup failed: {}", e)
         for deleted_path in e.deleted:
-            _emit_snapshot_deleted(state, snapshot, deleted_path, success=True)
+            _emit_snapshot_deleted(state, deleted_path, success=True)
         _emit_snapshot_deleted(
-            state, snapshot, e.failed_target, success=False, error_message=str(e)
+            state, e.failed_target, success=False, error_message=str(e)
         )
         return
     except SnapshotError as e:
         logger.warning("Snapshot cleanup failed: {}", e)
         _emit_snapshot_deleted(
             state,
-            snapshot,
-            snapshot.snapshot_path,
+            snapshot.snapshot_path if snapshot is not None else "",
             success=False,
             error_message=str(e),
         )
         return
     for deleted_path in deleted_paths:
-        _emit_snapshot_deleted(state, snapshot, deleted_path, success=True)
+        _emit_snapshot_deleted(state, deleted_path, success=True)
 
 
 def _emit_snapshot_deleted(
     state: _LoopState,
-    snapshot: SnapshotResult,
     snapshot_path: str,
     *,
     success: bool,
@@ -440,7 +454,7 @@ def _emit_snapshot_deleted(
         make_event(
             BackupEventType.SNAPSHOT_DELETED,
             tick_id=state.current_tick_id,
-            method=snapshot.method.value,
+            method=state.capabilities.method.value,
             snapshot_path=snapshot_path,
             success=success,
             error_message=error_message,
