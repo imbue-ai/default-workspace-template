@@ -75,7 +75,6 @@ The harden worker's transcript was not captured. The collector does handle a des
 - A fixture where the consumer is not findable by name or a cheap grep (several apps, several skills, a consumer named for what it does), to test criterion 1 and get a file-count difference.
 - Persist the worker capture's section output into the trial directory so a missed preserved stream is diagnosable, then re-run the eval with a worker left alive at collection to confirm the fallback.
 - A second eval where the user creates a skill for the app before changing the app, to exercise criterion 1 end to end (`--dwt-ref` on `minds-evals generate` pins the branch without a config edit).
-- Sidecar wiring uses a `program:<name>-*` prefix match, so an app named `share` would absorb `share-gateway`, and a sidecar not named after its app (`[program:xvfb]`, which exists only for the browser app) is missed; the manifest has no field to declare one.
 - The toy worktree and its five branches can be deleted once the numbers are no longer needed; the uncommitted eval config in `/Users/markally/imbue/wt-mngr-app-manifest-scoping/apps/minds_evals/configs/` can be deleted too.
 
 ## References

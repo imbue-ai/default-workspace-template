@@ -78,6 +78,16 @@ class ScopeRules(FrozenModel):
     )
 
 
+class WiringRules(FrozenModel):
+    """The supervisord programs an app owns beyond its own and its ``<name>-<role>`` sidecars."""
+
+    programs: tuple[ProgramName, ...] = Field(
+        default=(),
+        description="Program names whose [program:<name>] blocks belong to the app, such as a "
+        "display server that exists only for it",
+    )
+
+
 class DefaultShortcut(FrozenModel):
     """The rail row a new project is seeded with for this app."""
 
@@ -111,6 +121,9 @@ class AppManifest(FrozenModel):
     scope: ScopeRules = Field(
         default_factory=ScopeRules, description="The app's own exclusions from its footprint"
     )
+    wiring: WiringRules = Field(
+        default_factory=WiringRules, description="The extra supervisord programs the app owns"
+    )
     handles: dict[str, Any] = Field(default_factory=dict, description="Reserved; must be absent or empty")
 
     @model_validator(mode="before")
@@ -134,6 +147,13 @@ class AppManifest(FrozenModel):
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(
                 f"reference paths must be unique, got {reference_paths}"
+            )
+        wiring_programs = list(self.wiring.programs)
+        if len(set(wiring_programs)) != len(wiring_programs):
+            raise InvalidManifestValueError(f"wiring programs must be unique, got {wiring_programs}")
+        if self.program in wiring_programs:
+            raise InvalidManifestValueError(
+                f"wiring programs must not repeat the app's own program {str(self.program)!r}"
             )
         action_ids = [action.id for action in self.actions]
         if len(set(action_ids)) != len(action_ids):

@@ -71,7 +71,7 @@ Built-in excludes, applied to every footprint and never listed in a manifest: `s
 
 The kind of a reference (skill, script, doc, service) is derivable from the path prefix, so there is no `kind` field to drift.
 
-What stays implicit, because it is derivable: the app directory, the `[program:<program>]` block and every `[program:<name>-*]` block in `system/supervisord.conf`, the manifest itself. Cron lines for automations live in `/etc/cron.d/` outside the tree; the skill they run is what gets referenced.
+What stays implicit, because it is derivable: the app directory, the `[program:<program>]` block and every `[program:<name>-*]` block in `system/supervisord.conf`, the manifest itself. A program that serves only this app but is not named after it (the browser's `xvfb`) is declared under `[wiring] programs`; the first label of every standalone program is a reserved app name, so the `<name>-*` rule cannot claim an unrelated program. Cron lines for automations live in `/etc/cron.d/` outside the tree; the skill they run is what gets referenced.
 
 Direction: `app.toml` is the single source of truth. A skill does not declare its app. Skill-side flows (heal or update a skill) find the owning app by reverse lookup (`app-manifest references --for-path <path>`, a scan over the handful of manifests in `system/apps/`).
 

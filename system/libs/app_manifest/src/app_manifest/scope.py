@@ -163,24 +163,37 @@ def _deduplicated(globs: Sequence[ExcludeGlob]) -> tuple[ExcludeGlob, ...]:
 
 
 def find_wiring_sections(repo_root: Path, manifest: AppManifest) -> tuple[WiringSection, ...]:
-    """The supervisord blocks that run the app: its own program, plus every ``<app name>-<role>`` sidecar.
+    """The supervisord blocks that run the app: its own program, every ``<app name>-<role>``
+    sidecar, and every program its manifest's ``[wiring] programs`` declares.
 
-    A conf with none of them (an app that is not registered yet) yields no wiring rather than an error.
+    A conf with none of the derived ones (an app that is not registered yet) yields no wiring
+    rather than an error; a declared program with no block is an error, since the declaration
+    is explicit.
     """
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read(repo_root / _SUPERVISORD_CONF)
     except configparser.Error as e:
         raise ScopeComputationError(f"cannot parse {repo_root / _SUPERVISORD_CONF}: {e}") from e
+    sections = parser.sections()
     own_section = f"program:{manifest.program}"
-    # The sidecar rule is a prefix match, so it assumes no unrelated program is named with
-    # the app's name plus a hyphen: an app called "share" would claim a "share-gateway"
-    # program that is nobody's sidecar.
+    # The sidecar rule is a prefix match; the app-name rule reserves the first label of every
+    # standalone program (`share` for `share-gateway`), which is what keeps an unrelated
+    # program from being claimed here.
     sidecar_prefix = f"program:{manifest.name}-"
+    declared_sections = [f"program:{program}" for program in manifest.wiring.programs]
+    for declared_section in declared_sections:
+        if declared_section not in sections:
+            raise ScopeComputationError(
+                f"manifest {manifest.name} declares wiring program {declared_section!r}, which "
+                f"{repo_root / _SUPERVISORD_CONF} does not define"
+            )
     owned_sections = tuple(
         NonEmptyStr(section)
-        for section in parser.sections()
-        if section == own_section or section.startswith(sidecar_prefix)
+        for section in sections
+        if section == own_section
+        or section.startswith(sidecar_prefix)
+        or section in declared_sections
     )
     if not owned_sections:
         return ()

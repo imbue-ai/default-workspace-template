@@ -119,7 +119,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   label: the tab renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates). Short and
+  prefixes are reserved for workspace hostname coordinates), and it must not
+  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+  `host`, `env`), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used in `system/supervisord.conf` (`system_interface`,
   `browser`, etc. are reserved by the scaffolder).
