@@ -82,9 +82,14 @@ echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
 
 The frontmatter carries `operation: crystallize`, the `type`,
 `finish_report_path` (the report destination the lead polls; see
-`.agents/shared/references/worker-reporting.md`), and an optional
-`source_artifacts_dir`. The body *describes* the work and -- for a skill
-reconstructed from the transcript -- anchors the worker's search with verbatim
+`.agents/shared/references/worker-reporting.md`), `scope_file` (where the worker
+writes the creation's computed footprint at the start of its run -- you name the
+path, the worker creates the file), `diff_base` (the commit before the work
+being hardened began: your `HEAD` at dispatch for a skill reconstructed from
+the transcript, or the commit before `build-app` scaffolded the app for
+`type: app`), and an optional `source_artifacts_dir`.
+The body *describes* the work and -- for a skill reconstructed from the
+transcript -- anchors the worker's search with verbatim
 quotes (the user's original ask, key decisions, tool outputs that defined the
 recipe). Without anchors the worker scans the wrong region of your transcript.
 Describe invariants and state constraints; do **not** enumerate subcommands,
@@ -95,6 +100,8 @@ flow steps, or argparse surfaces -- those are the worker's decisions.
 cat << FRONTMATTER_EOF
 ---
 finish_report_path: data/.tasks/harden/crystallize-$NAME/reports/report.md
+scope_file: data/.tasks/harden/crystallize-$NAME/scope.json
+diff_base: $(git rev-parse HEAD)
 operation: crystallize
 type: skill
 FRONTMATTER_EOF

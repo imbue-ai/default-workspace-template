@@ -17,15 +17,19 @@ just routes you to the right ones.
 ## Step 1: Read your task file and resolve inputs
 
 Your task file was synced to your worktree under `data/.tasks/harden/<slug>/task.md`.
-Extract the lead address and the report destination (plus the `operation` and
-`type` fields the lead set in frontmatter):
+Extract the lead address, the report destination, and the scope file path
+(plus the `operation` and `type` fields the lead set in frontmatter):
 
 ```bash
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/harden/*/task.md')"
 ```
 
-This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and `TYPE`. Fail
-loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both.
+This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `SCOPE_FILE`, `DIFF_BASE`,
+`OPERATION`, and `TYPE`. Fail loudly if `OPERATION`, `TYPE`, `SCOPE_FILE`, or
+`DIFF_BASE` is unset -- the lead must supply all four. `SCOPE_FILE` is where
+you write the creation's footprint in your first step, and `DIFF_BASE` is the
+commit that footprint's diff is taken from; `harden-creation.md` has the
+command.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.
@@ -39,7 +43,7 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 
 | Load when | Reference | What it gives you |
 |---|---|---|
-| every run | `harden-creation.md` | the universal contract: the bar, isolation, reporting, testing/hardening, review gates, preserve-and-surface, give-up |
+| every run | `harden-creation.md` | the universal contract: the bar, isolation, reporting, the scope file, testing/hardening, review gates, preserve-and-surface, give-up |
 | every run | `op-<OPERATION>.md` | your operation's spine: pre-work, stages, which gates fire and their `name:` values, gate report templates |
 | every run | `type-<TYPE>.md` | the creation itself: where it lives, how to run/test it in isolation, how to edit it safely |
 | every run | `worker-reporting.md` **[shared]** | the report-file procedure and task-file frontmatter schema (Step 3 uses it) |
@@ -48,6 +52,10 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 | `TYPE` is `skill`, and your operation runs an outline gate | `skill-outline-fields.md` | what goes inside the outline gate |
 | `TYPE` is `skill`, on an emergent `update` | `update-vs-create-new.md` | update-in-place vs. split-a-new-sibling |
 | `TYPE` is `app` or `system-interface` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
+
+`verification.md` is in the same directory but appears in no row: the two
+code-guardian gates it invokes are parked, so no run loads it. It is kept
+current so its invocations are correct when they are run by hand or re-wired.
 
 The two conditional cases that need defining:
 
