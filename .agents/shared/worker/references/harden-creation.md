@@ -44,8 +44,9 @@ and full test suites at the end of hardening.
 
 ## The scope file
 
-Every app or skill run computes the creation's footprint and writes it to the
-path the task frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
+Every run over a creation with a footprint -- an app with an `app.toml`, or a
+skill -- computes that footprint and writes it to the path the task
+frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
 `SCOPE_FILE`, and it sits beside your task file at
 `data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
 the creation already exists on disk; for a skill you are building from scratch
@@ -67,23 +68,25 @@ uv run app-manifest footprint --for-path .agents/skills/<name> \
 `DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
 recorded at dispatch as the one *before* the work being hardened began, so the
 scope file's `diff` covers the committed change you are verifying, and -- once
-you regenerate it -- your own commits too. Fail loudly if it is unset. A creation with no manifest -- a
-pre-manifest app, a standalone service, the system interface -- has nothing to
-resolve: its footprint is its own directory plus its supervisord section, and
-the run carries no scope file.
+you regenerate it -- your own commits too. Fail loudly if it is unset.
+
+A creation with no manifest -- a pre-manifest app, a standalone service, the
+system interface -- has nothing to resolve: its footprint is its own directory
+plus its supervisord section, and the run carries no scope file.
 
 The file records `primary` (the creation's own directories), `wiring` (the
 `system/supervisord.conf` sections that run it), `references` (what its
 manifest claims outside its directory -- a skill that drives it, a script, a
-doc), `context` (paths to read but never change), `conventions`,
-`exclude` (a hard denylist of globs), and `diff` (the branch's changed files,
-split into those inside the footprint and `outside_footprint`). Three consumers
-read it: the test selection in `type-app.md`, the freshness check the lead runs
-before merging (`.agents/shared/references/harden-contention.md`), and the
-review invocations in `verification.md`. Regenerate it whenever the footprint
+doc), `context` (paths to read but never change), `conventions`, `exclude` (a
+hard denylist of globs), and `diff` (the branch's changed files, split into
+those inside the footprint and `outside_footprint`). Three consumers read it:
+the test selection in `type-app.md`, the freshness check the lead runs before
+merging (`.agents/shared/references/harden-contention.md`), and the review
+invocations in `verification.md`. Regenerate it whenever the footprint
 moves under you -- when you register a `[[references]]` entry, or when you add a
-supervisord section -- and once more immediately before your final report, so
-the `diff` it carries includes every commit you made.
+supervisord section -- and once more immediately before your final report, after
+committing everything, so the `diff` it carries includes every commit you made
+(the diff reads commits only; an uncommitted edit is invisible to it).
 
 A non-empty `diff.outside_footprint` in that final scope file is a claim to
 settle before you report. For each path, either add a `[[references]]` entry to

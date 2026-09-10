@@ -213,13 +213,13 @@ _FORBIDDEN_REFERENCE_PREFIXES: Final[tuple[str, ...]] = ("system/vendor/", "data
 
 _MAX_REFERENCE_NOTE_LENGTH: Final[int] = 200
 
-# What a gitignore pattern leads with to re-include a path an earlier pattern excluded.
+# The gitignore prefix that re-includes a path an earlier pattern excluded.
 _EXCLUDE_NEGATION_PREFIX: Final[str] = "!"
 
 
 @pure
 def _describe_repo_relative_path_problem(value: str, field_name: str) -> str | None:
-    """Return why ``value`` cannot be a repo-root-relative POSIX path, or None when it can."""
+    """Why ``value`` cannot be a repo-root-relative POSIX path, or None when it can."""
     if not value or not value.strip():
         return f"{field_name} must not be empty"
     if value.startswith("/"):
@@ -236,26 +236,6 @@ def _describe_repo_relative_path_problem(value: str, field_name: str) -> str | N
         return f"invalid {field_name} {value!r}: '.' segments are not allowed"
     if "" in segments:
         return f"invalid {field_name} {value!r}: empty segments are not allowed"
-    return None
-
-
-@pure
-def _describe_reference_path_problem(value: str) -> str | None:
-    """Return why ``value`` cannot be a reference path, or None when it can."""
-    problem = _describe_repo_relative_path_problem(value, "reference path")
-    if problem is not None:
-        return problem
-    if value.endswith("/"):
-        return f"invalid reference path {value!r}: name a directory without a trailing slash"
-    for character in _GLOB_CHARACTERS:
-        if character in value:
-            return (
-                f"invalid reference path {value!r}: a reference is a literal path, but this "
-                f"contains the glob character {character!r}"
-            )
-    for prefix in _FORBIDDEN_REFERENCE_PREFIXES:
-        if value.startswith(prefix):
-            return f"invalid reference path {value!r}: nothing under {prefix!r} can be referenced"
     return None
 
 
@@ -300,7 +280,21 @@ class ReferencePath(RepoRelativePath):
 
     @classmethod
     def _describe_problem(cls, value: str) -> str | None:
-        return _describe_reference_path_problem(value)
+        problem = _describe_repo_relative_path_problem(value, "reference path")
+        if problem is not None:
+            return problem
+        if value.endswith("/"):
+            return f"invalid reference path {value!r}: name a directory without a trailing slash"
+        for character in _GLOB_CHARACTERS:
+            if character in value:
+                return (
+                    f"invalid reference path {value!r}: a reference is a literal path, but this "
+                    f"contains the glob character {character!r}"
+                )
+        for prefix in _FORBIDDEN_REFERENCE_PREFIXES:
+            if value.startswith(prefix):
+                return f"invalid reference path {value!r}: nothing under {prefix!r} can be referenced"
+        return None
 
 
 class ExcludeGlob(RepoRelativePath):

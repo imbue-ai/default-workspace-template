@@ -44,11 +44,11 @@ pass considers, on top of the built-in ones (`system/vendor/**`, `data/**`,
 inside the app's own directory (already implicit) or into another app's (that is
 a `pyproject.toml` dependency), and every one must exist, which
 `system/test_app_manifests.py` checks for every manifest in the tree. Together
-with the app's directory and its `system/supervisord.conf` blocks these make up
+with the app's directory and its `system/supervisord.conf` blocks, these make up
 the app's footprint, which `app-manifest footprint <manifest>` writes out as a
 scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration
-ignores both tables entirely, so a stale reference can never stop the app.
+ignores both tables, so a stale reference can never stop the app.
 
 Every Python app with a manifest runs from its own uv tool environment,
 installed from its own `pyproject.toml` (`uv tool install -e

@@ -11,8 +11,8 @@ run and test a web frontend in isolation, see
 
 An app's footprint is its own directory, the `system/supervisord.conf` sections
 that run it, and the `[[references]]` its `app.toml` declares -- the skills,
-scripts, and docs built for the app that live elsewhere in the tree. The scope file
-(`harden-creation.md`) is that footprint resolved to literal paths.
+scripts, and docs built for the app that live elsewhere in the tree. The scope
+file (`harden-creation.md`) is that footprint resolved to literal paths.
 
 - The scaffolded lib: `system/apps/<package>/src/<package>/runner.py` (the Flask app
   and routes), plus its `pyproject.toml`, `README.md`, and
@@ -52,18 +52,15 @@ App specifics:
   # from the repo root, over every referenced directory that holds tests
   # anywhere beneath it (a skill keeps its tests under scripts/):
   REFERENCE_TEST_DIRS=$(jq -r '.references[].path' "$SCOPE_FILE" | while read -r p; do
-      [ -d "$p" ] && [ -n "$(find "$p" -name '*_test.py' -o -name 'test_*.py' | head -1)" ] && echo "$p"
+      [ -d "$p" ] && [ -n "$(find "$p" \( -name '*_test.py' -o -name 'test_*.py' \) -print -quit)" ] && echo "$p"
   done)
   [ -n "$REFERENCE_TEST_DIRS" ] && uv run pytest $REFERENCE_TEST_DIRS
   ```
 
-  The guard on `REFERENCE_TEST_DIRS` matters: a bare `uv run pytest` from the
-  repo root runs the whole monorepo suite, vendored code included. Every
-  `primary` directory gets its own project-root run when the creation has more
-  than one; a referenced file, or a directory with no tests beneath it, is left
-  out of the run, and the ratchet file of any referenced project that has one is
-  run too. A pre-manifest app carries no scope file, so the app-directory run is
-  its whole test set.
+  Without the guard, a bare `uv run pytest` from the repo root runs the whole
+  monorepo suite, vendored code included. A referenced file, and a referenced
+  directory with no tests beneath it, stay out of the run. A pre-manifest app
+  carries no scope file, so the app-directory run is its whole test set.
 
 ## Working in isolation
 

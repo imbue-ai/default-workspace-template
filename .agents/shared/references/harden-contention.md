@@ -66,25 +66,31 @@ Run these in order before `git merge`:
 
 2. **Freshness check.** The pass is mergeable only if the creation has not
    changed since the worker branched. The paths to diff are the creation's
-   whole footprint, not just the files the worker touched -- which is what the
+   whole footprint, not just the files the worker touched, which is what the
    worker's scope file holds. That file lives under the worker's own `data/`
    (gitignored, and only the reports directory syncs back), so recompute it on
    your side with the same command:
 
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
-   SCOPE=/tmp/harden-freshness-scope.json
+   SCOPE=$(mktemp)
    # an app with a manifest:
-   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE"
+   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
    # a skill:
-   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE"
+   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
 
    PATHS=$(jq -r '[.primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
+   [ -n "$PATHS" ] || exit 1
    git diff --name-only "$BASE" HEAD -- $PATHS
    ```
 
-   When the worker's report says it registered a new `[[references]]` entry,
-   add that path to `$PATHS` as well -- your tree's manifest predates it.
+   The two guards matter: with an empty `$PATHS` the diff covers the whole
+   tree, and any commit anywhere reads as a moved base. If the footprint
+   command fails (a reference the manifest names no longer exists, say), fix
+   the manifest on your branch first and rerun; do not treat the failure as
+   staleness. When the worker's `done` report lists paths under `References
+   registered:`, add them to `$PATHS` as well -- your tree's manifest predates
+   them.
    A creation with no manifest is diffed at its own path: a standalone service
    under `system/services/<package>/` (plus `system/supervisord.conf`), a shared
    script or reference at its path, the system interface at

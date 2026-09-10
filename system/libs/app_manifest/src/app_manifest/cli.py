@@ -29,9 +29,9 @@ class ReferenceLookupRow(FrozenModel):
     note: ReferenceNote | None = Field(description="The note the manifest wrote on that entry")
 
 
-# Every command reads the same tree, so they take the same option. The footprint commands
-# resolve it to the directory the command was run from when it is absent; validate-manifest
-# leaves it unresolved, because there "no root" is a meaningful third state.
+# Every command reads the same tree, so they share one option. The footprint commands
+# default an absent root to the current directory; validate-manifest leaves it unresolved,
+# because there "no root" is a meaningful third state.
 _repo_root_option = click.option(
     "--repo-root",
     "repo_root",
