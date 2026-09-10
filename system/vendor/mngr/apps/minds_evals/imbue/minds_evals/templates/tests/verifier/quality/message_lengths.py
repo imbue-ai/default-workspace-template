@@ -21,12 +21,10 @@ an answer -- position would grade it as the turn's answer and let 300 words thro
 fallback for a turn that marks nothing, which is the driver's hand-built trajectory: there a turn is
 a single merged step, so it has no interim messages and only the final-message limit applies.
 
-The limits below are the whole configuration. This replaced a guard that passed a trial unless its
-average words per turn exceeded a per-config `avg_word_count_baseline` by 10%, which made the bar a
-property of the config rather than of the writing, and let a wall of text be paid for by the terse
-messages around it. Configs may still carry that key -- it is accepted so they load -- but nothing
-here reads it, and neither do the driver's own `average_words_per_turn` and
-`average_words_per_message`, which are recorded in the trial metadata for observability only.
+The limits below are the whole configuration: the bar is a property of the writing rather than of the
+eval config, and it is per message so that a wall of text cannot be paid for by the terse messages
+around it. The driver's own `average_words_per_turn` and `average_words_per_message` are recorded in
+the trial metadata for observability only; nothing at grade time reads either.
 """
 
 import json

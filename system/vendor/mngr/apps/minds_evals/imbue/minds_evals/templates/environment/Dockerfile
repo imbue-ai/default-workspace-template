@@ -66,6 +66,18 @@ RUN cd apps/minds \
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN uv run python -m playwright install --with-deps chromium
 
+# The in-box LLM proxy (`--ak proxy`) is served from a venv of its own, because the workspace venv
+# above cannot serve it: modal-litellm depends on plain `litellm` there (the [proxy] extra's
+# gunicorn cap is confined to that app's image group), so its `litellm` CLI exits with a missing
+# dependency, and every `uv run` in the box re-syncs that venv from the lock, which would strip
+# proxy dependencies out from under a running proxy. The pin set is modal_litellm's hash-locked
+# image export as of the box's mngr SHA, so a trial's proxy runs the versions the deployed proxy of
+# that revision runs, on the python:3.12 its image installs those pins against. The versions only:
+# that image also generates a prisma client on top of them, which a box's proxy, serving without a
+# database, never reaches.
+RUN uv venv --python 3.12 /opt/eval_proxy \
+ && uv pip install --python /opt/eval_proxy --require-hashes -r apps/modal_litellm/image_requirements.txt
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY probe_minds_port.py /usr/local/bin/probe_minds_port.py
 RUN chmod +x /usr/local/bin/entrypoint.sh

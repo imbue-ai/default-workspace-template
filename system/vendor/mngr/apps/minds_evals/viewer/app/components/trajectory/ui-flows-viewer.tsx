@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Compass } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { asRecord } from "~/components/trajectory/json";
+import { Toggle } from "~/components/trajectory/toggle";
 import { CodeBlock } from "~/components/ui/code-block";
 import {
   Empty,
@@ -65,12 +67,6 @@ export interface FlowStep {
 }
 
 const KNOWN_KINDS: ReadonlySet<string> = new Set(["init", "action", "final"]);
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -185,32 +181,6 @@ function elapsedLabel(from: string | null, to: string | null): string | null {
   return seconds < 60
     ? `+${seconds.toFixed(1)}s`
     : `+${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-}
-
-function Toggle({
-  label,
-  pressed,
-  onPressedChange,
-}: {
-  label: string;
-  pressed: boolean;
-  onPressedChange: (next: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={pressed}
-      onClick={() => onPressedChange(!pressed)}
-      className={cn(
-        "cursor-pointer px-2 py-0.5 text-xs uppercase transition-colors",
-        pressed
-          ? "bg-muted text-foreground"
-          : "text-muted-foreground hover:text-foreground"
-      )}
-    >
-      {label}
-    </button>
-  );
 }
 
 function statusClass(status: string): string {

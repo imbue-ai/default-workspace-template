@@ -15,7 +15,6 @@ from rewardkit.runner import discover
 
 from imbue.minds_evals.data_types import ComposedRewardFloor
 from imbue.minds_evals.data_types import DECIDE_SENTINEL
-from imbue.minds_evals.data_types import DEFAULT_AVG_WORD_COUNT_BASELINE
 from imbue.minds_evals.data_types import DEFAULT_DWT_REPO
 from imbue.minds_evals.data_types import DEFAULT_MAX_EXCHANGES
 from imbue.minds_evals.data_types import DEFAULT_VERIFICATION_TIMEOUT_SECONDS
@@ -86,7 +85,6 @@ def test_load_eval_config_parses_cases_and_defaults(tmp_path: Path) -> None:
     assert config.mngr_branch == "main"
     assert config.dwt_repo == DEFAULT_DWT_REPO
     assert config.timeout_seconds == 1800.0
-    assert config.avg_word_count_baseline == DEFAULT_AVG_WORD_COUNT_BASELINE
     assert [case.case_id for case in config.cases] == ["todo-app", "case-2"]
     assert config.cases[1].persona == ""
 

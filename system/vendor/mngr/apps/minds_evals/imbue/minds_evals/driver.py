@@ -48,6 +48,7 @@ from imbue.minds_evals import proxy_config
 from imbue.minds_evals import trajectory as trajectory_building
 from imbue.minds_evals import ui_flows
 from imbue.minds_evals import usage as usage_accounting
+from imbue.minds_evals.data_types import ArmRecord
 from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckStatus
@@ -57,6 +58,10 @@ from imbue.minds_evals.data_types import DeciderTurn
 from imbue.minds_evals.data_types import EntryRecord
 from imbue.minds_evals.data_types import EvidenceManifest
 from imbue.minds_evals.data_types import GoalEntry
+from imbue.minds_evals.data_types import HarnessConfig
+from imbue.minds_evals.data_types import HarnessConfigRecord
+from imbue.minds_evals.data_types import HarnessLane
+from imbue.minds_evals.data_types import ObservedHarnessModels
 from imbue.minds_evals.data_types import PromptEntry
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
@@ -72,6 +77,7 @@ from imbue.minds_evals.data_types import WorkerState
 from imbue.minds_evals.data_types import cross_step_lifetime_seconds
 from imbue.minds_evals.data_types import entry_exchange_budget
 from imbue.minds_evals.data_types import is_final_step
+from imbue.minds_evals.data_types import lane_id
 from imbue.minds_evals.errors import AgentKwargError
 from imbue.minds_evals.errors import InstructionParseError
 from imbue.minds_evals.errors import TrajectoryDocumentError
@@ -292,8 +298,8 @@ def parse_agent_flag(raw_value: object, name: str) -> bool:
     """A boolean agent kwarg, however harbor delivered it.
 
     Every unrecognised spelling is rejected rather than read as False. A flag that silently means
-    "off" whenever it cannot be understood turns a typo into a trial that ran the other arm and
-    reported the one that was asked for, which is worse than a run that refuses to start.
+    "off" whenever it cannot be understood turns a typo into a trial that ran one harness config
+    and reported another, which is worse than a run that refuses to start.
     """
     text = _agent_kwarg_text(raw_value).lower()
     if text in _TRUE_FLAG_SPELLINGS:
@@ -346,6 +352,253 @@ def is_snapshot_wanted(snapshot_mode: SnapshotMode, point: SnapshotPoint) -> boo
             return False
         case _ as unreachable:
             assert_never(unreachable)
+
+
+# Every lane a run may name, keyed by the id the command line and the workspace's accounts API spell
+# it with.
+_LANE_BY_ID: Final[Mapping[str, HarnessLane]] = {lane_id(lane): lane for lane in HarnessLane}
+
+
+@pure
+def parse_lane(raw_value: object) -> HarnessLane:
+    """The provider lane the workspace is signed in on, defaulting to the anthropic one a run that
+    names no lane takes. A lane this driver does not know is refused rather than tried: the workspace
+    would answer a sign-in on it with nothing the trial record could explain."""
+    text = _agent_kwarg_text(raw_value).lower()
+    if not text:
+        return HarnessLane.ANTHROPIC
+    lane = _LANE_BY_ID.get(text)
+    if lane is None:
+        raise AgentKwargError(
+            "lane {!r} is not a provider lane this driver can sign a workspace in on; expected one of {}".format(
+                raw_value, ", ".join(sorted(_LANE_BY_ID))
+            )
+        )
+    return lane
+
+
+@pure
+def derive_key_env(lane: HarnessLane, key_provider: str) -> str:
+    """Which environment variable a lane's key is read from when the run names none, or empty when
+    the lane has no default.
+
+    The derivation is a convenience, not a contract with the workspace template: the template names
+    the variable per provider and does not always follow the pattern (`google` reads
+    `GEMINI_API_KEY`), so those cases are run with an explicit `key_env`.
+    """
+    match lane:
+        case HarnessLane.ANTHROPIC:
+            return "ANTHROPIC_API_KEY"
+        case HarnessLane.OPENROUTER:
+            return "OPENROUTER_API_KEY"
+        case HarnessLane.API_KEY:
+            return "{}_API_KEY".format(key_provider.upper().replace("-", "_"))
+        case HarnessLane.OPENCODE_GO:
+            return ""
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def parse_harness_config(
+    lane: object,
+    key_provider: object,
+    key_env: object,
+    model: object,
+    effort: object,
+    fast: object,
+) -> HarnessConfig:
+    """The run's harness config out of its agent kwargs, refusing here every combination the
+    workspace would refuse later.
+
+    The model endpoint takes no model without an effort level and applies no axis at all without a
+    model, and the api-key lane is the only one that pairs a key with a provider. Each of these is
+    knowable from the kwargs alone, so refusing them here costs no workspace.
+    """
+    parsed_lane = parse_lane(lane)
+    parsed_key_provider = _agent_kwarg_text(key_provider)
+    parsed_model = _agent_kwarg_text(model)
+    parsed_effort = _agent_kwarg_text(effort)
+    fast_text = _agent_kwarg_text(fast)
+    if parsed_model and not parsed_effort:
+        raise AgentKwargError(
+            "model {!r} needs an effort: the workspace's model endpoint refuses a model without one".format(
+                parsed_model
+            )
+        )
+    if parsed_effort and not parsed_model:
+        raise AgentKwargError(
+            "effort {!r} needs a model: the workspace's model endpoint applies no axis without one".format(
+                parsed_effort
+            )
+        )
+    if fast_text and not parsed_model:
+        raise AgentKwargError(
+            "fast {!r} needs a model: the workspace's model endpoint applies no axis without one, and no "
+            "endpoint reads the live choice back to fill one in from".format(fast)
+        )
+    if parsed_key_provider and parsed_lane is not HarnessLane.API_KEY:
+        raise AgentKwargError(
+            "key_provider {!r} belongs to the api-key lane; lane {} serves a provider of its own".format(
+                parsed_key_provider, lane_id(parsed_lane)
+            )
+        )
+    if parsed_lane is HarnessLane.API_KEY and not parsed_key_provider:
+        raise AgentKwargError("lane api-key needs a key_provider saying which provider its key belongs to")
+    resolved_key_env = _agent_kwarg_text(key_env) or derive_key_env(parsed_lane, parsed_key_provider)
+    if not resolved_key_env:
+        raise AgentKwargError(
+            "lane {} has no default key variable; name the one holding its key with key_env".format(
+                lane_id(parsed_lane)
+            )
+        )
+    return HarnessConfig(
+        lane=parsed_lane,
+        key_provider=parsed_key_provider,
+        key_env=resolved_key_env,
+        model=parsed_model,
+        effort=parsed_effort,
+        # A config that names a model but no tier runs standard, which is what arms compared on
+        # cost must all do; only a config that requests nothing at all leaves the template's tier
+        # alone.
+        is_fast=parse_agent_flag(fast, "fast") if fast_text else False,
+    )
+
+
+# A table for claude alone, whose catalog ids are aliases (`haiku`, `opus[1m]`) that never appear in
+# a reported model name: only the table says which name each alias answers under. pi needs no entry,
+# because it reports the tag minus its first segment -- `anthropic/claude-haiku-4-5` reports as
+# `claude-haiku-4-5` and `openrouter/openai/gpt-5-mini` as `openai/gpt-5-mini`, both measured on real
+# trials -- which is the generic split reported_model_prefix falls back to for every non-claude id.
+_REPORTED_MODEL_BY_CATALOG_ID: Final[Mapping[str, str]] = {
+    "haiku": "claude-haiku-4-5",
+    "sonnet[1m]": "claude-sonnet-5",
+    "opus[1m]": "claude-opus-5",
+    "fable[1m]": "claude-fable-5",
+}
+
+
+@pure
+def reported_model_prefix(catalog_id: str) -> str:
+    """What a catalog id's model is reported as in the transcript, or empty when it is not known.
+
+    pi-coding tags a model with the provider whose key serves it and reports everything after that
+    provider: `anthropic/claude-haiku-4-5` reports as `claude-haiku-4-5`, and a gateway tag keeps the
+    vendor it routes to, `openrouter/openai/gpt-5-mini` reporting as `openai/gpt-5-mini`. So a tag
+    resolves itself by dropping its first segment.
+    """
+    known_prefix = _REPORTED_MODEL_BY_CATALOG_ID.get(catalog_id)
+    if known_prefix is not None:
+        return known_prefix
+    _provider, separator, model = catalog_id.partition("/")
+    if separator and model:
+        return model
+    return ""
+
+
+@pure
+def is_model_confirmed(harness_config: HarnessConfig, observed_models: Sequence[str]) -> bool | None:
+    """Whether the models the transcript shows answering are exactly the one the config asked for.
+
+    None when there is nothing to confirm: no switch was requested, the reported naming of the id is
+    not known, or nothing was observed at all (a trial whose transcript was never captured, or one
+    that gave up before a turn). An unrecognised model name and a missing transcript are both
+    silence, not evidence, so False is reserved for a trial that observably ran on something else.
+    """
+    expected_prefix = reported_model_prefix(harness_config.model) if harness_config.is_switch_requested else ""
+    if not expected_prefix or not observed_models:
+        return None
+    if len(observed_models) != 1:
+        return False
+    return observed_models[0].startswith(expected_prefix)
+
+
+@pure
+def is_proxy_model_confirmed(
+    harness_config: HarnessConfig, metered_models: Sequence[str], welcome_model: str
+) -> bool | None:
+    """The same confirmation over the models a proxy metered, which is the ground truth whenever one
+    metered the trial.
+
+    The proxy sees every request the workspace made, greeting included, and cannot tell which turn
+    served which -- so the requested model has to be there and every other model has to be the one that
+    answered the greeting. A trial whose greeting is not known and that ran on more than one model
+    cannot be told apart from one that switched away, and answers None rather than accusing it.
+    """
+    expected_prefix = reported_model_prefix(harness_config.model) if harness_config.is_switch_requested else ""
+    if not expected_prefix or not metered_models:
+        return None
+    other_models = [model for model in metered_models if not model.startswith(expected_prefix)]
+    if len(other_models) == len(metered_models):
+        return False
+    elif not other_models:
+        return True
+    elif not welcome_model:
+        return None
+    else:
+        return all(model == welcome_model for model in other_models)
+
+
+# The pseudo-model Claude Code files a message it wrote itself under -- the pre-sign-in "Not logged
+# in" notice is the one this eval has seen -- rather than one an inference answered on. Never a model
+# a run could have asked for, so counting it would read a switched trial as one that ran on two.
+_SYNTHETIC_MODEL_NAME: Final[str] = "<synthetic>"
+
+
+@pure
+def _answering_model(step: Mapping[str, Any]) -> str:
+    """The model an agent step was answered on; empty for every other step and for one no inference
+    produced."""
+    if step.get("source") != "agent":
+        return ""
+    model = str(step.get("model_name") or "")
+    return "" if model == _SYNTHETIC_MODEL_NAME else model
+
+
+@pure
+def observed_harness_models(
+    steps: Sequence[Mapping[str, Any]], first_client_message: str
+) -> ObservedHarnessModels | None:
+    """Which models answered the greeting and which answered the conversation, from a captured
+    document's steps, or None when the document does not carry the driver's first turn.
+
+    The greeting runs on the workspace's default model, since the create template delivers it before
+    any model choice can be applied, so the two are separated at the step carrying the driver's own
+    first message: everything before it belongs to the greeting, everything after it to the chat the
+    harness config was applied to.
+    Anchoring on that message rather than on the greeting's own text is what makes the split
+    harness-blind -- the greeting reaches the transcript as a client turn on pi and as a `system`
+    step on claude, and neither harness's greeting text has to be known here.
+
+    None rather than a partial reading when no step carries that message: a trial that never sent a
+    turn and a document whose shape moved both leave every step unattributable, and guessing at the
+    boundary would report the greeting's model as one the conversation ran on.
+    """
+    wanted_message = first_client_message.strip()
+    if not wanted_message:
+        return None
+    turn_one_index = next(
+        (
+            index
+            for index, step in enumerate(steps)
+            if step.get("source") == "user" and str(step.get("message") or "").strip() == wanted_message
+        ),
+        None,
+    )
+    if turn_one_index is None:
+        return None
+    welcome_model = next((model for step in steps[:turn_one_index] if (model := _answering_model(step))), "")
+    conversation_models = {model for step in steps[turn_one_index:] if (model := _answering_model(step))}
+    return ObservedHarnessModels(models=tuple(sorted(conversation_models)), welcome_model=welcome_model)
+
+
+# What the harness-config block records for a switch that was made and for a config that asked for
+# none; anything else in that field is the failure that stopped the trial.
+MODEL_SWITCH_APPLIED: Final[str] = "applied"
+MODEL_SWITCH_SKIPPED: Final[str] = "skipped"
+# The status that means the choice itself was wrong rather than the workspace failing to apply it:
+# a configuration error to be reported and stopped on, never a workspace fault to retry.
+_MODEL_CHOICE_REFUSED_STATUS: Final[int] = 400
 
 
 @pure
@@ -959,6 +1212,12 @@ class MindsPersonaDriver(BaseAgent):
         proxy_probe: object = False,
         proxy: object = False,
         verifier_model: str = "",
+        lane: object = "anthropic",
+        key_provider: object = "",
+        key_env: object = "",
+        model: object = "",
+        effort: object = "",
+        fast: object = "",
         user_id_prefix: object = "",
         **kwargs: Any,
     ) -> None:
@@ -972,6 +1231,43 @@ class MindsPersonaDriver(BaseAgent):
         # Route the workspace's model traffic through a proxy in the box, so every call -- including
         # any the agent delegates -- is metered where the agent cannot reach it.
         self._is_proxy_enabled = parse_agent_flag(proxy, "proxy")
+        # The harness, model, effort and speed tier every case of this run drives on -- the half of
+        # its arm that is not the pinned (mngr, dwt) pair. Parsed here so that a run which cannot
+        # be honoured is refused before a box boots.
+        self._harness_config = parse_harness_config(
+            lane=lane, key_provider=key_provider, key_env=key_env, model=model, effort=effort, fast=fast
+        )
+        # The proxy's address only reaches the workspace through the claude sign-in's base-URL line,
+        # and its model list is Anthropic-only, so on any other lane it would meter nothing.
+        if self._is_proxy_enabled and self._harness_config.lane is not HarnessLane.ANTHROPIC:
+            raise AgentKwargError(
+                "proxy=true meters the anthropic lane only; a workspace signed in on lane {} never reaches it".format(
+                    lane_id(self._harness_config.lane)
+                )
+            )
+        # The workspace's own credential, which the lane decides the provider of. Read here rather
+        # than at sign-in time: a run with no key can never sign a workspace in, and finding that out
+        # per trial spends a box on each to say so.
+        workspace_key = self._get_env(self._harness_config.key_env) or ""
+        if not workspace_key:
+            raise AgentKwargError(
+                "no {} to sign the workspace in on lane {}".format(
+                    self._harness_config.key_env, lane_id(self._harness_config.lane)
+                )
+            )
+        self._workspace_key = SecretStr(workspace_key)
+        # The provider account the sign-in minted and the chat was created against; empty on a
+        # workspace that named none, which leaves the choice of account to the workspace itself.
+        self._account_id: str = ""
+        # What the workspace's own accounts listing said about that account, which is the only
+        # reading of the harness the trial gets; empty until it has been read back.
+        self._account_harness: str = ""
+        # How the requested model choice came out, carried in every harness-config record. A config
+        # that names no model skips the switch by construction; one that does starts with nothing to
+        # report, so a trial that gave up before the switch is not recorded as having made one.
+        self._model_choice_switch: str = "" if self._harness_config.is_switch_requested else MODEL_SWITCH_SKIPPED
+        # Which models the captured transcript shows answering, filled in once one is captured.
+        self._observed_harness_models: ObservedHarnessModels = ObservedHarnessModels()
         self._proxy_key: str = ""
         self._proxy_usage_records: tuple[dict[str, Any], ...] = ()
         self._snapshot_mode = parse_snapshot_mode(snapshot_mode)
@@ -1195,6 +1491,9 @@ class MindsPersonaDriver(BaseAgent):
                 # steps share, and the hand-built one describes the driver's accumulated
                 # conversation.
                 trajectory_source = await self._publish_trajectory(case, environment)
+                # After the publish, which is where the captured transcript is read for the models
+                # that actually answered: the arm block only becomes complete there.
+                await self._write_state_file(environment)
                 # After the evidence phase, so the driver's view covers the whole step rather than
                 # the last state the conversation loop happened to leave behind.
                 self._write_driver_events()
@@ -1433,6 +1732,9 @@ class MindsPersonaDriver(BaseAgent):
             )
             await self._mark_timed_out(environment, reason)
             return False
+        self._account_id = authentication.account_id
+        if self._account_id:
+            await self._record_account_harness(environment, self._account_id)
 
         # A workspace boots with no chat, and a chat binds to the account it is created against, so
         # this can only happen once the sign-in above has minted one.
@@ -1486,6 +1788,10 @@ class MindsPersonaDriver(BaseAgent):
             await self._mark_timed_out(
                 environment, self._readiness_reason("the workspace chat never answered its welcome")
             )
+            return False
+
+        is_harness_config_applied = await self._apply_harness_config(environment, readiness_deadline)
+        if not is_harness_config_applied:
             return False
 
         await self._capture_preexisting_registrations(environment)
@@ -1986,22 +2292,32 @@ class MindsPersonaDriver(BaseAgent):
         create one. Doing it through the sign-in endpoint rather than the create-time host env is
         what keeps the graded agent in production's shared config-dir regime.
 
-        A failure answers with which of the three ways it failed, because the trial record keeps that
-        string and the three have entirely different causes.
+        Which endpoint that is depends on the config's lane, and both paths end in this same value, so
+        the rest of the bring-up does not know which one signed the workspace in. A failure answers
+        with the way it failed, because the trial record keeps that string and the ways have entirely
+        different causes.
         """
         assert self._box_env is not None
-        # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
-        # scoped to this trial, and the credential the agent can see buys nothing anywhere else.
-        api_key = self._proxy_key or self._get_env("ANTHROPIC_API_KEY") or ""
-        if not api_key:
-            return WorkspaceAuthentication(
-                failure="no ANTHROPIC_API_KEY to sign the workspace in with", is_failure_from_waiting=False
-            )
         is_endpoint_ready = await minds_bridge.wait_for_auth_endpoint(
             environment, self._box_env, self._workspace_agent_id, deadline, self._poll_seconds
         )
         if not is_endpoint_ready:
             return WorkspaceAuthentication(failure="the workspace's claude-auth endpoint never came up")
+        if self._harness_config.lane is HarnessLane.ANTHROPIC:
+            return await self._authenticate_on_claude_lane(environment)
+        return await self._authenticate_through_accounts_flow(environment, deadline)
+
+    async def _authenticate_on_claude_lane(self, environment: BaseEnvironment) -> WorkspaceAuthentication:
+        """Sign in through the claude-auth endpoint, which is the path the anthropic lane keeps.
+
+        Its answer carries the auth mode, and that readback is what verifies a proxied sign-in landed
+        against the proxy rather than the Anthropic API; the accounts flow reports no such thing, so
+        the two paths stay separate for as long as the proxy meters this lane.
+        """
+        assert self._box_env is not None
+        # Behind the proxy the workspace gets the trial's own key, never the upstream one: it is
+        # scoped to this trial, and the credential the agent can see buys nothing anywhere else.
+        api_key = self._proxy_key or self._workspace_key.get_secret_value()
         logger.info("Signing the workspace in through the claude-auth endpoint")
         sign_in = await minds_bridge.authenticate_workspace(
             environment,
@@ -2015,6 +2331,152 @@ class MindsPersonaDriver(BaseAgent):
                 failure="the workspace rejected the submitted credentials or came back not signed in"
             )
         return WorkspaceAuthentication(account_id=sign_in.account_id)
+
+    async def _authenticate_through_accounts_flow(
+        self, environment: BaseEnvironment, deadline: float
+    ) -> WorkspaceAuthentication:
+        """Sign in on the config's lane through the flow the product's account screen drives, which is
+        the only path the non-claude lanes have."""
+        assert self._box_env is not None
+        lane = lane_id(self._harness_config.lane)
+        logger.info("Signing the workspace in on lane {} through the accounts flow", lane)
+        sign_in = await minds_bridge.sign_in_via_accounts_flow(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            lane,
+            self._workspace_key.get_secret_value(),
+            self._harness_config.key_provider,
+            deadline,
+            self._poll_seconds,
+        )
+        if not sign_in.is_signed_in:
+            # A failure that named nothing would read here as a workspace that signed in, since that
+            # is what an empty failure means, so the lane's own name stands in for one.
+            return WorkspaceAuthentication(
+                failure=sign_in.failure or "the workspace did not sign in on lane {}".format(lane),
+                is_failure_from_waiting=sign_in.is_failure_from_waiting,
+            )
+        return WorkspaceAuthentication(account_id=sign_in.account_id)
+
+    async def _record_account_harness(self, environment: BaseEnvironment, account_id: str) -> None:
+        """Read back the workspace's own row for the account the sign-in minted, for the harness it
+        names.
+
+        Which harness an account runs is the workspace's to say, never the run's to assume from the
+        lane it asked for, and this listing is the only place it says it. A row that is not there
+        leaves the harness unrecorded rather than stopping a workspace that is otherwise fine.
+        """
+        assert self._box_env is not None
+        account = await minds_bridge.fetch_account(environment, self._box_env, self._workspace_agent_id, account_id)
+        if account is None:
+            return
+        self._account_harness = account.harness
+        logger.info("The workspace minted account {} on lane {} ({})", account.id, account.lane, account.harness)
+        if account.lane and account.lane != lane_id(self._harness_config.lane):
+            logger.warning(
+                "The workspace signed in on lane {}, not the lane {} the run asked for",
+                account.lane,
+                lane_id(self._harness_config.lane),
+            )
+
+    async def _apply_harness_config(self, environment: BaseEnvironment, deadline: float) -> bool:
+        """Set the chat to the config's model, effort and speed tier; False means the trial was marked
+        timed out.
+
+        Applied after the welcome has been answered, because the create template delivers that
+        greeting the moment the agent is ready and a switch typed into that window would race it. The
+        greeting therefore always runs on the workspace's default, which the harness-config block
+        records separately from the models the conversation ran on.
+        """
+        assert self._box_env is not None
+        if not self._harness_config.is_switch_requested:
+            self._model_choice_switch = MODEL_SWITCH_SKIPPED
+            return True
+        outcome = await minds_bridge.switch_model_choice(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            self._harness_config.model,
+            self._harness_config.effort,
+            self._harness_config.is_fast,
+        )
+        if not outcome.is_applied:
+            template = (
+                "the workspace refused the requested model choice: {}"
+                if outcome.status == _MODEL_CHOICE_REFUSED_STATUS
+                else "the workspace could not apply the requested model choice: {}"
+            )
+            self._model_choice_switch = template.format(outcome.detail)
+            await self._mark_timed_out(environment, self._model_choice_switch)
+            return False
+        # On claude the switch is typed into the session as slash commands, so the agent is briefly
+        # busy answering them and turn 1 must not be sent into that window.
+        is_settled = await minds_bridge.wait_for_chat_state(
+            environment,
+            self._box_env,
+            self._workspace_agent_id,
+            self._chat_agent_id,
+            is_waiting_desired=True,
+            deadline=deadline,
+            poll_seconds=self._poll_seconds,
+        )
+        if not is_settled:
+            self._model_choice_switch = "the workspace chat never settled after the model switch"
+            await self._mark_timed_out(environment, self._readiness_reason(self._model_choice_switch))
+            return False
+        self._model_choice_switch = MODEL_SWITCH_APPLIED
+        return True
+
+    def _metered_models(self) -> tuple[str, ...]:
+        """Every model the proxy served the workspace, the greeting's included, or nothing when no
+        proxy metered the trial."""
+        return tuple(
+            entry.model for entry in usage_accounting.summarize_proxy_usage(self._proxy_usage_records).per_model
+        )
+
+    def _arm_record(self) -> ArmRecord:
+        """The whole treatment this trial ran under: the pinned pair its box and workspace came from,
+        and the harness config applied on top of them.
+
+        The pair is repeated here rather than only at the top level of the records this block goes
+        into, so the block describes a treatment on its own wherever it travels.
+        """
+        return ArmRecord(
+            mngr_sha=self._mngr_sha,
+            dwt_sha=self._case.dwt_sha if self._case is not None else "",
+            harness_config=self._harness_config_record(),
+        )
+
+    def _harness_config_record(self) -> HarnessConfigRecord:
+        """What harness settings this trial was asked to run on and what it was observed running on.
+
+        The observed half is empty until a transcript has been captured, since no workspace endpoint
+        reads a chat's live model choice back: what a trial actually ran on can only be read off the
+        steps the agent left behind.
+        """
+        observed = self._observed_harness_models
+        # The proxy sees every request the workspace made, delegated ones included, so wherever one
+        # metered the trial it -- not the transcript -- is what the model choice is confirmed against.
+        is_confirmed = (
+            is_proxy_model_confirmed(self._harness_config, self._metered_models(), observed.welcome_model)
+            if self._proxy_usage_records
+            else is_model_confirmed(self._harness_config, observed.models)
+        )
+        return HarnessConfigRecord(
+            lane=lane_id(self._harness_config.lane),
+            key_provider=self._harness_config.key_provider,
+            account_id=self._account_id,
+            harness=self._account_harness,
+            model=self._harness_config.model,
+            effort=self._harness_config.effort,
+            fast=self._harness_config.is_fast,
+            model_choice_switch=self._model_choice_switch,
+            observed_models=observed.models,
+            welcome_model=observed.welcome_model,
+            is_model_confirmed=is_confirmed,
+        )
 
     async def _wait_for_reply(
         self,
@@ -2316,6 +2778,8 @@ class MindsPersonaDriver(BaseAgent):
             # Which step wrote this file, so a per-step artifact says what it is. Empty for a
             # single-step case, whose one state.json describes the whole trial.
             "step_name": step.name if step is not None else "",
+            # Both pinned inputs at the top level, where every reader of a state file looks for
+            # them; the "arm" block below repeats them so it describes a whole treatment on its own.
             "mngr_sha": self._mngr_sha,
             "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             # Populated in setup(), so it is in the very first sync: the trial leaks this
@@ -2345,6 +2809,10 @@ class MindsPersonaDriver(BaseAgent):
             # figure above would read as an overrun on a perfectly healthy later step.
             "step_elapsed_seconds": round(time.time() - self._step_started_at, 1),
             "timeout_seconds": self._case.timeout_seconds if self._case is not None else 0.0,
+            # The whole treatment the trial ran under -- pinned pair plus harness config -- and what
+            # it was observed running on. Written on every state, so a trial that gave up during
+            # preparation still says which arm it was.
+            "arm": self._arm_record().model_dump(mode="json"),
         }
 
     def _write_trial_files(self) -> dict[str, str]:
@@ -2480,11 +2948,15 @@ class MindsPersonaDriver(BaseAgent):
             if message_word_counts
             else 0.0,
             "decider_model": self._decider_model,
+            # Repeated in the trial metadata so a run's summary can read requested-versus-observed
+            # off the trial listing without opening an artifact.
+            "arm": self._arm_record().model_dump(mode="json"),
             "modal_user_id": self._user_id,
             "modal_environment_name": self._modal_environment_name,
+            # Both pinned inputs travel with the trial record at the top level, so a captured trial
+            # says which mngr and which workspace template produced it; the "arm" block above
+            # repeats them so it describes a whole treatment on its own.
             "mngr_sha": self._mngr_sha,
-            # Both pinned inputs travel with the trial record, so a captured
-            # trial says which mngr and which workspace template produced it.
             "dwt_sha": self._case.dwt_sha if self._case is not None else "",
             "workspace_usage": usage_accounting.workspace_usage_metadata(workspace_usage),
             # Both sources, so the two can be reconciled after the fact: they agree exactly when the
@@ -2536,6 +3008,7 @@ class MindsPersonaDriver(BaseAgent):
             harbor_session_id=self.session_id,
             case_id=case.case_id,
             usage_source=usage_source,
+            arm=self._arm_record(),
         )
 
     def _workspace_trajectory_or_none(
@@ -2560,6 +3033,61 @@ class MindsPersonaDriver(BaseAgent):
         except TrajectoryDocumentError as exc:
             logger.warning("The captured trajectory document is unusable; writing the hand-built one: {}", exc)
             return None
+
+    def _first_client_message(self) -> str:
+        """The text of the first turn the driver sent, which is where the greeting ends and the
+        conversation the harness answered begins. Empty until a turn has been sent."""
+        return next((entry["text"] for entry in self._conversation if entry["role"] == "user"), "")
+
+    def _read_observed_harness_models(self) -> ObservedHarnessModels:
+        """Which models the captured document shows answering, or nothing when there is no document.
+
+        The polled event feed carries the workspace's own message shapes rather than ATIF steps and
+        names no model, so a model choice can only be checked against the document the evidence phase
+        brings out; a trial that captured none, and one whose document does not carry the turn it
+        sent, leave the observed half of its harness config empty. Which is not the same trials as the ones graded on
+        the hand-built shape: a document that was captured but did not validate is read here all the
+        same, and still says which models answered.
+        """
+        document_path = self._transcript_capture.document.host_path
+        if document_path is None:
+            return ObservedHarnessModels()
+        try:
+            raw_document = json.loads(document_path.read_text())
+        except (OSError, ValueError) as exc:
+            logger.warning("Could not read the captured document to see which models answered: {}", exc)
+            return ObservedHarnessModels()
+        raw_steps = raw_document.get("steps") if isinstance(raw_document, dict) else None
+        # Down to the steps that have the shape a step is read with: this runs inside the publish
+        # that every trial ends on, and a document too malformed to say which model answered must
+        # cost the trial that field rather than the whole record.
+        steps = [step for step in raw_steps if isinstance(step, Mapping)] if isinstance(raw_steps, list) else []
+        first_client_message = self._first_client_message()
+        observed = observed_harness_models(steps, first_client_message)
+        if observed is None:
+            logger.warning(
+                "No step of the captured document carries the first turn this trial sent ({!r}), so which models "
+                "answered the conversation cannot be told from which answered the greeting",
+                first_client_message[:200],
+            )
+            return ObservedHarnessModels()
+        return observed
+
+    async def _write_state_file(self, environment: BaseEnvironment) -> None:
+        """Write state.json alone, host-side and into the box, once the captured transcript can say
+        which models answered.
+
+        Only state.json: the trajectory has just been published as the workspace's own document, and
+        writing both would put the driver's hand-built summary back over it. Guarded like that
+        publish, since a box that has gone must not cost the trial its metadata.
+        """
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        host_path = self.logs_dir / STATE_FILENAME
+        host_path.write_text(json.dumps(self._state_payload(), indent=2))
+        try:
+            await environment.upload_file(host_path, _box_trial_file_path(STATE_FILENAME))
+        except (OSError, RuntimeError, ModalError) as exc:
+            logger.warning("Could not publish the final state into the box; grading on the per-turn copy: {}", exc)
 
     def _hand_built_trajectory(self, case: CaseConfig) -> Trajectory | None:
         """The driver's own per-turn summary of the conversation so far, or None before any exchange.
@@ -2592,6 +3120,9 @@ class MindsPersonaDriver(BaseAgent):
         fails, the last per-turn copy is what grading sees, and the host copy is put back to exactly
         that rather than left describing a document the verifier never got.
         """
+        # Before the provenance is built, since the arm block it carries reports which models
+        # actually answered, and the captured document is where that is recorded.
+        self._observed_harness_models = self._read_observed_harness_models()
         resolved_usage = self._resolve_workspace_usage()
         provenance = self._trajectory_provenance(case, _usage_source(resolved_usage))
         document_path = self._transcript_capture.document.host_path
