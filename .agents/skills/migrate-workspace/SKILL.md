@@ -294,7 +294,7 @@ exit 3).
 ## Reporting back
 Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
 `question` (a genuinely undecidable case), `done` / `stuck` (terminal).
-Substitutions: `<TASK_FILE_GLOB>` -> `data/.tasks/migrate-workspace/task.md`;
+Substitutions: `<TASK_FILE>` -> `data/.tasks/migrate-workspace/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/migrate-workspace/reports`.
 BODY_EOF
 } > data/.tasks/migrate-workspace/task.md

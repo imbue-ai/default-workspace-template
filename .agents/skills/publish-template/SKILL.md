@@ -577,7 +577,7 @@ worktree to a clean template base and deletes gitignored state -- including
 Follow `.agents/shared/references/worker-reporting.md` for the full report
 procedure. Substitutions for this task:
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
+- `<TASK_FILE>` -> `data/.tasks/launch-task/<slug>/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/launch-task/<slug>/reports/` (recreate
   it with `mkdir -p` -- the assembly script deleted `data/`)
 - Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`

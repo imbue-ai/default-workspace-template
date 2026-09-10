@@ -1,1 +1,3 @@
 The mngr create-template test now also pins the `worker` template's skill-install step: the generic worker is installed into the worker's skill tree by `install_worker_skills.sh` exactly once, after the venv converge and the plugin install, and the script the template names exists in the repo.
+
+The `worker` create template no longer installs anything into the worker's skill tree -- the generic harden worker is followed in place from `.agents/shared/worker/SKILL.md`, which every worker's checkout already carries. The template-stacking test now pins that absence, while still requiring the venv converge, the claude plugin install after it, and the `MNGR_AGENT_ROLE=worker` env that let a worker run its own review gates.

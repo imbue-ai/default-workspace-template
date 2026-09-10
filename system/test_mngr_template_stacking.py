@@ -173,32 +173,28 @@ def test_worker_template_installs_claude_plugins_before_the_agent_starts() -> No
     assert commands.index(plugin_commands[0]) > sync_position
 
 
-def test_worker_template_installs_the_generic_worker_skill_after_venv_and_plugins() -> (
-    None
-):
-    """A `-t worker` create installs the generic worker at
-    .agents/shared/worker/ into the worker's skill tree as `harden-worker`
-    (via .agents/shared/scripts/install_worker_skills.sh), which every lead's
-    task file tells the worker to use. It runs after the venv converge and the
-    plugin install, exactly once, and the script it names exists in the repo."""
+def test_worker_template_installs_no_worker_skill_and_keeps_venv_and_plugins() -> None:
+    """A `-t worker` create installs nothing into the worker's skill tree.
+
+    The generic harden worker is followed in place from the checkout every
+    worker already has (`.agents/shared/worker/SKILL.md`, named outright by the
+    lead's task file), so the provisioning step that used to copy it in as a
+    `harden-worker` skill is gone -- and must not creep back, since an
+    installed copy is untracked scratch that a worker's broad `git add` would
+    carry onto its branch. What the template must still do is provision the
+    worker to run its own gates: converge the venv, then install the claude
+    plugins, and mark the agent's role."""
     result = _apply(("worker",))
     commands = result["extra_provision_command"]
-    install_commands = [cmd for cmd in commands if "install_worker_skills.sh" in cmd]
-    assert len(install_commands) == 1, (
-        f"expected exactly one worker-skill install command from worker, got {commands!r}"
+    assert not any("install_worker_skills.sh" in cmd for cmd in commands), (
+        f"the worker template must no longer install a worker skill, got {commands!r}"
     )
-    install_words = install_commands[0].split()
-    assert install_words == [
-        "bash",
-        ".agents/shared/scripts/install_worker_skills.sh",
-        ".agents/skills",
-    ]
-    assert (_REPO_ROOT / install_words[1]).is_file()
-    install_position = commands.index(install_commands[0])
     sync_position = commands.index("uv sync --all-packages")
-    plugin_position = next(
+    plugin_positions = [
         idx for idx, cmd in enumerate(commands) if "claude_update_plugin.sh" in cmd
+    ]
+    assert len(plugin_positions) == 1, (
+        f"expected exactly one plugin-install command from worker, got {commands!r}"
     )
-    assert install_position > sync_position
-    assert install_position > plugin_position
+    assert plugin_positions[0] > sync_position
     assert "MNGR_AGENT_ROLE=worker" in result["env"]

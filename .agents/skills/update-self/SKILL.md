@@ -246,7 +246,7 @@ Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
 review-gate escape hatch, or a §4b customization the update cannot keep),
 `done` / `stuck` (terminal). Substitutions:
-`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
+`<TASK_FILE>` -> `data/.tasks/update-self/task.md`;
 `<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
 BODY_EOF
 } > data/.tasks/update-self/task.md

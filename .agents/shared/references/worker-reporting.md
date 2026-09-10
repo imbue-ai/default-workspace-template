@@ -11,13 +11,15 @@ Your worker SKILL.md lists any additional inputs the calling flow stages
 alongside it. At the start of your run, extract the lead's address with:
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py '<TASK_FILE_GLOB>')"
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
-Quote the pattern. `LEAD_AGENT` is the `mngr` agent you push reports to
-(and whose transcript you read); `FINISH_REPORT_PATH` is the destination
-path on the lead's worktree where your report file must land -- the lead
-polls for exactly this file. Any additional string fields the lead
+`<TASK_FILE>` is the `task_file` value in the frontmatter you were sent --
+the launcher stamps this task file's own path there before sending it, so you
+always hold an exact path. `TASK_FILE` is that path; `LEAD_AGENT` is the `mngr`
+agent you push reports to (and whose transcript you read); `FINISH_REPORT_PATH`
+is the destination path on the lead's worktree where your report file must land
+-- the lead polls for exactly this file. Any additional string fields the lead
 set in the frontmatter also become shell variables -- see your worker
 SKILL.md for which extras (if any) the calling flow stages.
 
@@ -48,7 +50,7 @@ At each gate or terminal status:
    ```bash
    mngr rsync ./<RUNTIME_REPORTS_DIR>/ \
        "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
-       --uncommitted-changes=merge
+       --uncommitted-changes=clobber
    ```
 
    `mngr rsync` takes `SOURCE DESTINATION`: your local `<RUNTIME_REPORTS_DIR>/`
@@ -60,8 +62,9 @@ At each gate or terminal status:
    against the lead's workdir. You sync the report's *parent directory*
    (`dirname`) rather than the file itself: the trailing slashes matter (rsync
    directory semantics) and rsync cannot transfer a single file.
-   `--uncommitted-changes=merge` is required because the lead's worktree usually
-   has uncommitted local state.
+   `--uncommitted-changes=clobber` is required because the lead's worktree
+   usually has uncommitted local state; the destination sits under gitignored
+   `data/`, so nothing tracked is overwritten and no shared git stash is touched.
 
    **Fallback delivery (same-repo)**: when `LEAD_AGENT` is unset/empty, or the
    `mngr rsync` push fails, deliver the report by writing it straight into the

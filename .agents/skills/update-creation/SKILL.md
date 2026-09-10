@@ -123,9 +123,9 @@ it should now accept, outputs it should now produce. Describe the new contract;
 the incident is captured above.>
 
 ## What to do
-Use the installed \`harden-worker\` sub-skill. It reads \`operation\`,
-\`type\`, and the \`## Change origin\` marker, then follows the matching
-references. Push reports to the lead per its reporting protocol.
+Read and follow \`.agents/shared/worker/SKILL.md\` from your own checkout. It
+reads \`operation\`, \`type\`, and the \`## Change origin\` marker, then follows
+the matching references. Push reports to the lead per its reporting protocol.
 
 ## Success criteria
 - The change is hardened, tested, and passes the review gates on your branch.

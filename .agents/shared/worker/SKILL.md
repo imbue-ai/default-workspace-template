@@ -16,16 +16,18 @@ just routes you to the right ones.
 
 ## Step 1: Read your task file and resolve inputs
 
-Your task file was synced to your worktree under `data/.tasks/harden/<slug>/task.md`.
-Extract the lead address and the report destination (plus the `operation` and
-`type` fields the lead set in frontmatter):
+Your task file was synced to your worktree, and its frontmatter names its own
+path in `task_file`. Pass that exact path to the parser to extract the lead
+address and the report destination (plus the `operation` and `type` fields the
+lead set in frontmatter):
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/harden/*/task.md')"
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
-This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and `TYPE`. Fail
-loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both.
+This sets `TASK_FILE`, `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and
+`TYPE`. Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply
+both.
 
 - `OPERATION` is one of `crystallize`, `update`, `heal`.
 - `TYPE` is one of `skill`, `app`, `service`, `system-interface`.
@@ -73,7 +75,6 @@ the crystallize shape), it carries that itself, keyed by type.
 Follow `.agents/shared/references/worker-reporting.md` for the report-file
 procedure. The `eval` in Step 1 already set the variables it needs. Substitute:
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/harden/*/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> the directory part of `FINISH_REPORT_PATH`
   (i.e. `dirname "$FINISH_REPORT_PATH"`).
 

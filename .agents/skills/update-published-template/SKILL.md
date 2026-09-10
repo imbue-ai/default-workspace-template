@@ -263,7 +263,8 @@ Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatt
 the bundle is pushed to the worker. The task body directs the worker to:
 
 1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
-   `.agents/shared/references/worker-reporting.md` -- before any reset that could
+   `.agents/shared/references/worker-reporting.md`, from the exact task-file path
+   `data/.tasks/launch-task/<slug>/task.md` -- before any reset that could
    remove the task file.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):

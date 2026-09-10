@@ -63,7 +63,7 @@ report procedure: it has you parse this task's frontmatter to get
 `LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
 its parent directory back to the lead. Substitutions for this task:
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
+- `<TASK_FILE>` -> the `task_file` path stamped in this file's frontmatter
 - `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
   i.e. `dirname "$FINISH_REPORT_PATH"` (your worktree path matches the
   lead's destination for this flow)
@@ -95,6 +95,12 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --runtime-dir data/.tasks/launch-task/$NAME/ \
     --task-file data/.tasks/launch-task/$NAME/task.md
 ```
+
+`launch` stamps this task file's own path as `task_file` and your agent name
+as `lead_agent` into its frontmatter before sending it, and labels the worker
+`lead_agent=<you>`, so the worker knows exactly where its task file is and who
+to report to. The same steps apply when you are yourself a worker: your
+sub-worker's runtime dir and report land in your worktree, and you are its lead.
 
 If the task references gitignored files outside the runtime dir, set
 `source_artifacts_dir: <dir>` in the task frontmatter; `launch`

@@ -466,7 +466,7 @@ Reading the confirmation signal:
 
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic `harden-worker`,
+task file (set `type: app`), launching the generic worker,
 polling, merging on `done`, and refreshing the tab after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker

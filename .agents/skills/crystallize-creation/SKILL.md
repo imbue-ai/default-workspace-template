@@ -123,10 +123,10 @@ distinctive moments (a key decision, a tool output that drove a step).
 after. Describe the contract; do not prescribe subcommands or surfaces.>
 
 ## What to do
-Use the installed `harden-worker` sub-skill. It reads `operation` and `type`
-from this frontmatter and follows the matching references. When you reach a gate
-or terminal status, push a report to the lead per its reporting protocol; the
-destination is `finish_report_path`.
+Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
+reads `operation` and `type` from this frontmatter and follows the matching
+references. When you reach a gate or terminal status, push a report to the lead
+per its reporting protocol; the destination is `finish_report_path`.
 
 ## Success criteria
 - The creation is committed on your branch, tested, and passes the review gates.
@@ -160,7 +160,6 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-The `worker` template installs the generic `harden-worker` sub-skill.
 If the frontmatter sets `source_artifacts_dir`, `launch` pushes it too -- no
 extra flag.
 
