@@ -192,7 +192,13 @@ MAX_LOG_DB_ROWS = 4000
 # name merely starts the same way (``codex_app_server_protocol`` carries the
 # serialized protocol messages, including the login exchange). Admitting a
 # target nobody listed is the denylist failure this allowlist exists to avoid.
-LOG_DB_TARGET_MODULES = ("codex_app_server",)
+#
+# The transport crate is listed separately for that reason: it is a sibling of
+# ``codex_app_server``, not a child, so an exact-module match does not reach it.
+# It is worth naming because it is where the socket and websocket come up, which
+# is the whole record of a daemon that never started -- and those lines land at
+# startup, which is exactly what a busy day pushes out of app_server.log's tail.
+LOG_DB_TARGET_MODULES = ("codex_app_server", "codex_app_server_transport")
 
 # Ceiling on the text the log-db class contributes, filled newest-first. Its own
 # rather than shared with the harness log files, because the two are separate

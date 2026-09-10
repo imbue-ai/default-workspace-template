@@ -1351,6 +1351,13 @@ def test_a_log_db_target_allowlist_entry_does_not_admit_a_crate_sharing_its_name
                 "codex_app_server_protocol::auth",
                 "SECRET-SIBLING",
             ),
+            (
+                1789078903,
+                4,
+                "TRACE",
+                "codex_app_server_transport::transport::unix_socket",
+                "wanted-from-a-listed-sibling",
+            ),
         ],
     )
     module = _load_collector(agents_dir=agents_dir)
@@ -1360,6 +1367,10 @@ def test_a_log_db_target_allowlist_entry_does_not_admit_a_crate_sharing_its_name
     assert "wanted-from-the-root" in rendered
     assert "wanted-from-below" in rendered
     assert "SECRET-SIBLING" not in rendered
+    # A sibling crate rides only by being named. The transport crate is, because
+    # it is where the socket and websocket come up -- the whole record of a
+    # daemon that never started.
+    assert "wanted-from-a-listed-sibling" in rendered
 
 
 def test_a_log_db_read_sees_rows_a_live_harness_has_not_checkpointed(
