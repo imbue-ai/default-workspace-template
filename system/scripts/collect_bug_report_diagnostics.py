@@ -31,19 +31,20 @@ archive into a way around the scan, so the scan always happens first.
 """
 
 import base64
-from datetime import datetime
 import glob
 import io
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import zipfile
 from collections.abc import Sequence
+from datetime import datetime, timezone
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
@@ -87,6 +88,7 @@ LOG_RECENCY_WINDOW_SECONDS = 24 * 60 * 60
 WORKSPACE_LOGS_KEY = "workspace_logs"
 TRANSCRIPT_KEY = "transcript"
 AGENT_LOGS_KEY = "agent_logs"
+AGENT_LOG_DB_KEY = "agent_log_db"
 
 MAX_LOG_FILES = 100
 # Generous because MAX_READ_BYTES, not this, is what bounds a member: the tail
@@ -114,6 +116,10 @@ DEFAULT_SCAN_TIMEOUT_SECONDS = 12
 SUPERVISORCTL_TIMEOUT_SECONDS = 2
 DF_TIMEOUT_SECONDS = 2
 GIT_TIMEOUT_SECONDS = 2
+# How long a log-db read waits on SQLite's own lock. Short because a live
+# harness holds the write lock in short bursts, and a report that cannot get a
+# read in seconds is better off saying so than spending the collection budget.
+LOG_DB_TIMEOUT_SECONDS = 2
 
 # Where each kind of member lives inside the archive.
 METADATA_MEMBER_NAME = "metadata.json"
@@ -143,6 +149,46 @@ AGENTS_DIR = os.path.dirname(os.environ.get("MNGR_AGENT_STATE_DIR", ""))
 # agent plugin interface, surfaced through a `mngr` subcommand), the way
 # `fetch_transcript` already leaves the set of harnesses to mngr.
 AGENT_LOG_GLOBS = ("*.log", "logs/*.log", "plugin/*/home/tui_log/*.log")
+
+# Harness log databases, read alongside the text logs above. Codex writes one:
+# its app-server keeps a structured SQLite log whose rows carry the request and
+# connection each line belongs to, which the text log it writes to stderr does
+# not. The db is also the only place that attribution is affordable -- codex
+# builds its stderr layer with ``FmtSpan::FULL``, so asking for the same spans
+# there costs an ``enter``/``exit`` record per poll of every future, measured at
+# 99% of that file's bytes.
+#
+# Matched by glob for the same reason AGENT_LOG_GLOBS is: the numeric suffix is
+# a schema version codex bumps on migration, and the next one should be picked
+# up without a template release.
+AGENT_LOG_DB_GLOBS = ("plugin/*/home/logs_*.sqlite",)
+
+# The table every harness log db is read through, and the columns a rendered row
+# is built from. A db without this shape contributes nothing rather than a
+# partial render, so a schema change reads as "no rows" and not as silence.
+LOG_DB_TABLE = "logs"
+# Rows per db, newest first before rendering. Deliberately larger than the
+# MAX_READ_BYTES trim that follows, so the byte ceiling is what bounds the
+# member and a run of short rows still fills it.
+MAX_LOG_DB_ROWS = 4000
+
+# The only rows read out of a harness log db: those its own request/response
+# layer wrote. This is an allowlist rather than a denylist of the targets known
+# to log credentials, because the db holds the harness's whole TRACE stream --
+# including its HTTP client, which logs the Authorization header it just sent.
+# Measured on a live codex workspace: bearer JWTs under two targets, and a
+# separate API key under a third (``codex_core::session::turn``) that a denylist
+# built from the first two did not anticipate. An allowlist can only ever miss
+# something useful; a denylist misses something secret.
+#
+# It costs nothing the db was collected for: the request and connection each
+# line belongs to is exactly what this layer records.
+LOG_DB_TARGET_PREFIXES = ("codex_app_server",)
+
+# Ceiling on the text the log-db class contributes, filled newest-first. Its own
+# rather than shared with the harness log files, because the two are separate
+# classes -- see the note on AGENT_LOG_DB_KEY in main().
+MAX_LOG_DB_CLASS_BYTES = 1024 * 1024
 
 # The scrollback of an agent's primary tmux window, captured for harnesses whose
 # crash output only ever reaches the screen.
@@ -218,6 +264,95 @@ def read_tail(path: str, max_lines: int) -> str:
 def read_head(path: str, max_lines: int) -> str:
     """First max_lines lines of a file. For files whose headline values come first."""
     return "\n".join(read_bounded(path, False).splitlines()[:max_lines])
+
+
+def format_log_db_row(
+    ts: int, ts_nanos: int, level: str, target: str, body: str
+) -> str:
+    """One log-db row in the shape the harness's own text logs already use.
+
+    Timestamp, level, target, message, in that order, so a reader moving between
+    the rendered db and ``app_server.log`` does not have to learn a second
+    layout. ``ts_nanos`` is the sub-second part, kept in full because the rows
+    that matter for a stuck turn are the ones microseconds apart.
+    """
+    moment = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return "{}.{:09d}Z {:>5} {}: {}".format(
+        moment, ts_nanos, level, target, body.strip()
+    )
+
+
+def read_log_db(path: str) -> str:
+    """The newest allowlisted rows of a harness log db, rendered oldest-first, or a note.
+
+    Opened read-only through a URI so a live harness keeps writing undisturbed;
+    a bug report observes the workspace, it does not pause it. Read-only also
+    reads the write-ahead log, which is where a busy harness's most recent --
+    and most relevant -- rows still are: an ``immutable=1`` open, the other way
+    to read a db without writing, silently skips them.
+
+    Only LOG_DB_TARGET_PREFIXES rows are selected, in SQL rather than after, so
+    the rest are never read into the collector at all.
+
+    Rendered oldest-first after being selected newest-first, so the member reads
+    forward like every other log in the archive while the trim still drops the
+    oldest rows rather than the newest.
+    """
+    try:
+        connection = sqlite3.connect(
+            "file:{}?mode=ro".format(path), uri=True, timeout=LOG_DB_TIMEOUT_SECONDS
+        )
+    except sqlite3.Error as e:
+        return "(unreadable: {!r})".format(e)
+    # GLOB rather than LIKE: LIKE reads ``_`` as a single-character wildcard, which
+    # would quietly widen an allowlist whose every prefix contains one.
+    target_clause = " OR ".join("target GLOB ?" for _ in LOG_DB_TARGET_PREFIXES)
+    try:
+        rows = connection.execute(
+            "SELECT ts, ts_nanos, level, target, feedback_log_body FROM {}"
+            " WHERE {} ORDER BY id DESC LIMIT ?".format(LOG_DB_TABLE, target_clause),
+            (
+                *["{}*".format(prefix) for prefix in LOG_DB_TARGET_PREFIXES],
+                MAX_LOG_DB_ROWS,
+            ),
+        ).fetchall()
+    except sqlite3.Error as e:
+        return "(unreadable: {!r})".format(e)
+    finally:
+        connection.close()
+
+    # Filled newest-first up to the byte ceiling and then reversed, so the trim
+    # drops the oldest rows -- the same end-is-the-news rule read_tail applies to
+    # the text logs. Whole rows only: a byte-offset trim would leave the first
+    # line a fragment starting mid-timestamp, and unlike a text log this one is
+    # being rendered here, so it can be cut where a reader would cut it.
+    newest_first: list[str] = []
+    budget = MAX_READ_BYTES
+    for ts, ts_nanos, level, target, body in rows:
+        line = format_log_db_row(ts, ts_nanos, level, target, body or "")
+        cost = len(line.encode("utf-8")) + 1
+        if cost > budget:
+            break
+        budget -= cost
+        newest_first.append(line)
+    return "\n".join(reversed(newest_first))
+
+
+def select_agent_log_dbs(agent_id: str) -> list[str]:
+    """One agent's harness log databases, newest first.
+
+    Unlike the text logs these carry no recency filter: a db is written through
+    for the life of the harness rather than rotated, so its mtime describes the
+    last write and not the span it covers, and the rows carry their own times
+    anyway.
+    """
+    if not AGENTS_DIR:
+        return []
+    agent_dir = os.path.join(AGENTS_DIR, agent_id)
+    paths: set[str] = set()
+    for pattern in AGENT_LOG_DB_GLOBS:
+        paths.update(glob.glob(os.path.join(agent_dir, pattern)))
+    return sorted(paths, key=safe_mtime, reverse=True)
 
 
 def run_command(argv: Sequence[str], timeout: float) -> str:
@@ -349,7 +484,9 @@ def collect_log_members() -> tuple[list[tuple[str, str, float]], int]:
     used_names: set[str] = set()
     for path in select_log_files():
         stem = safe_member_component(program_name_for_log(path))
-        member = unique_member_name("{}/{}.log".format(LOG_MEMBER_DIR, stem), used_names)
+        member = unique_member_name(
+            "{}/{}.log".format(LOG_MEMBER_DIR, stem), used_names
+        )
         members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
     return take_within_byte_budget(members, MAX_LOG_CLASS_BYTES)
 
@@ -387,7 +524,41 @@ def capture_pane(address: str, timeout: float) -> str | None:
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
 
 
-def collect_agent_log_members(timeout: float, is_pane_included: bool) -> tuple[list[tuple[str, str, float]], int]:
+def collect_agent_log_db_members(
+    timeout: float,
+) -> tuple[list[tuple[str, str, float]], int]:
+    """Every agent's rendered harness log db, as ``(member name, content, mtime)``, and the drop count.
+
+    Separate from the harness log files, and scanned as its own class, because
+    the two fail differently. A log db is the harness's own TRACE stream and has
+    already been observed carrying credentials it wrote about itself; a stderr
+    log is what the harness chose to print. Sharing a class would mean one row
+    the allowlist did not anticipate costs the report ``app_server.log`` and
+    every agent's ``stderr.log`` too -- the logs most likely to explain the bug.
+    """
+    members: list[tuple[str, str, float]] = []
+    used_names: set[str] = set()
+    for name, _address, agent_id in list_agents(timeout):
+        agent_dir_member = safe_member_component(name)
+        for path in select_agent_log_dbs(agent_id):
+            # Rendered to text under a ``.log`` member name: the db is packed for
+            # a reader, not for a sqlite client.
+            member = unique_member_name(
+                "{}/{}/{}.log".format(
+                    AGENT_LOG_MEMBER_DIR,
+                    agent_dir_member,
+                    safe_member_component(os.path.basename(path)),
+                ),
+                used_names,
+            )
+            members.append((member, read_log_db(path), safe_mtime(path)))
+    members.sort(key=lambda item: item[2], reverse=True)
+    return take_within_byte_budget(members, MAX_LOG_DB_CLASS_BYTES)
+
+
+def collect_agent_log_members(
+    timeout: float, is_pane_included: bool
+) -> tuple[list[tuple[str, str, float]], int]:
     """The harness diagnostics for every agent, as ``(member name, content, mtime)``, and the drop count.
 
     Agents run in tmux, not under supervisord, so none of this reaches the
@@ -421,19 +592,25 @@ def collect_agent_log_members(timeout: float, is_pane_included: bool) -> tuple[l
                 ),
                 used_names,
             )
-            log_members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
+            log_members.append(
+                (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
+            )
         if not is_pane_included:
             continue
         pane = capture_pane(address, timeout)
         if pane is not None:
             member = unique_member_name(
-                "{}/{}/{}".format(AGENT_LOG_MEMBER_DIR, agent_dir_member, PANE_MEMBER_NAME),
+                "{}/{}/{}".format(
+                    AGENT_LOG_MEMBER_DIR, agent_dir_member, PANE_MEMBER_NAME
+                ),
                 used_names,
             )
             pane_members.append((member, pane, time.time()))
     log_members.sort(key=lambda item: item[2], reverse=True)
     kept_logs, dropped_logs = take_within_byte_budget(log_members, MAX_LOG_CLASS_BYTES)
-    kept_panes, dropped_panes = take_within_byte_budget(pane_members, MAX_PANE_CLASS_BYTES)
+    kept_panes, dropped_panes = take_within_byte_budget(
+        pane_members, MAX_PANE_CLASS_BYTES
+    )
     return kept_logs + kept_panes, dropped_logs + dropped_panes
 
 
@@ -654,6 +831,7 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     recent_count = sum(1 for item in fetched if item[2] >= cutoff)
     return fetched[: max(recent_count, MIN_TRANSCRIPT_COUNT)]
 
+
 def build_zip(members: Sequence[tuple[str, str, float]]) -> bytes:
     """Deflate the members into one archive, returned as raw zip bytes.
 
@@ -804,13 +982,19 @@ def main(argv: Sequence[str]) -> None:
     if "--logs" in flags:
         log_members, dropped_logs = collect_log_members()
         if dropped_logs:
-            notes.append("workspace logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_logs))
+            notes.append(
+                "workspace logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_logs)
+            )
         collected.append(
             (
                 WORKSPACE_LOGS_KEY,
                 "workspace logs",
                 [
-                    (METADATA_MEMBER_NAME, json.dumps(build_metadata(), indent=2), time.time()),
+                    (
+                        METADATA_MEMBER_NAME,
+                        json.dumps(build_metadata(), indent=2),
+                        time.time(),
+                    ),
                     *log_members,
                 ],
             )
@@ -824,8 +1008,23 @@ def main(argv: Sequence[str]) -> None:
         if not agent_log_members:
             notes.append("agent logs: " + NOTE_NO_AGENT_LOGS)
         elif dropped_agent_logs:
-            notes.append("agent logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_agent_logs))
+            notes.append(
+                "agent logs: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_agent_logs)
+            )
         collected.append((AGENT_LOGS_KEY, "agent logs", agent_log_members))
+
+        # Its own class, not part of the agent logs above: a harness log db is
+        # the harness's whole TRACE stream and has been observed carrying
+        # credentials the harness logged about itself, so a row the target
+        # allowlist did not anticipate must cost the report this class alone.
+        log_db_members, dropped_log_dbs = collect_agent_log_db_members(
+            scan_timeout_seconds
+        )
+        if dropped_log_dbs:
+            notes.append(
+                "agent log databases: " + NOTE_TRIMMED_TO_BUDGET.format(dropped_log_dbs)
+            )
+        collected.append((AGENT_LOG_DB_KEY, "agent log databases", log_db_members))
 
     if "--transcript" in flags:
         chat_members = collect_transcript_members(scan_timeout_seconds)

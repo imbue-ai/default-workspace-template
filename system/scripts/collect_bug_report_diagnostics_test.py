@@ -14,10 +14,11 @@ import io
 import json
 import os
 import shlex
+import sqlite3
 import time
-from datetime import datetime, timezone
 import zipfile
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -108,7 +109,12 @@ def _write_log(log_dir: Path, name: str, *, mtime: float, content: str = "") -> 
 
 
 def _write_agent_log(
-    agents_dir: Path, agent_name: str, relative_path: str, *, mtime: float, content: str = ""
+    agents_dir: Path,
+    agent_name: str,
+    relative_path: str,
+    *,
+    mtime: float,
+    content: str = "",
 ) -> Path:
     """One harness log inside an agent's state dir, at the layout mngr writes.
 
@@ -123,6 +129,41 @@ def _write_agent_log(
     return path
 
 
+def _write_log_db(
+    agents_dir: Path,
+    agent_name: str,
+    rows: Sequence[tuple[int, int, str, str, str]],
+    *,
+    relative_path: str = "plugin/codex/home/logs_2.sqlite",
+    mtime: float | None = None,
+) -> Path:
+    """One harness log db inside an agent's state dir, at the layout codex writes.
+
+    ``rows`` are ``(ts, ts_nanos, level, target, body)`` in insertion order, so a
+    test controls both what the allowlist sees and what order the rows come back
+    in. The schema mirrors codex's own ``logs`` table.
+    """
+    path = agents_dir / _agent_id_for(agent_name) / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    with connection:
+        connection.execute(
+            "CREATE TABLE logs ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,"
+            " ts_nanos INTEGER NOT NULL, level TEXT NOT NULL, target TEXT NOT NULL,"
+            " feedback_log_body TEXT)"
+        )
+        connection.executemany(
+            "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body)"
+            " VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+    connection.close()
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+    return path
+
+
 def _stamp_seconds_ago(age_seconds: float) -> str:
     """An ISO-8601 ``Z`` timestamp that many seconds before now, as transcripts carry them."""
     return (
@@ -132,7 +173,9 @@ def _stamp_seconds_ago(age_seconds: float) -> str:
     )
 
 
-def _chat_events(marker: str, *, age_seconds: float = 60.0, source: str = "claude") -> str:
+def _chat_events(
+    marker: str, *, age_seconds: float = 60.0, source: str = "claude"
+) -> str:
     """One conversation's JSONL, carrying ``marker`` and a timestamp of that age.
 
     The timestamp is what the collector reads for recency (mngr's
@@ -224,7 +267,9 @@ def _write_mngr_stub(
     return script
 
 
-def _transcript_events(*messages: str, source: str = "claude", timestamp: str = "2026-08-17T12:00:00Z") -> str:
+def _transcript_events(
+    *messages: str, source: str = "claude", timestamp: str = "2026-08-17T12:00:00Z"
+) -> str:
     """JSONL in the shape ``mngr event`` returns, one event per message."""
     return "".join(
         json.dumps(
@@ -308,7 +353,9 @@ def _write_sleeping_stub_scan_gate(
 
 def _zip_from_stdout(stdout: str) -> zipfile.ZipFile:
     """The archive main() printed: exactly one line, the base64 of a zip."""
-    assert stdout.endswith("\n") and stdout.count("\n") == 1, "the collector must print exactly one line"
+    assert stdout.endswith("\n") and stdout.count("\n") == 1, (
+        "the collector must print exactly one line"
+    )
     return zipfile.ZipFile(io.BytesIO(base64.b64decode(stdout.strip(), validate=True)))
 
 
@@ -362,7 +409,8 @@ def test_select_log_files_caps_at_the_newest_hundred_files(tmp_path: Path) -> No
 
     assert len(selected) == module.MAX_LOG_FILES
     expected_newest_first = [
-        str(log_dir / f"svc-{index:03d}-stderr.log") for index in range(module.MAX_LOG_FILES)
+        str(log_dir / f"svc-{index:03d}-stderr.log")
+        for index in range(module.MAX_LOG_FILES)
     ]
     assert selected == expected_newest_first
 
@@ -479,7 +527,9 @@ def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_
     module.collect_transcript_members(5.0)
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
-    event_calls = [line for line in invocations.splitlines() if line.startswith("event ")]
+    event_calls = [
+        line for line in invocations.splitlines() if line.startswith("event ")
+    ]
     assert len(event_calls) == 1, invocations
     assert 'source.endsWith("common_transcript")' in event_calls[0]
     assert 'source.startsWith("logs/")' in event_calls[0]
@@ -505,7 +555,9 @@ def test_every_chat_written_to_inside_the_window_rides_along_newest_first(
         name: _transcript_events(name, timestamp=_stamp_seconds_ago(60 * (index + 1)))
         for index, name in enumerate(recent_names)
     }
-    events_by_agent["idle"] = _transcript_events("idle", timestamp=_stamp_seconds_ago(10_000))
+    events_by_agent["idle"] = _transcript_events(
+        "idle", timestamp=_stamp_seconds_ago(10_000)
+    )
     stub = _write_mngr_stub(
         tmp_path,
         agents=tuple([*recent_names, "idle"]),
@@ -685,7 +737,10 @@ def test_scan_targets_drops_only_the_file_a_finding_names(tmp_path: Path) -> Non
 
     verdicts = module.scan_targets(["/tmp/logs.txt", "/tmp/transcript.txt"], 10)
 
-    assert verdicts == {"/tmp/logs.txt": None, "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND}
+    assert verdicts == {
+        "/tmp/logs.txt": None,
+        "/tmp/transcript.txt": module.NOTE_SECRETS_FOUND,
+    }
 
 
 @pytest.mark.parametrize(
@@ -859,18 +914,15 @@ def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
             "chats/agent-older-claude.jsonl",
         ]
         # The service log is its own member; the structured context is json.
-        assert (
-            "interface started"
-            in archive.read("logs/system_interface.log").decode("utf-8")
+        assert "interface started" in archive.read("logs/system_interface.log").decode(
+            "utf-8"
         )
-        assert (
-            "op.dispatch.shutdown"
-            in archive.read("agent-logs/agent-newer/app_server.log").decode("utf-8")
-        )
-        assert (
-            "claude crashed here"
-            in archive.read("agent-logs/agent-older/pane.txt").decode("utf-8")
-        )
+        assert "op.dispatch.shutdown" in archive.read(
+            "agent-logs/agent-newer/app_server.log"
+        ).decode("utf-8")
+        assert "claude crashed here" in archive.read(
+            "agent-logs/agent-older/pane.txt"
+        ).decode("utf-8")
         metadata = json.loads(archive.read("metadata.json").decode("utf-8"))
         assert set(metadata) == {"workspace", "host_health", "services"}
         assert '"seq": "agent-newer"' in archive.read(
@@ -898,7 +950,9 @@ def test_main_reports_no_chat_transcript_when_the_agent_tree_is_empty(
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
-        assert _notes_lines(archive) == ["recent chats: no chat transcripts exist in this workspace"]
+        assert _notes_lines(archive) == [
+            "recent chats: no chat transcripts exist in this workspace"
+        ]
 
 
 def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
@@ -922,7 +976,11 @@ def test_main_omits_an_unrequested_content_type_from_both_members_and_notes(
     chats = {"agent-a": _chat_events("chatty")}
     agents_dir = tmp_path / "agents"
     _write_agent_log(
-        agents_dir, "agent-a", "app_server.log", mtime=time.time(), content="daemon up\n"
+        agents_dir,
+        "agent-a",
+        "app_server.log",
+        mtime=time.time(),
+        content="daemon up\n",
     )
     module = _load_collector(
         supervisor_log_dir=log_dir,
@@ -976,7 +1034,9 @@ def test_main_withholds_the_whole_archive_when_one_chat_carries_a_secret(
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
-        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
+        assert _notes_lines(archive) == [
+            "recent chats: withheld: the secret scan reported findings"
+        ]
 
 
 def test_main_scans_the_member_name_a_chat_will_be_archived_under(
@@ -1000,7 +1060,9 @@ def test_main_scans_the_member_name_a_chat_will_be_archived_under(
 
     with _zip_from_stdout(capsys.readouterr().out) as archive:
         assert archive.namelist() == ["collection-notes.txt"]
-        assert _notes_lines(archive) == ["recent chats: withheld: the secret scan reported findings"]
+        assert _notes_lines(archive) == [
+            "recent chats: withheld: the secret scan reported findings"
+        ]
 
 
 def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
@@ -1050,7 +1112,9 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
             "chats/agent-clean-claude.jsonl",
             "collection-notes.txt",
         ]
-        assert _notes_lines(archive) == ["workspace logs: withheld: the secret scan reported findings"]
+        assert _notes_lines(archive) == [
+            "workspace logs: withheld: the secret scan reported findings"
+        ]
 
 
 def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
@@ -1069,7 +1133,11 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
     chats = {"agent-a": _chat_events("chatty")}
     agents_dir = tmp_path / "agents"
     _write_agent_log(
-        agents_dir, "agent-a", "app_server.log", mtime=time.time(), content="daemon up\n"
+        agents_dir,
+        "agent-a",
+        "app_server.log",
+        mtime=time.time(),
+        content="daemon up\n",
     )
     module = _load_collector(
         supervisor_log_dir=log_dir,
@@ -1150,11 +1218,17 @@ def test_agent_logs_are_collected_from_every_shape_a_harness_writes(
     ):
         _write_agent_log(agents_dir, "chatty", relative_path, mtime=now, content="x\n")
     _write_agent_log(
-        agents_dir, "chatty", "events/logs/converted.log", mtime=now, content="converted\n"
+        agents_dir,
+        "chatty",
+        "events/logs/converted.log",
+        mtime=now,
+        content="converted\n",
     )
     module = _load_collector(agents_dir=agents_dir)
 
-    collected = {os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")}
+    collected = {
+        os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")
+    }
 
     assert collected == {"app_server.log", "agy_cli.log", "codex-tui.log"}
 
@@ -1167,15 +1241,250 @@ def test_an_agent_log_nothing_has_written_to_in_a_day_is_left_behind(
     from, and only spends the class budget."""
     agents_dir = tmp_path / "agents"
     now = time.time()
-    _write_agent_log(agents_dir, "chatty", "app_server.log", mtime=now, content="fresh\n")
     _write_agent_log(
-        agents_dir, "chatty", "logs/stale.log", mtime=now - 25 * 60 * 60, content="old\n"
+        agents_dir, "chatty", "app_server.log", mtime=now, content="fresh\n"
+    )
+    _write_agent_log(
+        agents_dir,
+        "chatty",
+        "logs/stale.log",
+        mtime=now - 25 * 60 * 60,
+        content="old\n",
     )
     module = _load_collector(agents_dir=agents_dir)
 
-    collected = [os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")]
+    collected = [
+        os.path.basename(p) for p in module.select_agent_log_files("agent-chatty")
+    ]
 
     assert collected == ["app_server.log"]
+
+
+def test_only_allowlisted_targets_are_read_out_of_a_log_db(tmp_path: Path) -> None:
+    """The allowlist is what keeps the harness's own credentials out of a report.
+
+    A log db is the harness's whole TRACE stream, and codex's includes its HTTP
+    client logging the Authorization header it just sent. Measured on a live
+    workspace: bearer JWTs under two targets and a separate API key under a
+    third, which is why this is an allowlist and not a denylist of the targets
+    seen carrying one.
+    """
+    agents_dir = tmp_path / "agents"
+    _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (
+                1789078900,
+                1,
+                "TRACE",
+                "codex_app_server::message_processor",
+                "app-server request: thread/read",
+            ),
+            (
+                1789078901,
+                2,
+                "DEBUG",
+                "codex_http_client::client",
+                "authorization: Bearer SECRET-TOKEN",
+            ),
+            (1789078902, 3, "TRACE", "codex_core::session::turn", "api_key=SECRET-KEY"),
+        ],
+    )
+    module = _load_collector(agents_dir=agents_dir)
+
+    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+
+    assert "app-server request: thread/read" in rendered
+    assert "SECRET-TOKEN" not in rendered
+    assert "SECRET-KEY" not in rendered
+
+
+def test_a_log_db_target_allowlist_entry_does_not_match_underscores_as_wildcards(
+    tmp_path: Path,
+) -> None:
+    """The prefix match has to be literal.
+
+    SQL ``LIKE`` reads ``_`` as a single-character wildcard, and every allowlist
+    prefix is full of them, so a ``LIKE`` match would admit targets nobody
+    listed -- widening a filter whose whole job is to be narrow.
+    """
+    agents_dir = tmp_path / "agents"
+    _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (1789078900, 1, "TRACE", "codex_app_server::message_processor", "wanted"),
+            (1789078901, 2, "TRACE", "codexXappXserver::impostor", "SECRET-IMPOSTOR"),
+        ],
+    )
+    module = _load_collector(agents_dir=agents_dir)
+
+    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+
+    assert "wanted" in rendered
+    assert "SECRET-IMPOSTOR" not in rendered
+
+
+def test_a_log_db_read_sees_rows_a_live_harness_has_not_checkpointed(
+    tmp_path: Path,
+) -> None:
+    """The newest rows are the ones a bug report is about, and in a running
+    workspace they are still in the write-ahead log.
+
+    Reading a db without writing to it can be done two ways, and only one of them
+    is correct here: ``immutable=1`` skips the WAL entirely, so a report filed
+    while the harness is running would carry everything except what just
+    happened. This holds a writer open, which is the state the collector always
+    finds a live harness in.
+    """
+    agents_dir = tmp_path / "agents"
+    db_path = _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (
+                1789078900,
+                1,
+                "TRACE",
+                "codex_app_server::message_processor",
+                "checkpointed",
+            )
+        ],
+    )
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("PRAGMA journal_mode=WAL")
+        with writer:
+            writer.execute(
+                "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    1789078999,
+                    2,
+                    "TRACE",
+                    "codex_app_server::message_processor",
+                    "still-in-the-wal",
+                ),
+            )
+        module = _load_collector(agents_dir=agents_dir)
+
+        rendered = module.read_log_db(str(db_path))
+    finally:
+        writer.close()
+
+    assert "still-in-the-wal" in rendered
+
+
+def test_a_log_db_renders_oldest_first_and_drops_whole_oldest_rows_to_fit(
+    tmp_path: Path,
+) -> None:
+    """Forward-reading like every other log in the archive, trimmed from the end
+    that is not the news.
+
+    Whole rows only: the member is rendered here rather than read off disk, so
+    unlike a byte-offset tail of a text log it can be cut where a reader would
+    cut it, instead of leaving the first line a fragment starting mid-timestamp.
+    """
+    agents_dir = tmp_path / "agents"
+    _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (
+                1789078900 + index,
+                0,
+                "TRACE",
+                "codex_app_server::message_processor",
+                "row-{:02d} {}".format(index, "x" * 200),
+            )
+            for index in range(10)
+        ],
+    )
+    module = _load_collector(agents_dir=agents_dir)
+    _rebind(module.__dict__, "MAX_READ_BYTES", 800)
+
+    rendered = module.read_log_db(str(module.select_agent_log_dbs("agent-chatty")[0]))
+    lines = rendered.splitlines()
+    kept = [line.split()[-2] for line in lines]
+
+    # A contiguous suffix of the rows, still in ascending order: the trim drops
+    # the oldest, and what survives reads forward.
+    assert kept == ["row-{:02d}".format(index) for index in range(10 - len(kept), 10)]
+    assert 0 < len(kept) < 10, (
+        "the budget has to actually bite for this to test the trim"
+    )
+    assert len(rendered.encode("utf-8")) <= 800
+    # Every surviving line is a whole row, not a fragment starting mid-timestamp.
+    assert all(line.startswith("2026-") for line in lines)
+
+
+def test_a_log_db_the_collector_cannot_read_reports_itself_rather_than_raising(
+    tmp_path: Path,
+) -> None:
+    """A harness that bumps its schema must cost the report that one member, not
+    the run. The db filename carries a schema version codex bumps on migration,
+    so the collector will meet a shape it does not know."""
+    agents_dir = tmp_path / "agents"
+    db_path = (
+        agents_dir
+        / _agent_id_for("chatty")
+        / "plugin"
+        / "codex"
+        / "home"
+        / "logs_9.sqlite"
+    )
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_text("not a database at all", encoding="utf-8")
+    module = _load_collector(agents_dir=agents_dir)
+
+    assert module.read_log_db(str(db_path)).startswith("(unreadable:")
+
+
+def test_a_secret_in_a_log_db_does_not_cost_the_report_its_harness_logs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The log db is scanned as its own class, so a row the allowlist did not
+    anticipate costs the report the db and nothing else.
+
+    Sharing a class with the harness log files would mean one such row withholds
+    ``app_server.log`` and every agent's ``stderr.log`` -- the logs most likely
+    to explain the bug -- which is the opposite of what collecting the db is for.
+    """
+    agents_dir = tmp_path / "agents"
+    now = time.time()
+    _write_agent_log(
+        agents_dir, "chatty", "app_server.log", mtime=now, content="harmless\n"
+    )
+    _write_log_db(
+        agents_dir,
+        "chatty",
+        [
+            (
+                1789078900,
+                1,
+                "TRACE",
+                "codex_app_server::message_processor",
+                "leaked-token",
+            )
+        ],
+    )
+    scan_gate_dir = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(scan_gate_dir, secret="leaked-token")
+    stub = _write_mngr_stub(tmp_path, agents=("chatty",))
+    module = _load_collector(
+        mngr_binary=stub,
+        agents_dir=agents_dir,
+        scan_gate_dir=scan_gate_dir,
+        supervisor_log_dir=tmp_path / "supervisor",
+    )
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert "agent-logs/chatty/app_server.log" in archive.namelist()
+        assert "agent-logs/chatty/logs_2.sqlite.log" not in archive.namelist()
+        assert any("agent log databases" in line for line in _notes_lines(archive))
 
 
 def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
@@ -1291,7 +1600,10 @@ def test_the_service_log_class_stops_at_its_byte_budget(tmp_path: Path) -> None:
     now = time.time()
     for index, name in enumerate(("oldest", "middle", "newest")):
         _write_log(
-            log_dir, f"{name}-stdout.log", mtime=now - 300 + index * 100, content="x" * 400
+            log_dir,
+            f"{name}-stdout.log",
+            mtime=now - 300 + index * 100,
+            content="x" * 400,
         )
     module = _load_collector(supervisor_log_dir=log_dir)
     _rebind(module.__dict__, "MAX_LOG_CLASS_BYTES", 900)
@@ -1322,7 +1634,9 @@ def test_a_pane_is_not_captured_when_the_user_declined_to_send_their_chats(
         agents_dir, "chatty", "app_server.log", mtime=time.time(), content="daemon up\n"
     )
     stub = _write_mngr_stub(
-        tmp_path, agents=("chatty",), panes_by_agent={"chatty": "the whole conversation\n"}
+        tmp_path,
+        agents=("chatty",),
+        panes_by_agent={"chatty": "the whole conversation\n"},
     )
     module = _load_collector(mngr_binary=stub, agents_dir=agents_dir)
 
@@ -1345,7 +1659,11 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
     now = time.time()
     for name in ("one", "two", "three"):
         _write_agent_log(
-            agents_dir, name, "app_server.log", mtime=now - 100, content="log-" + "x" * 300
+            agents_dir,
+            name,
+            "app_server.log",
+            mtime=now - 100,
+            content="log-" + "x" * 300,
         )
     stub = _write_mngr_stub(
         tmp_path,
@@ -1381,7 +1699,10 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
     _write_content_matching_stub_scan_gate(gate, secret=secret)
     log_dir = tmp_path / "supervisor"
     _write_log(
-        log_dir, "system_interface-stdout.log", mtime=time.time(), content="interface started\n"
+        log_dir,
+        "system_interface-stdout.log",
+        mtime=time.time(),
+        content="interface started\n",
     )
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
@@ -1417,7 +1738,9 @@ def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
             "chats/agent-clean-claude.jsonl",
             "collection-notes.txt",
         ]
-        assert _notes_lines(archive) == ["agent logs: withheld: the secret scan reported findings"]
+        assert _notes_lines(archive) == [
+            "agent logs: withheld: the secret scan reported findings"
+        ]
 
 
 def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
@@ -1435,7 +1758,10 @@ def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
     _write_stub_scan_gate(gate, exit_code=0)
     log_dir = tmp_path / "supervisor"
     _write_log(
-        log_dir, "system_interface-stdout.log", mtime=time.time(), content="interface started\n"
+        log_dir,
+        "system_interface-stdout.log",
+        mtime=time.time(),
+        content="interface started\n",
     )
     conf = tmp_path / "supervisord.conf"
     conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
@@ -1443,7 +1769,11 @@ def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
     now = time.time()
     for index, name in enumerate(("oldest", "newest")):
         _write_agent_log(
-            agents_dir, name, "app_server.log", mtime=now - 100 + index, content="x" * 400
+            agents_dir,
+            name,
+            "app_server.log",
+            mtime=now - 100 + index,
+            content="x" * 400,
         )
     module = _load_collector(
         supervisor_log_dir=log_dir,
