@@ -41,7 +41,8 @@ pasted verbatim with `<SCOPE_FILE>` replaced by the scope file's path
     `SKILL.md` and its `scripts/`, so you see how it invokes the app; every
     `context` path, read-only; the `conventions` list.
 
-    Never read a path matching `exclude`.
+    Never read a path matching `exclude`; the scope file itself is the one
+    exception.
 
     Do not read other apps, or any path outside the footprint, unless you are
     following a concrete import, call, URL, or file path from inside the
