@@ -1500,8 +1500,9 @@ function dropPanelsForAddress(address: string, options: { keepPage?: boolean } =
  */
 function rebindPanel(panelId: string, address: string): void {
   const panel = dockview?.panels.find((candidate) => candidate.id === panelId);
-  const params = panel === undefined ? null : instanceParamsOf(panelId);
-  if (panel === undefined || params === null || params.address === address) return;
+  if (panel === undefined) return;
+  const params = parsePanelParams(panel.params);
+  if (params === null || params.kind !== "instance" || params.address === address) return;
   // One page per instance: a tab already showing the target closes (the rebound pane is where
   // the user acted), and its page goes with it rather than lingering unfiled.
   dropPanelsForAddress(address);
