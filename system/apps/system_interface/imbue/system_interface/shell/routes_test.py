@@ -12,6 +12,8 @@ from flask.testing import FlaskClient
 
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.data_types import ClientStateReport
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
+from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
 from imbue.system_interface.shell.primitives import Address
@@ -77,6 +79,10 @@ def _panel_addresses(layout: dict[str, Any]) -> list[str]:
     return [panel["address"] for panel in layout["panels"]]
 
 
+def _stored_addresses(dockview: dict[str, Any] | None) -> list[str]:
+    return [str(params.address) for params in instance_panel_params_by_id(dockview).values()]
+
+
 # ---------- section 5 ----------
 
 
@@ -105,8 +111,10 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
     )
 
     assert response.status_code == 204
-    assert shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs["p0"].address == _TERMINAL_2
-    assert shell.layouts.read_layout("everything", "c2", DeviceKind.DESKTOP).tabs["p0"].address == _TERMINAL_2
+    assert _stored_addresses(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).dockview) == [str(_TERMINAL_2)]
+    assert _stored_addresses(shell.layouts.read_layout("everything", "c2", DeviceKind.DESKTOP).dockview) == [
+        str(_TERMINAL_2)
+    ]
     assert shell.projects.get_project("alpha").tabs == (_TERMINAL_2,)
     messages = drain_messages(client_queue)
     rebound = [message for message in messages if message["type"] == "tab_rebound"]
@@ -389,7 +397,6 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
     empty = client.get("/api/layouts/everything?client=c1&device=mobile").get_json()
     assert empty == {
         "dockview": None,
-        "tabs": {},
         "device_kind": "mobile",
         "updated_at": None,
     }
@@ -399,14 +406,7 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
         "client_id": "c1",
         "save_id": "save-0000000000000001",
         "device_kind": "desktop",
-        "dockview": {"panels": {"p0": {}}},
-        "tabs": {
-            "p0": {
-                "address": str(_TERMINAL_1),
-                "tab_id": str(_TAB),
-                "last_focused_ms": 5,
-            }
-        },
+        "dockview": {"panels": {"p0": {"params": instance_panel_params_json(_TERMINAL_1, _TAB, 5)}}},
     }
     saved = client.post("/api/layouts/everything", json=body)
     assert saved.status_code == 200 and saved.get_json()["updated_at"] is not None
@@ -415,10 +415,11 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
     assert client.post("/api/layouts/everything", json={**body, "save_id": "nope"}).status_code == 400
 
     own = client.get("/api/layouts/everything?client=c1").get_json()
-    assert own["tabs"]["p0"]["address"] == str(_TERMINAL_1) and own["updated_at"] == saved.get_json()["updated_at"]
+    assert _stored_addresses(own["dockview"]) == [str(_TERMINAL_1)]
+    assert "tabs" not in own and own["updated_at"] == saved.get_json()["updated_at"]
     seeded = client.get("/api/layouts/everything?client=c2&device=desktop").get_json()
-    assert seeded["tabs"] == own["tabs"]
-    assert client.get("/api/layouts/everything?client=c2&device=mobile").get_json()["tabs"] == {}
+    assert seeded["dockview"] == own["dockview"]
+    assert client.get("/api/layouts/everything?client=c2&device=mobile").get_json()["dockview"] is None
     # The write was announced with the window's own save id; a save that changes nothing is not.
     updates = [message for message in drain_messages(client_queue) if message["type"] == "layout_updated"]
     assert updates == [
@@ -438,11 +439,31 @@ def test_layouts_are_read_per_client_with_the_seed_as_fallback(client: FlaskClie
     assert unchanged.status_code == 200 and unchanged.get_json() == {"updated_at": None}
     assert drain_messages(client_queue) == []
     # A save based on an older arrangement than the stored one is refused, and one based on the stored one lands.
-    stale = {**again, "base_updated_at": None, "tabs": {}, "dockview": None}
+    stale = {**again, "base_updated_at": None, "dockview": None}
     assert client.post("/api/layouts/everything", json=stale).status_code == 409
-    fresh = {**again, "tabs": {}, "dockview": None}
+    fresh = {**again, "dockview": None}
     assert client.post("/api/layouts/everything", json=fresh).status_code == 200
-    assert client.get("/api/layouts/everything?client=c1").get_json()["tabs"] == {}
+    assert client.get("/api/layouts/everything?client=c1").get_json()["dockview"] is None
+
+
+def test_a_save_in_the_older_shape_is_folded_into_the_panels_params(client: FlaskClient, app: Flask) -> None:
+    """A window still running the bundle from before params-only layouts posts a ``tabs`` block; the shell keeps its meaning."""
+    body = {
+        "client_id": "c1",
+        "save_id": "save-0000000000000001",
+        "device_kind": "desktop",
+        "dockview": {"panels": {"p0": {"params": {"kind": "instance", "address": "app:stale", "tabId": "tab-0000000000000000"}}}},
+        "tabs": {"p0": {"address": str(_TERMINAL_1), "tab_id": str(_TAB), "last_focused_ms": 5}},
+    }
+    assert client.post("/api/layouts/everything", json=body).status_code == 200
+    own = client.get("/api/layouts/everything?client=c1").get_json()
+    assert "tabs" not in own
+    assert own["dockview"]["panels"]["p0"]["params"] == {
+        "kind": "instance",
+        "address": str(_TERMINAL_1),
+        "tabId": str(_TAB),
+        "lastFocusedMs": 5,
+    }
 
 
 def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app: Flask) -> None:
@@ -478,8 +499,7 @@ def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskCl
         "client_id": "m1",
         "save_id": "save-0000000000000001",
         "device_kind": "mobile",
-        "dockview": {"panels": {"p0": {}}},
-        "tabs": {"p0": {"address": str(_FILES), "tab_id": str(_TAB), "last_focused_ms": 0}},
+        "dockview": {"panels": {"p0": {"params": instance_panel_params_json(_FILES, _TAB, 0)}}},
     }
     assert client.post("/api/layouts/everything", json=mobile_body).status_code == 200
     _shell(app).clients.record_report(
@@ -492,7 +512,7 @@ def test_a_recorded_client_reads_the_seed_of_its_own_device_kind(client: FlaskCl
     )
 
     seeded = client.get("/api/layouts/everything?client=c2&device=desktop").get_json()
-    assert seeded["device_kind"] == "mobile" and seeded["tabs"]["p0"]["address"] == str(_FILES)
+    assert seeded["device_kind"] == "mobile" and _stored_addresses(seeded["dockview"]) == [str(_FILES)]
 
 
 # ---------- the broadcast endpoint ----------
@@ -657,7 +677,7 @@ def test_document_ops_edit_the_target_clients_file_and_announce_the_write(client
     assert _panel_addresses(answer["layout"]) == [str(_TERMINAL_1)]
     # The file is the truth: written for this client, filed into the project, and announced with a shell-minted id.
     stored = shell.layouts.read_client_layout("alpha", "c1")
-    assert stored is not None and [str(tab.address) for tab in stored.tabs.values()] == [str(_TERMINAL_1)]
+    assert stored is not None and _stored_addresses(stored.dockview) == [str(_TERMINAL_1)]
     assert stored.dockview is not None and stored.dockview["grid"]["root"]["type"] == "branch"
     assert shell.projects.get_project("alpha").tabs == (_TERMINAL_1,)
     messages = drain_messages(client_queue)
@@ -858,7 +878,7 @@ def test_open_of_a_bare_app_creates_through_the_relay_inside_the_op(
     stub_source.is_ready = False
     assert _broadcast(client, "open", {"address": "app:stub"}).status_code == 503
     stored = _shell(app).layouts.read_client_layout("everything", "c1")
-    assert stored is not None and len(stored.tabs) == 2
+    assert stored is not None and len(_stored_addresses(stored.dockview)) == 2
 
 
 def test_transient_ops_reach_the_target_clients_windows(client: FlaskClient, app: Flask) -> None:

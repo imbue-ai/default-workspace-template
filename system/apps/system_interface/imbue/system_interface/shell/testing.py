@@ -23,7 +23,7 @@ from pydantic import Field
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import TabRecord
+from imbue.system_interface.shell.data_types import instance_panel_params_json
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
@@ -198,8 +198,12 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
 
 
 def layout_showing(*addresses: Address) -> LayoutRecord:
-    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each under a fixed tab id."""
+    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each panel's params carrying a fixed tab id."""
     panel_ids = [f"p{index}" for index in range(len(addresses))]
+    params_by_panel_id = {
+        f"p{index}": instance_panel_params_json(address, TabId(f"tab-{index:016x}"), 0)
+        for index, address in enumerate(addresses)
+    }
     return LayoutRecord(
         dockview={
             "grid": {
@@ -214,15 +218,11 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
                 "height": 800,
                 "orientation": "HORIZONTAL",
             },
-            "panels": {panel_id: {"id": panel_id} for panel_id in panel_ids},
+            "panels": {panel_id: {"id": panel_id, "params": params_by_panel_id[panel_id]} for panel_id in panel_ids},
             "activeGroup": "g0",
         }
         if addresses
         else None,
-        tabs={
-            f"p{index}": TabRecord(address=address, tab_id=TabId(f"tab-{index:016x}"), last_focused_ms=0)
-            for index, address in enumerate(addresses)
-        },
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )

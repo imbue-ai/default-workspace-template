@@ -32,6 +32,7 @@ from imbue.system_interface.shell.clients import client_wire_json
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientActivityReport
 from imbue.system_interface.shell.data_types import LayoutRecord
+from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.data_types import LayoutSaveRequest
 from imbue.system_interface.shell.data_types import Shortcut
 from imbue.system_interface.shell.data_types import TabInstanceReport
@@ -239,11 +240,9 @@ def tab_instance(tab_id: str) -> ResponseReturnValue:
     if not found:
         raise LayoutNotFoundError(f"No tab {tab_id!r} in any client layout")
     for stored, panel_id in found:
-        if stored.layout.tabs[panel_id].address.app != report.app:
-            return _detail(
-                f"tab {tab_id!r} shows {stored.layout.tabs[panel_id].address}, not the app {report.app!r}",
-                HTTP_BAD_REQUEST,
-            )
+        shown = instance_panel_params_by_id(stored.layout.dockview)[panel_id].address
+        if shown.app != report.app:
+            return _detail(f"tab {tab_id!r} shows {shown}, not the app {report.app!r}", HTTP_BAD_REQUEST)
     address = address_for(report.app, None if report.key == "" else InstanceKey(report.key))
     for stored in shell.rebind_tab(TabId(tab_id), address):
         if not is_everything_view(stored.view_id):
@@ -498,8 +497,10 @@ def inventory_document() -> ResponseReturnValue:
     clients = shell.clients.list_clients()
     docked_by_client_id = {
         str(client.id): [
-            tab.address
-            for tab in shell.layouts.read_layout(client.active_view, client.id, client.device_kind).tabs.values()
+            params.address
+            for params in instance_panel_params_by_id(
+                shell.layouts.read_layout(client.active_view, client.id, client.device_kind).dockview
+            ).values()
         ]
         for client in clients
     }

@@ -239,7 +239,7 @@ A wrapped server that carries no beacon still works, with every instance opening
 All shell state lives under `data/.state/system_interface/`:
 
 - `projects.json`: `{version, last_active_view, projects: [{id, name, color, glyph, tabs: [address], shortcuts: [{app, action, mode}]}]}`.
-- `layouts/<view-id>/<client-id>.json`: `{dockview, tabs: {panel_id: {address, tab_id, last_focused_ms}}, device_kind, updated_at}`.
+- `layouts/<view-id>/<client-id>.json`: `{dockview, device_kind, updated_at}`, each panel's `params` in the dockview document naming what it shows (`kind`, `address`, `tabId`, `lastFocusedMs`).
 - `layouts/<view-id>/seed.<device-kind>.json`: the seed a new client of that device kind starts from; rewritten from the most recently saved layout of that kind.
 - `clients.json`: `{client_id: {device_kind, active_view, last_seen}}`; layouts of clients unseen for ninety days are pruned.
 - `migrated.json`: the migration's marker (section 9).
