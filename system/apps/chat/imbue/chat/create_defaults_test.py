@@ -126,6 +126,18 @@ def test_keys_outside_the_managed_block_survive_every_rewrite(tmp_path: Path) ->
     assert not any(key in raw["commands"]["create"] for key in MANAGED_KEYS)
 
 
+def test_a_file_that_no_longer_parses_is_rebuilt_with_a_warning(tmp_path: Path, loguru_records: list[str]) -> None:
+    """A hand edit that breaks the file must not break every account write and the boot sweep with it:
+    the file is derived output, and mngr refuses a malformed local layer anyway, so it is rewritten."""
+    path = tmp_path / "settings.local.toml"
+    path.write_text("not = [toml\n")
+
+    write_create_defaults(path, _defaults(HarnessType.CODEX, tmp_path))
+
+    assert read_create_defaults_type(path) == "codex"
+    assert any(record.startswith("WARNING") and "settings.local.toml" in record for record in loguru_records)
+
+
 def test_the_path_follows_mngrs_project_config_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "cfg"))
     assert create_defaults_path() == tmp_path / "cfg" / "settings.local.toml"

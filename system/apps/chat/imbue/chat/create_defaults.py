@@ -25,7 +25,9 @@ from typing import Any
 from typing import Final
 
 import tomlkit
+from loguru import logger as _loguru_logger
 from pydantic import Field
+from tomlkit.exceptions import ParseError
 from tomlkit.items import Table
 
 from imbue.chat.harnesses.account_scope import account_credential_path
@@ -33,6 +35,8 @@ from imbue.chat.harnesses.account_scope import account_env
 from imbue.chat.harnesses.account_scope import agent_credential_relative_path
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.imbue_common.frozen_model import FrozenModel
+
+logger = _loguru_logger
 
 # mngr's own override for where the project's settings files live; honored here so the file
 # is written where the mngr that reads it will look, and so tests never touch a real one.
@@ -114,12 +118,26 @@ def managed_create_settings(defaults: CreateDefaults) -> dict[str, Any]:
     return settings
 
 
+def _empty_document() -> tomlkit.TOMLDocument:
+    document = tomlkit.document()
+    document.add(tomlkit.comment(_HEADER))
+    return document
+
+
 def _load_document(path: Path) -> tomlkit.TOMLDocument:
+    """The file as it stands, or a fresh document when there is none or it no longer parses.
+
+    A malformed file is rebuilt rather than raised on: it is derived output, mngr refuses to
+    load a malformed local layer anyway, and raising here would turn one bad hand edit into a
+    failure of every account write and of the boot sweep that regenerates the file.
+    """
     if not path.exists():
-        document = tomlkit.document()
-        document.add(tomlkit.comment(_HEADER))
-        return document
-    return tomlkit.parse(path.read_text())
+        return _empty_document()
+    try:
+        return tomlkit.parse(path.read_text())
+    except ParseError as e:
+        logger.warning("Rewriting {}, which no longer parses ({}); any hand-kept keys in it are lost", path, e)
+        return _empty_document()
 
 
 def _write_document(path: Path, document: tomlkit.TOMLDocument) -> None:
