@@ -16,12 +16,14 @@ Use this skill when the user asks you to work on their behalf with services that
 
 Usage:
 
-1. **Use `latchkey curl`** instead of regular `curl` for supported services.
-2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
-3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
-4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` (see the "Ask for user permission" example below) when either there are no valid credentials for the given service or the curl requests come back with the "request not permitted by the user" message. One request per tool call, on its own, output untouched.
-6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
+- **Use `latchkey curl`** instead of regular `curl` for supported services.
+  - Pass through all regular curl arguments - latchkey is a transparent wrapper.
+- Latchkey comes with a list of builtin supported services.
+  - **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
+  - **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
+  - You can request to register more custom services, although the options for authenticating to custom services are limited. See "Ask for a new connection to a domain latchkey does not know" below.
+- **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when `latchkey curl` fails with a Latchkey permission error. See "Interpreting Latchkey permission errors" below. One request per tool call, on its own, output untouched.
+- **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
 
 ## Examples
@@ -44,6 +46,76 @@ latchkey curl -X POST 'https://slack.com/api/conversations.create' \
 ```bash
 latchkey curl 'https://discord.com/api/v10/users/@me'
 ```
+
+### Interpreting Latchkey permission errors
+
+When `latchkey curl` comes back with a response like `{"error": "..."}`,
+it could be a genuine error from the upstream API endpoint, but it could also be
+that Latchkey hasn't granted you permission to access the service. When the
+latter is true, you can call
+`latchkey curl -XPOST http://latchkey-self.invalid/permission-requests`
+to request the user to grant you the necessary permission.
+
+Inspect the error **text** (not the status code or exit code) to decide which
+type of permission request to send.
+
+| Error latchkey returned | What it means | What to send |
+| --- | --- | --- |
+| `No service matches URL: <url>` | Latchkey has no service for this domain at all | `type: "custom-service"` |
+| `No credentials found for <service>.` | The service exists; it is not connected yet | `type: "predefined"` |
+| `Request not permitted by the user.` | The service exists and is connected; you lack the permission | `type: "predefined"` |
+
+### Ask for a new connection to a domain latchkey does not know
+
+Before you decide to go down this route, note that:
+
+- You don't need to ask for a new connection to make requests to URLs that don't
+  require credentials. Latchkey is not necessary at all.
+
+- The authentication headers and login flows currently supported by Latchkey are
+  limited (see details below ). If the service needs anything else, fall back to
+  either:
+
+   - Ask the user to perform some operations manually.
+   - If the user really wants automated access, ask the user to type in the
+     credentials and store them within the workspace, with ample warning
+     about its security consequence of that.
+
+This asks the user to create a connection to one domain and to let this machine
+use it:
+
+```bash
+# This one must go in a tool call of its own, with nothing else in it and its output untouched.
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "custom-service", "payload": {"domain": "api.example.com", "scheme": "https"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
+```
+
+- `domain` must be ASCII; encode non-ASCII ones with punycode.
+- `scheme` must be one of `"https"` and `"http"`.
+
+By default the user is asked to paste a token during approval, and Latchkey
+attaches it as an `Authorization: Bearer <token>` header.
+
+Alternatively, trigger a browser sign-in flow and have Latchkey retrieve and
+store credentials from the browser, by adding a `login` object.
+
+```bash
+  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"url": "https://api.example.com/login", "flow": "cookie-capture", "flow_params": {"cookieKeys": ["session"]}}}}'
+```
+
+`login.url`, `login.flow` and `login.flow_params` are the same as the
+`--login-url`, `--login-flow` and `--login-flow-params` flags documented in
+`latchkey services register --help` (run it to see each flow's parameters), but
+beware that you should use this API instead of the `latchkey services register`
+CLI directly. All three are required inside `login`: a flow needs a login URL
+and its parameters. The parameters are checked against the flow's schema, so an
+unknown key is refused, and every URL in them (`url`, `cookieUrl`, `tokenUrl`)
+must be on `domain` or a subdomain of it.
+
+Furthermore, beware that every login flow has limitations: make sure that the
+login flow you request will actually work for the custom service you're
+registering.
 
 ### Ask for user permission
 
