@@ -104,7 +104,8 @@ MAX_SHED_LINES = 50
 # hugepage tail.
 MAX_MEMINFO_LINES = 40
 # Ceiling on how much of any one file is read. supervisord rotates each log at
-# 10MB, so reading 100 of them whole would cost a gigabyte for 200 lines each.
+# 10MB, so reading MAX_LOG_FILES of them whole would cost a gigabyte to end up
+# with MAX_LINES_PER_LOG lines of each.
 MAX_READ_BYTES = 256 * 1024
 # Ceiling on the text one log class contributes, filled newest-first. The
 # per-file cap alone does not bound a class: a hundred files at MAX_READ_BYTES
