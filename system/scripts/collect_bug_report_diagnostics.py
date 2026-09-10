@@ -340,12 +340,7 @@ def collect_log_members() -> list[tuple[str, str, float]]:
     used_names: set[str] = set()
     for path in select_log_files():
         stem = safe_member_component(program_name_for_log(path))
-        member = "{}/{}.log".format(LOG_MEMBER_DIR, stem)
-        index = 2
-        while member in used_names:
-            member = "{}/{}-{}.log".format(LOG_MEMBER_DIR, stem, index)
-            index += 1
-        used_names.add(member)
+        member = unique_member_name("{}/{}.log".format(LOG_MEMBER_DIR, stem), used_names)
         members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
     return take_within_byte_budget(members, MAX_LOG_CLASS_BYTES)
 
@@ -470,13 +465,7 @@ def transcript_member_name(name: str, harness: str, used_names: set[str]) -> str
     opens in whatever reads a transcript normally.
     """
     stem = "{}-{}".format(safe_member_component(name), safe_member_component(harness))
-    member = "{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem)
-    index = 2
-    while member in used_names:
-        member = "{}/{}-{}.jsonl".format(CHAT_MEMBER_DIR, stem, index)
-        index += 1
-    used_names.add(member)
-    return member
+    return unique_member_name("{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem), used_names)
 
 
 def run_mngr(args: Sequence[str], timeout: float) -> str | None:
