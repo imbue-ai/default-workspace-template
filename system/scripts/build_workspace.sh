@@ -72,6 +72,17 @@ while IFS= read -r plugin_path; do
     MNGR_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
 done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
 
+# A process substitution's exit status is not the loop's, so `set -e` cannot see the
+# lister failing -- and an empty list would make the install below succeed with the
+# base package alone, which is the plugin-less mngr this whole shape exists to rule
+# out. (The per-app loop below needs no such guard: the manifest assigns
+# system_interface no plugins, so empty is its normal answer.)
+if [ "${#MNGR_PLUGIN_ARGS[@]}" -eq 0 ]; then
+    echo "build_workspace: system/config/mngr_plugins.toml listed no plugins for the mngr tool;" \
+        "installing the base package alone leaves an mngr that cannot parse [agent_types.*]." >&2
+    exit 1
+fi
+
 # --reinstall because the two-step form always ended in one (`mngr plugin add` reinstalls
 # from the receipt): the base is an editable install, so its *code* tracks the tree either
 # way, but its resolved dependencies do not -- and a tree that gained a dependency since
