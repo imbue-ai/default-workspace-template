@@ -473,10 +473,7 @@ def rename_account(account_id: str, name: str, home: Path | None = None) -> Acco
             rows.append(renamed)
         if renamed is None:
             raise AccountError(f"no such account: {account_id}")
-        _write_index(
-            index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))),
-            home,
-        )
+        _write_index(index.model_copy_update(to_update(index.field_ref().accounts, tuple(rows))), home)
     return renamed
 
 
@@ -504,10 +501,7 @@ def set_default_account(account_id: str, is_default: bool, home: Path | None = N
             default_account = None
         else:
             return
-        _write_index(
-            index.model_copy_update(to_update(index.field_ref().default_account, default_account)),
-            home,
-        )
+        _write_index(index.model_copy_update(to_update(index.field_ref().default_account, default_account)), home)
 
 
 def account_exists(account_id: str, home: Path | None = None) -> bool:
@@ -667,11 +661,7 @@ def reconcile(home: Path | None = None) -> tuple[tuple[str, ...], tuple[str, ...
                 home,
             )
     if removed:
-        logger.info(
-            "Removed {} unreachable account folder(s): {}",
-            len(removed),
-            ", ".join(removed),
-        )
+        logger.info("Removed {} unreachable account folder(s): {}", len(removed), ", ".join(removed))
     if dropped:
         logger.warning(
             "Dropped {} account row(s) whose folder is gone; they must be signed in again: {}",
