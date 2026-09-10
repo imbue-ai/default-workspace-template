@@ -34,7 +34,7 @@ def main() -> None:
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     help=(
         "Eval config json: {mngr_branch, dwt_repo?, dwt_branch?, timeout_seconds?, "
-        "verification_timeout_seconds?, avg_word_count_baseline?, personas:[...]}"
+        "verification_timeout_seconds?, personas:[...]}"
     ),
 )
 @click.option(
@@ -98,20 +98,22 @@ def generate(config_path: Path, output_dir: Path, mngr_repo: str, mngr_ref: str 
 def check_run_command(job_dir: Path, summary_md_path: Path | None, summary_json_path: Path | None) -> None:
     """Decide whether a finished harbor job passed, and exit non-zero when it did not.
 
-    A trial passes when it ran to the end, its structural gates held, and nothing in its evidence
-    bundle went unmeasured. Judge scores are reported and never gated.
+    A trial passes when it ran to the end, its structural gates held, nothing in its evidence bundle
+    went unmeasured, and it is not recorded as having answered on a model other than the one its
+    harness config asked for. Judge scores are reported and never gated.
     """
     result = check_run.check_job_directory(job_dir)
     check_run.write_run_check_reports(result, summary_md_path, summary_json_path)
     for trial in result.trials:
         if not trial.is_passed:
             logger.error(
-                "Trial {} failed: completed={} ({}) gates={} errored evidence={}",
+                "Trial {} failed: completed={} ({}) gates={} errored evidence={} arm={}",
                 trial.trial_name,
                 trial.is_completed,
                 trial.incompletion_reason or "ran to the end",
                 trial.is_gates_passed,
                 ", ".join(trial.error_entry_ids) or "none",
+                trial.wrong_model_reason or "no wrong model recorded",
             )
     logger.info(
         "{}: {} of {} trial(s) passed",

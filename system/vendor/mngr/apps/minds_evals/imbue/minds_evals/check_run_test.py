@@ -211,7 +211,143 @@ def test_check_job_directory_names_an_errored_evidence_entry_that_carries_no_id(
     trial_row = next(
         line for line in render_summary_markdown(run_check).splitlines() if line.startswith("| todo-app__aaaaaaa")
     )
-    assert trial_row.split(" | ")[4] != "none"
+    assert trial_row.split(" | ")[5] != "none"
+
+
+def _harness_config_state(
+    *, model: str, is_model_confirmed: bool | None, observed_models: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """The harness-config block of the arm the driver records, as a trial that ran on the anthropic
+    lane leaves it."""
+    return {
+        "lane": "anthropic",
+        "harness": "claude",
+        "model": model,
+        "effort": "medium" if model else "",
+        "fast": False,
+        "model_choice_switch": "applied" if model else "skipped",
+        "observed_models": list(observed_models),
+        "welcome_model": "claude-opus-4-8",
+        "is_model_confirmed": is_model_confirmed,
+    }
+
+
+def test_check_job_directory_reads_the_harness_config_out_of_the_arm_block(tmp_path: Path) -> None:
+    """The harness settings are one half of a trial's arm and are nested under it, the pinned pair
+    being the other half -- which the block repeats, so it describes a treatment on its own."""
+    job_dir = tmp_path / "nightly-run"
+    trial_dir = write_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        harness_config=_harness_config_state(
+            model="haiku", is_model_confirmed=True, observed_models=("claude-haiku-4-5-20251001",)
+        ),
+    )
+
+    (trial,) = check_job_directory(job_dir).trials
+
+    assert (trial.lane, trial.requested_model, trial.is_model_confirmed) == ("anthropic", "haiku", True)
+    state = json.loads((trial_dir / "agent" / "state.json").read_text())
+    assert (state["arm"]["mngr_sha"], state["arm"]["dwt_sha"]) == (state["mngr_sha"], state["dwt_sha"])
+    assert (trial.mngr_sha, trial.dwt_sha) == (state["arm"]["mngr_sha"], state["arm"]["dwt_sha"])
+
+
+def test_check_job_directory_fails_a_trial_that_answered_on_another_model_than_it_asked_for(
+    tmp_path: Path,
+) -> None:
+    """The one thing a harness config's record is kept for: a model choice that did not take, or a
+    greeting renamed out from under the reader that splits the two, has to break the run rather than
+    be reported alongside a green verdict."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(
+        job_dir,
+        "todo-app__aaaaaaa",
+        harness_config=_harness_config_state(
+            model="haiku", is_model_confirmed=False, observed_models=("claude-opus-5-20260401",)
+        ),
+    )
+
+    run_check = check_job_directory(job_dir)
+
+    (trial,) = run_check.trials
+    assert run_check.is_passed is False
+    assert trial.is_passed is False
+    # Nothing else about the trial went wrong: it ran to the end and its gates held.
+    assert (trial.is_completed, trial.is_gates_passed) == (True, True)
+    assert "haiku" in trial.wrong_model_reason
+    assert "claude-opus-5-20260401" in trial.wrong_model_reason
+
+
+@pytest.mark.parametrize(
+    "harness_config",
+    [
+        pytest.param(
+            _harness_config_state(model="haiku", is_model_confirmed=None), id="a model the trial could not confirm"
+        ),
+        pytest.param(_harness_config_state(model="", is_model_confirmed=None), id="a config that asked for no model"),
+        pytest.param(None, id="a trial that recorded no arm at all"),
+    ],
+)
+def test_check_job_directory_charges_a_trial_only_for_a_model_it_observably_ran_on(
+    tmp_path: Path, harness_config: dict[str, Any] | None
+) -> None:
+    """Null is what the driver writes wherever it cannot tell -- no transcript was captured, or the
+    catalog id has no known reported name -- and a config that named no model has nothing to confirm.
+    Charging either would fail runs for silence."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=harness_config)
+
+    run_check = check_job_directory(job_dir)
+
+    assert run_check.is_passed is True
+    assert run_check.trials[0].wrong_model_reason == ""
+
+
+@pytest.mark.parametrize(
+    ("harness_config", "expected_cell"),
+    [
+        pytest.param(
+            _harness_config_state(
+                model="haiku", is_model_confirmed=True, observed_models=("claude-haiku-4-5-20251001",)
+            ),
+            "anthropic haiku confirmed",
+            id="a model the transcript confirmed",
+        ),
+        pytest.param(
+            _harness_config_state(model="haiku", is_model_confirmed=None),
+            "anthropic haiku unconfirmed",
+            id="one it could not",
+        ),
+        pytest.param(
+            _harness_config_state(model="", is_model_confirmed=None),
+            "anthropic default",
+            id="the config that asks for nothing",
+        ),
+        pytest.param(
+            _harness_config_state(
+                model="haiku", is_model_confirmed=False, observed_models=("claude-opus-5-20260401",)
+            ),
+            "the run asked for haiku but the trial answered on claude-opus-5-20260401",
+            id="a model it ran on instead",
+        ),
+        pytest.param(None, "-", id="no arm at all"),
+    ],
+)
+def test_render_summary_markdown_says_which_harness_config_each_trial_ran(
+    tmp_path: Path, harness_config: dict[str, Any] | None, expected_cell: str
+) -> None:
+    """The summary is what a scheduled run is read by, so the harness half of the arm has to be
+    legible there rather than only in the JSON beside it."""
+    job_dir = tmp_path / "nightly-run"
+    write_trial_dir(job_dir, "todo-app__aaaaaaa", harness_config=harness_config)
+
+    trial_row = next(
+        line
+        for line in render_summary_markdown(check_job_directory(job_dir)).splitlines()
+        if line.startswith("| todo-app__aaaaaaa")
+    )
+
+    assert trial_row.split(" | ")[2] == expected_cell
 
 
 def test_check_job_directory_ignores_the_cache_harbor_leaves_after_a_regrade(tmp_path: Path) -> None:
@@ -317,7 +453,7 @@ def test_render_summary_markdown_renders_a_trial_that_never_got_graded(tmp_path:
     )
 
     assert "DaemonError" in trial_row
-    assert trial_row.split(" | ")[5] == "-"
+    assert trial_row.split(" | ")[6] == "-"
 
 
 @pytest.mark.parametrize("is_markdown_wanted", [True, False])
@@ -348,8 +484,8 @@ def test_render_summary_markdown_keeps_a_pipe_in_an_exception_message_inside_its
 
     trial_row = next(line for line in summary.splitlines() if line.startswith("| todo-app__aaaaaaa"))
     assert "Daemon\\|Error" in trial_row
-    # Ten columns means every pipe in the message stayed escaped.
-    assert trial_row.count("|") - trial_row.count("\\|") == 11
+    # Eleven columns means every pipe in the message stayed escaped.
+    assert trial_row.count("|") - trial_row.count("\\|") == 12
 
 
 def test_render_summary_markdown_keeps_every_free_text_cell_inside_its_column(tmp_path: Path) -> None:
@@ -364,7 +500,7 @@ def test_render_summary_markdown_keeps_every_free_text_cell_inside_its_column(tm
     trial_row = next(line for line in summary.splitlines() if line.startswith("| todo-app__aaaaaaa"))
     assert "todo\\|app" in trial_row
     assert "http\\|0" in trial_row
-    assert trial_row.count("|") - trial_row.count("\\|") == 11
+    assert trial_row.count("|") - trial_row.count("\\|") == 12
 
 
 def test_is_gates_dimension_passed_rejects_a_dimension_that_was_never_scored() -> None:

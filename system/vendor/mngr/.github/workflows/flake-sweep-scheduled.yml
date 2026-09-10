@@ -81,7 +81,7 @@ jobs:
       # libs/mngr_latchkey/imbue/mngr_latchkey/remote/provisioning.py;
       # apps/minds/imbue/minds/test_latchkey_version_alignment.py enforces that.
       - name: Install latchkey CLI
-        run: npm install -g latchkey@3.11.0
+        run: npm install -g latchkey@3.11.1
 
       - name: Configure git identity
         run: |

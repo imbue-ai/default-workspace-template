@@ -2,7 +2,9 @@ import json
 
 import pytest
 
+from imbue.minds_evals.data_types import ArmRecord
 from imbue.minds_evals.data_types import DeciderTurn
+from imbue.minds_evals.data_types import HarnessConfigRecord
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TurnEntryKind
@@ -52,6 +54,22 @@ def _provenance() -> TrajectoryProvenance:
         harbor_session_id="session-1",
         case_id="todo-app",
         usage_source=UsageSource.PROXY,
+        arm=ArmRecord(
+            mngr_sha="a" * 40,
+            dwt_sha="c" * 40,
+            harness_config=HarnessConfigRecord(
+                lane="api-key",
+                key_provider="anthropic",
+                account_id="acct-1",
+                harness="pi-coding",
+                model="anthropic/claude-haiku-4-5",
+                effort="medium",
+                model_choice_switch="applied",
+                observed_models=("claude-haiku-4-5",),
+                welcome_model="claude-opus-4-8",
+                is_model_confirmed=True,
+            ),
+        ),
     )
 
 
@@ -84,6 +102,23 @@ _EXPECTED_EXTRA = {
     "harbor_session_id": "session-1",
     "case_id": "todo-app",
     "usage_source": "proxy",
+    "arm": {
+        "mngr_sha": "a" * 40,
+        "dwt_sha": "c" * 40,
+        "harness_config": {
+            "lane": "api-key",
+            "key_provider": "anthropic",
+            "account_id": "acct-1",
+            "harness": "pi-coding",
+            "model": "anthropic/claude-haiku-4-5",
+            "effort": "medium",
+            "fast": False,
+            "model_choice_switch": "applied",
+            "observed_models": ["claude-haiku-4-5"],
+            "welcome_model": "claude-opus-4-8",
+            "is_model_confirmed": True,
+        },
+    },
 }
 
 
