@@ -60,7 +60,10 @@ def test_a_layout_in_the_older_shape_reads_as_params_only() -> None:
         "dockview": _dockview(
             {
                 # The older browser wrote params too, but its ``tabs`` block was what it read back: the block wins.
-                "pa": {"id": "pa", "params": {"kind": "instance", "address": "app:stale", "tabId": "tab-00000000000000ff"}},
+                "pa": {
+                    "id": "pa",
+                    "params": {"kind": "instance", "address": "app:stale", "tabId": "tab-00000000000000ff"},
+                },
                 "new-tab-1": {"id": "new-tab-1", "params": {"kind": "launcher"}},
                 "orphan": {"id": "orphan"},
             }
