@@ -78,9 +78,12 @@ A chat created from outside the workspace with an `auto_open` or `assist` label
 (`auto_open.py`): when the agent appears, the app asks the shell to open the
 chat's address in every connected client, holds the open until a client is
 connected if none is, and records the delivery under
-`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. A
-labeled chat found at startup is still owed its tab for 12 hours after its
-creation.
+`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. The
+open is held for as long as the chat exists, so a chat started while nobody was
+connected still gets its tab whenever someone finally connects. The one
+exception is a workspace with no ledger to read (its chats predate this app
+keeping one, or the file was lost): every labeled chat it already has is adopted
+as shown, since a tab for each is worse than missing one.
 
 ## Development
 

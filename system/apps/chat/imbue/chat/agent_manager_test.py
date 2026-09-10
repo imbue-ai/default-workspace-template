@@ -30,7 +30,6 @@ from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
-from imbue.chat.auto_open import AUTO_OPEN_FRESHNESS
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
@@ -2735,7 +2734,7 @@ def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager
 def test_observe_events_feed_the_auto_open_reactor(
     broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The first listing seeds (a fresh labeled chat is owed its tab, an old one is settled), every
+    """The first listing seeds (a labeled chat the ledger does not name is owed its tab), every
     labeled agent that appears afterwards is opened, and a removed one is forgotten."""
     monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
@@ -2743,18 +2742,13 @@ def test_observe_events_feed_the_auto_open_reactor(
     shell = RecordingShell(client_ids=["c1"])
     reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell)
     manager = AgentManager.build(broadcaster, auto_open=reactor)
-    stale = _agent_details("assist-old", labels={"assist": "true"})
-    stale = stale.model_copy_update(
-        to_update(stale.field_ref().create_time, datetime.now(timezone.utc) - AUTO_OPEN_FRESHNESS - timedelta(hours=1))
-    )
-    fresh_at_start = _agent_details("update-self-1", labels={"auto_open": "true"})
+    at_start = _agent_details("update-self-1", labels={"auto_open": "true"})
     plain = _agent_details("chat-1", labels={"user_created": "true"})
 
-    manager._handle_observe_event(make_full_agent_state_event([stale, fresh_at_start, plain]))
+    manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
     reactor.flush()
 
-    assert shell.opens == [(str(fresh_at_start.id), "c1")]
-    assert reactor.ledger.is_delivered(str(stale.id))
+    assert shell.opens == [(str(at_start.id), "c1")]
     assert not reactor.ledger.is_delivered(str(plain.id))
 
     appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})

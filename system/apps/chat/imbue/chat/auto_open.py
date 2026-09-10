@@ -9,8 +9,9 @@ address in every connected client, which files it into whatever view each client
 A chat is owed its tab exactly once. Delivery is remembered on disk, so a restart of this app
 (the update run itself restarts it) neither re-pops a tab the user has since closed nor loses
 one nobody was there to take: with no client connected the open is held and retried until a
-client connects, for as long as the chat is fresh (`AUTO_OPEN_FRESHNESS` after its creation).
-Older than that and the saved layout stands, as it does for a chat the ledger already names.
+client connects, for as long as the chat exists. Only a chat the ledger already names is left
+to the saved layout -- along with the chats a workspace already had the first time this app
+kept a ledger at all, which are adopted as shown rather than each popping a tab.
 """
 
 from __future__ import annotations
@@ -18,11 +19,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Mapping
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
 from typing import Final
 from typing import Protocol
@@ -43,9 +41,6 @@ logger = _loguru_logger
 # purpose-neutral form any spawner can set. The app sets both.
 AUTO_OPEN_LABELS: Final[tuple[str, ...]] = ("auto_open", "assist")
 
-# How long after its creation a labeled chat nobody has been shown is still owed its tab.
-AUTO_OPEN_FRESHNESS: Final[timedelta] = timedelta(hours=12)
-
 # How often a held open is retried against the shell's client list while anything is pending.
 # The shell has no hook for a client arriving, so a window opened later is found by asking.
 FLUSH_INTERVAL_SECONDS: Final[float] = 3.0
@@ -64,10 +59,6 @@ def chat_address(agent_id: str) -> str:
     return f"app:chat?instance={agent_id}"
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class AutoOpenLedger(MutableModel):
     """The set of chat agent ids whose open has reached a client.
 
@@ -80,21 +71,24 @@ class AutoOpenLedger(MutableModel):
     path: Path | None = Field(description="Where the set is kept, or None for memory only")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _delivered: set[str] = PrivateAttr(default_factory=set)
+    _is_history_known: bool = PrivateAttr(default=True)
 
     def model_post_init(self, context: object, /) -> None:
-        self._delivered = self._load()
+        self._delivered, self._is_history_known = self._load()
 
-    def _load(self) -> set[str]:
-        if self.path is None or not self.path.exists():
-            return set()
+    def _load(self) -> tuple[set[str], bool]:
+        if self.path is None:
+            # Nothing is kept here at all, so an empty set is the whole history rather than a lost one.
+            return set(), True
+        if not self.path.exists():
+            return set(), False
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             logger.opt(exception=e).warning("Ignoring an unreadable auto-open ledger at {}", self.path)
-            return set()
+            return set(), False
         delivered = data.get(_DELIVERED_KEY) if isinstance(data, dict) else None
         if not isinstance(delivered, list):
-            # Starting empty in silence is the one failure that re-pops every delivered tab.
             logger.warning(
                 "Ignoring an auto-open ledger of the wrong shape at {} (expected a JSON object with a "
                 "'{}' list, got {})",
@@ -102,8 +96,8 @@ class AutoOpenLedger(MutableModel):
                 _DELIVERED_KEY,
                 type(data).__name__,
             )
-            return set()
-        return {str(agent_id) for agent_id in delivered}
+            return set(), False
+        return {str(agent_id) for agent_id in delivered}, True
 
     def _save_unlocked(self) -> None:
         if self.path is None:
@@ -116,6 +110,15 @@ class AutoOpenLedger(MutableModel):
         except OSError as e:
             logger.opt(exception=e).warning("Failed to write the auto-open ledger at {}", self.path)
 
+    @property
+    def is_history_known(self) -> bool:
+        """Whether the delivered set is the whole history of what this workspace has been shown.
+
+        False when there was a file to read and it did not read: a workspace whose chats
+        predate this app keeping a ledger at all, or one whose ledger has been lost since.
+        """
+        return self._is_history_known
+
     def is_delivered(self, agent_id: str) -> bool:
         with self._lock:
             return agent_id in self._delivered
@@ -125,6 +128,19 @@ class AutoOpenLedger(MutableModel):
             if agent_id in self._delivered:
                 return
             self._delivered.add(agent_id)
+            self._save_unlocked()
+
+    def adopt_delivered(self, agent_ids: Iterable[str]) -> None:
+        """Take chats as already shown without showing them, and leave a ledger behind either way.
+
+        What a first boot with no ledger finds is history this app cannot see: every chat the
+        Minds app ever labeled here, back to the workspace's first day. The file is written
+        even when there is nothing to adopt, so that its existence is what tells the next boot
+        the set it reads is the real one.
+        """
+        with self._lock:
+            self._delivered.update(agent_ids)
+            self._is_history_known = True
             self._save_unlocked()
 
     def forget(self, agent_id: str) -> None:
@@ -223,68 +239,58 @@ class AutoOpenReactor(MutableModel):
 
     ledger: AutoOpenLedger = Field(description="Which chats' opens have already reached a client")
     shell: ShellLayoutInterface = Field(description="The shell's client list and op route")
-    clock: Callable[[], datetime] = Field(default=_utc_now, description="UTC now, for the freshness cut")
-    freshness: timedelta = Field(default=AUTO_OPEN_FRESHNESS, description="How long a held open stays owed")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    # agent id -> when the chat was created, for the freshness cut.
-    _pending_created_at: dict[str, datetime] = PrivateAttr(default_factory=dict)
+    _pending_agent_ids: set[str] = PrivateAttr(default_factory=set)
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
-    def note_appeared(self, agent_id: str, labels: Mapping[str, str], created_at: datetime | None) -> None:
-        """A labeled agent the observe stream just added is owed its open unless it already had it.
-
-        A chat mngr gave no creation time for is owed it from now: the hold has to expire on
-        the same rule as every other one, or it is retried for the life of the process and
-        pops a tab of any age at whoever eventually connects.
-        """
+    def note_appeared(self, agent_id: str, labels: Mapping[str, str]) -> None:
+        """A labeled agent the observe stream just added is owed its open unless it already had it."""
         if not is_auto_open_labeled(labels) or self.ledger.is_delivered(agent_id):
             return
         with self._lock:
-            if agent_id in self._pending_created_at:
+            if agent_id in self._pending_agent_ids:
                 return
-            self._pending_created_at[agent_id] = created_at if created_at is not None else self.clock()
+            self._pending_agent_ids.add(agent_id)
         self._wake.set()
 
-    def seed_at_startup(self, agents: Mapping[str, tuple[Mapping[str, str], datetime | None]]) -> None:
+    def seed_at_startup(self, agents: Mapping[str, Mapping[str, str]]) -> None:
         """Decide what each labeled chat found at startup is owed: its open, or nothing.
 
-        A restart normally restores the saved layout rather than reopening tabs, so a chat
-        already delivered stays as the user left it. The one chat still owed its open is a
-        fresh one never delivered anywhere -- an update run started while no client was
-        connected, whose apply then restarted this app before anyone looked. Everything else
-        is recorded as delivered, which is also how a chat surfaced by a build that kept no
-        ledger is kept from popping again.
+        A restart normally restores the saved layout rather than reopening tabs, so a chat the
+        ledger already names stays as the user left it. One it does not name is still owed its
+        open -- an update run started while no client was connected, whose apply then restarted
+        this app before anyone looked -- and holds it for as long as the chat exists.
+
+        Except on a boot with no ledger to read, where a chat the ledger does not name means
+        nothing: every labeled chat the workspace has is adopted as shown, since the ledger is
+        the only thing that could tell the one chat owed a tab from a year of delivered ones.
         """
-        for agent_id, (labels, created_at) in agents.items():
-            if not is_auto_open_labeled(labels) or self.ledger.is_delivered(agent_id):
-                continue
-            if created_at is None or self._is_fresh(created_at):
-                self.note_appeared(agent_id, labels, created_at)
-            else:
-                self.ledger.mark_delivered(agent_id)
+        if not self.ledger.is_history_known:
+            adopted = [agent_id for agent_id, labels in agents.items() if is_auto_open_labeled(labels)]
+            self.ledger.adopt_delivered(adopted)
+            logger.info(
+                "Adopted {} labeled chat(s) as already shown: this workspace had no auto-open ledger to read",
+                len(adopted),
+            )
+            return
+        for agent_id, labels in agents.items():
+            self.note_appeared(agent_id, labels)
 
     def forget(self, agent_id: str) -> None:
         with self._lock:
-            self._pending_created_at.pop(agent_id, None)
+            self._pending_agent_ids.discard(agent_id)
         self.ledger.forget(agent_id)
 
     def pending_agent_ids(self) -> set[str]:
         with self._lock:
-            return set(self._pending_created_at)
+            return set(self._pending_agent_ids)
 
     def flush(self) -> None:
         """Try every held open against every connected client; the first accepted open delivers it."""
-        with self._lock:
-            pending = dict(self._pending_created_at)
-        stale = [agent_id for agent_id, created_at in pending.items() if not self._is_fresh(created_at)]
-        for agent_id in stale:
-            # Too old to pop now: the saved layout stands, and it stays out of the way for good.
-            self.ledger.mark_delivered(agent_id)
-            self._drop(agent_id)
-            del pending[agent_id]
+        pending = self.pending_agent_ids()
         if not pending:
             return
         client_ids = self.shell.connected_client_ids()
@@ -329,7 +335,4 @@ class AutoOpenReactor(MutableModel):
 
     def _drop(self, agent_id: str) -> None:
         with self._lock:
-            self._pending_created_at.pop(agent_id, None)
-
-    def _is_fresh(self, created_at: datetime) -> bool:
-        return self.clock() - created_at < self.freshness
+            self._pending_agent_ids.discard(agent_id)
