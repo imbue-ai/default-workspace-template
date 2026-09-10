@@ -4754,19 +4754,18 @@ def test_the_refresh_targets_the_installation_actually_on_path(
     assert envs[update_layout.SYSTEM_INTERFACE_DIR]["UV_TOOL_BIN_DIR"] == str(bin_dir)
 
 
-def _install_mngr_tool(home: Path) -> tuple[Path, Path]:
-    """A uv-style mngr tool install under ``home``: ``(shim, tools_root)``."""
+def _install_tool(home: Path, tool_name: str, executable: str) -> tuple[Path, Path]:
+    """A uv-style install of tool ``tool_name`` under ``home``, behind console
+    script ``executable``: ``(shim, tools_root)``."""
     tools = home / ".local" / "share" / "uv" / "tools"
-    (tools / update_layout.MNGR_TOOL_NAME).mkdir(parents=True)
-    (tools / update_layout.MNGR_TOOL_NAME / update_layout.RECEIPT).write_text(
+    (tools / tool_name).mkdir(parents=True, exist_ok=True)
+    (tools / tool_name / update_layout.RECEIPT).write_text(
         "[tool]\nrequirements = []\n"
     )
     bin_dir = home / ".local" / "bin"
-    bin_dir.mkdir(parents=True)
-    shim = bin_dir / update_layout.MNGR_EXECUTABLE
-    shim.write_text(
-        f"#!{tools}/{update_layout.MNGR_TOOL_NAME}/bin/python3\nimport sys\n"
-    )
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    shim = bin_dir / executable
+    shim.write_text(f"#!{tools}/{tool_name}/bin/python3\nimport sys\n")
     return shim, tools
 
 
@@ -4775,8 +4774,12 @@ def test_the_apply_removes_a_stale_mngr_install_that_shadows_the_refreshed_one(
 ) -> None:
     # Not gated on the merge's manifests: the box is already broken, whatever
     # this release changes.
-    refreshed_shim, refreshed_tools = _install_mngr_tool(tmp_path / "root")
-    stale_shim, stale_tools = _install_mngr_tool(tmp_path / "home")
+    refreshed_shim, refreshed_tools = _install_tool(
+        tmp_path / "root", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
+    stale_shim, stale_tools = _install_tool(
+        tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _apply_runner(_DOCS_DIFF, apply_repo)
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(refreshed_shim)
@@ -4794,8 +4797,12 @@ def test_a_shim_that_is_not_the_stale_installs_own_is_left_alone(
 ) -> None:
     # The console script under $HOME/.local/bin may belong to something else
     # (a venv script, a hand-written wrapper); only the stale tool's own goes.
-    refreshed_shim, _ = _install_mngr_tool(tmp_path / "root")
-    stale_shim, stale_tools = _install_mngr_tool(tmp_path / "home")
+    refreshed_shim, _ = _install_tool(
+        tmp_path / "root", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
+    stale_shim, stale_tools = _install_tool(
+        tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
     stale_shim.write_text('#!/bin/sh\nexec /somewhere/else/mngr "$@"\n')
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
@@ -4811,7 +4818,9 @@ def test_the_only_mngr_install_is_never_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The install on PATH is the one being refreshed, even when it lives under $HOME.
-    shim, tools = _install_mngr_tool(tmp_path / "home")
+    shim, tools = _install_tool(
+        tmp_path / "home", update_layout.MNGR_TOOL_NAME, update_layout.MNGR_EXECUTABLE
+    )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = _RecordingRunner()
     runner.executables[update_layout.MNGR_EXECUTABLE] = str(shim)
@@ -5054,17 +5063,8 @@ def _tool_on_path(
     tmp_path: Path, runner: _RecordingRunner, tool_name: str, executable: str
 ) -> Path:
     """Install a fake uv tool ``tool_name`` behind console script ``executable``; return its tool dir."""
-    bin_dir = tmp_path / "root" / ".local" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    tools = tmp_path / "root" / ".local" / "share" / "uv" / "tools"
-    (tools / tool_name).mkdir(parents=True, exist_ok=True)
-    (tools / tool_name / update_layout.RECEIPT).write_text(
-        "[tool]\nrequirements = []\n"
-    )
-    (bin_dir / executable).write_text(
-        f"#!{tools}/{tool_name}/bin/python3\nimport sys\n"
-    )
-    runner.executables[executable] = str(bin_dir / executable)
+    shim, tools = _install_tool(tmp_path / "root", tool_name, executable)
+    runner.executables[executable] = str(shim)
     return tools / tool_name
 
 
