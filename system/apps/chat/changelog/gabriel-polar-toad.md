@@ -3,3 +3,5 @@ The workspace's default provider account now reaches every `mngr create` that na
 A chat created from outside the workspace with an `auto_open` or `assist` label (the app's update and help chats) has its tab surfaced again: when the agent appears, the chat app asks the shell to open the chat's address in every connected client, holds the open until a client is connected if none is, and records the delivery under `data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. A labeled chat found at startup is still owed its tab for 12 hours after its creation.
 
 The per-harness credential tables moved from `harnesses/binding.py` to `harnesses/account_scope.py`, and `harness_for` and the pinned-else-recent-else-oldest rule (`choose_default_account`) moved to `accounts.py`, so the store can derive the file without importing the binding module.
+
+The `running_workspace` test helper points `MNGR_PROJECT_CONFIG_DIR` at a temp directory of its own, so a suite outside this package that stands one up (the system interface's chat-system tests) no longer leaves a `settings.local.toml` in whatever directory it ran from.
