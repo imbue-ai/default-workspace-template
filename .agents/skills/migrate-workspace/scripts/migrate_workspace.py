@@ -736,6 +736,34 @@ def parse_supervisord_ports(text: str) -> list[AppPort]:
 # The manifest filename every app ships beside its package.
 APP_MANIFEST_FILENAME = "app.toml"
 
+# The two keys that name an origin an app listens on, in a manifest and in a registry
+# row alike: the app's own pages, and the instances API when it is served beside a
+# wrapped server on a second port.
+_URL_KEYS = ("url", "instances_url")
+
+
+def _url_field_ports(name: str, table: Mapping[str, object], found_in: str) -> list[AppPort]:
+    """The ports one app record's ``url`` and ``instances_url`` name, tagged with their source.
+
+    A field carrying no parseable port is skipped rather than reported as portless: it is
+    a registration the migration cannot act on mechanically.
+    """
+    ports: list[AppPort] = []
+    for url_key in _URL_KEYS:
+        url = str(table.get(url_key, ""))
+        match = re.search(r":(\d+)", url)
+        if match is None:
+            continue
+        ports.append(
+            AppPort(
+                name=name,
+                port=int(match.group(1)),
+                url=url,
+                found_in=f"{found_in} {url_key}",
+            )
+        )
+    return ports
+
 
 def parse_app_manifest_ports(toml_text: str) -> list[AppPort]:
     """Extract the ports an app's ``app.toml`` declares.
@@ -751,20 +779,7 @@ def parse_app_manifest_ports(toml_text: str) -> list[AppPort]:
     name = parsed.get("name")
     if not name:
         return []
-    ports: list[AppPort] = []
-    for url_key in ("url", "instances_url"):
-        url = parsed.get(url_key, "")
-        match = re.search(r":(\d+)", str(url))
-        if match is not None:
-            ports.append(
-                AppPort(
-                    name=name,
-                    port=int(match.group(1)),
-                    url=str(url),
-                    found_in=f"{APP_MANIFEST_FILENAME} {url_key}",
-                )
-            )
-    return ports
+    return _url_field_ports(name, parsed, APP_MANIFEST_FILENAME)
 
 
 # The registry's array-of-tables key: ``applications`` pre-rename, ``apps``
@@ -792,23 +807,11 @@ def parse_apps_registry(toml_text: str) -> list[AppPort]:
             name = entry.get("name")
             if not name:
                 continue
-            for url_key in ("url", "instances_url"):
-                url = entry.get(url_key, "")
-                match = re.search(r":(\d+)", url)
-                if match is None:
+            for app_port in _url_field_ports(name, entry, f"registry [[{key}]]"):
+                if (name, app_port.port) in seen:
                     continue
-                port = int(match.group(1))
-                if (name, port) in seen:
-                    continue
-                seen.add((name, port))
-                ports.append(
-                    AppPort(
-                        name=name,
-                        port=port,
-                        url=url,
-                        found_in=f"registry [[{key}]] {url_key}",
-                    )
-                )
+                seen.add((name, app_port.port))
+                ports.append(app_port)
     return ports
 
 
