@@ -105,11 +105,13 @@ yes = true
 # with no provider account signed in, there is no settings.local.toml naming a
 # default type, and mngr's own refusal ("No agent type provided", with a hint to
 # set one in config) sends the user after the wrong fix; the script refuses with
-# "sign in first" instead. It gates itself to creates run inside the workspace,
-# so the create of the workspace itself (run from a checkout of this template on
-# the user's machine) is never refused; the shell test in front of it keeps that
-# create from even starting a python3 there, since the user's machine need not
-# have one (macOS's stub would prompt to install the Command Line Tools).
+# "sign in first" instead. It gates on the create's project root being the work
+# dir of the agent running it, so the create of the workspace itself -- run on the
+# user's machine from a clone of this template that is nobody's work dir -- is
+# never refused. The shell test in front spares a plain user shell the python3
+# (macOS's stub would prompt to install the Command Line Tools), but not an mngr
+# agent on that machine, which has MNGR_AGENT_ID like any other; see the script's
+# docstring for what that means when working on this repo from a Mac.
 [pre_command_scripts]
 create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_account.py"]
 

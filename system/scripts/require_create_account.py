@@ -8,17 +8,26 @@ writes from the account store. Without that file an unqualified create fails on 
 "No agent type provided" and its config-set hint, which is the wrong advice here; the fix is
 to sign in, and that is what this says instead.
 
-Only a create run from inside the workspace is gated: one running in an agent's environment
-(`MNGR_AGENT_ID`, which mngr sources for every shell, service, cron job and `mngr exec` here)
-from that agent's own checkout. The create of the workspace itself runs from a checkout of
-this template on the user's machine, outside any agent, and is never refused. A create that
-names its own `--type` cannot be told apart here and is refused too while nothing is signed
-in, which is the state every agent in the workspace is unusable in anyway.
+The gate is on one thing: the create's project root is the work dir of the agent running it
+(`MNGR_AGENT_WORK_DIR` under `MNGR_AGENT_ID`, which mngr sources for every shell, service,
+cron job and `mngr exec` here). That is what a create from inside the workspace looks like.
+The create of the workspace itself runs on the user's machine from a clone of this template
+that is nobody's work dir, and is never refused; neither is a create an agent on that machine
+runs from a checkout other than its own, which is how this repo is normally worked on -- an
+agent in the mngr monorepo, cd'd into a worktree of this one. An agent whose own work dir *is*
+a checkout of this template is gated exactly like one inside the workspace, and on a machine
+with no account store nothing there will ever satisfy it, so work on this repo from the
+monorepo. A create that names its own `--type` cannot be told apart here and is refused too
+while nothing is signed in, which is the state every agent in the workspace is unusable in
+anyway.
 
-Standard library only: it runs before any venv exists. `tomllib` is imported only past the
-gate: the create of the workspace itself runs this under whatever `python3` the user's machine
-has (the 3.9 of macOS's Command Line Tools has no `tomllib`), and that run must exit 0 before
-touching anything the container's 3.12 provides.
+Standard library only: it runs before any venv exists. `MNGR_AGENT_ID` is set for any mngr
+agent, on the user's machine as much as in the container, so the settings entry's shell test
+spares only a plain user shell the `python3` -- an agent-run create on a Mac does start one,
+under whatever `python3` that agent has. `tomllib` is imported only past the gate so that run
+exits 0 without needing a version the 3.9 of macOS's Command Line Tools lacks. The one path
+that reaches the import on such a Mac is the gated one above, where the create was going to
+fail regardless and does, on the ImportError rather than on the message.
 """
 
 from __future__ import annotations
