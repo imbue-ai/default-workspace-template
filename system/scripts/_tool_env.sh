@@ -5,9 +5,9 @@
 # different ones: the image build's HOME=/root, and HOME=/home/user on a live create
 # (root's passwd home at runtime). Left unpinned, a create installs a second copy of
 # every tool under /home/user/.local. No update refreshes that copy, and a login shell
-# finds it first, because /home/user/.bashrc sources $HOME/.local/bin/env. The desktop
-# app's `mngr exec` and the terminal app both arrive through such a shell, so the stale
-# copy is the one they run while the refreshed one reports success.
+# finds it first. The desktop app's `mngr exec` and the terminal app both arrive through
+# such a shell, so the stale copy is the one they run while the refreshed one reports
+# success.
 #
 # The tool directories are pinned rather than $HOME itself because build_workspace.sh
 # also writes $HOME-relative state -- its `git config --global` safe.directory entry --
