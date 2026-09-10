@@ -11,13 +11,16 @@ content type was requested. Under --logs the zip holds ``metadata.json`` plus
 one ``logs/<program>.log`` member per collected service log, and one
 ``agent-logs/<agent-name>/<file>`` per harness log -- services run under
 supervisord and agents run under tmux, so the two halves come from different
-places and neither sees the other's failures. Under --transcript it holds one
-``chats/<agent-name>-<harness>.jsonl`` per selected agent conversation, newest
-first. With BOTH flags each running agent also contributes an
-``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
+places and neither sees the other's failures. A harness that keeps a structured
+log database rather than a text log (codex's app-server) contributes it too,
+rendered to text as ``agent-logs/<agent-name>/<db>.log``. Under --transcript it
+holds one ``chats/<agent-name>-<harness>.jsonl`` per selected agent
+conversation, newest first. With BOTH flags each running agent also contributes
+an ``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
 into its pane, so its scrollback needs the chats consent as well as the logs
-one. Each of the three classes is scanned and released or
-withheld on its own. Anything requested that is not in the archive whole -- a
+one. The workspace logs, the harness logs, the log databases and the chats are
+each scanned and released or withheld on their own. Anything requested that is
+not in the archive whole -- a
 class withheld by the secret scan, or one the size budget could not fit -- is a
 plain-words line in the archive's own ``collection-notes.txt`` member, so the
 archive explains itself; a content type that was not requested appears in
