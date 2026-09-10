@@ -146,11 +146,8 @@ AGENTS_DIR = os.path.dirname(os.environ.get("MNGR_AGENT_STATE_DIR", ""))
 # reachable from any of these -- it holds the conversation, which the chats
 # half already collects, and the converter's own stdout, which says nothing.
 #
-# FIXME: these globs are this script's one piece of mngr-layout knowledge, and
-# a harness that logs somewhere else is silently uncollected. Replace them with
-# a per-agent list mngr itself reports (a `get_diagnostic_log_paths` on the
-# agent plugin interface, surfaced through a `mngr` subcommand), the way
-# `fetch_transcript` already leaves the set of harnesses to mngr.
+# They are also this script's one piece of mngr-layout knowledge, so a harness
+# that logs anywhere else is uncollected and says nothing about being so.
 AGENT_LOG_GLOBS = ("*.log", "logs/*.log", "plugin/*/home/tui_log/*.log")
 
 # Harness log databases, read alongside the text logs above. Codex writes one:
