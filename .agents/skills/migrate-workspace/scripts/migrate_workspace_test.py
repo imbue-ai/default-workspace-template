@@ -488,7 +488,7 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     monkeypatch.chdir(Path(__file__).resolve().parents[4])
     ports = [
         port
-        for conf in migrate_workspace._local_supervisord_configs()
+        for conf in migrate_workspace._local_supervisord_configs(Path())
         for port in migrate_workspace.parse_supervisord_ports(
             conf.read_text(encoding="utf-8")
         )
@@ -523,7 +523,7 @@ def test_local_supervisord_configs_follow_a_here_relative_include_glob(
 
     ports = [
         port
-        for conf in migrate_workspace._local_supervisord_configs()
+        for conf in migrate_workspace._local_supervisord_configs(Path())
         for port in migrate_workspace.parse_supervisord_ports(
             conf.read_text(encoding="utf-8")
         )
