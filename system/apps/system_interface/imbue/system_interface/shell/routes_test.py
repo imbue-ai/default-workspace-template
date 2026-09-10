@@ -111,7 +111,9 @@ def test_a_tab_report_rebinds_the_tab_everywhere_and_files_it_in_the_project(
     )
 
     assert response.status_code == 204
-    assert _stored_addresses(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).dockview) == [str(_TERMINAL_2)]
+    assert _stored_addresses(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).dockview) == [
+        str(_TERMINAL_2)
+    ]
     assert _stored_addresses(shell.layouts.read_layout("everything", "c2", DeviceKind.DESKTOP).dockview) == [
         str(_TERMINAL_2)
     ]
@@ -452,7 +454,9 @@ def test_a_save_in_the_older_shape_is_folded_into_the_panels_params(client: Flas
         "client_id": "c1",
         "save_id": "save-0000000000000001",
         "device_kind": "desktop",
-        "dockview": {"panels": {"p0": {"params": {"kind": "instance", "address": "app:stale", "tabId": "tab-0000000000000000"}}}},
+        "dockview": {
+            "panels": {"p0": {"params": {"kind": "instance", "address": "app:stale", "tabId": "tab-0000000000000000"}}}
+        },
         "tabs": {"p0": {"address": str(_TERMINAL_1), "tab_id": str(_TAB), "last_focused_ms": 5}},
     }
     assert client.post("/api/layouts/everything", json=body).status_code == 200

@@ -415,9 +415,10 @@ def test_run_writes_seeds_the_shell_reads_and_the_editor_can_edit(
     assert not (state_dir / "layouts" / "everything").exists()
     # A client of the other device kind starts from its own seed, not the desktop's.
     mobile = store.read_layout("project-1", "never-seen-client", DeviceKind.MOBILE)
-    assert [str(params.address) for params in instance_panel_params_by_id(mobile.dockview).values()] == [
-        _CHAT_AAA
-    ]
+    assert [
+        str(params.address)
+        for params in instance_panel_params_by_id(mobile.dockview).values()
+    ] == [_CHAT_AAA]
 
 
 def test_run_writes_projects_the_shell_reads(
