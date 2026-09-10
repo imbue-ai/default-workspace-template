@@ -2073,6 +2073,10 @@ function createLiveSlotRenderer(panelId: string): IContentRenderer {
         return;
       }
       const surface = ensureLiveSurface(params.address, params.tabId, mountLiveContent);
+      // A page keeps the id it was opened under, whichever view docks it next: the page reports
+      // with the id in its url, and the rebind route finds the panels carrying that id. A panel
+      // that arrived with its own id takes the page's, so the next save records it.
+      if (surface.tabId !== params.tabId) parameters.api.updateParameters({ tabId: surface.tabId });
       bindSlot(surface, panelId, parameters.api);
     },
     dispose() {
