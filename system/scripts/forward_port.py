@@ -803,9 +803,11 @@ def main() -> None:
     # that declaration for a run serving somewhere else (a test on an ephemeral
     # port), so the row always records where the app actually is.
     declared_url = manifest_fields.get("url") if manifest_fields is not None else None
-    resolved_url: str | None = args.url or (
-        str(declared_url) if declared_url is not None else None
-    )
+    resolved_url = args.url or (str(declared_url) if declared_url is not None else "")
+    if not args.remove and not resolved_url:
+        parser.error(
+            "--url is required when not using --remove, unless the manifest declares url"
+        )
 
     apps_file = _apps_file()
     lock_path = apps_file.parent / ".apps.lock"
@@ -833,11 +835,6 @@ def main() -> None:
                         f"app {name!r} is new and has no icon: pass --icon-file with a house-style "
                         "SVG (see the build-app skill), name one in the manifest, or pass --no-icon "
                         "to keep the generic letter monogram"
-                    )
-                if resolved_url is None:
-                    parser.error(
-                        "--url is required when not using --remove, unless the "
-                        "manifest declares url"
                     )
                 _upsert(
                     apps_file,
