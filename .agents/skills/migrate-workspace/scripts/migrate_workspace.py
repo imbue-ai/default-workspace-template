@@ -73,7 +73,10 @@ below, which carry all the logic and are covered by ``migrate_workspace_test.py`
 from __future__ import annotations
 
 import argparse
+import configparser
+import glob
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1055,12 +1058,30 @@ def _read_file_command(path: str) -> str:
     )
 
 
-def _list_remote_supervisord_dropins(target: SshTarget, dropin_dir: str) -> list[str]:
-    """The source's supervisord drop-in paths, or [] when it has no such directory."""
-    quoted = _shell_quote(dropin_dir)
+def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+    """The drop-in paths the SOURCE's own ``[include] files`` globs match, or [] when it has none.
+
+    Read from the source's config rather than assumed: which directory holds the per-program
+    drop-ins is that workspace's to declare, and this is the one reader that runs against a
+    workspace someone else configured. Expanded the way supervisord expands it -- each
+    whitespace-separated pattern against the directory of the config declaring it, with
+    ``%(here)s`` substituted for that directory.
+
+    Done in the one round trip the fixed listing already cost. Pathname expansion stays off
+    while the pattern list is split, so a pattern is never globbed against the login shell's
+    own directory, and is turned back on only for the expansion meant to glob.
+    """
+    quoted = _shell_quote(supervisord_conf)
     listing = run_remote(
         target,
-        f"if [ -d {quoted} ]; then ls -1 {quoted}/*.conf 2>/dev/null || true; fi",
+        f'conf={quoted}; confdir=$(dirname "$conf"); '
+        r"patterns=$(sed -n '/^\[include\]/,/^\[/ s/^[[:space:]]*files[[:space:]]*=[[:space:]]*//p' "
+        '"$conf" 2>/dev/null); '
+        "set -f; for pattern in $patterns; do "
+        'pattern=$(printf \'%s\' "$pattern" | sed "s|%(here)s|$confdir|g"); '
+        'case "$pattern" in /*) ;; *) pattern="$confdir/$pattern" ;; esac; '
+        'set +f; for path in $pattern; do [ -f "$path" ] && printf \'%s\\n\' "$path"; done; '
+        "set -f; done; set +f",
     )
     return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
@@ -1371,12 +1392,12 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
             "runtime/applications.toml",
         )
     ]
-    # The source's programs live one per file under supervisord.conf.d/, so the
-    # fixed list above would find none of them. Enumerate the drop-ins first (one
-    # extra round trip) and read them in the same batched pass; a source predating
-    # the split declares its programs in the main config, which is already listed.
+    # The source's programs live one per file under the directory its own [include] globs
+    # name, so the fixed list above would find none of them. Enumerate the drop-ins first
+    # (one extra round trip) and read them in the same batched pass; a source predating the
+    # split declares its programs in the main config, which is already listed.
     remote_paths.extend(
-        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf.d")
+        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf")
     )
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
@@ -1416,11 +1437,23 @@ def _local_ports() -> list[AppPort]:
     return ports
 
 
-def _local_supervisord_configs() -> list[Path]:
-    """This workspace's supervisord config files: the main one plus every drop-in."""
-    main = Path("system/supervisord.conf")
-    configs = [main] if main.is_file() else []
-    return configs + sorted(Path("system/supervisord.conf.d").glob("*.conf"))
+def _local_supervisord_configs(repo_root: Path = Path()) -> list[Path]:
+    """This workspace's supervisord config files: the main one plus every file its globs match.
+
+    The globs come out of the config, the same way the source's do, so a workspace holding its
+    drop-ins somewhere other than ``supervisord.conf.d/`` still has all of its ports scanned.
+    """
+    main = repo_root / "system/supervisord.conf"
+    if not main.is_file():
+        return []
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    parser.read(main)
+    conf_dir = str(main.parent)
+    dropins: list[Path] = []
+    for pattern in (parser.get("include", "files", fallback="") or "").split():
+        expanded = os.path.join(conf_dir, pattern.replace("%(here)s", conf_dir))
+        dropins.extend(Path(path) for path in sorted(glob.glob(expanded)))
+    return [main] + dropins
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> int:
