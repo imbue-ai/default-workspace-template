@@ -101,6 +101,34 @@ def test_wiring_finds_the_apps_program_and_its_sidecars_but_not_other_apps(
     assert list(wiring[0].sections) == ["program:news", "program:news-fetcher"]
 
 
+def test_wiring_includes_the_programs_the_manifest_declares(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    write_supervisord_conf(tmp_path, ("program:news", "program:xvfb", "program:files"))
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[wiring]\nprograms = ["xvfb"]\n',
+        is_icon_written=True,
+    )
+
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+
+    assert list(wiring[0].sections) == ["program:news", "program:xvfb"]
+
+
+def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> None:
+    build_news_workspace(tmp_path)
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[wiring]\nprograms = ["xvfb"]\n',
+        is_icon_written=True,
+    )
+
+    with pytest.raises(ScopeComputationError, match="program:xvfb"):
+        find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+
+
 def test_wiring_is_empty_for_an_app_the_supervisord_conf_does_not_run_yet(
     tmp_path: Path,
 ) -> None:
