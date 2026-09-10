@@ -266,7 +266,14 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 If you get a failure in `test_no_type_errors` that seems spurious, try running `uv sync --all-packages` and then re-running the tests. If that doesn't work, the error is probably real, and should be fixed.
 
-If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), which refresh fixes it depends on *which* install you ran, because a standard workspace has two: `uv run mngr ...` resolves from the root venv, and a bare `mngr` on PATH is the uv-managed tool that `system/scripts/build_workspace.sh` installs at build time. For the venv one, run `uv sync --all-packages`. For the tool one, note its registered plugins first (`mngr plugin list`), then run "uv tool uninstall imbue-mngr && uv tool install -e system/vendor/mngr/libs/mngr" (the vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr` -- installing the root fails with a setuptools flat-layout error), then re-register those plugins with "mngr plugin add --path system/vendor/mngr/libs/mngr_claude --path system/vendor/mngr/libs/mngr_wait" (plus any others the list showed) -- reinstalling rebuilds the tool environment from the base package alone, so without this step the tool loses the plugins `system/scripts/build_workspace.sh` gave it and can no longer parse its own plugin config; `uv tool list` shows what is installed. Then try running the command again.
+If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), which refresh fixes it depends on *which* install you ran, because a standard workspace has two: `uv run mngr ...` resolves from the root venv, and a bare `mngr` on PATH is the uv-managed tool that `system/scripts/build_workspace.sh` installs at build time. For the venv one, run `uv sync --all-packages`. For the tool one, reinstall the base package and its plugins in a SINGLE command, which is what `system/scripts/build_workspace.sh` does:
+
+```bash
+uv tool install -e system/vendor/mngr/libs/mngr --reinstall \
+    $(python3 system/scripts/list_mngr_plugins.py --tool mngr | sed 's|^|--with-editable |')
+```
+
+(The vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr` -- installing the root fails with a setuptools flat-layout error. `system/config/mngr_plugins.toml` is the plugin list; `uv tool list` shows what is installed.) Do NOT split this into an install followed by `mngr plugin add`: installing the base alone rebuilds the environment from it and drops every extra, so between the two commands the tool cannot parse its own `[agent_types.*]` config -- and if the second one never runs, it stays that way, which breaks `mngr create --template chat` and with it the app's whole update path. Then try running the command again.
 
 If you get a failure when trying to commit the first time, just try committing again (the pre-commit hook returns a non-zero exit code when ruff reformats files).
 

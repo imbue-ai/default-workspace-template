@@ -9,7 +9,12 @@
 # idempotent.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-export PATH="/root/.local/bin:$PATH"
+
+# Pin the uv tool directories and put their bin dir first on PATH, so the installs
+# below land in the environment every later lookup resolves -- whichever $HOME this
+# script happens to run under (see _tool_env.sh).
+. "$(dirname "$0")/_tool_env.sh"
+tool_env_pin
 
 # NOTE: intentionally NOT guarded by the provisioning skip cache -- this produces
 # in-repo outputs (frontend dist, .venv) that the create's git-mirror landing does
@@ -22,8 +27,8 @@ export PATH="/root/.local/bin:$PATH"
 # SIGILLs in `_armv8_sve_get_vl_bytes`. OPENSSL_armcap=0 falls back to
 # NEON-only paths, which run on both real M-series silicon and the VZ guest.
 # The same env var rides the agent's runtime env via .mngr/settings.toml
-# `host_env__extend`; this export covers the build-time `mngr plugin add`
-# below, which runs before /home/user/.mngr/env is sourced.
+# `host_env__extend`; this export covers the build-time `uv tool install`s
+# below, which run before /home/user/.mngr/env is sourced.
 export OPENSSL_armcap=0
 
 # Pin uv to a Python that satisfies the lockfile (>=3.12). The Docker base ships
@@ -49,18 +54,25 @@ git config --global --add safe.directory "$REPO_ROOT"
 # own pyproject, so no app runs from the root venv and one app's pins never
 # constrain another's. The manifest is the discriminator: an app with a
 # pyproject but no manifest runs `uv run <name>` from the root venv, and both
-# forms are supported. An app's
-# tool also gets the mngr plugins system/config/mngr_plugins.toml assigns to
-# its manifest name, as editable extras, so it can parse plugin-specific
-# config; the update-self apply reads the same table, so a release adding a
-# plugin registers it in existing workspaces as well as here. mngr_modal is
-# intentionally not registered (providers.modal.is_enabled=false).
+# forms are supported. Each tool also gets the mngr plugins
+# system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
+# an app's manifest name for that app's -- as editable extras, so it can parse
+# plugin-specific config; the update-self apply reads the same table, so a
+# release adding a plugin registers it in existing workspaces as well as here.
+# mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
+#
+# Base package and plugins go in ONE `uv tool install`, never an install followed
+# by a `mngr plugin add`: installing the base alone rebuilds the environment from
+# it and drops every extra, so the two-step form leaves the tool plugin-less in
+# between. A build that dies in that window strands a mngr that cannot resolve
+# `[agent_types.claude]`, which is what `mngr create --template chat` needs -- and
+# that create is how the app starts the update that would repair it.
 MNGR_PLUGIN_ARGS=()
 while IFS= read -r plugin_path; do
-    MNGR_PLUGIN_ARGS+=(--path "$plugin_path")
+    MNGR_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
 done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
 
-uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
+uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr" "${MNGR_PLUGIN_ARGS[@]}"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
@@ -72,7 +84,7 @@ for app_dir in "$REPO_ROOT"/system/apps/*/; do
     uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 
-mngr plugin add "${MNGR_PLUGIN_ARGS[@]}"
+tool_env_drop_shadowing_mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
