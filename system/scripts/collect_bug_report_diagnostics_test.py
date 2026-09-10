@@ -1876,3 +1876,62 @@ def test_a_class_the_budget_could_not_fit_whole_says_so_in_the_notes(
         assert _notes_lines(archive) == [
             "agent logs: 1 file(s) were left out to fit the collection's size budget"
         ]
+
+
+def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every half of a report needs the same listing, and it is the expensive call.
+
+    Its provider fan-out is what the ``--provider local`` scoping exists to
+    avoid, and the host hands each mngr call most of the whole collection's
+    budget -- so asking once per half is how a slow mngr turns a trimmed report
+    into no report at all. One listing also means the harness logs, the log
+    databases and the chats describe the same set of agents.
+    """
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    log_dir = tmp_path / "supervisor"
+    _write_log(
+        log_dir, "system_interface-stdout.log", mtime=time.time(), content="up\n"
+    )
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    chats = {"agent-a": _chat_events("chatty")}
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir, "agent-a", "app_server.log", mtime=time.time(), content="daemon\n"
+    )
+    _write_log_db(
+        agents_dir,
+        "agent-a",
+        [(1789078900, 1, "TRACE", "codex_app_server::message_processor", "served")],
+    )
+    module = _load_collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=_write_mngr_stub(
+            tmp_path,
+            agents=tuple(chats),
+            events_by_agent=chats,
+            panes_by_agent={"agent-a": "on screen\n"},
+        ),
+        supervisord_conf=conf,
+        workspace_dir=tmp_path / "workspace",
+        scan_gate_dir=gate,
+        agents_dir=agents_dir,
+    )
+
+    module.main(["--logs", "--transcript"])
+
+    # Every half that reads the listing landed, so every one of them did ask.
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert "agent-logs/agent-a/app_server.log" in archive.namelist()
+        assert "agent-logs/agent-a/logs_2.sqlite.log" in archive.namelist()
+        assert "agent-logs/agent-a/pane.txt" in archive.namelist()
+        assert "chats/agent-a-claude.jsonl" in archive.namelist()
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    list_calls = [line for line in invocations.splitlines() if line.startswith("list ")]
+    assert list_calls == [
+        "list --provider local"
+        " --format {name}|{name}@{host.name}.{host.provider_name}|{id}"
+    ], invocations
