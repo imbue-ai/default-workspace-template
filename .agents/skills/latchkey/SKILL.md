@@ -20,7 +20,7 @@ Usage:
 2. **Pass through all regular curl arguments** - latchkey is a transparent wrapper.
 3. **Check for `latchkey services list`** to get a list of supported services. Use `--viable` to only show the currently configured ones.
 4. **Use `latchkey services info <service_name>`** to get information about a specific service (auth options, credentials status, API docs links, special requirements, etc.).
-5. **Submit a permission request to the user if necessary** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests`. Which request to send is decided by the error latchkey returned -- see "Which request to send" below. Briefly: `"No service matches URL"` means latchkey has no service for that domain, so ask for a new connection (`type: "custom-service"`); anything naming an existing service (`"No credentials found for <service>"`, `"Request not permitted by the user"`) means ask for permissions on it (`type: "predefined"`). One request per tool call, on its own, output untouched.
+5. **Submit a permission request to the user** by calling `latchkey curl -XPOST http://latchkey-self.invalid/permission-requests` when `latchkey curl` fails with a Latchkey permission error. See "Interpreting Latchkey permission errors" below. One request per tool call, on its own, output untouched.
 6. **Look for the newest documentation of the desired public API online.** Avoid bot-only endpoints.
 
 
@@ -45,11 +45,17 @@ latchkey curl -X POST 'https://slack.com/api/conversations.create' \
 latchkey curl 'https://discord.com/api/v10/users/@me'
 ```
 
-### Which request to send
+### Interpreting Latchkey permission errors
 
-Read the error text, not the status code: an unknown domain and a known
-service you are not connected to **both** come back as HTTP 400, and only the
-message tells them apart.
+When `latchkey curl` comes back with a response like `{"error": "..."}`,
+it could be a genuine error from the upstream API endpoint, but it could also be
+that Latchkey hasn't granted you permission to access the service. When the
+latter is true, you can call
+`latchkey curl -XPOST http://latchkey-self.invalid/permission-requests`
+to request the user to grant you the necessary permission.
+
+Inspect the error **text** (not the status code or exit code) to decide which
+type of permission request to send.
 
 | Error latchkey returned | What it means | What to send |
 | --- | --- | --- |
@@ -57,19 +63,20 @@ message tells them apart.
 | `No credentials found for <service>.` | The service exists; it is not connected yet | `type: "predefined"` |
 | `Request not permitted by the user.` | The service exists and is connected; you lack the permission | `type: "predefined"` |
 
-Only send `custom-service` for the first one. If the error names a service,
-that service already exists -- asking to create another one for the same domain
-produces a connection that is silently never used, and costs the user a
-pointless approval.
-
-Note that `latchkey curl` exits 0 even when the request failed, and prints the
-error as a JSON body on stdout. Check the body; do not rely on the exit code.
-
 ### Ask for a new connection to a domain latchkey does not know
 
-Only when the error was `No service matches URL`. This asks the user to create
-a connection to one domain and to let this machine use it, in a single
-approval:
+Before you decide to go down this route, note that:
+
+- You don't need to ask for a new connection to make requests to URLs that don't
+  require credentials. Latchkey is not necessary at all.
+
+- The authentication headers currently supported by Latchkey is limited. If the
+  service requires a different authentication header than what's currently
+  supported, fall back to storing the credential within the workspace, and warn
+  the user about the security consequence of that.
+
+This asks the user to create a connection to one domain and to let this machine
+use it:
 
 ```bash
 # This one must go in a tool call of its own, with nothing else in it and its output untouched.
@@ -78,36 +85,21 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "custom-service", "payload": {"domain": "api.example.com", "scheme": "https"}, "rationale": "I'"'"'d like to reach the Example widget API to look up the part numbers you asked about."}'
 ```
 
-`payload` takes a `domain` and a `scheme` of `"https"` or `"http"` -- the
-latter for a service that has no certificate; the user is shown the resulting
-origin and told when credentials would travel unencrypted. Add nothing else,
-unless the service signs in through the browser with cookies --
-then add a `login` object with `login_url`, `cookie_url` (either scheme, both
-on that domain or a subdomain of it) and `cookie_keys`:
+`payload` takes a `domain` and a `scheme` of `"https"` or `"http"`.
+
+By default the user is asked to paste a token during approval, and Latchkey
+will always attach it as part of a `Authorization: Bearer <token>`.
+
+Alternatively, trigger a browser sign-in flow and have Latchkey store a set of
+cookies as credentials by adding a `login` object:
 
 ```bash
   -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"login_url": "https://api.example.com/login", "cookie_url": "https://api.example.com/", "cookie_keys": ["session"]}}}'
 ```
 
-The domain must be a bare hostname: no scheme (that goes in `scheme`), port,
-path, wildcard or underscore. A single label (`gitlab`), a private suffix
-(`vault.internal`) or an IPv4 address are all fine; an IPv6 literal is not, and
-a non-ASCII name goes in as its punycode form. Reserved names (`.test`,
-`.example`, `example.com`), local ones (`localhost`, a single label, `.local`,
-`.internal`), IP addresses and punycode labels are allowed but shown to the
-user with a warning, so expect closer scrutiny of those. There is deliberately no field for a display name --
-the connection is labelled by its domain, so the user always sees exactly what
-it reaches.
-
-If the service has no browser sign-in, the user is asked to paste a token
-during approval. A domain that needs no authentication at all cannot be
-reached this way; latchkey refuses a request to a service with no stored
-credentials.
-
-Once the connection exists it is an ordinary service. Another workspace whose
-latchkey does not know it sees `No service matches URL` too and sends the same
-`custom-service` request; the user is told the connection already exists and
-approving connects that workspace to it.
+The `login_url` and `cookie_url` must be the same as `domain` or subdomains of
+it. Latchkey will attach the stored cookies as part of a `Cookie: <cookies>`
+header.
 
 ### Ask for user permission
 
