@@ -1,12 +1,12 @@
 # Report: app manifest scoping
 
-Status as of 2026-09-10. Branch `mark/app-manifest-scoping`, three commits (`19be2c213` plan, `1c90bee0d` implementation, `494601659` review fixes), pushed. One end-to-end eval run against `1c90bee0d`, and a six-arm measurement of the two review invocations on a toy fixture.
+Status as of 2026-09-10. Branch `mark/app-manifest-scoping`, pull request #570 (`19be2c213` plan, `1c90bee0d` implementation, `494601659` and `233d2b626` review fixes). One end-to-end eval run against `1c90bee0d`, and a six-arm measurement of the two review invocations on a toy fixture.
 
 ## What was delivered
 
 | Piece | Where | State |
 |---|---|---|
-| `[[references]]` and `[scope] exclude` in `app.toml`, validated by the library, ignored by registration | `system/libs/app_manifest/` | done, 168 unit tests |
+| `[[references]]` and `[scope] exclude` in `app.toml`, validated by the library, ignored by registration | `system/libs/app_manifest/` | done, 172 unit tests |
 | `app-manifest footprint` (scope file), `footprint --for-path`, `references --for-path`, `validate-manifest --repo-root` | `system/libs/app_manifest/src/app_manifest/{scope,cli}.py` | done |
 | Repo-wide check that every manifest's references exist | `system/test_app_manifests.py` | done |
 | Harden worker writes the scope file, tests over the footprint, settles `outside_footprint`, regenerates before reporting | `.agents/shared/worker/references/{harden-creation,type-app,type-skill}.md` | done |
@@ -14,7 +14,7 @@ Status as of 2026-09-10. Branch `mark/app-manifest-scoping`, three commits (`19b
 | Review invocations carry the scope brief through `$ARGUMENTS` | `verification.md` | written, unloaded (gates stay parked) |
 | Toy fixture: `toy_notes` app, `toy-notes-digest` skill referenced from its manifest, a branch renaming the route in the app only | worktree `/Users/markally/imbue/wt-app-manifest-scoping-toy`, branches `toy-base`, `toy-unscoped`, `toy-scoped`, `toy-noref-base`, `toy-noref` | built, not merged |
 
-Tests: library 168 passed; root suite 2,336 passed with the 9 known macOS-only `agy_shim` failures; the same suites pass on Linux in a container except tests needing `jq` (absent from that image). Changelog gate ok. CI has not run yet.
+Tests: library 172 passed; root suite 2,345 passed with the 9 known macOS-only `agy_shim` failures; the same suites pass on Linux in a container except tests needing `jq` (absent from that image). Changelog gate ok. CI has not run yet.
 
 ## The success criteria and the evidence for each
 
