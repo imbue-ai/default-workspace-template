@@ -393,7 +393,7 @@ The exact rules are in [phase_09_migration.md](phase_09_migration.md):
 | the registry's last-active project id | dropped; the active view lives on each client's record, and a first-visiting client lands on the first project |
 | `unpinned_shortcuts` and `shortcut_overrides` | the project's `shortcuts` list |
 | `projects/<id>.json` and `<id>.mobile.json` | `layouts/<id>/seed.desktop.json` and `seed.mobile.json` |
-| `member_last_used.json` | `last_focused_ms` on the matching seed-layout tabs |
+| `member_last_used.json` | `lastFocusedMs` in the matching seed panels' params |
 | every terminal found | a record in the terminal app's store, so the terminal is listed before its tmux session exists again and its tabs survive the first observation |
 | `member_titles.json` | terminal titles become the terminal record's title; the rest are dropped, since chats already carry theirs |
 | `member_locations.json` | imported into the files app's store |
