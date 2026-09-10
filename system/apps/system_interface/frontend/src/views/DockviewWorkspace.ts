@@ -224,8 +224,14 @@ function instanceParamsOf(panelId: string): InstancePanelParams | null {
   return params !== null && params.kind === "instance" ? params : null;
 }
 
+/** Whether an open panel is a New Tab launcher rather than an instance. */
+function showsLauncher(panel: IDockviewPanel): boolean {
+  return parsePanelParams(panel.params)?.kind === "launcher";
+}
+
 function isLauncherPanel(panelId: string): boolean {
-  return panelParamsOf(panelId)?.kind === "launcher";
+  const panel = panelById(panelId);
+  return panel !== undefined && showsLauncher(panel);
 }
 
 /** Every open panel showing an instance, with what it shows. */
@@ -920,7 +926,7 @@ function groupForPanel(panelId: string): DockviewGroupPanel | null {
 function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null {
   if (!dockview || group === null) return null;
   for (const panel of dockview.panels) {
-    if (parsePanelParams(panel.params)?.kind !== "launcher") continue;
+    if (!showsLauncher(panel)) continue;
     if (panel.api.group.id === group.id) return panel.id;
   }
   return null;
@@ -972,7 +978,7 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
   const panel = panelById(panelId);
-  if (panel === undefined || parsePanelParams(panel.params)?.kind !== "launcher") return;
+  if (panel === undefined || !showsLauncher(panel)) return;
   dockview.removePanel(panel);
 }
 
@@ -989,7 +995,7 @@ function retireLaunchersOnFocusLeaving(activePanelId: string): void {
   if (revealedPanelId === activePanelId) return;
   if (isLauncherPanel(activePanelId)) return;
   for (const panel of [...dockview.panels]) {
-    if (panel.id !== activePanelId && parsePanelParams(panel.params)?.kind === "launcher") {
+    if (panel.id !== activePanelId && showsLauncher(panel)) {
       dockview.removePanel(panel);
     }
   }
