@@ -129,12 +129,16 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
-- **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
-  picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
-  `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+- **Pick a free port.** The scaffolder picks the lowest free port at or
+  above 8080, and it can see every port the workspace holds: it reads
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`,
+  every `system/apps/*/app.toml` (an app declares the port it serves as
+  its manifest's `url`, and its instances port as `instances_url`), and
+  `data/.state/apps.toml`. There is no list of ports to avoid by hand --
+  the manifests are the list, and unlike the runtime registry they are
+  committed, so a fresh clone or a worker worktree sees them too. Do not
+  reach for `ss -tln`: `iproute2` is not installed in every workspace, so
+  it exits 127 rather than reporting nothing is bound.
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
