@@ -1,12 +1,13 @@
 """The pure editor over a client's serialized dockview document (contracts.md section 12).
 
 A layout file holds dockview's own ``toJSON`` output, whose per-panel ``params`` name what each
-tab shows (``data_types.instance_panel_params_by_id`` reads them). Dockview's grid is a tree: the root is a branch laid out along ``grid.orientation``, every nested branch
-flips orientation, and a leaf is a group of tabs (``views``) with an ``activeView`` and an ``id``.
-A node's ``size`` is its extent along its parent's axis and its cross extent is its parent's
-``size``; dockview lays the tree out proportionally on load, so the numbers only need to be in
-proportion. Placement follows the tree, never the screen: a direction finds the nearest enclosing
-branch of the matching orientation and the sibling on that side.
+tab shows (``data_types.instance_panel_params_by_id`` reads them). Dockview's grid is a tree: the
+root is a branch laid out along ``grid.orientation``, every nested branch flips orientation, and a
+leaf is a group of tabs (``views``) with an ``activeView`` and an ``id``. A node's ``size`` is its
+extent along its parent's axis and its cross extent is its parent's ``size``; dockview lays the
+tree out proportionally on load, so the numbers only need to be in proportion. Placement follows
+the tree, never the screen: a direction finds the nearest enclosing branch of the matching
+orientation and the sibling on that side.
 """
 
 import copy
