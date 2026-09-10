@@ -102,6 +102,26 @@ ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
 AUTH_MODE_API_KEY: Final[str] = "api_key"
 AUTH_MODE_IMBUE: Final[str] = "imbue"
 
+# The workspace's accounts API -- the endpoints the product's account screen posts to when a user
+# adds a provider account. A chat runs on the harness of the lane its account was minted on, so the
+# lane a workspace is signed in on is what decides the harness a run measures.
+ACCOUNTS_PATH: Final[str] = "/api/accounts"
+ACCOUNT_FLOW_PATH_TEMPLATE: Final[str] = "/api/accounts/flow/{flow_id}"
+# The one sign-in method a run can drive: a pasted key. The other methods put a human at a device
+# prompt, which is why the lanes that only offer those are out of reach of an eval.
+ACCOUNT_FLOW_METHOD_API_KEY: Final[str] = "api_key"
+# What a flow reports on the submit and on every poll of it; anything else means it is still working.
+_ACCOUNT_FLOW_STATE_OK: Final[str] = "ok"
+_ACCOUNT_FLOW_STATE_FAILED: Final[str] = "failed"
+# The endpoint the product's model picker posts to. It is harness-blind and validated against the
+# chat's own catalog, and it answers with nothing that reads the choice back.
+MODEL_CHOICE_PATH_TEMPLATE: Final[str] = "/api/agents/{agent_id}/model"
+# Sent on every switch so the endpoint applies all three axes, rather than only the ones a client's
+# own diffing would have considered changed.
+MODEL_CHOICE_AXES: Final[tuple[str, ...]] = ("model", "effort", "fast")
+# How much of a refusal is kept: enough to read a mistyped catalog id off a trial listing.
+_REFUSAL_DETAIL_LIMIT: Final[int] = 300
+
 _QUICK_EXEC_TIMEOUT_SECONDS: Final[int] = 180
 _SLOW_EXEC_TIMEOUT_SECONDS: Final[int] = 900
 
@@ -877,6 +897,202 @@ async def authenticate_workspace(
     return WorkspaceSignIn(is_signed_in=True, account_id=account_id)
 
 
+class AccountSignIn(FrozenModel):
+    """What the workspace's accounts flow reported when a lane was signed in through it.
+
+    The claude lane keeps its own path (``authenticate_workspace``), whose answer carries the auth
+    mode a proxied sign-in is verified by; every other lane comes through here.
+    """
+
+    is_signed_in: bool = Field(description="Whether the flow settled with the workspace signed in")
+    account_id: str = Field(default="", description="The account the flow minted; empty when it did not sign in")
+    failure: str = Field(default="", description="Prose naming what went wrong; empty when the workspace signed in")
+    is_failure_from_waiting: bool = Field(
+        default=False,
+        description="Whether the failure is a wait that ran out, which callers report as a readiness reason",
+    )
+
+
+@pure
+def _response_detail(response: WorkspaceResponse) -> str:
+    """An endpoint's own account of an answer: its ``detail``, else whatever it sent, else the bare
+    status -- an answer that says nothing still has to name itself in a failure a reader diagnoses
+    a trial from."""
+    body = response.body if isinstance(response.body, dict) else {}
+    detail = str(body.get("detail") or response.text or "")
+    if detail:
+        return detail
+    return "HTTP {}".format(response.status) if response.status else "the call was never answered"
+
+
+@pure
+def _read_account_flow_answer(response: WorkspaceResponse, lane_id: str, api_key: str) -> AccountSignIn | None:
+    """The sign-in an accounts-flow answer reports, or None while the flow is still working on it.
+
+    A key the harness could not use settles the flow as ``failed``: the workspace probes the
+    provider with the key before it answers, so this is where a key that does not work for the lane
+    is caught, rather than a turn later. An answer this side cannot read counts as still working,
+    since the flow is polled on the same URL and the next answer may settle it.
+    """
+    body = response.body if isinstance(response.body, dict) else {}
+    state = str(body.get("state") or "")
+    if state == _ACCOUNT_FLOW_STATE_FAILED:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the workspace rejected the key for lane {}: {}".format(
+                lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+            ),
+        )
+    if state != _ACCOUNT_FLOW_STATE_OK:
+        return None
+    account_id = body.get("account_id")
+    if isinstance(account_id, str) and account_id:
+        return AccountSignIn(is_signed_in=True, account_id=account_id)
+    return AccountSignIn(is_signed_in=True)
+
+
+async def sign_in_via_accounts_flow(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    lane_id: str,
+    api_key: str,
+    key_provider: str,
+    deadline: float,
+    poll_seconds: float,
+) -> AccountSignIn:
+    """Sign the workspace in on a provider lane through the flow the product's account screen drives,
+    and report the account it minted.
+
+    The lane decides which harness a chat bound to that account runs on, so this is how a run
+    chooses a harness at all. It is two calls: one that starts a flow and answers its id, and one
+    that submits the key against it. An API-key lane settles on the submit, but the flow may also
+    answer that it is still working, which is polled on the same URL until it settles or the wait
+    runs out.
+
+    The key never reaches a log or a return value: whatever refuses a sign-in can quote the request
+    that carried it, and trial logs outlive the run.
+    """
+    start_payload = json.dumps({"lane_id": lane_id, "method_id": ACCOUNT_FLOW_METHOD_API_KEY})
+    start_response = await workspace_curl(environment, env, workspace_agent_id, ACCOUNTS_PATH, start_payload)
+    started = start_response.body if isinstance(start_response.body, dict) else {}
+    flow_id = started.get("flow_id")
+    if not start_response.is_ok or not isinstance(flow_id, str) or not flow_id:
+        failure = "the workspace refused to start a sign-in on lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(start_response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    flow_path = ACCOUNT_FLOW_PATH_TEMPLATE.format(flow_id=flow_id)
+    submit_fields = {"api_key": api_key}
+    # Sent only by a lane that has one to send: the api-key lane pairs a key with the provider it
+    # belongs to, and a lane that serves one provider has no use for the field.
+    if key_provider:
+        submit_fields["key_provider"] = key_provider
+    response = await workspace_curl(environment, env, workspace_agent_id, flow_path, json.dumps(submit_fields))
+    if not response.is_ok:
+        failure = "the workspace rejected the key for lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    heartbeat = WaitHeartbeat(label="the sign-in on lane {} to settle".format(lane_id))
+    sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    while sign_in is None and time.time() < deadline:
+        heartbeat.tick(redact_secret(_response_detail(response), api_key)[:200])
+        await asyncio.sleep(poll_seconds)
+        response = await workspace_curl(environment, env, workspace_agent_id, flow_path, None)
+        sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    if sign_in is None:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the sign-in on lane {} never settled".format(lane_id),
+            is_failure_from_waiting=True,
+        )
+    if sign_in.failure:
+        logger.error(sign_in.failure)
+        return sign_in
+    if not sign_in.account_id:
+        logger.warning(
+            "The workspace signed in on lane {} but named no account; its chat will be created against "
+            "whichever account the workspace picks for itself",
+            lane_id,
+        )
+        return sign_in
+    logger.info("Signed the workspace in on lane {} (account {})", lane_id, sign_in.account_id)
+    return sign_in
+
+
+class AccountRecord(FrozenModel):
+    """One row of the workspace's accounts listing."""
+
+    id: str = Field(description="The account id a chat is created against")
+    lane: str = Field(description="The provider lane the account was minted on")
+    harness: str = Field(description="The harness a chat bound to this account runs on")
+
+
+async def fetch_account(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    account_id: str,
+) -> AccountRecord | None:
+    """The workspace's own row for an account, or None when it lists no such row.
+
+    This is the only readback of the harness a trial gets: which harness an account runs is the
+    workspace's to say, never the run's to assume from the lane it asked for.
+    """
+    body = await workspace_curl_json(environment, env, workspace_agent_id, ACCOUNTS_PATH, None)
+    accounts = body.get("accounts") if isinstance(body, dict) else None
+    if not isinstance(accounts, list):
+        logger.warning("The workspace's accounts listing answered nothing readable; the harness stays unrecorded")
+        return None
+    for account in accounts:
+        if isinstance(account, dict) and str(account.get("id") or "") == account_id:
+            return AccountRecord(
+                id=account_id, lane=str(account.get("lane") or ""), harness=str(account.get("harness") or "")
+            )
+    logger.warning("The workspace lists no account {}; the harness stays unrecorded", account_id)
+    return None
+
+
+class ModelSwitchOutcome(FrozenModel):
+    """What the workspace answered when a chat's model choice was set."""
+
+    is_applied: bool = Field(description="Whether the endpoint took the choice")
+    status: int = Field(description="The response status; 0 when the call never reached the endpoint")
+    detail: str = Field(default="", description="The endpoint's account of a refusal; empty when it was applied")
+
+
+async def switch_model_choice(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    chat_agent_id: str,
+    model_id: str,
+    effort: str,
+    is_fast: bool,
+) -> ModelSwitchOutcome:
+    """Set a chat's model, effort and speed tier through the endpoint the product's model picker
+    posts to.
+
+    The ids are the chat's catalog ids, which differ by harness and are validated by the endpoint
+    alone: its 400 is the validation, and it is quoted verbatim because a mistyped catalog id is a
+    configuration error the reader has to be able to see, not a workspace fault to retry.
+    """
+    payload = json.dumps({"model_id": model_id, "effort": effort, "fast": is_fast, "axes": list(MODEL_CHOICE_AXES)})
+    url_path = MODEL_CHOICE_PATH_TEMPLATE.format(agent_id=chat_agent_id)
+    response = await workspace_curl(environment, env, workspace_agent_id, url_path, payload)
+    if response.is_ok:
+        logger.info("The workspace took the model choice {} (effort {}, fast {})", model_id, effort, is_fast)
+        return ModelSwitchOutcome(is_applied=True, status=response.status)
+    detail = _response_detail(response)[:_REFUSAL_DETAIL_LIMIT]
+    logger.error("The workspace refused the model choice {} (HTTP {}): {}", model_id, response.status, detail)
+    return ModelSwitchOutcome(is_applied=False, status=response.status, detail=detail)
+
+
 @pure
 def parse_agent_ssh_info(listed_json: str, agent_id: str) -> dict[str, str] | None:
     """The workspace's SSH endpoint out of `mngr list --format json`, the same payload mngr's own
@@ -1222,6 +1438,9 @@ WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
 # hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
 # survive in the home tree, its trajectory does not.
 PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
+# Where Claude transcripts are stored for Minds provider accounts when the service runs as root.
+# Restricting to accounts/*/projects avoids archiving credentials (such as settings.json) under accounts/.
+ROOT_MINDS_PROJECTS_PATTERN: Final[str] = "/root/.minds/accounts/*/projects"
 
 
 async def snapshot_workspace(
@@ -1245,15 +1464,18 @@ async def snapshot_workspace(
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    # The preserved dir is added as its own -C segment, and only when it exists: naming a missing path
-    # makes tar exit nonzero and the snapshot is skipped entirely. Its entries land under
-    # `root/.mngr/preserved/`, distinct from the home tree's `./`.
+    # The preserved and minds dirs are added as their own -C segments, and only when they exist:
+    # naming a missing path makes tar exit nonzero and the snapshot is skipped entirely. Their
+    # entries land under `root/.mngr/preserved/` and `root/.minds/accounts/<id>/projects/`, distinct
+    # from the home tree's `./`. Restricting to `accounts/*/projects` avoids archiving credentials.
     tar_command = (
         "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
-        "tar czf {tar} {excludes} -C {root} . $preserved 2>/dev/null || true"
+        'minds=\'\'; for p in {minds_pattern}; do [ -d "$p" ] && minds="$minds -C / ${{p#/}}"; done; '
+        "tar czf {tar} {excludes} -C {root} . $preserved $minds 2>/dev/null || true"
     ).format(
         preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
         preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        minds_pattern=ROOT_MINDS_PROJECTS_PATTERN,
         tar=workspace_tar,
         excludes=exclude_flags,
         root=WORKSPACE_BACKUP_ROOT,

@@ -149,8 +149,12 @@ def test_prevent_num_prefix() -> None:
 # --- Documentation ---
 
 
+# The 1 here is the `# pragma: no cover` marker on the `case _ as unreachable:`
+# exhaustiveness sentinel in pipeline_svg.py. CI gates coverage with a plain
+# `coverage report`, which applies only the default exclusions, and the pragma
+# has to sit on the case line itself to exclude the arm.
 def test_prevent_trailing_comments() -> None:
-    rc.check_trailing_comments(_DIR, snapshot(0))
+    rc.check_trailing_comments(_DIR, snapshot(1))
 
 
 def test_prevent_init_docstrings() -> None:

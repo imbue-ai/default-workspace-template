@@ -212,6 +212,7 @@ def _provenance_extra(provenance: TrajectoryProvenance, source: TrajectorySource
             "harbor_session_id": provenance.harbor_session_id,
             "case_id": provenance.case_id,
             "usage_source": provenance.usage_source.value,
+            "arm": provenance.arm.model_dump(mode="json"),
         }
     }
 

@@ -1,5 +1,6 @@
 import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -185,6 +186,12 @@ GATES_CRITERION_NAMES: Final[tuple[str, ...]] = (
 )
 
 
+# The pinned pair every written trial says it ran on, both at the top level of its state file and
+# inside its arm block, so a test can assert the two agree.
+TRIAL_MNGR_SHA: Final[str] = "a" * 40
+TRIAL_DWT_SHA: Final[str] = "c" * 40
+
+
 def _exception_info(exception_type: str) -> dict[str, Any]:
     return {
         "exception_type": exception_type,
@@ -224,16 +231,31 @@ def _write_harbor_trial_result(
     (trial_dir / "result.json").write_text(json.dumps(trial_result, indent=2))
 
 
-def _write_agent_state(trial_dir: Path, case_id: str, test_state: str, is_environment_recorded: bool) -> None:
+def _write_agent_state(
+    trial_dir: Path,
+    case_id: str,
+    test_state: str,
+    is_environment_recorded: bool,
+    harness_config: Mapping[str, Any] | None,
+) -> None:
     """The driver's own progress record, synced out of the box."""
     state: dict[str, Any] = {
         "eval_name": trial_dir.name,
         "case_name": case_id,
-        "mngr_sha": "a" * 40,
-        "dwt_sha": "c" * 40,
+        "mngr_sha": TRIAL_MNGR_SHA,
+        "dwt_sha": TRIAL_DWT_SHA,
         "test_state": test_state,
         "timed_out": test_state == "timed_out",
     }
+    # Absent rather than empty for a trial that recorded no arm, which is the shape every state file
+    # written before arms existed has. The block repeats the pinned pair the way the driver writes
+    # it, so it describes a whole treatment on its own.
+    if harness_config is not None:
+        state["arm"] = {
+            "mngr_sha": TRIAL_MNGR_SHA,
+            "dwt_sha": TRIAL_DWT_SHA,
+            "harness_config": dict(harness_config),
+        }
     # An oracle trial writes a state but reaches no workspace, so the key is absent rather than
     # empty -- the driver only ever adds it once it has named the environment it will create.
     if is_environment_recorded:
@@ -330,6 +352,7 @@ def write_trial_dir(
     is_state_written: bool = True,
     is_environment_recorded: bool = True,
     is_manifest_written: bool = True,
+    harness_config: Mapping[str, Any] | None = None,
 ) -> Path:
     """One finished trial's on-disk artifacts, in the layout harbor and the driver leave behind.
 
@@ -343,7 +366,7 @@ def write_trial_dir(
     if is_result_written:
         _write_harbor_trial_result(trial_dir, job_dir, case_id, exception_type, step_exception_type)
     if is_state_written:
-        _write_agent_state(trial_dir, case_id, test_state, is_environment_recorded)
+        _write_agent_state(trial_dir, case_id, test_state, is_environment_recorded, harness_config)
     if not exception_type and not step_exception_type:
         _write_reward_details(trial_dir, test_state, failed_gate_names, judge_raw_score)
     if is_manifest_written:

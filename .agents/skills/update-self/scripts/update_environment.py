@@ -284,6 +284,51 @@ def _installed_tool_location(
     return _tool_location(Path(found), tool_name) if found is not None else None
 
 
+# CLEANUP: remove once no supported workspace can still carry a tool install
+# left by a pre-minds-v0.4.3 apply (those followed uv's $HOME default instead
+# of targeting the installation on PATH).
+def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
+    """Delete stale copies of the mngr tool that shadow the one this apply refreshes.
+
+    A pre-minds-v0.4.3 apply reinstalled the tool wherever uv's default pointed,
+    which at runtime is ``$HOME/.local`` rather than the ``/root/.local`` the
+    image was built under. That copy sits first on every login shell's PATH (the
+    terminal app, the desktop app's ``mngr exec``) and is never refreshed again,
+    so the first release adding a dependency breaks every command those shells
+    run while the refreshed copy reports success.
+
+    Only a copy that is not the one behind ``mngr`` on this apply's PATH is
+    removed: its tool environment, and the console script that points into it.
+    Returns what was removed.
+    """
+    canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
+    if canonical is None:
+        return []
+    canonical_tools = canonical[0].resolve()
+    removed: list[Path] = []
+    homes = [Path(PROVISIONER_HOME)]
+    if os.environ.get("HOME"):
+        homes.insert(0, Path(os.environ["HOME"]))
+    for home in homes:
+        tools = home / ".local" / "share" / "uv" / "tools"
+        stale_env = tools / MNGR_TOOL_NAME
+        try:
+            is_present = stale_env.is_dir()
+        except PermissionError:
+            # A home this process cannot read (a non-root run) holds nothing it could remove.
+            is_present = False
+        if not is_present or tools.resolve() == canonical_tools:
+            continue
+        shim = home / ".local" / "bin" / MNGR_EXECUTABLE
+        shim_location = _tool_location(shim, MNGR_TOOL_NAME)
+        if shim_location is not None and shim_location[0].resolve() == tools.resolve():
+            shim.unlink()
+            removed.append(shim)
+        shutil.rmtree(stale_env)
+        removed.append(stale_env)
+    return removed
+
+
 def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:
     """The environment for a ``uv tool`` call, aimed at ``executable``'s own
     installation when we can confirm which that is, else at the mngr tool's.
