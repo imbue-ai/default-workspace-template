@@ -423,18 +423,10 @@ def _clear_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
     built in ``tmp_path``. Under CI those variables describe the *real* PR, so
     they answer questions about a repo the test never created.
 
-    It surfaced through the base: a stacked PR's base branch does not exist in a
+    The base bites hardest: a stacked PR's base branch does not exist in a
     throwaway repo, and ``resolve_diff_base`` deliberately raises rather than
-    falling back to ``main`` for an unresolvable named base, so three tests
-    failed on the environment rather than on anything they assert. When the base
-    is ``main`` the throwaway repo happens to have a ``main`` too, so the leak
-    had been resolving by coincidence and the tests passed for the wrong reason.
-
-    All four are cleared, not just the two that bit: the branch pair is read by
-    the same module, and this file's upstream ancestor
-    (``system/vendor/mngr/scripts/check_changelog_entries_test.py``) already
-    clears the GitHub trio for exactly this reason. Losing them in the derived
-    copy is how the base leak got here.
+    falling back to ``main`` for an unresolvable named base. All four are
+    cleared regardless, since the branch pair is read by the same module.
 
     The tests that exercise a named base set their own value, which still wins
     because that happens inside the test body.
