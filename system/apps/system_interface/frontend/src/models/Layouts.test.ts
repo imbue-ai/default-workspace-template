@@ -2,7 +2,7 @@
 import "../testing/dom";
 
 import { DockviewComponent, Orientation, type IContentRenderer, type SerializedDockview } from "dockview-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   isOwnSaveId,
@@ -101,6 +101,8 @@ describe("panelsWithUnlistedAddresses", () => {
  * installed dockview-core, since nothing else in this suite drives a real DockviewComponent.
  */
 describe("dockview panel params", () => {
+  const docks: DockviewComponent[] = [];
+
   function buildDock(seen: Record<string, unknown>[]): DockviewComponent {
     const container = document.createElement("div");
     document.body.appendChild(container);
@@ -115,14 +117,17 @@ describe("dockview panel params", () => {
       },
     });
     dock.layout(800, 600);
+    docks.push(dock);
     return dock;
   }
 
-  function disposeDock(dock: DockviewComponent): void {
-    const container = dock.element.parentElement;
-    dock.dispose();
-    container?.remove();
-  }
+  afterEach(() => {
+    for (const dock of docks.splice(0)) {
+      const container = dock.element.parentElement;
+      dock.dispose();
+      container?.remove();
+    }
+  });
 
   it("hands the params of addPanel to init, round-trips them through toJSON and fromJSON, and keeps updates", () => {
     const seen: Record<string, unknown>[] = [];
@@ -148,7 +153,5 @@ describe("dockview panel params", () => {
     expect(panelParamsInDocument(restored.toJSON())).toEqual({
       "tab-0000000000000001": { ...params, lastFocusedMs: 7 },
     });
-    disposeDock(dock);
-    disposeDock(restored);
   });
 });
