@@ -56,7 +56,7 @@ states; the newest pass always covers the union instead.
 ## Before merge: lease, freshness, conflicts
 
 Run these in order before any merge from a worker branch -- the merge on `done`
-and a provisional milestone merge alike:
+or a provisional milestone merge:
 
 1. **Wait out the foreground lease (apps and services only).** If the creation is
    an app or service and another agent holds its editing lease (an open/in-progress
