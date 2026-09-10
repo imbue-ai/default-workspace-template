@@ -74,8 +74,11 @@ tool_env_drop_shadowing_mngr() {
     case "$_shadow_shebang" in
         "#!"*)
             # uv writes `#!<tool env>/bin/python`, so the environment is two levels up.
-            _shadow_interpreter="${_shadow_shebang#\#!}"
-            _shadow_interpreter="${_shadow_interpreter%% *}"
+            # `read` takes the first whitespace-separated field, matching how the update
+            # apply reads the same shebang (update_environment.py::_tool_location); cutting
+            # at the first space instead would yield "" for a `#! /path` spelling, and the
+            # miss would remove the environment and strand its script on PATH.
+            read -r _shadow_interpreter _ <<< "${_shadow_shebang#\#!}"
             if [ "$(dirname "$(dirname "$_shadow_interpreter")")" -ef "$_shadow_env" ]; then
                 _is_shadow_script=true
             fi
