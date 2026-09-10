@@ -148,6 +148,27 @@ def test_a_held_open_expires_with_the_chats_freshness() -> None:
     assert reactor.ledger.is_delivered("chat-1")
 
 
+def test_a_chat_with_no_creation_time_is_held_from_when_it_was_seen_rather_than_forever() -> None:
+    """mngr always says when it made an agent, but the reactor's input allows it not to; an open
+    that could never go stale would be retried for the life of the process and pop a tab of any
+    age at whoever eventually connected."""
+    now = _NOW
+    shell = RecordingShell()
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell, clock=lambda: now)
+    reactor.note_appeared("chat-1", _LABELED, None)
+
+    reactor.flush()
+    assert reactor.pending_agent_ids() == {"chat-1"}
+
+    now = _NOW + AUTO_OPEN_FRESHNESS + timedelta(seconds=1)
+    shell.client_ids = ["c1"]
+    reactor.flush()
+
+    assert shell.opens == []
+    assert reactor.pending_agent_ids() == set()
+    assert reactor.ledger.is_delivered("chat-1")
+
+
 def test_a_removed_chat_is_forgotten_everywhere() -> None:
     ledger = AutoOpenLedger(path=None)
     reactor = _reactor(RecordingShell(), ledger)
