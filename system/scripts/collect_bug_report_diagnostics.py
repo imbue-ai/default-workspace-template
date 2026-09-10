@@ -329,7 +329,14 @@ def read_log_db(path: str) -> str:
     newest_first: list[str] = []
     budget = MAX_READ_BYTES
     for ts, ts_nanos, level, target, body in rows:
-        line = format_log_db_row(ts, ts_nanos, level, target, body or "")
+        # SQLite stores what it was given, not what the column was declared as, so a
+        # bumped schema can hand back a NULL level or a ts that is not a number --
+        # neither of which is a sqlite3.Error. Unguarded, that ends the whole
+        # collection and the report arrives with nothing in it at all.
+        try:
+            line = format_log_db_row(ts, ts_nanos, level, target, body or "")
+        except (TypeError, ValueError, OverflowError) as e:
+            return "(unreadable: {!r})".format(e)
         cost = len(line.encode("utf-8")) + 1
         if cost > budget:
             break
