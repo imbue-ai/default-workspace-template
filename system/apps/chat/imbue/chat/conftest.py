@@ -56,8 +56,12 @@ def _isolate_chat_tests(
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
     # Every index write rewrites the workspace's create defaults beside mngr's project config,
     # which mngr and the writer both find through this variable; without it a test's account
-    # writes would land a settings.local.toml in this package's own .mngr.
-    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path_factory.mktemp("mngr-project-config")))
+    # writes would land a settings.local.toml in this package's own .mngr. The file starts
+    # with mngr's pytest opt-in (which the writer keeps, as it does every unmanaged key), so a
+    # real mngr a test spawns -- the observe subprocess -- accepts the file the store writes.
+    project_config_dir = tmp_path_factory.mktemp("mngr-project-config")
+    (project_config_dir / "settings.local.toml").write_text("is_allowed_in_pytest = true\n")
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(project_config_dir))
     # The chat document reads the app registry (for the terminal's origin label) from the
     # working directory otherwise, which in a workspace is the live one.
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))

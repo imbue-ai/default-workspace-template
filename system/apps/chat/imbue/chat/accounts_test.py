@@ -586,13 +586,14 @@ def test_a_pinned_account_on_a_lane_this_build_lacks_is_skipped_for_the_defaults
 
 
 def test_deleting_the_last_usable_account_removes_the_create_defaults(tmp_path: Path) -> None:
-    """A stale file would bind the next create to a folder that is gone, which fails without saying signed-out."""
+    """A stale binding would point the next create at a folder that is gone, which fails without saying signed-out."""
     account = _add(tmp_path, "anthropic", "Anthropic")
-    assert create_defaults_path().exists()
+    assert _written_type() == "claude"
 
     delete_account(account.id, tmp_path)
 
-    assert not create_defaults_path().exists()
+    assert _written_type() is None
+    assert "commands" not in tomllib.loads(create_defaults_path().read_text())
 
 
 def test_the_boot_sweep_regenerates_the_create_defaults_from_what_survives(tmp_path: Path) -> None:
