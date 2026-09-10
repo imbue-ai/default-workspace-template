@@ -128,6 +128,15 @@ from this frontmatter and follows the matching references. When you reach a gate
 or terminal status, push a report to the lead per its reporting protocol; the
 destination is `finish_report_path`.
 
+## Milestones
+Do not save everything for the end. As soon as the creation is genuinely usable
+on your branch -- for an app, once its tests pass; for a skill, once your
+scenarios pass -- commit and declare a milestone (non-blocking, per your
+reporting protocol): the lead merges the first usable version as soon as you
+declare it, so the user can start using the creation while you finish the
+review gates. Name it for what is true at that commit, and have its `## Tested`
+section say exactly what you ran there and what you have not.
+
 ## Success criteria
 - The creation is committed on your branch, tested, and passes the review gates.
 - For a reconstructed skill: the user approved the outline (Gate 1) and the
@@ -189,12 +198,21 @@ Flow-specific substitutions:
   `data/.tasks/harden/crystallize-$NAME/reports/report.md`
 - Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`;
   consumed: `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
+- Milestones dir: `data/.tasks/harden/crystallize-$NAME/reports/milestones/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
   **app** → none (the worker merges straight to `done`).
+- Milestones: any name, non-blocking → provisional merge per `lead-proxy.md`'s
+  "Milestone reports: provisional merge". Provisional go-live is the minimum
+  that makes the creation usable: **skill** → it is on disk at
+  `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
+  still runs only on `done`.
 - Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
   `launch-task/references/worker-failure.md`).
 
 ## Step 6: Go live
+
+A provisional milestone merge does not change this step: it runs only on `done`,
+and the `done` merge brings the remainder of the branch.
 
 On `done`, after merging the worker's branch:
 

@@ -53,9 +53,10 @@ grep -E "(update|heal) $TARGET" /tmp/harden-inflight.txt
 Do not queue a second pass behind a live one. Queued passes verify obsolete
 states; the newest pass always covers the union instead.
 
-## Before merge (on `done`): lease, freshness, conflicts
+## Before merge: lease, freshness, conflicts
 
-Run these in order before `git merge`:
+Run these in order before any merge from a worker branch -- the merge on `done`
+and a provisional milestone merge alike:
 
 1. **Wait out the foreground lease (apps and services only).** If the creation is
    an app or service and another agent holds its editing lease (an open/in-progress
@@ -87,6 +88,23 @@ Run these in order before `git merge`:
    conflict by hand would reintroduce exactly the unverified state the pass
    exists to prevent.
 
+### Provisional milestone merges
+
+A worker can declare a **milestone** mid-pass: a commit it says is already worth
+using (`worker-reporting.md` for the worker's side, `lead-proxy.md`'s
+"Milestone reports: provisional merge" for the lead's). Merging one runs the
+same three checks above, with the target pinned to the milestone's `commit:`
+rather than the branch tip.
+
+This is the **one sanctioned way not-yet-hardened work reaches the lead's
+branch**. The merge commit says so (`Provisional merge of <worker> at milestone
+<name>`), and it is verified only as far as the milestone's `## Tested` states.
+
+The freshness rule composes: the provisional merge advances
+`git merge-base HEAD "$WORKER_BRANCH"` to the milestone commit, so at `done` the
+same check covers exactly the window since that merge, and a foreground edit
+inside it makes the pass stale by the usual rule.
+
 ## Superseding a stale pass (coalescing)
 
 Whoever finds the staleness -- the pass owner at merge time, or the agent
@@ -105,3 +123,17 @@ scope covers **everything since the last hardened merge**: at minimum the
 `$BASE..HEAD` commits touching the creation, plus whatever any notes on the
 old ticket describe. One superseding pass validates the union of all pending
 changes together -- which is the only combination that will actually run.
+
+Two wrinkles when the pass had already delivered a provisional milestone
+merge:
+
+- **A provisionally merged milestone survives.** It is already a commit on your
+  own branch, so deleting the worker branch does not take it back out; only the
+  hardening done after that milestone is lost, and the superseding pass redoes
+  it.
+- **A reverted milestone must be reinstated or superseded.** If you rolled a
+  provisional merge back with `git revert -m 1 <merge-commit>`, the reverted
+  commits are still ancestors of HEAD, so any later merge from that branch
+  silently omits them. Reinstate them with `git revert <revert-commit>` before
+  merging from that branch again, or supersede the pass so a fresh one rebuilds
+  the work from the current base.
