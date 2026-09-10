@@ -21,6 +21,9 @@ There are two shapes, selected by which creation you are crystallizing:
 
 - Gates (reconstruct shape only): `outline-approval` (Stage 2),
   `final-creation` (Stage 6).
+- Milestones: `type: milestone`, any slug you choose (see
+  `.agents/shared/references/worker-reporting.md`); non-blocking -- you never
+  stop your turn for one.
 - Terminal statuses: `done`, `stuck`.
 
 In the pre-existing/confirmed-live shape, emit no gates; you may emit a
@@ -66,6 +69,17 @@ and stop. If the user asks for changes, iterate and emit a fresh
 Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
 testing/hardening and preserve-and-surface contract from `harden-creation.md`.
+
+Once the creation runs end to end on your branch -- reconstruct shape: SKILL.md
+and any scripts exist and `uv run .agents/shared/scripts/validate_skill.py
+.agents/skills/<name>` prints `ok`; pre-existing shape: the app's own tests pass
+-- commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
+reports (non-blocking)". Name it for what is true at that commit, and make its
+`## Tested` section list exactly what you ran here and what you have not. The
+lead may merge that commit and let the user start using the creation while you
+work through the rest of the pass, so do not stop your turn: push it and go
+straight on to Stage 4. Declaring further milestones later (e.g. once the
+scenarios pass) is at your discretion.
 
 ## Stage 4: Scenarios
 
