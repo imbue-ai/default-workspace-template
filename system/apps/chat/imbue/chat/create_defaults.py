@@ -124,18 +124,21 @@ def _empty_document() -> tomlkit.TOMLDocument:
 
 
 def _load_document(path: Path) -> tomlkit.TOMLDocument:
-    """The file as it stands, or a fresh document when there is none or it no longer parses.
+    """The file as it stands, or a fresh document when there is none or it no longer reads.
 
     A malformed file is rebuilt rather than raised on: it is derived output, mngr refuses to
     load a malformed local layer anyway, and raising here would turn one bad hand edit into a
-    failure of every account write and of the boot sweep that regenerates the file.
+    failure of every account write and of the boot sweep that regenerates the file -- and the
+    boot sweep failing is a supervisord crash loop with no UI left to fix it from. Bytes that
+    are not UTF-8 count as malformed too: they fail the read rather than the parse. An OSError
+    is left to propagate, since a file this cannot read is one it cannot rewrite either.
     """
     if not path.exists():
         return _empty_document()
     try:
         return tomlkit.parse(path.read_text())
-    except ParseError as e:
-        logger.warning("Rewriting {}, which no longer parses ({}); any hand-kept keys in it are lost", path, e)
+    except (ParseError, UnicodeDecodeError) as e:
+        logger.warning("Rewriting {}, which no longer reads ({}); any hand-kept keys in it are lost", path, e)
         return _empty_document()
 
 

@@ -126,11 +126,16 @@ def test_keys_outside_the_managed_block_survive_every_rewrite(tmp_path: Path) ->
     assert not any(key in raw["commands"]["create"] for key in MANAGED_KEYS)
 
 
-def test_a_file_that_no_longer_parses_is_rebuilt_with_a_warning(tmp_path: Path, loguru_records: list[str]) -> None:
+@pytest.mark.parametrize("content", (b"not = [toml\n", b'type = "\xff\xfe"\n'), ids=("unparseable", "not-utf8"))
+def test_a_file_that_no_longer_reads_is_rebuilt_with_a_warning(
+    tmp_path: Path, loguru_records: list[str], content: bytes
+) -> None:
     """A hand edit that breaks the file must not break every account write and the boot sweep with it:
-    the file is derived output, and mngr refuses a malformed local layer anyway, so it is rewritten."""
+    the file is derived output, and mngr refuses a malformed local layer anyway, so it is rewritten.
+    Bytes that are not UTF-8 break the read rather than the parse, and the boot sweep does not catch
+    that on its way out -- it would be a supervisord crash loop with no UI left to delete an account from."""
     path = tmp_path / "settings.local.toml"
-    path.write_text("not = [toml\n")
+    path.write_bytes(content)
 
     write_create_defaults(path, _defaults(HarnessType.CODEX, tmp_path))
 
