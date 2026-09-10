@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "../testing/dom";
 
-import { DockviewComponent, type IContentRenderer } from "dockview-core";
+import { DockviewComponent, Orientation, type IContentRenderer, type SerializedDockview } from "dockview-core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -63,15 +63,15 @@ describe("parsePanelParams", () => {
 
 describe("panelParamsInDocument", () => {
   it("collects the readable params of every panel a document names", () => {
-    const document = {
-      grid: { root: { type: "branch", data: [] }, width: 1, height: 1, orientation: "HORIZONTAL" },
+    const serialized: SerializedDockview = {
+      grid: { root: { type: "branch", data: [] }, width: 1, height: 1, orientation: Orientation.HORIZONTAL },
       panels: {
         p1: { id: "p1", params: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001" } },
         p2: { id: "p2", params: { kind: "launcher" } },
         p3: { id: "p3" },
       },
     };
-    expect(panelParamsInDocument(document as never)).toEqual({
+    expect(panelParamsInDocument(serialized)).toEqual({
       p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
       p2: { kind: "launcher" },
     });
