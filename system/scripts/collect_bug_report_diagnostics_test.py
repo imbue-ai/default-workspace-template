@@ -1359,3 +1359,59 @@ def test_panes_do_not_displace_the_harness_logs_of_the_agent_that_broke(
 
     assert sum(1 for name in names if name.endswith("app_server.log")) == 2
     assert sum(1 for name in names if name.endswith("pane.txt")) == 2
+
+
+def test_a_secret_rendered_on_a_pane_withholds_the_agent_logs_and_nothing_else(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pane is scanned like everything else that leaves the container.
+
+    The pane is the only content the collector reads off a screen rather than
+    out of a file, and it is the class a credential is most likely to be
+    rendered into. The content-matching gate flags whichever staged file holds
+    the secret, so a pass here is evidence the scanner was handed the pane's own
+    text -- not that a member name was predicted. The agent's clean log file goes
+    with it: a class ships whole or not at all.
+    """
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=secret)
+    log_dir = tmp_path / "supervisor"
+    _write_log(
+        log_dir, "system_interface-stdout.log", mtime=time.time(), content="interface started\n"
+    )
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    chats = {"agent-clean": _chat_events("clean")}
+    agents_dir = tmp_path / "agents"
+    _write_agent_log(
+        agents_dir,
+        "agent-clean",
+        "app_server.log",
+        mtime=time.time(),
+        content="nothing secret here\n",
+    )
+    module = _load_collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=_write_mngr_stub(
+            tmp_path,
+            agents=tuple(chats),
+            events_by_agent=chats,
+            panes_by_agent={"agent-clean": f"$ export API_KEY={secret}\n"},
+        ),
+        supervisord_conf=conf,
+        workspace_dir=tmp_path / "workspace",
+        scan_gate_dir=gate,
+        agents_dir=agents_dir,
+    )
+
+    module.main(["--logs", "--transcript"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert archive.namelist() == [
+            "metadata.json",
+            "logs/system_interface.log",
+            "chats/agent-clean-claude.jsonl",
+            "collection-notes.txt",
+        ]
+        assert _notes_lines(archive) == ["agent logs: withheld: the secret scan reported findings"]
