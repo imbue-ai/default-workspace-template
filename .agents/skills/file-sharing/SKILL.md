@@ -19,6 +19,26 @@ Use this skill when the user asks you to work with files located directly on the
 The base URL is `http://latchkey-self.invalid/minds-api-proxy/api/v1/files`. Only the user's home directory and the user's system temp directory are accessible. MOVE and COPY operations are not supported.
 
 
+## Folders the user keeps synced
+
+The user can ask Minds to keep a local folder synced with this machine. Those
+land in your home directory and are ordinary files -- read and write them
+normally, and your changes go back to the user's computer.
+
+- `~/synced_folders/<device id>/<the folder's path on their computer>` is a
+  folder that is syncing now.
+- `~/inactive_synced_folders/...` holds a copy whose syncing the user turned
+  off. **Treat it as Minds' own.** Do not create, move, or write anything under
+  it: Minds moves folders in and out of it by name, and anything of yours
+  sitting where a folder belongs is deleted when the user turns syncing off
+  again. If you need somewhere to put your own files, use your working
+  directory or `/tmp`.
+
+Deleting a synced folder does not break anything -- Minds recreates it and
+syncs the files again -- but the user will not expect their files to vanish,
+so delete them only if the user asks you to.
+
+
 ## Examples
 
 ### Check existing access
