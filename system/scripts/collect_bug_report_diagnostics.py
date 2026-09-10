@@ -183,7 +183,13 @@ MAX_LOG_DB_ROWS = 4000
 #
 # It costs nothing the db was collected for: the request and connection each
 # line belongs to is exactly what this layer records.
-LOG_DB_TARGET_PREFIXES = ("codex_app_server",)
+#
+# Each entry names a module, matched exactly or at the ``::`` separator below it
+# -- never as a bare character prefix, which would also admit every crate whose
+# name merely starts the same way (``codex_app_server_protocol`` carries the
+# serialized protocol messages, including the login exchange). Admitting a
+# target nobody listed is the denylist failure this allowlist exists to avoid.
+LOG_DB_TARGET_MODULES = ("codex_app_server",)
 
 # Ceiling on the text the log-db class contributes, filled newest-first. Its own
 # rather than shared with the harness log files, because the two are separate
@@ -291,7 +297,7 @@ def read_log_db(path: str) -> str:
     and most relevant -- rows still are: an ``immutable=1`` open, the other way
     to read a db without writing, silently skips them.
 
-    Only LOG_DB_TARGET_PREFIXES rows are selected, in SQL rather than after, so
+    Only LOG_DB_TARGET_MODULES rows are selected, in SQL rather than after, so
     the rest are never read into the collector at all.
 
     Rendered oldest-first after being selected newest-first, so the member reads
@@ -305,16 +311,20 @@ def read_log_db(path: str) -> str:
     except sqlite3.Error as e:
         return "(unreadable: {!r})".format(e)
     # GLOB rather than LIKE: LIKE reads ``_`` as a single-character wildcard, which
-    # would quietly widen an allowlist whose every prefix contains one.
-    target_clause = " OR ".join("target GLOB ?" for _ in LOG_DB_TARGET_PREFIXES)
+    # would quietly widen an allowlist whose every module name contains one. The
+    # module itself is matched by equality and its children at the ``::`` below it,
+    # so a crate that merely starts with the same characters is not a child.
+    target_clause = " OR ".join(
+        "target = ? OR target GLOB ?" for _ in LOG_DB_TARGET_MODULES
+    )
+    target_parameters: list[str] = []
+    for module in LOG_DB_TARGET_MODULES:
+        target_parameters.extend((module, "{}::*".format(module)))
     try:
         rows = connection.execute(
             "SELECT ts, ts_nanos, level, target, feedback_log_body FROM {}"
             " WHERE {} ORDER BY id DESC LIMIT ?".format(LOG_DB_TABLE, target_clause),
-            (
-                *["{}*".format(prefix) for prefix in LOG_DB_TARGET_PREFIXES],
-                MAX_LOG_DB_ROWS,
-            ),
+            (*target_parameters, MAX_LOG_DB_ROWS),
         ).fetchall()
     except sqlite3.Error as e:
         return "(unreadable: {!r})".format(e)
