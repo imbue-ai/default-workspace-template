@@ -149,10 +149,15 @@ def _supervisord_include_globs(supervisord_conf: Path) -> list[str]:
 
 
 def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
-    """The main config plus every file its ``[include]`` globs match, in supervisord's read order."""
-    files = [supervisord_conf] if supervisord_conf.exists() else []
+    """The main config plus every file its ``[include]`` globs match, in supervisord's read order.
+
+    Only regular files: a glob is matched against whatever is on disk, so a directory named like
+    a drop-in (``supervisord.conf.d/archive.conf/``) is a match, and every caller here reads what
+    it is handed. Skipping it costs nothing -- supervisord cannot read it either.
+    """
+    files = [supervisord_conf] if supervisord_conf.is_file() else []
     for pattern in _supervisord_include_globs(supervisord_conf):
-        files.extend(Path(path) for path in sorted(glob.glob(pattern)))
+        files.extend(Path(path) for path in sorted(glob.glob(pattern)) if os.path.isfile(path))
     return files
 
 

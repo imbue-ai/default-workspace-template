@@ -225,6 +225,24 @@ def test_a_port_held_by_a_non_default_include_directory_is_still_seen(tmp_path: 
     assert "http://localhost:8081" in (root / "system/supervisord.conf.d/news.conf").read_text()
 
 
+def test_a_directory_matching_the_include_glob_does_not_break_the_scan(tmp_path: Path) -> None:
+    """A glob matches whatever is on disk, and a directory can be named like a drop-in.
+
+    Every consumer of the expansion reads what it is handed, so an unfiltered match turns the
+    port pre-flight into an IsADirectoryError traceback -- a scaffold that dies on an unrelated
+    directory someone happened to create. supervisord cannot read it either, so skipping it
+    loses nothing.
+    """
+    root = _make_workspace(tmp_path / "workspace", {"dashboard": 8080})
+    (root / "system/supervisord.conf.d/archive.conf").mkdir()
+
+    result = _scaffold(root, "news")
+
+    assert result.returncode == 0, result.stderr
+    # The real drop-in beside it was still scanned: 8080 is taken, so the new app gets 8081.
+    assert "http://localhost:8081" in (root / "system/supervisord.conf.d/news.conf").read_text()
+
+
 def test_requested_port_held_by_a_dropin_is_refused(tmp_path: Path) -> None:
     root = _make_workspace(tmp_path / "workspace", {"browser": 8081})
 

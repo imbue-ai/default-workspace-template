@@ -1067,21 +1067,37 @@ def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -
     whitespace-separated pattern against the directory of the config declaring it, with
     ``%(here)s`` substituted for that directory.
 
-    Done in the one round trip the fixed listing already cost. Pathname expansion stays off
-    while the pattern list is split, so a pattern is never globbed against the login shell's
-    own directory, and is turned back on only for the expansion meant to glob.
+    The patterns are read as supervisord's own parser reads them -- ``files =`` and ``files:``
+    alike, an indented continuation folded into the value above it, comments dropped -- because
+    taking one spelling only, or one line only, silently loses whichever drop-ins the missed
+    patterns name.
+
+    Done in the one round trip the fixed listing already cost. Pathname expansion stays off while
+    the pattern list is split, so a pattern is never globbed against the login shell's own
+    directory, and is turned back on only for the expansion meant to glob. ``%(here)s`` is
+    substituted with parameter expansion rather than ``sed``, and the glob runs with ``IFS``
+    emptied, so a source path holding a space, a ``|`` or an ``&`` cannot be read as syntax.
     """
     quoted = _shell_quote(supervisord_conf)
     listing = run_remote(
         target,
         f'conf={quoted}; confdir=$(dirname "$conf"); '
-        r"patterns=$(sed -n '/^\[include\]/,/^\[/ s/^[[:space:]]*files[[:space:]]*=[[:space:]]*//p' "
-        '"$conf" 2>/dev/null); '
+        "patterns=$(awk '"
+        r"/^\[include\]/ { inc = 1; next } "
+        r"/^\[/ { inc = 0 } "
+        "inc && /^[[:space:]]*[;#]/ { next } "
+        "inc && /^[[:space:]]*files[[:space:]]*[=:]/ { "
+        'sub(/^[[:space:]]*files[[:space:]]*[=:][[:space:]]*/, ""); print; cont = 1; next } '
+        "inc && cont && /^[[:space:]]/ { print; next } "
+        "inc { cont = 0 } "
+        "' \"$conf\" 2>/dev/null); "
         "set -f; for pattern in $patterns; do "
-        'pattern=$(printf \'%s\' "$pattern" | sed "s|%(here)s|$confdir|g"); '
+        "while :; do case \"$pattern\" in *'%(here)s'*) "
+        "pattern=\"${pattern%%'%(here)s'*}$confdir${pattern#*'%(here)s'}\" ;; *) break ;; esac; done; "
         'case "$pattern" in /*) ;; *) pattern="$confdir/$pattern" ;; esac; '
-        'set +f; for path in $pattern; do [ -f "$path" ] && printf \'%s\\n\' "$path"; done; '
-        "set -f; done; set +f",
+        "oldifs=$IFS; IFS=; set +f; for path in $pattern; do "
+        "[ -f \"$path\" ] && printf '%s\\n' \"$path\"; done; "
+        "set -f; IFS=$oldifs; done; set +f",
     )
     return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
