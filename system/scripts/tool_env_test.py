@@ -84,7 +84,11 @@ def test_the_pinned_install_is_not_removed_when_home_reaches_it_by_another_path(
     linked_home.symlink_to(image_home)
 
     _run("tool_env_drop_shadowing_mngr", home=linked_home, tool_home=image_home)
-    _run(f"HOME={image_home}/ tool_env_drop_shadowing_mngr", home=image_home, tool_home=image_home)
+    _run(
+        f"HOME={image_home}/ tool_env_drop_shadowing_mngr",
+        home=image_home,
+        tool_home=image_home,
+    )
 
     assert pinned_env.is_dir()
     assert pinned_script.is_file()
