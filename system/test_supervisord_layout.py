@@ -265,11 +265,14 @@ def test_a_program_in_a_dropin_implies_an_include_aware_vendored_capture() -> No
     Deliberately a conditional: it says nothing about a template that declares every program in the
     main config, and is a permanent regression guard for one that does not.
 
-    Asserts on what the capture *does*, not on how it is written: it builds the capture's own shell
-    out of the vendored source and runs it against this repo. An upstream rewrite that keeps the
-    behaviour -- a different ``sed``, or a Python reader instead of a shell one -- keeps this green,
-    where matching on the source text would fail a correct implementation under a message telling
-    the next reader not to relax it.
+    Asserts on what the capture *does*, not on how its shell is written: it builds the capture's
+    own shell out of the vendored source and runs it against this repo, so a rewrite of the
+    expansion -- a different ``sed``, an ``awk``, a pipeline -- keeps this green where matching on
+    the source text would fail a correct implementation. What it does still depend on is the shape
+    of the upstream API: a builder of that name returning a shell string, and the one constant it
+    formats in. Rename either, or read the config in Python instead of emitting shell, and the
+    gate goes red -- deliberately, since it cannot tell that apart from the capture being dropped.
+    The assertions below carry the re-point instruction for that case.
     """
     if not list(_DROPIN_DIR.glob("*.conf")):
         return
