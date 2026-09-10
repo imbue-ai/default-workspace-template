@@ -16,14 +16,10 @@ Four subcommands cover the lead-side lifecycle:
 ``await``
     Reads the ``finish_report_path`` field from the task file's frontmatter and
     blocks until that file appears, prints its contents to stdout, and returns
-    0. It watches a second thing alongside that file: the ``milestones/``
-    directory beside it, where a worker drops non-blocking *milestone* reports
-    without stopping its turn. Any milestone with no same-named entry in
-    ``consumed/`` ends the poll exactly the way the report does (contents on
-    stdout, exit 0), with the milestone's own path on stderr so the lead knows
-    what to consume. ``report.md`` wins any poll where both are present -- a
-    gate or a terminal status is the more important event, and the milestone
-    comes back on the next re-armed poll.
+    0. It also watches the ``milestones/`` directory beside that file, where a
+    worker drops non-blocking milestone reports: one with no same-named entry
+    in ``consumed/`` ends the poll the same way (contents on stdout, exit 0),
+    plus its path on stderr. ``report.md`` wins when both are present.
     On timeout it returns non-zero so the caller drops into the liveness
     diagnosis described in ``.agents/shared/references/lead-proxy.md``. Callers
     run this in the *background* and re-invoke it once per gate cycle; it is
@@ -250,43 +246,31 @@ def _read_finish_report_path(task_file: Path) -> Path:
 
 
 def _consumed_dir(report_path: Path) -> Path:
-    """The archive the lead moves handled reports into, beside the report path.
+    """Where handled reports and milestones are archived, beside the report.
 
-    One definition for every caller -- the stale-report guard's suggested
-    remedy, ``launch_sync``'s own archiving, and the milestone watch's
-    already-handled test -- so the location the prose tells a lead to move a
-    file to cannot drift from the one the code looks in.
+    The one place the prose's "move it aside" remedy and the code's
+    already-handled checks both resolve to.
     """
     return report_path.parent / "consumed"
 
 
 def _milestones_dir(report_path: Path) -> Path:
-    """The directory a worker drops non-blocking milestone reports into.
+    """Where a worker drops milestone reports, one file per milestone.
 
-    Milestones sit beside ``report.md`` rather than in it. ``report.md`` is a
-    single slot whose contract is "write it, push it, stop your turn", so the
-    lead always consumes it before the worker writes again. A milestone does
-    not stop the worker, which may therefore reach a gate before the lead has
-    consumed the milestone -- sharing the one slot would silently overwrite it.
-    One file per milestone removes that race.
+    They cannot share ``report.md``'s single slot: a milestone does not stop the
+    worker, so it may reach a gate before the lead has consumed the milestone,
+    and the gate would overwrite it.
     """
     return report_path.parent / "milestones"
 
 
 def _unconsumed_milestones(report_path: Path) -> list[Path]:
-    """Milestone files the lead has not acknowledged yet, oldest first.
+    """Milestone files with no same-named entry in ``consumed/``, oldest first.
 
-    A milestone counts as unconsumed while no file of the same basename sits in
-    ``consumed/``. The worker keeps its own copy of every milestone it ever
-    wrote, so each later push of the reports directory (a gate, ``done``)
-    re-delivers all of them; matching on the basename -- which carries the
-    commit's short sha -- makes a re-delivered file inert, while the same
-    milestone name declared again at a *new* commit is a new filename and so a
-    genuinely new event.
-
-    Ordered oldest-mtime first so the lead sees milestones in the order the
-    worker declared them, with the filename as a tie-break so two files sharing
-    an mtime still come back in a stable order.
+    The worker keeps its copies, so every later push re-delivers them; matching
+    on the basename (which carries the commit's short sha) makes a re-delivered
+    file inert while the same name at a new commit is a new event. Sorted by
+    mtime, then name, so declaration order is stable.
     """
     milestones_dir = _milestones_dir(report_path)
     if not milestones_dir.is_dir():
@@ -495,8 +479,8 @@ def launch(
     message, since those are caller-supplied paths. So does a leftover file at
     the task's ``finish_report_path`` -- a stale report from a previous run
     would satisfy ``await`` instantly, so launch refuses until the caller has
-    confirmed it was handled and moved it aside -- and so does an unconsumed
-    milestone beside it, which ``await`` returns just as instantly. So does a
+    confirmed it was handled and moved it aside (likewise an unconsumed
+    milestone beside it). So does a
     dirty working tree: the worker branches from committed HEAD, so uncommitted
     changes never reach it (and ``mngr create`` refuses a dirty tree anyway) --
     launch stops with an actionable "commit first" message rather than letting
@@ -553,11 +537,8 @@ def launch(
                 file=sys.stderr,
             )
             return 2
-        # Unconsumed milestones are stale for exactly the same reason: `await`
-        # returns them as soon as it starts, so the caller would read the
-        # previous run's in-flight news as if it came from the new worker (and
-        # the runtime-dir sync below would seed the new worker's worktree with
-        # them).
+        # An unconsumed milestone is stale for the same reason: ``await`` would
+        # return it as the new worker's news.
         stale_milestones = _unconsumed_milestones(report_path)
         if stale_milestones:
             listed = ", ".join(str(path) for path in stale_milestones)
@@ -749,22 +730,11 @@ def await_report(
     on stderr so the caller diagnoses worker liveness per lead-proxy.md rather
     than treating the timeout as a terminal failure.
 
-    With ``watch_milestones`` (the default), an unconsumed milestone beside the
-    report ends the poll the same way: its contents go to ``out``, its path
-    goes to stderr, and the return code is 0, so the caller's existing "parse
-    the frontmatter, branch on ``type``" loop absorbs the new report kind with
-    no new exit code to learn. ``report.md`` is checked first, so it wins any
-    poll where both exist -- a gate or a terminal status is the more important
-    event, and the milestone is still there for the next re-armed poll. The
-    milestone check runs ahead of the shed and idle checks for the same reason
-    the report check does: a milestone that arrived is real news, and the
-    worker that produced it may legitimately have gone quiet since.
-
-    Nothing here consumes the milestone; that is lead judgment (it may merge
-    the pinned commit or defer it) and lives in lead-proxy.md. Re-delivery is
-    harmless because the worker keeps its copy and the lead's ``consumed/``
-    archive is matched by basename, so re-pushed milestones are inert -- see
-    ``_unconsumed_milestones``.
+    With ``watch_milestones`` (the default), an unconsumed milestone ends the
+    poll the same way -- contents to ``out``, path to stderr, return 0 -- so the
+    caller's parse-and-branch-on-``type`` loop absorbs it with no new exit code.
+    ``report.md`` is checked first and wins; the milestone is still there for
+    the next poll. Consuming it is lead judgment (lead-proxy.md), not done here.
 
     If ``worker_name`` and ``pending_shed_check`` are supplied, each poll also
     checks whether the worker's own agent was shed by the OOM daemon. A shed
@@ -936,15 +906,13 @@ def _archive_report(report_path: Path) -> None:
 
 
 def _archive_milestones(report_path: Path) -> None:
-    """Move every unconsumed milestone into ``consumed/`` alongside the report.
+    """Move every unconsumed milestone into ``consumed/``.
 
-    ``launch_sync`` deliberately ignores milestones while it waits (its callers
-    want one terminal result), but ``launch``'s guard refuses to start while an
-    unconsumed one exists -- so a milestone the worker declared mid-run would
-    trap the next ``launch_sync`` on the same task file exactly as the report
-    itself would. Once the terminal report is in hand the milestones are moot,
-    so they are archived the same way. Basenames carry the commit's short sha
-    and are unique per milestone, so no disambiguation is needed.
+    ``launch_sync`` ignores milestones while it waits, but ``launch``'s guard
+    refuses to start over one, so a milestone declared mid-run would trap the
+    next ``launch_sync`` on the same task file just as the report would. Once
+    the terminal report is in hand they are moot. Basenames are unique (short
+    sha), so no disambiguation is needed.
     """
     consumed_dir = _consumed_dir(report_path)
     for milestone_path in _unconsumed_milestones(report_path):
@@ -992,9 +960,7 @@ def launch_sync(
     describing the outcome: ``timed_out`` plus the report ``type``/``name``/``body``
     and the worker ``branch``. When ``result_path`` is set, the same JSON is also
     written there as the machine-readable contract for programmatic callers.
-
-    Milestones are deliberately not watched here -- see the ``await_report``
-    call below.
+    Milestones are not watched: callers want one terminal result.
     """
     runner = runner or Runner()
     stream: TextIO = sys.stdout if out is None else out
@@ -1028,10 +994,8 @@ def launch_sync(
         worker_name=name,
         pending_shed_check=_worker_has_pending_shed,
         idle_check=functools.partial(_worker_is_idle, runner=runner),
-        # Non-interactive callers want exactly one terminal result: a service
-        # that got a milestone back would emit it as *the* run result and
-        # destroy a worker that is still hardening. Milestones are for the
-        # interactive lead, which can act on them and keep polling.
+        # A milestone returned here would be emitted as *the* run result and the
+        # still-hardening worker destroyed.
         watch_milestones=False,
     )
     branch = f"mngr/{name}"
@@ -1057,9 +1021,8 @@ def launch_sync(
     # ``finish_report_path``, and ``destroy`` only removes the worker's
     # agent/worktree -- not this report, which lives in the caller's runtime dir.
     # Leaving it behind would trap the next ``launch_sync`` on the same task file
-    # (the fixed-path pattern services use). Milestones the worker declared
-    # along the way were ignored by the wait above and are archived for the
-    # same reason -- see ``_archive_milestones``.
+    # (the fixed-path pattern services use). Milestones are archived for the
+    # same reason.
     _archive_report(report_path)
     _archive_milestones(report_path)
     if destroy_on_finish:
