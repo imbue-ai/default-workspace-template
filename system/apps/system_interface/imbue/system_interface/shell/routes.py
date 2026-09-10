@@ -1004,14 +1004,23 @@ def _docking_placement(
     arguments: DocumentOpArguments,
     requester: Address | None,
 ) -> Placement:
-    """Where ``open`` and ``split`` dock: open lands beside the requester's own instance when it is docked (else beside
-    the active group), tabbing into a group already there unless ``new_group``; split follows its anchor and direction."""
+    """Where ``open`` and ``split`` dock: open lands beside the requester's own instance when it is docked, and into the
+    client's active group when there is no such anchor; split follows its anchor and direction.
+
+    "Beside" needs something to be beside. With a docked requester it is that panel, and the op tabs into whatever group
+    already lies to its right (unless ``new_group``) -- an agent asking for a tab next to its own chat. With no docked
+    anchor -- the reactor surfacing an app-launched chat, or any agent surfacing its *own* chat, which by definition is
+    not docked yet -- the fallback anchor is the active group, and "beside" it means a column split whenever it is the
+    rightmost, which it usually is. Those callers all want the tab where the user is already looking, so they get the
+    active group itself. ``new_group`` still overrides, since ``_dock`` honours a direction over that flag.
+    """
     if op == "split":
         return _anchored_placement(layout, arguments, requester)
     requester_panel = panel_id_for_address(layout, requester) if requester is not None else None
+    is_anchored = requester_panel is not None or arguments.new_group
     return Placement(
         anchor_panel_id=requester_panel,
-        direction=Direction.RIGHT,
+        direction=Direction.RIGHT if is_anchored else Direction.WITHIN,
         ratio=arguments.ratio,
         is_new_group=arguments.new_group,
         group_id=mint_group_id(),
