@@ -70,16 +70,17 @@ Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
 testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 
-Once the creation runs end to end on your branch -- reconstruct shape: SKILL.md
-and any scripts exist and `uv run .agents/shared/scripts/validate_skill.py
-.agents/skills/<name>` prints `ok`; pre-existing shape: the app's own tests pass
--- commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
+**Pre-existing shape (app):** once the app's own tests pass on your branch,
+commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit, and make its
 `## Tested` section list exactly what you ran here and what you have not. The
-lead may merge that commit and let the user start using the creation while you
-work through the rest of the pass, so do not stop your turn: push it and go
-straight on to Stage 4. Declaring further milestones later (e.g. once the
-scenarios pass) is at your discretion.
+lead may merge that commit and let the user start using the hardened build
+while you work through the rest of the pass, so do not stop your turn: push it
+and go straight on to Stage 4.
+
+**Reconstruct shape (skill):** do not declare a milestone yet. The user has
+approved only an outline, and a skill whose scenarios have never run is not
+worth putting in front of them; the milestone comes at the end of Stage 4.
 
 ## Stage 4: Scenarios
 
@@ -88,6 +89,17 @@ plus realistic edge cases). Your creation reference gives the scenario specifics
 (for a skill, the scenario template and the fixture-based tests for any external
 data parsing). Fix the creation when a scenario fails; fix the scenario when the
 creation is right but the scenario was wrong.
+
+**Reconstruct shape (skill):** once the scenarios pass and
+`uv run .agents/shared/scripts/validate_skill.py .agents/skills/<name>` prints
+`ok`, commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
+reports (non-blocking)". Name it for what is true at that commit; its
+`## Tested` section lists the scenarios you ran and their results, the
+validation, and what you have not run (the review gates are still ahead). The
+lead may merge that commit so the user can start using the skill while you run
+the review gates and prepare the final gate, so do not stop your turn: push it
+and go straight on to Stage 5. Declaring a further milestone later is at your
+discretion.
 
 ## Stage 5: Review gates
 

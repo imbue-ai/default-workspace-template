@@ -43,10 +43,12 @@ Design rationale and alternatives: `proposal.md` beside this file.
   section listing what remains before `done`.
 - A milestone whose delivery fails is best-effort: the worker continues, and
   `done` still carries everything.
-- In `op-crystallize`, the worker declares a milestone at the end of Stage 3
-  once the creation runs end to end on its branch (reconstruct shape: SKILL.md
-  and scripts exist and `validate_skill.py` passes; pre-existing shape: the
-  app's tests pass). Further milestones (e.g. after scenarios pass) are at the
+- In `op-crystallize` the milestone comes at different points per shape.
+  Pre-existing shape (app): at the end of Stage 3, once the app's tests pass on
+  the branch. Reconstruct shape (skill): at the end of Stage 4, once the
+  scenarios pass and `validate_skill.py` prints `ok` -- not earlier, because at
+  Stage 3 the user has approved only an outline and a skill whose scenarios
+  have never run is not worth their time. Further milestones are at the
   worker's discretion.
 
 ### Lead side
@@ -174,12 +176,14 @@ Design rationale and alternatives: `proposal.md` beside this file.
 
 - "Valid report `name:` values": add "Milestones: `type: milestone`, any
   slug you choose (see `worker-reporting.md`); non-blocking."
-- Stage 3: add a closing paragraph -- once the creation runs end to end on
-  your branch (reconstruct shape: SKILL.md and scripts exist and
-  `validate_skill.py` passes; pre-existing shape: the app's tests pass),
-  commit and declare a milestone named for what is true at that point; its
-  `## Tested` must list exactly what you ran. Further milestones are at your
-  discretion.
+- Stage 3: add a closing paragraph -- pre-existing shape (app): once the
+  app's tests pass on your branch, commit and declare a milestone named for
+  what is true at that point; its `## Tested` must list exactly what you ran.
+  Reconstruct shape (skill): no milestone yet; it comes at the end of Stage 4.
+- Stage 4: add a closing paragraph -- reconstruct shape (skill): once the
+  scenarios pass and `validate_skill.py` prints `ok`, commit and declare the
+  milestone (the review gates are still ahead and `## Tested` says so).
+  Further milestones are at your discretion.
 
 ### `.agents/skills/crystallize-creation/SKILL.md`
 
