@@ -1,11 +1,5 @@
-The latchkey skill now tells agents how to ask for a connection to a domain latchkey has no service for, and -- more importantly -- when not to.
+The latchkey skill now tells agents how to ask for a connection to a domain latchkey has no service for, and when not to.
 
-Which request to send is decided by the error latchkey returned. `No service matches URL` means there is no service for that domain, so the agent asks for a new connection (`type: "custom-service"`). An error naming an existing service (`No credentials found for <service>`, `Request not permitted by the user`) means the service already exists, so the agent asks for permissions on it as before. The skill spells out that the first two of those share HTTP 400, so the message text is what distinguishes them, and that `latchkey curl` exits 0 even when the request failed.
+Which request to send is decided by the error text latchkey returned, not its status or exit code. `No service matches URL` means there is no service for that domain, so the agent asks for a new connection (`type: "custom-service"`); an error naming an existing service (`No credentials found for <service>`, `Request not permitted by the user`) means the service exists, so the agent asks for permissions on it as before. A second workspace whose latchkey does not know the service sends the same `custom-service` request.
 
-The latchkey skill now documents the `scheme` a `custom-service` request must name (`https`, or `http` for a service with no certificate) and that a sign-in URL may use either scheme so long as it belongs to the domain.
-
-The latchkey skill now says a custom-service domain may be a single label, a private suffix or an IPv4 address, as private networks use; the old public-DNS-shaped restrictions are gone.
-
-A second workspace wanting an origin an earlier one connected sends the same `custom-service` request; the skill no longer tells it to send a `predefined` request naming the scope instead.
-
-The latchkey skill notes that reserved, local and punycode names and IP addresses are accepted but shown to the user with a warning.
+A `custom-service` request names a `domain` (ASCII; punycode for anything else) and a `scheme` (`https` or `http`). By default the user pastes a token during approval, sent as a bearer `Authorization` header; a browser sign-in is described with `login_url`, `login_flow` and `login_flow_params`, which mirror the same-named flags of `latchkey services register`. The skill also says when not to go this route at all: a URL that needs no credentials needs no latchkey, and a service that needs a credential shape latchkey cannot attach should be handled with the user instead.

@@ -95,20 +95,24 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 - `scheme` must be one of `"https"` and `"http"`.
 
 By default the user is asked to paste a token during approval, and Latchkey
-will attaches it as part of a `Authorization: Bearer <token>` header.
+attaches it as an `Authorization: Bearer <token>` header.
 
 Alternatively, trigger a browser sign-in flow and have Latchkey retrieve and
 store credentials from the browser, by specifying a `login_flow` and
 `login_flow_params`.
 
 ```bash
-  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login": {"login_url": "https://api.example.com/login", "cookie_url": "https://api.example.com/", "cookie_keys": ["session"]}}}'
+  -d '{... "payload": {"domain": "api.example.com", "scheme": "https", "login_url": "https://api.example.com/login", "login_flow": "cookie-capture", "login_flow_params": {"cookieKeys": ["session"]}}}'
 ```
 
-The `login_flow` and `login_flow_params` fields are the same as the
-`--login-flow` and `--login-flow-params` flags documented in
-`latchkey services register --help`, but beware that you should use this API
-instead of the `latchkey services register` CLI directly.
+The `login_url`, `login_flow` and `login_flow_params` fields are the same as the
+`--login-url`, `--login-flow` and `--login-flow-params` flags documented in
+`latchkey services register --help` (run it to see each flow's parameters), but
+beware that you should use this API instead of the `latchkey services register`
+CLI directly. The three go together: a flow needs a login URL and its
+parameters. The parameters are checked against the flow's schema, so an unknown
+key is refused, and every URL in them (`login_url`, `cookieUrl`, `tokenUrl`)
+must be on `domain` or a subdomain of it.
 
 Furthermore, beware that every login flow has limitations: make sure that the
 login flow you request will actually work for the custom service you're
