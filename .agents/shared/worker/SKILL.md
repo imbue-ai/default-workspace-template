@@ -55,10 +55,6 @@ marked **[shared]**, which live in `.agents/shared/references/`.
 | `TYPE` is `skill`, on an emergent `update` | `update-vs-create-new.md` | update-in-place vs. split-a-new-sibling |
 | `TYPE` is `app` or `system-interface` | `web-frontend-testing.md` | isolated-instance and rendered-page rules |
 
-`verification.md` is in the same directory but appears in no row: the two
-code-guardian gates it invokes are parked, so no run loads it. Its invocations
-stay correct for a by-hand run.
-
 The two conditional cases that need defining:
 
 - **"you reconstruct the work from the lead's session"** -- a skill
