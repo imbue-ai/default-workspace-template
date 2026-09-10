@@ -83,11 +83,11 @@ if [ "${#MNGR_PLUGIN_ARGS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-# --reinstall because the two-step form always ended in one (`mngr plugin add` reinstalls
-# from the receipt): the base is an editable install, so its *code* tracks the tree either
-# way, but its resolved dependencies do not -- and a tree that gained a dependency since
-# the environment was built is the other way a workspace ends up with an mngr that cannot
-# run at all.
+# --reinstall builds the environment from scratch rather than syncing whatever is
+# already there, matching what the update apply does for every tool it refreshes
+# (update_environment.py::_reinstall_tool). It is not what keeps the dependencies
+# current: uv re-resolves a local editable source on every `uv tool install`, which
+# is why the per-app installs below need no such flag.
 uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr" "${MNGR_PLUGIN_ARGS[@]}" --reinstall
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
