@@ -7,22 +7,26 @@ on that -- the OOM band checks in ``system/services/oom_priority``, the
 ``migrate-workspace``'s port scan, and (cross-repo) the minds evals evidence
 capture, which joins each registered app to the program that supervises it. Each
 of them reaches the drop-ins by hand, because neither ``configparser`` nor a
-plain ``cat`` follows supervisord's ``[include]`` -- all but
-``migrate-workspace`` by expanding the glob the config declares, that one by
-reading ``system/supervisord.conf.d/`` under its literal name.
+plain ``cat`` follows supervisord's ``[include]`` -- that is a supervisord
+feature, not a configparser one -- and each expands the glob the config
+declares rather than assuming a directory name.
 
 That makes the glob a real contract, and one that fails *open*: a reader that
 misses the drop-ins still parses a valid config, just an empty one, and its
 assertions pass over nothing at all. These tests pin the contract so that
-degradation is loud.
+degradation is loud, and ``test_every_reader_expands_the_include_globs_alike``
+pins the readers against each other, since each carries its own copy of the
+expansion and a copy that drifts fails in exactly that silent way.
 """
 
 from __future__ import annotations
 
 import configparser
 import glob
+import importlib.util
 import re
 from pathlib import Path
+from types import ModuleType
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
@@ -34,6 +38,8 @@ _DROPIN_DIR = _REPO_ROOT / "system" / "supervisord.conf.d"
 _MAIN_CONFIG_PROGRAMS: frozenset[str] = frozenset()
 
 _SECTION_RE = re.compile(r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE)
+# The manifest reader looks at ``[program:*]`` alone, so parity with it is stated in those terms.
+_PROGRAM_ONLY_RE = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
 
 # The one cross-repo reader of this config, vendored here as part of every release.
 _VENDORED_EVALS_CAPTURE = (
@@ -69,6 +75,104 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
         for section in parser.sections()
         if section.startswith(("program:", "eventlistener:"))
     }
+
+
+# Every in-repo reader of this config, by the path it lives at. They cannot share a helper: they
+# sit in four separate uv workspace members, and two of them are standalone scripts (the scaffolder
+# declares its own PEP 723 dependencies by design). So each carries its own copy of the expansion,
+# and this file pins the copies against each other instead.
+_READER_PATHS: dict[str, Path] = {
+    "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
+    "migrate_workspace": _REPO_ROOT / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
+    "app_manifests": _REPO_ROOT / "system/test_app_manifests.py",
+    "oom_bands": _REPO_ROOT / "system/services/oom_priority/bin/oom_tag_service_test.py",
+}
+
+
+def _load(name: str) -> ModuleType:
+    """Import a reader by path, under its own module name so pytest's own copy is untouched."""
+    spec = importlib.util.spec_from_file_location("_supervisord_reader_" + name, _READER_PATHS[name])
+    assert spec is not None and spec.loader is not None, f"cannot load {_READER_PATHS[name]}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _declared_in(paths: list[Path]) -> set[str]:
+    return {program for path in paths for program in _SECTION_RE.findall(path.read_text())}
+
+
+def _program_names_in(paths: list[Path]) -> set[str]:
+    return {name for path in paths for name in _PROGRAM_ONLY_RE.findall(path.read_text())}
+
+
+def _write_workspace_with_dropins_at(root: Path, dropin_dir: str) -> None:
+    """A workspace whose programs live in a directory of its own choosing, declared by glob."""
+    (root / "system" / dropin_dir).mkdir(parents=True)
+    (root / "system/supervisord.conf").write_text(
+        "[supervisord]\nnodaemon=true\n\n[include]\nfiles = %(here)s/" + dropin_dir + "/*.conf\n"
+    )
+    (root / "system" / dropin_dir / "todo.conf").write_text("[program:todo]\ncommand=todo-app\n")
+    (root / "system" / dropin_dir / "watchdog.conf").write_text(
+        "[eventlistener:watchdog]\ncommand=watchdog\n"
+    )
+
+
+def test_every_reader_expands_the_include_globs_alike() -> None:
+    """All four in-repo readers see the same programs this file does, for the shipped config.
+
+    The expansion is written out once per reader, so any two can drift apart -- and the failure is
+    silent in the same way a missed glob is: the reader that drifted returns a smaller set, or an
+    empty one, and goes on asserting over it. Nothing else compares them; the other tests here each
+    check the layout against itself.
+
+    A reader is compared on what it concludes, not on how it spells the expansion, so a rewrite
+    that keeps the answer is free.
+    """
+    canonical_files = [_SUPERVISORD_CONF] + _expand_include_patterns(_parse_main_config())
+    canonical = _declared_in(canonical_files)
+    assert canonical, "no programs found at all -- the fixture, not the readers, is wrong"
+
+    assert _declared_in(_load("scaffolder")._supervisord_conf_files(_SUPERVISORD_CONF)) == canonical
+    assert _declared_in(_load("migrate_workspace")._local_supervisord_configs(_REPO_ROOT)) == canonical
+    # These two return command-by-name rather than a file list; the names are the shared claim.
+    # The band reader covers event listeners as well, the manifest reader programs only.
+    assert set(_load("oom_bands")._command_by_supervisord_program()) == canonical
+    assert set(_load("app_manifests")._command_by_program()) == _program_names_in(canonical_files)
+
+
+def test_every_reader_honours_a_dropin_directory_the_config_names_itself(tmp_path: Path) -> None:
+    """Which directory holds the drop-ins is the workspace's to declare, not a constant to assume.
+
+    Agreeing about the shipped config is not enough to prove that: this repo declares
+    ``supervisord.conf.d/*.conf``, so a reader that simply hardcodes that directory agrees with
+    every other reader and the test above stays green. It is only against a workspace that chose a
+    different name that assuming and reading come apart -- and the reader that assumes finds nothing
+    at all, which is the silent-empty-set failure this file exists to make loud.
+
+    ``migrate-workspace`` in particular reads a FOREIGN workspace over SSH, one someone else
+    configured, so it is the reader for which this matters most.
+    """
+    _write_workspace_with_dropins_at(tmp_path, "programs.d")
+    conf = tmp_path / "system/supervisord.conf"
+    expected = {"todo", "watchdog"}
+
+    scaffolder = _load("scaffolder")
+    migrate = _load("migrate_workspace")
+
+    assert _declared_in(scaffolder._supervisord_conf_files(conf)) == expected
+    assert _declared_in(migrate._local_supervisord_configs(tmp_path)) == expected
+
+    # The other two take their config path from a module constant rather than an argument, so they
+    # are pointed at this workspace by rebinding it on the private copy loaded above -- these are
+    # throwaway module objects, not the ones pytest collected.
+    oom_bands = _load("oom_bands")
+    oom_bands._SUPERVISORD_CONF = conf
+    app_manifests = _load("app_manifests")
+    app_manifests._SUPERVISORD_CONF = conf
+
+    assert set(oom_bands._command_by_supervisord_program()) == expected
+    assert set(app_manifests._command_by_program()) == {"todo"}
 
 
 def test_include_glob_matches_every_dropin_file() -> None:
