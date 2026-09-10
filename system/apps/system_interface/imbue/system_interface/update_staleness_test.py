@@ -55,27 +55,28 @@ _IRRELEVANT_PATHS = (
 @pytest.mark.parametrize(
     ("path", "is_relevant"),
     [
-        # The settings file the long-lived mngr config parser re-reads.
-        (".mngr/settings.toml", True),
+        # The mngr settings file: never read by this process.
+        (".mngr/settings.toml", False),
         # Every manifest the served environment was resolved from.
-        ("pyproject.toml", True),
-        ("uv.lock", True),
         ("system/apps/system_interface/pyproject.toml", True),
-        ("system/services/oom_priority/pyproject.toml", True),
-        ("system/libs/tk_command_parsing/pyproject.toml", True),
+        ("pyproject.toml", True),
+        # ... but not the manifests of another app's dependencies, which another process runs.
+        ("system/services/oom_priority/pyproject.toml", False),
+        ("system/libs/tk_command_parsing/pyproject.toml", False),
+        # ... nor the root lockfile, which every scaffolded app relocks.
+        ("uv.lock", False),
         # The backend this process is running.
         ("system/apps/system_interface/imbue/system_interface/server.py", True),
         # ... but not its tests, which no running process holds.
         ("system/apps/system_interface/imbue/system_interface/server_test.py", False),
         ("system/apps/system_interface/imbue/system_interface/test_layout_pipeline.py", False),
-        # Workspace libraries imported in-process through editable installs.
-        ("system/services/oom_priority/src/oom_priority/bands.py", True),
-        ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", True),
+        # Workspace libraries another app imports and this process does not.
+        ("system/services/oom_priority/src/oom_priority/bands.py", False),
+        ("system/libs/tk_command_parsing/src/tk_command_parsing/parser.py", False),
         # A workspace library this process does not import.
         ("system/libs/bootstrap/src/bootstrap/manager.py", False),
-        # The vendored mngr, imported in-process and shelled out to. Broader
-        # than `.py` on purpose: this process reads that tree at runtime
-        # through more than its Python.
+        # The vendored mngr tree, which counts as a whole (this process imports
+        # its shared libraries). Broader than `.py` on purpose.
         ("system/vendor/mngr/libs/mngr/imbue/mngr/api/list.py", True),
         ("system/vendor/mngr/libs/mngr/imbue/mngr/help/topics.toml", True),
         # ... except its documentation and its tests, which nothing holds in
@@ -200,6 +201,35 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(repo, "ordinary work and bookkeeping", *_IRRELEVANT_PATHS)
+    assert tracker.staleness() is None
+
+
+def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
+    # Scaffolding an app -- the routine action the build-app skill documents --
+    # writes the package under ``system/apps/``, appends a supervisord program
+    # block, and relocks so the root lockfile covers the new workspace member.
+    # None of that moves what this process resolved, so the banner must stay
+    # down: firing on every app a user builds is how a banner stops being read.
+    # Every file ``scaffold_flask_lib.py`` writes is listed, so a rule that
+    # later caught any one of them fails here rather than in a user's
+    # workspace. The root ``pyproject.toml`` is absent because the scaffold does
+    # not edit it -- the ``system/apps/*`` member glob picks the package up --
+    # which is why it can stay a staleness trigger.
+    repo = git_work_dir
+    tracker = UpdateStalenessTracker.capture(repo_root=repo)
+    _commit_files(
+        repo,
+        "scaffold a new app",
+        "uv.lock",
+        "system/supervisord.conf",
+        "system/apps/finances/pyproject.toml",
+        "system/apps/finances/app.toml",
+        "system/apps/finances/README.md",
+        "system/apps/finances/icon.svg",
+        "system/apps/finances/test_finances_ratchets.py",
+        "system/apps/finances/src/finances/__init__.py",
+        "system/apps/finances/src/finances/runner.py",
+    )
     assert tracker.staleness() is None
 
 
