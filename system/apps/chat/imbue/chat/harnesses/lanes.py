@@ -80,6 +80,8 @@ class PasteSink(StrEnum):
     CLAUDE_ENV = "claude_env"
     # A 0600 JSON map keyed by pi's provider id.
     PI_AUTH_JSON = "pi_auth_json"
+    # codex's own 0600 auth.json, holding a raw key in API-key mode.
+    CODEX_AUTH_JSON = "codex_auth_json"
 
 
 class Scrape(FrozenModel):
@@ -289,14 +291,16 @@ LANE_ANTHROPIC = Lane(
 )
 
 # --- codex ------------------------------------------------------------------------------
-# Inverted from every other lane: the URL is fixed and the CODE is what gets scraped, the
-# user types it into the browser, and nothing comes back to the terminal. The CLI polls and
-# exits 0 on its own, so process exit is the success signal.
+# Its device flow is inverted from every other PTY method: the URL is fixed and the CODE is
+# what gets scraped, the user types it into the browser, and nothing comes back to the
+# terminal. The CLI polls and exits 0 on its own, so process exit is the success signal.
+# Pasting a key skips all of that -- it is a plain file write, and the only method on this
+# lane that can be driven without a person at a browser.
 
 LANE_OPENAI = Lane(
     id="openai",
     provider_name="OpenAI",
-    subtitle="Use your ChatGPT Plus or Pro subscription. Free accounts get limited coding usage.",
+    subtitle="Use your ChatGPT Plus or Pro subscription, or pay per token.",
     harness=HarnessType.CODEX,
     methods=(
         PtyMethod(
@@ -314,6 +318,15 @@ LANE_OPENAI = Lane(
             eof_policy=EofPolicy.SUCCESS,
             # codex renders plainly, without Ink's synchronized updates.
             frame_marker=None,
+        ),
+        # `codex login status`, the promote probe for this lane, is a presence check: it
+        # exits 0 for any key in the file. So a key with a typo in it commits happily here
+        # and surfaces as a failed first turn instead.
+        PasteMethod(
+            id="api_key",
+            label="Use an API key",
+            description="Paste a raw sk-... API key.",
+            sink=PasteSink.CODEX_AUTH_JSON,
         ),
     ),
 )
