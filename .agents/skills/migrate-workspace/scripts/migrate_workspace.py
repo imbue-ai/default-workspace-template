@@ -1429,7 +1429,7 @@ def _local_ports() -> list[AppPort]:
     # only the main config would see no ports at all and report every real app as
     # free -- collisions would surface as two programs bound to the same port
     # after the migration, not here.
-    for conf in _local_supervisord_configs():
+    for conf in _local_supervisord_configs(Path()):
         ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
@@ -1437,7 +1437,7 @@ def _local_ports() -> list[AppPort]:
     return ports
 
 
-def _local_supervisord_configs(repo_root: Path = Path()) -> list[Path]:
+def _local_supervisord_configs(repo_root: Path) -> list[Path]:
     """This workspace's supervisord config files: the main one plus every file its globs match.
 
     The globs come out of the config, the same way the source's do, so a workspace holding its
