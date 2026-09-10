@@ -20,11 +20,10 @@ an ``agent-logs/<agent-name>/pane.txt``: a TUI harness renders the conversation
 into its pane, so its scrollback needs the chats consent as well as the logs
 one. The workspace logs, the harness logs, the log databases and the chats are
 each scanned and released or withheld on their own. Anything requested that is
-not in the archive whole -- a
-class withheld by the secret scan, or one the size budget could not fit -- is a
-plain-words line in the archive's own ``collection-notes.txt`` member, so the
-archive explains itself; a content type that was not requested appears in
-neither the members nor the notes.
+not in the archive whole -- a class withheld by the secret scan, or one the size
+budget could not fit -- is a plain-words line in the archive's own
+``collection-notes.txt`` member, so the archive explains itself; a content type
+that was not requested appears in neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
