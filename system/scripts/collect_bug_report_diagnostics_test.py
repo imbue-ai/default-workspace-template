@@ -1488,16 +1488,24 @@ def test_a_log_db_the_collector_cannot_read_reports_itself_rather_than_raising(
     assert module.read_log_db(str(db_path)).startswith("(unreadable:")
 
 
+@pytest.mark.parametrize(
+    "ts",
+    ["not-a-number", 1789078900123456789],
+    ids=["ts_written_as_text", "ts_bumped_to_nanoseconds"],
+)
 def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raising(
-    tmp_path: Path,
+    tmp_path: Path, ts: object
 ) -> None:
     """A shape change inside a row costs the report the db, not the whole run.
 
     A db that opens and queries fine can still hand back a value the render
     cannot use: SQLite stores what it was given rather than what the column was
-    declared as, so a bumped schema writing a text ``ts`` survives ``NOT NULL``
-    and ``INTEGER`` alike. That is not a ``sqlite3.Error``, so unguarded it
-    would propagate out of ``main()`` and the host would get no archive at all.
+    declared as, so a bumped schema writing a text ``ts``, or one that moved
+    ``ts`` to nanoseconds, survives ``NOT NULL`` and ``INTEGER`` alike. Neither
+    is a ``sqlite3.Error``, and the two raise different exceptions out of
+    ``datetime.fromtimestamp`` -- ``ValueError`` for the text, ``OSError`` for
+    the nanoseconds, which is outside the platform's ``time_t``. Unguarded,
+    either propagates out of ``main()`` and the host gets no archive at all.
     """
     agents_dir = tmp_path / "agents"
     db_path = _write_log_db(agents_dir, "chatty", [])
@@ -1507,7 +1515,7 @@ def test_a_log_db_row_the_render_cannot_format_reports_itself_rather_than_raisin
             "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body)"
             " VALUES (?, ?, ?, ?, ?)",
             (
-                "not-a-number",
+                ts,
                 1,
                 "TRACE",
                 "codex_app_server::message_processor",
