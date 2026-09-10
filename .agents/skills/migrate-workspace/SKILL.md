@@ -331,8 +331,11 @@ resources. Use `rsync` over the SSH session with an `--exclude` for each.
 
 **Creations.** Each app lands under `system/apps/<package>/` and gets a
 `[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
-`system/scripts/forward_port.py` before its own start command, and re-registers its
-port that way -- never by copying the old registry file, which is runtime state. No
+`system/scripts/forward_port.py --manifest` before its own start command, and
+re-registers its port that way -- never by copying the old registry file, which is
+runtime state. The port itself goes in the app's `app.toml` as
+`url = "http://localhost:<port>"`, not on the command as `--url`: the manifest is
+the one place it is written, and what `list-ports` reads on both sides. No
 root `pyproject.toml` entry: the `system/apps/*` member glob picks the package up.
 Land the app in the shape `build-app` writes today -- `uv tool install -e
 system/apps/<package>`, and a program command ending in the app's own name --

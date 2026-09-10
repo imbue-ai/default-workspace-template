@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
+from app_manifest.primitives import loopback_url_port
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,28 @@ _APPS_DIR = _REPO_ROOT / "system" / "apps"
 _SUPERVISORD_CONF = _REPO_ROOT / "system" / "supervisord.conf"
 
 _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
+_LOOPBACK_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
+
+
+def _port_constants(source: str) -> set[int]:
+    """Every ``*_PORT = <int>`` an app's module declares, read from its source."""
+    ports: set[int] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets: list[ast.expr] = [node.target]
+        elif isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        else:
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id.endswith("_PORT")
+            for target in targets
+        ):
+            continue
+        for literal in ast.walk(node.value):
+            if isinstance(literal, ast.Constant) and isinstance(literal.value, int):
+                ports.add(literal.value)
+    return ports
 
 
 # The apps the template ships. Only these are checked: a workspace built from the
@@ -165,6 +188,80 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     # A built-in never sits in the user band: that would shed it before every
     # user-created app.
     assert manifest.priority != "user"
+
+
+def test_every_built_in_app_declares_the_port_it_serves() -> None:
+    """Every built-in manifest names its own ``url``.
+
+    The manifests are what a reader that never starts an app consults for the ports the
+    workspace holds -- the build-app scaffolder's port pre-flight and migrate-workspace's
+    port scan both read them, and for an app whose supervisord command names no port
+    because it registers itself at runtime they are the only static record. One app that
+    stops declaring its url is one port those readers hand out twice.
+    """
+    undeclared = [
+        manifest.name
+        for manifest in map(load_manifest, _built_in_manifest_paths())
+        if manifest.url is None
+    ]
+    assert not undeclared, (
+        f"built-in apps whose manifest declares no url: {undeclared}. Add "
+        'url = "http://localhost:<port>" -- without it the port pre-flight cannot see '
+        "the port this app holds and will hand it to a new app."
+    )
+
+
+def test_no_two_built_in_apps_declare_the_same_port() -> None:
+    """No port is claimed twice across the built-in manifests.
+
+    Two apps on one port is a bind failure and a supervisord crash loop for whichever
+    starts second, and nothing upstream of this catches it: ``forward_port.py`` upserts
+    by name and never compares ports.
+    """
+    holders: dict[int, list[str]] = {}
+    for manifest in map(load_manifest, _built_in_manifest_paths()):
+        for url in (manifest.url, manifest.instances_url):
+            if url is not None:
+                holders.setdefault(loopback_url_port(url), []).append(manifest.name)
+    shared = {port: names for port, names in holders.items() if len(names) > 1}
+    assert not shared, f"ports declared by more than one built-in app: {shared}"
+
+
+def test_a_built_in_app_names_no_port_its_manifest_does_not_declare() -> None:
+    """An app's own source holds no port beyond the ones its manifest declares.
+
+    The manifest is where an app's port is written; a second copy in the source is a
+    copy that can drift, and the drift is silent until the app registers one port and
+    binds another. Both spellings count: a loopback URL literal and a ``*_PORT`` integer
+    constant.
+    """
+    stray: dict[str, set[int]] = {}
+    for package in _BUILT_IN_APP_PACKAGES:
+        manifest = load_manifest(_APPS_DIR / package / MANIFEST_FILENAME)
+        declared = {
+            loopback_url_port(url)
+            for url in (manifest.url, manifest.instances_url)
+            if url is not None
+        }
+        found: set[int] = set()
+        for source in (_APPS_DIR / package).rglob("*.py"):
+            # Test infrastructure names ports freely: fixture origins, and the
+            # deliberately-dead ``http://localhost:1`` the conftests point at.
+            if (
+                source.name in ("conftest.py", "testing.py")
+                or source.name.endswith("_test.py")
+                or source.name.startswith("test_")
+            ):
+                continue
+            text = source.read_text()
+            found.update(int(match) for match in _LOOPBACK_PORT_RE.findall(text))
+            found.update(_port_constants(text))
+        if found - declared:
+            stray[manifest.name] = found - declared
+    assert not stray, (
+        f"ports named in an app's source that its manifest does not declare: {stray}. "
+        "Read the port from the manifest instead, or declare it there."
+    )
 
 
 def test_built_in_manifests_agree_with_the_contract_table() -> None:

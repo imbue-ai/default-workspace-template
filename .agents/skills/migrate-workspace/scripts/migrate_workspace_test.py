@@ -478,29 +478,75 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
     ]
 
 
-def test_parse_supervisord_ports_reads_the_real_template_config(
+def test_the_local_port_scan_finds_every_built_in_app_in_the_real_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Read through the scan's own file list rather than a copy of it, so this checks the parser
-    # against the config the scan is actually given: the main file plus its drop-ins, which is
-    # where every program now lives. A hand-rolled list would keep passing if the scan itself
-    # stopped finding the drop-ins. The list is relative to the workspace root, hence the chdir.
+    """The real scan, over the real tree, accounts for every built-in app's port.
+
+    Run through ``_local_ports`` rather than a hand-rolled file list, so this fails if the
+    scan stops finding one of its sources rather than passing over a shorter list. The
+    ports come from the manifests: an app's ``app.toml`` declares the origin it serves,
+    which is the one record that covers an app registering itself at runtime (chat, files
+    and terminal all do) and the only one committed to the repo, since the runtime
+    registry under ``data/.state/`` is gitignored and absent here.
+    """
     monkeypatch.chdir(Path(__file__).resolve().parents[4])
-    ports = [
+    ports = migrate_workspace._local_ports()
+
+    assert {(port.name, port.port) for port in ports} >= {
+        ("system_interface", 8000),
+        ("chat", 8010),
+        ("browser", 8081),
+        ("files", 8300),
+        ("files", 8301),
+        ("terminal", 7681),
+        ("terminal", 7682),
+    }
+    # The supervisord config names no port of its own any more: a program's command
+    # registers through its manifest and lets the manifest say where the app serves.
+    config_ports = [
         port
         for conf in migrate_workspace._local_supervisord_configs()
         for port in migrate_workspace.parse_supervisord_ports(
             conf.read_text(encoding="utf-8")
         )
     ]
-    # The chat, the terminal and the files app register from inside their own processes
-    # (the registry scan covers them), so the config itself names the other two.
-    assert {(port.name, port.port) for port in ports} >= {
-        ("system_interface", 8000),
-        ("browser", 8081),
-    }
-    assert not {port.name for port in ports} & {"terminal", "files", "chat"}
-    assert [port.name for port in ports].count("system_interface") == 1
+    assert config_ports == []
+
+
+def test_parse_app_manifest_ports_reads_both_origins_a_manifest_declares() -> None:
+    ports = migrate_workspace.parse_app_manifest_ports(
+        'name = "files"\n'
+        'display_name = "File Viewer"\n'
+        'url = "http://localhost:8300"\n'
+        "instances = true\n"
+        'instances_url = "http://127.0.0.1:8301"\n'
+    )
+
+    assert [(port.name, port.port) for port in ports] == [
+        ("files", 8300),
+        ("files", 8301),
+    ]
+    assert [port.found_in for port in ports] == [
+        "app.toml url",
+        "app.toml instances_url",
+    ]
+
+
+def test_parse_app_manifest_ports_ignores_a_registry_document() -> None:
+    """A registry is an array of tables with no top-level name, so it reports nothing here.
+
+    ``app.toml`` and ``data/.state/apps.toml`` are told apart by basename when the remote
+    read is classified; this is the backstop if that ever slips -- reading a registry as a
+    manifest must come back empty rather than inventing a port for an app named after
+    whatever the first key happened to be.
+    """
+    assert (
+        migrate_workspace.parse_app_manifest_ports(
+            '[[apps]]\nname = "dashboard"\nurl = "http://localhost:8091"\n'
+        )
+        == []
+    )
 
 
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
