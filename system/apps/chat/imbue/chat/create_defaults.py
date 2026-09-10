@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import tomllib
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -178,13 +177,3 @@ def write_create_defaults(path: Path, defaults: CreateDefaults | None) -> None:
         path.unlink(missing_ok=True)
         return
     _write_document(path, document)
-
-
-def read_create_defaults_type(path: Path) -> str | None:
-    """The `commands.create.type` the file names, or None when it names none or is absent."""
-    if not path.exists():
-        return None
-    raw = tomllib.loads(path.read_text())
-    create = raw.get(_COMMANDS_KEY, {}).get(_CREATE_KEY, {})
-    agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
-    return agent_type if isinstance(agent_type, str) and agent_type else None

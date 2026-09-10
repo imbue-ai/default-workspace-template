@@ -18,9 +18,9 @@ from imbue.chat.create_defaults import PROVISION_COMMAND_KEY
 from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.create_defaults import managed_create_settings
-from imbue.chat.create_defaults import read_create_defaults_type
 from imbue.chat.create_defaults import write_create_defaults
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.testing import read_create_defaults_type
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.mngr.config.loader import load_config
 from imbue.mngr.main import get_or_create_plugin_manager

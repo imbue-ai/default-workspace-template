@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Generator
@@ -57,6 +58,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
+from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
@@ -196,6 +198,16 @@ class RecordingShell(MutableModel):
     def open_chat(self, agent_id: str, client_id: str) -> bool:
         self.opens.append((agent_id, client_id))
         return client_id not in self.refused_client_ids
+
+
+def read_create_defaults_type(path: Path) -> str | None:
+    """The `commands.create.type` the workspace's local mngr settings name, or None when they name none."""
+    if not path.exists():
+        return None
+    raw = tomllib.loads(path.read_text())
+    create = raw.get("commands", {}).get("create", {})
+    agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
+    return agent_type if isinstance(agent_type, str) and agent_type else None
 
 
 class RecordingClientActivityShell:
