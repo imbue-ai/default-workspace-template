@@ -18,6 +18,7 @@ from host_backup.runner import (
     ENV_RECORD_CAPTURE_TIMEOUT_SECONDS,
     _age_out_restore_markers,
     _check_secrets_present,
+    _cleanup_snapshot,
     _emit_tick_error,
     _load_config_if_changed,
     _LoopState,
@@ -246,6 +247,34 @@ def test_every_way_a_tick_ends_emits_a_terminal_event(
     observed.add(last_event_type(state.events_dir))
 
     assert observed == TICK_TERMINAL_EVENT_TYPES
+
+
+def test_cleanup_runs_with_no_snapshot_result_in_hand(tmp_path: Path) -> None:
+    """Cleanup must work without a SnapshotResult: a tick aborted at the snapshot step has none.
+
+    That is the tick whose snapshot the outer helper has already created, so it
+    is exactly the one whose snapshots would otherwise pile up unreclaimed.
+    """
+    events_dir = tmp_path / "events"
+    # OUTER_TRIGGER with no paths makes make_snapshot_taker raise, which is the
+    # cheapest way to reach cleanup's own failure report -- the branch that used
+    # to read the snapshot result for the path it names.
+    state = _LoopState(BackupCapabilities(method=SnapshotMethod.OUTER_TRIGGER))
+    state.events_dir = events_dir
+    state.current_tick_id = "tick-under-test"
+
+    _cleanup_snapshot(state=state, snapshot=None)
+
+    deleted_events = [
+        event
+        for event in _read_events(events_dir)
+        if event["type"] == "SNAPSHOT_DELETED"
+    ]
+    assert len(deleted_events) == 1
+    assert deleted_events[0]["method"] == "OUTER_TRIGGER"
+    assert deleted_events[0]["success"] is False
+    assert deleted_events[0]["snapshot_path"] == ""
+    assert deleted_events[0]["error_message"]
 
 
 def test_refresh_environment_record_emits_success_event(tmp_path: Path) -> None:
