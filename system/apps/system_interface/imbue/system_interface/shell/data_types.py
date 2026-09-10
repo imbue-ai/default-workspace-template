@@ -51,10 +51,9 @@ class Project(FrozenModel):
     shortcuts: tuple[Shortcut, ...] = Field(description="The rail rows, in rail order")
 
 
-# The ``kind`` a dockview panel's ``params`` carry (contracts.md section 6): an instance panel names
-# what it shows, a launcher panel is the New Tab page and names nothing.
+# The ``kind`` the ``params`` of a dockview panel showing an instance carry (contracts.md section 6). A
+# launcher panel (the New Tab page) carries another kind and names no instance, so the shell never looks for it.
 INSTANCE_PANEL_KIND: Final[str] = "instance"
-LAUNCHER_PANEL_KIND: Final[str] = "launcher"
 
 
 class InstancePanelParams(FrozenModel):
