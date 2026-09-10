@@ -17,6 +17,13 @@ from imbue.modal_app_kit.sentry import init_sentry
 from imbue.modal_app_kit.sentry import resolve_sentry_dsn
 from imbue.modal_app_kit.sentry import resolve_sentry_environment
 
+# These tests usually run in well under a second, but on cold offload sandboxes
+# (base image still building, I/O saturated) the sentry SDK's first-use setup has
+# blown the global 10s pytest-timeout in CI -- on both the first attempt and the
+# flaky retry -- so the module gets a wider 30s bound in addition to opting into
+# offload's automatic flaky retry.
+pytestmark = [pytest.mark.flaky, pytest.mark.timeout(30)]
+
 
 class _ExampleError(Exception):
     """Distinct exception type for rate-limiter keying tests."""
@@ -63,6 +70,37 @@ def _init_sentry_with_capturing_transport(monkeypatch: pytest.MonkeyPatch) -> li
 
 def _captured_events(captured_envelopes: list[Any]) -> list[Any]:
     return [item.payload.json for envelope in captured_envelopes for item in envelope.items]
+
+
+def _event_own_message(event: Any) -> str:
+    """The event's own message -- never its breadcrumbs, so an info line riding along as
+    a breadcrumb on a warning event does not count as an event of its own.
+    """
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict) and isinstance(logentry.get("message"), str):
+        return logentry["message"]
+    message = event.get("message")
+    if isinstance(message, str):
+        return message
+    exception = event.get("exception")
+    if isinstance(exception, dict):
+        values = exception.get("values")
+        if isinstance(values, list) and values and isinstance(values[-1].get("value"), str):
+            return values[-1]["value"]
+    return ""
+
+
+def _events_matching(captured_envelopes: list[Any], probe: str) -> list[Any]:
+    """Captured events whose own message carries ``probe`` (a per-test uuid).
+
+    The SDK's LoggingIntegration is process-global: every WARNING-or-worse record
+    anywhere in the process becomes an event on whichever client is active, so this
+    capturing transport is a shared sink that unrelated, concurrent warnings also
+    land in. Selecting by the test's own probe keeps each assertion counting only the
+    events it generated, rather than an exact total that a stray warning inflates
+    (the MIND-228 flake).
+    """
+    return [event for event in _captured_events(captured_envelopes) if probe in _event_own_message(event)]
 
 
 def test_resolve_sentry_environment_prefers_env_name_over_tier() -> None:
@@ -151,13 +189,6 @@ def test_init_sentry_is_a_noop_without_a_dsn(monkeypatch: pytest.MonkeyPatch, is
     assert not sentry_sdk.get_client().is_active()
 
 
-# Two separate costs land in this package's 10s budget, and either can blow it
-# on a slow sandbox. One is sentry-sdk's one-time default-integration import,
-# paid by whichever of these tests inits first in a worker process; the session
-# fixture in conftest.py moves that out of the measured window. The other is the
-# DSN lookup described above test_init_sentry_reports_..., which is still paid
-# in the body. The markers cover what is left.
-@pytest.mark.flaky
 def test_init_sentry_activates_and_tags_service_with_a_dsn(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:
@@ -171,19 +202,14 @@ def test_init_sentry_activates_and_tags_service_with_a_dsn(
     assert client.options["traces_sample_rate"] == 0.0
     assert client.options["send_default_pii"] is False
 
-    sentry_sdk.capture_message(f"tag probe {uuid4().hex}")
-    sentry_sdk.flush(timeout=5)
+    probe = uuid4().hex
+    sentry_sdk.capture_message(f"tag probe {probe}")
 
-    assert len(captured_envelopes) == 1
-    event = captured_envelopes[0].items[0].payload.json
+    (event,) = _events_matching(captured_envelopes, probe)
     assert event["tags"]["service"].startswith("test-service-")
     assert event["server_name"].startswith("test-service-")
 
 
-# Flaky: timed out (>10s) once in offload CI (PR #655) while running ~2.5s
-# locally over dozens of runs; the flush is a no-op with the capturing
-# transport, so the stall was sandbox load, not this test's own work.
-@pytest.mark.flaky
 def test_init_sentry_reports_warning_logs_as_events_and_info_logs_as_breadcrumbs_only(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:
@@ -197,14 +223,12 @@ def test_init_sentry_reports_warning_logs_as_events_and_info_logs_as_breadcrumbs
     warning_probe = f"tolerated failure probe {uuid4().hex}"
     test_logger.info(info_probe)
     test_logger.warning(warning_probe)
-    sentry_sdk.flush(timeout=5)
 
-    events = _captured_events(captured_envelopes)
-    assert len(events) == 1
-    assert events[0]["level"] == "warning"
-    assert warning_probe in events[0]["logentry"]["message"]
-    # The info line rode along as a breadcrumb on the warning event, not as its own event.
-    breadcrumb_messages = [crumb.get("message", "") for crumb in events[0].get("breadcrumbs", {}).get("values", [])]
+    # The info line stayed a breadcrumb on the warning event rather than minting its own.
+    assert _events_matching(captured_envelopes, info_probe) == []
+    (event,) = _events_matching(captured_envelopes, warning_probe)
+    assert event["level"] == "warning"
+    breadcrumb_messages = [crumb.get("message", "") for crumb in event.get("breadcrumbs", {}).get("values", [])]
     assert any(info_probe in message for message in breadcrumb_messages)
 
 
@@ -212,7 +236,6 @@ def test_capture_unexpected_exception_returns_none_without_an_active_client(isol
     assert capture_unexpected_exception(_ExampleError("unreported 8802")) is None
 
 
-@pytest.mark.flaky
 def test_capture_unexpected_exception_returns_the_event_id_when_reporting_is_active(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:
@@ -222,12 +245,11 @@ def test_capture_unexpected_exception_returns_the_event_id_when_reporting_is_act
         raise _ExampleError("unexpected failure 9917")
     except _ExampleError as exc:
         event_id = capture_unexpected_exception(exc)
-    sentry_sdk.flush(timeout=5)
 
     assert event_id is not None
-    events = _captured_events(captured_envelopes)
-    assert len(events) == 1
-    assert events[0]["event_id"] == event_id
+    matching = [event for event in _captured_events(captured_envelopes) if event.get("event_id") == event_id]
+    assert len(matching) == 1
+    assert matching[0]["exception"]["values"][0]["value"] == "unexpected failure 9917"
 
 
 def test_capture_and_reraise_reraises_the_original_exception(isolated_sentry_client: None) -> None:
@@ -240,11 +262,6 @@ def test_capture_and_reraise_reraises_the_original_exception(isolated_sentry_cli
         raise AssertionError("capture_and_reraise swallowed the exception")
 
 
-# Flaky: same >10s offload-CI timeout signature as the warning-breadcrumb
-# test above (sandbox load stalling a test that runs in ~2.5s locally); the
-# capturing transport makes the flush a no-op, so the stall is not this
-# test's own work.
-@pytest.mark.flaky
 def test_init_sentry_never_reports_modal_client_logger_records(
     monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
 ) -> None:
@@ -255,11 +272,28 @@ def test_init_sentry_never_reports_modal_client_logger_records(
     our_probe = f"our warning probe {uuid4().hex}"
     logging.getLogger("modal-client").warning(modal_probe)
     logging.getLogger(f"modal_app_kit_sentry_test_{uuid4().hex}").warning(our_probe)
-    sentry_sdk.flush(timeout=5)
 
-    events = _captured_events(captured_envelopes)
-    assert len(events) == 1
-    assert our_probe in events[0]["logentry"]["message"]
+    assert _events_matching(captured_envelopes, modal_probe) == []
+    (event,) = _events_matching(captured_envelopes, our_probe)
+    assert our_probe in event["logentry"]["message"]
+
+
+def test_capturing_assertions_isolate_a_probe_from_unrelated_concurrent_events(
+    monkeypatch: pytest.MonkeyPatch, isolated_sentry_client: None
+) -> None:
+    """Pins MIND-228: an unrelated concurrent WARNING also reaches the shared sink (see
+    ``_events_matching``), but selecting by the test's own probe still isolates exactly
+    the intended event. Asserting an exact event total was the original flake.
+    """
+    captured_envelopes = _init_sentry_with_capturing_transport(monkeypatch)
+
+    our_probe = f"intended probe {uuid4().hex}"
+    unrelated_probe = f"unrelated churn {uuid4().hex}"
+    logging.getLogger(f"modal_app_kit_sentry_test_{uuid4().hex}").warning(our_probe)
+    logging.getLogger(f"unrelated_component_{uuid4().hex}").warning(unrelated_probe)
+
+    assert len(_events_matching(captured_envelopes, unrelated_probe)) == 1
+    assert len(_events_matching(captured_envelopes, our_probe)) == 1
 
 
 def test_capture_and_reraise_logs_one_error_record_and_reports_one_event(
@@ -267,18 +301,19 @@ def test_capture_and_reraise_logs_one_error_record_and_reports_one_event(
 ) -> None:
     captured_envelopes = _init_sentry_with_capturing_transport(monkeypatch)
 
+    cron_failure = f"cron failure {uuid4().hex}"
     with caplog.at_level(logging.ERROR, logger="imbue.modal_app_kit.sentry"):
         with pytest.raises(_ExampleError):
             with capture_and_reraise():
-                raise _ExampleError("cron failure 9042")
+                raise _ExampleError(cron_failure)
 
     error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
     assert len(error_records) == 1
     assert error_records[0].exc_info is not None
     assert isinstance(error_records[0].exc_info[1], _ExampleError)
-    assert "cron failure 9042" in str(error_records[0].exc_info[1])
-    # The logging integration would report the ERROR record as a second event
-    # were the SDK not deduping it against the explicit capture.
-    events = _captured_events(captured_envelopes)
-    assert len(events) == 1
-    assert "cron failure 9042" in events[0]["exception"]["values"][0]["value"]
+    assert cron_failure in str(error_records[0].exc_info[1])
+    # The logging integration would report the ERROR record as a second event of
+    # our own were the SDK not deduping it against the explicit capture.
+    matching = _events_matching(captured_envelopes, cron_failure)
+    assert len(matching) == 1
+    assert cron_failure in matching[0]["exception"]["values"][0]["value"]

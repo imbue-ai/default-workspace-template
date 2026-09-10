@@ -150,6 +150,130 @@ second gateway URL or a different agent skill.
    response event log via `/ui/api/inbox/resolutions`. Once the
    transcript's own classified resolution lands, it takes over.
 
+## Creating a connection an agent asks for
+
+Most third-party services come from Minds' shipped catalog. When an agent needs
+a domain that catalog has no entry for, it can ask for the connection to be
+*created*: it submits a `custom-service` permission request naming the domain
+and, optionally, how the service signs in through a browser. One Approve both creates
+the connection and grants the asking machine access to it.
+
+The dialog is the simplest of the kinds, and deliberately so:
+
+* It is headed by a globe and "Storing credentials for **the origin**" -- there is no display-name field
+  on the request, here or on the wire. A custom service is labelled by its
+  domain everywhere it is named, because that is the one string that cannot
+  misdescribe what the connection reaches. The agent's rationale is the only
+  agent-authored text on screen, and it appears under **Reason** as the agent's
+  claim rather than as the app's description of the service.
+* There is **no account picker**: the workspace's machine has no account for
+  the service yet, whether the service is being created or this computer
+  already has it, and the sign-in (or the typed credentials) establishes the
+  one the grant rides on.
+* There is **no permission editor and no "Adjust" link**: the grant is
+  all-or-nothing on a scope already pinned to a single domain, so there is
+  nothing to narrow.
+* When the request carries a browser sign-in, the dialog names the URL the
+  browser will open, and Approve reads "Sign in & approve".
+* When it does not, credentials still have to be established -- "no sign-in
+  flow" does not mean "no credentials", since Latchkey refuses a request to a
+  registered service with nothing stored, so a domain with genuinely no
+  authentication is not reachable this way. Unlike a catalog service, the form
+  cannot be part of the first render: the service does not exist yet, so it has
+  no credential command to build inputs from. The first Approve therefore
+  registers it and comes back asking, and the second supplies the values -- the
+  same two-step a catalog service falls into when its credentials turn out to
+  need typing (see [Manual credential entry](#manual-credential-entry)). A
+  rejected value re-shows the form with the reason, rather than failing the
+  request.
+
+Approving registers the service in Latchkey's own `config.json` unless this
+computer already has it, connects an account on the workspace's machine, and
+then writes the grant -- the account-scoped rule plus the scope's own
+definition, since a custom scope is not a Detent builtin -- into the agent's
+per-host permissions file through `POST /permissions/rules`, the same write a
+predefined grant makes, and drops the gateway's pending record. The gateway's
+`permission-requests` extension decides nothing about a custom service beyond
+the shape of the request. A failure at any step leaves the request
+**pending** with no response event, exactly as a failed predefined approval
+does, so the user can fix the problem and click Approve again and the agent is
+never told it was denied. Denying registers nothing and leaves no trace of the
+proposed service.
+
+A second workspace asking for an origin some earlier one connected is the
+common case, not an error: its own gateway has no service for the origin, so
+`custom-service` is the only request it can make. The dialog then says the
+connection already exists on this computer and names the sign-in of the
+registration this computer has -- the request's `login` counts only for a
+service being created -- and approving connects that workspace to the service
+as it is.
+
+What the request may name is deliberately wide: a private network may call
+its services whatever it likes, and the dialog shows exactly which origin is
+being approved. The domain is a bare ASCII hostname -- dot-separated labels of
+letters, digits and hyphens, so a single label, a private suffix or an IPv4
+address are all fine, and a non-ASCII name arrives as its punycode -- with
+three refusals: anything beyond a bare host (a scheme, port, path, underscore
+or wildcard), a name longer than DNS allows, and the gateway's own address. The
+request names the scheme, `https` or `http` -- the latter for a service on
+a private network with no certificate; the dialog shows the resulting origin rather than the bare domain,
+and says outright when it is plain http, since that is the difference between
+credentials sent encrypted and in the clear. The grant pins both the domain and
+the scheme, so it covers exactly the origin the dialog showed.
+
+A browser sign-in is a `login` object described the way `latchkey services
+register` takes it: `url`, `flow` (`cookie-capture` or `token-capture`) and
+`flow_params`, the flow's own parameters keyed as latchkey keys them
+(`cookieKeys`/`cookieUrl`, `tokenUrl`/`tokenField`/`header`); all three are
+required inside it, and the object is omitted for a service with no browser
+sign-in. It is not passed through blind: the gateway and the
+desktop both deserialize the parameters against the flow's schema and refuse
+an unknown key, and every URL among them -- the login page, `cookieUrl`,
+`tokenUrl` -- may use either scheme but must be on the approved domain or a
+subdomain of it, so where the browser goes and where the captured credentials
+apply is always what the dialog named. What passes is registered exactly as
+the agent sent it.
+
+Some valid names still get a warning line in the dialog, in place of the old
+hard refusals: a reserved name nothing answers to (`.invalid`, `.test`,
+`.example`, `example.com` and its siblings, `.onion`), a name the workspace
+machine's own network resolves (`localhost`, a single label, `.local`,
+`.internal`, `.lan`, `.corp`, `.home`, `.home.arpa`), any IP address, and a
+punycode label that could look like another site. The classification lives in
+`custom_services.domain_warning` and is advisory: nothing is blocked, and the
+line is worded as "make sure you know what this is", since a private network
+calls its services what it likes.
+
+An agent is not supposed to ask for a domain some *other* service already
+covers, and does not need Minds to stop it: Latchkey answers that question
+first. A request to a domain no service covers fails with `No service matches
+URL`, and that is the only error the workspace's latchkey skill treats as
+grounds for asking to create a connection; an error naming a service sends it
+to an ordinary permission request instead. Were one to slip through anyway, the
+duplicate is inert rather than dangerous -- Detent takes the first rule whose
+scope matches, so the second never applies.
+
+Once created, a custom service is an ordinary connection: it appears in the
+Permissions tab and on the Connectors page with its account, and its access can
+be revoked there. Latchkey re-reads its registrations on every request, so the
+new service is usable immediately, with no gateway restart.
+
+A remote workspace's machine keeps its own `config.json`, seeded from this
+computer's when the machine was provisioned and never read back -- so a service
+created afterwards exists only here until something carries it over. Every
+connect does, the way the policy travels: the single script that merges the
+credential into the machine's store first installs this computer's projection of
+that file -- the hidden built-in services and every registered service, bundled
+and custom -- as a whole snapshot, ahead of the credential, because a gateway
+with no entry for a service cannot route a request to it. Nothing else on a
+machine writes that file (upstream latchkey touches it only from `services
+register` and from browser discovery, neither of which runs on a VPS), so the
+newest snapshot is always right, and a service deregistered here disappears from
+the machine on its next connect. The snapshot never includes this computer's own
+browser or keyring settings. A custom service this computer has no registration
+for is refused rather than pushed, since the machine could never use its
+credentials.
+
 ## Manual credential entry
 
 A service latchkey cannot sign in to through a browser advertises an
@@ -303,7 +427,10 @@ whatever app state a later route hangs off that prefix.
 Existing hosts pick a newly-added baseline grant up through
 `reconcile_baseline_permissions`, which `register_agent_for_host` applies
 whenever it registers a discovered agent -- a baseline addition alone
-would otherwise only reach newly-created workspaces. Reconciliation only
+would otherwise only reach newly-created workspaces. A remote workspace's
+gateway checks these grants against its *own* copy of the file, so a
+registration that changes the file is also pushed to the workspace's
+machine (see "Grants follow the same ownership" below). Reconciliation only
 *adds permissions to the `latchkey-self` rule*; it never introduces a
 rule, so a baseline addition shaped as a new rule reaches newly-created
 host files only. Auto-registration de-dupes an agent it has already
@@ -351,8 +478,10 @@ mechanism still sees a deny-all gateway -- the implicit `allow all`
 that latchkey applies when the file is missing must never be observable
 by an agent.
 
-`LATCHKEY_DIRECTORY` -- where credentials live -- stays shared across all
-agents on the same machine.
+`LATCHKEY_DIRECTORY` -- where credentials live -- is shared across all agents
+on the same machine, and *only* those: the user's computer keeps one store for
+its local workspaces, and each remote workspace's VPS has one of its own (see
+[Per-machine credentials](#per-machine-credentials) below).
 
 ## Cross-workspace management API permissions
 
@@ -496,53 +625,114 @@ authenticated by hand instead, with `latchkey auth set <name> -H "..."`;
 either way, granting the permission and supplying credentials are
 independent steps.
 
-## Connectors and accounts (Settings page)
+## Per-machine credentials
 
-The app-level Settings page's **Connectors** tab lists, per connected
-service, the accounts the user has signed in to (latchkey 3.0.0 stores
-credentials per account). The account list is read from
-`latchkey services info <service> --offline` -- the `credentials` object,
-keyed by account name (the unnamed default account keyed by `""`) --
-which also drives the aggregate credential status the grant flow uses.
+Credentials belong to the machine that uses them. The user's computer keeps one
+latchkey store, shared by every local workspace; each remote workspace's VPS
+keeps its own, and is the only holder of its own refresh tokens -- which is what
+lets it renew them while the user's computer is offline, without two machines
+racing to rotate the same one.
 
-Two per-service actions manage accounts:
+Changes travel as operations, made at the moment the user asks for them:
+connecting a service signs in here (the browser and the shared session are
+here) and then hands the credential to the machine; disconnecting clears it on
+the machine, because that is where it is.
 
-* **+ Add account** runs the same browser sign-in as approving a
-  permission request whose service has no credentials yet
-  (`Latchkey.add_account`), but with `LATCHKEY_EPHEMERAL_BROWSER=1` set so
-  the browser starts from a clean session and the user lands on a fresh
-  sign-in screen -- letting them add a genuinely new account instead of
-  being silently re-authenticated as an already-signed-in one. For a Minds
-  Google OAuth service, if signing in with the official Minds client does
-  not succeed, it always falls back to a fresh `auth browser-prepare`
-  self-setup step and retries.
+Every change is carried **synchronously**, by the app itself: it loads mngr's
+provider set in-process, opens the workspace's outer host (its VPS) and hands
+the machine the change in a single remote command, blocking the click that
+asked for it until the machine has taken it (`desktop_client/latchkey/`:
+`machine_access.py` opens the door, `machine_operations.py` is what goes
+through it). Nothing is queued and nothing is applied later, so what the UI
+shows afterwards is what the machine holds -- and a change the machine will
+not take is reported where the user clicked, immediately, rather than as a
+notification about a click they have long since forgotten.
 
-  Because the action *is* that sign-in, it is **disabled** for a service
-  that has no browser flow (`is_browser_sign_in_supported`, resolved per
-  listed service with one `latchkey services info <service> --offline`
-  call -- all of them probed on a thread each, so the page's wall time
-  does not grow with the number of connectors), with the reason on hover,
-  instead of failing with an error after the click. Such a service is connected from a permission dialog, which
-  asks for its credentials directly (see
-  [Manual credential entry](#manual-credential-entry)).
-* **Disconnect** clears one account's stored credentials
-  (`latchkey auth clear <service> --account <account>`). Disconnecting the
-  *last* account for a service also runs the per-service "revoke all"
-  cleanup in the background -- stripping that service's grants from every
-  workspace host file, since they would otherwise have no credentials
-  behind them.
+The provider set is loaded once, lazily, and kept for the life of the app;
+loading it imports every installed provider plugin, so it is started on a
+background thread at startup and the first Permissions tab open normally finds
+it done.
 
-Below the accounts, the panel shows the existing per-workspace grants
-("Allowed on all accounts:"), which are unchanged.
+The desktop keeps each remote machine's credentials in that host's *machine
+store* (`~/.minds/latchkey/mngr_latchkey/hosts/<host_id>/`), a
+`LATCHKEY_DIRECTORY` of its own that shares this computer's config, browser
+session and encryption key. Everything the app does on a workspace's behalf --
+listing its connections, signing in, entering credentials, signing out -- goes
+through the store belonging to *that machine*
+(`desktop_client/latchkey/machine_latchkey.py` decides which one that is), so a
+sign-in for one machine never turns up in another's connectors. What ships to a
+VPS is re-encrypted with that machine's own key on the way out.
 
-This page is app-wide. To edit what one machine's agents may reach, see
-[Permissions tab (per machine)](#permissions-tab-per-machine) below.
+Two consequences the UI makes visible:
+
+* **Connecting a service is per machine.** A service connected on this computer
+  is not connected for a remote workspace: its Permissions tab offers it under
+  Add connection, and connecting it there runs the sign-in for that machine.
+  The browser still opens here (there is nothing to open on a VPS) and reuses
+  this computer's session, so it is usually a consent click rather than a full
+  login.
+* **Sign out reaches as far as the credential is shared.** Disconnecting an
+  account from a machine's Permissions tab clears the credential of the store
+  *that machine* reads and strips *that machine's* now-inert grants. A remote
+  machine holds its own, so the same account keeps working everywhere else; this
+  computer's store is shared by every local machine, so signing out from one of
+  those signs out of all of them. The tab says which of the two it is before it
+  asks to confirm.
+
+A workspace whose gateway has not been provisioned yet has no machine of its own
+to speak of, so it is answered from this computer's store until it has one.
+
+Grants follow the same ownership, and travel the same way. A machine's
+`~/.latchkey/permissions.json` is the policy it enforces, and every permission
+edit made here is pushed to the machine as a full snapshot of the host's
+canonical file. The permission dialog's Approve carries the credential and the
+snapshot as **one change** (applied credential-first on the machine, failed
+together), so neither half of a grant can land without the other; a toggle, a
+revoke, a sign-out cleanup, and the grants that go through the gateway's own
+approve endpoint (cross-workspace access, file sharing, accounts) each push a
+plain snapshot. A machine that will not take one fails the action that asked
+for it: the toggle stays where it was with the reason beside it, and the
+dialog's Approve reports FAILED and leaves its request pending for a retry --
+because it is not a grant until the gateway the agent talks to can act on it.
+
+**Reading is symmetrical.** Opening (or refreshing) a remote workspace's
+Permissions tab reads that machine first -- its credential store, re-encrypted
+for this computer, and the policy its gateway is enforcing, both in one remote
+command -- so the pane shows what its agents actually have rather than what
+this computer last wrote toward it. A machine that cannot be reached shows as
+"permissions can't be loaded", never as a stale answer presented as current.
+
+The two halves reconcile differently on that read, because they are owned
+differently. The **credentials are the machine's**: only it can rotate the
+tokens it holds, so what it reports is adopted, and this computer's copy goes
+back to matching it (which is also how a second computer sees an account the
+first one connected). The **policy is the machine's too**, for a different
+reason: the user may have several computers, and any of them can push a grant,
+so a computer that treated its own copy as the truth would revert what another
+one granted every time the tab was opened. The machine's answer is therefore
+adopted here as well, and the copy here is a cache -- which is also what walks
+back an edit whose push failed, with no separate error reconcile. That is only
+safe because the copy here is never edited *without* being pushed in the same
+breath: the UI's edits while the user waits, and the discovery-driven ones (an
+agent registration, the baseline reconciliation that rides along with it) from
+a background thread, coalesced per host, since the resolver callback they run
+in must not block. An edit that could not be pushed is discarded by the next
+read rather than carried over later, so a writer that cannot push has to say
+so.
+
+The one write that read makes *toward* the machine is the seed: a machine with
+no policy at all permits everything, so it is handed this computer's copy
+instead of being left open. Provisioning seeds it too, before any of this: the
+pass that stands the gateway up writes the host's policy (or the deny-all
+default) alongside it rather than waiting for someone to open the tab.
 
 ## Permissions tab (per machine)
 
-The workspace options panel's **Permissions** tab is the other half of the
-story above: Settings owns accounts across the app, this owns what agents
-in *one* machine may reach. It renders every permission that machine's
+The workspace options panel's **Permissions** tab is where connectors and
+grants live, and the only place they live: each machine holds its own
+credentials, so there is nothing an app-level page could say about them that
+would be true of every machine at once. It owns both halves for one machine --
+which accounts it is connected to, and what its agents may reach with them. It renders every permission that machine's
 host file can carry as a toggle, so the file is editable without going
 back through a request.
 
@@ -557,7 +747,11 @@ have pending requests; each row opens the review popup on that request.
 Three properties are worth knowing:
 
 * **A flip posts one permission, and the server answers with the whole
-  view.** The client sends only the permission it flipped and its new
+  view -- once the machine has taken it.** Every write blocks on the
+  workspace's own machine, so the pane locks while one is in flight: the
+  control that was clicked shows a spinner and every other action grays
+  out (two writes at once would fight over the view each of them answers
+  with). The client sends only the permission it flipped and its new
   state; the desktop client reads the host's permissions file, recomputes
   the affected rule's *complete* permission set, and writes that through
   the gateway's `permissions` extension -- never a diff. Recomputing
@@ -578,14 +772,21 @@ Three properties are worth knowing:
   sign-in that cannot happen. Either way the new account arrives with
   nothing granted.
 
-* **Revoke all and Sign out are different in scope, deliberately.**
-  *Revoke all*, in a connection's heading, drops that account's grants
-  **on this machine only**; the account stays signed in and its grants on
-  other machines are untouched. *Sign out*, at the foot of the panel,
-  clears the stored credential itself -- so the account is gone from
-  **every** machine, and its grants, which would otherwise have nothing
-  behind them, are stripped from every active workspace's host file. It
-  asks first, naming the service and account. An account with leftover
+* **Revoke all and Sign out are different, but both are this machine's.**
+  *Revoke all*, in a connection's heading, drops that account's grants and
+  leaves the account connected -- so re-granting later is a click rather than a
+  fresh sign-in. *Sign out*, at the foot of the panel, clears the stored
+  credential itself, so this machine's grants for it -- which would otherwise
+  have nothing behind them -- are stripped too. Revoke all never reaches past
+  this machine; sign out reaches as far as that credential is shared (this
+  machine alone when it holds its own, every machine on this computer when it
+  reads the desktop's store), and its copy says which. Sign out asks first,
+  naming the service and account.
+
+  Nothing else removes a credential from a machine. A machine only ever holds
+  what was connected for it, so an account with no grants is not something that
+  leaked there and needs cleaning up -- it is one the user connected and has not
+  signed out of. An account with leftover
   grants but no stored credential offers no Sign out -- there is nothing
   left to clear -- and its toggles can be turned off but not on, since
   turning one on would grant something with no credentials behind it.
@@ -609,7 +810,9 @@ Agents are expected to:
 * Detect the three blocked outcomes from the gateway response.
 * POST a permission request to the gateway's `permission-requests`
   extension (`POST /permission-requests` with `scope`, `permissions`,
-  and `rationale`).
+  and `rationale`) -- or, for a domain the catalog has no service for, a
+  `custom-service` request naming the domain (see [Creating a connection an
+  agent asks for](#creating-a-connection-an-agent-asks-for)).
 * Stop the turn and wait. The agent will receive an `mngr message` from
   the desktop with the decision and can decide whether to retry.
 

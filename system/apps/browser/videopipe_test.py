@@ -1,7 +1,11 @@
-import pytest
+import threading
+import time
+from collections.abc import Callable
 
+import pytest
 from browser import videopipe
-from browser.videopipe import target_capture_fps
+from browser.videopipe import PixelfluxVideoPipe, target_capture_fps
+from mock_capture_backend_test import FakeCaptureBackend
 
 
 def test_drop_free_interval_climbs_by_increment() -> None:
@@ -54,3 +58,93 @@ def test_window_reference_exceeds_max_rate() -> None:
     # The credit window must be sized to carry the encoder's top rate, or it throttles
     # delivery below the rate and the controller collapses (the pinned-at-floor bug).
     assert videopipe._WINDOW_REFERENCE_FPS > videopipe._RATE_MAX_FPS
+
+
+# --- pause, resume, and the paused wait (over a fake capture) -------------------------
+
+_WAIT_SECONDS = 0.2
+# A wait that returns at once is far below this.
+_MIN_BLOCKED_SECONDS = 0.15
+
+
+def _started_pipe(backend: FakeCaptureBackend) -> PixelfluxVideoPipe:
+    pipe = PixelfluxVideoPipe("browser-1", ":97", backend=backend)
+    pipe.start()
+    return pipe
+
+
+def _seconds_spent(action: Callable[[], None]) -> float:
+    started = time.monotonic()
+    action()
+    return time.monotonic() - started
+
+
+def test_a_viewer_that_connects_hidden_waits_while_paused_instead_of_spinning() -> None:
+    # The connect path: the viewer's pane size is applied (leaving a ``res,`` pending),
+    # then the conductor pauses the connection before anything drained it.
+    backend = FakeCaptureBackend()
+    pipe = _started_pipe(backend)
+    pipe.set_capture_region(1000, 640)
+    pipe.pause()
+
+    assert _seconds_spent(lambda: pipe.wait_while_paused(_WAIT_SECONDS)) >= _MIN_BLOCKED_SECONDS
+    assert pipe.take_control_message() is None
+    assert backend.captures[0].is_stopped
+    pipe.stop()
+
+
+def test_a_cursor_change_landing_while_paused_does_not_wake_the_paused_wait() -> None:
+    backend = FakeCaptureBackend()
+    pipe = _started_pipe(backend)
+    pipe.pause()
+    cursor_callback = backend.captures[0].cursor_callback
+    assert cursor_callback is not None
+    cursor_callback(0, b"png", 3, 4)
+
+    assert _seconds_spent(lambda: pipe.wait_while_paused(_WAIT_SECONDS)) >= _MIN_BLOCKED_SECONDS
+    pipe.stop()
+
+
+def test_resume_restarts_the_capture_at_the_viewers_size_and_announces_it() -> None:
+    backend = FakeCaptureBackend()
+    pipe = _started_pipe(backend)
+    pipe.set_capture_region(1000, 640)
+    pipe.pause()
+
+    pipe.resume()
+
+    assert not pipe.is_paused
+    assert len(backend.captures) == 2
+    resumed = backend.captures[1]
+    assert resumed.settings is not None
+    assert (resumed.settings.capture_width, resumed.settings.capture_height) == (1000, 640)
+    assert resumed.idr_requests == 1
+    assert pipe.take_control_message() == "res,1000,640"
+    pipe.stop()
+
+
+def test_the_conductors_wake_ends_the_paused_wait_at_once() -> None:
+    backend = FakeCaptureBackend()
+    pipe = _started_pipe(backend)
+    pipe.pause()
+    waiter = threading.Thread(target=lambda: pipe.wait_while_paused(5.0), daemon=True)
+
+    def wake_until_the_wait_ends() -> None:
+        # The conductor's wake, repeated until the waiter has returned, so the test never
+        # depends on the waiter being inside the wait before the one notify lands.
+        waiter.start()
+        while waiter.is_alive():
+            with pipe.condition:
+                pipe.condition.notify_all()
+            waiter.join(timeout=0.01)
+
+    assert _seconds_spent(wake_until_the_wait_ends) < 1.0
+    pipe.stop()
+
+
+def test_the_paused_wait_returns_at_once_for_a_pipe_that_is_not_paused() -> None:
+    backend = FakeCaptureBackend()
+    pipe = _started_pipe(backend)
+
+    assert _seconds_spent(lambda: pipe.wait_while_paused(_WAIT_SECONDS)) < _MIN_BLOCKED_SECONDS
+    pipe.stop()

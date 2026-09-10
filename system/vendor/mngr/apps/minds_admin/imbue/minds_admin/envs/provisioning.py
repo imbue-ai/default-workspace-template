@@ -150,7 +150,7 @@ def resolve_web_template_pin(web_workspaces: WebWorkspacesConfig, *, tier: str) 
             "deploy.toml), so the template ref must be stated explicitly -- web creates lease "
             "only pool hosts whose baked repo_branch_or_tag matches it exactly. Re-run with "
             "MINDS_WEB_TEMPLATE_REF=<branch-or-tag> set to the ref your dev pool is baked at "
-            "(see `just list-pool-hosts` for the rows' repo_branch_or_tag), e.g.: "
+            "(see `just pool-list` for the rows' repo_branch_or_tag), e.g.: "
             "MINDS_WEB_TEMPLATE_REF=minds-v0.3.16 uv run minds-admin env deploy"
         )
     else:

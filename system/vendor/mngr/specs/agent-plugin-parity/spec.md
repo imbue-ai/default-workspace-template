@@ -825,8 +825,8 @@ type. Two layers, both opt-in via mixins (`interfaces/agent.py:446`):
 
 - **Raw** (always provisioned): copy the CLI's native session JSONL verbatim to
   `$MNGR_AGENT_STATE_DIR/logs/<type>_transcript/events.jsonl`.
-- **Common** (gated on `is_common_transcript_enabled`): convert to the shared envelope
-  (`user_message`/`assistant_message`/`tool_result`) at
+- **Common** (gated on `is_common_transcript_enabled`): convert to the shared ATIF-shaped
+  stream (`header`/`step`/`observation` records) at
   `$MNGR_AGENT_STATE_DIR/events/<type>/common_transcript/events.jsonl`.
 
 Both reference plugins provision streamer + converter shell scripts into `commands/` and
@@ -836,15 +836,18 @@ lives. Shared helpers: `agents/common_transcript.py`. In both, the **common laye
 *derived* from the raw stream** (the converter reads the raw JSONL), which is why the raw
 layer is foundational and always-on.
 
-The common envelope's field vocabulary tracks the OpenTelemetry GenAI semantic conventions
-(e.g. `finish_reason`, not a bespoke name); the canonical schema is
-`agents/common_transcript_records.py`. Every assistant record carries an ordered `parts[]`
-(text/tool_call segments, modelled on the OTel message `parts`) -- the agent-agnostic view the
-reader renders -- with a `parts_ordered` flag. The order is faithful for claude, pi-coding,
-opencode (all iterate their native ordered content) and trivially so for codex (text-only
-assistant messages); only antigravity is best-effort (`parts_ordered=False`), because its native
-format does not record where tool calls sat relative to the text. See
-[`../common-transcript-standard/spec.md`](../common-transcript-standard/spec.md).
+The common stream is a streaming JSONL form of ATIF (Harbor's Agent Trajectory Interchange
+Format), pinned to `ATIF-v1.7`; the canonical schema is `agents/common_transcript_records.py`.
+Its first line is a `header` record carrying that pinned `schema_version`. Every turn (one LLM
+inference) is one `step` record whose ATIF `source` is `user`, `agent`, or `system`, carrying
+full-fidelity `message`, `reasoning_content`, and `tool_calls[]` (complete `arguments` objects,
+not previews). Every streamed tool result is one `observation` record whose `results[]` entries
+each require a `source_call_id`, with `is_error` and `tool_name` under the result's `extra`
+(ATIF has no field for either). Records are validated against the canonical schema at *emit*
+time -- each plugin's conformance test drives its real emitter over native fixtures and
+validates every emitted line -- so the independently written emitters cannot silently drift on
+the shared fields. See
+[`../atif-transcript-alignment/spec.md`](../atif-transcript-alignment/spec.md).
 
 **pi-coding emits the two layers *independently*, not derived.** pi has no convenient
 always-current flat session file to tail (its native store is tree-structured JSONL), so the
@@ -895,9 +898,9 @@ by `codex_background_tasks.sh` (pidfile-deduped, restart-on-death, like claude/a
   `logs/codex_transcript/events.jsonl`, with a per-rollout offset file so it resumes after a
   restart (`stream_transcript.sh:97`).
 - **Common** (gated on `emit_common_transcript`): `common_transcript.sh` reads the raw stream
-  and converts `response_item` rows into the shared envelope -- `message`/user -> `user_message`,
-  `message`/assistant -> `assistant_message`, `function_call` + `function_call_output` paired by
-  `call_id` -> `tool_result` -- with `source = "codex/common_transcript"`
+  and converts `response_item` rows into the shared ATIF-shaped records -- `message`/user and
+  `message`/assistant -> `step`, `function_call_output` -> `observation` matched to its
+  `function_call` by `call_id` -- with `emitter = "codex/common_transcript"`
   (`common_transcript.sh:70`). It deliberately ignores `event_msg` display duplicates and
   bookkeeping rows. Since the rollout carries no global per-line id, event ids are synthesized
   from the line's 1-based index (`line-<n>-user` etc.), and the converter dedupes against the

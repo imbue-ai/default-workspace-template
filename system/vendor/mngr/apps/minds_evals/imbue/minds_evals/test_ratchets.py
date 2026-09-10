@@ -37,6 +37,9 @@ def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
+# Every hit is inside `templates/`, which runs as standalone scripts in the verifier container:
+# stdout and stderr are the only channel a grading failure has to a harbor log, and loguru is not
+# installed there.
 def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(7))
 
@@ -48,8 +51,12 @@ def test_prevent_bare_except() -> None:
     rc.check_bare_except(_DIR, snapshot(0))
 
 
+# Every hit is a best-effort guard around work whose failure must not discard an already-completed
+# or already-failed trial: evidence collection, workspace teardown, the decider's degradation to its
+# fallback line, and the timeout diagnostics. Each one records what went wrong and carries on; none
+# of them swallows a failure of the thing being measured.
 def test_prevent_broad_exception_catch() -> None:
-    rc.check_broad_exception_catch(_DIR, snapshot(4))
+    rc.check_broad_exception_catch(_DIR, snapshot(6))
 
 
 def test_prevent_base_exception_catch() -> None:
@@ -95,7 +102,7 @@ def test_prevent_setattr() -> None:
 
 
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(6))
+    rc.check_asyncio_import(_DIR, snapshot(7))
 
 
 def test_prevent_pandas_import() -> None:
@@ -123,10 +130,28 @@ def test_prevent_exit_stack() -> None:
 
 
 # harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
-# every driver method that touches the box or the workspace has to be too. Reads of the workspace
-# cannot be made synchronous here; keep new async surface to what those interfaces force.
+# every call that reaches the box or the workspace has to be async too. `driver.py`,
+# `minds_bridge.py` and `evidence_collection.py` are that forced surface, and `driver_test.py`,
+# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it, so all six are
+# excluded: their hits track how many trials the tests exercise rather than how much async the
+# project chooses. Within those files, keep new async to what harbor's interfaces force.
+# What remains counted is the async that is optional. Today that is two LiteLLM proxy callbacks in
+# `resources/box_proxy_hooks.py`, whose signatures the proxy fixes, plus three test strings naming
+# the `create_worker.py await` subcommand, which the regex reads as the keyword. Any increase is
+# new optional async, which belongs in blocking code instead.
 def test_prevent_async_await() -> None:
-    rc.check_async_await(_DIR, snapshot(260))
+    rc.check_async_await(
+        _DIR,
+        snapshot(5),
+        (
+            "driver.py",
+            "driver_test.py",
+            "minds_bridge.py",
+            "minds_bridge_test.py",
+            "evidence_collection.py",
+            "mock_environment_test.py",
+        ),
+    )
 
 
 # --- Hardcoded paths ---
@@ -143,8 +168,12 @@ def test_prevent_hardcoded_guarded_binary() -> None:
 # --- Naming conventions ---
 
 
+# Every hit is a key in a wire format this code does not own: `num_turns` in the ported state.json
+# schema, which the old harness's readers consume and which the gate still reads back off a rollout
+# captured before per-entry records, and `num_retries` in litellm's proxy config. Neither name is a
+# naming choice available here.
 def test_prevent_num_prefix() -> None:
-    rc.check_num_prefix(_DIR, snapshot(7))
+    rc.check_num_prefix(_DIR, snapshot(11))
 
 
 # --- Documentation ---

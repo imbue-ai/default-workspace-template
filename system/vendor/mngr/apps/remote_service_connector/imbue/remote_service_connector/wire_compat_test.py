@@ -84,9 +84,7 @@ def _validate_entries_for_snapshots(endpoint_key: str, entries: object) -> None:
         _validate_for_snapshots(endpoint_key, entry)
 
 
-# ---------------------------------------------------------------------------
 # Snapshot aging
-# ---------------------------------------------------------------------------
 
 
 def test_compat_snapshots_are_within_their_support_window() -> None:
@@ -101,9 +99,7 @@ def test_compat_snapshots_are_within_their_support_window() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
 # Response validation, per endpoint group
-# ---------------------------------------------------------------------------
 
 
 def test_auth_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -305,9 +301,7 @@ def test_sync_responses_parse_for_all_snapshots(monkeypatch: pytest.MonkeyPatch)
     _validate_for_snapshots("GET /sync/bundle", bundle.json())
 
 
-# ---------------------------------------------------------------------------
 # Route completeness
-# ---------------------------------------------------------------------------
 
 # Routes whose responses are strictly parsed by shipped clients, mapped to the
 # snapshot endpoint key(s) whose fixtures above exercise them. Each key must

@@ -182,9 +182,7 @@ def spawn_supervisor(host_db_id: str, transition_id: str) -> None:
     spawner.hook(host_db_id, transition_id)
 
 
-# ---------------------------------------------------------------------------
 # Row / box access (thin SQL wrappers; the fake DB in tests emulates these)
-# ---------------------------------------------------------------------------
 
 _WORKSPACE_ROW_SELECT: Final[str] = (
     "SELECT id, status, leased_to_user, host_id, vps_address, ssh_port, ssh_user, container_ssh_port, "
@@ -323,9 +321,7 @@ def _record_transition_error(row: WorkspaceRow, message: str) -> None:
         conn.commit()
 
 
-# ---------------------------------------------------------------------------
 # Box SSH seams (faked in tests)
-# ---------------------------------------------------------------------------
 
 
 def _management_key_pem() -> str:
@@ -379,9 +375,7 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
 # The supervisor
-# ---------------------------------------------------------------------------
 
 
 def run_transition_supervisor(host_db_id: str, transition_id: str) -> str:
@@ -1044,9 +1038,7 @@ def _teardown_superseded_restore(box: BoxRow, instance_name: str, disk_name: str
         )
 
 
-# ---------------------------------------------------------------------------
 # Watchdog
-# ---------------------------------------------------------------------------
 
 
 # A row the watchdog is responsible for: mid-transition, or stopped with its

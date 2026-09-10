@@ -1,0 +1,21 @@
+# The launched workers' harness. Hardening, review gates and crystallization run here, so this is
+# where a missing plugin usually bites -- and where its cost is hardest to see from the conversation,
+# because the client is only told the pass is "running in the background".
+#
+# A trial that launched no worker gets a report saying so, and the criterion description below tells
+# the judge to score that as a sound harness rather than an empty one.
+[judge]
+judge = "anthropic/claude-opus-4-8"
+files = ["/logs/agent/harness_workers.txt"]
+prompt_template = "prompt.md"
+# rewardkit averages a directory's .py criteria into ONE reward of weight 1.0, so two judge
+# tomls at weight 1.0 each would carry a third apiece against a sixth for each scripted
+# criterion. Half each makes the dimension an equal-weight mean of all four, the same
+# per-criterion parity the quality dimension buys with its own weight.
+weight = 0.5
+
+[[criterion]]
+name = "worker_harness_success"
+description = "How well did the harness hold for the agent's LAUNCHED WORKERS? 5 = every skill and tool they reached for resolved and worked, or the trial launched no worker. 3 = something failed but the worker routed around it and the hardening still happened. 1 = the tooling the worker depended on did not load, so the pass it was launched for did not really run."
+type = "likert"
+points = 5

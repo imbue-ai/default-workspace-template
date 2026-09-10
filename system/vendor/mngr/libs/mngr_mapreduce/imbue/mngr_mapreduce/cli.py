@@ -11,6 +11,7 @@ import resource
 import time
 import traceback
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import TypeVar
@@ -20,6 +21,7 @@ import click
 from loguru import logger
 
 from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.pure import pure
 from imbue.mngr.api.providers import get_local_host
 from imbue.mngr.cli.env_utils import resolve_env_vars
 from imbue.mngr.cli.env_utils import resolve_labels
@@ -30,6 +32,7 @@ from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.config.data_types import OutputOptions
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import UnknownBackendError
+from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.interfaces.host import AgentEnvironmentOptions
 from imbue.mngr.interfaces.host import AgentLabelOptions
 from imbue.mngr.interfaces.host import OnlineHostInterface
@@ -47,6 +50,8 @@ from imbue.mngr_mapreduce.data_types import MapReduceContext
 from imbue.mngr_mapreduce.data_types import MapReduceRecipe
 from imbue.mngr_mapreduce.data_types import MapReduceTask
 from imbue.mngr_mapreduce.data_types import MapperInfo
+from imbue.mngr_mapreduce.launching import ROLE_LABEL_KEY
+from imbue.mngr_mapreduce.launching import TASK_ID_LABEL_KEY
 from imbue.mngr_mapreduce.launching import launch_all_mappers
 from imbue.mngr_mapreduce.launching import launch_reducer_agent
 from imbue.mngr_mapreduce.mngr_cli import try_list_agents
@@ -569,6 +574,31 @@ def _render_final_report(
         return None
 
 
+@pure
+def select_run_mappers(agents: Sequence[AgentDetails], run_name: str) -> list[AgentDetails]:
+    """Select the mapper agents of a previous run.
+
+    Every agent of a run carries the run-name label, including the reducer and
+    the snapshotter, so the role label is what distinguishes a mapper.
+    """
+    return [
+        detail
+        for detail in agents
+        if detail.labels.get(RUN_NAME_LABEL_KEY) == run_name
+        and detail.labels.get(ROLE_LABEL_KEY) == AgentKind.MAPPER.value
+    ]
+
+
+@pure
+def resolve_reintegrate_task_id(detail: AgentDetails) -> str:
+    """Recover the task a discovered mapper was launched for."""
+    # CLEANUP: drop the agent-name fallback (and take the label directly) once
+    # no run launched before the mapreduce_task_id label shipped is still
+    # discoverable by `mngr list` -- agent hosts are ephemeral, so a few weeks
+    # after this lands.
+    return detail.labels.get(TASK_ID_LABEL_KEY, str(detail.name))
+
+
 def reintegrate_mapreduce(
     recipe: MapReduceRecipe,
     opts: MapReduceCliOptions,
@@ -579,9 +609,10 @@ def reintegrate_mapreduce(
 ) -> None:
     """Re-read outcomes from a previous map-reduce run and re-run the reducer.
 
-    Discovers prior agents by the ``mapreduce_run_name`` label, pulls each
-    one's outputs into the output dir, re-fires ``on_mapper_finalized`` for
-    each, then runs the reducer just like a normal run.
+    Discovers the prior run's mappers by the ``mapreduce_run_name`` and
+    ``mapreduce_role`` labels, pulls each one's outputs into the output dir,
+    re-fires ``on_mapper_finalized`` for each, then runs the reducer just like
+    a normal run.
     """
     if not opts.run_name:
         raise click.UsageError("--reintegrate requires --run-name <NAME> (the run name to reintegrate).")
@@ -593,17 +624,12 @@ def reintegrate_mapreduce(
     list_result = try_list_agents(mngr_ctx)
     if list_result is None:
         raise MngrError("Failed to list agents. Cannot reintegrate.")
-    matching = [
-        detail
-        for detail in list_result.agents
-        if detail.labels.get(RUN_NAME_LABEL_KEY) == run_name
-        and detail.labels.get("mapreduce_role") != AgentKind.REDUCER.value
-    ]
+    matching = select_run_mappers(list_result.agents, run_name)
     if is_human:
-        write_human_line("Found {} agent(s) from run {}", len(matching), run_name)
+        write_human_line("Found {} mapper(s) from run {}", len(matching), run_name)
 
     if not matching:
-        raise click.UsageError(f"No agents found for run name {run_name!r}. Nothing to reintegrate.")
+        raise click.UsageError(f"No mappers found for run name {run_name!r}. Nothing to reintegrate.")
 
     source_host = get_local_host(mngr_ctx)
 
@@ -625,7 +651,7 @@ def reintegrate_mapreduce(
     # whatever it does (e.g. branch bundles).
     mapper_metadata: list[AgentMetadata] = []
     for detail in matching:
-        task_id = detail.labels.get("mapreduce_task_id", str(detail.name))
+        task_id = resolve_reintegrate_task_id(detail)
         meta = AgentMetadata(
             kind=AgentKind.MAPPER,
             agent_name=detail.name,

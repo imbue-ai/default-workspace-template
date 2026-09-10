@@ -215,6 +215,18 @@ class NoCommandDefinedError(AgentError, ValueError):
     """Raised when no command is defined for an agent type."""
 
 
+class TrajectoryBuildError(AgentError):
+    """Raised when a common-transcript stream cannot be assembled into a valid ATIF trajectory."""
+
+
+class InvalidCommonTranscriptRecordError(AgentError, ValueError):
+    """Raised by parse_common_transcript_record when a stream record violates the canonical ATIF-shaped schema.
+
+    Raises from inside the record model validators get rewrapped by pydantic, so the
+    parse boundary re-raises this domain error around pydantic's ValidationError.
+    """
+
+
 class AgentNotFoundError(AgentError):
     """No agent with this ID exists."""
 
@@ -760,6 +772,21 @@ class ModalAuthError(ProviderNotAuthorizedError):
         self.short_remediation = "run `uvx modal token set`"
         # The message already carries full remediation, so no separate help text.
         self.user_help_text = None
+
+
+class ModalCliOutputError(MngrError, ValueError):
+    """Raised when a `modal ... list --json` payload does not carry the keys we read.
+
+    Loud on purpose. These listings are read to find Modal resources to reap,
+    so a key we cannot find yields an empty result that looks exactly like
+    "nothing to clean up" and leaks apps, volumes and environments silently.
+    """
+
+    user_help_text = "The Modal CLI's JSON output shape may have changed; check `modal --version`."
+
+    def __init__(self, command: str, reason: str) -> None:
+        self.command = command
+        super().__init__(f"Unexpected output from `{command} --json`: {reason}")
 
 
 class ConfigError(MngrError):

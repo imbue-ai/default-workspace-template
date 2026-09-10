@@ -116,7 +116,7 @@ canonical REST API through an SSH tunnel; the resulting per-service project
 DSNs land in the tier's `sentry` Vault entry (written by the glue script),
 which `minds-admin env deploy` stamps into the reporting services' Modal secret.
 Vault schema: `.minds/template/bugsink.sh` -> `secrets/minds/<tier>/bugsink`.
-The operator runbook is `apps/minds/docs/deploy/bugsink-bringup.md`.
+The operator runbook is `apps/minds/docs/deploy/setup/bugsink.md`.
 
 ## Retention
 

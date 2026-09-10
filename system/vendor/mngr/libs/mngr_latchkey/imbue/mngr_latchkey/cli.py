@@ -25,8 +25,6 @@ import os
 import signal
 import threading
 from collections.abc import Callable
-from datetime import datetime
-from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -39,6 +37,8 @@ from pydantic import Field
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.sentry.core import flush_sentry_on_shutdown
+from imbue.mngr.api.discovery_events import resolve_hosts_for_identifiers
+from imbue.mngr.api.providers import get_provider_instance
 from imbue.mngr.cli.common_opts import add_common_options
 from imbue.mngr.cli.common_opts import setup_command_context
 from imbue.mngr.cli.help_formatter import CommandHelpMetadata
@@ -47,10 +47,12 @@ from imbue.mngr.cli.output_helpers import write_human_line
 from imbue.mngr.cli.output_helpers import write_json_line
 from imbue.mngr.config.data_types import CommonCliOptions
 from imbue.mngr.config.data_types import MngrContext
+from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import PluginName
 from imbue.mngr_forward.ssh_tunnel import SSHTunnelManager
+from imbue.mngr_latchkey._pre_lock_migration import pre_lock_forward_pid
 from imbue.mngr_latchkey.agent_setup import LatchkeyGatewayLocation
 from imbue.mngr_latchkey.agent_setup import finalize_host_permissions
 from imbue.mngr_latchkey.agent_setup import prepare_agent_latchkey
@@ -62,14 +64,17 @@ from imbue.mngr_latchkey.core import LatchkeyError
 from imbue.mngr_latchkey.discovery import LatchkeyDestructionHandler
 from imbue.mngr_latchkey.discovery import LatchkeyDiscoveryHandler
 from imbue.mngr_latchkey.discovery_stream import DiscoveryStreamConsumer
-from imbue.mngr_latchkey.forward_supervisor import is_forward_info_alive
+from imbue.mngr_latchkey.remote.credentials import MachineCredentials
+from imbue.mngr_latchkey.remote.credentials import has_machine_of_its_own
+from imbue.mngr_latchkey.remote.credentials import read_host_permissions
+from imbue.mngr_latchkey.remote.errors import RemoteGatewayError
 from imbue.mngr_latchkey.sentry import setup_forward_sentry
-from imbue.mngr_latchkey.store import LatchkeyForwardInfo
 from imbue.mngr_latchkey.store import LatchkeyStoreError
+from imbue.mngr_latchkey.store import acquire_forward_lock
 from imbue.mngr_latchkey.store import delete_forward_info
-from imbue.mngr_latchkey.store import load_forward_info
-from imbue.mngr_latchkey.store import save_forward_info
-from imbue.mngr_latchkey.store import update_forward_info_gateway_port
+from imbue.mngr_latchkey.store import load_forward_owner
+from imbue.mngr_latchkey.store import probe_forward_lock
+from imbue.mngr_latchkey.store import update_forward_owner_gateway_port
 
 # Env-var overrides for the two resolved settings; documented in the
 # CLI help and in the spec.
@@ -441,6 +446,10 @@ def _register_agent_command(ctx: click.Context, **kwargs: Any) -> None:
     let that agent through to its own ``/api/v1/agents/<id>/...``
     subtree. Idempotent: re-running for an already-registered agent is a
     no-op.
+
+    A host with a machine of its own (a remote workspace whose gateway was
+    provisioned from this computer) is then handed the updated file, since
+    its gateway enforces its own copy.
     """
     del kwargs
     mngr_ctx, _output_opts, opts = setup_command_context(
@@ -462,11 +471,64 @@ def _register_agent_command(ctx: click.Context, **kwargs: Any) -> None:
         raise click.UsageError(f"--agent-id is not a valid agent ID: {e}") from e
 
     try:
-        register_agent_for_host(latchkey.plugin_data_dir, host_id, agent_id)
+        is_file_changed = register_agent_for_host(latchkey.plugin_data_dir, host_id, agent_id)
     except LatchkeyStoreError as e:
         raise click.ClickException(f"register_agent_for_host failed: {e}") from e
 
     logger.info("Registered agent {} on host {}; access to the Minds API proxy granted", agent_id, host_id)
+
+    try:
+        is_machine_to_update = is_file_changed and has_machine_of_its_own(latchkey.plugin_data_dir, host_id)
+    except LatchkeyStoreError as e:
+        raise click.ClickException(f"Could not tell whether host {host_id} has a machine of its own: {e}") from e
+    if is_machine_to_update:
+        _push_host_permissions_to_machine(mngr_ctx, latchkey, host_id, agent_id)
+        logger.info("Pushed the updated permissions of host {} to its machine", host_id)
+
+
+def _push_host_permissions_to_machine(
+    mngr_ctx: MngrContext, latchkey: Latchkey, host_id: HostId, agent_id: AgentId
+) -> None:
+    """Make this computer's canonical policy for ``host_id`` the one its machine enforces.
+
+    The machine is reached through the provider that owns the host, which the
+    SSH-free discovery event stream records against the agent. Every failure
+    is a ``ClickException`` that says the local registration stands: the
+    machine catches up on the next read of it (a Permissions tab open).
+    """
+    permissions_json = read_host_permissions(latchkey.plugin_data_dir, host_id)
+    if permissions_json is None:
+        raise click.ClickException(f"Host {host_id} has no permissions file to push right after registering into it")
+    try:
+        resolved = resolve_hosts_for_identifiers(mngr_ctx, [str(agent_id)])[str(agent_id)]
+    except MngrError as e:
+        raise click.ClickException(
+            f"Registered locally, but could not find which provider runs agent {agent_id} to reach its machine: {e}"
+        ) from e
+    if resolved.host_id != host_id:
+        raise click.ClickException(
+            f"Registered locally, but agent {agent_id} is recorded on host {resolved.host_id}, not {host_id}; "
+            "not pushing to a machine the agent does not run on"
+        )
+    try:
+        provider = get_provider_instance(resolved.provider_name, mngr_ctx)
+    except MngrError as e:
+        raise click.ClickException(
+            f"Registered locally, but could not load provider {resolved.provider_name} to reach the machine of host "
+            f"{host_id}: {e}"
+        ) from e
+    try:
+        with provider.outer_host_for(host_id) as outer:
+            if outer is None or outer.is_local:
+                raise click.ClickException(
+                    f"Registered locally, but provider {resolved.provider_name} offers no remote machine for host "
+                    f"{host_id}"
+                )
+            MachineCredentials(host=outer, latchkey=latchkey, host_id=host_id).set_permissions(permissions_json)
+    except (MngrError, RemoteGatewayError, OSError) as e:
+        raise click.ClickException(
+            f"Registered locally, but the machine of host {host_id} did not take the updated permissions: {e}"
+        ) from e
 
 
 _add_common_latchkey_options(_register_agent_command)
@@ -481,7 +543,12 @@ allowed-agent enum on the first rule (the one that gates
 ``/minds-api-proxy/api/v1/agents/<id>/...``); this command appends
 the supplied agent ID to that enum so the gateway will let that
 agent through to its own ``/api/v1/agents/<id>/...`` subtree.
-Idempotent: re-running for an already-registered agent is a no-op.""",
+Idempotent: re-running for an already-registered agent is a no-op.
+
+When the edit changes the file and the host has a machine of its own
+(a remote workspace whose gateway was provisioned from this computer),
+the updated file is pushed to that machine, since its gateway enforces
+its own copy.""",
     examples=(
         (
             "Register an agent for the Minds API proxy",
@@ -578,25 +645,31 @@ def _run_forward_supervisor(
     Extracted from :func:`_forward_command` so the latter can wrap it in a single error-logging +
     Sentry-flush boundary; see that function for why an unhandled error is logged through loguru.
     """
-    # Refuse to start if another forward is already alive for this
-    # latchkey directory; two forwards would fight over the same
-    # reverse tunnels and produce a confusing stream of failures.
-    existing = load_forward_info(latchkey.plugin_data_dir)
-    if existing is not None and is_forward_info_alive(existing):
+    # CLEANUP: a forward predating the ownership lock holds none, so the lock
+    # below would be taken uncontended beside it, and its record is the only
+    # thing that can announce it. A record surviving the refusal names no live
+    # forward, so it goes. Remove the whole block with ``_pre_lock_migration``.
+    pre_lock_pid = pre_lock_forward_pid(latchkey.plugin_data_dir)
+    if pre_lock_pid is not None:
         raise click.ClickException(
-            f"Another ``mngr latchkey forward`` is already running for this latchkey directory "
-            f"(pid={existing.pid}); refusing to start a second supervisor.",
+            f"A ``mngr latchkey forward`` from an earlier build is still running for this latchkey "
+            f"directory (pid={pre_lock_pid}); stop it before starting a new one.",
         )
-    if existing is not None:
-        logger.info(
-            "Discarding stale forward record (pid={}); the previous supervisor is no longer running.",
-            existing.pid,
-        )
+    delete_forward_info(latchkey.plugin_data_dir)
 
-    save_forward_info(
-        latchkey.plugin_data_dir,
-        LatchkeyForwardInfo(pid=os.getpid(), started_at=datetime.now(timezone.utc)),
-    )
+    # Exclusive ownership of this directory, held until the shutdown ``finally``
+    # releases it -- or, on a path that never reaches it, until this process exits.
+    try:
+        forward_lock = acquire_forward_lock(latchkey.plugin_data_dir)
+    except LatchkeyStoreError as e:
+        raise click.ClickException(f"Failed to claim this latchkey directory: {e}") from e
+    if forward_lock is None:
+        owner = load_forward_owner(latchkey.plugin_data_dir)
+        owner_description = "" if owner is None else f" (pid={owner.pid})"
+        raise click.ClickException(
+            f"Another ``mngr latchkey forward`` already owns this latchkey directory"
+            f"{owner_description}; refusing to start a second supervisor.",
+        )
 
     # Eagerly ensure the gateway is up so users see startup failures
     # immediately, not on the first agent discovery. The discovery
@@ -614,7 +687,7 @@ def _run_forward_supervisor(
     )
 
     try:
-        update_forward_info_gateway_port(latchkey.plugin_data_dir, gateway_port)
+        update_forward_owner_gateway_port(latchkey.plugin_data_dir, gateway_port)
     except LatchkeyStoreError as e:
         raise click.ClickException(f"Failed to publish gateway port: {e}") from e
 
@@ -643,13 +716,6 @@ def _run_forward_supervisor(
     shutdown_event = threading.Event()
     bounce_event = threading.Event()
     _install_signal_handlers(shutdown_event, bounce_event)
-
-    # Keep every remote host's VPS credentials/permissions in sync in the
-    # background for the lifetime of this supervisor. Passed the shutdown event
-    # so the watcher stops cleanly on shutdown -- and, if the watcher itself
-    # dies unexpectedly, signals a loud teardown rather than running on with a
-    # silently-dead watcher.
-    discovery_handler.start_remote_state_sync(mngr_ctx.concurrency_group, shutdown_event)
 
     consumer.start()
     # Dispatch SIGHUP-driven observe bounces off the signal-handler thread so
@@ -687,7 +753,9 @@ def _run_forward_supervisor(
             latchkey.stop_gateway()
         except LatchkeyError as e:
             logger.opt(exception=e).error("Failed to stop shared Latchkey gateway during shutdown.")
-        delete_forward_info(latchkey.plugin_data_dir)
+        # Released last, so the directory stays claimed until everything this
+        # forward owns is torn down and a replacement cannot overlap it.
+        forward_lock.release()
 
 
 class _ShutdownSignalHandler(FrozenModel):
@@ -813,7 +881,7 @@ def _run_gateway_health_check_loop(
             continue
         logger.info("Respawned shared Latchkey gateway at http://{}:{}", latchkey.listen_host, gateway_port)
         try:
-            update_forward_info_gateway_port(latchkey.plugin_data_dir, gateway_port)
+            update_forward_owner_gateway_port(latchkey.plugin_data_dir, gateway_port)
         except LatchkeyStoreError as e:
             logger.opt(exception=e).error("Failed to publish respawned gateway port.")
 
@@ -989,13 +1057,13 @@ def _gateway_info_command(ctx: click.Context, **kwargs: Any) -> None:
 
     latchkey = _build_initialized_latchkey(mngr_ctx, opts.latchkey_directory, opts.latchkey_binary)
 
-    info = load_forward_info(latchkey.plugin_data_dir)
-    if info is None or not is_forward_info_alive(info):
+    owner = probe_forward_lock(latchkey.plugin_data_dir)
+    if owner is None:
         raise click.ClickException(
             "No ``mngr latchkey forward`` supervisor is running for this latchkey directory; "
             "start one with ``mngr latchkey forward`` before asking for its gateway info.",
         )
-    if info.gateway_port is None:
+    if owner.gateway_port is None:
         raise click.ClickException(
             "The supervisor is running but has not finished binding its gateway port yet; retry in a moment.",
         )
@@ -1007,7 +1075,7 @@ def _gateway_info_command(ctx: click.Context, **kwargs: Any) -> None:
 
     write_json_line(
         {
-            "url": f"http://{latchkey.listen_host}:{info.gateway_port}",
+            "url": f"http://{latchkey.listen_host}:{owner.gateway_port}",
             "password": password,
         },
     )

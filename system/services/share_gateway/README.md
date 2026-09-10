@@ -13,8 +13,12 @@ share-enable, removed at unshare). While the materials are present it keeps
 three things running:
 
 1. **The gateway HTTP service** (Flask, `127.0.0.1:8791`): caddy's
-   `forward_auth` backend. `/_auth/verify` checks the `imbue_machine_session`
-   cookie, re-reads `data/.secrets/share_grants.toml` on every request
+   `forward_auth` backend. `/_auth/verify` checks the session cookie (set as
+   two copies of one signed value: `imbue_machine_session`, `SameSite=Lax`,
+   for top-level visits, and `imbue_machine_session_partitioned`,
+   `SameSite=None` with the CHIPS `Partitioned` attribute, for the hosted
+   chrome's cross-site iframe -- either copy opens the session), re-reads
+   `data/.secrets/share_grants.toml` on every request
    (revocation is instant; a malformed file fails closed), enforces the Origin
    policy (WebSocket upgrades need a workspace Origin; non-GETs reject a
    foreign one), and strips the session cookie from what the service sees.
@@ -56,11 +60,27 @@ email_domains = ["partner.org"]
 [services.web]
 emails = ["reviewer@example.com"]
 email_domains = []
+
+[services.chat]
+emails = ["pair@example.com"]
+email_domains = []
 ```
 
 Workspace-level grants admit every service; per-service grants admit exactly
 that service's origin (the shell and siblings stay 403). Matching is
 case-insensitive.
+
+The `[services.<name>]` key is the app's registered name (the `name` in its
+`app.toml`). The chat app is one of them: its pages are served at
+their own registered origin (`chat-<rand>.<domain>`), framed by the shell, so a
+workspace-level grant admits the chat origin directly and a `[services.chat]`
+grant narrows a visitor to it. A visitor holding only a per-app grant reaches
+that app's origin and nothing else -- not the shell, so not the tabs the shell
+arranges; the origin's own pages (a chat at `/<agent-id>`, the file viewer's
+listing) are what they see, and a `[services.files]` grant admits only the
+file viewer. Nothing here is configured per app: caddy re-renders its routes
+from the registry, so the chat origin (like every app's) is claimed and routed
+as soon as the app registers.
 
 ## Request identity (what a service sees)
 

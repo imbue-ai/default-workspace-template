@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import sys
 
-from imbue.system_interface.accounts import AccountError
-from imbue.system_interface.accounts import account_dir
-from imbue.system_interface.harnesses.binding import BindingError
-from imbue.system_interface.harnesses.binding import account_env
-from imbue.system_interface.harnesses.binding import harness_for
-from imbue.system_interface.harnesses.binding import resolve_binding
-from imbue.system_interface.harnesses.harness_type import HarnessType
+from imbue.chat.accounts import AccountError, account_dir
+from imbue.chat.harnesses.binding import (
+    BindingError,
+    account_env,
+    harness_for,
+    resolve_binding,
+)
+from imbue.chat.harnesses.harness_type import HarnessType
 
 
 def main(argv: list[str]) -> int:

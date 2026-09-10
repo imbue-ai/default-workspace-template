@@ -1,4 +1,4 @@
-"""Helpers that reach the box's Minds HTTP API and the workspace's system_interface through
+"""Helpers that reach the box's Minds HTTP API and the workspace's chat app through
 ``environment.exec`` (ported from the old harness's minds_client).
 
 Everything here runs commands inside the harbor environment (the box) or, bridged one level deeper
@@ -8,9 +8,12 @@ harbor's environment API is async; this module and driver.py are the only async 
 
 import asyncio
 import json
+import re
 import shlex
 import time
 import tomllib
+from collections.abc import Mapping
+from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -19,17 +22,32 @@ from typing import Final
 from harbor.environments.base import BaseEnvironment
 from harbor.environments.base import ExecResult
 from loguru import logger
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
+# The trial artifact directory the task declares its files under. harbor EMPTIES this before every
+# step of a multi-step task, so nothing a long-running box process holds an open handle on may live
+# here: emptying unlinks the file while the writer keeps appending to the dead inode, and the log is
+# then unrecoverable for the rest of the trial. Only files the driver rewrites from the host belong
+# here -- the transcript mirrors, which task.toml's artifacts and the verifier judge read at these
+# exact paths.
 BOX_LOGS_DIR: Final[str] = "/logs/agent"
+# Where the box's long-running services log instead. harbor collects /logs/artifacts as an implicit
+# artifact after every step and never empties it, so a service started on step 1 keeps writing to a
+# file that survives -- and is collected -- for the whole trial.
+BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
+BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
-# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
-# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
-# pinned mngr SHA, which predates them.
+# baked into the box image because the image is one build per mngr SHA, cached whole, and has to
+# stay byte-identical across a dataset -- so changing them would cost a full rebuild -- and because
+# the image is built from the pinned mngr SHA, which predates them.
 _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
@@ -39,22 +57,44 @@ BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
 # and is imported by it as a plain module, so the two files must land in the same directory.
 BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
+# The venv the proxy is served from, built by the box image and holding nothing else. Never the
+# workspace venv under BOX_MNGR_DIR: that one carries plain `litellm`, whose CLI refuses to serve
+# without the [proxy] extra, and every `uv run` in the box re-syncs it from the lock -- so proxy
+# dependencies added to it would be stripped out from under a running proxy mid-trial. It is a
+# different directory from BOX_PROXY_DIR above, which holds the proxy's config, hooks and usage
+# log (proxy.log itself goes to the service logs dir, like every other long-running service's).
+BOX_PROXY_VENV_DIR: Final[str] = "/opt/eval_proxy"
+BOX_PROXY_LITELLM_PATH: Final[str] = "{}/bin/litellm".format(BOX_PROXY_VENV_DIR)
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
-BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
+BOX_PROXY_USAGE_LOG_PATH: Final[str] = "{}/usage_proxy.jsonl".format(BOX_PROXY_DIR)
 TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
 PROXY_LOG_FILENAME: Final[str] = "proxy.log"
+# How much of a service log the timeout diagnostics keep. The tail is where a wedged service says
+# why, and the whole log is collected separately as an artifact, so this only has to be enough to
+# read at a glance.
+SERVICE_LOG_TAIL_BYTES: Final[int] = 20_000
 # Read by the uploaded hooks; named here so the two sides cannot drift apart.
 PROXY_KEY_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_KEY"
 PROXY_USAGE_LOG_ENV_VAR: Final[str] = "MINDS_EVAL_PROXY_USAGE_LOG"
-# The workspace-local system_interface the old in-workspace eval worker polled
-# (unauthenticated loopback inside the workspace sandbox).
-WORKSPACE_SYSTEM_INTERFACE: Final[str] = "http://127.0.0.1:8000"
+# Every route the bridge calls (sign-in, create-chat, the agents listing, sends, events) is the
+# workspace's chat app's, which runs as its own program at its own port. Loopback, so it is
+# reachable only from inside the workspace sandbox, which is why it needs no authentication.
+# The port is the registry's to say: the row named `chat` in
+# `data/.state/apps.toml` carries the URL the app registered at startup, and the fallback is the
+# port the template's chat app defaults to, for a workspace whose registry has no row yet.
+WORKSPACE_APPS_REGISTRY: Final[str] = "data/.state/apps.toml"
+CHAT_APP_NAME: Final[str] = "chat"
+CHAT_APP_FALLBACK_URL: Final[str] = "http://127.0.0.1:8010"
 
 # The workspace's own claude sign-in API -- the endpoints the product's in-UI login modal posts to.
 # Authenticating through these rather than through the create-time host env keeps the workspace in
 # the same shared-config regime real workspaces run in.
 CLAUDE_AUTH_STATUS_PATH: Final[str] = "/api/claude-auth/status"
 CLAUDE_AUTH_SUBMIT_PATH: Final[str] = "/api/claude-auth/submit-credentials"
+# The endpoint the product's new-tab screen posts to when a user starts a chat. A workspace boots
+# with no chat at all, so the driver's own chat is made here.
+CREATE_CHAT_PATH: Final[str] = "/api/agents/create-chat"
+AGENTS_PATH: Final[str] = "/api/agents"
 ANTHROPIC_API_KEY_ENV_VAR: Final[str] = "ANTHROPIC_API_KEY"
 ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
 # The auth mode the workspace derives from which credential keys it was given: a key on its own is
@@ -62,8 +102,37 @@ ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
 AUTH_MODE_API_KEY: Final[str] = "api_key"
 AUTH_MODE_IMBUE: Final[str] = "imbue"
 
+# The workspace's accounts API -- the endpoints the product's account screen posts to when a user
+# adds a provider account. A chat runs on the harness of the lane its account was minted on, so the
+# lane a workspace is signed in on is what decides the harness a run measures.
+ACCOUNTS_PATH: Final[str] = "/api/accounts"
+ACCOUNT_FLOW_PATH_TEMPLATE: Final[str] = "/api/accounts/flow/{flow_id}"
+# The one sign-in method a run can drive: a pasted key. The other methods put a human at a device
+# prompt, which is why the lanes that only offer those are out of reach of an eval.
+ACCOUNT_FLOW_METHOD_API_KEY: Final[str] = "api_key"
+# What a flow reports on the submit and on every poll of it; anything else means it is still working.
+_ACCOUNT_FLOW_STATE_OK: Final[str] = "ok"
+_ACCOUNT_FLOW_STATE_FAILED: Final[str] = "failed"
+# The endpoint the product's model picker posts to. It is harness-blind and validated against the
+# chat's own catalog, and it answers with nothing that reads the choice back.
+MODEL_CHOICE_PATH_TEMPLATE: Final[str] = "/api/agents/{agent_id}/model"
+# Sent on every switch so the endpoint applies all three axes, rather than only the ones a client's
+# own diffing would have considered changed.
+MODEL_CHOICE_AXES: Final[tuple[str, ...]] = ("model", "effort", "fast")
+# How much of a refusal is kept: enough to read a mistyped catalog id off a trial listing.
+_REFUSAL_DETAIL_LIMIT: Final[int] = 300
+
 _QUICK_EXEC_TIMEOUT_SECONDS: Final[int] = 180
 _SLOW_EXEC_TIMEOUT_SECONDS: Final[int] = 900
+
+# The overlay template every workspace this box creates is stacked on, and the sandbox lifetime that
+# template gives it. The overlay lives in default-workspace-template, so the number is a fact about
+# that repo restated here; it is named because it is a hard ceiling on a trial, not a preference.
+# The trial's whole conversation lives in one workspace -- across every step of a stepped case -- so
+# a case whose steps together outlast this loses the workspace mid-trial, whatever the case's own
+# timeouts say. `generate.trial_lifetime_seconds` is measured against it at generation time.
+EVAL_WORKSPACE_TEMPLATE: Final[str] = "modal_eval"
+EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS: Final[float] = 3 * 60 * 60
 
 # Providers other than Modal are unusable in the box; exec'd mngr commands need
 # the same disables the entrypoint exports for the backend.
@@ -142,6 +211,32 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
     return activation_env
 
 
+# mngr's modal provider truncates the environment name it derives to this many characters
+# (MODAL_NAME_MAX_LENGTH in mngr_modal, which this project does not depend on). Truncation is a
+# lossy left-slice with no disambiguating hash, so a truncated name is a name that can collide with
+# another trial's -- and a name nothing here could reconstruct afterwards to clean up.
+MODAL_ENVIRONMENT_NAME_MAX_LENGTH: Final[int] = 64
+
+
+@pure
+def derive_modal_environment_name(activation_env: Mapping[str, str], user_id: str) -> str:
+    """The Modal environment mngr's modal provider will put this trial's workspaces in.
+
+    Derived here rather than read back from Modal because the environment is created lazily, deep
+    inside the first workspace create: a trial that dies before then still has to leave the name
+    behind for cleanup to act on. It is the same concatenation mngr makes.
+    """
+    environment_name = "{}{}".format(activation_env["MNGR_PREFIX"], user_id)
+    if len(environment_name) > MODAL_ENVIRONMENT_NAME_MAX_LENGTH:
+        raise ModalNameBudgetError(
+            "the Modal environment name {!r} is {} characters and mngr would truncate it to {}; "
+            "shorten the user id budget so the recorded name stays the created one".format(
+                environment_name, len(environment_name), MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+            )
+        )
+    return environment_name
+
+
 @pure
 def build_box_env(
     *,
@@ -160,9 +255,10 @@ def build_box_env(
             "MINDS_ENV": minds_env,
             "MNGR__PROVIDERS__MODAL__USER_ID": user_id,
             "MINDS_BOX_MNGR_REF": mngr_sha,
-            # Every workspace this box creates is an eval workspace: stack the
-            # modal_eval overlay (shorter 3h sandbox timeout) on the modal template.
-            "MINDS_MODAL_EXTRA_TEMPLATE": "modal_eval",
+            # Every workspace this box creates is an eval workspace: stack the eval overlay, whose
+            # shorter sandbox lifetime is EVAL_WORKSPACE_SANDBOX_TIMEOUT_SECONDS, on the modal
+            # template.
+            "MINDS_MODAL_EXTRA_TEMPLATE": EVAL_WORKSPACE_TEMPLATE,
             "SKIP_AUTH": "1",
         }
     )
@@ -200,6 +296,66 @@ async def check_run_in_box(
     return result
 
 
+# How often a readiness poll says it is still waiting. A poll that has answered nothing for twenty
+# minutes and a poll that is not running at all look identical in a log; this is what tells them
+# apart, without turning a long wait into thousands of lines.
+_WAIT_HEARTBEAT_SECONDS: Final[float] = 60.0
+
+
+class WaitHeartbeat(MutableModel):
+    """Reports, at a bounded rate, that a readiness poll is still waiting and what it last saw.
+
+    The observation is the point: knowing a wait is stuck localizes the failure, but knowing what
+    the workspace was answering while it was stuck is what explains it.
+    """
+
+    label: str = Field(frozen=True, description="What the poll is waiting for, as the log names it")
+    started_at: float = Field(
+        default_factory=time.monotonic, description="When the wait began, on the monotonic clock"
+    )
+    last_logged_at: float = Field(default=0.0, description="When the last heartbeat was emitted; 0 means none yet")
+
+    def tick(self, observation: str) -> None:
+        now = time.monotonic()
+        if self.last_logged_at and now - self.last_logged_at < _WAIT_HEARTBEAT_SECONDS:
+            return
+        self.last_logged_at = now
+        logger.info(
+            "Still waiting for {} after {:.0f}s -- the workspace answers: {}",
+            self.label,
+            now - self.started_at,
+            observation,
+        )
+
+
+@pure
+def describe_agents_listing(body: Any) -> str:
+    """What the workspace's agents listing currently says, in one line.
+
+    An unresolvable chat agent is nearly always one of three things -- the listing not answering at
+    all, a workspace whose chat was never created, or a chat listed under a name other than the one
+    being looked for -- and all three are readable off this.
+    """
+    agents = body.get("agents") if isinstance(body, dict) else None
+    if not isinstance(agents, list):
+        return "nothing (the chat app is unreachable or answered no agents list)"
+    if not agents:
+        return "an empty agents list"
+    return ", ".join(
+        "{}({})".format(agent.get("name") or "unnamed", agent.get("state") or "no state")
+        if isinstance(agent, dict)
+        else "malformed entry"
+        for agent in agents
+    )
+
+
+@pure
+def service_log_path(filename: str) -> str:
+    """The box path a long-running service logs to. Every service log goes through here so none of
+    them can drift back under the directory harbor empties between steps."""
+    return "{}/{}".format(BOX_SERVICE_LOGS_DIR, filename)
+
+
 async def read_box_mngr_sha(environment: BaseEnvironment) -> str:
     """The exact mngr SHA the box image was built from (stamped into the image by the generator;
     the staged clone carries no .git because Modal's build-context upload drops it)."""
@@ -215,8 +371,8 @@ async def start_backend(environment: BaseEnvironment, env: dict[str, str]) -> No
     backend spawns (including each `mngr create`) inherits it."""
     await check_run_in_box(
         environment,
-        "mkdir -p {logs} && setsid nohup /usr/local/bin/entrypoint.sh > {logs}/box.log 2>&1 < /dev/null &".format(
-            logs=BOX_LOGS_DIR
+        "mkdir -p {logs} && setsid nohup /usr/local/bin/entrypoint.sh > {log} 2>&1 < /dev/null &".format(
+            logs=BOX_SERVICE_LOGS_DIR, log=service_log_path(BOX_LOG_FILENAME)
         ),
         env,
         _QUICK_EXEC_TIMEOUT_SECONDS,
@@ -259,17 +415,12 @@ async def _box_curl_json(
     output = (result.stdout or "").strip()
     if result.return_code != 0:
         return 0, {"error": (result.stderr or output or "curl failed").strip()[:400]}
-    head, _, status_line = output.rpartition("\n")
-    if not status_line.strip().isdigit():
-        return 0, {"error": output[:400]}
-    status = int(status_line.strip())
-    if not head.strip():
-        return status, {}
-    try:
-        parsed = json.loads(head)
-    except ValueError:
-        return status, {"error": head[:400]}
-    return status, parsed if isinstance(parsed, dict) else {"error": head[:400]}
+    response = parse_curl_response(output)
+    if isinstance(response.body, dict):
+        return response.status, response.body
+    # A body this caller cannot read is reported through the "error" key its callers already
+    # inspect; a capture that never carried a status reads back as status 0, which they poll on.
+    return response.status, {"error": response.text[:400]} if response.text else {}
 
 
 @pure
@@ -370,6 +521,98 @@ async def run_in_workspace(
     return bool(first.get("success")), str(first.get("stdout") or "")
 
 
+class WorkspaceResponse(FrozenModel):
+    """One bridged HTTP call to the workspace's chat app."""
+
+    # Status 0 is the one callers may retry -- the bridged exec failed, or the chat app is not
+    # listening yet. Every other status is the endpoint's own answer, refusals included.
+    status: int = Field(description="The response status; 0 when the call never reached the endpoint")
+    body: Any = Field(default=None, description="The parsed JSON body; None when there was none or it did not parse")
+    # A body that did not parse came from somewhere other than the endpoint, whose own error shapes
+    # are all JSON -- an unhandled traceback page, or something in front of the chat app.
+    # That is when a failed trial most needs the text, so it is kept rather than dropped.
+    text: str = Field(default="", description="The raw body as captured, whether or not it parsed")
+
+    @property
+    def is_ok(self) -> bool:
+        """Whether the endpoint answered yes. The whole 2xx range counts -- a create answers 201
+        where a send answers 200 -- and everything else is the endpoint refusing, or, at 0, not
+        having answered at all."""
+        return 200 <= self.status < 300
+
+
+@pure
+def parse_curl_response(output: str) -> WorkspaceResponse:
+    """Split what `curl -w '\\n%{http_code}'` printed into the status and the parsed JSON body."""
+    head, _, status_line = output.strip().rpartition("\n")
+    if not status_line.strip().isdigit():
+        return WorkspaceResponse(status=0, text=output.strip())
+    # curl prints 000 when it never got a response, which reads back as the same 0 a failed bridge
+    # exec gives: both mean the call was never answered.
+    status = int(status_line.strip())
+    if not head.strip():
+        return WorkspaceResponse(status=status)
+    try:
+        return WorkspaceResponse(status=status, body=json.loads(head), text=head)
+    except ValueError:
+        return WorkspaceResponse(status=status, text=head)
+
+
+# Reads the chat app's URL out of the workspace's registry, printing nothing when the registry or
+# the row is missing (a workspace still booting), so the fallback takes over. Runs inside the
+# workspace in the same exec as the curl that uses it: one bridged call per request, and the URL is
+# always the one the app registered most recently. The registry path is relative to the exec's cwd,
+# which `mngr exec` sets to the workspace agent's work_dir -- the repo root -- the same way the
+# template's own forward_port.py reads it.
+_READ_CHAT_URL_PROGRAM: Final[str] = (
+    "import tomllib\n"
+    "rows = tomllib.load(open({registry!r}, 'rb')).get('apps', [])\n"
+    "print(next((row.get('url', '') for row in rows if row.get('name') == {name!r}), ''), end='')\n"
+).format(registry=WORKSPACE_APPS_REGISTRY, name=CHAT_APP_NAME)
+
+
+@pure
+def chat_url_shell_snippet() -> str:
+    """A shell snippet that leaves the chat app's URL in ``$chat_url``: the registry's, else the fallback."""
+    return 'chat_url=$(python3 -c {program} 2>/dev/null); [ -n "$chat_url" ] || chat_url={fallback}'.format(
+        program=shlex.quote(_READ_CHAT_URL_PROGRAM), fallback=shlex.quote(CHAT_APP_FALLBACK_URL)
+    )
+
+
+@pure
+def workspace_curl_command(url_path: str, body_json: str | None) -> str:
+    """The shell command one bridged call runs: resolve the chat app's URL, then curl the path on it."""
+    parts = ["curl", "-s", "--max-time", "30", "-w", "\\n%{http_code}"]
+    if body_json is not None:
+        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
+    curl = " ".join(shlex.quote(part) for part in parts)
+    # The URL is the one shell word left unquoted: it is the variable the snippet just set.
+    return '{snippet}; {curl} "$chat_url"{path}'.format(
+        snippet=chat_url_shell_snippet(), curl=curl, path=shlex.quote(url_path)
+    )
+
+
+async def workspace_curl(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    url_path: str,
+    body_json: str | None,
+) -> WorkspaceResponse:
+    """HTTP against the workspace-local chat app, bridged through mngr exec, keeping the status: an
+    endpoint that answers 4xx has to be told apart from one that is not up yet."""
+    inner_command = workspace_curl_command(url_path, body_json)
+    is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
+    if not is_success:
+        # Whatever the failed exec left behind: mngr's own failure detail when the bridge could not
+        # run the command at all, or -- when curl ran and could not reach the endpoint -- curl's
+        # write-out on its own, which reduces to no text. Never a status, since a curl that exited
+        # non-zero may have printed one (a `--max-time` cut off mid-response) without the body that
+        # goes with it.
+        return WorkspaceResponse(status=0, text=parse_curl_response(stdout).text)
+    return parse_curl_response(stdout)
+
+
 async def workspace_curl_json(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -377,43 +620,44 @@ async def workspace_curl_json(
     url_path: str,
     body_json: str | None,
 ) -> Any | None:
-    """HTTP against the workspace-local system_interface, bridged through mngr exec; returns the
-    parsed JSON body, or None on any failure (callers poll)."""
-    parts = ["curl", "-s", "--max-time", "30"]
-    if body_json is not None:
-        parts += ["-X", "POST", "-H", "Content-Type: application/json", "-d", body_json]
-    parts.append("{}{}".format(WORKSPACE_SYSTEM_INTERFACE, url_path))
-    inner_command = " ".join(shlex.quote(part) for part in parts)
-    is_success, stdout = await run_in_workspace(environment, env, workspace_agent_id, inner_command, 60)
-    if not is_success or not stdout.strip():
-        return None
-    try:
-        return json.loads(stdout)
-    except ValueError:
-        return None
+    """The parsed JSON body of a bridged chat app call, or None when there was none -- what the
+    pollers read, which treat any answer alike."""
+    response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
+    return response.body
 
 
-_SYSTEM_SERVICES_AGENT_NAME: Final[str] = "system-services"
+# A chat wears two names: the display name it was created under ("Chat 2") and the canonical true
+# name the workspace lists it as ("Chat-2"). The agents listing carries the canonical one only --
+# labels, which is where the display name lives, reach clients over the workspace's WebSocket and
+# not over this endpoint -- so a chat is matched on the key below rather than on either name.
+_CANONICAL_STRIP_PATTERN: Final[re.Pattern[str]] = re.compile(r"[^a-zA-Z0-9 _-]+")
+_CANONICAL_SPACES_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s+")
 
 
 @pure
-def _resolve_chat_agent_id(agents: list[Any], workspace_host_name: str) -> str | None:
-    named_matches = [
-        agent
-        for agent in agents
-        if isinstance(agent, dict)
-        and agent.get("id")
-        and str(agent.get("name") or "").lower() == workspace_host_name.lower()
-    ]
-    if named_matches:
-        return str(named_matches[0]["id"])
-    non_system_agents = [
-        agent
-        for agent in agents
-        if isinstance(agent, dict) and agent.get("id") and agent.get("name") != _SYSTEM_SERVICES_AGENT_NAME
-    ]
-    if len(non_system_agents) == 1:
-        return str(non_system_agents[0]["id"])
+def _chat_name_key(name: str) -> str:
+    """The key a workspace compares two chat names on, and the rule it refuses a colliding create
+    on: everything but a safe-name character or a space is dropped, each run of spaces becomes one
+    dash, the ends are stripped of dashes and underscores, and case is ignored.
+
+    This mirrors the template's own ``_canonical_name_key`` (``canonical_agent_name`` plus the
+    casefold); the two have to be changed together. It is not the name a chat is listed under --
+    the true name is the canonical form alone, which keeps the case it was created with.
+    """
+    stripped = _CANONICAL_STRIP_PATTERN.sub("", name.strip())
+    return _CANONICAL_SPACES_PATTERN.sub("-", stripped).strip("-_").casefold()
+
+
+@pure
+def resolve_chat_agent_id(agents: list[Any], display_name: str) -> str | None:
+    """The id of the chat created under ``display_name`` in an `/api/agents` listing, or None when
+    the listing carries no such chat yet."""
+    wanted_key = _chat_name_key(display_name)
+    for agent in agents:
+        if not isinstance(agent, dict) or not agent.get("id"):
+            continue
+        if _chat_name_key(str(agent.get("name") or "")) == wanted_key:
+            return str(agent["id"])
     return None
 
 
@@ -421,22 +665,103 @@ async def fetch_chat_agent_id(
     environment: BaseEnvironment,
     env: dict[str, str],
     workspace_agent_id: str,
-    workspace_host_name: str,
+    display_name: str,
     deadline: float,
     poll_seconds: float,
 ) -> str | None:
-    """The workspace's chat (primary) agent id, resolved from the workspace system_interface's
-    agents listing: the agent named after the workspace host, else the single non-system-services
-    agent. (The dwt worker read the manager's initial_chat_agent_id file instead, but that file is
-    written lazily and proved unreliable over the bridge.)"""
+    """Poll the workspace's agents listing until it carries the chat created under ``display_name``.
+
+    Only a workspace that already has that chat has one to find, and a create it is still working on
+    is not listed yet, which is why this polls rather than reading once. A workspace that boots with
+    no chat at all gets its chat from ``create_chat_agent``.
+    """
+    heartbeat = WaitHeartbeat(label="the workspace chat agent to appear in the agents listing")
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, "/api/agents", None)
+        body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
         agents = body.get("agents") if isinstance(body, dict) else None
         if isinstance(agents, list):
-            chat_agent_id = _resolve_chat_agent_id(agents, workspace_host_name)
+            chat_agent_id = resolve_chat_agent_id(agents, display_name)
             if chat_agent_id is not None:
                 return chat_agent_id
+        heartbeat.tick(describe_agents_listing(body))
         await asyncio.sleep(poll_seconds)
+    return None
+
+
+async def create_chat_agent(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    display_name: str,
+    account_id: str,
+    deadline: float,
+    poll_seconds: float,
+) -> str | None:
+    """Create the workspace's chat through the endpoint the product's new-tab screen posts to;
+    returns its agent id.
+
+    The screen sends no name and lets the workspace mint the next free "Chat N"; this names the
+    chat itself, because the name is the only handle a create whose answer was lost can be
+    recovered by -- see the collision branch below.
+
+    A chat runs on the provider account it binds to at creation, so the workspace must already be
+    signed in: with no account to bind to, the workspace refuses the create rather than making a
+    chat that could never take a turn. An empty ``account_id`` leaves the choice to the workspace,
+    which takes the account it used most recently, or its oldest one when that is no longer usable.
+
+    Only a call that never reached the endpoint is retried, since that is the chat app still
+    coming up. A refusal is final -- except a name collision, which says a chat under that name is
+    already there and is answered by resolving it from the listing.
+    """
+    # The account is left out rather than sent empty: absent and empty mean the same thing to the
+    # endpoint, and a request carries no field it has no value for.
+    request_body = {"name": display_name}
+    if account_id:
+        request_body["account_id"] = account_id
+    payload = json.dumps(request_body)
+    heartbeat = WaitHeartbeat(label="the workspace's create-chat endpoint to answer")
+    unanswered_detail = ""
+    while time.time() < deadline:
+        response = await workspace_curl(environment, env, workspace_agent_id, CREATE_CHAT_PATH, payload)
+        body = response.body if isinstance(response.body, dict) else {}
+        if response.status == 0:
+            # An attempt that says nothing at all (curl's own 000 carries no body) must not erase
+            # what an earlier one said, since that is the only account of why the call keeps
+            # failing.
+            unanswered_detail = response.text or unanswered_detail
+            heartbeat.tick(unanswered_detail or "nothing readable from {}".format(CREATE_CHAT_PATH))
+            await asyncio.sleep(poll_seconds)
+            continue
+        if response.is_ok:
+            agent_id = body.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                logger.info("Created the workspace chat {!r} (agent {})", display_name, agent_id)
+                return agent_id
+            logger.error("The workspace created a chat but named no agent id: {}", response.text[:300])
+            return None
+        # A conflict is the name being held already -- by an agent, or by a create still in flight.
+        if response.status == HTTPStatus.CONFLICT:
+            logger.info(
+                "The workspace already has a chat named {!r} ({}); resolving it from the agents listing",
+                display_name,
+                str(body.get("detail") or "")[:200],
+            )
+            resolved_agent_id = await fetch_chat_agent_id(
+                environment, env, workspace_agent_id, display_name, deadline, poll_seconds
+            )
+            if resolved_agent_id is None:
+                logger.error(
+                    "The workspace refused a chat named {!r} as taken, then never listed one under that name",
+                    display_name,
+                )
+            return resolved_agent_id
+        logger.error(
+            "The workspace refused to create a chat (HTTP {}): {}",
+            response.status,
+            str(body.get("detail") or response.text)[:300],
+        )
+        return None
+    logger.error("The workspace's create-chat endpoint never answered ({})", unanswered_detail[:300])
     return None
 
 
@@ -451,6 +776,22 @@ def build_credential_lines(anthropic_api_key: str, anthropic_base_url: str) -> s
     return "\n".join(lines) + "\n"
 
 
+_REDACTION: Final[str] = "<redacted>"
+
+
+@pure
+def redact_secret(text: str, secret: str) -> str:
+    """``text`` with every occurrence of ``secret`` masked.
+
+    Whatever answers a sign-in can quote the request that carried the credential paste: the
+    endpoint reports an unreadable body by rendering the validation error, which carries the input
+    it could not read, and a bridged command that fails can be echoed back with its own ``-d``
+    payload in it. Trial logs are kept and shared long after the run, so mask before logging --
+    and mask before truncating, since a slice of an unmasked key is still a leak.
+    """
+    return text.replace(secret, _REDACTION) if secret else text
+
+
 async def wait_for_auth_endpoint(
     environment: BaseEnvironment,
     env: dict[str, str],
@@ -459,15 +800,37 @@ async def wait_for_auth_endpoint(
     poll_seconds: float,
 ) -> bool:
     """Block until the workspace's claude-auth endpoint answers, so credentials are not posted at a
-    system_interface that is still coming up. This is a real readiness gate for auth, which the
+    chat app that is still coming up. This is a real readiness gate for auth, which the
     turn loop otherwise lacks -- without it a failure surfaces only as an agent that replies with
-    'not logged in' text."""
+    'not logged in' text.
+
+    Readiness is a 2xx, not merely a body. Being signed out is a 200 here, so the endpoint's own
+    error shapes -- which are JSON like everything else -- all mean it cannot report the state at
+    all, and posting credentials at a harness that just said so only moves the failure somewhere
+    less legible.
+    """
+    heartbeat = WaitHeartbeat(label="the workspace's claude-auth endpoint")
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
-        if isinstance(body, dict):
+        response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_STATUS_PATH, None)
+        if response.is_ok and isinstance(response.body, dict):
             return True
+        heartbeat.tick("status {} from {}".format(response.status, CLAUDE_AUTH_STATUS_PATH))
         await asyncio.sleep(poll_seconds)
     return False
+
+
+class WorkspaceSignIn(FrozenModel):
+    """What the workspace reported when it was signed in through its own credential endpoint."""
+
+    is_signed_in: bool = Field(description="Whether the workspace came back signed in, in the mode asked for")
+    # A chat binds to an account when it is created, so this is what the driver's own chat is made
+    # against. Empty when the workspace named no account, which leaves the choice to the workspace.
+    account_id: str = Field(default="", description="The provider account the credentials minted")
+
+
+# What every path that leaves the workspace unauthenticated answers with, whichever way the sign-in
+# was refused. Named for the state it reports rather than for any one cause of it.
+NOT_SIGNED_IN: Final[WorkspaceSignIn] = WorkspaceSignIn(is_signed_in=False)
 
 
 async def authenticate_workspace(
@@ -476,21 +839,40 @@ async def authenticate_workspace(
     workspace_agent_id: str,
     anthropic_api_key: str,
     anthropic_base_url: str,
-) -> bool:
+) -> WorkspaceSignIn:
     """Sign the workspace in the way a user does, via the product's own credential endpoint.
 
-    The endpoint writes the credentials into the shared claude settings env block, records the key's
-    approval so claude never challenges it, and restarts the claude agents -- so callers must wait
-    for the chat agent to reach WAITING again afterwards.
+    The endpoint mints the provider account it answers with, writes the credentials into that
+    account rather than over the workspace's shared login, and records the key's approval so claude
+    never challenges it. That account is what a chat is then created against, so signing in has to
+    come before the chat.
     """
     payload = json.dumps({"credentials": build_credential_lines(anthropic_api_key, anthropic_base_url)})
-    body = await workspace_curl_json(environment, env, workspace_agent_id, CLAUDE_AUTH_SUBMIT_PATH, body_json=payload)
+    response = await workspace_curl(environment, env, workspace_agent_id, CLAUDE_AUTH_SUBMIT_PATH, body_json=payload)
+    body = response.body
     if not isinstance(body, dict):
-        return False
-    # A rejected paste answers with an error detail rather than an auth status.
-    if body.get("detail"):
-        logger.warning("The workspace rejected the submitted credentials: {}", body["detail"])
-        return False
+        # The endpoint's own answers are all JSON, so anything else came from somewhere else -- an
+        # unhandled traceback page, or something in front of the chat app. It is the only
+        # account of the failure a trial log would otherwise get, so it is reported verbatim.
+        logger.error(
+            "The workspace's sign-in endpoint answered nothing readable (HTTP {}): {}",
+            response.status,
+            redact_secret(response.text, anthropic_api_key)[:300],
+        )
+        return NOT_SIGNED_IN
+    # Read on the status, not on the body alone: a signed-in answer is a 2xx, and anything else is a
+    # refusal whose body may still parse and may still carry an auth status shaped like a success.
+    # Every refusal names a detail, and which one it is decides whether the trial's credentials or
+    # the workspace itself is at fault -- a paste the endpoint could not read against an account it
+    # could not write -- so the status and the detail are reported together. A detail alongside a
+    # 2xx is not a shape the endpoint has, but it is not a sign-in either.
+    if not response.is_ok or body.get("detail"):
+        logger.error(
+            "The workspace refused the sign-in (HTTP {}): {}",
+            response.status,
+            redact_secret(str(body.get("detail") or response.text), anthropic_api_key)[:300],
+        )
+        return NOT_SIGNED_IN
     # The endpoint deliberately runs no credential probe, so a wrong key or base URL is accepted
     # here and surfaces only later, as the agent replying that it is not logged in -- which the
     # judge would then grade as if it were the agent's own behaviour. Check what the workspace
@@ -504,8 +886,211 @@ async def authenticate_workspace(
             actual_mode,
             expected_mode,
         )
-        return False
-    return True
+        return NOT_SIGNED_IN
+    account_id = body.get("account_id")
+    if not isinstance(account_id, str) or not account_id:
+        logger.warning(
+            "The workspace signed in but named no account; its chat will be created against whichever "
+            "account the workspace picks for itself"
+        )
+        return WorkspaceSignIn(is_signed_in=True)
+    return WorkspaceSignIn(is_signed_in=True, account_id=account_id)
+
+
+class AccountSignIn(FrozenModel):
+    """What the workspace's accounts flow reported when a lane was signed in through it.
+
+    The claude lane keeps its own path (``authenticate_workspace``), whose answer carries the auth
+    mode a proxied sign-in is verified by; every other lane comes through here.
+    """
+
+    is_signed_in: bool = Field(description="Whether the flow settled with the workspace signed in")
+    account_id: str = Field(default="", description="The account the flow minted; empty when it did not sign in")
+    failure: str = Field(default="", description="Prose naming what went wrong; empty when the workspace signed in")
+    is_failure_from_waiting: bool = Field(
+        default=False,
+        description="Whether the failure is a wait that ran out, which callers report as a readiness reason",
+    )
+
+
+@pure
+def _response_detail(response: WorkspaceResponse) -> str:
+    """An endpoint's own account of an answer: its ``detail``, else whatever it sent, else the bare
+    status -- an answer that says nothing still has to name itself in a failure a reader diagnoses
+    a trial from."""
+    body = response.body if isinstance(response.body, dict) else {}
+    detail = str(body.get("detail") or response.text or "")
+    if detail:
+        return detail
+    return "HTTP {}".format(response.status) if response.status else "the call was never answered"
+
+
+@pure
+def _read_account_flow_answer(response: WorkspaceResponse, lane_id: str, api_key: str) -> AccountSignIn | None:
+    """The sign-in an accounts-flow answer reports, or None while the flow is still working on it.
+
+    A key the harness could not use settles the flow as ``failed``: the workspace probes the
+    provider with the key before it answers, so this is where a key that does not work for the lane
+    is caught, rather than a turn later. An answer this side cannot read counts as still working,
+    since the flow is polled on the same URL and the next answer may settle it.
+    """
+    body = response.body if isinstance(response.body, dict) else {}
+    state = str(body.get("state") or "")
+    if state == _ACCOUNT_FLOW_STATE_FAILED:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the workspace rejected the key for lane {}: {}".format(
+                lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+            ),
+        )
+    if state != _ACCOUNT_FLOW_STATE_OK:
+        return None
+    account_id = body.get("account_id")
+    if isinstance(account_id, str) and account_id:
+        return AccountSignIn(is_signed_in=True, account_id=account_id)
+    return AccountSignIn(is_signed_in=True)
+
+
+async def sign_in_via_accounts_flow(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    lane_id: str,
+    api_key: str,
+    key_provider: str,
+    deadline: float,
+    poll_seconds: float,
+) -> AccountSignIn:
+    """Sign the workspace in on a provider lane through the flow the product's account screen drives,
+    and report the account it minted.
+
+    The lane decides which harness a chat bound to that account runs on, so this is how a run
+    chooses a harness at all. It is two calls: one that starts a flow and answers its id, and one
+    that submits the key against it. An API-key lane settles on the submit, but the flow may also
+    answer that it is still working, which is polled on the same URL until it settles or the wait
+    runs out.
+
+    The key never reaches a log or a return value: whatever refuses a sign-in can quote the request
+    that carried it, and trial logs outlive the run.
+    """
+    start_payload = json.dumps({"lane_id": lane_id, "method_id": ACCOUNT_FLOW_METHOD_API_KEY})
+    start_response = await workspace_curl(environment, env, workspace_agent_id, ACCOUNTS_PATH, start_payload)
+    started = start_response.body if isinstance(start_response.body, dict) else {}
+    flow_id = started.get("flow_id")
+    if not start_response.is_ok or not isinstance(flow_id, str) or not flow_id:
+        failure = "the workspace refused to start a sign-in on lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(start_response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    flow_path = ACCOUNT_FLOW_PATH_TEMPLATE.format(flow_id=flow_id)
+    submit_fields = {"api_key": api_key}
+    # Sent only by a lane that has one to send: the api-key lane pairs a key with the provider it
+    # belongs to, and a lane that serves one provider has no use for the field.
+    if key_provider:
+        submit_fields["key_provider"] = key_provider
+    response = await workspace_curl(environment, env, workspace_agent_id, flow_path, json.dumps(submit_fields))
+    if not response.is_ok:
+        failure = "the workspace rejected the key for lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    heartbeat = WaitHeartbeat(label="the sign-in on lane {} to settle".format(lane_id))
+    sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    while sign_in is None and time.time() < deadline:
+        heartbeat.tick(redact_secret(_response_detail(response), api_key)[:200])
+        await asyncio.sleep(poll_seconds)
+        response = await workspace_curl(environment, env, workspace_agent_id, flow_path, None)
+        sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    if sign_in is None:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the sign-in on lane {} never settled".format(lane_id),
+            is_failure_from_waiting=True,
+        )
+    if sign_in.failure:
+        logger.error(sign_in.failure)
+        return sign_in
+    if not sign_in.account_id:
+        logger.warning(
+            "The workspace signed in on lane {} but named no account; its chat will be created against "
+            "whichever account the workspace picks for itself",
+            lane_id,
+        )
+        return sign_in
+    logger.info("Signed the workspace in on lane {} (account {})", lane_id, sign_in.account_id)
+    return sign_in
+
+
+class AccountRecord(FrozenModel):
+    """One row of the workspace's accounts listing."""
+
+    id: str = Field(description="The account id a chat is created against")
+    lane: str = Field(description="The provider lane the account was minted on")
+    harness: str = Field(description="The harness a chat bound to this account runs on")
+
+
+async def fetch_account(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    account_id: str,
+) -> AccountRecord | None:
+    """The workspace's own row for an account, or None when it lists no such row.
+
+    This is the only readback of the harness a trial gets: which harness an account runs is the
+    workspace's to say, never the run's to assume from the lane it asked for.
+    """
+    body = await workspace_curl_json(environment, env, workspace_agent_id, ACCOUNTS_PATH, None)
+    accounts = body.get("accounts") if isinstance(body, dict) else None
+    if not isinstance(accounts, list):
+        logger.warning("The workspace's accounts listing answered nothing readable; the harness stays unrecorded")
+        return None
+    for account in accounts:
+        if isinstance(account, dict) and str(account.get("id") or "") == account_id:
+            return AccountRecord(
+                id=account_id, lane=str(account.get("lane") or ""), harness=str(account.get("harness") or "")
+            )
+    logger.warning("The workspace lists no account {}; the harness stays unrecorded", account_id)
+    return None
+
+
+class ModelSwitchOutcome(FrozenModel):
+    """What the workspace answered when a chat's model choice was set."""
+
+    is_applied: bool = Field(description="Whether the endpoint took the choice")
+    status: int = Field(description="The response status; 0 when the call never reached the endpoint")
+    detail: str = Field(default="", description="The endpoint's account of a refusal; empty when it was applied")
+
+
+async def switch_model_choice(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    chat_agent_id: str,
+    model_id: str,
+    effort: str,
+    is_fast: bool,
+) -> ModelSwitchOutcome:
+    """Set a chat's model, effort and speed tier through the endpoint the product's model picker
+    posts to.
+
+    The ids are the chat's catalog ids, which differ by harness and are validated by the endpoint
+    alone: its 400 is the validation, and it is quoted verbatim because a mistyped catalog id is a
+    configuration error the reader has to be able to see, not a workspace fault to retry.
+    """
+    payload = json.dumps({"model_id": model_id, "effort": effort, "fast": is_fast, "axes": list(MODEL_CHOICE_AXES)})
+    url_path = MODEL_CHOICE_PATH_TEMPLATE.format(agent_id=chat_agent_id)
+    response = await workspace_curl(environment, env, workspace_agent_id, url_path, payload)
+    if response.is_ok:
+        logger.info("The workspace took the model choice {} (effort {}, fast {})", model_id, effort, is_fast)
+        return ModelSwitchOutcome(is_applied=True, status=response.status)
+    detail = _response_detail(response)[:_REFUSAL_DETAIL_LIMIT]
+    logger.error("The workspace refused the model choice {} (HTTP {}): {}", model_id, response.status, detail)
+    return ModelSwitchOutcome(is_applied=False, status=response.status, detail=detail)
 
 
 @pure
@@ -554,16 +1139,18 @@ async def start_reverse_tunnel(
 ) -> None:
     """Upload the tunnel holder and start it in the background in the box.
 
-    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
-    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    Uploaded at run time rather than baked into the box image: the image is one build per mngr SHA,
+    cached whole, and has to stay byte-identical across a dataset, so shipping this in it would cost
+    a full rebuild.
     """
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
     command = (
-        "cd {mngr} && setsid nohup uv run python {script} --agent-id {agent} --ssh-user {user} "
+        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run python {script} --agent-id {agent} --ssh-user {user} "
         "--ssh-host {host} --ssh-port {ssh_port} --ssh-key {key} --port {port} "
-        "--hold-seconds {hold}{probe} > {logs}/{log} 2>&1 < /dev/null &"
+        "--hold-seconds {hold}{probe} > {log} 2>&1 < /dev/null &"
     ).format(
+        logs=BOX_SERVICE_LOGS_DIR,
         mngr=BOX_MNGR_DIR,
         script=BOX_REVERSE_TUNNEL_PATH,
         agent=shlex.quote(workspace_agent_id),
@@ -574,8 +1161,7 @@ async def start_reverse_tunnel(
         port=port,
         hold=hold_seconds,
         probe=" --serve-probe-token" if is_probe_token_served else "",
-        logs=BOX_LOGS_DIR,
-        log=TUNNEL_LOG_FILENAME,
+        log=service_log_path(TUNNEL_LOG_FILENAME),
     )
     await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
 
@@ -585,8 +1171,8 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 
     Both land in the target's directory, because the script imports the protocol as a plain module
     beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
+    reverse-tunnel holder is: the image is one build per mngr SHA, cached whole, and has to stay
+    byte-identical across a dataset, so a change here would otherwise cost a full rebuild.
     """
     box_dir = target_path.rsplit("/", 1)[0]
     for filename, destination in (
@@ -600,6 +1186,19 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 async def read_box_file(environment: BaseEnvironment, env: dict[str, str], path: str) -> str:
     result = await run_in_box(
         environment, "cat {} 2>/dev/null || true".format(shlex.quote(path)), env, _QUICK_EXEC_TIMEOUT_SECONDS
+    )
+    return (result.stdout or "").strip()
+
+
+async def read_box_file_tail(environment: BaseEnvironment, env: dict[str, str], path: str, max_bytes: int) -> str:
+    """The tail of a box file, empty when it is absent. Bounded in the box rather than on the host,
+    because a service log can reach hundreds of megabytes and the whole of it would ride the exec
+    round trip."""
+    result = await run_in_box(
+        environment,
+        "tail -c {} {} 2>/dev/null || true".format(max_bytes, shlex.quote(path)),
+        env,
+        _QUICK_EXEC_TIMEOUT_SECONDS,
     )
     return (result.stdout or "").strip()
 
@@ -628,20 +1227,20 @@ async def start_proxy(
             "ANTHROPIC_API_KEY": anthropic_api_key,
             PROXY_KEY_ENV_VAR: proxy_key,
             PROXY_USAGE_LOG_ENV_VAR: BOX_PROXY_USAGE_LOG_PATH,
-            # litellm imports the hooks by module name, so the directory holding them must be on the
-            # path; it is not the working directory, which stays the monorepo for `uv run`.
+            # litellm imports the hooks by module name, so the directory holding them must be on
+            # the path.
             "PYTHONPATH": BOX_PROXY_DIR,
         }
     )
     command = (
-        "cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
-        "--port {port} --host 127.0.0.1 > {logs}/{log} 2>&1 < /dev/null &"
+        "mkdir -p {logs} && setsid nohup {litellm} --config {config} "
+        "--port {port} --host 127.0.0.1 > {log} 2>&1 < /dev/null &"
     ).format(
-        mngr=BOX_MNGR_DIR,
+        logs=BOX_SERVICE_LOGS_DIR,
+        litellm=BOX_PROXY_LITELLM_PATH,
         config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
         port=port,
-        logs=BOX_LOGS_DIR,
-        log=PROXY_LOG_FILENAME,
+        log=service_log_path(PROXY_LOG_FILENAME),
     )
     await check_run_in_box(environment, command, proxy_env, _QUICK_EXEC_TIMEOUT_SECONDS)
 
@@ -693,7 +1292,7 @@ async def fetch_chat_agent_state(
     workspace_agent_id: str,
     chat_agent_id: str,
 ) -> str | None:
-    body = await workspace_curl_json(environment, env, workspace_agent_id, "/api/agents", None)
+    body = await workspace_curl_json(environment, env, workspace_agent_id, AGENTS_PATH, None)
     if not isinstance(body, dict):
         return None
     for agent in body.get("agents") or []:
@@ -714,10 +1313,12 @@ async def wait_for_chat_state(
 ) -> bool:
     """Block until the chat agent is WAITING (True) or has left WAITING (False), same gating the old
     in-workspace worker used."""
+    heartbeat = WaitHeartbeat(label="the chat agent to {} WAITING".format("reach" if is_waiting_desired else "leave"))
     while time.time() < deadline:
         state = await fetch_chat_agent_state(environment, env, workspace_agent_id, chat_agent_id)
         if state is not None and (state == "WAITING") == is_waiting_desired:
             return True
+        heartbeat.tick("state={}".format(state or "unreachable"))
         await asyncio.sleep(poll_seconds)
     return False
 
@@ -731,15 +1332,42 @@ async def send_chat_message(
     deadline: float,
     poll_seconds: float,
 ) -> bool:
-    """Send a chat message the way the UI chat box does, retrying transient failures until the
-    deadline."""
+    """Send a chat message the way the UI chat box does, retrying anything short of a 2xx until the
+    deadline.
+
+    Only a 2xx means the harness took the message; the endpoint refuses in JSON, so a body on its
+    own proves nothing. A chat listed as WAITING can still answer 404 here -- the listing is a live
+    mngr discovery, while this endpoint resolves against the workspace's own agent map, which a
+    create fills later -- and a harness whose daemon is still starting answers 503. Reading either
+    as sent leaves the turn loop waiting out its budget for a reply to a message that never
+    arrived, and blaming the agent for the silence.
+
+    A refusal that will never clear is waited out along with them, unlike ``create_chat_agent``,
+    where one is final. The endpoint does not separate the two: the same 500 covers a harness still
+    settling and one that is wedged. Giving up on the first refusal would throw away a trial that a
+    second attempt would have run, while waiting one out costs a trial that was already lost.
+    """
     body_json = json.dumps({"message": message})
     url_path = "/api/agents/{}/message".format(chat_agent_id)
+    refusal_detail = ""
     while time.time() < deadline:
-        body = await workspace_curl_json(environment, env, workspace_agent_id, url_path, body_json)
-        if body is not None:
+        response = await workspace_curl(environment, env, workspace_agent_id, url_path, body_json)
+        if response.is_ok:
             return True
+        if response.status:
+            body = response.body if isinstance(response.body, dict) else {}
+            detail = "HTTP {}: {}".format(response.status, str(body.get("detail") or response.text)[:200])
+        else:
+            detail = response.text
+        if detail and detail != refusal_detail:
+            # Each refusal as it first appears, and then silence while it repeats: a send being
+            # waited out can hold the whole remaining case budget, and an unannounced one is
+            # indistinguishable in the log from an agent that is merely slow.
+            logger.warning("The workspace has not taken the message yet ({})", detail)
+        # An attempt that says nothing must not erase what an earlier one said.
+        refusal_detail = detail or refusal_detail
         await asyncio.sleep(poll_seconds)
+    logger.error("The workspace never took the message ({})", refusal_detail or "it never answered")
     return False
 
 
@@ -786,8 +1414,9 @@ async def fetch_events_window(
     return events if isinstance(events, list) else None
 
 
-# Match the dwt eval worker's restic exclude set (deps are reinstallable from
-# lockfiles), so snapshots stay lean and comparable to the old harness's.
+# Left out of a snapshot because they are all reinstallable from the lockfiles
+# and sources that are in it, and they dominate the tree's size -- which is what
+# keeps a per-turn tarball small enough to ship as a trial artifact.
 SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
     ".venv",
     "node_modules",
@@ -800,9 +1429,18 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
     ".next",
     ".cache",
 )
-# The tree the dwt eval worker snapshotted: the workspace home tree that
-# contains the mngr host dir (code, agent state, and data).
+# The workspace home tree, which contains the mngr host dir -- code, agent
+# state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
+# Where mngr rescues a destroyed agent's transcripts to. The agent side of the workspace runs as root,
+# so its own host dir is /root/.mngr, outside the home tree above -- and a worker the lead destroys
+# after merging (which the launch-task flow invites) leaves its conversation ONLY here. Without it a
+# hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
+# survive in the home tree, its trajectory does not.
+PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
+# Where Claude transcripts are stored for Minds provider accounts when the service runs as root.
+# Restricting to accounts/*/projects avoids archiving credentials (such as settings.json) under accounts/.
+ROOT_MINDS_PROJECTS_PATTERN: Final[str] = "/root/.minds/accounts/*/projects"
 
 
 async def snapshot_workspace(
@@ -811,16 +1449,36 @@ async def snapshot_workspace(
     workspace_agent_id: str,
     tag: str,
 ) -> bool:
-    """Tar the workspace home tree (with the dwt worker's exclude set) and pull it into the box's
-    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts."""
+    """Tar the workspace home tree (minus SNAPSHOT_EXCLUDES) and pull it into the box's
+    /logs/agent/snapshots/<tag>.tar.gz, which harbor syncs into the trial artifacts.
+
+    Snapshots stay under the agent logs dir rather than joining the service logs: harbor downloads
+    that dir once per step and then empties it, so each tarball travels exactly once and lands under
+    the step that took it. Under the service logs dir -- which is never emptied -- every earlier
+    step's tarballs would be re-downloaded and re-archived on every later step, at tens of megabytes
+    each. A completed tarball also has no writer holding it open, so emptying cannot orphan it.
+    """
     exclude_flags = " ".join("--exclude={}".format(shlex.quote(pattern)) for pattern in SNAPSHOT_EXCLUDES)
     # Name the workspace-side tarball after the tag and pull it INTO the
     # snapshots directory (trailing slash): rsyncing a named file into a
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    tar_command = "tar czf {} {} -C {} . 2>/dev/null || true".format(
-        workspace_tar, exclude_flags, WORKSPACE_BACKUP_ROOT
+    # The preserved and minds dirs are added as their own -C segments, and only when they exist:
+    # naming a missing path makes tar exit nonzero and the snapshot is skipped entirely. Their
+    # entries land under `root/.mngr/preserved/` and `root/.minds/accounts/<id>/projects/`, distinct
+    # from the home tree's `./`. Restricting to `accounts/*/projects` avoids archiving credentials.
+    tar_command = (
+        "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
+        'minds=\'\'; for p in {minds_pattern}; do [ -d "$p" ] && minds="$minds -C / ${{p#/}}"; done; '
+        "tar czf {tar} {excludes} -C {root} . $preserved $minds 2>/dev/null || true"
+    ).format(
+        preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
+        preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        minds_pattern=ROOT_MINDS_PROJECTS_PATTERN,
+        tar=workspace_tar,
+        excludes=exclude_flags,
+        root=WORKSPACE_BACKUP_ROOT,
     )
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:
@@ -839,6 +1497,52 @@ async def snapshot_workspace(
         logger.warning("Skipped snapshot {}: rsync pull failed: {}", tag, (result.stderr or "").strip()[:200])
         return False
     return True
+
+
+@pure
+def build_workspace_push_command(box_dir: str, workspace_agent_id: str, workspace_dir: str) -> str:
+    """The in-box command that copies a box directory's contents into the running workspace.
+
+    The trailing slashes are rsync's "contents of" on the source and "into this exact directory" on
+    the destination; an absolute `:PATH` on an agent endpoint targets that path rather than
+    something under the agent's worktree.
+
+    ``--uncommitted-changes clobber`` turns off mngr's stash guard on the destination. The guard
+    exists to protect a git worktree it is about to overwrite, and this destination is inside one --
+    but nothing here overwrites the agent's work, and stashing it mid-conversation would take away
+    the very thing the trial is measuring.
+    """
+    return ("cd {mngr} && uv run mngr rsync --uncommitted-changes clobber {src}/ {destination}").format(
+        mngr=BOX_MNGR_DIR,
+        src=shlex.quote(box_dir),
+        # Quoted as one word, since the agent and the path are one rsync endpoint: quoting the two
+        # halves separately would put the shell's quotes around the colon that joins them.
+        destination=shlex.quote("{}:{}/".format(workspace_agent_id, workspace_dir)),
+    )
+
+
+async def push_to_workspace(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    box_dir: str,
+    workspace_dir: str,
+) -> tuple[bool, str]:
+    """Copy a box directory's contents into the running workspace; returns (success, failure text).
+
+    The same mngr transfer the snapshot pull uses, pointed the other way: the box is the local side
+    of the transfer and the workspace sandbox is the remote one, so this is the only channel from a
+    task directory into a live workspace.
+    """
+    result = await run_in_box(
+        environment,
+        build_workspace_push_command(box_dir, workspace_agent_id, workspace_dir),
+        env,
+        _SLOW_EXEC_TIMEOUT_SECONDS,
+    )
+    if result.return_code != 0:
+        return False, ((result.stderr or result.stdout or "no output").strip())[:300]
+    return True, ""
 
 
 async def _destroy_pass(environment: BaseEnvironment, env: dict[str, str]) -> list[str]:

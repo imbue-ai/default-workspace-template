@@ -31,3 +31,6 @@ Hidden folders (dot-prefixed; workspace machinery, safe to ignore):
   explorer-plan accounts: the analytics collection script (injected on each
   run so you can always read what ran) and its run audit. See
   `docs/system/analytics-collection.md`.
+- `.imbue/plans/` - Plans written for offline analysis when an app is built.
+  Nothing in the workspace reads them back and no agent may use them; see
+  the `CLAUDE.md` in that folder.

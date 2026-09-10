@@ -37,6 +37,7 @@ from loguru import logger
 from packaging.version import InvalidVersion
 from packaging.version import Version
 from pydantic import Field
+from pydantic import JsonValue
 from pydantic import PrivateAttr
 from pydantic import SecretStr
 from pydantic import computed_field
@@ -53,10 +54,10 @@ from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr_latchkey._spawn import spawn_detached_latchkey_ensure_browser
 from imbue.mngr_latchkey.additional_services import AdditionalServicesCatalogError
 from imbue.mngr_latchkey.additional_services import additional_service_registration_entries
+from imbue.mngr_latchkey.custom_services import custom_service_catalog_payload
 from imbue.mngr_latchkey.encryption_key import LatchkeyEncryptionKeyPermissionError
 from imbue.mngr_latchkey.encryption_key import inject_encryption_key_into_env
 from imbue.mngr_latchkey.encryption_key import load_or_create_encryption_key
-from imbue.mngr_latchkey.migrations.runner import run_data_format_migrations
 from imbue.mngr_latchkey.store import LatchkeyPermissionsConfig
 from imbue.mngr_latchkey.store import default_permissions_path
 from imbue.mngr_latchkey.store import ensure_admin_permissions_file
@@ -83,7 +84,7 @@ _GATEWAY_BIND_TIMEOUT_SECONDS: Final[float] = 10.0
 _GATEWAY_BIND_POLL_INTERVAL_SECONDS: Final[float] = 0.05
 
 # Maximum request body size the gateway accepts, passed as ``--max-body-size``
-# to every gateway spawn (here and in :mod:`imbue.mngr_latchkey.remote_gateway`).
+# to every gateway spawn (here and in :mod:`imbue.mngr_latchkey.remote.provisioning`).
 # The upstream default is 10 MiB, which is fine for API calls but not for git:
 # the gateway natively proxies GitHub's git smart-HTTP endpoints
 # (``/gateway/https://github.com/...``, ``github-git`` scope), and a push's
@@ -115,13 +116,31 @@ _VERSION_CHECK_TIMEOUT_SECONDS: Final[float] = 15.0
 
 # Filename of the stamp the *upstream* latchkey CLI keeps at the root of the
 # latchkey directory to record its credential-store data format version.
-# Distinct from this plugin's own ``data-format-version`` stamp, which lives
-# under ``plugin_data_dir`` (see :mod:`imbue.mngr_latchkey.migrations.runner`).
 UPSTREAM_DATA_FORMAT_VERSION_FILENAME: Final[str] = "data-format-version"
 
 # Filename of the upstream CLI's encrypted credential store, directly under
 # the latchkey directory.
 CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
+
+# Filename of the upstream CLI's encrypted browser session state, directly
+# under the latchkey directory. Encrypted with the *same* per-directory key as
+# the credential store, so it can only be shared between two latchkey
+# directories that also share their encryption key (see
+# :mod:`imbue.mngr_latchkey.remote._mirror`).
+BROWSER_STATE_FILENAME: Final[str] = "browser_state.json.enc"
+
+# Filename of the stamp the upstream CLI keeps directly under the latchkey
+# directory to rate-limit its usage ping: an ISO timestamp, rewritten (and the
+# ping fired) whenever the CLI starts and finds it missing or older than a day.
+# Shared between the desktop and every machine store, which is a latchkey
+# directory of its own (see :mod:`imbue.mngr_latchkey.remote._mirror`).
+DAILY_COUNT_STAMP_FILENAME: Final[str] = "last-daily-count"
+
+# Filename the upstream CLI reads a latchkey directory's permissions policy
+# from when no override JWT names another path. This plugin keeps the
+# canonical per-host file under its own name (``latchkey_permissions.json``)
+# and links this one at it.
+PERMISSIONS_CONFIG_FILENAME: Final[str] = "permissions.json"
 
 # Minimum version of the upstream ``latchkey`` CLI this package will operate
 # against. :meth:`Latchkey._check_minimum_version` enforces it against the
@@ -129,13 +148,13 @@ CREDENTIALS_STORE_FILENAME: Final[str] = "credentials.json.enc"
 # a CLI-only user's own install -- so the floor must never exceed the version
 # in ``apps/minds/package.json``, or the app rejects the very binary it ships.
 # Move it in lockstep with the versions we install
-# (:data:`imbue.mngr_latchkey.remote_gateway.LATCHKEY_VERSION` and the
+# (:data:`imbue.mngr_latchkey.remote.provisioning.LATCHKEY_VERSION` and the
 # in-workspace pin in default-workspace-template) rather than to track what the
 # code strictly needs: the newest release with a hard dependency here is 3.2.0,
 # the first to report the account whose credentials it injects to detent as
 # ``customMetadata.account`` -- what the per-account permission grants
 # (:mod:`imbue.mngr_latchkey.account_scopes`) read.
-LATCHKEY_MIN_VERSION: Final[str] = "3.10.0"
+LATCHKEY_MIN_VERSION: Final[str] = "3.11.1"
 
 # Fixed port that every containerized/VM/VPS agent sees on its own 127.0.0.1
 # when reaching the Latchkey gateway. A per-agent SSH reverse tunnel bridges
@@ -168,21 +187,26 @@ _GATEWAY_EXTENSIONS_SUBDIR: Final[str] = "extensions"
 # The desktop and VPS gateways intentionally load disjoint extension sets. The
 # desktop owns all stateful Minds endpoints; the VPS loads only the transparent
 # forwarder that sends those endpoint families back to the desktop gateway.
+# The catalog the gateway extensions validate against. Named because it is the
+# one bundled file that is not shipped verbatim: custom services are overlaid
+# onto it at materialization time (see ``overlaid_services_catalog_content``).
+SERVICES_CATALOG_FILENAME: Final[str] = "services.json"
+
+# Upstream latchkey's own JSON config file, directly under ``LATCHKEY_DIRECTORY``.
+# Latchkey (>= 3.1.0) reads its ``settings`` block -- including
+# ``hideBuiltinServices`` -- from here, and its ``registeredServices`` block,
+# which is how any gateway learns about a custom (non-builtin) service.
+# :func:`merge_minds_latchkey_config` writes this package's half of both;
+# :func:`read_registered_services` reads the latter back.
+CONFIG_FILENAME: Final[str] = "config.json"
 DESKTOP_GATEWAY_EXTENSION_FILENAMES: Final[tuple[str, ...]] = (
     "minds_api_proxy.mjs",
     "permission_requests.mjs",
     "permissions.mjs",
-    "services.json",
+    SERVICES_CATALOG_FILENAME,
     "workspace_permissions.json",
 )
 REMOTE_GATEWAY_EXTENSION_FILENAME: Final[str] = "desktop_gateway_proxy.mjs"
-
-# Filename of the upstream latchkey CLI's JSON config file, directly under
-# ``LATCHKEY_DIRECTORY``. Latchkey (>= 3.1.0) reads its ``settings`` block --
-# including ``hideBuiltinServices`` -- from here, and its ``registeredServices``
-# block, which is how any gateway learns about a custom (non-builtin) service.
-# :func:`merge_minds_latchkey_config` owns minds' half of both.
-CONFIG_FILENAME: Final[str] = "config.json"
 
 # Built-in latchkey services hidden from agents via
 # ``settings.hideBuiltinServices``. ``notion`` is hidden because agents get
@@ -239,21 +263,15 @@ _CREDENTIAL_STATUS_BY_LATCHKEY_VALUE: Final[dict[str, CredentialStatus]] = {
 LATCHKEY_AUTH_OPTION_BROWSER: Final[str] = "browser"
 LATCHKEY_AUTH_OPTION_SET: Final[str] = "set"
 
-# Values latchkey reports as an account's ``credentialType``
-# (upstream's stored ``objectType``) for the two credential kinds it can renew:
-# those whose access token expires *and* whose service implements
-# ``refreshCredentials``. Everything else is a static token that never has to be
-# renewed. ``oauth`` covers the refresh-token services (Google, Dropbox, Notion
-# MCP, Ramp); Zoom's server-to-server credential carries no refresh token and
-# instead mints a fresh access token from the app's client id and secret, but
-# expires and is renewed the same way. A future latchkey credential kind that
-# gains ``refreshCredentials`` has to be added here, or it will never be renewed
-# for remote hosts.
+# Values latchkey reports as an account's ``credentialType`` (upstream's stored
+# ``objectType``) for the two credential kinds whose access token expires and is
+# renewed: ``oauth`` covers the refresh-token services (Google, Dropbox, Notion
+# MCP, Ramp), while Zoom's server-to-server credential carries no refresh token
+# and mints a fresh access token from the app's client id and secret instead.
+# Renewal is the business of the machine that holds the credential, so these
+# name the kinds rather than gate anything here.
 LATCHKEY_CREDENTIAL_TYPE_OAUTH: Final[str] = "oauth"
 LATCHKEY_CREDENTIAL_TYPE_ZOOM_SERVER_TO_SERVER: Final[str] = "zoomServerToServer"
-LATCHKEY_RENEWABLE_CREDENTIAL_TYPES: Final[frozenset[str]] = frozenset(
-    {LATCHKEY_CREDENTIAL_TYPE_OAUTH, LATCHKEY_CREDENTIAL_TYPE_ZOOM_SERVER_TO_SERVER}
-)
 
 # Env var the upstream ``latchkey`` CLI (>= 3.0.0) reads to run browser auth
 # flows without persisting or reusing any saved browser session state. We set
@@ -645,8 +663,79 @@ def _materialize_bundled_extensions(latchkey_directory: Path) -> Path:
     (extensions_dir / REMOTE_GATEWAY_EXTENSION_FILENAME).unlink(missing_ok=True)
     for filename in DESKTOP_GATEWAY_EXTENSION_FILENAMES:
         destination = extensions_dir / filename
-        destination.write_text(bundled_gateway_extension_content(filename), encoding="utf-8")
+        if filename == SERVICES_CATALOG_FILENAME:
+            content = overlaid_services_catalog_content(latchkey_directory)
+        else:
+            content = bundled_gateway_extension_content(filename)
+        destination.write_text(content, encoding="utf-8")
     return extensions_dir
+
+
+def read_registered_services(latchkey_directory: Path) -> dict[str, JsonValue]:
+    """Return the ``registeredServices`` block of latchkey's ``config.json``.
+
+    Returns an empty mapping when the file is absent, unreadable, not JSON, or
+    structurally surprising. This is read on the path that renders the
+    permission dialog and the Connectors page, and it shares a file with
+    upstream latchkey (which rewrites it when it discovers a browser), so a
+    transient or hand-inflicted problem here must degrade to "no custom
+    services" rather than taking those surfaces down. A custom service that
+    silently fails to appear is recoverable by the agent asking again; a
+    permissions page that will not load is not.
+    """
+    config_path = latchkey_directory / CONFIG_FILENAME
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.debug("No latchkey config to read custom services from at {}: {}", config_path, e)
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("Latchkey config at {} is not valid JSON, so no custom services: {}", config_path, e)
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning("Latchkey config at {} is not a JSON object, so no custom services", config_path)
+        return {}
+    registered = parsed.get("registeredServices")
+    if not isinstance(registered, dict):
+        return {}
+    return registered
+
+
+def overlaid_services_catalog_content(latchkey_directory: Path) -> str:
+    """Return ``services.json`` with this install's custom services overlaid on the shipped catalog.
+
+    The extensions validate a permission request against this file, and the
+    desktop renders its dialogs from the same catalog via
+    :class:`~imbue.mngr_latchkey.services_catalog.ServicesCatalog`, so the two
+    must agree about which services exist. They do it by construction rather
+    than by convention: this is the one place the overlay is applied for the
+    gateway, and the catalog applies the same projection for Python. Neither
+    gateway extension knows custom services exist -- they keep reading one file
+    in one shape.
+
+    A materialized file therefore differs from the package resource of the same
+    name whenever the install has custom services. That is the point, but it is
+    worth knowing when comparing the two by hand.
+    """
+    shipped = json.loads(bundled_gateway_extension_content(SERVICES_CATALOG_FILENAME))
+    overlay = custom_service_catalog_payload(read_registered_services(latchkey_directory), frozenset(shipped))
+    shipped.update(overlay)
+    return json.dumps(shipped, indent=2) + "\n"
+
+
+def custom_service_registration_entries(latchkey_directory: Path) -> dict[str, JsonValue]:
+    """Return this install's custom services as a ``registeredServices`` block.
+
+    Only the entries :mod:`imbue.mngr_latchkey.custom_services` recognizes --
+    ``custom_``-prefixed, with a readable ``baseApiUrl`` -- so an unusable entry
+    is not propagated onward to a VPS. Used by the remote path, which merges the
+    *desktop's* custom services into a VPS config that holds none of them.
+    """
+    registered = read_registered_services(latchkey_directory)
+    readable = custom_service_catalog_payload(registered)
+    return {name: registered[name] for name in readable}
 
 
 # Maximum length of a condensed latchkey failure detail. Long enough for a real
@@ -693,7 +782,10 @@ def summarize_latchkey_failure(raw_output: str, fallback: str) -> str:
     return summary
 
 
-def merge_minds_latchkey_config(existing_config_json: str | None) -> str:
+def merge_minds_latchkey_config(
+    existing_config_json: str | None,
+    custom_service_entries: Mapping[str, JsonValue] | None = None,
+) -> str:
     """Merge minds' own state into a latchkey ``config.json``.
 
     Two things minds owns live in the upstream CLI's config file, and both must
@@ -708,10 +800,21 @@ def merge_minds_latchkey_config(existing_config_json: str | None) -> str:
       its credentials. A gateway that holds the credentials but not the
       registration cannot use them at all, so the registration travels with them.
 
+    ``custom_service_entries`` are the user-created services (see
+    :mod:`imbue.mngr_latchkey.custom_services`) to merge in as well. The desktop
+    passes nothing: its custom services already live in the very file being
+    merged, and are preserved by the read-merge below. A VPS config is a
+    *different* file that holds none of them, so the remote path passes the
+    desktop's set explicitly -- a gateway holding a custom service's credentials
+    but not its registration cannot resolve a request to it at all.
+
     Returns the serialized config text, preserving any other content the input
     config holds: the ``settings`` and ``registeredServices`` blocks are
     read-merged, not clobbered, and unrelated top-level keys (e.g. latchkey's
-    discovered ``browser``) are kept verbatim. ``existing_config_json`` is the
+    discovered ``browser``) are kept verbatim. **Preserving `registeredServices`
+    entries this package does not own is load-bearing, not incidental**: a custom
+    service lives only there, so clobbering the block instead of updating it
+    would delete every one of them on the next gateway spawn. ``existing_config_json`` is the
     current config text, or ``None`` when there is no config yet (a fresh config
     starts from an empty object). Existing hidden entries are kept in order and
     only the missing ones are appended, so the result is stable across repeated
@@ -749,6 +852,8 @@ def merge_minds_latchkey_config(existing_config_json: str | None) -> str:
         registered.update(additional_service_registration_entries())
     except AdditionalServicesCatalogError as e:
         raise LatchkeyError(f"Could not read the bundled additional services: {e}") from e
+    if custom_service_entries:
+        registered.update(custom_service_entries)
     config["registeredServices"] = registered
     return json.dumps(config, indent=2)
 
@@ -890,14 +995,6 @@ class Latchkey(MutableModel):
         immediately, before any agent has had a chance to be told to
         use the gateway.
 
-        Also reconciles the plugin's on-disk data format: any
-        outstanding :class:`DataFormatMigration` steps between the
-        version recorded under :attr:`plugin_data_dir` and the version
-        the installed code targets are applied here (cheap in the
-        steady state -- one small file read when already current). A
-        migration that needs to inspect the credential store gets the
-        latchkey directory and binary to do so.
-
         Also writes this plugin's state into latchkey's own ``config.json`` -- the hidden
         built-in services and the registrations of minds' additional (custom)
         services (see :func:`merge_minds_latchkey_config`), so the gateway can
@@ -923,10 +1020,35 @@ class Latchkey(MutableModel):
                 (non-zero exit, unparseable output, spawn error).
         """
         self._check_minimum_version()
-        run_data_format_migrations(self.plugin_data_dir, self.latchkey_directory, self.latchkey_binary)
         _ensure_minds_latchkey_config(self.latchkey_directory)
         with self._lock:
             self._is_initialized = True
+
+    def register_custom_service(self, service_name: str, registration: Mapping[str, JsonValue]) -> None:
+        """Register a user-created custom service in latchkey's ``config.json``.
+
+        The registration *is* the service: everything else about a custom one --
+        its label, its Detent scope, the domain that scope pins -- is derived
+        from this entry, so there is no second place to write (see
+        :mod:`imbue.mngr_latchkey.custom_services`).
+
+        Read-merge-write, so latchkey's own settings and every other
+        registration survive, and idempotent, so a retry after a failed sign-in
+        re-registers harmlessly. The gateway's extension catalog is
+        re-materialized afterwards so its view of which services exist matches
+        the desktop's immediately, rather than at the next gateway spawn.
+
+        Raises :class:`LatchkeyError` if the config cannot be read or written.
+        """
+        config_path = self.latchkey_directory / CONFIG_FILENAME
+        existing = config_path.read_text(encoding="utf-8") if config_path.is_file() else None
+        try:
+            content = merge_minds_latchkey_config(existing, {service_name: dict(registration)})
+        except LatchkeyError as e:
+            raise LatchkeyError(f"Failed to register {service_name} in {config_path}: {e}") from e
+        atomic_write(config_path, content)
+        logger.info("Registered custom latchkey service {}", service_name)
+        _materialize_bundled_extensions(self.latchkey_directory)
 
     def start_gateway(self, concurrency_group: ConcurrencyGroup) -> int:
         """Start the shared gateway and return its bound listen port.
@@ -1016,7 +1138,7 @@ class Latchkey(MutableModel):
     # -- Password / JWT derivation ------------------------------------------
 
     def derive_gateway_password(self) -> str:
-        """Return a stable password for the shared gateway.
+        """Return a stable password for this computer's own shared gateway.
 
         Derived by minting a permissions-override JWT for a hard-coded
         sentinel path (which is never validated, never reached, and
@@ -1029,6 +1151,16 @@ class Latchkey(MutableModel):
         The same value is set as ``LATCHKEY_GATEWAY_LISTEN_PASSWORD`` on
         the spawned gateway and as ``LATCHKEY_GATEWAY_PASSWORD`` on every
         agent so the gateway accepts agent traffic.
+
+        A remote workspace's gateway runs on its own machine and has a listen
+        password of its own, which this value only *seeds*: it is what the
+        workspaces this computer creates are given, so a machine being
+        provisioned for the first time takes it, and every later pass -- from
+        here or from another of the user's computers -- adopts whatever the
+        machine ended up with (see
+        :func:`~imbue.mngr_latchkey.remote.provisioning._resolve_machine_gateway_password`).
+        This value is still what such a machine's forwarding extension presents
+        on the hop back to this computer's gateway.
 
         Cached after the first successful invocation. Raises
         ``LatchkeyJwtMintError`` if ``latchkey gateway create-jwt``
@@ -1139,19 +1271,33 @@ class Latchkey(MutableModel):
 
     # -- Credential export ---------------------------------------------------
 
-    def export_credentials_subset(self, destination: Path, service_names: Collection[str]) -> None:
+    def export_credentials_subset(
+        self,
+        destination: Path,
+        service_names: Collection[str],
+        *,
+        destination_key: SecretStr | None = None,
+        account: str | None = None,
+    ) -> None:
         """Write a re-encrypted copy of the credential store, filtered to ``service_names``.
 
         Shells out to ``latchkey auth re-encrypt <destination> --services <service> ...``.
+        ``account`` narrows the copy further, to one account of the selected
+        services (``--account``): the export fails when no selected service
+        stores that account, so a bundle can never quietly be empty.
         ``destination`` is an output *directory* (which must already exist): the
         source store (this :class:`Latchkey`'s ``LATCHKEY_DIRECTORY``) is
         decrypted with the current per-directory encryption key and a
         re-encrypted copy containing *only* the listed services' credentials is
-        written into it as ``credentials.json.enc``. The new key is read
-        from the child's stdin; we pass an empty stdin (``DEVNULL``) so
-        ``re-encrypt`` reuses the same encryption key, keeping the copy
-        readable by the same gateway -- and the same derived password /
-        permissions-override JWTs -- as the canonical store.
+        written into it as ``credentials.json.enc``.
+
+        ``destination_key`` is the key the copy is encrypted with, handed to the
+        child on stdin so it never appears in ``argv``. This is what moves
+        credentials across a key boundary -- to a machine that keeps its own
+        encryption key, or back from one. Omitting it passes an empty stdin, which
+        makes ``re-encrypt`` reuse the source key, keeping the copy readable by the
+        same gateway -- and the same derived password / permissions-override JWTs
+        -- as the canonical store.
 
         ``service_names`` must be non-empty: ``--services`` requires at
         least one service, and an empty bundle is meaningless. The caller
@@ -1172,6 +1318,11 @@ class Latchkey(MutableModel):
         # Sorted for a deterministic command line (stable logs / tests);
         # the set of services is order-independent.
         command = [self.latchkey_binary, "auth", "re-encrypt", str(destination), "--services", *sorted(service_names)]
+        if account is not None:
+            command.extend(["--account", account])
+        # An empty stdin is not the same as no stdin here: ``re-encrypt`` blocks
+        # reading it, so the child must always see EOF.
+        stdin_bytes = b"" if destination_key is None else destination_key.get_secret_value().encode("utf-8")
         cg = ConcurrencyGroup(name="latchkey-reencrypt")
         try:
             with cg:
@@ -1180,6 +1331,7 @@ class Latchkey(MutableModel):
                     timeout=_REENCRYPT_TIMEOUT_SECONDS,
                     is_checked_after=False,
                     env=env,
+                    stdin_bytes=stdin_bytes,
                 )
         except ConcurrencyExceptionGroup as group:
             if not group.only_exception_is_instance_of(ProcessSetupError):

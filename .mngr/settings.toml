@@ -121,18 +121,21 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
-# User-facing chat agents override it per create:
-# the system interface and the bootstrap both pass
-# `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
-# workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+# Every other chat gets this default too: the chat app's create passes no launch
+# settings. Only the workspace's first chat launches fast, through the
+# `agent_types.claude.settings_overrides.fastMode=true` setting that
+# `[create_templates.first]` (below) stacks on its create; a running chat then
+# toggles it with `/fast`, which the chat app's harnesses/claude/model.py writes
+# into that agent's own settings file.
 #
-# That override targets `claude` rather than `chat` because a `-S` is parsed as
-# its own config layer, without the `parent_type = "claude"` this file gives
-# `chat` -- so `chat` resolves against the base agent config, which has no
+# That setting targets `claude` rather than `chat` because a create-time setting
+# (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
+# config layer, without the `parent_type = "claude"` this file gives `chat` --
+# so `chat` resolves against the base agent config, which has no
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
-# This is the canonical explanation; the two create paths and the CLI-contract
+# This is the canonical explanation; the `first` template and the CLI-contract
 # test point here rather than repeating it.
 #
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
@@ -712,9 +715,9 @@ idle_mode = "disabled"
 # minds-facing sizing + timeouts HERE rather than in the mngr_modal provider
 # defaults: 2 CPU / 4 GB (matching the lima/docker convention) and a ~24h sandbox
 # timeout. The sandbox timeout (86310) plus the provider's 90s shutdown buffer
-# lands at 86400s (24h), Modal's hard cap. Eval workers instead stack the
-# `modal_eval` overlay below for a shorter timeout, leaving this global template
-# untouched.
+# lands at 86400s (24h), Modal's hard cap. The workspaces an eval run creates
+# instead stack the `modal_eval` overlay below for a shorter timeout, leaving
+# this global template untouched.
 setting__extend = [
     "providers.modal.is_enabled=true",
     "providers.modal.default_cpu=2.0",
@@ -740,13 +743,14 @@ extra_provision_command__extend = [
     "sh /home/user/workspace/system/scripts/seed_home_skeleton.sh",
 ]
 
-# Short-timeout overlay for eval-worker Modal sandboxes. Always stacked on top of
-# `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
+# Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
+# of `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
 # overlays `docker`: it reuses the entire `modal` body and only shortens the sandbox
-# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s), since eval runs
-# are short-lived and self-terminate at their per-case budget. The eval harness selects
-# it via the MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates
-# use plain `modal` (24h). Keeping it separate leaves the global `modal` template alone.
+# timeout to 3h (10710 + the provider's 90s shutdown buffer = 10800s). An eval trial
+# tears its own workspaces down when it finishes, so this timeout is the backstop for
+# the case where the driver dies without doing so. The eval harness selects it via the
+# MINDS_MODAL_EXTRA_TEMPLATE env var on the eval box; normal Modal creates use plain
+# `modal` (24h). Keeping it separate leaves the global `modal` template alone.
 [create_templates.modal_eval]
 setting__extend = ["providers.modal.default_sandbox_timeout=10710"]
 
@@ -1664,7 +1668,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"chat:$MNGR_AGENT_NAME\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=$MNGR_AGENT_ID\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
@@ -1689,6 +1693,16 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # `harden-worker`, which the crystallize / update / heal creation lifecycle
 # relies on. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
+#
+# claude_update_plugin.sh installs the code-guardian plugin (and the other
+# .claude/settings.json plugins) for the worker's worktree path BEFORE its
+# claude starts. Claude Code resolves the plugin set at session startup, so the
+# SessionStart-hook install that chat agents rely on lands too late for a
+# worker's single session -- it would start with no /autofix or
+# /verify-architecture at all, and the harden contract mandates both. It runs
+# WITHOUT --strict on purpose: a plugin or marketplace outage must never make a
+# worker undeployable, so an install failure is a warning in the provision
+# output (and the worker reports the missing gate) rather than a failed launch.
 [create_templates.worker]
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
@@ -1702,7 +1716,7 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted

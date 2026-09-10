@@ -3,9 +3,12 @@
 **Audience:** developers working on the `mngr` common-transcript schema and the per-agent
 emitters (claude, antigravity, opencode, pi-coding, codex).
 
-**Status:** implemented. Tier 1 (`finish_reason` rename) and Tier 2 (universal `parts[]` /
+**Status:** implemented, then superseded by
+[`../atif-transcript-alignment/spec.md`](../atif-transcript-alignment/spec.md) (2026-08-25).
+Tier 1 (`finish_reason` rename) and Tier 2 (universal `parts[]` /
 `parts_ordered`) landed together in `90ef7a979` (2026-06-15); the schema, all five emitters, and the
-reader carry them.
+reader carry them. This spec's premise that no on-disk transcript standard exists no longer
+holds -- Harbor's ATIF is such a standard, and the superseding spec realigns the format to it.
 
 This spec proposes evolving the agent-agnostic *common transcript* schema toward the
 vocabulary and message shape of the **OpenTelemetry (OTel) GenAI semantic conventions**,

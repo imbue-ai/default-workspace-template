@@ -168,7 +168,7 @@ def test_skip_reason() -> None:
     assert skip_reason(Path("apps/minds/UNABRIDGED_CHANGELOG.md")) is not None
     assert skip_reason(Path("uv.lock")) is not None
     assert skip_reason(Path("scripts/rename_template_repo.py")) is not None
-    assert skip_reason(Path("apps/minds/docs/deploy/release.md")) is None
+    assert skip_reason(Path("apps/minds/docs/deploy/ops/app-release.md")) is None
     assert skip_reason(Path("justfile")) is None
 
 

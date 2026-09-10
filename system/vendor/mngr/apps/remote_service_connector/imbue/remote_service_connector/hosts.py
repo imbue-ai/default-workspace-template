@@ -1264,7 +1264,7 @@ def _count_user_workspaces(user_id_prefix: str, count_sql: str) -> int:
     return int(row[0]) if row is not None else 0
 
 
-# --- Server-driven sharing (the web client cannot inject share materials itself) ---
+# Server-driven sharing (the web client cannot inject share materials itself)
 
 # Where the share stack reads its materials inside the workspace container.
 # Absolute: the raw-SSH exec channel starts in the login user's home, NOT the
@@ -1537,7 +1537,7 @@ def _enable_sharing_core(
     )
 
 
-# --- Web workspace creation (POST /hosts/claim) ---
+# Web workspace creation (POST /hosts/claim)
 
 # The in-container host_dir layouts pool hosts have been baked with, newest
 # first. Mirrors mngr's ``KNOWN_WORKSPACE_HOST_DIRS`` (libs/mngr/imbue/mngr/
@@ -1651,8 +1651,8 @@ def _adopt_workspace_on_container(
 
     The connector-side port of the plugin's fast-path adopt (see
     ``mngr_imbue_cloud.providers.instance`` / ``hosts.host``): rewrite the
-    host record's placeholder ``host_name`` (the dwt bootstrap reads it to
-    name the initial chat agent), stamp the minds labels on the pre-baked
+    host record's placeholder ``host_name`` (the dwt system_interface reads
+    it as the workspace's name), stamp the minds labels on the pre-baked
     services agent, and write the connector URL into the host env file so
     everything on the host can reach this tier's connector. All writes go
     through SFTP (no shell quoting of user-controlled names).

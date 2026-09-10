@@ -5,7 +5,13 @@ description = "Harbor-based Minds persona evals: generate task datasets from eva
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "harbor[modal]==0.21.0",
+    "harbor[modal]==0.22.0",
+    # Declared even though harbor's [modal] extra already installs it:
+    # cleanup_environments drives the Modal SDK directly (listing and deleting the
+    # environments a run leaves behind), so an import of it is this project's own
+    # requirement rather than a detail of how harbor reaches Modal. The floor is
+    # harbor's own for that extra.
+    "modal>=1.5.1",
     "anthropic>=0.40",
     "click>=8.0.0",
     "loguru>=0.7",
@@ -21,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-minds-evals-harbor = "imbue.minds_evals.generate:main"
+minds-evals = "imbue.minds_evals.cli:main"
 
 # This project is deliberately NOT a member of the monorepo's uv workspace (the
 # root pyproject.toml excludes it) and resolves against its own uv.lock. harbor
@@ -51,7 +57,7 @@ exclude-newer = "14 days"
 # The upstream git tag for the same release the PyPI wheel carries. Pinned to the
 # tag rather than the registry so the source is exact and independent of the
 # cooldown window above, which the PyPI upload was inside of when this was written.
-harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.21.0" }
+harbor = { git = "https://github.com/harbor-framework/harbor", tag = "v0.22.0" }
 # Monorepo packages this project shares with the workspace. They are path
 # sources rather than workspace members because this project has no workspace.
 # Only the direct dependencies need an entry: a path source that points into the
@@ -79,10 +85,10 @@ dev = [
     # Not imported by anything this project runs: it is here so the type checker
     # can resolve templates/, whose criteria (under tests/ and outcome/ alike)
     # import `rewardkit`. The verifier container installs it separately via uvx,
-    # so this pin must match the one in templates/tests/test.sh, which runs the
+    # so this pin must match the one in templates/tests/verifier/test.sh, which runs the
     # whole verifier -- rewardkit_pin_test.py asserts that.
     # Its only base dependency is litellm, already present via harbor.
-    "harbor-rewardkit==0.1.*",
+    "harbor-rewardkit==0.2.0",
 ]
 
 [build-system]
@@ -116,14 +122,16 @@ concurrency = ["multiprocessing", "thread"]
 omit = ["*_test.py", "test_*.py", "*/tests/*", "*/conftest.py", "*/templates/*", "*/resources/*"]
 
 [tool.ty.src]
-# resources/ is shipped as source into the eval box and runs against the monorepo
-# venv, importing mngr_forward and litellm, which this project does not depend on.
-# It is type-checked by the root workspace instead -- the box runs that venv, so it
-# is the accurate environment for it; the root [tool.ty.src] exclude deliberately
-# does not cover it. Anything listed here must stay checked there:
-# test_meta_ratchets.py reads this list and probes the root's ty for each path, so
-# excluding a path here without un-excluding it at the root fails that check. Every
-# entry must name a directory or a file, since the probe hands it straight to ty.
+# resources/ is shipped as source into the eval box, importing mngr_forward and
+# litellm, which this project does not depend on. It is type-checked by the root
+# workspace instead -- the box runs that venv, so it is the accurate environment
+# for it, and it stays accurate for the proxy hooks, which the box loads from its
+# own /opt/eval_proxy venv: that venv installs the litellm version the root
+# workspace is ==-pinned to. The root [tool.ty.src] exclude deliberately does not
+# cover it. Anything listed here must stay checked there: test_meta_ratchets.py
+# reads this list and probes the root's ty for each path, so excluding a path here
+# without un-excluding it at the root fails that check. Every entry must name a
+# directory or a file, since the probe hands it straight to ty.
 #
 # templates/ is NOT excluded. Those files also run elsewhere (the verifier
 # container), but their only foreign import is rewardkit, which the dev group

@@ -1,27 +1,38 @@
 from enum import auto
+from functools import cached_property
+from pathlib import Path
+from typing import Annotated
 from typing import Any
 from typing import Final
+from typing import Self
 
 from pydantic import Field
+from pydantic import StringConstraints
+from pydantic import computed_field
+from pydantic import model_validator
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
+from imbue.minds_evals.errors import CapturedFileError
 
 # A prompts entry equal to this sentinel is role-played by the decider model
 # instead of being sent verbatim. It cannot be the first prompt (there is no
 # transcript to decide from yet).
 DECIDE_SENTINEL: Final[str] = "DECIDE_FROM_PERSONA"
 
+# What a goal entry gets when it does not say, and the hard ceiling any entry may ask for. Each
+# exchange is a full agent turn in a real workspace, so an unbounded budget is not on offer; the cap
+# is what keeps a mis-authored case from spending a whole trial budget on one entry.
+DEFAULT_MAX_EXCHANGES: Final[int] = 3
+MAX_EXCHANGES_CAP: Final[int] = 8
+
 # The default-workspace-template (dwt) each eval case is cloned from.
 DEFAULT_DWT_REPO: Final[str] = "https://github.com/imbue-ai/default-workspace-template.git"
 DEFAULT_DWT_BRANCH: Final[str] = "main"
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 3600.0
-
-# Seed value for the wordiness guard until PR2 measures real old-harness batch
-# averages; overridable per eval config via "avg_word_count_baseline".
-DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
 # ends; overridable per eval config via "verification_timeout_seconds".
@@ -224,6 +235,97 @@ class TraceRecord(FrozenModel):
     output: str = Field(description="Bounded raw output, failures included")
 
 
+class CapturedFile(FrozenModel):
+    """One file the evidence phase tried to bring out of the workspace: where it landed in the host-side
+    bundle, or why it did not."""
+
+    host_path: Path | None = Field(description="Where the file landed host-side; None when it was not captured")
+    failure_reason: str = Field(description="Why the file was not captured (e.g. 'pull_failed'); empty when it was")
+    failure_detail: str = Field(description="Bounded diagnostic for the failure (e.g. a stderr tail); empty otherwise")
+
+    @property
+    def is_captured(self) -> bool:
+        return self.host_path is not None
+
+    @model_validator(mode="after")
+    def _validate_captured_or_failed(self) -> Self:
+        if self.host_path is None and not self.failure_reason:
+            raise CapturedFileError("an uncaptured file must name a failure reason")
+        if self.host_path is not None and (self.failure_reason or self.failure_detail):
+            raise CapturedFileError("a captured file cannot also carry a failure")
+        return self
+
+
+class WorkerState(LowerCaseStrEnum):
+    """A background worker's state at collection time: the listing's lifecycle state folded down when
+    the worker is listed, DESTROYED when only mngr's preserved copy of it remains, and UNKNOWN when
+    neither the listing nor a preserved directory says."""
+
+    STOPPED = auto()
+    RUNNING = auto()
+    DESTROYED = auto()
+    UNKNOWN = auto()
+
+
+class WorkerLaunch(FrozenModel):
+    """One background worker an agent's own stream shows it creating through the launch-task skill."""
+
+    name: str = Field(description="The worker's mngr agent name, from the launch command's --name")
+    tool_call_id: str = Field(description="The tool call that ran the launch command; where the worker embeds")
+    task_file: str = Field(
+        description="The --task-file path as the launch wrote it (relative to the lead's work dir unless absolute), or empty"
+    )
+    depth: int = Field(description="0 for a worker the chat agent launched, 1 for a worker's worker, and so on")
+    lead_name: str = Field(description="The worker that launched it; empty when the chat agent did")
+
+
+class WorkerListingEntry(FrozenModel):
+    """One agent as `mngr list --format json` reported it inside the workspace at collection time."""
+
+    agent_id: str = Field(description="The mngr agent id")
+    name: str = Field(description="The agent name")
+    agent_type: str = Field(description="The agent type (claude, codex, ...)")
+    state: WorkerState = Field(description="The lifecycle state, folded into what the capture cares about")
+    work_dir: str = Field(description="The agent's work dir, which launch commands' paths are relative to")
+
+
+class WorkerCapture(FrozenModel):
+    """What the evidence phase brought out for one launched worker: its ATIF document, its stream, and the
+    report it pushed back to its lead, each recorded on its own."""
+
+    launch: WorkerLaunch = Field(description="The launch this capture answers")
+    agent_id: str = Field(description="The worker's mngr agent id; empty when it could not be resolved")
+    agent_type: str = Field(description="The worker's agent type from the listing; empty when it was not listed")
+    state: WorkerState = Field(description="The worker's state at collection time")
+    document: CapturedFile = Field(description="The ATIF document mngr built for the worker")
+    stream: CapturedFile = Field(description="The worker's common-transcript stream, live or preserved")
+    report: CapturedFile = Field(description="The lead-side reports directory the worker pushed its report into")
+
+
+class TranscriptCapture(FrozenModel):
+    """What the evidence phase brought out of the workspace agent's common transcript: the raw stream and
+    the ATIF document mngr built from it, each recorded on its own."""
+
+    stream: CapturedFile = Field(description="The common-transcript stream, one record per line")
+    document: CapturedFile = Field(description="The ATIF trajectory document mngr assembled from the stream")
+
+
+class TrajectorySource(LowerCaseStrEnum):
+    """Which shape the trial's trajectory.json has: the workspace's own ATIF document, the driver's
+    hand-built turn summary, or none because there was no conversation to describe."""
+
+    WORKSPACE = auto()
+    HAND_BUILT = auto()
+    NONE = auto()
+
+
+class UsageSource(LowerCaseStrEnum):
+    """Which account the trial's reported workspace usage was taken from."""
+
+    PROXY = auto()
+    TRANSCRIPT = auto()
+
+
 class RegisteredApp(FrozenModel):
     """One entry of the workspace's app registry (data/.state/apps.toml)."""
 
@@ -276,24 +378,419 @@ class EvidenceManifest(FrozenModel):
     entries: tuple[ManifestEntry, ...] = Field(description="Every recorded probe, in collection order")
 
 
+class GoalEntry(FrozenModel):
+    """A prompts entry that expands into a bounded back-and-forth: a goal-holding client keeps
+    replying until it is satisfied or its exchange budget runs out."""
+
+    # Both bounds live on the model rather than only in the config parser, so the driver -- which
+    # re-validates the case config out of instruction.md at trial time -- enforces what the
+    # generator did, on a dataset produced by any version of the generator. An entry with no goal
+    # would have a model hold out for nothing.
+    goal: str = Field(min_length=1, description="What the client wants out of this stretch of the conversation")
+    max_exchanges: int = Field(
+        default=DEFAULT_MAX_EXCHANGES,
+        ge=1,
+        le=MAX_EXCHANGES_CAP,
+        strict=True,
+        description="Hard ceiling on the client messages this entry may send",
+    )
+
+
+# A literal message, or the DECIDE_FROM_PERSONA sentinel. Bounded on the model for the same reason
+# a goal entry's own fields are: an entry with no text has the client spend a full agent turn saying
+# nothing. Stripping matches what the config parser does, so a generated dataset validates unchanged.
+MessagePrompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+# What a `prompts` entry may be: a plain string is a literal message or the DECIDE_FROM_PERSONA
+# sentinel; an object expands into a bounded goal-driven exchange.
+PromptEntry = MessagePrompt | GoalEntry
+
+
+@pure
+def entry_exchange_budget(entry: PromptEntry) -> int:
+    """How many client messages one prompts entry may send. A string entry is exactly one turn."""
+    return entry.max_exchanges if isinstance(entry, GoalEntry) else 1
+
+
+class TurnEntryKind(LowerCaseStrEnum):
+    """Which kind of turn source a prompts entry resolved to, recorded per entry in state.json."""
+
+    LITERAL = auto()
+    PERSONA = auto()
+    GOAL = auto()
+
+
+class DeciderTurn(FrozenModel):
+    """One decider-model call a turn source made on the client's behalf: the message it sent, or the
+    decision to end its entry without one."""
+
+    turn: int | None = Field(
+        description="The 1-based index of the message the call sent; None when it sent none (it ended "
+        "the entry, or its message never reached the workspace)"
+    )
+    entry_index: int = Field(description="The 0-based prompts entry the call belongs to")
+    exchange: int = Field(description="The 0-based exchange within that entry")
+    entry_kind: TurnEntryKind = Field(description="What kind of entry the source was driving")
+    model: str = Field(description="The decider model that answered (the configured model on a fallback)")
+    is_fallback: bool = Field(description="Whether the literal fallback message was sent instead")
+    detail: str = Field(description="Why the entry ended, in the client's own words; empty for a call that spoke")
+
+
+class StepBoundary(FrozenModel):
+    """Where one step of a multi-step task begins, so the trajectory can mark it.
+
+    A stepped task drives one workspace across several instructions, and every step's trajectory
+    replays the conversation from its first turn -- so without a marker the later steps read as one
+    undivided conversation. The marker is cosmetic: it becomes a ``system`` step, which the verifier's
+    readers (the judge transcript, the structural gates, the wordiness guard) all skip.
+    """
+
+    name: str = Field(description="The step's name, as harbor knows it")
+    started_at: str = Field(description="ISO 8601 time the driver began the step")
+    conversation_index: int = Field(
+        description="How many clean-conversation entries preceded the step; the join for the hand-built shape"
+    )
+    opening_message: str = Field(
+        description="The client's first message of the step; the join for the workspace's own document. "
+        "Empty when the step ended before the client said anything"
+    )
+
+
+class HarnessLane(LowerCaseStrEnum):
+    """A provider lane a workspace can be signed in on without a human at a device prompt.
+
+    The lane decides the harness, because that is how the product itself decides it: a chat runs on
+    the harness of the lane its account was minted on. ANTHROPIC serves claude; the rest serve
+    pi-coding, differing in whose key they take. The `openai` lane (codex) has no member here because
+    its sign-in cannot be driven by a run.
+    """
+
+    ANTHROPIC = auto()
+    API_KEY = auto()
+    OPENROUTER = auto()
+    OPENCODE_GO = auto()
+
+
+@pure
+def lane_id(lane: HarnessLane) -> str:
+    """The lane as the workspace's accounts API and the command line spell it: dashes, not
+    underscores (`--ak lane=api-key`)."""
+    return lane.value.replace("_", "-")
+
+
+class HarnessConfig(FrozenModel):
+    """The harness, model, effort and speed tier one run drives every one of its cases on.
+
+    One half of a run's arm, the other being the (mngr, dwt) pair the trial's box and workspace come
+    from. A run-level property like that pair, never a per-case one: it is parsed once from the run's
+    agent kwargs and applied to the one workspace each trial prepares.
+    """
+
+    lane: HarnessLane = Field(description="The provider lane the workspace is signed in on")
+    key_provider: str = Field(description="Which provider the key belongs to; only the api-key lane takes one")
+    key_env: str = Field(description="The environment variable holding the lane's key, derived when not given")
+    model: str = Field(description="The catalog id to switch the chat to before turn 1; empty means no switch")
+    effort: str = Field(description="The effort or thinking level set with the model; empty means no switch")
+    is_fast: bool = Field(description="Whether the switch asks for the fast speed tier")
+
+    @property
+    def is_switch_requested(self) -> bool:
+        """Whether this config asks for a model choice at all. A config that names no model changes
+        no setting of the workspace, and the chat runs exactly as the product ships it."""
+        return bool(self.model)
+
+
+class ObservedHarnessModels(FrozenModel):
+    """Which models actually answered, as read out of the captured transcript.
+
+    Empty until a transcript has been captured, which is the only place the models are recorded: no
+    workspace endpoint reads a chat's live model choice back. (The harness writes it to
+    `$MNGR_HOST_DIR/agents/<chat_id>/model_state.json`, which a bridged exec could read; nothing
+    here does.)
+    """
+
+    models: tuple[str, ...] = Field(
+        default=(), description="Sorted model names on the agent steps after the client's first turn"
+    )
+    welcome_model: str = Field(
+        default="", description="The model that answered the create template's greeting, before any switch"
+    )
+
+
+class HarnessConfigRecord(FrozenModel):
+    """What harness settings a trial was asked to run on and what it was observed running on.
+
+    The field names are this block's own keys wherever it is serialized, and they are the harness
+    config's kwarg names rather than this package's naming conventions -- hence `fast` for the
+    requested speed tier, which is what the operator typed.
+    """
+
+    lane: str = Field(default="", description="The provider lane the run asked to be signed in on")
+    key_provider: str = Field(default="", description="The provider the lane's key belongs to; empty off api-key")
+    account_id: str = Field(default="", description="The account the sign-in minted and the chat was created against")
+    harness: str = Field(default="", description="The harness, read back from the workspace's accounts listing")
+    model: str = Field(default="", description="The catalog id the run asked for; empty when it asked for none")
+    effort: str = Field(default="", description="The effort level the run asked for")
+    fast: bool = Field(default=False, description="The speed tier the run asked for")
+    # Named for the product's own name for the call that sets model, effort and fast together
+    # (`POST /api/agents/<id>/model`), since one such call is what this field reports on.
+    model_choice_switch: str = Field(
+        default="",
+        description="'applied', 'skipped' when the config named no model, the failure that stopped the trial, or "
+        "empty when the trial gave up before the switch",
+    )
+    observed_models: tuple[str, ...] = Field(
+        default=(), description="The models the transcript shows answering after the client's first turn"
+    )
+    welcome_model: str = Field(default="", description="The model that answered the greeting, before any switch")
+    # None rather than False for a config that requested no switch and for a catalog id whose
+    # reported naming is not known: an unrecognised model name is not evidence of a wrong model.
+    is_model_confirmed: bool | None = Field(
+        default=None,
+        description="Whether the observed models are exactly the requested one; None when it cannot be told",
+    )
+
+
+class ArmRecord(FrozenModel):
+    """The whole treatment a trial ran under: the (mngr, dwt) pair its box and workspace were built
+    from, and the harness config applied on top of that pair.
+
+    Every field is defaulted so a trajectory that no run drove -- the oracle's, built from a canned
+    transcript -- carries an empty arm rather than none at all.
+    """
+
+    mngr_sha: str = Field(default="", description="The mngr SHA the trial's box was built from")
+    dwt_sha: str = Field(default="", description="The workspace-template SHA the trial's workspace was cloned from")
+    harness_config: HarnessConfigRecord = Field(
+        default_factory=HarnessConfigRecord,
+        description="The harness settings the trial was asked to run on and was observed running on",
+    )
+
+
+class TrajectoryProvenance(FrozenModel):
+    """What the eval knows about a trial's trajectory that the workspace document cannot: who drove it,
+    which decider spoke for the client, which arm -- pinned pair plus harness config -- it ran on,
+    and whose account its usage figures come from."""
+
+    driver_name: str = Field(description="The harbor agent that drove the conversation")
+    driver_version: str = Field(description="That agent's version")
+    decider_model: str = Field(description="The simulated-user model configured for the trial")
+    decider_turns: tuple[DeciderTurn, ...] = Field(description="The turns the decider wrote, in order")
+    harbor_session_id: str | None = Field(
+        description="The harbor session the trial ran under; None when harbor left it unset"
+    )
+    case_id: str = Field(description="The case the trial ran")
+    usage_source: UsageSource = Field(description="Which account final_metrics carries")
+    # Defaulted to the empty record for a trajectory no run drove: the oracle builds its own
+    # provenance from a canned transcript, pinning nothing and requesting nothing of any workspace.
+    arm: ArmRecord = Field(default_factory=ArmRecord, description="The treatment the trial was asked to run under")
+
+
+class TurnOutcome(LowerCaseStrEnum):
+    """Why one prompts entry stopped producing client messages.
+
+    The loop enforces an entry's exchange ceiling, but the source declares what hitting it means
+    (`TurnSource.exhaustion_end`): only a goal-holding client is ever really cut off, so only its
+    entries end BUDGET_EXHAUSTED. Such an entry is recorded and shown to the outcome judge rather
+    than gating the reward to zero, because an agent that cannot satisfy an unreasonable goal is not
+    the same thing as a broken trial.
+    """
+
+    COMPLETED = auto()
+    SATISFIED = auto()
+    BUDGET_EXHAUSTED = auto()
+    FALLBACK = auto()
+
+
+class EntryRecord(FrozenModel):
+    """How one prompts entry actually played out, for state.json and the structural gates."""
+
+    index: int = Field(description="The entry's position in the case's prompts list")
+    kind: TurnEntryKind = Field(description="Which kind of turn source produced the entry's messages")
+    exchange_count: int = Field(description="Client messages actually sent for this entry")
+    outcome: TurnOutcome = Field(description="Why the entry stopped")
+    detail: str = Field(default="", description="The source's reason for stopping; empty when it gave none")
+
+
+# What a step name may be: it names a task subdirectory, a harbor step, and a verifier container
+# session, so it is restricted to what all three accept.
+STEP_NAME_PATTERN: Final[str] = r"^[a-z0-9][a-z0-9-]*$"
+
+# What an upload id may be: it names a directory under the workspace's data/uploads/ and a directory
+# in the box, and it is quoted into prompts as a path, so it stays to path-safe characters. Minds
+# mints these as bare hex, but an author-written id may be readable as long as it is a plain name.
+UPLOAD_ID_PATTERN: Final[str] = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+# Where a Minds workspace keeps the files its user uploaded. The template ignores this tree, so a
+# step's files land untracked, exactly as a real upload does.
+WORKSPACE_UPLOADS_DIR: Final[str] = "/home/user/workspace/data/uploads"
+
+# Where a step's uploads wait in the box between harbor putting them there and the driver copying
+# them into the workspace. Deliberately outside the box's working directory, which is the mngr
+# checkout the workspace's vendored copy is taken from and must stay exactly what the image shipped.
+BOX_STEP_FILES_DIR: Final[str] = "/work/step_files"
+
+
+# The eval-config key that selects a stepped case's reward strategy, named so the parser and its
+# error messages cannot drift from each other.
+REWARD_STRATEGY_KEY: Final[str] = "reward_strategy"
+
+
+class RewardStrategy(LowerCaseStrEnum):
+    """How a stepped case's trial reward is derived from its per-step rewards.
+
+    Spelled exactly as harbor's own `multi_step_reward_strategy`, which this is rendered into.
+    FINAL scores the trial by the last step that ran, which after an abort is the step that failed;
+    MEAN averages every step that produced a reward. Both are legitimate because every step is
+    graded by the same verifier on the same scale.
+    """
+
+    FINAL = auto()
+    MEAN = auto()
+
+
+class StepFile(FrozenModel):
+    """One upload a step introduces into the workspace, exactly as the eval author wrote it."""
+
+    source: str = Field(description="File or directory to ship, relative to the eval config file")
+    upload_id: str = Field(description="The directory name it appears under in the workspace's data/uploads/")
+
+
+class StepBoxFile(FrozenModel):
+    """Where one step's upload waits in the box, and the id it takes in the workspace.
+
+    Harbor puts a step's workdir into the box before the step runs, so by the time the driver reads
+    this the files are already there; all the driver does is copy them into the running workspace.
+    """
+
+    upload_id: str = Field(description="The directory name it takes under the workspace's data/uploads/")
+    box_path: str = Field(description="The box directory holding this upload's contents")
+
+
+class RewardDimension(LowerCaseStrEnum):
+    """A key of the verifier's reward.json that a step's `min_reward` may gate on.
+
+    Every member but REWARD is a dimension rewardkit scores; REWARD is the composed, gated score
+    finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
+    """
+
+    GATES = auto()
+    QUALITY = auto()
+    HARNESS_QUALITY = auto()
+    OUTCOME = auto()
+    REWARD = auto()
+
+
+class RewardFloor(FrozenModel):
+    """One dimension's threshold within a step's `min_reward` mapping."""
+
+    dimension: RewardDimension = Field(description="Which reward.json key this threshold applies to")
+    floor: float = Field(description="The value that key must reach for the trial to go on")
+
+
+class ComposedRewardFloor(FrozenModel):
+    """A step's `min_reward` authored as a bare number: a floor on the composed `reward` key."""
+
+    floor: float = Field(description="The value the composed reward must reach for the trial to go on")
+
+
+class PerDimensionRewardFloors(FrozenModel):
+    """A step's `min_reward` authored as a mapping: one floor per named reward dimension.
+
+    A dimension the mapping leaves out is not gated at all, since harbor reads a missing key as
+    -inf. At least one floor is required: an empty mapping renders as `min_reward = { }`, which
+    harbor reads as a gate that can never fail, so the step would declare a threshold it does not
+    have and the trial would run to the end looking fine.
+    """
+
+    floors: tuple[RewardFloor, ...] = Field(
+        min_length=1, description="The per-dimension floors, in the order the config named them"
+    )
+
+
+# The reward a step must reach for the trial to continue, in the two forms harbor accepts. They are
+# separate types rather than one model with two optional fields so that "exactly one of them" is a
+# property of the type: neither and both are the shapes that render TOML saying something the eval
+# config did not.
+StepMinReward = ComposedRewardFloor | PerDimensionRewardFloors
+
+
+class CaseStep(FrozenModel):
+    """One named stretch of a stepped case: its own turns, the uploads it introduces, what it is
+    graded against, and the reward it must reach for the trial to go on."""
+
+    name: str = Field(description="Stable step name; names the step directory and the harbor step")
+    prompts: tuple[PromptEntry, ...] = Field(description="One entry per turn, exactly as a flat case's prompts")
+    files: tuple[StepFile, ...] = Field(description="What the client 'uploaded' for this step")
+    expectations: Expectations | None = Field(
+        description="What this step is graded against; None grades it on gates and quality alone"
+    )
+    min_reward: StepMinReward | None = Field(
+        description="The reward floor below which harbor aborts the remaining steps; None never aborts"
+    )
+
+
+class StepPosition(FrozenModel):
+    """Where one instruction sits in its multi-step task.
+
+    Carried in the per-step case config because a harbor agent is invoked once per step with only
+    that step's instruction, and the driver has to know which invocation is the last one: the
+    evidence phase runs at the end of every step, but the workspace may only be destroyed once no
+    later step can still use it.
+    """
+
+    name: str = Field(description="The step's name")
+    index: int = Field(description="The step's 0-based position in the task's step list")
+    total: int = Field(description="How many steps the task declares")
+    # `timeout_seconds` on the config beside this one is only THIS step's share. Anything that has to
+    # outlive the step it was started in -- the reverse tunnel the workspace reaches the proxy on --
+    # must be sized against this instead, or it closes under a later step. It is not the sum of the
+    # steps' conversation shares: between two conversations the trial also spends a step's evidence
+    # phase, its cleanup grace and its verifier container, and the tunnel has to span all of that.
+    trial_lifetime_seconds: float = Field(
+        description="How long something started on the first step must live to still serve the last"
+    )
+    # The conversation and its per-entry records are cumulative, while the config beside this one
+    # holds only this step's turns, so the structural gates need this to know how many entries the
+    # trial owes by the end of this step.
+    entries_before: int = Field(description="How many prompts entries the earlier steps configured")
+    files: tuple[StepBoxFile, ...] = Field(description="This step's uploads, and where the box holds them")
+
+
+@pure
+def is_final_step(step: StepPosition | None) -> bool:
+    """Whether this instruction is the last one the trial will run. A case with no steps is a
+    single-step task, whose one run() is by definition the last."""
+    return step is None or step.index == step.total - 1
+
+
 class PersonaCase(FrozenModel):
-    """One persona case from an eval config: an id, an optional persona, and one prompt per turn."""
+    """One persona case from an eval config: an id, an optional persona, and its prompts entries."""
 
     case_id: str = Field(description="Stable case id; names the task directory and the trial")
     persona: str = Field(description="Client persona role-played on DECIDE_FROM_PERSONA turns (may be empty)")
-    prompts: tuple[str, ...] = Field(description="One entry per turn: a literal message or DECIDE_FROM_PERSONA")
+    # The flat view of the whole case, whether or not it declares steps: the oracle, the timeout
+    # warning, and the verifier's structural gates all reason about the case's turns as one list.
+    prompts: tuple[PromptEntry, ...] = Field(
+        description="The conversation's entries in order: a literal message, the sentinel, or a goal"
+    )
+    steps: tuple[CaseStep, ...] | None = Field(
+        description="The named steps whose prompts `prompts` flattens; None for a single-step case"
+    )
+    # None for a stepped case, where every step states its own instead, so that a reader of a step's
+    # instruction sees exactly what that step is graded on.
     expectations: Expectations | None = Field(description="What the delivered artifact must be, if the case says")
+    reward_strategy: RewardStrategy = Field(description="How a stepped case's per-step rewards become the trial's")
 
 
 class EvalConfig(FrozenModel):
     """A validated eval config file: the mngr branch under test plus the persona cases."""
 
-    mngr_branch: str = Field(description="The mngr branch the box is built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box is built from")
     dwt_repo: str = Field(description="Workspace template repo each case is cloned from")
-    dwt_branch: str = Field(description="Workspace template branch")
+    dwt_branch: str = Field(description="Workspace template ref (branch, tag, or full SHA)")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
     cases: tuple[PersonaCase, ...] = Field(description="The persona cases, one task each")
 
 
@@ -302,32 +799,148 @@ class CaseConfig(FrozenModel):
 
     case_id: str = Field(description="Stable case id")
     persona: str = Field(description="Client persona for DECIDE_FROM_PERSONA turns (may be empty)")
-    prompts: tuple[str, ...] = Field(description="One entry per turn")
+    prompts: tuple[PromptEntry, ...] = Field(description="The conversation's entries in order")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    mngr_branch: str = Field(description="The mngr branch the box was built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box was built from")
     mngr_sha: str = Field(description="Exact mngr SHA resolved at generation time")
     dwt_repo: str = Field(description="Workspace template repo")
-    dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
+    dwt_branch: str = Field(description="Workspace template ref the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
     # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
     expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
     authored_expectations: Expectations | None = Field(description="The expectations exactly as authored")
+    # None in the task-level tests/case.json (which describes the whole case) and in every
+    # single-step task; set only in a step's own instruction, where `prompts` holds that step's turns
+    # rather than the case's.
+    step: StepPosition | None = Field(description="Which step of a multi-step task this config drives")
+
+
+@pure
+def cross_step_lifetime_seconds(case: CaseConfig) -> float:
+    """How long something started on the first step must live to still serve the last one, whichever
+    step's config is in hand. A single-step case's is just its conversation budget, since nothing
+    outlives the one run() call."""
+    return case.timeout_seconds if case.step is None else case.step.trial_lifetime_seconds
 
 
 class Transcript(FrozenModel):
-    """The conversation so far, as raw system_interface events (verbatim schema)."""
+    """The conversation so far, as raw chat app events (verbatim schema)."""
 
-    events: tuple[dict[str, Any], ...] = Field(description="Raw events from the workspace system_interface")
+    events: tuple[dict[str, Any], ...] = Field(description="Raw events from the workspace's chat app")
 
 
 class DeciderResult(FrozenModel):
     """One decider (simulated-user) model call: the message plus usage accounting."""
 
     message: str = Field(description="The client's next message")
-    model: str = Field(description="The decider model used (empty when the fallback was used)")
-    input_token_count: int = Field(description="Input tokens consumed by the call (0 on fallback)")
-    output_token_count: int = Field(description="Output tokens consumed by the call (0 on fallback)")
+    model: str = Field(description="The decider model the call was made against; empty when there was no call")
+    # A fallback does not imply zeros: a call that came back with an answer the client could not act
+    # on was still billed for answering, and this is the only place that cost is ever measured.
+    input_token_count: int = Field(description="Input tokens the call consumed; 0 when none completed")
+    output_token_count: int = Field(description="Output tokens the call consumed; 0 when none completed")
     is_fallback: bool = Field(description="Whether the literal fallback message was used")
+
+
+class JudgeScore(FrozenModel):
+    """One likert judge criterion's score on a trial. Reported for the record, never gated."""
+
+    dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
+    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
+    # rewardkit normalizes a 1-10 likert to (raw - 1) / 9; both are carried so a reader can compare
+    # across runs without having to know which convention a number is in.
+    normalized_score: float = Field(description="The criterion's contribution to its dimension, 0-1")
+    raw_score: float = Field(description="The judge's own 1-10 likert answer")
+
+
+class TrialCheck(FrozenModel):
+    """How one trial of a finished run came out, under the criteria a scheduled run is gated on."""
+
+    trial_name: str = Field(description="The trial directory's name, e.g. 'todo-app__XNXFsgk'")
+    case_id: str = Field(description="The persona case the trial ran; empty when it cannot be read")
+    is_completed: bool = Field(description="Whether the trial ran to the end without erroring or timing out")
+    incompletion_reason: str = Field(description="Why the trial did not complete; empty when it did")
+    is_gates_passed: bool = Field(description="Whether every structural gate criterion scored above zero")
+    error_entry_ids: tuple[str, ...] = Field(description="Evidence manifest entries the harness could not measure")
+    reward: float | None = Field(description="The trial's final reward; None when it was never graded")
+    judge_scores: tuple[JudgeScore, ...] = Field(description="Every likert judge criterion the verifier recorded")
+    lane: str = Field(description="The provider lane the trial signed in on; empty when it recorded none")
+    requested_model: str = Field(
+        description="The catalog id the trial asked the chat to run on; empty when it asked for none"
+    )
+    is_model_confirmed: bool | None = Field(
+        description="Whether the models observed were exactly the requested one; None wherever it could not be told"
+    )
+    wrong_model_reason: str = Field(
+        description="Why the trial ran on another model than it asked for; empty when it did not"
+    )
+    modal_environment_name: str = Field(description="The Modal environment the trial left behind; empty if unrecorded")
+    mngr_sha: str = Field(description="The mngr SHA the trial's box was built from")
+    dwt_sha: str = Field(description="The workspace-template SHA the trial's workspace was cloned from")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        return self.is_completed and self.is_gates_passed and not self.error_entry_ids and not self.wrong_model_reason
+
+
+class RunCheck(FrozenModel):
+    """Whether a finished job passed the criteria a scheduled run is gated on, trial by trial."""
+
+    job_name: str = Field(description="The job directory's name")
+    trials: tuple[TrialCheck, ...] = Field(description="One entry per trial directory, in name order")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        """Whether every trial passed; the check-run command's exit code follows this.
+
+        A run with no trials is not a pass: it says nothing ran, which must never read as a green
+        verdict.
+        """
+        return bool(self.trials) and all(trial.is_passed for trial in self.trials)
+
+    @computed_field
+    @cached_property
+    def modal_environment_names(self) -> tuple[str, ...]:
+        """Every environment the run leaked, so the same file that reports the run names what a
+        cleanup pass has to remove.
+
+        Derived from the rows rather than stored beside them, like the verdict above: a list a
+        caller had to keep in step with `trials` is one that can name an environment no trial in
+        the report created. A trial that never reached a workspace records no name, and an empty
+        one is dropped rather than reported as an environment to go looking for.
+        """
+        return tuple(sorted({trial.modal_environment_name for trial in self.trials if trial.modal_environment_name}))
+
+
+class ModalDeletionOutcome(UpperCaseStrEnum):
+    """How one Modal environment deletion came out.
+
+    DELETED and NOT_FOUND both mean the environment is gone, whether or not this call is what removed
+    it; only FAILED is a reason to look."""
+
+    DELETED = auto()
+    NOT_FOUND = auto()
+    FAILED = auto()
+
+
+class CleanupReport(FrozenModel):
+    """What one Modal environment cleanup pass did."""
+
+    deleted_names: tuple[str, ...] = Field(description="Environments the pass removed")
+    already_gone_names: tuple[str, ...] = Field(description="Environments that were absent by the time it looked")
+    failed_names: tuple[str, ...] = Field(description="Environments Modal refused to remove")
+
+
+class GoalDecision(FrozenModel):
+    """What a goal-holding client decided for one exchange: say something else, or stop asking.
+
+    The two questions -- "am I satisfied?" and "what do I say next?" -- are one judgment, so they
+    are one model call and one result rather than two.
+    """
+
+    is_satisfied: bool = Field(description="Whether the client declared the goal met")
+    satisfaction_reason: str = Field(description="Why it is satisfied; empty while it is still asking")
+    call: DeciderResult = Field(description="The message to send plus the call's usage accounting")

@@ -15,19 +15,23 @@ zero because the measuring instrument broke.
 import asyncio
 import base64
 import json
+import posixpath
 import re
 import shlex
 import time
 import tomllib
 from collections.abc import Mapping
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from typing import Final
+from typing import assert_never
 
 from harbor.environments.base import BaseEnvironment
 from loguru import logger
+from modal.exception import Error as ModalError
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import SecretStr
@@ -37,6 +41,7 @@ from imbue.imbue_common.pure import pure
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.data_types import CapturedFile
 from imbue.minds_evals.data_types import CaseConfig
 from imbue.minds_evals.data_types import CheckClass
 from imbue.minds_evals.data_types import CheckStatus
@@ -49,8 +54,16 @@ from imbue.minds_evals.data_types import PhaseTiming
 from imbue.minds_evals.data_types import REGISTERED_APPS_HTTP_TARGET
 from imbue.minds_evals.data_types import RegisteredApp
 from imbue.minds_evals.data_types import TraceRecord
+from imbue.minds_evals.data_types import TranscriptCapture
 from imbue.minds_evals.data_types import UiFlowCheck
+from imbue.minds_evals.data_types import WorkerCapture
+from imbue.minds_evals.data_types import WorkerLaunch
+from imbue.minds_evals.data_types import WorkerListingEntry
+from imbue.minds_evals.data_types import WorkerState
 from imbue.minds_evals.expectations import slugify
+from imbue.minds_evals.trajectory import parse_transcript_jsonl
+from imbue.minds_evals.trajectory import scan_worker_launches
+from imbue.mngr.primitives import AgentLifecycleState
 
 # The bundle layout, relative to /logs/agent/. The directory is declared as an artifact in task.toml,
 # and harbor re-materializes artifacts at their original absolute paths, so the verifier reads these
@@ -63,6 +76,24 @@ APPS_REGISTRY_FILENAME: Final[str] = "apps.toml"
 SERVICES_FILENAME: Final[str] = "services.txt"
 REPO_STATE_FILENAME: Final[str] = "repo_state.json"
 DELIVERABLE_BUNDLE_FILENAME: Final[str] = "deliverable.bundle"
+COMMON_TRANSCRIPT_FILENAME: Final[str] = "common_transcript.jsonl"
+WORKSPACE_TRAJECTORY_FILENAME: Final[str] = "workspace_trajectory.json"
+_TRANSCRIPT_STDERR_FILENAME: Final[str] = "transcript.err"
+# The background workers launched during the trial (the chat agent's and, in turn, theirs), one
+# directory each under the bundle.
+WORKERS_DIRNAME: Final[str] = "workers"
+WORKER_LISTING_FILENAME: Final[str] = "agents.json"
+WORKER_TRAJECTORY_FILENAME: Final[str] = "trajectory.json"
+WORKER_STREAM_FILENAME: Final[str] = "common_transcript.jsonl"
+WORKER_REPORTS_DIRNAME: Final[str] = "reports"
+_WORKER_STDERR_FILENAME: Final[str] = "transcript.err"
+_WORKER_LISTING_STDERR_FILENAME: Final[str] = "list.err"
+# A ceiling no real trial should reach, there to keep a runaway launch loop from consuming the phase
+# budget; and how deep a worker's own workers are followed.
+MAX_WORKER_COUNT: Final[int] = 100
+MAX_WORKER_ROUNDS: Final[int] = 3
+# Where a workspace's mngr keeps its agents when the exec environment does not say.
+_DEFAULT_WORKSPACE_MNGR_HOST_DIR: Final[str] = "/home/user/.mngr"
 HTTP_DIRNAME: Final[str] = "http"
 FLOWS_DIRNAME: Final[str] = "flows"
 FLOW_LOG_FILENAME: Final[str] = "log.jsonl"
@@ -76,7 +107,6 @@ WORKSPACE_STAGING_DIR: Final[str] = "/tmp/minds-evals-verification"
 # Where the workspace repo lives in a stock workspace (supervisord's `directory=` and the app
 # scaffold both hard-code it). Probed rather than assumed, but tried first so the common case is free.
 DEFAULT_WORKSPACE_REPO_ROOT: Final[str] = "/home/user/workspace"
-APPS_REGISTRY_RELATIVE_PATH: Final[str] = "data/.state/apps.toml"
 SUPERVISORD_CONF_RELATIVE_PATH: Final[str] = "system/supervisord.conf"
 # Throwaway "isolated instance" servers record the registry rows they registered here, one state
 # file per instance. Reading that record is how a delivered app is told from a preview.
@@ -102,6 +132,8 @@ MAX_TRACE_OUTPUT_CHARS: Final[int] = 2_000
 # exec the collector runs, against a workspace that has already booted.
 PROBE_TIMEOUT_SECONDS: Final[int] = 120
 _INVENTORY_TIMEOUT_SECONDS: Final[int] = 300
+_TRANSCRIPT_TIMEOUT_SECONDS: Final[int] = 300
+_WORKER_TIMEOUT_SECONDS: Final[int] = 120
 _BUNDLE_TIMEOUT_SECONDS: Final[int] = 300
 _TEST_COMMAND_TIMEOUT_SECONDS: Final[int] = 300
 _HTTP_TIMEOUT_SECONDS: Final[int] = 60
@@ -147,6 +179,13 @@ REASON_SERVICE_NOT_RUNNING: Final[str] = "service_not_running"
 REASON_NO_SUPERVISED_PROGRAM: Final[str] = "no_supervised_program"
 REASON_TOO_FEW_APPS: Final[str] = "too_few_apps"
 REASON_NONZERO_EXIT: Final[str] = "nonzero_exit"
+# Why a transcript file did not make it out of the workspace. These are recorded on the driver's
+# trial metadata, not in the manifest: the transcript is the trial's record, not outcome evidence.
+REASON_NOT_ATTEMPTED: Final[str] = "not_attempted"
+REASON_TRANSCRIPT_COMMAND_FAILED: Final[str] = "transcript_command_failed"
+REASON_PULL_FAILED: Final[str] = "pull_failed"
+REASON_DOWNLOAD_FAILED: Final[str] = "download_failed"
+REASON_NO_REPORT_PATH: Final[str] = "no_report_path"
 
 # The name the oracle's fabricated evidence gives the app it pretends was delivered, and the
 # template rows it pretends were already there, so the fabricated bundle exercises the same
@@ -380,9 +419,32 @@ def parse_service_states(services_text: str) -> dict[str, str]:
 
 # The forward_port.py call an app's supervisord program block chains before its own start command.
 # Either flag order is accepted: the app scaffold writes --url first, the isolated-instance runner
-# writes --name first, and a hand-written block may do either.
-_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py[^\n]*?--name\s+([\w-]+)")
+# writes --name first, and a hand-written block may do either. An app with a manifest registers
+# through ``--manifest <app.toml>`` with no ``--name`` (the name lives in the manifest); its program
+# is named after the app, so the block's own program name is the registration.
+# A call's flags run to the next shell chain operator (``&&``, ``;``, ``||``: the chain to the
+# following call or to the app's own start command, whose flags must not be read as the
+# registration's) or to the end of the line.
+_FORWARD_PORT_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"forward_port\.py(?P<flags>[^\n&;|]*)")
+_FORWARD_PORT_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name\s+([\w-]+)")
+_FORWARD_PORT_MANIFEST_PATTERN: Final[re.Pattern[str]] = re.compile(r"--manifest\s+\S+")
 _PROGRAM_SECTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\[program:([^\]]+)\]", re.MULTILINE)
+
+
+@pure
+def _registrations_in_block(block: str, program_name: str) -> list[str]:
+    """The registry names the forward_port.py calls in one program block register, in call order."""
+    registrations: list[str] = []
+    for call in _FORWARD_PORT_CALL_PATTERN.finditer(block):
+        flags = call.group("flags")
+        name_match = _FORWARD_PORT_NAME_PATTERN.search(flags)
+        if name_match is not None:
+            registrations.append(name_match.group(1))
+        elif _FORWARD_PORT_MANIFEST_PATTERN.search(flags) is not None:
+            registrations.append(program_name)
+        else:
+            pass
+    return registrations
 
 
 @pure
@@ -400,8 +462,9 @@ def parse_supervised_registrations(supervisord_conf: str) -> dict[str, str]:
     for index, match in enumerate(matches):
         block_end = matches[index + 1].start() if index + 1 < len(matches) else len(supervisord_conf)
         block = supervisord_conf[match.end() : block_end]
-        for registration in _FORWARD_PORT_NAME_PATTERN.findall(block):
-            program_by_registration.setdefault(registration, match.group(1).strip())
+        program_name = match.group(1).strip()
+        for registration in _registrations_in_block(block, program_name):
+            program_by_registration.setdefault(registration, program_name)
     return program_by_registration
 
 
@@ -414,17 +477,19 @@ def resolve_preexisting_registrations(
     Both arguments are read from the same pre-turn-1 snapshot, because neither alone is complete:
 
     - ``registry_names`` is the app registry as it actually stood. A measurement rather than an
-      inference, and the only source that sees a template app which registers from inside the script
-      its supervisord program runs rather than from a ``forward_port.py`` call in the config itself.
-      The terminal does exactly that, as do the owner-exec and vm-exec daemons, and counting one as
-      a deliverable is the failure this resolution exists to prevent.
+      inference, and the only source that sees a template app which registers from inside the
+      program it runs (its own entry point, or a launcher script) rather than from a
+      ``forward_port.py`` call in the config itself. The terminal does exactly that, as do the
+      owner-exec and vm-exec daemons, and counting one as a deliverable is the failure this
+      resolution exists to prevent.
     - ``config_registrations`` is what the workspace's own ``system/supervisord.conf`` registers,
-      joined through its ``forward_port.py --name`` invocations. It covers a template app whose
-      service is slow enough that it had not registered its port yet when the snapshot was taken:
-      the file is on disk from the moment the workspace is cloned, whatever its services are doing.
-      Directory names under ``system/apps/`` would not do -- a registry name is a caller-supplied
-      ``--name`` flag, and a multi-port app registers extra origin-label rows that correspond to no
-      directory at all.
+      joined through its ``forward_port.py`` invocations (``--name``, or the block's own program
+      name for a ``--manifest`` registration). It covers a template app whose service is slow
+      enough that it had not registered its port yet when the snapshot was taken: the file is on
+      disk from the moment the workspace is cloned, whatever its services are doing. Directory
+      names under ``system/apps/`` would not do -- a registry name is what the app hands
+      ``forward_port.py`` (a ``--name`` flag, or the name in its ``--manifest``), and a multi-port
+      app registers extra origin-label rows that correspond to no directory at all.
 
     The registry is therefore the half that must be readable; the config half only ever adds names,
     and contributes nothing when the probe came back without it.
@@ -566,10 +631,269 @@ def workspace_state_command() -> str:
         services_marker=_SECTION_MARKER.format("services"),
         supervisord_marker=_SECTION_MARKER.format("supervisord"),
         instances_marker=_SECTION_MARKER.format("isolated_instances"),
-        registry_path=APPS_REGISTRY_RELATIVE_PATH,
+        registry_path=minds_bridge.WORKSPACE_APPS_REGISTRY,
         supervisord_path=SUPERVISORD_CONF_RELATIVE_PATH,
         instances_path=ISOLATED_INSTANCES_RELATIVE_PATH,
         instance_file=shlex.quote(ISOLATED_INSTANCE_FILENAME),
+    )
+
+
+@pure
+def transcript_capture_command(chat_agent_id: str) -> str:
+    """Write the chat agent's common transcript, as the raw stream and as the ATIF document mngr builds
+    from it, into the workspace staging directory, reporting each command's exit code separately.
+
+    Only the exit codes and a stderr tail ride the exec envelope; the files themselves are pulled
+    out afterwards, so a long trial's transcript never has to fit through a command's stdout. On a
+    workspace whose mngr predates ATIF the stream command still answers (with the legacy-shaped
+    records its emitter wrote) while the document command fails, which is why each exit code is
+    reported on its own.
+    """
+    return (
+        "mkdir -p {staging}; "
+        "mngr transcript {agent} --headless --format jsonl > {staging}/{stream} 2> {staging}/{stderr}; "
+        "printf '{stream_marker}\\n%s\\n' \"$?\"; "
+        "mngr transcript {agent} --headless --format atif --output {staging}/{document} 2>> {staging}/{stderr}; "
+        "printf '{document_marker}\\n%s\\n' \"$?\"; "
+        "printf '{stderr_marker}\\n'; tail -c {limit} {staging}/{stderr} 2>/dev/null; "
+        "exit 0"
+    ).format(
+        staging=WORKSPACE_STAGING_DIR,
+        agent=shlex.quote(chat_agent_id),
+        stream=COMMON_TRANSCRIPT_FILENAME,
+        document=WORKSPACE_TRAJECTORY_FILENAME,
+        stderr=_TRANSCRIPT_STDERR_FILENAME,
+        stream_marker=_SECTION_MARKER.format("stream_exit"),
+        document_marker=_SECTION_MARKER.format("document_exit"),
+        stderr_marker=_SECTION_MARKER.format("stderr"),
+        limit=MAX_COMMAND_OUTPUT_BYTES,
+    )
+
+
+@pure
+def worker_listing_command() -> str:
+    """List the workspace's agents, printing the listing itself so the collector can resolve each
+    worker's id, state, and work dir before it captures them."""
+    return (
+        "mkdir -p {workers}; "
+        "mngr list --headless --format json > {workers}/{listing} 2> {workers}/{stderr}; "
+        "printf '{exit_marker}\\n%s\\n' \"$?\"; "
+        "printf '{listing_marker}\\n'; cat {workers}/{listing} 2>/dev/null; "
+        "printf '{stderr_marker}\\n'; tail -c {limit} {workers}/{stderr} 2>/dev/null; "
+        "exit 0"
+    ).format(
+        workers="{}/{}".format(WORKSPACE_STAGING_DIR, WORKERS_DIRNAME),
+        listing=WORKER_LISTING_FILENAME,
+        stderr=_WORKER_LISTING_STDERR_FILENAME,
+        exit_marker=_SECTION_MARKER.format("list_exit"),
+        listing_marker=_SECTION_MARKER.format("listing"),
+        stderr_marker=_SECTION_MARKER.format("stderr"),
+        limit=MAX_COMMAND_OUTPUT_BYTES,
+    )
+
+
+@pure
+def worker_capture_command(name: str, lead_work_dir: str, task_file: str) -> str:
+    """Write one worker's ATIF document, its stream, and the report it pushed back into the staging
+    directory, reporting each part on its own.
+
+    A worker destroyed after finishing is no longer an agent `mngr transcript` can resolve, but mngr
+    preserves its stream under `preserved/<name>--<id>/`; the newest such directory stands in for the
+    live stream, and its basename is how the host side learns the destroyed worker's id. The report is
+    read from the lead's side: the launch-task contract has the worker push it to the path named in the
+    task file's frontmatter, under the lead's own work dir.
+    """
+    worker_dir = "{}/{}/{}".format(WORKSPACE_STAGING_DIR, WORKERS_DIRNAME, name)
+    quoted_dir = shlex.quote(worker_dir)
+    quoted_name = shlex.quote(name)
+    report_step = (
+        "r=$(sed -n 's/^finish_report_path:[[:space:]]*//p' {task_file} 2>/dev/null | head -n 1); "
+        "printf '%s\\n' \"$r\"; "
+        "printf '{exit_marker}\\n'; "
+        'if [ -n "$r" ]; then mkdir -p {dir}/{reports} && '
+        'cp -R {lead_dir}/"$(dirname "$r")"/. {dir}/{reports}/ 2>> {dir}/{stderr}; printf \'%s\\n\' "$?"; fi; '
+    ).format(
+        task_file=shlex.quote(posixpath.join(lead_work_dir, task_file)),
+        exit_marker=_SECTION_MARKER.format("report_exit"),
+        dir=quoted_dir,
+        reports=WORKER_REPORTS_DIRNAME,
+        lead_dir=shlex.quote(lead_work_dir),
+        stderr=_WORKER_STDERR_FILENAME,
+    )
+    return (
+        "mkdir -p {dir}; "
+        "mngr transcript {name} --headless --format atif --output {dir}/{document} 2> {dir}/{stderr}; "
+        "printf '{document_marker}\\n%s\\n' \"$?\"; "
+        "mngr transcript {name} --headless --format jsonl > {dir}/{stream} 2>> {dir}/{stderr}; "
+        "printf '{stream_marker}\\n%s\\n' \"$?\"; "
+        "printf '{preserved_marker}\\n'; "
+        "if [ ! -s {dir}/{stream} ]; then "
+        'p=$(ls -td "${{MNGR_HOST_DIR:-{host_dir}}}/preserved/"{name}"--"*/ 2>/dev/null | head -n 1); '
+        'if [ -n "$p" ]; then cp "$p"events/*/common_transcript/events.jsonl {dir}/{stream} 2>> {dir}/{stderr} '
+        "&& printf '%s\\n' \"$p\"; fi; fi; "
+        "printf '{report_marker}\\n'; {report_step}"
+        "printf '{stderr_marker}\\n'; tail -c {limit} {dir}/{stderr} 2>/dev/null; "
+        "exit 0"
+    ).format(
+        dir=quoted_dir,
+        name=quoted_name,
+        document=WORKER_TRAJECTORY_FILENAME,
+        stream=WORKER_STREAM_FILENAME,
+        stderr=_WORKER_STDERR_FILENAME,
+        host_dir=_DEFAULT_WORKSPACE_MNGR_HOST_DIR,
+        document_marker=_SECTION_MARKER.format("document_exit"),
+        stream_marker=_SECTION_MARKER.format("stream_exit"),
+        preserved_marker=_SECTION_MARKER.format("preserved"),
+        report_marker=_SECTION_MARKER.format("report_path"),
+        report_step=report_step if task_file else "",
+        stderr_marker=_SECTION_MARKER.format("stderr"),
+        limit=MAX_COMMAND_OUTPUT_BYTES,
+    )
+
+
+@pure
+def _worker_state(raw_state: str) -> WorkerState:
+    """How mngr's lifecycle states fold into what the capture cares about: a finished worker sits at
+    its prompt (WAITING), is stopped, or is done, and either way its stream is complete."""
+    try:
+        state = AgentLifecycleState(raw_state.upper())
+    except ValueError:
+        logger.warning("The agent listing reported a lifecycle state mngr does not define: {!r}", raw_state)
+        return WorkerState.UNKNOWN
+    match state:
+        case AgentLifecycleState.STOPPED | AgentLifecycleState.WAITING | AgentLifecycleState.DONE:
+            return WorkerState.STOPPED
+        case AgentLifecycleState.RUNNING | AgentLifecycleState.RUNNING_UNKNOWN_AGENT_TYPE:
+            return WorkerState.RUNNING
+        case AgentLifecycleState.REPLACED | AgentLifecycleState.UNKNOWN:
+            return WorkerState.UNKNOWN
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def parse_worker_listing(listing_json: str) -> tuple[WorkerListingEntry, ...]:
+    """The agents out of `mngr list --format json`; empty when the listing could not be read."""
+    try:
+        payload = json.loads(listing_json)
+    except ValueError as exc:
+        logger.warning("The agent listing is not JSON: {}", exc)
+        return ()
+    raw_agents = payload.get("agents") if isinstance(payload, dict) else payload
+    if not isinstance(raw_agents, list):
+        logger.warning("The agent listing carries no agents array")
+        return ()
+    entries: list[WorkerListingEntry] = []
+    for raw_agent in raw_agents:
+        if not isinstance(raw_agent, dict) or not raw_agent.get("id"):
+            continue
+        entries.append(
+            WorkerListingEntry(
+                agent_id=str(raw_agent["id"]),
+                name=str(raw_agent.get("name") or ""),
+                agent_type=str(raw_agent.get("type") or ""),
+                state=_worker_state(str(raw_agent.get("state") or "")),
+                work_dir=str(raw_agent.get("work_dir") or ""),
+            )
+        )
+    return tuple(entries)
+
+
+@pure
+def _worker_report_capture(task_file: str, report_path: str, copy_exit: str, detail: str) -> CapturedFile:
+    """What the capture command said about the worker's report: the path the task file named (empty
+    when it named none) and the copy's exit status, or why there was nothing to copy."""
+    if not task_file:
+        return _uncaptured(REASON_NOT_ATTEMPTED, "the launch named no task file")
+    if not report_path:
+        return _uncaptured(REASON_NO_REPORT_PATH, "")
+    if copy_exit != "0":
+        return _uncaptured(REASON_TRANSCRIPT_COMMAND_FAILED, detail)
+    return CapturedFile(host_path=Path(WORKER_REPORTS_DIRNAME), failure_reason="", failure_detail="")
+
+
+@pure
+def _failed_worker_capture(
+    launch: WorkerLaunch, entry: WorkerListingEntry | None, failure: CapturedFile
+) -> WorkerCapture:
+    """A worker whose capture never ran or never answered: every part records the same failure, and
+    what is known about the worker is whatever the listing said."""
+    return WorkerCapture(
+        launch=launch,
+        agent_id=entry.agent_id if entry is not None else "",
+        agent_type=entry.agent_type if entry is not None else "",
+        state=entry.state if entry is not None else WorkerState.UNKNOWN,
+        document=failure,
+        stream=failure,
+        report=failure,
+    )
+
+
+@pure
+def preserved_worker_id(preserved_dir: str, name: str) -> str:
+    """The id encoded in a preserved directory's `<name>--<id>` basename, or empty when it is not one."""
+    basename = preserved_dir.rstrip("/").rsplit("/", 1)[-1]
+    prefix = "{}--".format(name)
+    return basename[len(prefix) :] if basename.startswith(prefix) and len(basename) > len(prefix) else ""
+
+
+@pure
+def _is_anything_staged(captures: Sequence[WorkerCapture]) -> bool:
+    """Whether any part of any capture was produced in the workspace, and so is there to transfer."""
+    return any(
+        part.host_path is not None
+        for capture in captures
+        for part in (capture.document, capture.stream, capture.report)
+    )
+
+
+@pure
+def _uncaptured(failure_reason: str, failure_detail: str) -> CapturedFile:
+    return CapturedFile(host_path=None, failure_reason=failure_reason, failure_detail=failure_detail)
+
+
+@pure
+def _transferred_capture(captured: CapturedFile, worker_dir: Path, transfer_failure_reason: str) -> CapturedFile:
+    """A worker capture part with its staged name resolved to where the round's transfer put it under
+    the worker's host directory, or the transfer's failure when it did not arrive."""
+    if captured.host_path is None:
+        return captured
+    if transfer_failure_reason:
+        return _uncaptured(transfer_failure_reason, "")
+    host_path = worker_dir / captured.host_path
+    if not host_path.exists():
+        return _uncaptured(REASON_DOWNLOAD_FAILED, "")
+    return CapturedFile(host_path=host_path, failure_reason="", failure_detail="")
+
+
+def _launches_in_captured_streams(
+    captures: Sequence[WorkerCapture], known_names: AbstractSet[str]
+) -> list[WorkerLaunch]:
+    """The workers the round's captured streams launched in turn, one per name not already known."""
+    launches: list[WorkerLaunch] = []
+    queued_names: set[str] = set()
+    for capture in captures:
+        if capture.stream.host_path is None:
+            continue
+        for launch in scan_worker_launches(
+            parse_transcript_jsonl(capture.stream.host_path.read_text()),
+            depth=capture.launch.depth + 1,
+            lead_name=capture.launch.name,
+        ):
+            if launch.name in known_names or launch.name in queued_names:
+                continue
+            queued_names.add(launch.name)
+            launches.append(launch)
+    return launches
+
+
+@pure
+def not_attempted_transcript_capture() -> TranscriptCapture:
+    """What a collector reports before the capture step has run: nothing was captured, and nothing
+    failed either."""
+    return TranscriptCapture(
+        stream=_uncaptured(REASON_NOT_ATTEMPTED, ""),
+        document=_uncaptured(REASON_NOT_ATTEMPTED, ""),
     )
 
 
@@ -819,6 +1143,11 @@ class EvidenceCollector(MutableModel):
     environment: BaseEnvironment = Field(frozen=True, description="The harbor environment (the box)")
     box_env: dict[str, str] = Field(frozen=True, description="The per-trial env every bridge exec runs with")
     workspace_agent_id: str = Field(frozen=True, description="The nested workspace the evidence is collected from")
+    chat_agent_id: str = Field(
+        frozen=True,
+        description="The workspace's chat agent, whose common transcript is the trial's transcript; empty when "
+        "the driver never resolved one, in which case the capture is not attempted",
+    )
     case: CaseConfig = Field(frozen=True, description="The case whose expanded expectations drive the probes")
     clone_base_sha: str = Field(frozen=True, description="HEAD of the prepared dwt clone; the git bundle's base")
     dwt_tip_sha: str = Field(frozen=True, description="The dwt tip the base clone was made from")
@@ -867,6 +1196,17 @@ class EvidenceCollector(MutableModel):
     registered_apps: tuple[RegisteredApp, ...] | None = Field(default=None, description="The parsed registry")
     serving_app_names: set[str] = Field(
         default_factory=set, description="Delivered apps that answered their root-path probe as expected"
+    )
+    transcript_capture: TranscriptCapture = Field(
+        default_factory=not_attempted_transcript_capture,
+        description="What the capture step brought out of the workspace's common transcript",
+    )
+    worker_captures: list[WorkerCapture] = Field(
+        default_factory=list,
+        description="One record per background worker launched in the trial: the chat agent's and, in turn, theirs",
+    )
+    worker_capture_overflow: list[str] = Field(
+        default_factory=list, description="Launched worker names the count or depth caps left uncaptured"
     )
     started_at: str = Field(default="", description="UTC ISO timestamp the phase began")
 
@@ -928,15 +1268,18 @@ class EvidenceCollector(MutableModel):
         )
         return is_success, output
 
-    async def _pull_staged_file(self, phase: str, filename: str) -> bool:
-        """Pull one workspace-staged file into the box's evidence directory over the snapshot
-        transport. Rsyncing a named file INTO a directory keeps its basename, which is what makes
-        the staged name the bundle name."""
-        command = "cd {mngr} && uv run mngr rsync {agent}:{src} {box_dir}/".format(
+    async def _pull_staged_path(self, phase: str, relative_path: str, is_directory: bool) -> bool:
+        """Pull one workspace-staged path into the box's evidence directory over the snapshot
+        transport, under the same relative name. Rsyncing a named file INTO the directory keeps its
+        basename; a directory is sent as its contents into a directory of that name (both trailing
+        slashes are rsync's "contents of")."""
+        source = "{}/{}{}".format(WORKSPACE_STAGING_DIR, relative_path, "/" if is_directory else "")
+        destination = "{}/{}".format(self._box_dir, "{}/".format(relative_path) if is_directory else "")
+        command = "cd {mngr} && uv run mngr rsync {agent}:{src} {dest}".format(
             mngr=minds_bridge.BOX_MNGR_DIR,
             agent=shlex.quote(self.workspace_agent_id),
-            src="{}/{}".format(WORKSPACE_STAGING_DIR, filename),
-            box_dir=self._box_dir,
+            src=source,
+            dest=destination,
         )
         result = await minds_bridge.run_in_box(
             self.environment, command, self.box_env, self._budget(_RSYNC_TIMEOUT_SECONDS)
@@ -960,6 +1303,31 @@ class EvidenceCollector(MutableModel):
         host_path.parent.mkdir(parents=True, exist_ok=True)
         host_path.write_text(content)
         await self.environment.upload_file(host_path, "{}/{}".format(self._box_dir, relative_name))
+
+    async def _download_evidence_dir(self, relative_dir: str) -> bool:
+        """Copy one directory already in the box's evidence directory to the host-side bundle."""
+        host_dir = self._host_dir / relative_dir
+        host_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await self.environment.download_dir("{}/{}".format(self._box_dir, relative_dir), host_dir)
+        except (OSError, RuntimeError, ModalError) as exc:
+            logger.warning("Could not download {} from the box: {}", relative_dir, exc)
+            return False
+        return True
+
+    async def _download_evidence(self, relative_name: str) -> Path | None:
+        """Copy one file already in the box's evidence directory to the host-side bundle: the reverse of
+        `_write_evidence`, for evidence that was pulled out of the workspace rather than written here.
+        A filesystem transfer rather than an exec, so the file's size never has to fit through a
+        command's stdout. None when the transfer failed."""
+        host_path = self._host_dir / relative_name
+        host_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await self.environment.download_file("{}/{}".format(self._box_dir, relative_name), host_path)
+        except (OSError, RuntimeError, ModalError) as exc:
+            logger.warning("Could not download {} from the box: {}", relative_name, exc)
+            return None
+        return host_path
 
     async def _flush_record(self) -> None:
         """Rewrite the manifest and trace so a crash after any step still leaves a readable record."""
@@ -1001,6 +1369,11 @@ class EvidenceCollector(MutableModel):
         # collector run against a box that skipped setup must not write into a missing directory.
         await ensure_evidence_dir(self.environment)
         await self._capture_workspace_state()
+        # Before the inventory: the transcript is the cheapest and most valuable capture, and the
+        # home-tree walk is the slowest of the always-on ones.
+        if self.chat_agent_id:
+            await self._capture_common_transcript()
+            await self._capture_workers()
         await self._capture_file_inventory()
         expectations = self.case.expectations
         if is_expectations_collection_wanted and expectations is not None:
@@ -1058,12 +1431,198 @@ class EvidenceCollector(MutableModel):
         self._record_phase("workspace_state", started_at)
         await self._flush_record()
 
+    async def _capture_common_transcript(self) -> None:
+        """Always-on: the chat agent's common transcript, as the raw stream and as the ATIF document
+        mngr builds from it.
+
+        This is the trial's transcript record rather than outcome evidence, so it feeds the driver's
+        trial metadata instead of the manifest: a manifest error here would tell the outcome judge a
+        check went unmeasured, over a fact about the transcript that has nothing to do with the
+        deliverable. Each half is brought out on its own, so a document that fails to build still
+        leaves the stream.
+        """
+        started_at = time.monotonic()
+        is_success, output = await self._run_in_workspace(
+            "common_transcript", transcript_capture_command(self.chat_agent_id), _TRANSCRIPT_TIMEOUT_SECONDS
+        )
+        sections = split_sections(output)
+        # The commands' own stderr is the diagnostic when they ran; the bridge's output when they
+        # did not.
+        detail = _bounded(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
+        stream = await self._bring_out_transcript_file(
+            COMMON_TRANSCRIPT_FILENAME, is_success, sections.get("stream_exit", "").strip(), detail
+        )
+        document = await self._bring_out_transcript_file(
+            WORKSPACE_TRAJECTORY_FILENAME, is_success, sections.get("document_exit", "").strip(), detail
+        )
+        self.transcript_capture = TranscriptCapture(stream=stream, document=document)
+        self._record_phase("common_transcript", started_at)
+        await self._flush_record()
+
+    async def _bring_out_transcript_file(
+        self, filename: str, is_bridge_success: bool, exit_code: str, detail: str
+    ) -> CapturedFile:
+        """One staged transcript file's journey: workspace staging -> box bundle -> host bundle, or
+        the first step that stopped it."""
+        if not is_bridge_success:
+            return _uncaptured(_timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds), detail)
+        if exit_code != "0":
+            return _uncaptured(REASON_TRANSCRIPT_COMMAND_FAILED, detail)
+        if not await self._pull_staged_path("common_transcript", filename, is_directory=False):
+            return _uncaptured(_timeout_or(REASON_PULL_FAILED, self._remaining_seconds), "")
+        host_path = await self._download_evidence(filename)
+        if host_path is None:
+            return _uncaptured(REASON_DOWNLOAD_FAILED, "")
+        return CapturedFile(host_path=host_path, failure_reason="", failure_detail="")
+
+    async def _capture_workers(self) -> None:
+        """Always-on: the background workers the chat agent launched, discovered from its captured stream,
+        and the workers those launched in turn, followed for MAX_WORKER_ROUNDS rounds.
+
+        Each round captures the workers the previous round's streams launched, then pulls and downloads
+        the whole workers directory so the next round can scan them host-side. Like the transcript
+        capture this is the trial's record, not outcome evidence: failures land on the driver's metadata,
+        never in the manifest.
+        """
+        stream_path = self.transcript_capture.stream.host_path
+        if stream_path is None:
+            return
+        pending = scan_worker_launches(parse_transcript_jsonl(stream_path.read_text()), depth=0, lead_name="")
+        if not pending:
+            return
+        started_at = time.monotonic()
+        entries = await self._capture_worker_listing()
+        work_dir_by_name = {entry.name: entry.work_dir for entry in entries}
+        chat_entry = next((entry for entry in entries if entry.agent_id == self.chat_agent_id), None)
+        work_dir_by_name[""] = chat_entry.work_dir if chat_entry is not None else DEFAULT_WORKSPACE_REPO_ROOT
+        # Every name already captured or already counted as overflow, so a name two leads both
+        # launch, or one the cap already dropped, is recorded once.
+        known_names: set[str] = set()
+        for _round in range(MAX_WORKER_ROUNDS):
+            if not pending:
+                break
+            this_round: list[WorkerCapture] = []
+            for launch in pending:
+                known_names.add(launch.name)
+                if len(self.worker_captures) + len(this_round) >= MAX_WORKER_COUNT:
+                    self.worker_capture_overflow.append(launch.name)
+                    continue
+                this_round.append(
+                    await self._capture_one_worker(launch, entries, work_dir_by_name.get(launch.lead_name, ""))
+                )
+            if not this_round:
+                pending = []
+                break
+            # The whole directory in one rsync and one download, when the round staged anything (a
+            # round whose captures were all skipped for the budget or failed at the bridge has nothing
+            # to bring over); a failure of either is recorded on every part the round captured.
+            is_staged = _is_anything_staged(this_round)
+            if is_staged and not await self._pull_staged_path("workers", WORKERS_DIRNAME, is_directory=True):
+                transfer_failure_reason = _timeout_or(REASON_PULL_FAILED, self._remaining_seconds)
+            elif is_staged and not await self._download_evidence_dir(WORKERS_DIRNAME):
+                transfer_failure_reason = REASON_DOWNLOAD_FAILED
+            else:
+                transfer_failure_reason = ""
+            settled = self._settled_worker_captures(this_round, transfer_failure_reason)
+            self.worker_captures.extend(settled)
+            pending = _launches_in_captured_streams(settled, known_names)
+        self.worker_capture_overflow.extend(launch.name for launch in pending)
+        self._record_phase("workers", started_at)
+        await self._flush_record()
+
+    async def _capture_worker_listing(self) -> tuple[WorkerListingEntry, ...]:
+        """The workspace's agents, or nothing when the listing could not be had: the workers are then
+        captured by name alone, with no id, state, or lead work dir from the listing."""
+        is_success, output = await self._run_in_workspace("workers", worker_listing_command(), _WORKER_TIMEOUT_SECONDS)
+        if not is_success:
+            logger.warning("Could not list the workspace's agents: {}", _bounded(output, MAX_COMMAND_OUTPUT_CHARS))
+            return ()
+        sections = split_sections(output)
+        entries = parse_worker_listing(sections.get("listing", ""))
+        if not entries:
+            logger.warning(
+                "The workspace's agent listing had no agents in it (exit {}): {}",
+                sections.get("list_exit", "").strip(),
+                _bounded(sections.get("stderr", ""), MAX_COMMAND_OUTPUT_CHARS),
+            )
+        return entries
+
+    async def _capture_one_worker(
+        self, launch: WorkerLaunch, entries: Sequence[WorkerListingEntry], lead_work_dir: str
+    ) -> WorkerCapture:
+        """Run one worker's capture and record what the workspace said about each part; the host paths
+        are filled in once the round's directory transfer has landed."""
+        entry = next((entry for entry in entries if entry.name == launch.name), None)
+        if self._remaining_seconds <= 0:
+            return _failed_worker_capture(launch, entry, _uncaptured(REASON_TIMEOUT, ""))
+        is_success, output = await self._run_in_workspace(
+            "workers", worker_capture_command(launch.name, lead_work_dir, launch.task_file), _WORKER_TIMEOUT_SECONDS
+        )
+        sections = split_sections(output)
+        detail = _bounded(sections.get("stderr", "") if is_success else output, MAX_COMMAND_OUTPUT_CHARS)
+        preserved_dir = sections.get("preserved", "").strip()
+        if not is_success:
+            return _failed_worker_capture(
+                launch, entry, _uncaptured(_timeout_or(REASON_BRIDGE_FAILED, self._remaining_seconds), detail)
+            )
+        is_stream_captured = sections.get("stream_exit", "").strip() == "0" or bool(preserved_dir)
+        return WorkerCapture(
+            launch=launch,
+            agent_id=entry.agent_id if entry is not None else preserved_worker_id(preserved_dir, launch.name),
+            agent_type=entry.agent_type if entry is not None else "",
+            state=(
+                entry.state if entry is not None else WorkerState.DESTROYED if preserved_dir else WorkerState.UNKNOWN
+            ),
+            # Captured here means "the workspace produced it"; the host path is attached after the
+            # transfer, which is when the file is actually in hand.
+            document=(
+                CapturedFile(host_path=Path(WORKER_TRAJECTORY_FILENAME), failure_reason="", failure_detail="")
+                if sections.get("document_exit", "").strip() == "0"
+                else _uncaptured(REASON_TRANSCRIPT_COMMAND_FAILED, detail)
+            ),
+            stream=(
+                CapturedFile(host_path=Path(WORKER_STREAM_FILENAME), failure_reason="", failure_detail="")
+                if is_stream_captured
+                else _uncaptured(REASON_TRANSCRIPT_COMMAND_FAILED, detail)
+            ),
+            report=_worker_report_capture(
+                launch.task_file,
+                sections.get("report_path", "").strip(),
+                sections.get("report_exit", "").strip(),
+                detail,
+            ),
+        )
+
+    def _settled_worker_captures(
+        self, captures: Sequence[WorkerCapture], transfer_failure_reason: str
+    ) -> list[WorkerCapture]:
+        """The round's captures with their host paths resolved against what the transfer brought over."""
+        settled: list[WorkerCapture] = []
+        for capture in captures:
+            worker_dir = self._host_dir / WORKERS_DIRNAME / capture.launch.name
+            settled.append(
+                WorkerCapture(
+                    launch=capture.launch,
+                    agent_id=capture.agent_id,
+                    agent_type=capture.agent_type,
+                    state=capture.state,
+                    document=_transferred_capture(capture.document, worker_dir, transfer_failure_reason),
+                    stream=_transferred_capture(capture.stream, worker_dir, transfer_failure_reason),
+                    report=_transferred_capture(capture.report, worker_dir, transfer_failure_reason),
+                )
+            )
+        return settled
+
     async def _capture_file_inventory(self) -> None:
         started_at = time.monotonic()
         is_success, output = await self._run_in_workspace(
             "file_inventory", file_inventory_command(), _INVENTORY_TIMEOUT_SECONDS
         )
-        is_pulled = await self._pull_staged_file("file_inventory", FILE_INVENTORY_FILENAME) if is_success else False
+        is_pulled = (
+            await self._pull_staged_path("file_inventory", FILE_INVENTORY_FILENAME, is_directory=False)
+            if is_success
+            else False
+        )
         self.entries.append(
             _entry(
                 "file_inventory",
@@ -1100,7 +1659,7 @@ class EvidenceCollector(MutableModel):
         commit_count = sections.get("commit_count", "").strip()
         is_bundle_expected = commit_count.isdigit() and int(commit_count) > 0
         is_bundle_pulled = (
-            await self._pull_staged_file("repo_state", DELIVERABLE_BUNDLE_FILENAME)
+            await self._pull_staged_path("repo_state", DELIVERABLE_BUNDLE_FILENAME, is_directory=False)
             if is_success and is_bundle_expected
             else False
         )
@@ -1530,7 +2089,13 @@ class EvidenceCollector(MutableModel):
         # The session cookie rides this first request, so the opening navigation is already
         # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
         opening = ui_flows.FlowAction(
-            kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
+            kind=ui_flows.FlowActionKind.OPEN,
+            role="",
+            target="",
+            text=target_url,
+            amount=0,
+            reasoning="the flow has not opened the app yet",
+            expected="the delivered app loads",
         )
         outcome = await self._run_step_script(
             ui_flows.build_step_request(
@@ -1559,6 +2124,11 @@ class EvidenceCollector(MutableModel):
             )
             return
         state_text = outcome.state_text
+        steps.append(
+            ui_flows.flow_init_record(
+                check.steps, check.expect, target_url, state_text, outcome.screenshot_name, utc_now_iso()
+            )
+        )
 
         for step_index in range(1, ui_flows.MAX_STEPS_PER_FLOW + 1):
             if self._remaining_seconds <= 0:
@@ -1593,12 +2163,19 @@ class EvidenceCollector(MutableModel):
             if action.kind == ui_flows.FlowActionKind.DONE:
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", "", utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        "",
+                        utc_now_iso(),
                     )
                 )
                 is_finished_by_agent = True
                 break
-            history.append(described)
             outcome = await self._run_step_script(
                 ui_flows.build_step_request(
                     action,
@@ -1611,7 +2188,15 @@ class EvidenceCollector(MutableModel):
             if ui_flows.is_instrument_reason(outcome.reason):
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", outcome.reason, utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        outcome.reason,
+                        utc_now_iso(),
                     )
                 )
                 await self._finish_flow(check, slug, steps, CheckStatus.ERROR, outcome.reason, outcome.detail)
@@ -1622,12 +2207,18 @@ class EvidenceCollector(MutableModel):
                 # a click that hit nothing. The page below shows the truth, so the flow carries on
                 # with the failure recorded where the grade-time judge will read it.
                 step_error = _bounded(outcome.detail.strip(), 200)
-                history.append("(that action failed: {})".format(step_error))
+            # What the page did, against what the action predicted it would do. Recorded on the step
+            # and carried into the next decision's history, which is where a wrong model of the UI
+            # -- a filter that turns out to be a toggle -- becomes visible instead of being retried.
+            observed = ui_flows.summarize_state_change(state_text, outcome.state_text or state_text)
+            history.append(ui_flows.describe_step(described, action.expected, step_error, observed))
             steps.append(
                 ui_flows.flow_step_record(
                     step_index,
                     described,
                     action.reasoning,
+                    action.expected,
+                    observed,
                     state_text,
                     # The executor names the frame it actually wrote, and names nothing when the
                     # capture failed. Naming the file it would have written instead would put a
@@ -1644,7 +2235,7 @@ class EvidenceCollector(MutableModel):
         # not its completion, because the step log already carries every state that was seen.
         reading, _reading_call = agent.read_final_state(check.steps, tuple(history), state_text)
         observation = reading.observation if reading is not None else ""
-        steps.append(ui_flows.flow_reading_record(len(steps) + 1, observation, state_text, utc_now_iso()))
+        steps.append(ui_flows.flow_final_record(len(steps), observation, state_text, utc_now_iso()))
         # Completion, not achievement: a flow that carried out its declared steps is `completed`,
         # and one that ran out of budget first is `incomplete`. Whether the app did what the
         # `expect` describes is decided at grade time, from this evidence.
@@ -1793,25 +2384,37 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
 
 @pure
 def _oracle_flow_log(check: UiFlowCheck) -> str:
+    """The log a flow would have written had the delivered app been perfect: the same record kinds a
+    real flow emits, so the oracle exercises every path a reader takes."""
+    opening_state = "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name)
     return "".join(
         line + "\n"
         for line in (
-            ui_flows.flow_step_record(
-                0,
-                "open {}".format(_ORACLE_APP_URL),
-                "Opening the delivered app to start the flow.",
-                "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name),
-                "",
+            ui_flows.flow_init_record(
+                check.steps,
+                check.expect,
+                _ORACLE_APP_URL,
+                opening_state,
                 "",
                 "1970-01-01T00:00:00+00:00",
             ),
             ui_flows.flow_step_record(
                 1,
                 "finish the flow",
-                "Every declared step has been carried out.",
-                "browser minds-eval-verify @ {}  ({})\n{}".format(_ORACLE_APP_URL, check.name, check.expect),
+                "the delivered app, open and showing what the steps describe",
+                "nothing further -- every declared step has been carried out",
+                "",
+                "{}\n{}".format(opening_state, check.expect),
                 "",
                 "",
+                "1970-01-01T00:00:00+00:00",
+            ),
+            # A reading, not a verdict, exactly as a real flow's closing record is: the digest prints
+            # it as one more piece of evidence and the judge still rules on the `expect` itself.
+            ui_flows.flow_final_record(
+                2,
+                "the page shows: {}".format(check.expect),
+                "{}\n{}".format(opening_state, check.expect),
                 "1970-01-01T00:00:00+00:00",
             ),
         )

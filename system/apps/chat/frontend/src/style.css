@@ -1,0 +1,615 @@
+@import "tailwindcss" source(none);
+/* The design system: colour and type tokens, the typography roles, the base layer and the
+   component keyframes, shared with every other frontend of the workspace (see
+   system/libs/workspace_ui). What follows is the chat page's own: the transcript, the
+   markdown, the card and its terminal face, the progress view. */
+@import "@imbue/workspace-ui/src/base.css";
+
+/* Why explicit sources (`source(none)` + `@source`): the utility classes live in
+   the TS views' class strings, so enumerating the sources keeps the scan
+   deterministic and off the rest of the tree. A class name
+   assembled by string concatenation is NOT detected -- safelist any such case
+   with `@source inline("...")`. */
+@source "./**/*.ts";
+
+/* On .app-content (ChatPanel / SubagentView), native scroll anchoring stays ON
+   (the browser default) so the viewport holds steady when rows above it load or
+   measure to their real height, with no per-frame JS scrollTop writes. The
+   virtualization spacers opt out of anchoring individually (see the spacer divs
+   in ChatPanel / SubagentView) so the browser anchors to a real message row
+   rather than a resizing spacer. The app only writes scrollTop for the discrete
+   tail-follow and jump pins. */
+
+.markdown-content {
+  line-height: 1.5;
+  font-size: var(--font-size-body);
+  color: var(--c-text-primary);
+}
+
+.markdown-content p {
+  margin-top: 0;
+  margin-bottom: 0.6em;
+}
+
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content strong {
+  font-weight: 600;
+}
+
+.markdown-content em {
+  font-style: italic;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+  line-height: 1.3;
+}
+
+.markdown-content h1 {
+  font-size: 1.5em;
+}
+
+.markdown-content h2 {
+  font-size: 1.3em;
+}
+
+.markdown-content h3 {
+  font-size: 1.15em;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.75em;
+  padding-left: 1.5em;
+}
+
+.markdown-content ul {
+  list-style-type: disc;
+}
+
+.markdown-content ol {
+  list-style-type: decimal;
+}
+
+.markdown-content li {
+  margin-bottom: 0.25em;
+}
+
+.markdown-content li > ul,
+.markdown-content li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0;
+}
+
+.markdown-content code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background-color: var(--c-bg-code);
+  border: 1px solid var(--c-border-code);
+  border-radius: 0.25em;
+  padding: 0.08em 0.2em;
+}
+
+.markdown-content pre {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding: 14px 16px;
+  background-color: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.markdown-content pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+}
+
+.markdown-content blockquote {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding-left: 1em;
+  border-left: 3px solid var(--c-border);
+  color: var(--c-text-secondary);
+}
+
+/* Inline chat images fit the message column and invite a click to enlarge
+   (opening the lightbox, src/lightbox.ts). */
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+.markdown-content .tool-call-block {
+  cursor: pointer;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+.markdown-content .tool-call-block pre {
+  margin: 0;
+  padding-left: 28px;
+  position: relative;
+}
+
+.markdown-content .tool-call-block pre::before {
+  content: "▸";
+  position: absolute;
+  left: 10px;
+  top: 14px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
+  line-height: 1.55;
+  color: var(--c-text-faint);
+  transition: transform 150ms;
+  pointer-events: none;
+}
+
+.markdown-content .tool-call-block--expanded pre::before {
+  transform: rotate(90deg);
+}
+
+.markdown-content .tool-call-block pre code {
+  display: block;
+}
+
+.markdown-content .tool-call-block:not(.tool-call-block--expanded) pre code {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 1.55em;
+}
+
+.markdown-content hr {
+  margin-top: 1.25em;
+  margin-bottom: 1.25em;
+  border: none;
+  border-top: 1px solid var(--c-border);
+}
+
+.markdown-content a {
+  color: var(--c-accent);
+  text-decoration: underline;
+}
+
+.markdown-content a:hover {
+  color: var(--c-accent-hover);
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  font-size: 0.875em;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid var(--c-border);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+
+.markdown-content th {
+  font-weight: 600;
+  background-color: var(--c-surface-secondary);
+}
+
+.app-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.app-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-content::-webkit-scrollbar-thumb {
+  background: var(--c-border);
+  border-radius: var(--radius-sm);
+}
+
+.app-content::-webkit-scrollbar-thumb:hover {
+  background: var(--c-text-faint);
+}
+
+/* Chat panel: the chat document's front face */
+.chat-panel {
+  /* The pane card's own surface: a chat fills its pane edge to edge, so anything
+     else here would read as a second surface inside the card. */
+  background: var(--c-surface);
+}
+
+.chat-panel .app-footer {
+  border-top: none;
+}
+
+/* The chat card and its two faces.
+   A chat and its agent's terminal are one conversation rendered two ways, so they are the front
+   and back of one surface rather than two places: perspective on the frame, preserve-3d on the
+   turner, both faces backface-hidden with the back pre-turned so it reads correctly once
+   around. */
+.chat-flip {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  perspective: 2000px;
+}
+.chat-flip-inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transition: transform 600ms cubic-bezier(0.45, 0, 0.25, 1);
+}
+/* Both faces keep their SIZE while hidden. ttyd sizes the agent's tmux window to its client
+   viewport (`window-size latest`), so a display:none back face would hand the agent a
+   zero-column terminal; a zero-sized front face would lose the transcript's scroll offset.
+   backface-visibility is what hides them, and it costs no layout. */
+.chat-flip-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* Each face paints the surface, so the card reads as one solid object mid-turn rather than
+     as a hole with two pictures behind it. */
+  background: var(--c-surface);
+  border-radius: inherit;
+  overflow: hidden;
+}
+.chat-flip-back {
+  transform: rotateY(180deg);
+}
+
+/* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
+   turning goes away. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-flip-inner {
+    transition: none;
+  }
+}
+
+/* The switch that turns the card over. Only the row around it is styled here -- the switch
+   itself is the shared one from `modelCardStyles`, at its own size: the knob's offset is a
+   Tailwind utility, which a `transform` here would lose to, leaving the knob outside the
+   track. */
+.terminal-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--c-text-secondary);
+  font-size: var(--font-size-row);
+  transition: color var(--dur-base);
+}
+.terminal-view-toggle:hover,
+.terminal-view-toggle[aria-checked="true"] {
+  color: var(--c-text-primary);
+}
+
+/* The model flyout's scroll region. A slim, always-visible track: the list is anchored at its
+   base and grows upward, so its top edge is not somewhere the eye naturally checks for "more",
+   and an overlay scrollbar that only appears mid-scroll says nothing until it is too late. */
+.model-flyout-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-border) transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.model-flyout-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background-color: var(--c-border);
+}
+.model-flyout-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: var(--c-text-faint);
+}
+
+/* The tiny muted thinking disclosure atop an assistant message
+   (views/message-renderers.ts renderThinkingDisclosure). */
+.thinking-disclosure {
+  margin-bottom: 2px;
+}
+
+.thinking-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: var(--font-size-helper);
+  color: var(--c-text-secondary);
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.thinking-toggle:hover {
+  opacity: 1;
+}
+
+.thinking-disclosure--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+/* Always in the DOM, revealed by the class the click handler toggles directly --
+   the memoized message wrapper skips re-patching, so a collapse must not need one. */
+.thinking-body {
+  display: none;
+  margin: 2px 0 6px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--c-border);
+  font-size: var(--font-size-row);
+  color: var(--c-text-secondary);
+  white-space: pre-wrap;
+}
+
+.thinking-disclosure--expanded .thinking-body {
+  display: block;
+}
+
+.thinking-body--note {
+  font-style: italic;
+}
+
+/* Subtle inline status messages (e.g. "Context was compacted") */
+.message-system-status-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.message-system-status-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.message-system-status {
+  font-size: var(--font-size-helper);
+  color: var(--c-text-faint);
+  background: var(--c-fill-hover);
+  border-radius: 12px;
+  padding: 3px 12px;
+  text-align: center;
+  user-select: none;
+}
+
+.message-system-status--toggleable {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition:
+    background var(--dur-base) ease,
+    color var(--dur-base) ease;
+}
+
+.message-system-status--toggleable:hover {
+  background: var(--c-fill-active);
+  color: var(--c-text-secondary);
+}
+
+.message-system-status-container--expanded .tool-call-chevron {
+  transform: rotate(90deg);
+}
+
+.message-system-status-details {
+  display: none;
+  margin-top: 8px;
+  max-width: 85%;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--c-bg-sidebar);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--c-text-secondary);
+  text-align: left;
+  user-select: text;
+}
+
+.message-system-status-container--expanded .message-system-status-details {
+  display: block;
+}
+
+.message-system-status-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Progress view (the per-turn task timeline rendered from tk tickets).
+   The timeline's structure lives as utilities in views/ProgressBlock.ts and the
+   library's components/icons.ts. What stays here is what utilities cannot carry: the
+   narration classes (they style markdown-rendered children, and the live
+   one's shimmer is a keyframe + background-clip machine) and the expanded
+   panel's markdown/tool-block child rules. */
+
+.pv-tl-narration {
+  margin-top: 3px;
+  padding-left: --spacing(0.5);
+  font-size: var(--font-size-body);
+  font-style: italic;
+  color: var(--c-text-secondary);
+  line-height: 1.5;
+  /* The "glint" that sweeps across active-step narration: the faint tone as
+     the moving highlight over the muted caption color. */
+  background: linear-gradient(90deg, var(--c-text-secondary) 0%, var(--c-text-faint) 40%, var(--c-text-secondary) 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: pv-narration-shimmer 2.5s ease-in-out infinite;
+}
+@keyframes pv-narration-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+/* Static (settled) narration: an unclosed step that went idle still shows
+   its mid-work narration, but without the live shimmer -- muted italic. */
+.pv-tl-narration--static {
+  margin-top: 3px;
+  padding-left: --spacing(0.5);
+  font-size: var(--font-size-body);
+  font-style: italic;
+  color: var(--c-text-secondary);
+  line-height: 1.5;
+}
+.pv-tl-narration p,
+.pv-tl-narration--static p {
+  margin: 0 0 0.4em;
+}
+.pv-tl-narration p:last-child,
+.pv-tl-narration--static p:last-child {
+  margin-bottom: 0;
+}
+.pv-tl-narration code,
+.pv-tl-narration--static code {
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  background: var(--c-border-faint);
+  border-radius: var(--radius-sm);
+  font-style: normal;
+  -webkit-text-fill-color: var(--c-text-secondary);
+  -webkit-background-clip: padding-box;
+  background-clip: padding-box;
+}
+/* Deliberate asymmetry: the live (shimmering) narration's code chip is
+   borderless; only the settled/static narration carries the bordered chip. */
+.pv-tl-narration code {
+  border: none;
+}
+.pv-tl-narration pre,
+.pv-tl-narration--static pre {
+  margin: 0.4em 0;
+  padding: 0.5em 0.7em;
+  background: var(--c-border-faint);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  font-size: 0.9em;
+  font-style: normal;
+  -webkit-text-fill-color: var(--c-text-secondary);
+  -webkit-background-clip: padding-box;
+  background-clip: padding-box;
+}
+.pv-tl-narration pre code,
+.pv-tl-narration--static pre code {
+  padding: 0;
+  background: none;
+}
+.pv-tl-narration a,
+.pv-tl-narration--static a {
+  color: var(--c-text-secondary);
+  text-decoration: underline;
+}
+.pv-tl-narration ul,
+.pv-tl-narration ol,
+.pv-tl-narration--static ul,
+.pv-tl-narration--static ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
+}
+.pv-tl-narration li,
+.pv-tl-narration--static li {
+  margin-bottom: 0.15em;
+}
+
+/* Expanded panel: matches the rest of the chat -- interleaved markdown +
+   tool-call-blocks (the container's indent + left rule are utilities in
+   ProgressBlock.ts; these are its rendered-content children). */
+.pv-expanded p {
+  margin: 0 0 0.6em;
+  line-height: 1.5;
+  color: var(--c-text-primary);
+}
+.pv-expanded p:last-child {
+  margin-bottom: 0;
+}
+.pv-expanded .tool-call-block {
+  margin: 0.5em 0;
+}
+
+/* --- Transcript custom scrollbar (transcript-smooth-scroll spec) ----------- */
+
+/* The transcript scroll container hides its native scrollbar entirely; the
+   TranscriptScrollbar overlay replaces it (physical region in pixel space,
+   virtual regions in index space). */
+.transcript-scroll {
+  scrollbar-width: none;
+  outline: none;
+  /* The engine owns viewport stability (anchor-derived scrollTop each frame);
+     the browser's native scroll anchoring would fight those writes with its
+     own adjustments, so it is disabled for this scroller entirely. */
+  overflow-anchor: none;
+}
+
+.transcript-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Overlay track along the panel's right edge. Auto-hides: transparent unless
+   scrolled recently, hovered, or mid-drag (the -shown class). Pointer events
+   stay on so the edge is grabbable even while faded out. */
+.transcript-scrollbar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  right: 2px;
+  width: 12px;
+  z-index: var(--z-content);
+  opacity: 0;
+  transition: opacity var(--dur-slow) ease;
+  touch-action: none;
+}
+
+.transcript-scrollbar-shown,
+.transcript-scrollbar:hover {
+  opacity: 1;
+}
+
+.transcript-scrollbar-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  border-radius: 5px;
+  background: var(--c-border);
+  pointer-events: none;
+}
+
+.transcript-scrollbar:hover .transcript-scrollbar-thumb,
+.transcript-scrollbar-shown .transcript-scrollbar-thumb {
+  background: color-mix(in srgb, var(--c-text-secondary) 55%, transparent);
+}

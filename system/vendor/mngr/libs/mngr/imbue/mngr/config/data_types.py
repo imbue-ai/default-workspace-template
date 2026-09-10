@@ -41,6 +41,7 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import UserId
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.logging import LoggingConfig
+from imbue.mngr.utils.suspension_watchdog import SuspensionWatchdog
 from imbue.overlay.markers import ScalarTuple
 
 USER_ID_FILENAME: Final[str] = "user_id"
@@ -666,6 +667,10 @@ class MngrContext(FrozenModel):
         default=False,
         description="When True, always query all providers during discovery (skip event-stream optimization)",
     )
+    suspension_watchdog: SuspensionWatchdog = Field(
+        default_factory=SuspensionWatchdog,
+        description="Closes SSH transports a machine suspension left half-open; every OuterHost connection registers with it.",
+    )
     project_root: Path | None = Field(
         default=None,
         description="Project root directory (git worktree root)",
@@ -700,6 +705,10 @@ class OutputOptions(FrozenModel):
     is_quiet: bool = Field(
         default=False,
         description="Whether to suppress all stdout output (set by --quiet)",
+    )
+    extra_format: str | None = Field(
+        default=None,
+        description="A command-specific extra format name (e.g. 'atif') that matched instead of a builtin OutputFormat",
     )
 
 

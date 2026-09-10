@@ -2,6 +2,7 @@ import pytest
 
 from imbue.minds_evals.data_types import DeciderResult
 from imbue.minds_evals.usage import canonical_model_key
+from imbue.minds_evals.usage import combine_trial_usages
 from imbue.minds_evals.usage import parse_proxy_usage_log
 from imbue.minds_evals.usage import resolve_workspace_usage
 from imbue.minds_evals.usage import summarize_decider_usage
@@ -27,6 +28,28 @@ def _assistant_event(
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_write_tokens": cache_write_tokens,
+        },
+    }
+
+
+def _atif_step_event(
+    model: str,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cached_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> dict:
+    """One ATIF-shaped agent step. ``prompt_tokens`` is cache-inclusive, as ATIF defines it."""
+    return {
+        "type": "step",
+        "source": "agent",
+        "message": "reply",
+        "model_name": model,
+        "metrics": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+            "extra": {"cache_creation_input_tokens": cache_creation_tokens},
         },
     }
 
@@ -163,6 +186,136 @@ def test_workspace_usage_metadata_exposes_the_four_way_split() -> None:
     assert metadata["tokens"] == {"input": 1, "output": 2, "cache_read": 3, "cache_write": 4}
     assert metadata["per_model"][0]["model"] == "claude-opus-4-8"
     assert metadata["unpriced_models"] == []
+
+
+def test_summarize_workspace_usage_splits_atif_prompt_tokens_back_into_cache_buckets() -> None:
+    # ATIF's prompt_tokens covers all 910 input tokens; only 10 of them are plain input.
+    events = [
+        _atif_step_event(
+            "claude-opus-4-8",
+            prompt_tokens=910,
+            completion_tokens=100,
+            cached_tokens=700,
+            cache_creation_tokens=200,
+        )
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.message_count == 1
+    assert usage.tokens.input == 10
+    assert usage.tokens.output == 100
+    assert usage.tokens.cache_read == 700
+    assert usage.tokens.cache_creation == 200
+    # The two vintages describing the same response must produce the same cost.
+    legacy = summarize_workspace_usage(
+        [_assistant_event("claude-opus-4-8", 10, 100, cache_read_tokens=700, cache_write_tokens=200)]
+    )
+    assert usage.cost_usd == legacy.cost_usd
+    assert usage.n_input_tokens == 910
+
+
+def test_summarize_workspace_usage_reads_an_atif_step_without_a_cache_write_counter() -> None:
+    events = [
+        {
+            "type": "step",
+            "source": "agent",
+            "message": "reply",
+            "model_name": "claude-opus-4-8",
+            "metrics": {"prompt_tokens": 50, "completion_tokens": 5, "cached_tokens": 40},
+        }
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.tokens.input == 10
+    assert usage.tokens.cache_read == 40
+    assert usage.tokens.cache_creation == 0
+
+
+def test_summarize_workspace_usage_floors_a_self_contradicting_atif_prompt_total_at_zero() -> None:
+    # A stream reporting fewer prompt tokens than it reports cache hits is contradicting itself; a
+    # negative bucket would show up as a negative cost.
+    events = [_atif_step_event("claude-opus-4-8", prompt_tokens=100, cached_tokens=500)]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.tokens.input == 0
+
+
+def test_summarize_workspace_usage_ignores_user_and_system_atif_steps() -> None:
+    events = [
+        {"type": "step", "source": "user", "message": "hi", "metrics": {"prompt_tokens": 999}},
+        {"type": "step", "source": "system", "message": "compacted", "metrics": {"prompt_tokens": 999}},
+        _atif_step_event("claude-opus-4-8", prompt_tokens=7, completion_tokens=70),
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.message_count == 1
+    assert usage.tokens.input == 7
+
+
+def test_summarize_workspace_usage_reads_both_vintages_in_one_stream() -> None:
+    events = [
+        _assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100),
+        _atif_step_event("claude-opus-4-8", prompt_tokens=5, completion_tokens=50),
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.message_count == 2
+    assert usage.tokens.input == 15
+    assert usage.tokens.output == 150
+
+
+def test_summarize_workspace_usage_flags_delegation_from_atif_tool_calls() -> None:
+    events = [
+        {
+            **_atif_step_event("claude-opus-4-8", prompt_tokens=10, completion_tokens=100),
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "Agent", "arguments": {"description": "build it"}}],
+        }
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.delegated_call_count == 1
+    assert usage.is_cost_complete is False
+
+
+def test_summarize_workspace_usage_finds_a_worker_launch_in_full_atif_arguments() -> None:
+    events = [
+        {
+            **_atif_step_event("claude-opus-4-8"),
+            "tool_calls": [
+                {
+                    "tool_call_id": "c1",
+                    "function_name": "Bash",
+                    # Far past where the legacy 200-char preview would have cut off.
+                    "arguments": {"command": "echo " + "x" * 400 + " && uv run create_worker.py launch --name x"},
+                }
+            ],
+        }
+    ]
+
+    usage = summarize_workspace_usage(events)
+
+    assert usage.worker_launch_count == 1
+    assert usage.delegated_call_count == 0
+
+
+def test_summarize_workspace_usage_treats_ordinary_atif_tool_use_as_complete() -> None:
+    events = [
+        {
+            **_atif_step_event("claude-opus-4-8", prompt_tokens=10, completion_tokens=100),
+            "tool_calls": [
+                {"tool_call_id": "c1", "function_name": "Bash", "arguments": {"command": "ls -la"}},
+                {"tool_call_id": "c2", "function_name": "Write", "arguments": {"file_path": "/tmp/x"}},
+            ],
+        }
+    ]
+
+    assert summarize_workspace_usage(events).is_cost_complete is True
 
 
 def test_summarize_decider_usage_totals_calls_and_counts_fallbacks() -> None:
@@ -470,7 +623,7 @@ def test_resolve_workspace_usage_reports_the_proxy_when_one_metered_the_trial() 
     events = [_assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100)]
     records = [_proxy_record(input_tokens=40, output_tokens=400)]
 
-    resolved = resolve_workspace_usage(events, records)
+    resolved = resolve_workspace_usage(events, records, (), None, 0)
 
     assert resolved.is_from_proxy is True
     assert resolved.reported.tokens.output == 400
@@ -480,7 +633,7 @@ def test_resolve_workspace_usage_reports_the_proxy_when_one_metered_the_trial() 
 def test_resolve_workspace_usage_falls_back_to_the_transcript_without_a_proxy() -> None:
     events = [_assistant_event("claude-opus-4-8", input_tokens=10, output_tokens=100)]
 
-    resolved = resolve_workspace_usage(events, [])
+    resolved = resolve_workspace_usage(events, [], (), None, 0)
 
     assert resolved.is_from_proxy is False
     assert resolved.reported == resolved.transcript
@@ -493,3 +646,80 @@ def test_parse_proxy_usage_log_skips_blank_lines() -> None:
 
     assert len(records) == 1
     assert records[0]["input_tokens"] == 1
+
+
+def test_combine_trial_usages_sums_per_model_and_carries_the_scans_worker_counts() -> None:
+    chat = summarize_workspace_usage(
+        [_atif_step_event("claude-opus-4-8", prompt_tokens=1_000, completion_tokens=10, cached_tokens=900)]
+    )
+    worker = summarize_workspace_usage(
+        [
+            _atif_step_event("claude-opus-4-8", prompt_tokens=700, completion_tokens=60, cached_tokens=500),
+            _atif_step_event("claude-sonnet-5", prompt_tokens=100, completion_tokens=5),
+        ]
+    )
+
+    combined = combine_trial_usages([chat, worker], worker_launch_count=1, worker_captured_count=1)
+
+    assert [(entry.model, entry.message_count, entry.tokens.input) for entry in combined.per_model] == [
+        ("claude-opus-4-8", 2, 300),
+        ("claude-sonnet-5", 1, 100),
+    ]
+    assert combined.message_count == 3
+    assert combined.tokens.cache_read == 1_400
+    # An unpriced model in any stream leaves the whole account unpriced, as it does within one stream.
+    assert combined.unpriced_models == ("claude-sonnet-5",)
+    assert combined.cost_usd is None
+    assert combined.is_cost_complete is True
+
+    priced = combine_trial_usages([chat, chat], worker_launch_count=0, worker_captured_count=0)
+    assert chat.cost_usd is not None
+    assert priced.cost_usd == pytest.approx(2 * chat.cost_usd)
+
+
+def test_a_launched_worker_that_was_not_captured_keeps_the_account_incomplete() -> None:
+    chat = summarize_workspace_usage([_atif_step_event("claude-opus-4-8", prompt_tokens=10, completion_tokens=1)])
+
+    assert combine_trial_usages([chat], worker_launch_count=1, worker_captured_count=0).is_cost_complete is False
+    assert combine_trial_usages([chat], worker_launch_count=0, worker_captured_count=0).is_cost_complete is True
+
+
+def test_resolve_workspace_usage_folds_captured_worker_streams_into_the_transcript_account() -> None:
+    events = [_atif_step_event("claude-opus-4-8", prompt_tokens=1_000, completion_tokens=10, cached_tokens=900)]
+    worker_stream = [_atif_step_event("claude-opus-4-8", prompt_tokens=700, completion_tokens=60, cached_tokens=500)]
+
+    resolved = resolve_workspace_usage(events, [], [worker_stream], worker_launch_count=1, worker_captured_count=1)
+
+    assert resolved.transcript.message_count == 2
+    assert resolved.transcript.tokens.output == 70
+    assert resolved.transcript.worker_launch_count == 1
+    assert resolved.transcript.worker_captured_count == 1
+    assert resolved.transcript.is_cost_complete is True
+    assert resolved.reported == resolved.transcript
+
+
+def test_resolve_workspace_usage_keeps_the_feeds_launch_heuristic_without_a_scan() -> None:
+    events = [
+        {
+            **_atif_step_event("claude-opus-4-8", prompt_tokens=10, completion_tokens=1),
+            "tool_calls": [
+                {"function_name": "Bash", "arguments": {"command": "uv run create_worker.py launch --name w"}}
+            ],
+        }
+    ]
+
+    resolved = resolve_workspace_usage(events, [], [], worker_launch_count=None, worker_captured_count=0)
+
+    assert resolved.transcript.worker_launch_count == 1
+    assert resolved.transcript.is_cost_complete is False
+
+
+def test_a_running_workers_stream_is_summed_but_leaves_the_account_incomplete() -> None:
+    events = [_atif_step_event("claude-opus-4-8", prompt_tokens=1_000, completion_tokens=10, cached_tokens=900)]
+    worker_stream = [_atif_step_event("claude-opus-4-8", prompt_tokens=700, completion_tokens=60, cached_tokens=500)]
+
+    resolved = resolve_workspace_usage(events, [], [worker_stream], worker_launch_count=1, worker_captured_count=0)
+
+    assert resolved.transcript.tokens.output == 70
+    assert resolved.transcript.worker_captured_count == 0
+    assert resolved.transcript.is_cost_complete is False

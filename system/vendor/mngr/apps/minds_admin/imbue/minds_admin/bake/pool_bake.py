@@ -3,12 +3,12 @@
 This is the single place that knows how to turn a *provisioned host* (an OVH VPS,
 or a lima "slice" on a bare-metal box) into a ready-to-lease pool host: run
 ``mngr create`` against it with the DEFAULT_WORKSPACE_TEMPLATE bake templates, stop the services agent,
-harden the container sshd, and tear down the bootstrap-created chat agent. It is
-deliberately **provider-agnostic and OVH-free**: the only provider name it sees
-is the opaque string on the ``mngr create`` address, and any provider-specific
-steps (OVH ufw / management-key install; the slice carve) are injected by the
-caller (``cli/admin.py`` for OVH, ``cli/server.py`` for slices) -- so OVH
-ordering logic and DEFAULT_WORKSPACE_TEMPLATE bake logic never mix in one module.
+harden the container sshd, and clear the baked-in git identity. It is
+deliberately **provider-agnostic**: the only provider name it sees is the
+opaque string on the ``mngr create`` address, and any provider-specific steps
+(e.g. the slice carve) are injected by the caller (``cli/server.py`` for
+slices; historically also an OVH VPS path) -- so provider ordering logic and
+DEFAULT_WORKSPACE_TEMPLATE bake logic never mix in one module.
 
 The bake resolves every host detail it returns from ``mngr create --format
 json`` (agent id, host id, the agent SSH endpoint + on-disk key, and -- when the
@@ -56,22 +56,16 @@ BAKED_SERVICES_AGENT_NAME: Final[str] = "system-services"
 # ``aws`` / ``imbue_cloud`` templates already work.
 DEFAULT_WORKSPACE_TEMPLATE_BAKE_TEMPLATES: Final[tuple[str, ...]] = ("main", "pool_host")
 
-# Path inside the pool host's container of the DEFAULT_WORKSPACE_TEMPLATE bootstrap's initial-chat
-# sentinel. The bootstrap writes it after creating the chat agent on first boot;
-# removing it (after destroying that chat agent) makes the user's first lease +
-# start re-create the chat agent under the user's own workspace name.
-INITIAL_CHAT_SENTINEL_PATH: Final[str] = "/home/user/workspace/data/.state/initial_chat_created"
 
 # The baked services checkout whose repo-local git identity we clear at finalize
 # time. mngr's cross-host create (GIT_MIRROR) copies the *operator's* ``git config
 # user.name/email`` into the workspace checkout's ``.git/config``; on a shared,
 # pre-provisioned pool host that operator is whoever ran the bake (e.g. "Josh
 # Albrecht"), and every adopting user's agent -- which shares that checkout -- would inherit
-# it as its commit author. We unset it here rather than substituting a value: on
-# adoption the DEFAULT_WORKSPACE_TEMPLATE bootstrap re-runs its workspace init
-# (its initial-chat signal was removed during this same finalize) and supplies its
-# own neutral only-if-unset fallback, so bootstrap stays the single source of that
-# value. (Per-agent commits are separately attributed to the agent by the
+# it as its commit author. We unset it here rather than substituting a value: the
+# DEFAULT_WORKSPACE_TEMPLATE bootstrap sets its own neutral only-if-unset fallback
+# on every boot, so on adoption the identity is always re-supplied and bootstrap
+# stays the single source of that value. (Per-agent commits are separately attributed to the agent by the
 # template's Bash-command rewrite hook; this only governs the leftover non-agent
 # commits on the shared checkout.) Local ``mngr`` worktree agents are unaffected --
 # they take the GIT_WORKTREE path, which never runs this copy.
@@ -88,22 +82,21 @@ _MNGR_CREATE_TIMEOUT_SECONDS: Final[int] = 1800
 # its own).
 _VENDOR_RSYNC_MANUAL_EXCLUDES: Final[tuple[str, ...]] = (".git", "uv.lock")
 _GITIGNORE_RSYNC_FILTER: Final[str] = ":- .gitignore"
-# How long to wait (inside the container) for the DEFAULT_WORKSPACE_TEMPLATE bootstrap to write its
-# initial-chat sentinel before giving up on the chat-agent teardown. The
-# bootstrap may never create a chat agent (e.g. inference creds absent), in which
-# case there is nothing to tear down and the bake proceeds.
-_SENTINEL_WAIT_TIMEOUT_SECONDS: Final[int] = 480
 # Exit code GNU ``timeout`` returns when it kills the wrapped command on timeout.
 _COMMAND_TIMEOUT_EXIT_CODE: Final[int] = 124
 
-# The DEFAULT_WORKSPACE_TEMPLATE env-converge browser unit is satisfied once the
-# Fortress engine binary is in place (there are no marker files anymore); the
-# bake waits on that condition (see ``wait_for_deferred_install``) before
-# stopping the services agent.
-_DEFERRED_INSTALL_SATISFIED_TEST: Final[str] = "test -x /opt/fortress/tilion-fortress/tilion"
-# Cap on how long the bake blocks for the deferred install (heavy apt + browser
-# download) to finish; on timeout the bake proceeds and the install retries on lease.
-_DEFERRED_INSTALL_WAIT_TIMEOUT_SECONDS: Final[int] = 900
+# The DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase stamps the container
+# rootfs as its final step -- after the env.d units (the Fortress/Chromium
+# install among them) have run and the environment record files (apt.json, ...)
+# are captured -- so the stamp's presence means the converge completed on this
+# rootfs. The bake waits on it (see ``wait_for_env_converge``) before stopping
+# the services agent.
+_ENV_CONVERGE_STAMPED_TEST: Final[str] = "test -e /var/lib/minds/env-converge/rootfs-id"
+# Cap on how long the bake blocks for the env-converge slow phase (heavy apt +
+# browser download); on timeout the bake proceeds and the converge retries on lease.
+_ENV_CONVERGE_WAIT_TIMEOUT_SECONDS: Final[int] = 900
+# How long the in-container ``mngr list`` of the post-park verification may take.
+_VERIFY_AGENTS_TIMEOUT_SECONDS: Final[int] = 120
 
 # The MNGR_PREFIX every inner bake ``mngr`` subprocess runs under. Deliberately
 # NOT an extension of any user-facing prefix (e.g. ``minds-``), so no consumer
@@ -366,23 +359,33 @@ def build_pool_create_command(
     return command
 
 
-def parse_baked_host(stdout: str, *, host_name: str) -> BakedPoolHost:
-    """Parse the ``mngr create --format json`` object from a bake's stdout.
+def _parse_last_json_object_line(stdout: str, *, description: str) -> Any:
+    """Extract and parse the one single-line JSON object from a bake command's stdout.
 
-    ``--format json`` writes exactly one JSON object to stdout (logs go to
-    stderr), so the last ``{...}`` line is the result. A malformed candidate or a
-    payload missing the guaranteed ``host_id`` raises ``PoolBakeError`` (never
-    silently swallowed).
+    Every bake ``mngr ... --format json`` command writes exactly one JSON object
+    to stdout (logs go to stderr), so the last ``{...}`` line is the result.
+    Raises :class:`PoolBakeError` (never silently swallowed) when no object is
+    present or it is malformed; ``description`` names the command and context
+    for those messages. Callers validate the parsed object's shape themselves.
     """
     candidates = [
         line.strip() for line in stdout.splitlines() if line.strip().startswith("{") and line.strip().endswith("}")
     ]
     if not candidates:
-        raise PoolBakeError(f"no `mngr create --format json` object found in bake output: {stdout[-500:]!r}")
+        raise PoolBakeError(f"no JSON object found in {description} output: {stdout[-500:]!r}")
     try:
-        parsed = json.loads(candidates[-1])
+        return json.loads(candidates[-1])
     except json.JSONDecodeError as exc:
-        raise PoolBakeError(f"`mngr create --format json` output was not valid JSON: {candidates[-1]!r}") from exc
+        raise PoolBakeError(f"{description} output was not valid JSON: {candidates[-1]!r}") from exc
+
+
+def parse_baked_host(stdout: str, *, host_name: str) -> BakedPoolHost:
+    """Parse the ``mngr create --format json`` object from a bake's stdout.
+
+    A missing/malformed object or a payload missing the guaranteed ``host_id``
+    raises ``PoolBakeError``.
+    """
+    parsed = _parse_last_json_object_line(stdout, description="`mngr create --format json` bake")
     if not isinstance(parsed, dict) or "host_id" not in parsed:
         raise PoolBakeError(f"`mngr create --format json` output missing host_id: {parsed!r}")
     ssh_port = parsed.get("ssh_port")
@@ -430,7 +433,7 @@ def bake_pool_host(
     ``--format json``), runs it (with the provider-specific ``extra_create_args`` /
     ``extra_create_env``), and parses the create JSON into a :class:`BakedPoolHost`.
     The provider-specific post-create work -- stopping the services agent (OVH),
-    container sshd-hardening + chat-agent teardown (both, via
+    container sshd-hardening + git-identity clearing (both, via
     :func:`finalize_baked_pool_host`), host hardening (OVH ufw + management key),
     the ``pool_hosts`` insert, and any rollback -- is the caller's, since the
     transport to reach the baked host and the rollback differ by provider.
@@ -463,48 +466,62 @@ def bake_pool_host(
     return baked
 
 
-def wait_for_deferred_install(
+def wait_for_env_converge(
     run_in_container: ContainerCommandRunner,
     baked: BakedPoolHost,
     *,
     host_name: str,
-    timeout_seconds: int = _DEFERRED_INSTALL_WAIT_TIMEOUT_SECONDS,
+    timeout_seconds: int = _ENV_CONVERGE_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """Wait for the DEFAULT_WORKSPACE_TEMPLATE env-converge browser unit to finish before the caller stops the services agent.
+    """Wait for the DEFAULT_WORKSPACE_TEMPLATE env-converge slow phase to finish before the caller stops the services agent.
 
-    The env-converge browser unit kicks off a heavy apt + Fortress/Chromium install at agent boot.
-    Stopping the services agent mid-apt kills it, leaving dpkg half-unpacked (reinst-required) -- so the
-    install only completes after a repair on the post-lease retry. Calling this right before the stop
-    avoids that interruption. Both backends must call it before their respective ``mngr stop`` (OVH stops
-    before ``finalize_baked_pool_host``, slices after, so this is a standalone step rather than part of
-    finalize). Runs inside the container via the caller-supplied transport.
+    The slow phase is a supervisord one-shot (``env-converge run --phase slow``) that runs the
+    heavy env.d units (the Fortress/Chromium apt install among them), replays the environment
+    record, captures the record files (apt.json, ...), and stamps the rootfs as its final step.
+    The bake's park (``mngr stop``) kills the whole services-agent tree, supervisord included, so
+    stopping mid-run ships a baked image without the record files or the rootfs stamp -- and
+    stopping mid-apt can leave dpkg half-unpacked. Waiting on any single sub-step is not enough:
+    the Fortress binary can already be present from a cached image while the rest of the phase is
+    still running, which is exactly how baked slices used to ship without ``apt.json``. So this
+    waits on the phase's own completion signals, inside the container via the caller-supplied
+    transport, right before the stop.
 
-    Blocks until either the unit's satisfied condition holds (the Fortress engine binary is in
-    place) OR the unit's process is no longer running -- the latter so a not-yet-started or
-    already-finished/failed install does not block us (env-converge re-runs the idempotent unit
-    cleanly post-lease). Best-effort with a cap: on timeout we log and proceed.
+    Blocks until either the rootfs stamp exists (written after the record files, so their
+    presence is implied) OR supervisord reports the one-shot as done (EXITED/FATAL) or unknown --
+    the latter so a crashed converge, or a template without the program, does not block the bake
+    (the converge re-runs idempotently on lease). A supervisord that is not up yet keeps the poll
+    waiting: its socket error matches neither condition. Best-effort with a cap: on timeout we
+    log and proceed.
     """
-    # The bracket in '[1]000-playwright-fortress' is the classic self-match guard: the regex still
-    # matches the real "bash system/scripts/env.d/1000-playwright-fortress.sh" unit process, but this wait
-    # command's own command line contains the bracketed spelling, so pgrep does not match itself into
-    # an infinite loop.
     poll = (
-        f"until {_DEFERRED_INSTALL_SATISFIED_TEST} || "
-        f"! pgrep -f '[1]000-playwright-fortress' >/dev/null 2>&1; do sleep 5; done"
+        f"until {_ENV_CONVERGE_STAMPED_TEST} || "
+        "supervisorctl status env-converge 2>/dev/null | grep -qE 'EXITED|FATAL|no such process'; "
+        "do sleep 5; done"
     )
-    wait_command = f"timeout {int(timeout_seconds)} bash -c {shlex.quote(poll)}"
-    rc, _out, err = run_in_container(baked, "deferred-install-wait", wait_command, float(timeout_seconds + 60))
+    # `&&` (not `;`) so a timeout's exit 124 is preserved; on a completed poll the trailing
+    # group reports whether the phase actually stamped or merely stopped running.
+    wait_command = (
+        f"timeout {int(timeout_seconds)} bash -c {shlex.quote(poll)}"
+        f" && ({_ENV_CONVERGE_STAMPED_TEST} && echo converged || echo exited-without-stamp)"
+    )
+    rc, out, err = run_in_container(baked, "env-converge-wait", wait_command, float(timeout_seconds + 60))
     if rc == 0:
-        # The install finished (or had not started / had already exited); safe to stop.
-        pass
+        if "exited-without-stamp" in out:
+            logger.warning(
+                "env-converge on {} finished without stamping the rootfs; proceeding (it retries on first lease)",
+                host_name,
+            )
+        else:
+            # The slow phase completed and stamped the rootfs; safe to stop.
+            pass
     elif rc == _COMMAND_TIMEOUT_EXIT_CODE:
         logger.warning(
-            "deferred-install on {} did not finish within {}s; proceeding (it retries on first lease)",
+            "env-converge on {} did not finish within {}s; proceeding (it retries on first lease)",
             host_name,
             timeout_seconds,
         )
     else:
-        logger.warning("Could not wait for deferred-install on {} (exit {}): {}", host_name, rc, err.strip())
+        logger.warning("Could not wait for env-converge on {} (exit {}): {}", host_name, rc, err.strip())
 
 
 def finalize_baked_pool_host(
@@ -512,9 +529,8 @@ def finalize_baked_pool_host(
     baked: BakedPoolHost,
     *,
     host_name: str,
-    sentinel_timeout_seconds: int = _SENTINEL_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """Harden the container sshd and tear down the DEFAULT_WORKSPACE_TEMPLATE bootstrap chat agent (shared DEFAULT_WORKSPACE_TEMPLATE post-bake).
+    """Harden the container sshd and clear its baked git identity (shared DEFAULT_WORKSPACE_TEMPLATE post-bake).
 
     Runs entirely *inside* the baked container via the caller-supplied
     ``run_in_container`` transport, so it works for both an OVH VPS (``mngr exec``)
@@ -529,17 +545,9 @@ def finalize_baked_pool_host(
        otherwise inherit the baker as their commit author. Unsetting it lets the
        bootstrap re-supply its neutral fallback on adoption (see
        ``BAKED_SERVICES_CHECKOUT_PATH``).
-    3. Wait for the DEFAULT_WORKSPACE_TEMPLATE bootstrap's initial-chat sentinel, then destroy the
-       bootstrap-created chat agent (named after the bake host) and remove the
-       sentinel -- so the user's first lease re-creates the chat agent under their
-       own workspace name.
 
-    If no sentinel appears within the timeout the bootstrap never created a chat
-    agent (e.g. inference creds absent), so there is nothing to tear down and this
-    returns. When the sentinel *is* present the destroy must succeed: a destroy
-    error almost always signals a vendored-mngr / default-workspace-template skew, and shipping a
-    pool host whose bootstrap state we don't understand has bitten us before, so we
-    raise rather than land a half-known host in the pool.
+    Both steps are best-effort (logged, not raised), so a transient failure never
+    fails an otherwise-good (and expensive) bake.
     """
     sshd_command = shlex.join(["/usr/sbin/sshd", "-o", "MaxSessions=100", "-o", "MaxStartups=100:30:200"])
     sshd_rc, _sshd_out, sshd_err = run_in_container(baked, "sshd-harden", sshd_command, 30.0)
@@ -547,9 +555,8 @@ def finalize_baked_pool_host(
         logger.warning("Could not harden container sshd for {} (exit {}): {}", host_name, sshd_rc, sshd_err.strip())
 
     # Clear the operator's git identity that the bake's cross-host create copied
-    # into the baked services checkout (see BAKED_SERVICES_CHECKOUT_PATH). Runs
-    # before the sentinel wait so it applies even on hosts where the bootstrap never
-    # made a chat agent. Best-effort: the Bash-command rewrite hook is the
+    # into the baked services checkout (see BAKED_SERVICES_CHECKOUT_PATH).
+    # Best-effort: the Bash-command rewrite hook is the
     # authoritative per-agent attribution, so a transient failure here shouldn't
     # fail an otherwise-good (and expensive) bake. ``git config --unset`` exits 5
     # when the key is already absent; `|| [ $? -eq 5 ]` treats that as success so a
@@ -568,44 +575,83 @@ def finalize_baked_pool_host(
             "Could not clear baked git identity on {} (exit {}): {}", host_name, identity_rc, identity_err.strip()
         )
 
-    sentinel = shlex.quote(INITIAL_CHAT_SENTINEL_PATH)
-    wait_command = (
-        f"timeout {int(sentinel_timeout_seconds)} bash -c {shlex.quote(f'until test -f {sentinel}; do sleep 5; done')}"
-    )
-    wait_rc, _wait_out, wait_err = run_in_container(
-        baked, "sentinel-wait", wait_command, float(sentinel_timeout_seconds + 60)
-    )
-    if wait_rc == _COMMAND_TIMEOUT_EXIT_CODE:
-        # The ``timeout`` wrapper killed the wait: the bootstrap never created a
-        # chat agent (e.g. inference creds absent), so there is nothing to tear
-        # down. This is the only non-zero code we treat as "skip".
-        logger.warning(
-            "No initial-chat sentinel appeared for {} within {}s; skipping chat-agent teardown",
-            host_name,
-            sentinel_timeout_seconds,
-        )
-        return
-    if wait_rc != 0:
-        # Any other failure (e.g. the container was unreachable -- ssh exit 255)
-        # is NOT "no chat agent": silently skipping would ship a pool host with a
-        # stale bootstrap chat agent. Fail the bake so the caller can roll back.
-        raise PoolBakeError(
-            f"waiting for the initial-chat sentinel on {host_name} failed (exit {wait_rc}): {wait_err.strip()}"
-        )
+    # There is no bootstrap-created chat to tear down: DEFAULT_WORKSPACE_TEMPLATE creates no
+    # chat at boot. A chat binds to a provider account when it is CREATED and nothing rebinds
+    # it, so a boot-time chat -- made before anyone has signed in -- could never take a turn.
+    # An adopted workspace opens on its new-tab screen, and its first chat is whichever one the
+    # user starts, on the account they picked. That end state is enforced by
+    # ``verify_only_primary_agents_baked`` after the park.
 
-    logger.info("  Destroying bootstrap-created chat agent: {}", host_name)
-    # Use the canonical in-container mngr invocation (uv run mngr in the workspace checkout),
-    # which works regardless of transport / login PATH in the DEFAULT_WORKSPACE_TEMPLATE image.
-    destroy_command = f"cd {checkout} && uv run mngr destroy {shlex.quote(host_name)} --force"
-    destroy_rc, _destroy_out, destroy_err = run_in_container(baked, "chat-destroy", destroy_command, 120.0)
-    if destroy_rc != 0:
+
+def _parse_agent_listing(stdout: str, *, host_name: str) -> list[dict[str, Any]]:
+    """Parse the agents from an in-container ``mngr list --format json`` stdout.
+
+    ``--format json`` emits one ``{"agents": [...], "errors": [...]}`` object. Raises
+    :class:`PoolBakeError` on a missing/malformed object, a malformed agent entry, or a
+    non-empty ``errors`` channel -- a listing that cannot be trusted must never pass the
+    verification.
+    """
+    parsed = _parse_last_json_object_line(stdout, description=f"`mngr list --format json` on {host_name}")
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("agents"), list):
+        raise PoolBakeError(f"`mngr list --format json` output on {host_name} missing the agents list: {parsed!r}")
+    errors = parsed.get("errors") or []
+    if errors:
         raise PoolBakeError(
-            f"destroying bootstrap chat agent {host_name!r} failed (exit {destroy_rc}): {destroy_err.strip()}"
+            f"`mngr list` on {host_name} reported discovery errors, so its agent listing cannot be "
+            f"trusted for verification: {errors!r}"
         )
-    logger.info("  Removing initial-chat sentinel: {}", INITIAL_CHAT_SENTINEL_PATH)
-    rm_command = shlex.join(["rm", "-f", INITIAL_CHAT_SENTINEL_PATH])
-    rm_rc, _rm_out, rm_err = run_in_container(baked, "sentinel-rm", rm_command, 30.0)
-    if rm_rc != 0:
+    agents = parsed["agents"]
+    for agent in agents:
+        if not isinstance(agent, dict):
+            raise PoolBakeError(f"`mngr list` on {host_name} returned a malformed agent entry: {agent!r}")
+    return agents
+
+
+def verify_only_primary_agents_baked(
+    run_in_container: ContainerCommandRunner,
+    baked: BakedPoolHost,
+    *,
+    host_name: str,
+) -> None:
+    """Fail the bake unless the parked container holds only the primary services agent.
+
+    Shipping a pool host with extra agents has bitten us before: the historical bootstrap-created
+    boot chat ran credential-less from bake until lease and collided with the adopting user's own
+    chat creates, and the teardown that was supposed to prevent it targeted a stale name whose
+    lookup miss ``mngr destroy --force`` silently turned into success. So instead of trusting any
+    teardown, this asserts the end state. It must run *after* the park (``mngr stop``): with
+    supervisord and the bootstrap dead nothing can create an agent later, so a pass here is the
+    shipped state.
+
+    Old default-workspace-template tags whose bootstrap still creates a boot chat are deliberately
+    refused by this check (``pool create --from-tag`` on such a tag fails its bake loudly here);
+    bake a tag without a boot chat instead.
+
+    Raises :class:`PoolBakeError` on any non-primary agent, on a listing that cannot be trusted
+    (command failure, unparseable output, discovery errors), or on an empty listing -- the parked
+    services agent must still be visible, so an empty result means the listing itself is broken.
+    """
+    list_command = f"cd {BAKED_SERVICES_CHECKOUT_PATH} && uv run mngr list --format json"
+    rc, out, err = run_in_container(baked, "verify-agents", list_command, float(_VERIFY_AGENTS_TIMEOUT_SECONDS))
+    if rc != 0:
         raise PoolBakeError(
-            f"removing initial-chat sentinel {INITIAL_CHAT_SENTINEL_PATH!r} failed (exit {rm_rc}): {rm_err.strip()}"
+            f"could not list agents on baked pool host {host_name} for verification (exit {rc}): {err.strip()}"
         )
+    agents = _parse_agent_listing(out, host_name=host_name)
+    if not agents:
+        raise PoolBakeError(
+            f"`mngr list` on baked pool host {host_name} returned no agents, but the parked "
+            f"{BAKED_SERVICES_AGENT_NAME} agent must be visible -- the listing is broken, refusing to ship"
+        )
+    non_primary_names = sorted(
+        str(agent.get("name", agent.get("id", "<unnamed>")))
+        for agent in agents
+        if not isinstance(agent.get("labels"), dict) or agent["labels"].get("is_primary") != "true"
+    )
+    if non_primary_names:
+        raise PoolBakeError(
+            f"baked pool host {host_name} holds non-primary agent(s) {non_primary_names}; refusing to ship "
+            "it. The bake's template created extra agents -- old default-workspace-template tags create a "
+            "boot chat at first boot and are not bakeable; use a tag without a boot chat."
+        )
+    logger.info("  Verified baked pool host {}: only primary agent(s) present ({} total)", host_name, len(agents))
