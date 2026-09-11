@@ -92,11 +92,12 @@ def classify_error_notice(raw: dict[str, Any], text: str) -> ErrorNotice:
     # The stamp decides the auth question only in the POSITIVE direction: a kind Claude Code
     # names as a credential dead end is one, and the prose still gets its say otherwise. It
     # is deliberately NOT a veto, because Claude Code's `invalid_request` bucket is not clean
-    # -- it stamps that on eight credential dead ends whose own text says to re-authenticate
-    # ("Your organization has disabled API key authentication - ... run /login", "Your
-    # apiKeyHelper script is failing - ... you need to re-authenticate with your provider",
-    # the gateway's "Authentication error"). Trusting the stamp exclusively would send those
-    # to the plain API-error surface with no way forward.
+    # -- it stamps that on a dozen credential problems, of which the prose currently rescues
+    # two: "Invalid API key - Fix external API key" and the gateway's "Authentication error".
+    # A veto would send those to the plain API-error surface with no way forward. (The other
+    # ten land there already -- "Your organization has disabled API key authentication - ...
+    # run /login" and its siblings are a gap in the shared auth vocabulary, not in this
+    # precedence rule.)
     if claude_kind in _AUTH_ERROR_KINDS or is_auth_error_text(text):
         return ErrorNotice(is_auth_error=True)
     kind = kind_for_status(status) or _KIND_BY_CLAUDE_ERROR.get(claude_kind) or classify_api_error(text)
