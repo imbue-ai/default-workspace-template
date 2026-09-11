@@ -63,6 +63,41 @@ def test_a_404_names_the_model_rather_than_the_provider() -> None:
 
 
 @pytest.mark.parametrize(
+    ("claude_kind", "kind", "text"),
+    [
+        pytest.param(
+            "invalid_request",
+            "invalid_request",
+            "API Error: an image in the conversation could not be processed and was removed. Re-read the file"
+            " with a different approach if you still need it.",
+            id="invalid-request",
+        ),
+        pytest.param(
+            "rate_limit",
+            "rate_limit",
+            "You've hit your session limit · resets 2:50pm (America/Los_Angeles)",
+            id="rate-limit",
+        ),
+        pytest.param("overloaded", "overloaded", "API Error: Overloaded. Please try again later.", id="overloaded"),
+        pytest.param(
+            "model_not_found",
+            "not_found",
+            "There's an issue with the selected model. It may not exist or you may not have access to it.",
+            id="model-not-found",
+        ),
+    ],
+)
+def test_a_failure_with_no_status_is_named_by_claude_codes_own_kind(claude_kind: str, kind: str, text: str) -> None:
+    """Not every failure carries a status -- the image-attachment rejection above is a
+    verbatim record that carries only ``error``. Each of these texts is invisible to BOTH
+    fallbacks (the auth vocabulary and the prose classifier), so the kind can only come
+    from Claude Code's own name for it, which is what pins the mapping."""
+    notice = classify_error_notice(_stamped(error=claude_kind), text)
+    assert notice.is_api_error is True
+    assert notice.api_error_kind == kind
+
+
+@pytest.mark.parametrize(
     ("claude_kind", "text"),
     [
         pytest.param(
