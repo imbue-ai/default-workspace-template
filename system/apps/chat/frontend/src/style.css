@@ -279,9 +279,15 @@
 .chat-flip-back {
   transform: rotateY(180deg);
   /* The terminal brings its own dark surface, so it sits IN the pane rather than filling it:
-     a 4px gutter all round, which is also what keeps the face's own corners from having to
-     line up with the pane's. */
-  padding: 4px;
+     a 4px gutter, which is also what keeps the face's own corners from having to line up with
+     the pane's.
+
+     Except along the bottom, where it runs to the face's edge. That edge is where the
+     composer's bottom edge is on the other face -- the footer is the front face's last child
+     and carries no padding under it -- so turning the card over leaves the bottom line exactly
+     where it was. A 4px gutter down there would lift the terminal off a line the eye has
+     already fixed. */
+  padding: 4px 4px 0;
 }
 /* The ttyd frame fills that padded box and carries the corner. 8px is what the pane's own 12px
    corner leaves once you step 4px inward, so the terminal reads as concentric with the pane
