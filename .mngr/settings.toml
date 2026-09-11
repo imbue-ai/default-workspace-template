@@ -21,11 +21,6 @@ pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
     "IS_AUTONOMOUS=1",
-    # Vestigial: fast mode for Opus 4.7 was deprecated 2026-06-25 and removed
-    # 2026-07-24, and this workspace runs Opus 4.8 (agent_types.claude model
-    # below), so this gates nothing. Kept only so a pinned Claude Code older
-    # than the removal keeps behaving as before; drop it on the next version bump.
-    "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1",
     # Skip Claude Code's org-level fast-mode eligibility check. Agents sign in
     # with a Claude Max subscription that supports fast mode, but the session
     # resolves under an organization whose org check otherwise reports fast
@@ -176,7 +171,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.227"
+version = "2.1.269"
 # Do not provision a per-agent Claude config dir: every claude in the workspace
 # shares one config dir so auth, plugins, marketplaces, and sessions are
 # configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
