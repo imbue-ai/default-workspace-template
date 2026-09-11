@@ -525,11 +525,22 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
           m("span", { class: css.SLIDER_WRAP }, [
             // A dot at each level: without them the slider is a bare line and the levels it can
-            // land on are guesswork.
+            // land on are guesswork. Every level EXCEPT the one the thumb is on -- there the ball
+            // is the mark, and it is dropped from the list rather than hidden in place, because a
+            // keyed list may not carry holes.
             m(
               "span",
               { class: css.SLIDER_TICKS },
-              shown.map((effort) => m("span", { key: effort.level, class: css.SLIDER_TICK })),
+              shown
+                .map((effort, index) => ({ effort, index }))
+                .filter(({ index }) => index !== position)
+                .map(({ effort, index }) =>
+                  m("span", {
+                    key: effort.level,
+                    class: css.SLIDER_TICK,
+                    style: `left: ${(index / (shown.length - 1)) * 100}%`,
+                  }),
+                ),
             ),
             m("input", {
               type: "range",
@@ -546,7 +557,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
               value: position,
               style:
                 `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
-                `var(--color-fill-active) ${pct}%)`,
+                `var(--color-fill-hover) ${pct}%)`,
               oninput: (event: Event) => {
                 draggingEffortIndex = Number((event.target as HTMLInputElement).value);
               },

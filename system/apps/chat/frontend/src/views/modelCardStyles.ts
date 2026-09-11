@@ -101,20 +101,21 @@ export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
  *  the track's actual edges -- so ticks spread across the full width put the first and last one
  *  6px outside anywhere the ball can reach, and the ball sits off its own mark at both ends.
  *  Spanning the thumb's real travel instead makes every tick a position the ball lands on. */
-export const SLIDER_TICKS =
-  "pointer-events-none absolute left-1.5 right-1.5 top-1/2 z-10 flex -translate-y-1/2 justify-between";
-/** A dot at each level, sitting ON the track (hence the container's `z-10`) rather than
- *  behind it.
+export const SLIDER_TICKS = "pointer-events-none absolute inset-x-1.5 top-1/2 z-10";
+/** A dot at each level, sitting ON the track (hence the container's `z-10`) rather than behind
+ *  it: a 2px mark behind a 6px track is not a faint dot, it is no dot at all.
  *
- *  A mark small enough to read as a dot is smaller than the 3px track, so behind the track it
- *  would show only the crescents the track fails to cover -- and it would not even be the same
- *  shape at both ends, because the filled half of the track is an opaque green while the
- *  unfilled half is a translucent black that the dot shows through. Above the track every dot
- *  is identical wherever the fill happens to end, and the one the thumb is parked on still
- *  reads through the ball, which is what the tall hairlines these replace were for. */
-export const SLIDER_TICK = "h-[3px] w-[3px] shrink-0 rounded-full bg-primary/70";
+ *  Placed by its CENTRE -- `left` at the level's own fraction of the thumb's travel, pulled back
+ *  half its own width -- rather than by laying the dots out with `justify-between`, which spaces
+ *  their BOXES and so leaves the first and last centres a pixel inside the stops they mark. At
+ *  2px wide that pixel is half the dot.
+ *
+ *  The dot under the thumb is not drawn at all (see `effortRow`): the ball is the mark for the
+ *  level it is parked on, and a dot showing through it reads as a second, smaller mark. */
+export const SLIDER_TICK =
+  "absolute top-0 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/75";
 export const SLIDER =
-  "relative h-[3px] w-full cursor-pointer appearance-none rounded-full " +
+  "relative h-[6px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
   "[&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-surface " +
   "[&::-moz-range-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)] " +
