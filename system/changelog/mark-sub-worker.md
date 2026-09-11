@@ -1,0 +1,1 @@
+The `worker` create template no longer installs a `harden-worker` skill into the worker's tree (the worker follows `.agents/shared/worker/SKILL.md` from its checkout); the template-stacking test pins that the install step is gone while the venv converge and plugin install remain. The `.agents/skills/*-worker/` gitignore rule went with it.

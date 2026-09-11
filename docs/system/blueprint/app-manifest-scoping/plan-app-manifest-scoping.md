@@ -71,7 +71,7 @@ Built-in excludes, applied to every footprint and never listed in a manifest: `s
 
 The kind of a reference (skill, script, doc, service) is derivable from the path prefix, so there is no `kind` field to drift.
 
-What stays implicit, because it is derivable: the app directory, the `[program:<program>]` block and every `[program:<name>-*]` block in `system/supervisord.conf`, the manifest itself. Cron lines for automations live in `/etc/cron.d/` outside the tree; the skill they run is what gets referenced.
+What stays implicit, because it is derivable: the app directory, the `[program:<program>]` block and every `[program:<name>-*]` block in `system/supervisord.conf`, the manifest itself. A program that serves only this app but is not named after it (the browser's `xvfb`) is declared under `[wiring] programs`; the first label of every standalone program is a reserved app name, so the `<name>-*` rule cannot claim an unrelated program. Cron lines for automations live in `/etc/cron.d/` outside the tree; the skill they run is what gets referenced.
 
 Direction: `app.toml` is the single source of truth. A skill does not declare its app. Skill-side flows (heal or update a skill) find the owning app by reverse lookup (`app-manifest references --for-path <path>`, a scan over the handful of manifests in `system/apps/`).
 
@@ -134,6 +134,11 @@ The same scope file drives, with no further hand derivation:
 One channel: `$ARGUMENTS` on `/autofix` and `/verify-architecture`. Both skills already forward caller text into the sub-agent brief ("Include this context in the description you pass to agents"; "pass the analysis agent the creation context verbatim"). `verification.md` is rewritten so its two invocations pass the scope file path, the read budget, and the expansion rule, replacing the `{creation_context}` paragraph. The consumer-contract check (a change to an app's routes, CLI, or stored data shape must be reflected in every referenced artifact that uses that surface, and the reverse) is part of that same instruction text. Nothing in the plugin, `.reviewer/settings.json`, or the issue categories changes.
 
 `verification.md` stays unloaded by `harden-creation.md`: the gates remain parked. Its invocations stay correct for a by-hand run, which is how the toy measurement below exercises them.
+
+Two hazards for whoever revisits that decision:
+
+- A cross-reference in a loaded reference is a routing instruction. `harden-creation.md` is the worker's "every run" entry, so a sentence in it that names `verification.md` makes every worker read the file and run both gates (measured at about 22 minutes and $26 per trial in a nine-trial A/B). `git grep verification.md -- .agents system` must stay empty outside the changelog.
+- Live gates race a milestone's provisional merge: the worker declares a milestone, the lead merges it, and the worker's `validate-diff` then runs against a base that already holds the milestone, sees an empty diff, and widens to the whole app (681 s in one trial). Parking hides the race rather than fixing it; a revived gate has to diff from the task's `diff_base`, not the moving base branch.
 
 ### The read budget and the expansion rule
 

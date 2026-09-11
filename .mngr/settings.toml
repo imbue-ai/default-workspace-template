@@ -1688,10 +1688,10 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # the stop hook must never auto-create PRs or push to origin (the repo-level
 # .reviewer/settings.json likewise disables ci + stop_hook.fetch_and_merge).
 #
-# install_worker_skills.sh installs the single generic worker sub-skill from
-# .agents/shared/worker/ into the worker's .agents/skills/ tree as
-# `harden-worker`, which the crystallize / update / heal creation lifecycle
-# relies on. (The venv converge that used to sit here now runs for every agent
+# Nothing worker-specific is installed into the worker's skill tree: the harden
+# worker is followed in place, from the checkout every worker already has at
+# .agents/shared/worker/SKILL.md, because a lead's task file names that path
+# outright. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
 #
 # claude_update_plugin.sh installs the code-guardian plugin (and the other
@@ -1707,7 +1707,7 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
 env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VERIFY_CONVERSATION_ENABLE=0", "REVIEWER_AUTOFIX_MINOR=0", "REVIEWER_VERIFY_ARCHITECTURE_ENABLE=0", "REVIEWER_STOP_HOOK_ENABLE=1", "MNGR_AGENT_ROLE=worker"]
-# Converge the venv for worker agents, ahead of the skill install so deps are ready
+# Converge the venv for worker agents, ahead of the plugin install so deps are ready
 # first. A fresh git worktree (transfer = "git-worktree" above) carries no .venv
 # (gitignored), so a worker's first `uv run` would otherwise cold-build one mid-task --
 # lazily, with root-closure scope rather than --all-packages, racing whatever the agent
@@ -1716,7 +1716,7 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted

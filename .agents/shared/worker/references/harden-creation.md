@@ -29,12 +29,12 @@ it the normal way and commit the manifest changes so they appear in the merge.
 
 ## Reporting back to the lead
 
-Follow `.agents/shared/references/worker-reporting.md` for the report-file
-procedure and the task-file frontmatter schema, and substitute the runtime
-paths your operation/creation references specify. Surface decisions the user
+Follow `.agents/shared/references/worker-reporting.md` for the reporting
+procedure and the task-file frontmatter schema: you write the body to a file
+and the launcher's `report` subcommand delivers it. Surface decisions the user
 must make as `gate` reports and stop; end the run with a terminal `done` or
-`stuck` status. The operation reference names the exact gate and
-status values its flow uses.
+`stuck` status. The operation reference names the exact gate and status values
+its flow uses, and `question` is available on top of them on every run.
 
 ## Parallelism & Sequencing
 
@@ -79,10 +79,10 @@ The file records `primary` (the creation's own directories), `wiring` (the
 manifest claims outside its directory -- a skill that drives it, a script, a
 doc), `context` (paths to read but never change), `conventions`, `exclude` (a
 hard denylist of globs), and `diff` (the branch's changed files, split into
-those inside the footprint and `outside_footprint`). Three consumers read it:
-the test selection in `type-app.md`, the freshness check the lead runs before
-merging (`.agents/shared/references/harden-contention.md`), and the review
-invocations in `verification.md`. Regenerate it whenever the footprint
+those inside the footprint and `outside_footprint`). Two consumers read it:
+the test selection in `type-app.md`, and the freshness check the lead runs
+before merging (`.agents/shared/references/harden-contention.md`). Regenerate
+it whenever the footprint
 moves under you -- when you register a `[[references]]` entry, or when you add a
 supervisord section -- and once more immediately before your final report, after
 committing everything, so the `diff` it carries includes every commit you made
@@ -95,6 +95,38 @@ name it in your final report under `Outside footprint:`, one line each on why it
 changed on this branch. A skill run's one sanctioned edit inside an app
 directory, the `[[references]]` entry it adds to that app's manifest, sits under
 the scope file's `context` and is counted as inside the footprint.
+## Splitting the pass across sub-workers
+
+When the creation has genuinely independent areas -- a Flask app's backend and
+its frontend, say -- you may split the pass across sibling sub-workers instead
+of doing all of it yourself. Nothing prescribes the split: you decide it for the
+creation at hand, or decide there is none worth making.
+
+Launch each sibling with the launch-task skill exactly as a chat agent would
+(`.agents/skills/launch-task/SKILL.md`). You are its lead, and the rules that
+are yours are in `.agents/shared/references/lead-proxy.md` under "When you are a
+worker yourself": answer a sibling's `question` yourself or re-raise it to your
+own lead, merge exactly one level with `--no-ff`, stop a finished sibling rather
+than destroy it, and await it with `--timeout 60m`.
+
+- Each sibling's task file carries the same `operation` and `type` as yours plus
+  its boundary in prose; when your run carries a scope file, give the sibling its
+  own `scope_file` path beside its task file and your `diff_base`, since Step 1
+  fails loudly without them. Say in the body that it runs only its scope's tests and
+  **skips the "Review gates" section below**, because you run that verification
+  once on the merged result, and that a small out-of-scope edit is allowed but
+  must be listed in its `done` report.
+- When a sibling's `question` decides a shared interface, use your judgement per
+  case; the default is to message the affected sibling with the decision
+  immediately (`mngr message`) rather than let it find out at merge time.
+- Merge the siblings in a fixed order and resolve any conflicts yourself. Then
+  run exactly the verification a direct pass runs -- the "Review gates" section
+  below: the full suite and the ratchets -- once on the merged result, and
+  report `done` with the same body a direct pass would.
+
+Weigh the cost before splitting: every sibling pays a venv converge and a plugin
+install before it does any work, and on a small creation that overhead can
+exceed what the parallelism saves.
 
 ## Testing and hardening contract
 
@@ -210,6 +242,10 @@ evicts is not hardened, no matter how well-tested its happy path is.
 1. Ensure all in-flight changes have settled and are committed
 2. Ensure that tests pass. If there are long running tests, this is the moment to run them
 3. Fix failing tests with narrowly targeted changes
+
+If your own task file says your lead runs this verification on the merged
+result -- the scoped-sibling case above -- skip this section and run only your
+scope's tests.
 
 When complete, report back to the lead.
 

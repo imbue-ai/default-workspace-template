@@ -119,7 +119,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   label: the tab renders at `http://<name>.<workspace-host>/`, so the
   name must be DNS-safe -- lowercase letters/digits with single
   hyphens, and it must not start with `host-` or `agent-` (those
-  prefixes are reserved for workspace hostname coordinates). Short and
+  prefixes are reserved for workspace hostname coordinates), and it must not
+  be the first label of a standalone service (`share`, `app`, `owner`, `vm`,
+  `host`, `env`), which would claim that service as a sidecar. Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
   already used in `system/supervisord.conf` (`system_interface`,
   `browser`, etc. are reserved by the scaffolder).
@@ -468,7 +470,7 @@ Reading the confirmation signal:
 
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic `harden-worker`,
+task file (set `type: app`), launching the generic worker,
 polling, merging on `done`, and refreshing the tab after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker

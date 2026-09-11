@@ -76,14 +76,6 @@ data/.tickets/*
 # clones, separate from the read-only vendor/ subtrees. See CLAUDE.md.
 **/.external_worktrees/
 
-# The generic harden worker installed into a worker's tree at provision time by
-# install_worker_skills.sh (from the single source at .agents/shared/worker/).
-# It is a scratch copy that must never be committed -- otherwise a worker's
-# broad `git add` would carry it onto its branch and the merge would leak it
-# into main. The source at .agents/shared/worker/ is not matched by this glob
-# and stays tracked.
-.agents/skills/*-worker/
-
 # Byte-compiled / optimized / DLL files
 **/__pycache__/
 **/*.py[codz]

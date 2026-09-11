@@ -96,11 +96,11 @@ behavior.
 what outputs are correct. Describe success; the incident itself is above.>
 
 ## What to do
-Use the installed \`harden-worker\` sub-skill. It reads \`operation\` and
-\`type\` from this frontmatter and follows the matching references:
-reproduce the failure, find the root cause, apply a minimal fix, re-run 2-3
-fresh scenarios, and push through the single final-creation gate. Push reports
-to the lead per its reporting protocol.
+Read and follow \`.agents/shared/worker/SKILL.md\` from your own checkout. It
+reads \`operation\` and \`type\` from this frontmatter and follows the matching
+references: reproduce the failure, find the root cause, apply a minimal fix,
+re-run 2-3 fresh scenarios, and push through the single final-creation gate.
+Push reports to the lead per its reporting protocol.
 
 ## Success criteria
 - The incident reproduces against the current creation before the fix.
@@ -137,8 +137,8 @@ Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`; branch: `mngr/heal-$TARGET`
 - Poll path: `data/.tasks/harden/heal-$TARGET/reports/report.md`; reports dir
-  `data/.tasks/harden/heal-$TARGET/reports/`; consumed
-  `data/.tasks/harden/heal-$TARGET/reports/consumed/`
+  `data/.tasks/harden/heal-$TARGET/reports/`; `await` archives each report it
+  prints under `data/.tasks/harden/heal-$TARGET/reports/consumed/`
 - The only user-approval gate is `final-creation` -- a heal has no outline gate.
 - Terminal statuses: `done` (go live, Step 4); `stuck` (failure flow per
   `.agents/skills/launch-task/references/worker-failure.md`).
