@@ -851,6 +851,41 @@ def test_api_error_flagged_only_on_synthetic_messages() -> None:
     assert real_event["is_provider_fault"] is False
 
 
+def test_a_limit_notice_reaches_the_wire_as_an_error() -> None:
+    """A verbatim spend-limit record: the failure is stated in the record's own stamp, not
+    in its prose, and the wire fields the frontend styles from must carry it either way."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "uuid-limit",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "isApiErrorMessage": True,
+            "apiErrorStatus": 429,
+            "error": "rate_limit",
+            "message": {
+                "role": "assistant",
+                "model": _SYNTHETIC_MODEL,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "You've hit your monthly spend limit · raise it at "
+                            "claude.ai/settings/usage?from=cc_cli_limit_message"
+                        ),
+                    }
+                ],
+                "stop_reason": "stop_sequence",
+                "usage": {},
+            },
+        }
+    )
+    event = parse_lines([line])[0]
+    assert event["is_api_error"] is True
+    assert event["api_error_kind"] == "rate_limit"
+    assert event["is_provider_fault"] is False
+    assert event["is_auth_error"] is False
+
+
 def test_tk_transition_is_stamped_resident() -> None:
     """A tk transition line (`Updated <id> -> <status>`) is stamped resident however deep
     in the output it sits, so the progress view never loses a step transition when a tk

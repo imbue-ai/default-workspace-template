@@ -15,10 +15,10 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
-from imbue.chat.harnesses.auth_errors import is_auth_error_text
+from imbue.chat.harnesses.claude.error_notice import ErrorNotice
+from imbue.chat.harnesses.claude.error_notice import classify_error_notice
 from imbue.chat.harnesses.claude.tool_labels import shell_command
 from imbue.chat.harnesses.claude.tool_labels import tool_labels
-from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
 from imbue.chat.harnesses.message_display import stamp_user_message_display
 from imbue.chat.harnesses.tool_output import classify_tool_call_display
@@ -360,18 +360,16 @@ def _parse_assistant_message(
         }
 
     joined_text = "\n".join(text_parts)
-    # A model API error surfaces as a synthetic assistant message (e.g. "API Error:
-    # 529 Overloaded"). Classify it so the frontend can style it as an error and, for a
-    # provider-side failure (5xx / overloaded), add a "not Minds' fault" note. Gated on
-    # the synthetic model: only Claude Code's own framework-generated notices carry these
-    # forms, so a REAL assistant message that merely quotes "API Error: 500" or an error
-    # JSON (routine in a coding chat) is not mistaken for an outage.
-    #
-    # The auth check carries the same gate for the same reason, and needs it more: an agent
-    # helping with a credential says "invalid API key" in ordinary prose, and ungated that
-    # painted its own reply as a failure with a "Sign in again" button under it.
+    # A failed turn surfaces as a synthetic assistant message (e.g. "API Error: 529
+    # Overloaded", "You've hit your monthly spend limit"). Classify it so the frontend can
+    # style it as an error and, for a provider-side failure (5xx / overloaded), add a "not
+    # Minds' fault" note. Gated on the synthetic model: only Claude Code's own
+    # framework-generated notices are failures, so a REAL assistant message that quotes
+    # "API Error: 500" or an error JSON (routine in a coding chat) is not mistaken for an
+    # outage, and an agent helping with a credential does not get its own reply painted as
+    # a failure with a "Sign in again" button under it.
     is_framework_notice = model == _SYNTHETIC_MODEL
-    api_error_kind = classify_api_error(joined_text) if is_framework_notice else None
+    notice = classify_error_notice(raw, joined_text) if is_framework_notice else ErrorNotice()
     event: dict[str, Any] = {
         "timestamp": timestamp,
         "type": "assistant_message",
@@ -384,10 +382,10 @@ def _parse_assistant_message(
         "stop_reason": stop_reason,
         "usage": usage,
         "message_uuid": uuid,
-        "is_auth_error": is_framework_notice and is_auth_error_text(joined_text),
-        "is_api_error": api_error_kind is not None,
-        "api_error_kind": api_error_kind,
-        "is_provider_fault": is_provider_fault(api_error_kind),
+        "is_auth_error": notice.is_auth_error,
+        "is_api_error": notice.is_api_error,
+        "api_error_kind": notice.api_error_kind,
+        "is_provider_fault": is_provider_fault(notice.api_error_kind),
     }
     if session_id is not None:
         event["session_id"] = session_id

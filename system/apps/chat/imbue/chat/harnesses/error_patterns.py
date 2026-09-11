@@ -97,6 +97,19 @@ def classify_api_error(text: str) -> str | None:
     return None
 
 
+def kind_for_status(status: object) -> str | None:
+    """Return a normalized API-error kind for an HTTP status a harness recorded as a FIELD,
+    or ``None`` when the status is absent or not one we name.
+
+    The counterpart to :func:`classify_api_error` for a harness that states the status
+    instead of wording it: a stated status is the same fact without the prose in between,
+    and a failure whose wording never mentions a status still has one.
+    """
+    if not isinstance(status, int):
+        return None
+    return _STATUS_KINDS.get(str(status))
+
+
 def is_provider_fault(kind: str | None) -> bool:
     """True when ``kind`` is a model-provider-side failure (a 5xx / overloaded)
     rather than a client-side one -- the ones that earn the "not Minds' fault"
