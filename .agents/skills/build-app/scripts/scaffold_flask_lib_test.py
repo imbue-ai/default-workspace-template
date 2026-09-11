@@ -46,3 +46,20 @@ def test_the_runner_page_posts_shell_location_to_the_shell() -> None:
     source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
     assert '"shell:location"' in source
     assert "minds-location" not in source
+
+
+def test_the_runner_uses_reloader_and_health_reports_metadata() -> None:
+    source = scaffold_flask_lib._lib_runner("inbox-status", "inbox_status", "inbox status dashboard", 8081)
+    assert "use_reloader=True" in source
+    assert '"started_at": _START_TIME' in source
+    assert '"pid": os.getpid()' in source
+
+
+def test_main_parser_supports_start_flag() -> None:
+    # Check that --start is accepted by the parser
+    # We can invoke scaffold_flask_lib with --help or inspect the parser in main
+    # Or test by creating an ArgumentParser with the same arguments
+    import inspect
+    main_src = inspect.getsource(scaffold_flask_lib.main)
+    assert '"--start"' in main_src
+

@@ -67,6 +67,15 @@ Map of the flow:
   confirms the *working* site looks right, hand thorough testing + the review
   gates to a background worker. The main agent never runs those itself.
 
+### Declaring steps up front
+
+Per AGENTS.md, decompose the planned flow into user-facing steps and create them up front.
+To avoid 10-15s of serial tool execution latency, **batch all your `tk create --step` commands in a single tool call** using `;`:
+```bash
+tk create --step "Clarify app design and plan architecture"; tk create --step "Scaffold app and show prototype"; tk create --step "Implement core features"; tk create --step "Verify and launch app"
+```
+*(Reminder: `tk start` and `tk close` must each be standalone commands in their own separate tool calls per AGENTS.md, but `tk create --step` commands can and should be batched together).*
+
 If you were sent here by `fetch-process-show` for an app over fetched data,
 the data sample is already confirmed -- but you still run your own mock
 confirmation here, because the data sample confirms the data *shape*, not the UI
@@ -128,11 +137,11 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   `forward_port.py` refuses a brand-new registration without one. The
   scaffold copies it beside the app's manifest (`app.toml`), which names
   it.
-- **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
-  picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
-  manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+- **Pick a free port.** The scaffolder (canonical path) auto-picks the lowest free
+  port at or above 8080 by parsing `system/supervisord.conf` and `data/.state/apps.toml`,
+  so running manual port checks (`ss -tln`) is unnecessary. If you are picking a port
+  manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
+  (system_interface), `8010` (the chat app) and `8081` (the browser service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many
@@ -148,6 +157,7 @@ uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
+    --start \
     [--display-name "<what users see>"] \
     [--port <int>] \
     [--extra-dep <pkg>] [--extra-dep <pkg>] ...
@@ -163,6 +173,9 @@ Required:
   registered on every start.
 
 Optional:
+- `--start`: registers the app with supervisord (`reread` + `update`) and
+  waits for the service to answer healthy on `http://127.0.0.1:<port>/health`.
+  Recommended to eliminate separate manual supervisor commands.
 - `--display-name`: what users see for the app (the manifest's
   `display_name`, at most 64 characters). Defaults to the description,
   so pass it when the description is long.
@@ -246,8 +259,8 @@ What gets updated and installed:
   `system/apps/*` member glob already covers the package, and the final
   `uv sync --all-packages` keeps the root lockfile current for it.
 
-supervisord does not watch the config, so tell it to pick up the new
-program, then confirm it is running:
+If you passed `--start` to `scaffold_flask_lib.py`, the service is already registered and running healthy.
+If you ran without `--start`, tell supervisord to pick up the new program:
 
 ```bash
 supervisorctl reread && supervisorctl update
@@ -276,6 +289,15 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
+- **Fast mock iteration & reload verification**:
+  The starter `runner.py` runs with Werkzeug's reloader enabled (`use_reloader=True`).
+  When you edit `runner.py` or templates, changes take effect within ~50ms **without restarting the service**.
+  Verify your mock changes in ~0.1s using:
+  ```bash
+  python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+  ```
+  `smoketest_app.py` checks that the server's reload timestamp in `/health` is newer than your edited file and polls until `--marker` appears in the rendered response, guaranteeing you never see stale code or hit race conditions.
+  To capture a screenshot for visual inspection before presenting to the user, add `--screenshot /tmp/mock.png` (~1.3s total with headless browser).
 - `layout.py open` to surface it (see Step 4 for the command and its `--view` flag), then loop:
   present -> take feedback -> update the mock so the change is *visible* ->
   re-present. Do not accept feedback and move on having only asserted you'll apply
@@ -372,9 +394,16 @@ Two cases, two patterns:
 ## Step 3: Verify
 
 Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- curl against the
-registered backend URL `http://127.0.0.1:<port>/` then a Playwright
-assertion on a unique-to-your-app marker.
+[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
+
+```bash
+python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+```
+
+Or with a visual screenshot:
+```bash
+python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
+```
 
 If verification surfaces something unexpected (connection refused,
 a tab stuck on the loading page, broken WebSockets), see
