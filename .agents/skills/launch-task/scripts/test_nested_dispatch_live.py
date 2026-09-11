@@ -52,6 +52,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import uuid
@@ -544,6 +545,35 @@ def _pin_claude_to_the_installed_version(settings: Path, installed: str) -> None
     )
 
 
+# The worker template converges the venv with a full ``uv sync --all-packages`` at
+# provisioning, and the browser app's ``pixelflux``/``pcmflux`` ship Linux-only
+# wheels, so on macOS that resolve fails and the create with it. The same sync with
+# those two left out is how the root venv is built on a Mac.
+_MACOS_PROVISION_SYNC = (
+    "uv sync --all-packages --no-install-package pcmflux --no-install-package pixelflux"
+)
+
+
+def _make_provisioning_resolvable_here(settings: Path) -> None:
+    """On macOS, rewrite the worker template's provisioning sync so it resolves.
+
+    Linux (every workspace) keeps the committed command. Asserted like the other
+    rewrites, so a changed provisioning line fails here rather than as a refused
+    ``mngr create``.
+    """
+    if sys.platform != "darwin":
+        return
+    text = settings.read_text(encoding="utf-8")
+    needle = '"uv sync --all-packages"'
+    assert text.count(needle) == 1, (
+        f"expected exactly one {needle} provisioning entry in {settings}, "
+        f"found {text.count(needle)}"
+    )
+    settings.write_text(
+        text.replace(needle, f'"{_MACOS_PROVISION_SYNC}"'), encoding="utf-8"
+    )
+
+
 def _isolate_worktree_base(settings: Path, worktree_base: Path) -> None:
     """Point the clone's ``worktree_base_folder`` at a throwaway dir.
 
@@ -576,10 +606,10 @@ def _clone_repo_at_head(
     they must not run in the checkout the suite is running from. A local clone hardlinks
     the object store, so this costs a couple of seconds and no meaningful disk.
 
-    Three edits are made to the clone's project config and committed (``launch`` refuses
-    a dirty tree): the pytest opt-in mngr demands of every config it loads, the
-    worktree root the two workers will be given, and the claude version pin, which
-    follows the claude installed here.
+    The clone's project config is edited and committed (``launch`` refuses a dirty
+    tree): the pytest opt-in mngr demands of every config it loads, the worktree root
+    the two workers will be given, the claude version pin (which follows the claude
+    installed here), and on macOS the worker template's provisioning sync.
     """
     branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], _REPO_ROOT).strip()
     clone = work_repo_parent / f"nested-dispatch-repo-{suffix}"
@@ -607,6 +637,7 @@ def _clone_repo_at_head(
     )
     _isolate_worktree_base(settings, worktree_base)
     _pin_claude_to_the_installed_version(settings, installed_claude)
+    _make_provisioning_resolvable_here(settings)
     _run_git(["add", ".mngr/settings.toml"], clone)
     _run_git(
         ["commit", "--quiet", "-m", "Isolate this test clone's mngr config"], clone
