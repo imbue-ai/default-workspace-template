@@ -59,6 +59,13 @@ export const TRIGGER =
 export const TRIGGER_DOT = "text-faint/60";
 
 // --- the card ------------------------------------------------------------------------------
+/** The invisible sheet under an open card. It takes every hover and every press that is not on
+ *  the card itself, so while the card is up nothing behind it lights up, wakes a tooltip, or
+ *  receives a click. Same `--z-dropdown` layer as the card, which stays on top of it by
+ *  rendering after it as a sibling -- the shape the project rail's menus already use.
+ *  `model-card-scrim` is a bare marker for tests and devtools, with no CSS attached. */
+export const SCRIM = "model-card-scrim fixed inset-0 z-(--z-dropdown)";
+
 /** The workspace's shared menu chrome; `fixed` and the width are the caller's. `overflow-hidden`
  *  keeps a full-bleed row highlight inside the rounded corners. */
 export const CARD = menuCardClass("fixed overflow-hidden text-(length:--font-size-row)");

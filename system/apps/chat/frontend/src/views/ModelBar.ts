@@ -1057,7 +1057,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
       // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
       // clipping overlay, so a card that extends past the panel would be cut off at its edge.
-      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+      //
+      // The scrim goes in first, so the card and the flyout paint over it. It carries no
+      // dismissal of its own: a press on it is a press outside every `[POPOVER_ATTR]`, which
+      // is exactly what `handleOutsideMousedown` already closes the card on.
+      return [
+        m("div", { class: "model-bar" }, trigger),
+        m(Portal, { children: [m("div", { class: css.SCRIM }), card, openFlyout] }),
+      ];
     },
   };
 }
