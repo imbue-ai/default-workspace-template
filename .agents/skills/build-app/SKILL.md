@@ -234,13 +234,16 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   The command ends in the app's own name, not `uv run <name>`; supervisord
-  resolves that name on PATH. The copy it finds is the console script
-  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
-  -e` puts the tool's own entry point under your HOME, which supervisord's
-  children do not have on PATH. So always sync with `--all-packages`: a
-  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
-  root dependency), deletes that script, and the next restart is a spawn error
-  with nothing to recover it.
+  resolves that name on PATH, and what it finds is the entry point of the app's
+  own uv tool environment (`uv tool install -e`, which the scaffold runs, puts
+  it in the tool bin dir that `setup_system.sh` and `build_workspace.sh` put on
+  PATH). The root venv is never on that path, which is why one app's pins never
+  constrain another's.
+
+  The scaffold still relocks with `uv sync --all-packages`, and so must anything
+  that rebuilds this workspace's venv: a root-closure-scoped `uv sync` prunes
+  every workspace member that is not a root dependency, which deletes the
+  console scripts the built-in `uv run <name>` services resolve.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
