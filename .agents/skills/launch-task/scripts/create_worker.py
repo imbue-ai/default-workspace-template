@@ -20,7 +20,10 @@ address being re-derived downstream:
     knows exactly which agent to push its report to. The same value is also
     attached to the worker's agent as a ``--label lead_agent=<lead>``, so a
     lead can find its own workers -- and its workers' workers -- in
-    ``mngr list`` without consulting any task file.
+    ``mngr list`` without consulting any task file. A second label,
+    ``runtime_dir=<repo-relative runtime dir>``, records where the worker's
+    task file and reports live, so ``destroy`` can carry a descendant's runtime
+    dir upward without opening any task file either.
 
 ``task_file``
     The task file's own path, relative to the repo root. The worker receives
@@ -29,7 +32,7 @@ address being re-derived downstream:
     keep nesting unambiguous: two levels of dispatch can use the same
     directory names without colliding.
 
-Four subcommands cover the lead-side lifecycle, and one (``report``) the
+Five subcommands cover the lead-side lifecycle, and one (``report``) the
 worker side:
 
 ``launch``
@@ -72,9 +75,31 @@ worker side:
     still be coming).
 
 ``destroy``
-    Destroys the worker agent (``mngr destroy <name> --force``). The git branch
-    ``mngr/<name>`` survives in the shared object store, so the work can still
-    be merged or inspected.
+    Destroys the worker agent and, by default, every worker underneath it (the
+    agents whose ``lead_agent`` chain reaches it), deepest first. Before each
+    agent goes -- the worker itself included -- the runtime dirs of the workers
+    *it* dispatched are pulled out of its worktree into the caller's tree at
+    the same repo-relative paths: every flow keeps its runtime dirs under
+    ``data/.tasks/``, so the pull is that tree minus the agent's own runtime
+    dir (the caller already has that one). The task files and consumed
+    reports of the whole subtree, including sub-workers a lead had already
+    destroyed itself, therefore end up where the caller's own runtime dirs
+    are. Each agent's
+    commits not reachable from HEAD and any dirty worktree are printed as a
+    warning first, never as a refusal. Git branches ``mngr/<name>`` survive
+    unless ``--delete-branches`` is passed; mngr preserves each destroyed
+    agent's transcript under ``$MNGR_HOST_DIR/preserved/``. One outcome line
+    per agent goes to stderr, and the exit code is non-zero if any agent
+    failed. ``--no-recursive`` destroys the one agent and names each child it
+    leaves behind.
+
+``stop``
+    Stops the worker agent and, by default, its whole subtree (children first)
+    with ``mngr stop --archive``: processes go, worktrees and branches stay,
+    and the ``archived_at`` label marks each one as stopped on purpose rather
+    than crashed. This is what a lead does with a worker that failed, so the
+    branch and transcript remain for inspection without a live process
+    holding memory. ``--no-recursive`` stops the one agent.
 
 The ``launch`` / ``await`` / ``launch-sync`` subcommands take the same
 ``--task-file``: ``launch`` sends it to the worker, and ``await`` /
@@ -102,6 +127,7 @@ Launch lifecycle commands:
 
     mngr create <NAME> -t <TEMPLATE> --label agent_created=true
                                      --label lead_agent=<LEAD>
+                                     --label runtime_dir=<RUNTIME_DIR>
     mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=clobber
     mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=clobber
                 (when frontmatter declares it)
@@ -111,6 +137,15 @@ Report delivery (the worker's side, run by ``report``):
 
     mngr rsync  ./<REPORT_DIR>/ <LEAD>:<REPORT_DIR>/ --uncommitted-changes=clobber
     mngr list   --format jsonl --on-error continue    (fallback resolution only)
+
+Teardown commands (``destroy`` and ``stop``; the subtree comes from one
+``mngr list``):
+
+    mngr rsync   <NAME>:data/.tasks/ ./data/.tasks/ --uncommitted-changes=clobber
+                 -- --update --exclude=/<NAME's own runtime dir under data/.tasks>
+                 (once per destroyed agent, pulling its workers' runtime dirs out)
+    mngr destroy <NAME> --force [-b]     (``-b`` only with ``--delete-branches``)
+    mngr stop    <NAME> --archive
 
 ``mngr rsync`` takes ``SOURCE DESTINATION`` (the local source dir first, then
 the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
@@ -459,12 +494,11 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
       than wherever the lead happens to be running.
     """
     rel = _normalize_dir(str(source_dir))
-    local_source = rel if rel.startswith(("/", "./", "../", "~/")) else f"./{rel}"
     runner.run(
         [
             "mngr",
             "rsync",
-            local_source,
+            _local_rsync_path(rel),
             f"{name}:{rel}",
             "--uncommitted-changes=clobber",
         ],
@@ -472,21 +506,64 @@ def rsync_dir(name: str, source_dir: Path, runner: Runner) -> None:
     )
 
 
-def _repo_relative_task_path(task_file: Path, runner: Runner) -> str:
-    """``task_file``'s path relative to the repo root, as a POSIX string.
+def _local_rsync_path(rel: str) -> str:
+    """``rel`` spelled so ``mngr rsync`` reads it as a local path.
 
-    The repo root comes from ``git rev-parse --show-toplevel`` (through the same
-    ``runner`` the cleanliness probe uses), not from this script's own location:
-    launch may be invoked from any subdirectory of the repo, and the worker
-    resolves the stamped path against *its* worktree root, so anything
-    cwd-relative would break the moment a lead launches from somewhere other
-    than the root.
+    ``mngr rsync`` only treats a path starting with ``/``, ``./``, ``../`` or
+    ``~/`` as local; a bare ``data/foo/`` would be misparsed as an *agent name*.
+    """
+    return rel if rel.startswith(("/", "./", "../", "~/")) else f"./{rel}"
 
-    Falls back to the path exactly as given (POSIX-normalized) when git cannot
-    answer -- not a repo, git unavailable, or the task file living outside the
-    repo. There is nothing to relativize against in those cases, and a launch
-    outside a repo has bigger problems that ``mngr create`` will surface in its
-    own terms.
+
+def rsync_dir_from(
+    name: str, source_dir: Path, runner: Runner, excludes: Sequence[str] = ()
+) -> bool:
+    """Rsync ``source_dir`` out of agent ``name``'s worktree into the caller's
+    tree at the same path; returns whether the sync landed.
+
+    The pull form of ``rsync_dir``: the ``<name>:<path>`` agent endpoint is the
+    SOURCE and the ``./``-prefixed local path the DESTINATION, with the same
+    trailing slashes (copy contents, not the directory) and the same
+    ``--uncommitted-changes=clobber`` (the destination is a gitignored runtime
+    dir, and ``merge`` would touch the shared stash stack). ``destroy`` uses it
+    to carry the runtime dirs of an agent's own workers up out of its worktree
+    before that worktree goes.
+
+    The destination may already exist -- the caller's tree holds the runtime
+    dirs of its own direct workers -- so rsync merges into it, ``--update``
+    keeps the newer copy of any file present on both sides, and each of
+    ``excludes`` (an rsync pattern, relative to ``source_dir``) is left out.
+
+    ``mngr rsync`` needs only the *host* to be reachable, so the source agent
+    may be STOPPED. Non-zero exit is returned as ``False`` rather than raised:
+    a relocation that fails is a warning on a teardown, not a reason to leave
+    the subtree running.
+    """
+    rel = _normalize_dir(str(source_dir))
+    result = runner.run(
+        [
+            "mngr",
+            "rsync",
+            f"{name}:{rel}",
+            _local_rsync_path(rel),
+            "--uncommitted-changes=clobber",
+            "--",
+            "--update",
+            *(f"--exclude={pattern}" for pattern in excludes),
+        ],
+        check=False,
+    )
+    return getattr(result, "returncode", 0) == 0
+
+
+def _repo_toplevel(runner: Runner) -> Path | None:
+    """The repo root per ``git rev-parse --show-toplevel``, or ``None``.
+
+    Resolved through the same ``runner`` the cleanliness probe uses, not from
+    this script's own location: launch may be invoked from any subdirectory of
+    the repo. ``None`` when git cannot answer (not a repo, git unavailable); a
+    launch outside a repo has bigger problems that ``mngr create`` will surface
+    in its own terms.
     """
     result = runner.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -496,15 +573,42 @@ def _repo_relative_task_path(task_file: Path, runner: Runner) -> str:
     )
     toplevel = (getattr(result, "stdout", "") or "").strip()
     if getattr(result, "returncode", 0) != 0 or not toplevel:
-        return task_file.as_posix()
+        return None
+    return Path(toplevel)
+
+
+def _repo_relative_path(path: Path, toplevel: Path | None) -> str:
+    """``path`` relative to the repo root ``toplevel``, as a POSIX string.
+
+    Every path that crosses from one agent's worktree to another's (the task
+    file stamped into the worker's message, the ``runtime_dir`` label
+    ``destroy`` pulls by) is resolved against *that* agent's worktree root, so
+    anything cwd-relative would break the moment a lead launches from somewhere
+    other than the root.
+
+    Falls back to the path exactly as given (POSIX-normalized) when there is no
+    repo root or the path lives outside it: there is nothing to relativize
+    against in those cases.
+    """
+    if toplevel is None:
+        return path.as_posix()
     try:
-        relative = task_file.resolve().relative_to(Path(toplevel).resolve())
+        relative = path.resolve().relative_to(toplevel.resolve())
     except ValueError:
-        return task_file.as_posix()
+        return path.as_posix()
     return relative.as_posix()
 
 
-def _ensure_task_file_path(task_file: Path, runner: Runner) -> None:
+def _repo_relative_task_path(task_file: Path, runner: Runner) -> str:
+    """``task_file``'s path relative to the repo root, as a POSIX string.
+
+    ``_repo_relative_path`` against the root ``_repo_toplevel`` finds through
+    ``runner``.
+    """
+    return _repo_relative_path(task_file, _repo_toplevel(runner))
+
+
+def _ensure_task_file_path(task_file: Path, toplevel: Path | None) -> None:
     """Stamp the task file's own repo-relative path into its frontmatter.
 
     The worker receives the task file as the body of its first message, so
@@ -519,7 +623,7 @@ def _ensure_task_file_path(task_file: Path, runner: Runner) -> None:
     """
     text = task_file.read_text(encoding="utf-8")
     stamped = _set_frontmatter_field(
-        text, "task_file", _repo_relative_task_path(task_file, runner)
+        text, "task_file", _repo_relative_path(task_file, toplevel)
     )
     if stamped == text:
         return
@@ -668,8 +772,10 @@ def launch(
     if lead.exit_code is not None:
         return lead.exit_code
     # Stamp the task file's own path too, so the worker reads where its task
-    # file is instead of searching for it.
-    _ensure_task_file_path(task_file, runner)
+    # file is instead of searching for it. The same repo root relativizes the
+    # runtime dir for the label below, so one ``git rev-parse`` serves both.
+    toplevel = _repo_toplevel(runner)
+    _ensure_task_file_path(task_file, toplevel)
 
     create_argv = [
         "mngr",
@@ -690,16 +796,25 @@ def launch(
         # lead can see its own workers (and, at any depth, whether one of them
         # is waiting on children of its own) without opening a task file.
         create_argv += ["--label", f"lead_agent={lead.lead_name}"]
+    # Where the worker's task file and reports live, relative to the repo root,
+    # so ``destroy`` can carry this worker's runtime dir up into the destroying
+    # lead's tree without opening the task file.
+    create_argv += [
+        "--label",
+        f"{_RUNTIME_DIR_LABEL}={_repo_relative_path(runtime_dir, toplevel)}",
+    ]
     try:
         runner.run(create_argv, check=True)
     except subprocess.CalledProcessError as exc:
-        # mngr's own refusals (a duplicate name the listing could not reveal,
-        # a dirty tree) are printed by mngr itself; the launch reports the
-        # failure in its own terms rather than as a traceback.
+        # mngr's own refusals (a duplicate name, a dirty tree) are printed by
+        # mngr itself; the launch reports the failure in its own terms rather
+        # than as a traceback. A duplicate name is the expected case -- a
+        # worker stopped after a failure keeps its name until it is destroyed
+        # -- so name the agent that holds it and the remedy.
         print(
             f"create_worker: `mngr create {name}` failed with exit code "
-            f"{exc.returncode}; no worker was created. See mngr's output above "
-            "(a duplicate name is refused there).",
+            f"{exc.returncode}; no worker was created. See mngr's output above."
+            f"{_name_collision_hint(name, runner)}",
             file=sys.stderr,
         )
         return 2
@@ -778,6 +893,12 @@ _IDLE_STATES = ("WAITING", _STOPPED_STATE)
 _LIVE_CHILD_STATES = ("RUNNING", "WAITING")
 
 
+# The label ``launch`` stamps with the launching agent's name (the worker's
+# lead), and the one it stamps with the worker's repo-relative runtime dir.
+_LEAD_AGENT_LABEL = "lead_agent"
+_RUNTIME_DIR_LABEL = "runtime_dir"
+
+
 def _agent_records(runner: Runner) -> tuple[Mapping[str, object], ...]:
     """Every agent record from one ``mngr list --format jsonl`` call.
 
@@ -835,6 +956,29 @@ def _record_label(record: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _name_collision_hint(name: str, runner: Runner) -> str:
+    """The sentence to append to a failed-create message when ``name`` is taken.
+
+    An agent of the requested name already existing is the one ``mngr create``
+    failure the launcher can explain in its own terms: mngr refuses a duplicate
+    name in *any* state, and a worker its lead stopped after a failure keeps
+    its name on purpose (see ``stop``). Empty when the listing shows no such
+    agent, so an unrelated failure gets no misleading hint.
+    """
+    record = _record_named(_agent_records(runner), name)
+    if record is None:
+        return ""
+    state = _record_field(record, "state") or "unknown"
+    lead = _record_label(record, _LEAD_AGENT_LABEL)
+    lead_text = f" (a worker of {lead})" if lead is not None else ""
+    return (
+        f" An agent named {name!r} already exists in state {state}{lead_text}, "
+        "and mngr refuses duplicate names in any state. If it is finished "
+        f"with, run `create_worker.py destroy --name {name}` and relaunch; "
+        "otherwise pick another name."
+    )
+
+
 def _worker_is_idle(
     worker_name: str,
     runner: Runner,
@@ -864,7 +1008,7 @@ def _worker_is_idle(
     if own is None or _record_field(own, "state") not in _IDLE_STATES:
         return False
     for record in records:
-        if _record_label(record, "lead_agent") != worker_name:
+        if _record_label(record, _LEAD_AGENT_LABEL) != worker_name:
             continue
         if _record_field(record, "state") not in _LIVE_CHILD_STATES:
             continue
@@ -1155,9 +1299,10 @@ def await_report(
                     "on a live sub-worker of its own does NOT count as idle, so "
                     "this is not a nested dispatch in flight. Either it finished "
                     "and the report delivery failed (look for the report inside the "
-                    f"worker's own worktree, e.g. data/worktrees/{worker_name}-*/ "
-                    "under the report's relative path, and copy it to the path "
-                    "above), or it stopped without reporting (read its transcript: "
+                    "worker's own worktree -- its `work_dir` in `mngr list "
+                    f"--format jsonl` for {worker_name} -- under the report's "
+                    "relative path, and copy it to the path above), or it stopped "
+                    "without reporting (read its transcript: "
                     f"mngr transcript {worker_name}; nudge it with mngr message "
                     f"{worker_name} -m 'deliver your report per "
                     "worker-reporting.md'). Not waiting out the remaining timeout.",
@@ -1175,14 +1320,286 @@ def await_report(
         sleeper(poll_interval_seconds)
 
 
-def destroy(name: str, runner: Runner | None = None) -> None:
-    """Destroy the worker agent. The git branch ``mngr/<name>`` survives.
+def _dispatch_subtree(
+    root_name: str, records: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...]:
+    """Every agent whose ``lead_agent`` chain reaches ``root_name``, in
+    post-order (each agent after all of its own workers), excluding the root.
 
-    ``mngr destroy`` removes the agent and its worktree; the branch persists in
-    the shared object store, so a caller can still merge or inspect the work.
+    The order is what lets a teardown work deepest-first: a descendant is
+    handled while its lead -- whose worktree holds the descendant's runtime dir
+    -- still exists. Cycle-safe (a mislabelled listing cannot loop it) and
+    addressable-only: a record with no ``name`` cannot be stopped, destroyed,
+    or pulled from, so it is left out rather than crashing the traversal.
+    """
+    children: dict[str, list[Mapping[str, object]]] = {}
+    for record in records:
+        lead = _record_label(record, _LEAD_AGENT_LABEL)
+        if lead is not None and _record_field(record, "name") is not None:
+            children.setdefault(lead, []).append(record)
+    ordered: list[Mapping[str, object]] = []
+    visited = {root_name}
+
+    def _visit(lead: str) -> None:
+        for child in children.get(lead, ()):
+            child_name = _record_field(child, "name")
+            assert child_name is not None
+            if child_name in visited:
+                continue
+            visited.add(child_name)
+            _visit(child_name)
+            ordered.append(child)
+
+    _visit(root_name)
+    return tuple(ordered)
+
+
+# Where every flow keeps its runtime dirs (``data/.tasks/<flow>/<slug>/``, per
+# AGENTS.md): the tree a destroy pulls out of an agent's worktree so the runtime
+# dirs of the workers *it* dispatched survive the worktree.
+_TASKS_DIR = Path("data/.tasks")
+
+
+def _relocate_task_dirs(record: Mapping[str, object], runner: Runner) -> bool:
+    """Pull the runtime dirs of the workers ``record``'s agent dispatched out
+    of its worktree into the caller's tree; returns whether it landed.
+
+    A lead creates each of its workers' runtime dirs (task file, ``consumed/``
+    reports, milestones) in its *own* worktree, which a destroy is about to
+    remove -- and a lead that has already destroyed a merged sub-worker holds
+    the only copy of that sub-worker's runtime dir, with no record left to
+    find it by. So the pull is by convention rather than by label: the whole
+    ``data/.tasks/`` tree, minus the agent's own runtime dir (the ``runtime_dir``
+    label ``launch`` stamped), which the caller already has -- and whose
+    worker-side copy carries the worker's own ``report.md``, which back in the
+    caller's tree would trip the next launch's stale-report guard. Landing at
+    the same repo-relative paths is what lets the next destroy up carry them
+    again, and what the eval's worker capture reads.
+
+    Skipped, with a warning naming why, when the record has no name or no
+    ``runtime_dir`` label (an older launcher: without the label the agent's
+    own dir cannot be excluded); a failed ``mngr rsync`` warns the same way.
+    """
+    name = _record_field(record, "name")
+    runtime_dir = _record_label(record, _RUNTIME_DIR_LABEL)
+    if name is None:
+        reason = "it has no name in the listing"
+    elif runtime_dir is None:
+        reason = "it carries no `runtime_dir` label (launched by an older launcher)"
+    else:
+        excludes: list[str] = []
+        try:
+            own = Path(runtime_dir).relative_to(_TASKS_DIR)
+        except ValueError:
+            own = None
+        if own is not None:
+            excludes.append(f"/{own.as_posix()}")
+        if rsync_dir_from(name, _TASKS_DIR, runner, excludes):
+            return True
+        reason = f"`mngr rsync` from {name} failed"
+    print(
+        f"create_worker: warning: could not relocate the runtime dirs of the "
+        f"workers of {name or '<unnamed>'} before destroying it: {reason}. Their "
+        "task files and consumed reports are not carried up; every transcript is "
+        "still preserved by mngr.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _unmerged_work_warning(record: Mapping[str, object], runner: Runner) -> None:
+    """Print one line on what destroying ``record``'s agent leaves unmerged.
+
+    Two probes through the runner: ``git status --porcelain`` in the agent's
+    ``work_dir`` (a dirty worktree is lost with the worktree -- the salvage
+    flow in dead-worker-recovery.md is for that), and ``git rev-list --count
+    HEAD..mngr/<name>`` from the caller's tree (committed work stays on the
+    branch, which a destroy keeps unless branches are deleted). Never blocks:
+    a lead destroys after it has merged, and a superseded pass is meant to be
+    dropped. Skipped with a note when the record has no ``work_dir``.
+    """
+    name = _record_field(record, "name") or "<unnamed>"
+    work_dir = _record_field(record, "work_dir")
+    if work_dir is None:
+        print(
+            f"create_worker: {name}: no work_dir in its record; skipping the "
+            "unmerged-work check",
+            file=sys.stderr,
+        )
+        return
+    status = runner.run(
+        ["git", "-C", work_dir, "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(status, "returncode", 0) != 0:
+        dirty_text = "worktree state unknown"
+    elif (getattr(status, "stdout", "") or "").strip():
+        dirty_text = "worktree has UNCOMMITTED changes (lost with the worktree)"
+    else:
+        dirty_text = "worktree clean"
+    branch = f"mngr/{name}"
+    unmerged = runner.run(
+        ["git", "rev-list", "--count", f"HEAD..{branch}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(unmerged, "returncode", 0) != 0:
+        commits_text = f"branch {branch} not found"
+    else:
+        count = (getattr(unmerged, "stdout", "") or "").strip() or "0"
+        commits_text = f"{count} commit(s) on {branch} not in HEAD"
+    print(f"create_worker: {name}: {dirty_text}; {commits_text}", file=sys.stderr)
+
+
+class _LifecycleOutcome(NamedTuple):
+    """What happened to one agent during a ``destroy`` or ``stop``."""
+
+    name: str
+    action: str
+    succeeded: bool
+    detail: str
+
+
+def _print_outcomes(outcomes: Sequence[_LifecycleOutcome]) -> int:
+    """Write one line per agent to stderr; ``0`` if all succeeded, else ``1``.
+
+    A partial failure is reported, not hidden: the caller sees exactly which
+    agent is still there and why, and the non-zero exit keeps a scripted
+    caller from believing the subtree is gone.
+    """
+    for outcome in outcomes:
+        verdict = outcome.action if outcome.succeeded else f"NOT {outcome.action}"
+        print(
+            f"create_worker: {outcome.name}: {verdict} ({outcome.detail})",
+            file=sys.stderr,
+        )
+    return 0 if all(o.succeeded for o in outcomes) else 1
+
+
+def _mngr_lifecycle_call(
+    argv: Sequence[str], name: str, action: str, runner: Runner
+) -> _LifecycleOutcome:
+    """Run one ``mngr destroy``/``mngr stop`` and record its outcome."""
+    result = runner.run(argv, check=False)
+    returncode = getattr(result, "returncode", 0)
+    if returncode == 0:
+        return _LifecycleOutcome(name, action, True, " ".join(argv))
+    return _LifecycleOutcome(
+        name, action, False, f"`{' '.join(argv)}` exited {returncode}"
+    )
+
+
+def _orphan_warning(
+    name: str, subtree: Sequence[Mapping[str, object]], action: str
+) -> None:
+    """Name each descendant a ``--no-recursive`` teardown leaves behind."""
+    if not subtree:
+        return
+    listed = ", ".join(
+        f"{_record_field(r, 'name')} ({_record_field(r, 'state') or 'unknown'})"
+        for r in subtree
+    )
+    print(
+        f"create_worker: warning: {name} is being {action} without its "
+        f"{len(subtree)} descendant worker(s), which stay as they are: {listed}. "
+        "Their lead is gone, so nothing will merge or clean them up; run "
+        "`create_worker.py destroy --name <name>` on each when finished with.",
+        file=sys.stderr,
+    )
+
+
+def destroy(
+    name: str,
+    runner: Runner | None = None,
+    recursive: bool = True,
+    delete_branches: bool = False,
+) -> int:
+    """Destroy the worker agent and (by default) every worker under it.
+
+    One ``mngr list`` resolves the subtree; ``_dispatch_subtree`` orders it
+    deepest-first. For each agent, the root last: pull the runtime dirs of
+    the workers it dispatched out of its worktree (``_relocate_task_dirs``),
+    print the unmerged-work line, then ``mngr destroy <agent> --force``.
+    Branches ``mngr/<name>`` survive unless ``delete_branches`` adds ``-b``;
+    the supersede and abandoned-takeover flows pass it because nothing on a
+    superseded pass is trustworthy.
+
+    Every step is best-effort and reported: a failed relocation warns and the
+    destroy continues; a failed ``mngr destroy`` on one agent does not stop
+    the rest. Returns ``0`` only if every agent was destroyed, else ``1``.
+    RUNNING descendants are destroyed too -- a superseded pass's in-flight
+    siblings are exactly what needs to go. ``recursive=False`` destroys the
+    one agent and warns about each descendant left behind.
     """
     runner = runner or Runner()
-    runner.run(["mngr", "destroy", name, "--force"], check=True)
+    records = _agent_records(runner)
+    subtree = _dispatch_subtree(name, records)
+    outcomes: list[_LifecycleOutcome] = []
+    destroy_flags = ["--force", "-b"] if delete_branches else ["--force"]
+    if recursive:
+        for record in subtree:
+            child = _record_field(record, "name")
+            assert child is not None
+            _relocate_task_dirs(record, runner)
+            _unmerged_work_warning(record, runner)
+            outcomes.append(
+                _mngr_lifecycle_call(
+                    ["mngr", "destroy", child, *destroy_flags],
+                    child,
+                    "destroyed",
+                    runner,
+                )
+            )
+    else:
+        _orphan_warning(name, subtree, "destroyed")
+    own = _record_named(records, name)
+    if own is not None:
+        _relocate_task_dirs(own, runner)
+        _unmerged_work_warning(own, runner)
+    outcomes.append(
+        _mngr_lifecycle_call(
+            ["mngr", "destroy", name, *destroy_flags], name, "destroyed", runner
+        )
+    )
+    return _print_outcomes(outcomes)
+
+
+def stop(name: str, runner: Runner | None = None, recursive: bool = True) -> int:
+    """Stop the worker agent and (by default) every worker under it.
+
+    ``mngr stop <agent> --archive`` per agent, children first and the root
+    last: processes go, worktrees and branches stay, and the ``archived_at``
+    label marks each one as stopped by its lead on purpose -- which is how
+    dead-worker-recovery.md tells a deliberately stopped worker from a crashed
+    one whose restart is worth trying. Nothing is relocated: a stopped
+    subtree's worktrees are still there to read. Outcome lines and the exit
+    code work as in ``destroy``. ``recursive=False`` stops the one agent and
+    warns about each descendant left running.
+    """
+    runner = runner or Runner()
+    records = _agent_records(runner)
+    subtree = _dispatch_subtree(name, records)
+    outcomes: list[_LifecycleOutcome] = []
+    if recursive:
+        for record in subtree:
+            child = _record_field(record, "name")
+            assert child is not None
+            outcomes.append(
+                _mngr_lifecycle_call(
+                    ["mngr", "stop", child, "--archive"], child, "stopped", runner
+                )
+            )
+    else:
+        _orphan_warning(name, subtree, "stopped")
+    outcomes.append(
+        _mngr_lifecycle_call(
+            ["mngr", "stop", name, "--archive"], name, "stopped", runner
+        )
+    )
+    return _print_outcomes(outcomes)
 
 
 # Exit code for a report that could not be delivered at all: neither pushed to
@@ -1239,7 +1656,7 @@ def _deliver_report_through_listing(
         return _report_undeliverable(
             report_path, f"`mngr list` has no agent record named {worker_name!r}"
         )
-    lead_name = _record_label(own_record, "lead_agent")
+    lead_name = _record_label(own_record, _LEAD_AGENT_LABEL)
     if lead_name is None:
         return _report_undeliverable(
             report_path,
@@ -1452,8 +1869,11 @@ def launch_sync(
     # would be trapped by its own previous report. Milestones are archived for
     # the same reason.
     _archive_milestones(report_path)
-    if destroy_on_finish:
-        destroy(name, runner)
+    # A destroy that leaves something behind is reported alongside the result
+    # rather than instead of it: the caller has the report either way, and the
+    # non-zero exit tells it the worker (or one of its own workers) is still
+    # there.
+    destroy_failed = destroy_on_finish and destroy(name, runner) != 0
     _emit_run_result(
         {
             "timed_out": False,
@@ -1462,11 +1882,12 @@ def launch_sync(
             "body": report.body,
             "branch": branch,
             "raw_report": report.raw,
+            "destroy_failed": destroy_failed,
         },
         stream,
         result_path,
     )
-    return 0
+    return 1 if destroy_failed else 0
 
 
 def _run_launch(args: argparse.Namespace, runner: Runner | None) -> int:
@@ -1538,8 +1959,16 @@ def _run_report(args: argparse.Namespace, runner: Runner | None) -> int:
 
 
 def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:
-    destroy(args.name, runner)
-    return 0
+    return destroy(
+        args.name,
+        runner,
+        recursive=not args.no_recursive,
+        delete_branches=args.delete_branches,
+    )
+
+
+def _run_stop(args: argparse.Namespace, runner: Runner | None) -> int:
+    return stop(args.name, runner, recursive=not args.no_recursive)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1705,10 +2134,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     destroy_parser = subparsers.add_parser(
         "destroy",
-        help="Destroy a worker agent (mngr destroy --force). The mngr/<name> "
-        "branch survives.",
+        help="Destroy a worker agent and, by default, every worker under it "
+        "(deepest first, each descendant's runtime dir pulled into this tree "
+        "first). Branches survive unless --delete-branches; mngr preserves "
+        "transcripts. Exits non-zero if any agent could not be destroyed.",
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
+    destroy_parser.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="Destroy only this agent; warn about each descendant left behind.",
+    )
+    destroy_parser.add_argument(
+        "--delete-branches",
+        action="store_true",
+        help="Also delete the mngr/<name> branch of every destroyed agent "
+        "(for a superseded or abandoned pass whose work is not wanted).",
+    )
+
+    stop_parser = subparsers.add_parser(
+        "stop",
+        help="Stop a worker agent and, by default, every worker under it "
+        "(mngr stop --archive: processes go, worktrees and branches stay). "
+        "For a worker that failed: its branch and transcript stay inspectable.",
+    )
+    stop_parser.add_argument("--name", required=True, help="Worker name to stop.")
+    stop_parser.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="Stop only this agent; warn about each descendant left running.",
+    )
 
     return parser
 
@@ -1725,6 +2180,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         return _run_report(args, runner)
     if args.command == "destroy":
         return _run_destroy(args, runner)
+    if args.command == "stop":
+        return _run_stop(args, runner)
     return _run_await(args)
 
 
