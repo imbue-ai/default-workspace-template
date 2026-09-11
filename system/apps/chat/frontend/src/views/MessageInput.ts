@@ -32,16 +32,15 @@ const MAX_TEXTAREA_HEIGHT_PX = 200;
  * by them). Attachment status looks are resolved in code, one utility per
  * property. */
 
-/** The composer card. The two-layer shadows are design-system-exceptions: a
- *  unique upward-cast composer shadow (negative y, Notion-charcoal base) with
- *  an accent-tinted glow on focus, which no elevation-scale value expresses;
- *  the border/shadow transition runs its two properties at different speeds,
- *  hence the arbitrary transition property. */
+/** The composer card: a border and nothing else. It carried a two-layer
+ *  upward-cast shadow, and an accent-tinted one on focus, and neither is here
+ *  any more -- the card sits at the foot of its own pane rather than floating
+ *  over the transcript, so the elevation it was claiming is elevation it does
+ *  not have. Focus is the accent border alone, which is why the transition now
+ *  names one property. */
 const INPUT_BOX_CLASS =
   "message-input-box flex flex-col rounded-xl border bg-composer " +
-  "shadow-[0_-4px_20px_rgba(55,53,47,0.06),0_-1px_6px_rgba(55,53,47,0.04)] " +
-  "[transition:border-color_150ms,box-shadow_var(--dur-slow)] focus-within:border-accent " +
-  "focus-within:shadow-[0_-4px_24px_rgba(47,107,79,0.08),0_-1px_8px_rgba(47,107,79,0.06)]";
+  "[transition:border-color_150ms] focus-within:border-accent";
 
 const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
 

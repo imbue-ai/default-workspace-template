@@ -782,7 +782,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               // typed while the chat is being created is held and delivered when it lands.
               !hasComposer(agentId)
                 ? null
-                : m("footer", { class: "app-footer relative shrink-0 bg-chat px-8" }, [
+                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
                     isConversationNotFound(agentId)
                       ? null
