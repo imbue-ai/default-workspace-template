@@ -121,6 +121,12 @@ norecursedirs = [
     # collecting one alongside the in-tree copy kills a bare `uv run pytest`
     # with an import-file basename collision.
     "data",
+    # Standalone clones of *other* repos, checked out to develop against them
+    # (see AGENTS.md). Gitignored, and not this repo's source. Collecting them
+    # is worse than noise: a scratch `*_test.py` in one of those trees runs at
+    # import time, and one that calls sys.exit kills the whole session with an
+    # INTERNALERROR before a single test of ours runs.
+    ".external_worktrees",
     ".git",
     ".claude",
     ".github",
