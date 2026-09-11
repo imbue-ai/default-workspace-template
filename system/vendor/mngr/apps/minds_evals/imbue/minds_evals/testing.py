@@ -13,13 +13,23 @@ from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.driver import EVAL_USER_ID_NAMESPACE
 
-# The scheduled CI workflow. It hard-codes things this package also decides -- the Modal
-# environment prefix its sweep matches on, and the check-run JSON field names its Slack report
-# reads -- because a GitHub Actions workflow cannot import Python. Tests read it back to hold those
-# ends together, so they all name it from here rather than each spelling the path again.
+# The scheduled CI workflow. It hard-codes things this package also decides -- the Modal environment
+# prefix its sweep matches on, the summary file names its report composes, and the model field names
+# its `jq` reads by string key -- because a GitHub Actions workflow cannot import Python. Tests read
+# it back to hold those ends together, so they all name it from here rather than each spelling the
+# path again.
 SCHEDULED_WORKFLOW_PATH: Final[Path] = (
     Path(__file__).resolve().parents[4] / ".github" / "workflows" / "minds-evals-scheduled.yml"
 )
+
+
+def read_scheduled_workflow_text() -> str:
+    """That workflow's text, for the tests that hold its hard-coded literals to this package's
+    models. Its presence is asserted rather than assumed, so a moved or renamed workflow reads as
+    itself instead of as a FileNotFoundError inside an assertion about something else."""
+    assert SCHEDULED_WORKFLOW_PATH.is_file(), "expected the scheduled workflow at {}".format(SCHEDULED_WORKFLOW_PATH)
+    return SCHEDULED_WORKFLOW_PATH.read_text()
+
 
 # Verbatim the CI_ENVIRONMENT_PREFIX env value in that workflow. Two tests in
 # cleanup_environments_test hold it in place -- one reads the workflow and compares, the other

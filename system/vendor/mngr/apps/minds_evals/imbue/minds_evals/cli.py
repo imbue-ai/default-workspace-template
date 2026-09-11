@@ -5,6 +5,7 @@ Each command is a thin front end over the module that owns the work (`generate`,
 one place while the logic stays importable without click.
 """
 
+import json
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -14,7 +15,12 @@ from loguru import logger
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.minds_evals import check_run
+from imbue.minds_evals import ci_matrix
+from imbue.minds_evals import ci_report
 from imbue.minds_evals import cleanup_environments
+from imbue.minds_evals.data_types import CiReportContext
+from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.errors import CleanupScopeError
 from imbue.minds_evals.generate import MNGR_REPO
 from imbue.minds_evals.generate import generate_dataset
@@ -244,6 +250,186 @@ def ci_user_id_prefix_command(output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(prefix + "\n")
     logger.info("Wrote the CI user id prefix {} to {}", prefix, output_path)
+
+
+@main.command("ci-matrix")
+@click.option(
+    "--pairs",
+    "pairs_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="JSON lines, one frozen (mngr, dwt) pair per line: {pair, mngr_ref, mngr_sha, dwt_ref, dwt_sha}",
+)
+@click.option(
+    "--harness-configs",
+    "harness_configs_path",
+    default=ci_matrix.CHECKED_IN_HARNESS_CONFIGS_PATH,
+    show_default=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="The named harness configs file",
+)
+@click.option(
+    "--select",
+    "selection",
+    default="",
+    help="Comma-separated harness config names to run; empty runs every config marked nightly",
+)
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    help="The repo-relative eval config every cell generates its dataset from; part of each green marker key",
+)
+@click.option(
+    "--green-markers",
+    "green_markers_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="`gh cache list --json key,ref` output listing the green markers; absent means none is green",
+)
+@click.option(
+    "--restorable-ref",
+    "restorable_refs",
+    multiple=True,
+    help="A git ref whose cache entries this run may restore (its own ref and the default branch); repeatable",
+)
+@click.option(
+    "--force/--no-force",
+    "is_forced",
+    default=False,
+    help="Run every cell, green marker or not",
+)
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Where to write the decided matrix as JSON (pairs, cells, and the two job matrices)",
+)
+@click.option(
+    "--summary-md",
+    "summary_md_path",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write a GitHub step-summary markdown table of the decision here",
+)
+@click.option(
+    "--repository",
+    default="",
+    help="The GitHub repository (owner/name), for the marker-listing hint in the summary",
+)
+def ci_matrix_command(
+    pairs_path: Path,
+    harness_configs_path: Path,
+    selection: str,
+    config_path: str,
+    green_markers_path: Path | None,
+    restorable_refs: tuple[str, ...],
+    is_forced: bool,
+    output_path: Path,
+    summary_md_path: Path | None,
+    repository: str,
+) -> None:
+    """Decide which arms a scheduled run evaluates: every frozen pair times every selected harness
+    config, minus the cells whose green marker says that exact arm was already verified.
+
+    The harness configs file is validated whole, selected or not, through the driver's own kwarg
+    parsing, so a config the driver would refuse at construction is refused here on the free job.
+    """
+    try:
+        entries = ci_matrix.load_harness_configs(harness_configs_path)
+        selected = ci_matrix.select_harness_configs(entries, selection)
+        pairs = ci_matrix.read_frozen_pairs(pairs_path)
+        green_keys = (
+            frozenset()
+            if green_markers_path is None
+            else ci_matrix.read_green_marker_keys(green_markers_path, restorable_refs)
+        )
+    except CiMatrixError as exc:
+        raise click.UsageError(str(exc)) from exc
+    matrix = ci_matrix.decide_matrix(
+        pairs=pairs, entries=selected, config_path=config_path, green_keys=green_keys, is_forced=is_forced
+    )
+    ci_matrix.write_matrix_reports(matrix, output_path, summary_md_path, repository)
+    for cell in matrix.cells:
+        logger.info("{} x {}: {}", cell.pair, cell.harness_config, cell.decision.value)
+    for pair in matrix.pairs:
+        if pair.decision is not PairDecision.RUN:
+            logger.info("pair {}: {}", pair.pair, pair.decision.value)
+
+
+@main.command("ci-report")
+@click.option(
+    "--matrix",
+    "matrix_path",
+    default=None,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="The ci-matrix output; absent or unreadable means the run broke before deciding what to evaluate",
+)
+@click.option(
+    "--summaries-dir",
+    "summaries_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Where the per-pair and per-cell summary artifacts were downloaded to; may not exist",
+)
+@click.option("--run-url", required=True, help="The workflow run's URL")
+@click.option("--trigger", required=True, help="The event that started the run (schedule, workflow_dispatch, push)")
+@click.option(
+    "--duration-seconds",
+    "duration_seconds",
+    default=None,
+    type=int,
+    help="How long the run has been going; omitted when it could not be looked up",
+)
+@click.option(
+    "--live-pass-skipped/--no-live-pass-skipped",
+    "is_live_pass_skipped",
+    default=False,
+    help="Whether the run stopped after the oracle passes",
+)
+@click.option("--resolve-result", default="", help="The resolve job's result, as GitHub reports it")
+@click.option("--oracle-result", default="", help="The oracle job's result, as GitHub reports it")
+@click.option("--evaluate-result", default="", help="The evaluate job's result, as GitHub reports it")
+@click.option(
+    "--output",
+    "output_path",
+    required=True,
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Where to write the Slack webhook payloads, as a JSON array of one payload per pair",
+)
+def ci_report_command(
+    matrix_path: Path | None,
+    summaries_dir: Path,
+    run_url: str,
+    trigger: str,
+    duration_seconds: int | None,
+    is_live_pass_skipped: bool,
+    resolve_result: str,
+    oracle_result: str,
+    evaluate_result: str,
+    output_path: Path,
+) -> None:
+    """Write the Slack report of a scheduled run: one webhook payload per pair, each a grid of the
+    pair's cases by harness config.
+
+    This command is the whole notification of a run, so it never fails: a matrix that cannot be read
+    or a summary that is missing is reported as such, and the exit code is zero either way.
+    """
+    context = CiReportContext(
+        run_url=run_url,
+        trigger=trigger,
+        duration_seconds=duration_seconds,
+        is_live_pass_skipped=is_live_pass_skipped,
+        resolve_result=resolve_result,
+        oracle_result=oracle_result,
+        evaluate_result=evaluate_result,
+    )
+    messages = ci_report.render_slack_report(matrix_path, summaries_dir, context)
+    payloads = [ci_report.as_slack_payload(message) for message in messages]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payloads, indent=2))
+    logger.info("Wrote {} run report message(s) to {}", len(payloads), output_path)
 
 
 if __name__ == "__main__":

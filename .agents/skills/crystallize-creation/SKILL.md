@@ -137,6 +137,9 @@ Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
 reads `operation` and `type` from this frontmatter and follows the matching
 references. When you reach a gate or terminal status, push a report to the lead
 per its reporting protocol; the destination is `finish_report_path`.
+Split this pass across parallel sub-workers along the creation's independent
+areas (for an app: backend and frontend), per the harden contract's "Splitting
+the pass across sub-workers".
 
 ## Milestones
 Do not save everything for the end. As soon as the creation is genuinely usable
