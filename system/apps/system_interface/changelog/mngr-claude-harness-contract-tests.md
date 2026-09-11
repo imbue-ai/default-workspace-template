@@ -1,0 +1,15 @@
+New acceptance test (`harnesses/claude/test_harness_contract.py`) that exercises the model bar's live-read chain end to end against the REAL pinned Claude Code binary.
+
+That chain has three links -- Claude Code's statusline payload, `system/scripts/claude_status_line.sh` selecting four fields out of it, and `match_option` resolving the result against `CLAUDE_CATALOG` -- and every existing test of it drives a FROZEN payload capture. A frozen capture cannot notice that the binary changed, so an upgrade can invalidate the whole chain while the suite stays green, and the bar silently shows nothing. The reported model ids are exactly the kind of value an upgrade moves.
+
+The test asserts the ids a live claude actually reports resolve to the options the picker offers -- both for the model the workspace launches (`opus[1m]`) and for each model reachable by `/model`. Run against the catalog as it stood before the Opus 5 fix, it fails with `the live reported model id 'claude-opus-5[1m]' matches NO catalog option`, which is precisely the blank-model-bar bug.
+
+It needs no credentials and runs no model turn: claude writes its statusline before it ever calls the API, so a syntactically-valid but non-functional key reaches the whole chain. Fast mode is deliberately not asserted -- `/fast on` is a no-op under an unusable key, and the reported value is not stable across a real turn.
+
+CI now installs tmux and the pinned Claude Code before the system_interface suite, reading the version from `[agent_types.claude].version` rather than repeating it, so the test actually runs instead of skipping.
+
+A second, release-marked test (`harnesses/claude/test_error_contract.py`) covers the API-error path the same way. `session_parser` classifies an outage by reading the text of a synthetic assistant record through `classify_api_error`, whose patterns key on the literal form `API Error: <status>`; the frontend styles the message from that and adds a "not Minds' fault" note when `is_provider_fault` agrees. Every other test of those patterns feeds them a hand-written string, so nothing would notice if claude rephrased the error.
+
+This one makes the real binary produce the text, by pointing it at a local stub that answers every request with a 529. It needs no credentials and costs nothing -- the stub is the API -- but claude retries a failing request for about three minutes before writing the record, which is why it is release-marked rather than per-PR.
+
+The switch test drives every catalog option, so it has to tolerate two things the catalog's own shape produces. An option this account is not entitled to is a silent no-op -- claude leaves the model where it was and prints nothing -- which is indistinguishable from a wrong alias, so it is recorded and skipped rather than failed; the test still fails if every option no-ops. And because the catalog carries overlapping keys (a dated `claude-haiku-4-5-<date>` reported for `claude-haiku-4` resolves to the shorter `haiku` entry through the prefix pass), the assertion is that the live id resolves to *some* option, not back to the one that was driven.
