@@ -94,6 +94,10 @@ export enum UserMessageKind {
    * catalogue is complete; `classifyUserMessage` never returns it.
    */
   PermissionResolution = "permission-resolution",
+  /**
+   * A subtle inline status message (e.g. "Context was compacted").
+   */
+  StatusMessage = "status-message",
 }
 
 export interface KindSpec {
@@ -150,6 +154,13 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "onto the EARLIER permission-request card, and a fresh turn section opens " +
       "with no user bubble. Handled by parsePermissionResolution + turn-grouping, " +
       "not classifyUserMessage.",
+  },
+  [UserMessageKind.StatusMessage]: {
+    rail: Rail.User,
+    boundary: true,
+    netVisual:
+      "A subtle centered status pill (e.g. 'Context was compacted') rendered as " +
+      "its own row between turns or at the start/end of a turn.",
   },
 };
 

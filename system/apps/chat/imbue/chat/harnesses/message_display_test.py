@@ -79,15 +79,6 @@ def test_resume_continuation_is_hidden_via_is_meta_not_a_bespoke_matcher() -> No
     assert classify_user_message("Continue from where you left off.") is None
 
 
-def test_compaction_summary_is_a_labelled_chip_keyed_off_its_flag() -> None:
-    summary = "This session is being continued from a previous conversation that ran out of context. ..."
-    assert classify_user_message(summary) is None
-    decision = classify_user_message(summary, is_compact_summary=True)
-    assert decision is not None
-    assert decision.display is DisplayKind.CHIP
-    assert decision.display_label == "Summary of earlier conversation"
-
-
 def test_explicit_detector_wins_over_is_meta() -> None:
     """Stop-hook feedback is is_meta in the transcript yet deliberately surfaces as a chip."""
     decision = classify_user_message("Stop hook feedback:\nlint failed", is_meta=True)

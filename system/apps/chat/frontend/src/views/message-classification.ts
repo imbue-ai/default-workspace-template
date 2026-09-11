@@ -52,6 +52,12 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
       };
     case "skill_expansion":
       return { kind: UserMessageKind.SkillExpansion, label: event.display_label ?? null, body: content };
+    case "status":
+      return {
+        kind: UserMessageKind.StatusMessage,
+        label: event.display_label ?? (event.display_body !== undefined ? content : null),
+        body: event.display_body ?? content,
+      };
     default:
       return { kind: UserMessageKind.UserPrompt, label: null, body: content };
   }
@@ -76,6 +82,11 @@ export function isNonBoundaryUserMessage(event: ClassifiableUserMessage): boolea
  *  than being dropped): the SystemChip kinds. */
 export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
+}
+
+/** True when the message is a subtle inline status message. */
+export function isStatusUserMessage(event: ClassifiableUserMessage): boolean {
+  return classifyUserMessage(event).kind === UserMessageKind.StatusMessage;
 }
 
 /** True when the content is a skill expansion (its body is folded into the
