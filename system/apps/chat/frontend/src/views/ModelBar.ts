@@ -107,9 +107,15 @@ const SAFE_TRIANGLE_GRACE_MS = 400;
  *  gone somewhere else entirely. */
 const SUBMENU_LEAVE_DELAY_MS = 220;
 
-/** The slider's filled portion, deepening with effort. */
+/** The slider's filled portion, deepening with effort: 70% lightness at the bottom of the
+ *  scale, 40% at the top.
+ *
+ *  It used to end at 30%, which reads as near-black rather than as a deep green -- the top of
+ *  the scale looked switched off rather than turned up. 40% is exactly what the stop below the
+ *  top rendered on a five-level scale, which is the brightest the ramp ever looked while still
+ *  climbing. */
 function effortFillColor(fraction: number): string {
-  return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
+  return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
 export function ModelBar(): m.Component<{ agentId: string }> {
