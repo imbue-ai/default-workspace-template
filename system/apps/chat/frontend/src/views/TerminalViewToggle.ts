@@ -35,11 +35,11 @@ export const TerminalViewToggle: m.Component<TerminalViewToggleAttrs> = {
         role: "switch",
         class: "terminal-view-toggle",
         "aria-checked": on ? "true" : "false",
-        "aria-label": "Terminal View",
+        "aria-label": "Source view",
         onclick: onToggle,
       },
       [
-        m("span", { class: "terminal-view-toggle-label" }, "Terminal View"),
+        m("span", { class: "terminal-view-toggle-label" }, "Source view"),
         m(
           "span",
           { class: `${css.switchClass("sm")} ${on ? css.SWITCH_ON : css.SWITCH_OFF}` },
