@@ -100,7 +100,11 @@ for app_dir in "$REPO_ROOT"/system/apps/*/; do
     uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 
-tool_env_drop_shadowing_mngr
+# Drop an mngr install left under a different $HOME by a create that ran before the pin
+# above: it shadows the pinned one on every login shell's PATH and no update refreshes it.
+# Shared with the update apply, which does the same for workspaces whose update can still
+# run -- see tool_env.py. Runs after the install, so it always has a confirmed copy to keep.
+python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-shadowing-mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
