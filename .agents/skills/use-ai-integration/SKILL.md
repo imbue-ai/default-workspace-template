@@ -183,8 +183,11 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch-sync \
 ```
 
 It launches, waits for the worker's finish report in the foreground, writes a JSON
-result (`timed_out`, `type`, `name`, `body`, `branch`, `raw_report`) to
-`--result-json`, and destroys the worker (the `mngr/<name>` branch survives).
+result (`timed_out`, `type`, `name`, `body`, `branch`, `raw_report`,
+`destroy_failed`) to `--result-json`, and destroys the worker and any
+sub-workers it launched (the `mngr/<name>` branch survives; a destroy that
+left something behind sets `destroy_failed` and exits non-zero, with the
+result still written).
 Write the task file first with `finish_report_path` frontmatter
 (see the `launch-task` skill). **User- or error-triggered, tightly scoped** -- a
 broad unattended launch is how cost and time run away. What to do with the

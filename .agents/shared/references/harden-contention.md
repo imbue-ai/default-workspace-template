@@ -46,9 +46,10 @@ grep -E "(update|heal) $TARGET" /tmp/harden-inflight.txt
     tk add-note <their-ticket-id> "Commits <range> also change $TARGET; this pass is now stale. Coalesce at merge time per harden-contention.md."
     ```
   - **Abandoned** (worker session gone, no report, holder agent not
-    running): take it over. Destroy the worker, delete its branch, close
-    their ticket with a note saying you superseded it, then dispatch your own
-    pass covering the union (see "Superseding a stale pass").
+    running): take it over. Destroy the worker with the launcher
+    (`--delete-branches`, which also takes its sub-workers and their branches),
+    close their ticket with a note saying you superseded it, then dispatch
+    your own pass covering the union (see "Superseding a stale pass").
 
 Do not queue a second pass behind a live one. Queued passes verify obsolete
 states; the newest pass always covers the union instead.
@@ -128,13 +129,14 @@ Whoever finds the staleness -- the pass owner at merge time, or the agent
 taking over an abandoned pass -- replaces it with **one** new pass:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name>
-git branch -D <worker-branch>
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker-name> --delete-branches
 tk close <old-ticket-id> "Superseded -- base moved under the pass; re-dispatched covering the union."
 ```
 
-Deleting the branch is deliberate: its verification ran against a base that
-no longer exists, so nothing on it is trustworthy to keep. Then dispatch a
+Deleting the branches is deliberate: the verification ran against a base
+that no longer exists, so nothing on the pass -- the worker's branch or any
+sibling sub-worker's -- is trustworthy to keep. A stopped, in-flight, or
+finished sub-worker of the old pass goes with it. Then dispatch a
 fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
 scope covers **everything since the last hardened merge**: at minimum the
 `$BASE..HEAD` commits touching the creation, plus whatever any notes on the

@@ -105,9 +105,11 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
 
 `launch` stamps this task file's own path as `task_file` and your agent name
 as `lead_agent` into its frontmatter before sending it, and labels the worker
-`lead_agent=<you>`, so the worker knows exactly where its task file is and who
-to report to. The same steps apply when you are yourself a worker: your
-sub-worker's runtime dir and report land in your worktree, and you are its lead.
+`lead_agent=<you>` and `runtime_dir=<the runtime dir>`, so the worker knows
+exactly where its task file is and who to report to, and a later `destroy`
+knows where its runtime dir lives. The same steps apply when you are yourself
+a worker: your sub-worker's runtime dir and report land in your worktree, and
+you are its lead.
 
 If the task references gitignored files outside the runtime dir, set
 `source_artifacts_dir: <dir>` in the task frontmatter; `launch`
@@ -166,7 +168,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   "Milestone reports: provisional merge" (provisionally merge the pinned
   `commit:` or defer it, then re-arm the poll; `await` has already archived
   the file either way, and the worker keeps working regardless).
-- Terminal statuses: `done` (merge); `stuck` (failure flow).
+- Terminal statuses: `done` (merge, then `create_worker.py destroy --name
+  $NAME`); `stuck` (failure flow, ending in `create_worker.py stop --name
+  $NAME`).
 
 ## Guidelines
 
@@ -179,10 +183,21 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - If a task fails (stuck report, or 30m poll timeout with no report and
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
-- If a worker is `STOPPED` with uncommitted work, default to `mngr start
-  <worker>` and message it to continue -- the worktree is preserved
-  across restart. See `references/dead-worker-recovery.md` for the
-  manual salvage fallback when restart isn't viable.
+- If a worker is `STOPPED` with uncommitted work and carries no
+  `archived_at` label, default to `mngr start <worker>` and message it to
+  continue -- the worktree is preserved across restart. One with the label
+  was stopped on purpose by its lead after a failure; leave it. See
+  `references/dead-worker-recovery.md` for the manual salvage fallback when
+  restart isn't viable.
+- If `launch` fails because an agent of that name already exists, its
+  message names that agent's state and lead. A stopped failure keeps its
+  name until it is destroyed: run `create_worker.py destroy --name <name>`
+  if that worker is finished with (its branch survives), or pick another
+  name.
+- Never leave a process running for a worker you are done with: `done` and
+  `no-update-needed` end in `create_worker.py destroy`, `stuck` and a dead
+  worker in `create_worker.py stop`. Both take the worker's own sub-workers
+  with it.
 - If the task references gitignored files outside the runtime dir,
   declare them with `source_artifacts_dir: <dir>` in the task
   frontmatter -- `create_worker.py launch` pushes that directory automatically.

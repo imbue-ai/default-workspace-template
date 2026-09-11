@@ -343,9 +343,18 @@ python3 system/scripts/layout.py close si-preview
 ```
 
 Do this on every one of those exits, not only the successful one. Once the
-preview is down and its tab is closed, the worker can be destroyed per
-`launch-task` (after a failed apply, keep it until the diagnosis is done -- its
-branch and report are the retry's input). Close the `update-$SLUG` ticket the
+preview is down and its tab is closed, finish the worker's lifecycle -- this
+flow merges through the apply rather than `update-creation` Step 4, so the
+destroy that step performs is yours here. After a `0`, destroy it:
+
+```bash
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-$SLUG
+```
+
+After a failed apply (`1`, `2`, `3`), stop it instead
+(`create_worker.py stop --name update-$SLUG`) and keep it until the diagnosis
+is done -- its branch and report are the retry's input, and a diagnosed retry
+re-runs the apply against the kept branch. Close the `update-$SLUG` ticket the
 orchestration opened, and release the editing lease taken in Step 4 with
 `tk close "$LEASE_ID" "Apply finished."` -- on every exit code, since a lease
 left open blocks the next pass (on a rejection no lease was taken -- Step 4

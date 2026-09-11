@@ -24,6 +24,13 @@ What only a live run can show, and what this asserts:
   inner and comes back as line 3 of a committed marker file.
 - **Merge is a strict tree.** ``mngr/<inner>`` is merged only into ``mngr/<outer>``, so
   the top-level lead sees one branch carrying both markers.
+- **Teardown carries the subtree's evidence upward.** The outer worker destroys the
+  inner one after merging it (per ``lead-proxy.md``), so the inner is gone from
+  ``mngr list`` and its transcript sits under the isolated host dir's ``preserved/``;
+  when this harness then destroys the outer with the launcher, the inner's runtime dir
+  -- task file and consumed ``done`` report, which lived only in the outer's worktree
+  -- lands in the top-level tree at the same ``data/.tasks/launch-task/<inner>/`` path,
+  and the outer's branch still carries both markers.
 
 Isolation follows ``system/apps/chat/imbue/chat/test_message_conservation_release.py``:
 an isolated ``MNGR_HOST_DIR`` with its own profile (opted into pytest, docker and modal
@@ -148,23 +155,6 @@ def _claude_is_logged_in() -> bool:
     return isinstance(status, dict) and status.get("loggedIn") is True
 
 
-def _pinned_claude_version() -> str | None:
-    """The claude version this repo's mngr config pins, if it pins one.
-
-    ``[agent_types.claude] version`` is enforced at provisioning time: mngr refuses to
-    start a claude agent whose installed binary diverges from it, so a workspace whose
-    claude has drifted (or a laptop that never had the pinned build) cannot run a live
-    worker at all. Reading it here turns that create-time refusal into an up-front skip.
-    """
-    settings = _REPO_ROOT / ".mngr" / "settings.toml"
-    if not settings.is_file():
-        return None
-    config = tomllib.loads(settings.read_text(encoding="utf-8"))
-    claude_type = config.get("agent_types", {}).get("claude", {})
-    version = claude_type.get("version") if isinstance(claude_type, dict) else None
-    return version if isinstance(version, str) and version else None
-
-
 def _installed_claude_version() -> str | None:
     """The version ``claude --version`` reports (e.g. "2.1.267 (Claude Code)")."""
     try:
@@ -189,13 +179,8 @@ def _skip_unless_live_nested_dispatch_possible(work_repo_parent: Path) -> None:
         pytest.skip("mngr CLI not on PATH")
     if shutil.which("claude") is None:
         pytest.skip("claude binary not on PATH")
-    pinned = _pinned_claude_version()
-    installed = _installed_claude_version()
-    if pinned is not None and installed != pinned:
-        pytest.skip(
-            f"installed claude is {installed!r} but this repo's mngr config pins "
-            f"{pinned!r}; `mngr create` refuses the worker outright"
-        )
+    if _installed_claude_version() is None:
+        pytest.skip("`claude --version` did not answer; a live worker cannot start")
     if shutil.which("tmux") is None:
         pytest.skip("tmux not on PATH; mngr runs every agent in a tmux session")
     if not _claude_is_logged_in():
@@ -485,7 +470,7 @@ Then re-arm the same background `await`. You never move a report by hand: the
 `await` that printed it already archived it under
 `data/.tasks/launch-task/{inner_name}/reports/consumed/`.
 
-## Step 5 -- merge, stop, mark, report -- all in one turn
+## Step 5 -- merge, destroy the sub-worker, mark, report -- all in one turn
 
 When the `done` status arrives, do Step 5, Step 6 and the final report **in a
 single turn, without ending your turn in between**. Your lead is polling you and
@@ -493,12 +478,12 @@ treats a turn that ends with no live sub-worker and no report as a stalled run.
 
 ```bash
 git merge --no-ff mngr/{inner_name} -m "{merge_subject}"
-mngr stop {inner_name}
+uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name {inner_name}
 ```
 
 The merge must be `--no-ff` and its subject must be exactly `{merge_subject}`.
-Do NOT destroy the sub-worker and do NOT destroy yourself -- leave it stopped in
-place.
+Destroy the sub-worker with that exact command (not a raw `mngr destroy`), and
+do NOT destroy yourself -- your own lead does that.
 
 ## Step 6 -- your own marker
 
@@ -523,9 +508,40 @@ Then report `done` (see below), with a body naming your branch
   `{merge_subject}`, and `{_OUTER_MARKER_COMMIT_SUBJECT}`.
 - `poc/markers/inner.txt` and `poc/markers/outer.txt` both exist on your branch
   with exactly the contents described above.
-- `{inner_name}` is STOPPED, not destroyed.
+- `{inner_name}` no longer appears in `mngr list` (destroyed by the launcher).
 
 {_reporting_section(outer_name)}"""
+
+
+def _pin_claude_to_the_installed_version(settings: Path, installed: str) -> None:
+    """Point the clone's ``[agent_types.claude] version`` at the claude on this machine.
+
+    The committed pin is enforced at provisioning time -- mngr refuses to start a
+    claude agent whose installed binary diverges from it -- and it exists so a
+    workspace's workers run the build the workspace was set up with. This test wants
+    the opposite: to run wherever *a* claude can run, on a laptop whose build has
+    drifted as much as in a workspace on the pin. So the clone's pin follows the
+    installed version. Rewritten in place, like the worktree root, and asserted through
+    a real TOML parse so a moved or renamed key fails here rather than as a refused
+    ``mngr create``.
+    """
+    lines = settings.read_text(encoding="utf-8").splitlines(keepends=True)
+    replaced = 0
+    for index, line in enumerate(lines):
+        if line.startswith("version = "):
+            lines[index] = f'version = "{installed}"\n'
+            replaced += 1
+    assert replaced == 1, (
+        f"expected exactly one `version = ...` line in {settings}, found {replaced}"
+    )
+    settings.write_text("".join(lines), encoding="utf-8")
+    pinned = tomllib.loads(settings.read_text(encoding="utf-8"))["agent_types"][
+        "claude"
+    ]["version"]
+    assert pinned == installed, (
+        f"the rewritten pin is {pinned!r}, not the installed {installed!r}; the "
+        "`version` line rewritten above is not the one under [agent_types.claude]"
+    )
 
 
 def _isolate_worktree_base(settings: Path, worktree_base: Path) -> None:
@@ -551,7 +567,7 @@ def _isolate_worktree_base(settings: Path, worktree_base: Path) -> None:
 
 
 def _clone_repo_at_head(
-    work_repo_parent: Path, suffix: str, worktree_base: Path
+    work_repo_parent: Path, suffix: str, worktree_base: Path, installed_claude: str
 ) -> Path:
     """A throwaway clone of this repo, on this branch, under gitignored ``.test_output``.
 
@@ -560,9 +576,10 @@ def _clone_repo_at_head(
     they must not run in the checkout the suite is running from. A local clone hardlinks
     the object store, so this costs a couple of seconds and no meaningful disk.
 
-    Two edits are made to the clone's project config and committed (``launch`` refuses a
-    dirty tree): the pytest opt-in mngr demands of every config it loads, and the
-    worktree root the two workers will be given.
+    Three edits are made to the clone's project config and committed (``launch`` refuses
+    a dirty tree): the pytest opt-in mngr demands of every config it loads, the
+    worktree root the two workers will be given, and the claude version pin, which
+    follows the claude installed here.
     """
     branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], _REPO_ROOT).strip()
     clone = work_repo_parent / f"nested-dispatch-repo-{suffix}"
@@ -589,6 +606,7 @@ def _clone_repo_at_head(
         encoding="utf-8",
     )
     _isolate_worktree_base(settings, worktree_base)
+    _pin_claude_to_the_installed_version(settings, installed_claude)
     _run_git(["add", ".mngr/settings.toml"], clone)
     _run_git(
         ["commit", "--quiet", "-m", "Isolate this test clone's mngr config"], clone
@@ -620,7 +638,11 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
 
     # The two workers' worktrees, kept out of the workspace's shared worktree root.
     worktree_base = Path(tempfile.mkdtemp(prefix="nested-worktrees-"))
-    clone = _clone_repo_at_head(work_repo_parent, suffix, worktree_base)
+    installed_claude = _installed_claude_version()
+    assert installed_claude is not None  # the skip check above already required it
+    clone = _clone_repo_at_head(
+        work_repo_parent, suffix, worktree_base, installed_claude
+    )
     outer_runtime_dir = Path("data") / ".tasks" / "launch-task" / outer_name
     outer_task_file = outer_runtime_dir / "task.md"
     outer_report_path = clone / outer_runtime_dir / "reports" / "report.md"
@@ -750,37 +772,76 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
             f"{outer_marker!r}. Report:\n{report_text}"
         )
 
-        # The labels the two levels were created with, read back off the live listing,
-        # and the sub-worker left stopped in place rather than destroyed.
-        def _inner_is_stopped() -> bool:
-            record = _record_named(_agent_records(env, clone), inner_name)
-            return record is not None and record.get("state") == "STOPPED"
+        # The sub-worker was destroyed by its lead after the merge: gone from the
+        # listing, its transcript preserved by mngr under the isolated host dir.
+        def _inner_is_gone() -> bool:
+            return _record_named(_agent_records(env, clone), inner_name) is None
 
         wait_for(
-            _inner_is_stopped,
+            _inner_is_gone,
             timeout=_LISTING_SETTLE_TIMEOUT_SECONDS,
             poll_interval=3.0,
             error_message=(
-                f"{inner_name} never reached STOPPED after its lead merged and stopped it"
+                f"{inner_name} is still listed after its lead merged and destroyed it"
             ),
         )
-        records = _agent_records(env, clone)
-        inner_record = _record_named(records, inner_name)
-        outer_record = _record_named(records, outer_name)
-        assert inner_record is not None, f"{inner_name} is missing from `mngr list`"
-        assert outer_record is not None, f"{outer_name} is missing from `mngr list`"
-        assert _label(inner_record, "lead_agent") == outer_name, (
-            f"{inner_name} should be labelled with its own lead {outer_name!r}, got "
-            f"{_label(inner_record, 'lead_agent')!r}"
+        preserved = sorted((host_dir / "preserved").glob(f"{inner_name}--*"))
+        assert len(preserved) == 1, (
+            f"expected one preserved dir for {inner_name} under {host_dir / 'preserved'}, "
+            f"found {preserved}"
         )
+        assert any(preserved[0].rglob("*.jsonl")), (
+            f"{preserved[0]} holds no transcript (no .jsonl underneath it)"
+        )
+
+        # The labels the outer level was created with, read back off the live
+        # listing: its lead, and the runtime dir the top-level destroy below
+        # excludes from its pull.
+        outer_record = _record_named(_agent_records(env, clone), outer_name)
+        assert outer_record is not None, f"{outer_name} is missing from `mngr list`"
         assert _label(outer_record, "lead_agent") == top_name, (
             f"{outer_name} should be labelled with its lead {top_name!r}, got "
             f"{_label(outer_record, 'lead_agent')!r}"
         )
+        assert _label(outer_record, "runtime_dir") == outer_runtime_dir.as_posix(), (
+            f"{outer_name} should be labelled with its runtime dir "
+            f"{outer_runtime_dir.as_posix()!r}, got {_label(outer_record, 'runtime_dir')!r}"
+        )
+
+        # The top-level lead's own teardown, through the launcher: the outer goes,
+        # and the inner's runtime dir -- which existed only in the outer's worktree
+        # -- is carried into this tree at the same path first.
+        inner_runtime_dir = clone / "data" / ".tasks" / "launch-task" / inner_name
+        assert not inner_runtime_dir.exists(), (
+            f"{inner_runtime_dir} exists before the outer's destroy; the relocation "
+            "assertion below would be vacuous"
+        )
+        destroy_rc = create_worker_mod.destroy(outer_name, create_worker_mod.Runner())
+        assert destroy_rc == 0, f"destroying {outer_name} exited {destroy_rc}"
+        assert _record_named(_agent_records(env, clone), outer_name) is None, (
+            f"{outer_name} is still listed after the launcher destroyed it"
+        )
+        assert (inner_runtime_dir / "task.md").is_file(), (
+            f"the inner worker's task file was not relocated to {inner_runtime_dir}"
+        )
+        inner_consumed = sorted(
+            p.name for p in (inner_runtime_dir / "reports" / "consumed").glob("*.md")
+        )
+        assert any(name.endswith("-status-done.md") for name in inner_consumed), (
+            f"the inner worker's consumed `done` report was not relocated; "
+            f"{inner_runtime_dir}/reports/consumed holds {inner_consumed}"
+        )
+        # Destroy keeps the branch: the merged tree is still readable.
+        assert (
+            _OUTER_MARKER_COMMIT_SUBJECT
+            in _run_git(["log", "--format=%s", outer_branch], clone).splitlines()
+        ), f"{outer_branch} did not survive the destroy"
     finally:
-        # Children first, and from inside the clone: `.test_output/` would resolve the
-        # *real* repo's project config, which does not opt into pytest, so mngr would
-        # refuse to run at all and leave three live agents behind.
+        # Best-effort, for the failure case: on success the inner and outer are
+        # already gone. Children first, and from inside the clone: `.test_output/`
+        # would resolve the *real* repo's project config, which does not opt into
+        # pytest, so mngr would refuse to run at all and leave three live agents
+        # behind.
         for name in (inner_name, outer_name, top_name):
             subprocess.run(
                 ["mngr", "destroy", name, "--force"],

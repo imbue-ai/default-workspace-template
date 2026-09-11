@@ -32,6 +32,7 @@ import os
 import re
 import shlex
 import subprocess
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -62,7 +63,11 @@ parse_task_frontmatter = _load_script_module(
 
 # A fenced block opened by three or more backticks and closed by the same
 # number, so a block that nests a ``` fence (opened with ````) is taken whole.
-_FENCED_CODE = re.compile(r"^(`{3,})[^\n]*\n(.*?)^\1[ \t]*$", re.DOTALL | re.MULTILINE)
+# The fence may be indented (a block inside a list item), and the closing fence
+# carries the same indentation.
+_FENCED_CODE = re.compile(
+    r"^([ \t]*)(`{3,})[^\n]*\n(.*?)^\1\2[ \t]*$", re.DOTALL | re.MULTILINE
+)
 
 # Placeholder values for the slots the prose leaves to the agent. Shell
 # variables are supplied through the environment the block runs in; the
@@ -129,7 +134,9 @@ class _RecordingRunner(create_worker.Runner):
 
 
 def _fenced_blocks(text: str) -> list[str]:
-    return [match.group(2) for match in _FENCED_CODE.finditer(text)]
+    """Every fenced block's content, with a list item's indentation removed so
+    the commands inside read as they would at the top level."""
+    return [textwrap.dedent(match.group(3)) for match in _FENCED_CODE.finditer(text)]
 
 
 def _prose_files() -> list[Path]:
@@ -246,6 +253,7 @@ def test_prose_invokes_launcher_subcommands_that_exist() -> None:
         "await",
         "launch-sync",
         "destroy",
+        "stop",
     }
 
 
@@ -386,4 +394,12 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     assert frontmatter["lead_agent"] == _LEAD_NAME
     assert frontmatter["task_file"] == dispatcher.launch_option("--task-file")
     create_argv = next(argv for argv in argvs if argv[:2] == ["mngr", "create"])
-    assert create_argv[-2:] == ["--label", f"lead_agent={_LEAD_NAME}"]
+    labels = dict(
+        create_argv[i + 1].split("=", 1)
+        for i in range(len(create_argv) - 1)
+        if create_argv[i] == "--label"
+    )
+    assert labels["lead_agent"] == _LEAD_NAME
+    # The runtime dir the prose synced is the one the worker's record names,
+    # repo-relative, so a later destroy can pull it out of the lead's tree.
+    assert labels["runtime_dir"] == runtime_dir.rstrip("/")

@@ -217,15 +217,17 @@ Flow-specific substitutions:
   that makes the creation usable: **skill** → it is on disk at
   `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
   still runs only on `done`.
-- Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
-  `launch-task/references/worker-failure.md`).
+- Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
+  then Step 6); `stuck` (failure flow per
+  `launch-task/references/worker-failure.md`, which stops the worker).
 
 ## Step 6: Go live
 
 A provisional milestone merge does not change this step: it runs only on `done`,
 and the `done` merge brings the remainder of the branch.
 
-On `done`, after merging the worker's branch:
+On `done`, after merging the worker's branch and destroying the worker (the
+sub-workers it split its pass across are already gone with it):
 
 - **skill**: read and follow `references/post-crystallize-migration.md` before
   declaring crystallize done -- point consumers at the installed skill path,
