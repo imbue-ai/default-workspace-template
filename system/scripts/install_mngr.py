@@ -83,13 +83,15 @@ def install_environment(base_env: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-def install_mngr(repo_root: Path, env: Mapping[str, str]) -> list[str]:
-    """Run the install under ``env``; return the command that was run."""
+def install_mngr(repo_root: Path, base_env: Mapping[str, str]) -> list[str]:
+    """Run the install under ``base_env``, pinned; return the command that was run."""
     manifest = (repo_root / MANIFEST_PATH).read_text()
     command = build_install_command(
         repo_root, plugin_paths_for_tool(manifest, MNGR_PLUGIN_KEY)
     )
-    subprocess.run(command, cwd=repo_root, env=dict(env), check=True)
+    subprocess.run(
+        command, cwd=repo_root, env=install_environment(base_env), check=True
+    )
     return command
 
 
@@ -102,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        install_mngr(Path(args.repo_root), install_environment(os.environ))
+        install_mngr(Path(args.repo_root), os.environ)
     except NoPluginsListed as error:
         sys.stderr.write(f"install_mngr: {error}\n")
         return 1

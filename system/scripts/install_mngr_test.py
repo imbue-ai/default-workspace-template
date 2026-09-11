@@ -3,8 +3,9 @@
 The install itself is a ``uv tool install`` against the network, so what is exercised here
 is everything that decides *what* it runs: the argument vector, the refusal that keeps a
 plugin-less install from happening at all, and the environment the install runs under.
-None of it shells out: the refusal returns before any subprocess, and the pin is a mapping
-the install is handed rather than something it reads back.
+None of it shells out: the refusal returns before any subprocess, and the pin is an
+environment the install computes from the caller's rather than a mutation of the process's
+own.
 """
 
 from __future__ import annotations
