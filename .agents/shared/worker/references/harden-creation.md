@@ -79,10 +79,10 @@ The file records `primary` (the creation's own directories), `wiring` (the
 manifest claims outside its directory -- a skill that drives it, a script, a
 doc), `context` (paths to read but never change), `conventions`, `exclude` (a
 hard denylist of globs), and `diff` (the branch's changed files, split into
-those inside the footprint and `outside_footprint`). Three consumers read it:
-the test selection in `type-app.md`, the freshness check the lead runs before
-merging (`.agents/shared/references/harden-contention.md`), and the review
-invocations in `verification.md`. Regenerate it whenever the footprint
+those inside the footprint and `outside_footprint`). Two consumers read it:
+the test selection in `type-app.md`, and the freshness check the lead runs
+before merging (`.agents/shared/references/harden-contention.md`). Regenerate
+it whenever the footprint
 moves under you -- when you register a `[[references]]` entry, or when you add a
 supervisord section -- and once more immediately before your final report, after
 committing everything, so the `diff` it carries includes every commit you made
