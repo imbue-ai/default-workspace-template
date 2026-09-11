@@ -206,8 +206,18 @@ On `type: status`:
   reports: provisional merge") are ancestors of HEAD, so this merge brings only
   the remainder and the freshness check covers exactly the window since that
   provisional merge.
-  On a clean merge, close any tracking ticket and optionally destroy the
-  worker. On a conflict, recovery depends on the calling skill: if it defines
+  On a clean merge, close any tracking ticket and destroy the worker before
+  the calling skill's go-live:
+  ```bash
+  uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
+  ```
+  Destroy takes the worker's sub-workers with it and keeps what you may
+  still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
+  `$MNGR_HOST_DIR/preserved/`), and every sub-worker's runtime dir,
+  relocated into your tree at the same paths. It prints one outcome line
+  per agent and exits non-zero if any could not be destroyed; report that
+  rather than retrying blindly.
+  On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
   `.agents/shared/references/harden-contention.md`), abort the merge and
   follow that rule rather than hand-resolving; otherwise resolve the conflict
@@ -215,13 +225,19 @@ On `type: status`:
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
-  body (or its absence) to the user, point at the branch and worker agent, and
-  leave both intact for manual inspection.
+  body (or its absence) to the user, point at the branch and worker agent, then
+  stop the worker (and its sub-workers) so no process stays behind:
+  ```bash
+  uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
+  ```
+  Its branch, worktree, and transcript stay for inspection. A timeout is
+  the same once the liveness diagnosis says the worker is dead or wedged.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
-  stop; do not merge, do not invoke the failure flow. Optionally surface the
-  one-sentence reason to the user.
+  destroy the worker exactly as on `done`, with nothing to merge; do not
+  invoke the failure flow. Optionally surface the one-sentence reason to the
+  user.
 
 In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
 `await` that printed it archived it there -- so the reports dir is clean for the
@@ -243,12 +259,13 @@ that launched its own worker. Four rules are yours alone.
   merges into *your* branch, with `--no-ff` and the sub-worker named in the
   merge commit message. Your own lead then sees one merged branch and never
   needs to know sub-workers existed.
-- **Stop, never destroy.** Once a sub-worker's branch is merged, stop it with
-  `mngr stop <sub-worker-name>` and leave it in place -- its transcript and
-  pushed reports stay where a later capture can resolve them. Do not destroy
-  it, and do not destroy yourself. Stopping matters for your own lead too: a
-  merged sub-worker left in WAITING still reads as a live child, which keeps
-  you counted as busy after you have finished.
+- **Destroy after merge, stop on failure.** Once a sub-worker's branch is
+  merged, destroy it (`create_worker.py destroy --name <sub-worker-name>`);
+  a stuck one is stopped (`create_worker.py stop --name <sub-worker-name>`)
+  after the failure flow. Never destroy yourself: your own lead does that
+  once it has merged you. This matters for your own lead too: a merged
+  sub-worker left in WAITING still reads as a live child, which keeps you
+  counted as busy after you have finished, while a STOPPED one does not.
 - **Await sub-workers with `--timeout 60m`**, which fits inside the window your
   own lead is waiting out (90m for the harden flows).
 

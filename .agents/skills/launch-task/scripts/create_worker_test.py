@@ -62,8 +62,14 @@ class _RecordingRunner(create_worker_mod.Runner):
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
-        key = tuple(argv_list[:2])
-        canned = self._responses.get(key, _StubResult())
+        canned = next(
+            (
+                self._responses[prefix]
+                for prefix in sorted(self._responses, key=len, reverse=True)
+                if tuple(argv_list[: len(prefix)]) == prefix
+            ),
+            _StubResult(),
+        )
         if isinstance(canned, BaseException):
             raise canned
         return canned
@@ -84,23 +90,40 @@ def _agent_record(
     state: str,
     lead_agent: str | None = None,
     work_dir: str | None = None,
+    runtime_dir: str | None = None,
+    archived: bool = False,
 ) -> dict[str, object]:
     """One ``mngr list --format jsonl`` agent record, in mngr's own shape.
 
     Mirrors ``AgentDetails``: ``resource_type``/``name``/``state``, the optional
-    ``labels`` map ``launch`` writes ``lead_agent`` into, and the ``work_dir``
-    the report fallback resolves a lead's checkout by.
+    ``labels`` map, and ``work_dir``.
     """
     record: dict[str, object] = {
         "resource_type": "agent",
         "name": name,
         "state": state,
     }
+    labels: dict[str, str] = {}
     if lead_agent is not None:
-        record["labels"] = {"lead_agent": lead_agent}
+        labels["lead_agent"] = lead_agent
+    if runtime_dir is not None:
+        labels["runtime_dir"] = runtime_dir
+    if archived:
+        labels["archived_at"] = "2026-01-02T03:04:05Z"
+    if labels:
+        record["labels"] = labels
     if work_dir is not None:
         record["work_dir"] = work_dir
     return record
+
+
+def _labels(create_argv: Sequence[str]) -> dict[str, str]:
+    """The ``--label key=value`` pairs of a ``mngr create`` argv, as a map."""
+    return dict(
+        create_argv[i + 1].split("=", 1)
+        for i in range(len(create_argv) - 1)
+        if create_argv[i] == "--label"
+    )
 
 
 def _listing(*records: Mapping[str, object]) -> _StubResult:
@@ -153,6 +176,7 @@ def test_happy_path_no_artifacts(
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
@@ -164,6 +188,8 @@ def test_happy_path_no_artifacts(
             "agent_created=true",
             "--label",
             "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ],
         [
             "mngr",
@@ -243,7 +269,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(
     # the subcommand names (that would re-introduce the hand-mirrored
     # expectation this test exists to replace) -- assert_mngr_argv_valid is what
     # confronts each argv with the live CLI.
-    assert len(mngr_calls) == 4
+    assert len(mngr_calls) == 5
     # Vacuity guard for the two argv details this launch newly depends on: the
     # lead label and the clobber sync mode have to be *in* what we validate,
     # or the loop below would prove nothing about either.
@@ -387,6 +413,7 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
     assert rc == 0
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["mngr", "list"],
         ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
@@ -530,6 +557,8 @@ def test_lead_agent_stamped_from_env_over_literal(
         "agent_created=true",
         "--label",
         "lead_agent=real-lead",
+        "--label",
+        f"runtime_dir={runtime}",
     ] in [c.argv for c in runner.calls]
 
 
@@ -599,8 +628,9 @@ def test_unresolved_lead_agent_without_env_is_fatal(
     )
 
     assert rc == 2
-    # Only the preflight cleanliness probe ran -- no worker was provisioned.
-    assert [c.argv for c in runner.calls] == [["git", "status", "--porcelain"]]
+    # Only the preflight probes ran (cleanliness, name free) -- no worker was
+    # provisioned.
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
     assert "lead_agent is unresolved" in capsys.readouterr().err
 
 
@@ -649,8 +679,9 @@ def test_repo_relative_task_path_resolves_against_the_real_git_toplevel(
     task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
     monkeypatch.chdir(tmp_path / "data" / ".tasks")
 
-    relative = create_worker_mod._repo_relative_task_path(
-        Path("launch-task/demo/task.md"), create_worker_mod.Runner()
+    relative = create_worker_mod._repo_relative_path(
+        Path("launch-task/demo/task.md"),
+        create_worker_mod._repo_toplevel(create_worker_mod.Runner()),
     )
 
     assert relative == "data/.tasks/launch-task/demo/task.md"
@@ -669,8 +700,8 @@ def test_repo_relative_task_path_falls_back_for_a_file_outside_the_repo(
     outside.write_text("---\nlead_agent: lead\n---\n\nbody\n")
     monkeypatch.chdir(repo)
 
-    relative = create_worker_mod._repo_relative_task_path(
-        outside, create_worker_mod.Runner()
+    relative = create_worker_mod._repo_relative_path(
+        outside, create_worker_mod._repo_toplevel(create_worker_mod.Runner())
     )
 
     assert relative == outside.as_posix()
@@ -804,8 +835,7 @@ def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
 
     assert rc == 0
     create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
-    assert create_argv[-2:] == ["--label", "lead_agent=outer-worker"]
-    assert "lead_agent=lead" not in create_argv
+    assert _labels(create_argv)["lead_agent"] == "outer-worker"
     # The label and the stamp agree, so a worker's own record and its task file
     # never name different leads.
     assert "lead_agent: outer-worker" in task.read_text()
@@ -902,11 +932,14 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
         runner=runner,
     )
     assert rc == 2
-    # Nothing past the create runs: no sync, no task message.
+    # Nothing past the create runs but the listing that looks for a record the
+    # failed create left behind: no sync, no task message.
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["mngr", "list"],
         ["git", "rev-parse"],
         ["mngr", "create"],
+        ["mngr", "list"],
     ]
 
 
@@ -972,6 +1005,7 @@ def test_common_transcript_flushed_before_message_send(
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
@@ -983,6 +1017,8 @@ def test_common_transcript_flushed_before_message_send(
             "agent_created=true",
             "--label",
             "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ],
         [
             "mngr",
@@ -1769,10 +1805,6 @@ def _write_launch_sync_task(task_file: Path, report_path: Path) -> None:
     )
 
 
-def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    return [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "destroy"]]
-
-
 def test_parse_report_extracts_type_name_and_body() -> None:
     result = create_worker_mod.parse_report(
         "---\ntype: status\nname: done\n---\n\nall finished\n"
@@ -1801,18 +1833,626 @@ def test_parse_report_tolerates_malformed_yaml() -> None:
     assert result.raw == text
 
 
-def test_destroy_invokes_mngr_destroy_force() -> None:
-    runner = _RecordingRunner()
-    create_worker_mod.destroy("demo-worker", runner)
-    assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+# --- teardown: destroy and stop ---------------------------------------------
 
 
-def test_destroy_argv_accepted_by_live_cli() -> None:
-    # Guard against drift in the mngr CLI: the destroy argv we emit must stay valid.
+def _mngr_argvs(runner: _RecordingRunner, *subcommands: str) -> list[list[str]]:
+    """Every recorded ``mngr <subcommand>`` argv, in call order."""
+    wanted = [["mngr", sub] for sub in subcommands]
+    return [c.argv for c in runner.calls if c.argv[:2] in wanted]
+
+
+def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "destroy")
+
+
+def _stop_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "stop")
+
+
+def _rsync_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "rsync")
+
+
+def _lifecycle_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    """The mngr calls that move or remove agents, in order."""
+    return _mngr_argvs(runner, "rsync", "destroy", "stop")
+
+
+def _pull_argv(agent: str, own_runtime_dir: str | None) -> list[str]:
+    """The relocation pull ``destroy`` runs before destroying ``agent``: its
+    workers' runtime dirs (all of ``data/.tasks/``), minus its own."""
+    argv = [
+        "mngr",
+        "rsync",
+        f"{agent}:data/.tasks/",
+        "./data/.tasks/",
+        "--uncommitted-changes=clobber",
+        "--",
+        "--update",
+    ]
+    if own_runtime_dir is not None:
+        argv.append(f"--exclude=/{own_runtime_dir.removeprefix('data/.tasks/')}")
+    return argv
+
+
+def _three_level_tree(root: str) -> tuple[list[dict[str, object]], str, str, str]:
+    """``root`` -> ``child`` -> ``grandchild``, plus a stopped second child, each
+    labelled with its lead and runtime dir. Returns the listing and the names."""
+    child = f"{root}-child"
+    stuck = f"{root}-stuck"
+    grandchild = f"{child}-inner"
+    records = [
+        _agent_record(
+            root,
+            "WAITING",
+            work_dir=f"/wt/{root}",
+            runtime_dir=f"data/.tasks/harden/{root}",
+        ),
+        _agent_record(
+            child,
+            "WAITING",
+            lead_agent=root,
+            work_dir=f"/wt/{child}",
+            runtime_dir=f"data/.tasks/launch-task/{child}",
+        ),
+        _agent_record(
+            stuck,
+            "STOPPED",
+            lead_agent=root,
+            work_dir=f"/wt/{stuck}",
+            runtime_dir=f"data/.tasks/launch-task/{stuck}",
+            archived=True,
+        ),
+        _agent_record(
+            grandchild,
+            "RUNNING",
+            lead_agent=child,
+            work_dir=f"/wt/{grandchild}",
+            runtime_dir=f"data/.tasks/launch-task/{grandchild}",
+        ),
+    ]
+    return records, child, stuck, grandchild
+
+
+def test_dispatch_subtree_is_post_order_and_excludes_the_root() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    unrelated = _agent_record(f"{root}-lookalike", "RUNNING", lead_agent="someone-else")
+
+    names = [
+        r["name"]
+        for r in create_worker_mod._dispatch_subtree(root, [*records, unrelated])
+    ]
+
+    # A shared name prefix without the lead chain does not make an agent kin.
+    assert names == [grandchild, child, stuck]
+
+
+def test_dispatch_subtree_survives_a_cycle_and_a_nameless_record() -> None:
+    root = _unique("root")
+    a = f"{root}-a"
+    b = f"{root}-b"
+    records = [
+        _agent_record(a, "RUNNING", lead_agent=root),
+        _agent_record(b, "RUNNING", lead_agent=a),
+        # A mislabelled listing that points back up the chain must not loop.
+        _agent_record(root, "RUNNING", lead_agent=b),
+        {"resource_type": "agent", "state": "RUNNING", "labels": {"lead_agent": a}},
+    ]
+
+    names = [r["name"] for r in create_worker_mod._dispatch_subtree(root, records)]
+
+    assert names == [b, a]
+
+
+def test_destroy_pulls_each_descendant_out_of_its_lead_then_destroys_deepest_first(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
     runner = _RecordingRunner()
-    create_worker_mod.destroy("demo-worker", runner)
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        # Deepest first, so each lead's worktree still exists when its workers'
+        # dirs are pulled; the stopped, archived sibling is part of the subtree
+        # too.
+        _pull_argv(grandchild, f"data/.tasks/launch-task/{grandchild}"),
+        ["mngr", "destroy", grandchild, "--force"],
+        _pull_argv(child, f"data/.tasks/launch-task/{child}"),
+        ["mngr", "destroy", child, "--force"],
+        _pull_argv(stuck, f"data/.tasks/launch-task/{stuck}"),
+        ["mngr", "destroy", stuck, "--force"],
+        _pull_argv(root, f"data/.tasks/harden/{root}"),
+        ["mngr", "destroy", root, "--force"],
+    ]
     for call in runner.calls:
-        assert_mngr_argv_valid(call.argv)
+        if call.argv[0] == "mngr":
+            assert_mngr_argv_valid(call.argv)
+    err = capsys.readouterr().err
+    for name in (grandchild, child, stuck, root):
+        assert f"create_worker: {name}: destroyed" in err
+
+
+def test_destroy_delete_branches_adds_b_to_every_destroy() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner, delete_branches=True)
+
+    assert rc == 0
+    assert _destroy_argvs(runner) == [
+        ["mngr", "destroy", name, "--force", "-b"]
+        for name in (grandchild, child, stuck, root)
+    ]
+    for argv in _destroy_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_destroy_no_recursive_destroys_one_agent_and_names_the_orphans(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner, recursive=False)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        _pull_argv(root, f"data/.tasks/harden/{root}"),
+        ["mngr", "destroy", root, "--force"],
+    ]
+    err = capsys.readouterr().err
+    assert f"{grandchild} (RUNNING)" in err
+    assert f"{child} (WAITING)" in err
+    assert f"{stuck} (STOPPED)" in err
+
+
+def test_destroy_continues_past_a_failed_relocation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    child = f"{root}-child"
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING"),
+            _agent_record(
+                child, "WAITING", lead_agent=root, runtime_dir=f"data/.tasks/x/{child}"
+            ),
+        ),
+    )
+    runner.respond(("mngr", "rsync"), _StubResult(returncode=23))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _destroy_argvs(runner) == [
+        ["mngr", "destroy", child, "--force"],
+        ["mngr", "destroy", root, "--force"],
+    ]
+    assert (
+        f"could not relocate the runtime dirs of {child}'s workers"
+        in capsys.readouterr().err
+    )
+
+
+def test_destroy_skips_the_pull_for_an_agent_without_a_runtime_dir_label(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without the label the agent's own runtime dir cannot be excluded from
+    the pull,
+    so an agent launched by an older launcher is destroyed without one; the
+    reason is named."""
+    root = _unique("root")
+    child = f"{root}-child"
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING", runtime_dir=f"data/.tasks/harden/{root}"),
+            _agent_record(child, "STOPPED", lead_agent=root),
+        ),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [_pull_argv(root, f"data/.tasks/harden/{root}")]
+    assert [argv[2] for argv in _destroy_argvs(runner)] == [child, root]
+    assert "no `runtime_dir` label" in capsys.readouterr().err
+
+
+def test_destroy_pulls_without_an_exclude_when_the_runtime_dir_is_elsewhere() -> None:
+    """A runtime dir outside ``data/.tasks/`` is not in the pulled tree, so
+    there is nothing to exclude."""
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(_agent_record(root, "WAITING", runtime_dir=f"data/.apps/x/{root}")),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [_pull_argv(root, None)]
+    for argv in _rsync_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_destroy_reports_a_failed_agent_and_still_destroys_the_rest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "destroy", child), _StubResult(returncode=1))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 1
+    assert [argv[2] for argv in _destroy_argvs(runner)] == [
+        grandchild,
+        child,
+        stuck,
+        root,
+    ]
+    err = capsys.readouterr().err
+    assert f"create_worker: {child}: NOT destroyed" in err
+    assert f"create_worker: {root}: destroyed" in err
+
+
+def test_destroy_prints_unmerged_commits_and_a_dirty_worktree(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(_agent_record(root, "STOPPED", work_dir=f"/wt/{root}")),
+    )
+    runner.respond(("git", "-C"), _StubResult(stdout=" M file.py\n"))
+    runner.respond(("git", "rev-list"), _StubResult(stdout="3\n"))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert ["git", "-C", f"/wt/{root}", "status", "--porcelain"] in [
+        c.argv for c in runner.calls
+    ]
+    assert ["git", "rev-list", "--count", f"HEAD..mngr/{root}"] in [
+        c.argv for c in runner.calls
+    ]
+    err = capsys.readouterr().err
+    assert "UNCOMMITTED changes" in err
+    assert f"3 commit(s) on mngr/{root} not in HEAD" in err
+    # The warning never blocks.
+    assert _destroy_argvs(runner) == [["mngr", "destroy", root, "--force"]]
+
+
+def test_destroy_with_no_listing_still_destroys_the_named_agent() -> None:
+    """A listing that cannot be read is no reason to leave the worker running:
+    the root is destroyed on its own and the exit code says so."""
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.destroy("demo-worker", runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+
+
+def test_destroy_pulls_into_the_repo_root_from_a_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pull's destination is the repo's ``data/.tasks/``, not the cwd's,
+    so a destroy run from a subdirectory lands the runtime dirs where every
+    lead's own runtime dirs are."""
+    root = _unique("root")
+    monkeypatch.chdir(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path.parent))
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING", runtime_dir=f"data/.tasks/harden/{root}")
+        ),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [
+        [
+            "mngr",
+            "rsync",
+            f"{root}:data/.tasks/",
+            f"{tmp_path.parent}/data/.tasks/",
+            "--uncommitted-changes=clobber",
+            "--",
+            "--update",
+            f"--exclude=/harden/{root}",
+        ]
+    ]
+
+
+def test_a_timed_out_teardown_command_is_a_reported_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "destroy"), subprocess.TimeoutExpired(cmd=["mngr"], timeout=1)
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 1
+    assert f"create_worker: {root}: NOT destroyed" in capsys.readouterr().err
+    assert runner.calls[-1].kwargs["timeout"] > 0
+
+
+def test_stop_with_no_listing_still_stops_the_named_agent() -> None:
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.stop("demo-worker", runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "stop", "demo-worker", "--archive"]]
+
+
+def test_stop_archives_children_first_then_the_root() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.stop(root, runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        ["mngr", "stop", name, "--archive"] for name in (grandchild, child, stuck, root)
+    ]
+    for argv in _stop_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_stop_no_recursive_stops_one_agent_and_names_the_orphans(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.stop(root, runner, recursive=False)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "stop", root, "--archive"]]
+    assert f"{grandchild} (RUNNING)" in capsys.readouterr().err
+
+
+def test_stop_reports_a_failed_agent_and_still_stops_the_rest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "stop", grandchild), _StubResult(returncode=1))
+
+    rc = create_worker_mod.stop(root, runner)
+
+    assert rc == 1
+    assert [argv[2] for argv in _stop_argvs(runner)] == [grandchild, child, stuck, root]
+    assert f"create_worker: {grandchild}: NOT stopped" in capsys.readouterr().err
+
+
+def test_main_destroy_and_stop_flags_reach_the_functions() -> None:
+    runner = _RecordingRunner()
+    assert (
+        create_worker_mod.main(
+            ["destroy", "--name", "x", "--no-recursive", "--delete-branches"],
+            runner=runner,
+        )
+        == 0
+    )
+    assert _destroy_argvs(runner) == [["mngr", "destroy", "x", "--force", "-b"]]
+    runner = _RecordingRunner()
+    assert create_worker_mod.main(["stop", "--name", "x"], runner=runner) == 0
+    assert _stop_argvs(runner) == [["mngr", "stop", "x", "--archive"]]
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
+    assert create_worker_mod.main(["destroy", "--name", "x"], runner=runner) == 1
+
+
+# --- the stuck-worker edge case ----------------------------------------------
+
+
+def test_an_archived_stopped_child_does_not_hold_its_parent_busy() -> None:
+    """A lead that stopped its stuck sibling (``stop`` leaves it STOPPED with
+    ``archived_at``) reads as idle once its own turn ends -- exactly like a
+    child that crashed -- so its own lead's await ends promptly."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(
+                _unique("stuck"), "STOPPED", lead_agent=worker, archived=True
+            ),
+        ),
+    )
+
+    assert create_worker_mod._worker_is_idle(
+        worker, runner, pending_shed_check=lambda _name: False
+    )
+
+
+# --- the runtime_dir label ---------------------------------------------------
+
+
+def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label is repo-relative like the stamped task path, whether launch
+    runs from the root or a subdirectory, so ``destroy`` running from any
+    lead's root pulls the same path."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    for cwd, given in (
+        (tmp_path, Path("data/.tasks/launch-task/demo")),
+        (tmp_path / "data", Path(".tasks/launch-task/demo")),
+    ):
+        monkeypatch.chdir(cwd)
+        runner = _RecordingRunner()
+        runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+        rc = create_worker_mod.launch(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=given,
+            task_file=task,
+            runner=runner,
+        )
+
+        assert rc == 0
+        create_argv = next(
+            c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]
+        )
+        assert _labels(create_argv)["runtime_dir"] == "data/.tasks/launch-task/demo"
+        assert_mngr_argv_valid(create_argv)
+        # The sync agrees with the label: the worker gets the dir at the same
+        # repo-relative path, pushed from the repo root rather than the cwd.
+        assert _rsync_argvs(runner) == [
+            [
+                "mngr",
+                "rsync",
+                f"{tmp_path}/data/.tasks/launch-task/demo/",
+                "demo-worker:data/.tasks/launch-task/demo/",
+                "--uncommitted-changes=clobber",
+            ]
+        ]
+        assert [c.argv for c in runner.calls].count(
+            ["git", "rev-parse", "--show-toplevel"]
+        ) == 1
+
+
+def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stopped failure keeps its name, so a relaunch of that name is an
+    expected event: refused up front with the holder's state and lead and the
+    remedy, before the task file is stamped and before mngr is asked."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record("demo-worker", "STOPPED", lead_agent="lead", archived=True)
+        ),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
+    assert "task_file:" not in task.read_text()
+    assert "lead_agent: lead" in task.read_text()
+    err = capsys.readouterr().err
+    assert "STOPPED" in err
+    assert "a worker of lead" in err
+    assert "create_worker.py destroy --name demo-worker" in err
+
+
+def test_a_create_that_leaves_a_record_behind_names_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """mngr registers the agent before provisioning it, so a create that fails
+    in a provisioning command leaves a STOPPED record the next launch would
+    trip on; the failure names that leftover and the destroy that clears it,
+    without calling it a pre-existing worker."""
+    runtime, task, _ = _make_layout(tmp_path)
+    listings = iter(
+        [
+            _listing(),  # before the create: the name is free
+            _listing(_agent_record("demo-worker", "STOPPED", lead_agent="lead")),
+        ]
+    )
+
+    class _ListingChanges(_RecordingRunner):
+        def run(self, argv: Sequence[str], **kwargs):
+            if list(argv)[:2] == ["mngr", "list"]:
+                self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
+                return next(listings)
+            return super().run(argv, **kwargs)
+
+    runner = _ListingChanges()
+    runner.respond(
+        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no worker was created" in err
+    assert "already exists" not in err
+    assert "STOPPED" in err
+    assert "create_worker.py destroy --name demo-worker" in err
+
+
+def test_an_unrelated_create_failure_gets_no_leftover_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
+    )
+    runner.respond(("mngr", "list"), _listing(_agent_record("other", "RUNNING")))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no worker was created" in err
+    assert "already exists" not in err
+    assert "left an agent" not in err
 
 
 def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
@@ -1852,6 +2492,7 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
         "body": "shipped it",
         "branch": "mngr/demo-worker",
         "raw_report": "---\ntype: status\nname: done\n---\n\nshipped it\n",
+        "destroy_failed": False,
     }
     assert json.loads(result_json.read_text()) == expected
     # Stdout carries the same JSON object for shell/human callers.
@@ -1919,6 +2560,8 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
             "agent_created=true",
             "--label",
             "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ]
     ]
     # The second run's report is archived under a disambiguated name -- the first
@@ -1955,6 +2598,42 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
 
     assert rc == 0
     assert _destroy_argvs(runner) == []
+    assert _stop_argvs(runner) == []
+
+
+def test_launch_sync_reports_a_destroy_that_left_something_behind(
+    tmp_path: Path,
+) -> None:
+    """The report is still emitted -- the caller has the result either way --
+    but the JSON and the exit code both say the worker is still there."""
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
+    out = io.StringIO()
+
+    rc = create_worker_mod.launch_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        runner=runner,
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nok\n"
+        ),
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert rc == 1
+    assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+    result = json.loads(out.getvalue())
+    assert result["destroy_failed"] is True
+    assert result["name"] == "done"
 
 
 def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
