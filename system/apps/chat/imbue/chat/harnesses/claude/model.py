@@ -10,10 +10,11 @@ parses; this resolver never reads it.
 
 Claude Code exposes no stable programmatic model list, so the catalog is
 maintained by hand to match the aliases ``claude --model`` accepts. Read out of the
-pinned 2.1.227 binary, the full alias set is ``default``, ``fable``, ``fable[1m]``,
-``mythos``, ``opus``, ``opus[1m]``, ``opusplan``, ``opusplan[1m]``, ``sonnet``,
-``sonnet[1m]``, ``haiku``; the catalog offers four of them and hides a fifth, leaving
-``default``, ``opusplan`` and the redundant bare variants out on purpose.
+pinned 2.1.269 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
+``best``, ``sonnet[1m]``, ``opus[1m]``, ``fable[1m]``, ``opusplan``; the catalog offers
+four of them, leaving ``best``, ``opusplan`` and the redundant bare variants out on
+purpose (``best`` and ``opusplan`` name a policy rather than a model, so neither can carry
+a stable reported id).
 
 Every offered model uses the ``[1m]`` variant to keep the 1M-token context window the
 workspace provisions. In Claude Code ``[1m]`` is an explicit opt-in ("append [1m] to the
@@ -26,16 +27,17 @@ of the model, and this is a property of the harness. Haiku has no ``[1m]`` varia
 
 The switch alias and the reported id are different strings, and the suffix shows up in
 both: an agent launched as ``opus[1m]`` reports ``claude-opus-5[1m]``. Fast mode is an
-Opus-only capability (2.1.227 scopes it to "Opus 5/4.8") -- notably NOT a property of
+Opus-only capability (2.1.269 scopes it to "Opus 5/4.8") -- notably NOT a property of
 the most capable model, so do not infer it from rank.
 
-The picker offers exactly four models -- Fable 5, Opus 5, Sonnet 5, Haiku 4.5. Every
+The picker offers exactly four models -- Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5. Every
 other option is declared with ``in_picker=False``: matchable if a live read reports it,
 never offered. That set is defined by what the four do NOT cover, so an agent sitting on
 a model the picker cannot reach still shows a name instead of falling through to the
-shrug case. Two ways in: an approved org launching Mythos, and a user typing ``/model
-opus-4-8`` straight into the underlying Claude Code session, which the picker neither
-offers nor prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the same way.
+shrug case. Three ways in: an approved org launching Mythos, a chat that was created on
+an older pin and is still sitting on Fable 5, and a user typing ``/model opus-4-8``
+straight into the underlying Claude Code session, which the picker neither offers nor
+prevents. The ``ultra`` effort (ultracode) is declared-but-hidden the same way.
 
 Each option's ``harness_reported_model_id`` is the suffix-free API id
 (``claude-opus-5``), matched against a live read. An option launched with the ``[1m]``
@@ -84,7 +86,7 @@ _CLAUDE_EFFORTS: tuple[EffortChoice, ...] = (
     EffortChoice(level="ultra", in_picker=False),
 )
 
-# The four models the picker offers, in the order claude 2.1.227's own /model picker
+# The four models the picker offers, in the order claude 2.1.269's own /model picker
 # ranks them. Each takes the [1m] alias where one exists, because in Claude Code that
 # suffix is an explicit opt-in for the 1M window the workspace provisions -- the bare
 # alias is accepted and reports the same display name, so the smaller window it hands
@@ -92,10 +94,10 @@ _CLAUDE_EFFORTS: tuple[EffortChoice, ...] = (
 _OFFERED_MODELS: tuple[ModelOption, ...] = (
     ModelOption(
         id="fable[1m]",
-        label="Fable 5",
+        label="Fable 5.1",
         efforts=_CLAUDE_EFFORTS,
         supports_fast=False,
-        harness_reported_model_id="claude-fable-5",
+        harness_reported_model_id="claude-fable-5-1",
     ),
     ModelOption(
         id="opus[1m]",
@@ -122,11 +124,11 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 
 # Everything the four offered models do NOT match, so the catalog is complete against
 # what the harness can report: Mythos (approved orgs only) and every previous-generation
-# model 2.1.227 still carries. These are not offered, but they are not decoration either
+# model 2.1.269 still carries. These are not offered, but they are not decoration either
 # -- they exist so the catalog describes the whole model surface, and each one should say
 # what its model actually does.
 #
-# supports_fast therefore follows the binary rather than being set permissively. 2.1.227
+# supports_fast therefore follows the binary rather than being set permissively. 2.1.269
 # scopes fast to "Opus 5/4.8", so Opus 4.8 declares it and nothing else does -- 4.7 and
 # 4.6 had fast removed, which is also why their legacy claude-opus-4-*-fast ids are dead
 # and cannot arrive with fast on. Note the field gates MATCHING, not just rendering: a
@@ -141,7 +143,8 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 #
 # ORDER IS LOAD-BEARING. match_option's prefix pass takes the FIRST key the reported id
 # starts with, so a general key placed before a specific one swallows it -- claude-opus-4
-# ahead of claude-opus-4-8 would label every dated Opus 4.x as "Opus 4". Specific keys
+# ahead of claude-opus-4-8 would label every dated Opus 4.x as "Opus 4", and claude-fable-5
+# ahead of the offered claude-fable-5-1 would label Fable 5.1 as "Fable 5". Specific keys
 # come first and the bare family catch-alls last; the ordering is pinned by a test. The
 # catch-alls are what absorb the dated Opus 4 / Sonnet 4 ids (claude-opus-4-20250514),
 # whose alias form (claude-opus-4-0) is not a prefix of them.
@@ -156,6 +159,9 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         harness_reported_model_id=model_id,
     )
     for model_id, label, supports_fast in (
+        # The previous Fable: a chat created on an older pin can still be sitting on it.
+        ("claude-fable-5", "Fable 5", False),
+        ("claude-mythos-5-1", "Mythos 5.1", False),
         ("claude-mythos-5", "Mythos 5", False),
         ("claude-mythos-preview", "Mythos Preview", False),
         # The one hidden model that really has fast, per 2.1.227's "Opus 5/4.8".
@@ -166,9 +172,10 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         ("claude-opus-4-1", "Opus 4.1", False),
         ("claude-sonnet-4-6", "Sonnet 4.6", False),
         ("claude-sonnet-4-5", "Sonnet 4.5", False),
-        # The binary also carries a dotted spelling; without it the catch-all below would
-        # claim it and call it "Sonnet 4".
-        ("claude-sonnet-4.6", "Sonnet 4.6", False),
+        # The two pre-4 ids the binary still resolves; neither family catch-all below
+        # prefixes them.
+        ("claude-sonnet-3-7", "Sonnet 3.7", False),
+        ("claude-haiku-3-5", "Haiku 3.5", False),
         # Family catch-alls, last on purpose (see ORDER above).
         ("claude-opus-4", "Opus 4", False),
         ("claude-sonnet-4", "Sonnet 4", False),
