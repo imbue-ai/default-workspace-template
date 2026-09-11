@@ -32,6 +32,9 @@ from imbue.minds_evals.data_types import JudgeScore
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
 from imbue.minds_evals.errors import JobReadError
+from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
+from imbue.minds_evals.reporting import as_table_cell
+from imbue.minds_evals.reporting import write_reports
 
 # `agent/` is harbor's own trial layout (the driver's logs_dir is <trial dir>/agent), so it is
 # spelled here rather than imported from anywhere.
@@ -414,14 +417,6 @@ def _format_arm_cell(trial: TrialCheck) -> str:
 
 
 @pure
-def _as_table_cell(text: str) -> str:
-    """Free text in a markdown cell. A pipe or a newline in it would end the cell, and every cell
-    here carries free text: exception messages carry anything, and case ids, trial names, entry ids
-    and judge criterion names are authored strings held to no vocabulary."""
-    return text.replace("|", "\\|").replace("\n", " ")
-
-
-@pure
 def render_summary_markdown(run_check: RunCheck) -> str:
     """The run as a GitHub step-summary table: one row per trial, one verdict line above it."""
     header_lines = [
@@ -432,17 +427,17 @@ def render_summary_markdown(run_check: RunCheck) -> str:
     ]
     trial_lines = [
         "| {} | {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
-            _as_table_cell(trial.trial_name),
-            _as_table_cell(trial.case_id) or "-",
-            _as_table_cell(_format_arm_cell(trial)),
-            _format_marker(True) if trial.is_completed else _as_table_cell(trial.incompletion_reason),
+            as_table_cell(trial.trial_name),
+            as_table_cell(trial.case_id) or "-",
+            as_table_cell(_format_arm_cell(trial)),
+            _format_marker(True) if trial.is_completed else as_table_cell(trial.incompletion_reason),
             _format_marker(trial.is_gates_passed),
-            _as_table_cell(", ".join(trial.error_entry_ids)) or "none",
+            as_table_cell(", ".join(trial.error_entry_ids)) or "none",
             "-" if trial.reward is None else "{:.4f}".format(trial.reward),
-            _as_table_cell(_format_judge_scores(trial.judge_scores)),
-            _as_table_cell(trial.modal_environment_name) or "-",
-            _as_table_cell(trial.mngr_sha[:12]) or "-",
-            _as_table_cell(trial.dwt_sha[:12]) or "-",
+            as_table_cell(_format_judge_scores(trial.judge_scores)),
+            as_table_cell(trial.modal_environment_name) or "-",
+            as_table_cell(trial.mngr_sha[:SHORT_SHA_LENGTH]) or "-",
+            as_table_cell(trial.dwt_sha[:SHORT_SHA_LENGTH]) or "-",
         )
         for trial in run_check.trials
     ]
@@ -450,12 +445,9 @@ def render_summary_markdown(run_check: RunCheck) -> str:
 
 
 def write_run_check_reports(run_check: RunCheck, summary_md_path: Path | None, summary_json_path: Path | None) -> None:
-    for path, content in (
-        (summary_md_path, render_summary_markdown(run_check)),
-        (summary_json_path, run_check.model_dump_json(indent=2) + "\n"),
-    ):
-        if path is None:
-            continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
-        logger.info("Wrote {}", path)
+    write_reports(
+        [
+            (summary_md_path, render_summary_markdown(run_check)),
+            (summary_json_path, run_check.model_dump_json(indent=2) + "\n"),
+        ]
+    )

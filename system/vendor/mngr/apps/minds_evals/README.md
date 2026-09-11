@@ -250,15 +250,22 @@ just minds-evals-run $DS opus-standard 3 --ak model='opus[1m]' --ak effort=high
 # a cheap claude config
 just minds-evals-run $DS haiku 3 --ak model=haiku --ak effort=medium
 # pi-coding on an Anthropic key
-just minds-evals-run $DS pi-anthropic 3 --ak lane=api-key --ak key_provider=anthropic \
+just minds-evals-run $DS pi-haiku 3 --ak lane=api-key --ak key_provider=anthropic \
   --ak model=anthropic/claude-haiku-4-5 --ak effort=medium
 # pi-coding on OpenRouter
-OPENROUTER_API_KEY=... just minds-evals-run $DS pi-openrouter 3 --ak lane=openrouter \
-  --ak model='openrouter/<vendor>/<model>' --ak effort=medium
+OPENROUTER_API_KEY=... just minds-evals-run $DS pi-gpt-5-mini 3 --ak lane=openrouter \
+  --ak model=openrouter/openai/gpt-5-mini --ak effort=medium
 ```
 
 One dataset serves every harness config, and each run needs its own job name, because harbor refuses
 to reuse one.
+
+**The named harness configs** live in `configs/harness_configs.json`: `default`, `haiku`,
+`pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash` and `opus-standard`, each a name, an `is_nightly`
+flag and the kwargs above. It is the list the [scheduled CI](#scheduled-ci) composes its cells from,
+and the place to look for a config that is known to work -- an entry's kwargs are exactly the flags
+to append to a `just minds-evals-run` line to drive the same arm locally, and the entry's own name
+is a job name that says which arm the run was.
 
 ### The lane's key
 
@@ -1417,8 +1424,12 @@ deletion reported as failed (the environment stays; ask a workspace admin to rem
 
 ## Scheduled CI
 
-`.github/workflows/minds-evals-scheduled.yml` runs this eval nightly at 11:00 UTC against two
-`(mngr, default-workspace-template)` pairs:
+`.github/workflows/minds-evals-scheduled.yml` runs this eval nightly at 11:00 UTC as a **matrix of
+arms**: each `(mngr, default-workspace-template)` pair times each selected
+[harness config](#harness-and-model-arms). One cell is one arm, and the cell is the unit of
+everything below -- what runs, what is skipped, what is reported, and what is remembered green.
+
+Two pairs are evaluated by default:
 
 - **main** -- both repos at `main`. Answers "is what we are about to ship healthy?".
 - **released** -- the `minds-v<version>` tag named by the `stable` channel's `fallback_branch` in
@@ -1431,30 +1442,79 @@ and left out of the run, which also does not cost the other pair its answer. Dep
 installed from `apps/minds_evals/uv.lock` or the run fails: the only thing meant to move between two
 nights is the pair of SHAs.
 
-Each pair runs two passes. The **oracle pass** replays the canned transcript: it exercises the box
-image build, generation, the verifier container and grading without booting Minds or paying for the
-agent, and it gates the expensive pass. Cheap is not free -- grading is the verifier's judge call, so
-an oracle-only run still costs one judge pass per case (which is why an oracle run asserts
-`reward >= 0.8` rather than exactly 1.0). The **live pass** is the real eval, at a concurrency equal to
-the config's case count so every case runs in one wave. `minds-evals check-run` decides both: it
-passes only when every trial completed, no trial carries a harness `error` status, the structural
-gates hold, and no trial that asked for a model is recorded as having answered on another.
+### Which harness configs a run evaluates
+
+`configs/harness_configs.json` is the checked-in list of named harness configs, and it is where the
+spend decision lives: every entry carries an `is_nightly` flag, and a schedule runs exactly the
+entries that set it. `default`, `haiku` and `pi-gpt-5-mini` are nightly; `pi-haiku`,
+`pi-glm-4.7-flash` and `opus-standard` are not, and run only when a dispatch names one. The file's
+order is the order the run's cells are decided in, and so the order of the grid's columns in the
+Slack report -- which is why arms worth reading against each other, `haiku` beside `pi-haiku`, are
+listed side by side. Everything else in an entry is one of the run line's own
+[kwargs](#harness-and-model-arms), with the same default an unset kwarg has, so `default` -- a lane
+and nothing more -- is the product exactly as it ships.
+
+A name matches `^[a-z0-9][a-z0-9.-]*$` (dots are in, because a model version is part of what names
+an arm), is at most 30 characters, is unique in the file and is never `oracle`: it labels a harbor
+job, a concurrency group, an artifact and a line of the Slack report, beside the oracle's own. Every
+entry is validated through the driver's own kwarg parsing on the free `resolve` job, selected or
+not, so a config the driver would refuse at construction fails before any paid runner starts, and a
+unit test validates the checked-in file on every test run.
+
+### The jobs
+
+- **`resolve`** (free) freezes each pair's refs to SHAs, lists the green markers once with
+  `gh cache list --key minds-evals-green-`, and runs `minds-evals ci-matrix` to decide the cells:
+  which pairs run, which cells run, and what each cell's run line and marker key are.
+- **`oracle`**, one entry per pair with at least one running cell, replays the canned transcript: it
+  exercises the box image build, generation, the verifier container and grading without booting
+  Minds or paying for the agent, and it gates the expensive pass. Cheap is not free -- grading is the
+  verifier's judge call, so an oracle-only run still costs one judge pass per case (which is why an
+  oracle run asserts `reward >= 0.8` rather than exactly 1.0). **The oracle pass boots no workspace,
+  so it is independent of the harness config**: it runs once per pair rather than once per cell, and
+  a pair's live cells run only after its oracle passed.
+- **`evaluate`**, one entry per running cell, is the real eval, at a concurrency equal to the
+  config's case count so every case runs in one wave. A cell fetches only its own secrets, downloads
+  its pair's oracle summary and refuses to start unless that oracle passed, regenerates the same
+  dataset at the same SHAs (so the image build is a Modal cache hit), runs `just minds-evals-run`
+  with its harness config's `--ak` flags appended, writes its green marker as soon as the live pass
+  has been checked green, and only then deletes the environments it recorded and uploads its
+  artifacts, so a cleanup the Modal API refused turns the job red without costing the arm a re-run.
+- **`notify`** posts one Slack message per pair through `minds-evals ci-report`, and writes the
+  same reports to the run summary.
+
+`minds-evals check-run` decides both passes: it passes only when every trial completed, no trial
+carries a harness `error` status, the structural gates hold, and no trial that asked for a model is
+recorded as having answered on another -- so a cell goes red on a model switch that did not take.
 **Judge scores are reported, never gated** -- they are statistical, and one run's number is not a
 regression signal.
 
-A pair that passes end to end is recorded green in an `actions/cache` marker keyed on
-`(pair, mngr SHA, dwt SHA, config path)`, and the next night skips it. A red run saves nothing, so it
-retries on the next slot. List the green pairs with
-`gh cache list --key minds-evals-green-` -- the Caches web UI cannot filter by key prefix.
+The oracle job's concurrency group is `minds-evals-oracle-<pair>` and a cell's is
+`minds-evals-<pair>-<config>`, so two runs never evaluate the same arm at once. The harbor job names
+are `<pair>-oracle-<run_id>` and `<pair>-<config>-live-<run_id>`.
 
-Nothing that comes from the branch the workflow runs on is in that key -- not the config's contents,
-and not the eval harness in `apps/minds_evals` (the driver, the gates, the verifier) -- and neither
-is the live staging tier every trial boots. **A green marker says a pair was verified once, against
-whatever harness and tier existed then.** The `main` pair picks up a harness change anyway, because
-its SHA moves whenever `apps/minds_evals` does. The `released` pair does not: its refs are the
-release tag, so between releases it is verified once and skipped every night after -- a new gate, or
-a staging regression, is not seen there until the next release. Dispatch with `force` to re-verify
-any of that.
+### Green markers, and what they promise
+
+A cell that passes end to end is recorded green in an `actions/cache` marker keyed on
+`minds-evals-green-<pair>-mngr-<mngr sha>-dwt-<dwt sha>-cfg-<config path slug>-hc-<harness config name>-<12-hex digest>`,
+and the next night skips it. The digest is over the harness config's own kwargs, so editing a config
+re-runs its cells under the same name and leaves every other cell green. A cell is skipped when its
+exact key is among the markers the run may restore -- those saved on the run's own ref or on the
+default branch -- and a pair whose every cell is skipped runs no oracle pass either. A red cell
+saves nothing, so it retries on the next slot. Dispatch with `force` to run a cell anyway. List the
+markers with `gh cache list --key minds-evals-green-`; the Caches web UI cannot filter by key prefix.
+
+The lookup is that one `gh cache list` call rather than an `actions/cache/restore` step per cell,
+because the action cannot be looped over a matrix that is decided at run time.
+
+Nothing that comes from the branch the workflow runs on is in that key -- not the eval config's
+contents, and not the eval harness in `apps/minds_evals` (the driver, the gates, the verifier) -- and
+neither is the live staging tier every trial boots. **A green marker says an arm was verified once,
+against whatever harness and tier existed then.** The `main` pair picks up a harness change anyway,
+because its SHA moves whenever `apps/minds_evals` does. The `released` pair does not: its refs are
+the release tag, so between releases it is verified once and skipped every night after -- a new gate,
+or a staging regression, is not seen there until the next release. Dispatch with `force` to
+re-verify any of that.
 
 ### Dispatching a run
 
@@ -1463,38 +1523,123 @@ any of that.
 - `pair` -- `both` (default), `main`, or `released`.
 - `mngr_ref` / `dwt_ref` -- a one-off pair. Setting either replaces the pair selection with a single
   `custom` pair (branch, tag, or full SHA; the unset side defaults to `main`).
+- `harness_configs` -- comma-separated harness config names. Empty (the default, and what a schedule
+  and a branch push get) runs the nightly set; a name that is not in the file fails the `resolve`
+  job.
 - `config` -- which eval config to generate the dataset from; empty (the default) uses
   `eval-config-small.json`. Its persona count becomes the run concurrency.
-- `force` -- evaluate a pair even when its green marker says it was already verified.
-- `skip_live` -- run only the oracle pass. This is the cheap way to test changes to the workflow
-  itself; it never writes a green marker, because it verified nothing about the live path.
+- `force` -- evaluate a cell even when its green marker says that arm was already verified.
+- `skip_live` -- run only the oracle passes. This is the cheap way to test changes to the workflow
+  itself; it writes no green marker, because it verified nothing about the live path. Every cell is
+  decided as if `force` were set, so a night when nothing moved still has an oracle pass to run
+  rather than skipping into a report of a matrix it never exercised.
 
 GitHub accepts a `workflow_dispatch` only for a workflow file that is already on the default branch,
 so a change to the workflow cannot be dispatched from the branch that carries it. Push that branch
 under `minds-evals-run/` instead (`git push origin HEAD:minds-evals-run/<anything>`): the push runs
-the main pair, oracle pass only, unless the head commit message carries `[live]`, in which case the
-live pass runs too. An ordinary feature branch never triggers it. The Slack report and the green
-marker treat a push the same way they treat `skip_live`.
+the main pair against the nightly configs, oracle pass only, unless the head commit message carries
+`[live]`, in which case the live pass runs too. An ordinary feature branch never triggers it. Every
+cell of a push is decided as if `force` were set, whether or not it asks for the live pass, so a
+test push always has something to run rather than skipping into a report of a matrix it never
+exercised; a push that stops at the oracle writes no green marker, and its Slack report says
+`oracle only`. A push that does write markers writes them under its own ref, which no nightly can
+restore.
 
 ### Results
 
-Per pair, the run's step summary carries the check-run markdown, and two artifacts are kept for 14
-days: `minds-evals-summary-<pair>` (the markdown and JSON summaries) and
-`minds-evals-jobs-<pair>-<run_id>` (the full job directories, minus `agent/snapshots/` -- the
-workspace tarball is ~90 MB of a trial's ~92 MB).
+The step summary of each pass carries its check-run markdown (`resolve` writes the arms table and
+`notify` the Slack report instead), and artifacts are kept for 14 days: per pair,
+`minds-evals-summary-<pair>` and `minds-evals-jobs-<pair>-oracle-<run_id>` from the oracle pass; per
+cell, `minds-evals-summary-<pair>-<config>` and `minds-evals-jobs-<pair>-<config>-<run_id>` from the
+live pass. A summary artifact holds `oracle-summary-<pair>.{md,json}` or
+`live-summary-<pair>-<config>.{md,json}`, named so that `notify` can merge every one of them into a
+single directory. The `-jobs-` artifacts hold the full job directories minus `agent/snapshots/` --
+the workspace tarball is ~90 MB of a trial's ~92 MB.
 
-The `notify` job posts one Slack message per run covering every pair, its refs and SHAs, its verdict,
-and its per-case rows. The verdict covers the eval job as a whole, not only the trials: a run whose
-every pair passed but whose job still went red or was cancelled -- a cleanup that could not delete
-the run's Modal environments, say -- is flagged rather than reported as a clean success. It reads
-the webhook from Vault at `mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`
-(**not yet created** -- until it exists the job emits a warning and writes the same report to the run
-summary, and never fails the run). The rest of the run's credentials come from the same Vault role as
-the other CI jobs: `mngr/ci/ANTHROPIC_API_KEY` and the `mngr/ci/MODAL_TOKEN_ID` /
-`mngr/ci/MODAL_TOKEN_SECRET` pair, which CI writes into a throwaway `~/.modal.toml` because the
-driver parses one. That token belongs to the imbue Modal workspace, the same one a developer's
-`[imbue]` profile puts their own runs in; the staging Minds tier the box activates is reached over
-HTTP, so the token's workspace is independent of it.
+The `notify` job posts **one Slack message per pair**, rendered by `minds-evals ci-report` -- the
+two pairs answer different questions, and a reader acts on one of them at a time. A message opens
+with a header naming the pair and its verdict (passed, failed, skipped, not evaluated, or broken:
+the worst of the pair's oracle pass and its cells), then a line carrying the pair's refs, SHAs and
+oracle verdict beside the run's duration and trigger. It posts under `:big_brain:` when every arm it
+reports came out green -- every cell passed, every cell was skipped as already green, or an
+oracle-only run's oracle passed -- and under `:brainless:` for anything else, so the verdict reads
+off the channel list before the message is opened. The icon answers "are the arms good?", so a run
+whose arms all passed but whose job went red keeps `:big_brain:`; the warning in the message itself
+is what says the job broke.
+
+Under that is the **grid**: one column per harness config, in matrix order, and one row per case. A
+grid cell places the trial's reward on the absolute 0..1 scale as a coloured square -- red under
+0.25, orange under 0.50, yellow under 0.75, green at or above it -- followed by the reward itself
+and, where the trial did not pass, a bold cross. The cross covers every way a trial can fail: it did
+not complete, a gate failed, evidence went unmeasured, or it answered on the wrong model. The colour
+therefore means one thing throughout and never competes with the verdict, and a legend under the
+grid states the bands and the cross, derived from the bands themselves so the words cannot drift
+from the cells. `:heavy_minus_sign:` is a pass that was never attempted, skipped because it is
+already green or gated off by a failed oracle, and `:grey_question:` a cell with no reward to
+place: a pass whose story cannot be told, with no summary at all because the job died before grading
+or one that could not be read, a case a graded column has no trial for, or a trial that was never
+graded. An oracle-only run has a single `oracle` column, and a pair that graded nothing -- skipped,
+unresolved, or broken throughout -- has no grid.
+
+Under the grid, **the trials that did not pass** are listed in a table of config, case and the
+reason `check-run` recorded. It is drawn only when something failed: a heading over an empty table
+reads as a measurement that went missing rather than as a night with nothing to report.
+
+Below that, one collapsed container, `judge scores`, holds every graded trial of the pair in a
+single table -- config, case, reward, a column per judge criterion, then what became of the trial --
+rather than a table per harness config, so a criterion can be compared straight down its own column.
+The criteria are the union across every arm: a criterion only one config was scored on still gets a
+column, and the arms that were not scored on it print `-` rather than a zero. A column is headed
+with the bare criterion name, and with `<dimension>: <criterion>` only where two dimensions scored
+criteria of the same name; which dimension scored which criteria is stated once in a legend above
+the table (`quality: conciseness`, `outcome: works_as_expected`), because the dimension is what says
+whether a score is about the product or about the harness that drove it.
+
+Slack refuses the whole message over 20 cells in a table row or 10,000 characters across the cells
+of all its tables, so the message keeps itself under both. Every cell is clamped to 120 characters
+first -- a case id and an incompletion reason are both unbounded -- then a pair scored on more than
+16 criteria keeps the first 16, and the judge table, the only part that grows with cases times
+configs times criteria, is cut to whole rows of whatever budget the grid and the failures table left
+it. Each cut says so out loud: in the legend above the table, or, where no row fit at all, in a line
+where the container would have gone.
+
+A **details** block follows with whatever belongs to no arm's own row: one line per skipped, broken
+or not-evaluated cell, one per failing trial of a pass with no grid column of its own (a failed
+oracle on a pair whose cells ran), and one per passing trial whose requested model nothing confirmed.
+It is budgeted at 2900 characters, under the 3000 a Slack section holds, and cut on a line boundary
+when it overruns. Links to the run's logs and artifacts close the message.
+
+Only the blocks an incoming webhook accepts are used, which is what `table` and `container` are
+doing the work of. A webhook refuses `data_table` outright -- a minimal one is answered with
+`400 invalid_blocks` -- so the sorting and paging a data table would bring are unavailable until the
+notify job posts as an app with a bot token rather than through a webhook, and `markdown` is refused
+as well.
+
+The report covers the run as a whole, not only the trials: a run whose every cell passed but whose
+jobs went red or were cancelled -- a cleanup that could not delete the run's Modal environments, say
+-- is flagged rather than reported as a clean success, and a run that resolved nothing at all gets a
+single `broken` message naming the three job results instead of pairs.
+
+Every message also carries a plain-text rendering of itself, with the grid, the failures and the
+judge table each as a fixed-width fence. The grid's fence says `ok`, `FAIL`, `-` and `?` in place of
+the square, because Slack renders no emoji inside a fence, and the judge fence carries the same
+dimension legend on the line above it. `notify` writes that
+into the run summary and posts it on its own, with a warning, if Slack refuses the message's blocks.
+It reads the webhook from Vault at `mngr/ci/SLACK_MINDS_EVALS_WEBHOOK`; without it the job warns and
+the run summary is the whole report. Either way the run is never red because of its notification.
+
+Every job fetches the credentials it needs and no others, from the same Vault role as the other CI
+jobs. `resolve` needs none and `notify` only the webhook above; `mngr/ci/ANTHROPIC_API_KEY` and the
+`mngr/ci/MODAL_TOKEN_ID` / `mngr/ci/MODAL_TOKEN_SECRET` pair go to every job that runs a pass, the
+oracle and the cells: the judges spend the Anthropic key on every pass and the decider on every live
+one, and CI writes the Modal tokens into a throwaway `~/.modal.toml` because the driver parses one.
+That token belongs to the imbue Modal workspace, the same one a developer's `[imbue]` profile puts
+their own runs in; the staging Minds tier the box activates is reached over HTTP, so the token's
+workspace is independent of it. A cell whose harness config reads its lane's key from another
+variable fetches `mngr/ci/<key_env>` on top of that, and only that cell does -- a lane's key is
+never exported into a cell that does not sign in on that lane. So the `pi-gpt-5-mini` cell needs
+`mngr/ci/OPENROUTER_API_KEY` to exist in Vault; without it that cell fails at the fetch step, before
+a box is built, and the other cells are unaffected.
 
 ### CI environments and cleanup
 
@@ -1502,18 +1647,19 @@ A CI run passes `--ak user_id_prefix=ci-<YYYYMMDDtHHMMSSz>-`, so every Modal env
 is attributable to one run and one wall-clock time. Teardown is three-layered:
 
 1. The driver destroys its own nested workspace sandboxes in a `finally` block.
-2. `minds-evals cleanup-environments --job-dir <job dir>` deletes exactly the environments the run
-   recorded, and runs even when the passes failed. This is the layer that collects the run it is
-   part of.
+2. `minds-evals cleanup-environments --job-dir <job dir>` deletes exactly the environments that job
+   recorded, and runs even when the pass failed. This layer runs in **every** job, oracle and cell
+   alike, and collects the pass it is part of.
 3. `minds-evals cleanup-environments --sweep-prefix <ci prefix> --older-than-hours 8` is the backstop
-   for a run that died before recording anything. It deletes only names carrying a scheduled run's
-   `ci-<timestamp>` stamp. **The cutoff is `now - 8 h` and the job's own budget is 3 h 20 m, so the
-   sweep never collects the run it runs inside** -- an earlier run's leak is collected by a later
-   run, usually the next night's. That is the point of the 8 h: it puts every still-possible eval,
-   including the other pair running alongside, and every developer's work out of reach.
+   for a job that died before recording anything. It runs in the **oracle** job, once per pair, and
+   deletes only names carrying a scheduled run's `ci-<timestamp>` stamp. **The cutoff is `now - 8 h`
+   and the budget of every job that creates an environment is 3 h 20 m, so the sweep never collects
+   the run it runs inside, nor the cells that run after it** -- an earlier run's leak is collected
+   by a later run, usually the next night's. That is the point of the 8 h: it puts every
+   still-possible eval, including the cells running alongside, and every developer's work out of
+   reach.
 
-Cancelling the job (or hitting its timeout) SIGKILLs harbor rather than unwinding it; the boxes it
+Cancelling a job (or hitting its timeout) SIGKILLs harbor rather than unwinding it; the boxes it
 leaves then ride their own timeouts -- 3 h for the nested workspace sandboxes, and for the harbor
-sandbox 4 h in the live pass, which is where `just minds-evals-run` sets `--ek
-sandbox_timeout_secs` (the oracle pass calls harbor directly and takes its default) -- and the
-cleanup step still runs.
+sandbox 4 h in a live pass, which is where `just minds-evals-run` sets `--ek sandbox_timeout_secs`
+(the oracle pass calls harbor directly and takes its default) -- and the cleanup step still runs.

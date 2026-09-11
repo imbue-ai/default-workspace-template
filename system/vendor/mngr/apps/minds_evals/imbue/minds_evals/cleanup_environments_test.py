@@ -23,6 +23,7 @@ from imbue.minds_evals.testing import DEVELOPER_ENVIRONMENT_NAME
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import STAGING_MNGR_PREFIX
 from imbue.minds_evals.testing import expected_modal_environment_name
+from imbue.minds_evals.testing import read_scheduled_workflow_text
 from imbue.minds_evals.testing import write_trial_dir
 
 # The two tests below are what hold testing.CI_SWEEP_PREFIX to the workflow's CI_ENVIRONMENT_PREFIX:
@@ -50,8 +51,7 @@ def test_the_sweep_prefix_this_file_pins_is_the_one_the_scheduled_workflow_actua
     Python, so the two ends can only be held together from here -- and holding them against a second
     copy of the literal would hold nothing. A mismatch leaves the run's live Modal environments
     behind in silence, because a sweep that selects nothing exits 0."""
-    assert SCHEDULED_WORKFLOW_PATH.is_file(), "expected the scheduled workflow at {}".format(SCHEDULED_WORKFLOW_PATH)
-    match = _CI_ENVIRONMENT_PREFIX_PATTERN.search(SCHEDULED_WORKFLOW_PATH.read_text())
+    match = _CI_ENVIRONMENT_PREFIX_PATTERN.search(read_scheduled_workflow_text())
 
     assert match is not None, "no CI_ENVIRONMENT_PREFIX in {}; the sweep's scope is now unpinned".format(
         SCHEDULED_WORKFLOW_PATH

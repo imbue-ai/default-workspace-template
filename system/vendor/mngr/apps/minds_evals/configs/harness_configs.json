@@ -1,0 +1,45 @@
+{
+  "harness_configs": [
+    {
+      "name": "default",
+      "is_nightly": true,
+      "lane": "anthropic"
+    },
+    {
+      "name": "haiku",
+      "is_nightly": true,
+      "lane": "anthropic",
+      "model": "haiku",
+      "effort": "medium"
+    },
+    {
+      "name": "pi-haiku",
+      "is_nightly": false,
+      "lane": "api-key",
+      "key_provider": "anthropic",
+      "model": "anthropic/claude-haiku-4-5",
+      "effort": "medium"
+    },
+    {
+      "name": "pi-gpt-5-mini",
+      "is_nightly": true,
+      "lane": "openrouter",
+      "model": "openrouter/openai/gpt-5-mini",
+      "effort": "medium"
+    },
+    {
+      "name": "pi-glm-4.7-flash",
+      "is_nightly": false,
+      "lane": "openrouter",
+      "model": "openrouter/z-ai/glm-4.7-flash",
+      "effort": "medium"
+    },
+    {
+      "name": "opus-standard",
+      "is_nightly": false,
+      "lane": "anthropic",
+      "model": "opus[1m]",
+      "effort": "high"
+    }
+  ]
+}
