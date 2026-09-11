@@ -53,15 +53,15 @@ fi
 
 SIGNOFF="sent from :brain:"
 if [[ -n "$AGENT_ID" && -n "$HOSTNAME" ]]; then
-  SIGNOFF="${SIGNOFF}\n[mind:${AGENT_ID}@${HOSTNAME}]"
+  SIGNOFF="${SIGNOFF}"$'\n'"[mind:${AGENT_ID}@${HOSTNAME}]"
 fi
 
-COMBINED="${BODY}\n${LINK}"
+COMBINED="${BODY}"$'\n'"${LINK}"
 if [[ ${#COMBINED} -gt 160 ]]; then
   echo "Warning: body + link is ${#COMBINED} characters (>160). Slack criteria may fail." >&2
 fi
 
-TEXT="${COMBINED}\n${SIGNOFF}"
+TEXT="${COMBINED}"$'\n'"${SIGNOFF}"
 
 PAYLOAD=$(jq -n \
   --arg channel "$CHANNEL" \
