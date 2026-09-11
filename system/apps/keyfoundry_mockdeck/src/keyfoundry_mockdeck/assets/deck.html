@@ -306,6 +306,33 @@
   @media (prefers-reduced-motion: reduce) {
     .spinner { animation: none; }
   }
+
+  /* ---------- keyboard nav bar ---------- */
+  .nav-bar {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    background: var(--panel-bg); border: 1px solid var(--panel-line);
+    border-radius: 999px; padding: 8px 16px;
+    box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6);
+    z-index: 20;
+    transition: opacity 0.4s ease;
+  }
+  .nav-bar.faded { opacity: 0.35; }
+  .nav-keys { display: flex; align-items: center; gap: 6px; }
+  .nav-keys .key {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--panel-line); border-radius: 5px;
+    padding: 2px 6px; min-width: 20px; text-align: center;
+  }
+  .nav-label { font-size: 12px; color: var(--ink-faint); }
+  .nav-count {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+    border-left: 1px solid var(--panel-line); padding-left: 14px;
+  }
+
+  @media (max-width: 560px) {
+    .nav-label { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -650,5 +677,83 @@
   </footer>
 
 </div>
+
+<div class="nav-bar" id="navBar">
+  <div class="nav-keys">
+    <span class="key">&uarr;</span><span class="key">&darr;</span>
+    <span class="nav-label">move between screens</span>
+  </div>
+  <div class="nav-count" id="navCount">1 / 11</div>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('header.top, section.stage, footer.close'));
+  var idx = 0;
+  var navBar = document.getElementById('navBar');
+  var navCount = document.getElementById('navCount');
+  var fadeTimer = null;
+
+  function render() {
+    navCount.textContent = (idx + 1) + ' / ' + slides.length;
+  }
+
+  function wake() {
+    navBar.classList.remove('faded');
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(function () { navBar.classList.add('faded'); }, 2600);
+  }
+
+  // A slide "becomes current" once its top has scrolled to (or past) the
+  // viewport top -- the last slide whose top is at or above the current
+  // scroll position.
+  function indexFromScroll() {
+    var y = window.scrollY + 80;
+    var best = 0;
+    for (var i = 0; i < slides.length; i++) {
+      if (slides[i].offsetTop <= y) best = i;
+    }
+    return best;
+  }
+
+  function goTo(next) {
+    idx = Math.max(0, Math.min(slides.length - 1, next));
+    slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render();
+    wake();
+  }
+
+  // Only resync the counter from actual scroll position on a genuine manual
+  // gesture (wheel/trackpad/touch) -- never on a plain 'scroll' event, which
+  // also fires throughout a keyboard-triggered smooth-scroll animation and
+  // would otherwise race goTo()'s own idx bookkeeping.
+  var manualScrollTimer = null;
+  function onManualScroll() {
+    clearTimeout(manualScrollTimer);
+    manualScrollTimer = setTimeout(function () {
+      idx = indexFromScroll();
+      render();
+    }, 120);
+  }
+  window.addEventListener('wheel', onManualScroll, { passive: true });
+  window.addEventListener('touchmove', onManualScroll, { passive: true });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown') {
+      e.preventDefault(); goTo(idx + 1);
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault(); goTo(idx - 1);
+    } else if (e.key === 'Home') {
+      e.preventDefault(); goTo(0);
+    } else if (e.key === 'End') {
+      e.preventDefault(); goTo(slides.length - 1);
+    }
+  });
+
+  idx = indexFromScroll();
+  render();
+  wake();
+})();
+</script>
 </body>
 </html>
