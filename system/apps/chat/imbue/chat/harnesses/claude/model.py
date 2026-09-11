@@ -21,7 +21,7 @@ workspace provisions. In Claude Code ``[1m]`` is an explicit opt-in ("append [1m
 model name for 1M"), so the bare alias hands back a smaller window than the workspace
 paid for. Both forms are accepted and both report the same display name, which is why
 the difference is invisible at the ``/model`` prompt -- ``/model fable`` and ``/model
-fable[1m]`` each answer "Set model to Fable 5". Do not take an API-level claim that a
+fable[1m]`` each answer "Set model to Fable 5.1". Do not take an API-level claim that a
 model's default context is already 1M as licence to drop the suffix: that is a property
 of the model, and this is a property of the harness. Haiku has no ``[1m]`` variant.
 
@@ -164,7 +164,7 @@ _HIDDEN_MODELS: tuple[ModelOption, ...] = tuple(
         ("claude-mythos-5-1", "Mythos 5.1", False),
         ("claude-mythos-5", "Mythos 5", False),
         ("claude-mythos-preview", "Mythos Preview", False),
-        # The one hidden model that really has fast, per 2.1.227's "Opus 5/4.8".
+        # The one hidden model that really has fast, per 2.1.269's "Opus 5/4.8".
         ("claude-opus-4-8", "Opus 4.8", True),
         ("claude-opus-4-7", "Opus 4.7", False),
         ("claude-opus-4-6", "Opus 4.6", False),
