@@ -886,6 +886,35 @@ def test_a_limit_notice_reaches_the_wire_as_an_error() -> None:
     assert event["is_auth_error"] is False
 
 
+def test_a_stamped_login_failure_reaches_the_wire_as_an_auth_error() -> None:
+    """A verbatim `Login expired` record. Its wording is invisible to the auth vocabulary --
+    only the stamp says the credential is the problem -- and the sign-in action hangs off
+    `is_auth_error`, so without this the user is told to retry a turn that cannot succeed
+    until they sign in. `is_api_error` must stay off: the two surfaces would otherwise offer
+    contradictory next steps on one message."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "uuid-login",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "isApiErrorMessage": True,
+            "error": "authentication_failed",
+            "message": {
+                "role": "assistant",
+                "model": _SYNTHETIC_MODEL,
+                "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+                "stop_reason": "stop_sequence",
+                "usage": {},
+            },
+        }
+    )
+    event = parse_lines([line])[0]
+    assert event["is_auth_error"] is True
+    assert event["is_api_error"] is False
+    assert event["api_error_kind"] is None
+    assert event["is_provider_fault"] is False
+
+
 def test_tk_transition_is_stamped_resident() -> None:
     """A tk transition line (`Updated <id> -> <status>`) is stamped resident however deep
     in the output it sits, so the progress view never loses a step transition when a tk
