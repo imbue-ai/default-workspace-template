@@ -23,6 +23,12 @@ solely to support one app lives in that app's folder under
   tests in its package, and exercise its entry point (`uv run <name>`) with a
   bounded invocation where feasible. Never start supervisord, and never
   `supervisorctl` against the served tree from a worktree.
+- Run the package's tests by path, never a bare root `uv run pytest`:
+
+  ```bash
+  uv run pytest system/services/<package>       # standalone
+  cd system/apps/<package> && uv run pytest     # app-owned (<app>-<role>)
+  ```
 - Verify config-only changes by parsing `system/supervisord.conf` (e.g. with
   Python's `configparser`), not by starting the daemon.
 
