@@ -60,35 +60,7 @@ git config --global --add safe.directory "$REPO_ROOT"
 # plugin-specific config; the update-self apply reads the same table, so a
 # release adding a plugin registers it in existing workspaces as well as here.
 # mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-#
-# Base package and plugins go in ONE `uv tool install`, never an install followed
-# by a `mngr plugin add`: installing the base alone rebuilds the environment from
-# it and drops every extra, so the two-step form leaves the tool plugin-less in
-# between. A build that dies in that window strands a mngr that cannot resolve
-# `[agent_types.claude]`, which is what `mngr create --template chat` needs -- and
-# that create is how the app starts the update that would repair it.
-MNGR_PLUGIN_ARGS=()
-while IFS= read -r plugin_path; do
-    MNGR_PLUGIN_ARGS+=(--with-editable "$REPO_ROOT/$plugin_path")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
-
-# A process substitution's exit status is not the loop's, so `set -e` cannot see the
-# lister failing -- and an empty list would make the install below succeed with the
-# base package alone, which is the plugin-less mngr this whole shape exists to rule
-# out. (The per-app loop below needs no such guard: the manifest assigns
-# system_interface no plugins, so empty is its normal answer.)
-if [ "${#MNGR_PLUGIN_ARGS[@]}" -eq 0 ]; then
-    echo "build_workspace: system/config/mngr_plugins.toml listed no plugins for the mngr tool;" \
-        "installing the base package alone leaves an mngr that cannot parse [agent_types.*]." >&2
-    exit 1
-fi
-
-# --reinstall builds the environment from scratch rather than syncing whatever is
-# already there, matching what the update apply does for every tool it refreshes
-# (update_environment.py::_reinstall_tool). It is not what keeps the dependencies
-# current: uv re-resolves a local editable source on every `uv tool install`, which
-# is why the per-app installs below need no such flag.
-uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr" "${MNGR_PLUGIN_ARGS[@]}" --reinstall
+python3 "$REPO_ROOT/system/scripts/install_mngr.py"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue

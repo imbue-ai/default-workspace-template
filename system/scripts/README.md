@@ -5,9 +5,10 @@ Provisioning and utility scripts:
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
-  `_provision_guard.sh`, `_tool_env.sh`, `tool_env.py` (vendored byte-identically
-  into `.agents/skills/update-self/scripts/`, which the apply runs as a
-  self-contained unit), and the boot-convergence units in `env.d/`.
+  `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
+  (vendored byte-identically into `.agents/skills/update-self/scripts/`, which
+  the apply runs as a self-contained unit), and the boot-convergence units in
+  `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
   spawns their `*_check.py` checkers from `.pi/extensions/`. See
