@@ -41,6 +41,13 @@ your sleep expiring is dead time on the critical path. Ending your turn here is
 safe -- a worker with a live sub-worker of its own never counts as idle, so the
 liveness check below will not mistake you for a wedged one.
 
+This is a rule about waiting, not about one command: **a worker's report is never
+polled.** The only sanctioned wait on a sibling is an armed `await` plus ending
+the turn. Sleeping on a `find` over its reports directory, on `mngr list`, or on
+`tmux capture-pane` against its pane is the same blind guess wearing a different
+command, and it costs the same dead time -- `await` already watches exactly those
+files and returns the moment one lands.
+
 With several workers out, arm one poll per worker before ending the turn. Each
 completion wakes you separately, so you act on whichever reports first and merge
 it while the others are still running.

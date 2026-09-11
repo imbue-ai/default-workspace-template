@@ -125,8 +125,8 @@ a stuck one, and await it with `--timeout 60m`.
   immediately (`mngr message`) rather than let it find out at merge time.
 - Merge the siblings in a fixed order and resolve any conflicts yourself. Then
   run exactly the verification a direct pass runs -- the "Review gates" section
-  below: the full suite and the ratchets -- once on the merged result, and
-  report `done` with the same body a direct pass would.
+  below, scoped to your own footprint rather than any sibling's -- once on the
+  merged result, and report `done` with the same body a direct pass would.
 
 Weigh the cost before splitting: every sibling pays a venv converge and a plugin
 install before it does any work, and on a small creation that overhead can
@@ -248,8 +248,8 @@ evicts is not hardened, no matter how well-tested its happy path is.
 3. Fix failing tests with narrowly targeted changes
 
 If your own task file says your lead runs this verification on the merged
-result -- the scoped-sibling case above -- skip this section and run only your
-scope's tests.
+result -- the scoped-sibling case above -- run your own scope's tests and skip
+the rest of this section.
 
 When complete, report back to the lead.
 
