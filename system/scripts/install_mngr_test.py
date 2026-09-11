@@ -2,18 +2,17 @@
 
 The install itself is a ``uv tool install`` against the network, so what is exercised here
 is everything that decides *what* it runs: the argument vector, the refusal that keeps a
-plugin-less install from happening at all, and the tool-directory pin. The refusal path
-returns before any subprocess, so none of this shells out.
+plugin-less install from happening at all, and the environment the install runs under.
+None of it shells out: the refusal returns before any subprocess, and the pin is a mapping
+the install is handed rather than something it reads back.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
-
 import install_mngr
+import pytest
 import tool_env
 
 _MANIFEST = """
@@ -81,21 +80,19 @@ def test_a_manifest_that_assigns_mngr_nothing_exits_nonzero_without_installing(
     assert "no plugins" in capsys.readouterr().err
 
 
-def test_the_install_is_pinned_to_the_tool_directory_on_path(
+def test_the_install_is_pinned_to_the_tool_directory_the_build_uses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An agent runs this with HOME=/home/user while the mngr being repaired is the one on
-    PATH under the pinned home. Unpinned, uv reports success into a directory nothing runs
-    from and leaves the broken copy untouched."""
+    """An agent runs this with HOME=/home/user while the mngr being repaired is the one
+    under the pinned home. Unpinned, uv reports success into a directory nothing runs from
+    and leaves the broken copy untouched."""
     pinned_home = tmp_path / "root"
     monkeypatch.setenv("TOOL_ENV_HOME", str(pinned_home))
-    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
-    monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
 
-    install_mngr.main(["--repo-root", str(_repo(tmp_path, _MANIFEST_WITHOUT_MNGR))])
+    env = install_mngr.install_environment({})
 
-    assert os.environ["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned_home))
-    assert os.environ["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned_home))
+    assert env["UV_TOOL_DIR"] == str(tool_env.tools_dir(pinned_home))
+    assert env["UV_TOOL_BIN_DIR"] == str(tool_env.bin_dir(pinned_home))
 
 
 def test_a_caller_that_already_pinned_the_tool_directory_wins(
@@ -103,8 +100,7 @@ def test_a_caller_that_already_pinned_the_tool_directory_wins(
 ) -> None:
     """build_workspace.sh pins before calling, and its pin is the one that must hold."""
     monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "ignored"))
-    monkeypatch.setenv("UV_TOOL_DIR", "/already/chosen")
 
-    install_mngr.main(["--repo-root", str(_repo(tmp_path, _MANIFEST_WITHOUT_MNGR))])
+    env = install_mngr.install_environment({"UV_TOOL_DIR": "/already/chosen"})
 
-    assert os.environ["UV_TOOL_DIR"] == "/already/chosen"
+    assert env["UV_TOOL_DIR"] == "/already/chosen"
