@@ -2,13 +2,14 @@
  * Client layouts: one arrangement per view per client, read and written through the shell's
  * layout routes (contracts.md section 6).
  *
- * A layout is the serialized dockview grid plus one tab record per panel: which address the
- * panel shows, the tab id the shell minted for it, and when it was last the active one. The
- * client's layout file on the shell is the truth of the arrangement: this window writes it for
- * the user's own gestures, the shell writes it for agent ops, and every write is announced as
- * ``layout_updated`` so the client's other windows refetch. Each save carries a save id this
- * window minted (so it can skip the echo of its own writes) and the stamp of the arrangement it
- * was based on (so a save over a newer arrangement is refused rather than clobbering it).
+ * A layout is the serialized dockview grid, and nothing beside it: what each panel shows lives in
+ * the ``params`` dockview keeps on the panel (``PanelParams`` below), so there is no second copy
+ * of a tab's identity to fall out of step with the grid. The client's layout file on the shell
+ * is the truth of the arrangement: this window writes it for the user's own gestures, the shell
+ * writes it for agent ops, and every write is announced as ``layout_updated`` so the client's
+ * other windows refetch. Each save carries a save id this window minted (so it can skip the echo
+ * of its own writes) and the stamp of the arrangement it was based on (so a save over a newer
+ * arrangement is refused rather than clobbering it).
  */
 
 import type { SerializedDockview } from "dockview-core";
@@ -16,17 +17,43 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { errorDetailFromResponse } from "@imbue/workspace-ui/src/models/http";
 
-/** What one panel of a layout shows. */
-export interface TabRecord {
-  address: string;
-  tab_id: string;
-  last_focused_ms: number;
+/**
+ * What a panel shows, as the ``params`` dockview stores on it and hands back on restore: an
+ * instance, by address, in the page the shell minted a tab id for; or the New Tab launcher,
+ * which is a question about a pane rather than an instance. ``tabId`` is the page's id, not the
+ * panel's: the same page docked in two views is one tab id under two panel ids. ``lastFocusedMs``
+ * is when the panel was last the active one, 0 for never.
+ */
+export type PanelParams =
+  { kind: "instance"; address: string; tabId: string; lastFocusedMs: number } | { kind: "launcher" };
+
+export type InstancePanelParams = Extract<PanelParams, { kind: "instance" }>;
+
+/** ``value`` as panel params when it has their shape (a restore hands back whatever was saved), else null. */
+export function parsePanelParams(value: unknown): PanelParams | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "launcher") return { kind: "launcher" };
+  if (record.kind !== "instance" || typeof record.address !== "string" || typeof record.tabId !== "string") {
+    return null;
+  }
+  const lastFocusedMs = typeof record.lastFocusedMs === "number" ? record.lastFocusedMs : 0;
+  return { kind: "instance", address: record.address, tabId: record.tabId, lastFocusedMs };
+}
+
+/** The params of every panel a serialized dockview names, keyed by panel id; panels with no readable params are skipped. */
+export function panelParamsInDocument(dockview: SerializedDockview): Record<string, PanelParams> {
+  const found: Record<string, PanelParams> = {};
+  for (const [panelId, entry] of Object.entries(dockview.panels ?? {})) {
+    const params = parsePanelParams(entry.params);
+    if (params !== null) found[panelId] = params;
+  }
+  return found;
 }
 
 /** One client's arrangement of one view. */
 export interface LayoutRecord {
   dockview: SerializedDockview | null;
-  tabs: Record<string, TabRecord>;
   device_kind: string;
   updated_at: string | null;
 }
@@ -97,7 +124,6 @@ export async function saveLayout(
   viewId: string,
   clientId: string,
   dockview: SerializedDockview | null,
-  tabs: Record<string, TabRecord>,
   baseUpdatedAt: string | null,
 ): Promise<LayoutSaveOutcome> {
   const response = await fetch(apiUrl(`/api/layouts/${encodeURIComponent(viewId)}`), {
@@ -109,7 +135,6 @@ export async function saveLayout(
       base_updated_at: baseUpdatedAt,
       device_kind: getDeviceKind(),
       dockview,
-      tabs,
     }),
   });
   if (response.status === HTTP_CONFLICT) {
@@ -122,13 +147,13 @@ export async function saveLayout(
   return { updatedAt: answer.updated_at };
 }
 
-/** The panels of a layout whose tab record names an address no longer listed, so a restore
- *  can drop them (the observation that prunes references, contracts.md section 4.1). */
+/** The panels of a layout whose params name an address no longer listed, so a restore can drop
+ *  them (the observation that prunes references, contracts.md section 4.1). */
 export function panelsWithUnlistedAddresses(
-  tabs: Readonly<Record<string, TabRecord>>,
+  paramsByPanelId: Readonly<Record<string, PanelParams>>,
   isListed: (address: string) => boolean,
 ): string[] {
-  return Object.entries(tabs)
-    .filter(([, tab]) => !isListed(tab.address))
+  return Object.entries(paramsByPanelId)
+    .filter(([, params]) => params.kind === "instance" && !isListed(params.address))
     .map(([panelId]) => panelId);
 }
