@@ -80,18 +80,26 @@ def classify_error_notice(raw: dict[str, Any], text: str) -> ErrorNotice:
     model): ``text`` is matched as a fallback, and an agent discussing a credential or
     quoting an error body says these things in ordinary prose.
     """
+    # Narrow both stamp fields here, at the boundary with the third-party record, so
+    # everything below is typed. ``error`` is read as a lookup key, so a stray list or dict
+    # there would raise inside the watcher thread and wedge the read path (see
+    # ``_parse_assistant_message`` on the null-message guard).
     raw_kind = raw.get("error")
-    # Read as a lookup key below, so it must be hashable however malformed the record is:
-    # a stray list or dict here would raise inside the watcher thread and wedge the read
-    # path (see ``_parse_assistant_message`` on the null-message guard).
     claude_kind = raw_kind if isinstance(raw_kind, str) else ""
+    raw_status = raw.get("apiErrorStatus")
+    status = raw_status if isinstance(raw_status, int) else None
+
+    # The stamp decides the auth question only in the POSITIVE direction: a kind Claude Code
+    # names as a credential dead end is one, and the prose still gets its say otherwise. It
+    # is deliberately NOT a veto, because Claude Code's `invalid_request` bucket is not clean
+    # -- it stamps that on eight credential dead ends whose own text says to re-authenticate
+    # ("Your organization has disabled API key authentication - ... run /login", "Your
+    # apiKeyHelper script is failing - ... you need to re-authenticate with your provider",
+    # the gateway's "Authentication error"). Trusting the stamp exclusively would send those
+    # to the plain API-error surface with no way forward.
     if claude_kind in _AUTH_ERROR_KINDS or is_auth_error_text(text):
         return ErrorNotice(is_auth_error=True)
-    kind = (
-        kind_for_status(raw.get("apiErrorStatus"))
-        or _KIND_BY_CLAUDE_ERROR.get(claude_kind)
-        or classify_api_error(text)
-    )
+    kind = kind_for_status(status) or _KIND_BY_CLAUDE_ERROR.get(claude_kind) or classify_api_error(text)
     if kind is None and raw.get("isApiErrorMessage") is not True:
         return _NO_ERROR
     return ErrorNotice(is_api_error=True, api_error_kind=kind)
