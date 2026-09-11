@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Passkey Home — Own your passkeys</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --bg-soft: #14141c;
+    --ink: #f5f5f7;
+    --ink-dim: #a0a0b0;
+    --accent: #6ee7b7;
+    --accent-2: #38bdf8;
+    --line: #26262f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; line-height: 1.5; }
+  body { min-height: 100vh; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 28px; }
+
+  /* Nav */
+  nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .logo { font-weight: 700; font-size: 18px; letter-spacing: -0.02em; }
+  .logo span { color: var(--accent); }
+  nav .links { display: flex; gap: 26px; font-size: 14px; color: var(--ink-dim); }
+  nav .links a { color: inherit; text-decoration: none; }
+  nav .links a:hover { color: var(--ink); }
+
+  /* Hero */
+  .hero { padding: 72px 0 56px; text-align: center; }
+  .eyebrow { display: inline-block; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; color: var(--ink-dim); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 26px; }
+  h1 { font-size: 56px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 700; margin-bottom: 22px; }
+  h1 .grad { background: linear-gradient(120deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .lede { font-size: 20px; color: var(--ink-dim); max-width: 620px; margin: 0 auto 36px; }
+  .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 14px 26px; border-radius: 12px; font-weight: 600; font-size: 15px; text-decoration: none; transition: transform .12s ease, background .12s ease; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--accent); color: #04130c; }
+  .btn-ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .btn-ghost:hover { background: var(--bg-soft); }
+
+  /* Problem */
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  .section-label { font-size: 12px; color: var(--accent); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 14px; }
+  h2 { font-size: 34px; letter-spacing: -0.02em; margin-bottom: 14px; }
+  .sub { color: var(--ink-dim); font-size: 17px; max-width: 640px; margin-bottom: 40px; }
+
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .card { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 16px; padding: 26px; }
+  .card h3 { font-size: 18px; margin-bottom: 10px; }
+  .card p { color: var(--ink-dim); font-size: 15px; }
+  .card .tag { display: inline-block; font-size: 11px; padding: 3px 9px; border-radius: 6px; background: rgba(110,231,183,0.12); color: var(--accent); margin-bottom: 14px; letter-spacing: 0.06em; text-transform: uppercase; }
+  .card.alt .tag { background: rgba(56,189,248,0.12); color: var(--accent-2); }
+
+  /* What it is */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .step { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+  .step .num { font-size: 13px; color: var(--accent); font-weight: 700; margin-bottom: 12px; }
+  .step h3 { font-size: 17px; margin-bottom: 8px; }
+  .step p { color: var(--ink-dim); font-size: 14px; }
+
+  /* Compare */
+  .compare { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .compare th, .compare td { text-align: left; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .compare th { color: var(--ink-dim); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .compare td:first-child { font-weight: 600; }
+  .yes { color: var(--accent); }
+  .no { color: #f87171; }
+  .meh { color: var(--ink-dim); }
+
+  /* CTA band */
+  .band { text-align: center; padding: 80px 0; border-top: 1px solid var(--line); }
+  .band h2 { margin-bottom: 16px; }
+  .band p { color: var(--ink-dim); margin-bottom: 30px; font-size: 17px; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0; color: var(--ink-dim); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  footer a { color: inherit; }
+
+  @media (max-width: 720px) {
+    h1 { font-size: 38px; }
+    .cards, .steps { grid-template-columns: 1fr; }
+    nav .links { display: none; }
+  }
+
+  /* Printable 1-pager */
+  @media print {
+    @page { size: A4; margin: 12mm 14mm; }
+    body { background: #fff; color: #111; font-size: 9.5px; line-height: 1.35; }
+    .wrap { max-width: 100%; padding: 0; }
+    nav { padding: 0 0 6px; border-bottom: 1px solid #ddd; }
+    nav .links { display: none; }
+    .logo { font-size: 13px; color: #111; }
+    .logo span { color: #059669; }
+    .hero { padding: 14px 0 10px; }
+    .eyebrow { border-color: #ccc; color: #555; font-size: 8px; padding: 3px 9px; margin-bottom: 10px; }
+    h1 { font-size: 26px; margin-bottom: 8px; }
+    h1 .grad { background: none; -webkit-text-fill-color: #059669; color: #059669; }
+    .lede { font-size: 11px; margin-bottom: 12px; max-width: 100%; color: #333; }
+    .cta-row { gap: 8px; }
+    .btn { padding: 7px 14px; font-size: 10px; }
+    .btn-primary { background: #059669; color: #fff; }
+    .btn-ghost { border-color: #999; color: #111; }
+    section { padding: 12px 0; border-top: 1px solid #ddd; }
+    .section-label { font-size: 8px; color: #059669; margin-bottom: 4px; }
+    h2 { font-size: 15px; margin-bottom: 4px; }
+    .sub { font-size: 10px; margin-bottom: 12px; color: #333; }
+    .cards { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .card { background: #f7f7f9; border: 1px solid #ddd; padding: 10px; border-radius: 8px; }
+    .card h3 { font-size: 11px; margin-bottom: 3px; color: #111; }
+    .card p { font-size: 9px; color: #333; }
+    .card .tag { font-size: 7px; padding: 2px 6px; margin-bottom: 6px; background: #e6f7ef; color: #059669; }
+    .card.alt .tag { background: #e3f2fd; color: #0284c7; }
+    .steps { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    .step { background: #f7f7f9; border: 1px solid #ddd; padding: 8px; border-radius: 8px; }
+    .step .num { font-size: 8px; margin-bottom: 4px; color: #059669; }
+    .step h3 { font-size: 10px; margin-bottom: 3px; color: #111; }
+    .step p { font-size: 8.5px; color: #333; }
+    .compare { font-size: 8.5px; }
+    .compare th, .compare td { padding: 5px 7px; }
+    .compare th { color: #555; font-size: 7.5px; }
+    .compare td:first-child { color: #111; }
+    .yes { color: #059669; }
+    .no { color: #dc2626; }
+    .meh { color: #666; }
+    .band { padding: 14px 0; }
+    .band h2 { margin-bottom: 6px; }
+    .band p { font-size: 10px; margin-bottom: 12px; color: #333; }
+    footer { border-top: 1px solid #ddd; padding: 8px 0; font-size: 8px; color: #555; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav>
+    <div class="logo">Passkey<span>Home</span></div>
+    <div class="links">
+      <a href="#problem">The problem</a>
+      <a href="#how">How it works</a>
+      <a href="#compare">Compare</a>
+      <a href="#get">Get it</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="eyebrow">Open source · macOS · Local-first</div>
+    <h1>Own your <span class="grad">passkeys.</span></h1>
+    <p class="lede">Passkeys without the walled garden. A macOS app that wraps KeePassXC with real onboarding, a real passkey manager, and encrypted backups — so you get the convenience of passkeys without handing your keys to a cloud.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#get">Download for macOS →</a>
+      <a class="btn btn-ghost" href="https://github.com/">View on GitHub</a>
+    </div>
+  </header>
+
+  <section id="problem">
+    <div class="section-label">The problem</div>
+    <h2>Passkeys are the right answer. The way you get them is broken.</h2>
+    <p class="sub">Today you choose between convenient-but-locked-in, or free-and-owned-but-unusable. Neither is good enough.</p>
+    <div class="cards">
+      <div class="card">
+        <span class="tag">Locked in</span>
+        <h3>Apple Passwords &amp; the cloud managers</h3>
+        <p>On macOS, passkeys live in iCloud Keychain. You can't see a list of them, can't export them, can't move them off Apple. The sync that makes them convenient is also the cage.</p>
+      </div>
+      <div class="card alt">
+        <span class="tag">Unusable</span>
+        <h3>Raw KeePassXC</h3>
+        <p>The only open-source, local-first store that supports passkeys and lets you export them. But setup is a hobbyist chore: install the app, make a DB, install the extension, pair them, find the hidden toggle, hope your site isn't one of the broken ones.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="section-label">How it works</div>
+    <h2>Five minutes to your first passkey. A list that's actually a list. Backups that don't leak.</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="num">01 · Onboarding</div>
+        <h3>Guided setup</h3>
+        <p>Step-by-step screens take you from "just installed" to a real passkey on a real site in five minutes — install the browser extension (deep-linked), pair it with the app, enable passkeys, then create your first one. Hand-held.</p>
+      </div>
+      <div class="step">
+        <div class="num">02 · Manage</div>
+        <h3>A real passkey manager</h3>
+        <p>One screen showing every passkey you own — rename, delete, re-export, and a per-site "test this passkey" link. KeePassXC buries this behind a menu. We make it the home screen.</p>
+      </div>
+      <div class="step">
+        <div class="num">03 · Backup</div>
+        <h3>Migration &amp; backup, done right</h3>
+        <p>First-class export/import. And we fix KeePassXC's one real wart — its <code>.passkey</code> exports are unencrypted JSON. We wrap exports in an encrypted envelope so your backup isn't a liability.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare">
+    <div class="section-label">Compare</div>
+    <h2>Why this, not the others</h2>
+    <table class="compare">
+      <thead>
+        <tr><th></th><th>Passkey Home</th><th>Apple Passwords</th><th>1Password / Bitwarden</th><th>Raw KeePassXC</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Open source</td><td class="yes">Yes</td><td class="no">No</td><td class="meh">Partial</td><td class="yes">Yes</td></tr>
+        <tr><td>Local-first, no cloud</td><td class="yes">Yes</td><td class="no">iCloud only</td><td class="no">Cloud sync</td><td class="yes">Yes</td></tr>
+        <tr><td>Export your passkeys</td><td class="yes">Yes (encrypted)</td><td class="no">No</td><td class="meh">Vendor format</td><td class="meh">Yes (plaintext)</td></tr>
+        <tr><td>Guided onboarding</td><td class="yes">Yes</td><td class="meh">Auto</td><td class="yes">Yes</td><td class="no">No</td></tr>
+        <tr><td>Subscription-free</td><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">Paid for sync</td><td class="yes">Yes</td></tr>
+        <tr><td>Passkey list UI</td><td class="yes">Yes</td><td class="no">No</td><td class="yes">Yes</td><td class="meh">Buried</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="band" id="get">
+    <div class="section-label">Get it</div>
+    <h2>Stop renting your credentials.</h2>
+    <p>Free, open source, macOS. Five minutes to your first passkey you actually own.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#">Download for macOS →</a>
+      <a class="btn btn-ghost" href="https://github.com/">Star on GitHub</a>
+    </div>
+  </section>
+
+  <footer>
+    <div>Passkey Home · open source · MIT · wraps <a href="https://keepassxc.org">KeePassXC</a></div>
+    <div>Requires the KeePassXC browser extension (we guide the install). Best on Chrome / Firefox / Edge today; Safari in progress.</div>
+  </footer>
+
+</div>
+</body>
+</html>
