@@ -28,7 +28,7 @@ import argparse
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import tool_env
@@ -67,13 +67,29 @@ def build_install_command(repo_root: Path, plugin_paths: Sequence[str]) -> list[
     return command + ["--reinstall"]
 
 
-def install_mngr(repo_root: Path) -> list[str]:
-    """Run the install; return the command that was run."""
+def install_environment(base_env: Mapping[str, str]) -> dict[str, str]:
+    """``base_env`` with the tool directories pinned to the ones the build installs into.
+
+    The install must land there rather than wherever ``$HOME`` points: an agent running
+    this by hand has HOME=/home/user while the mngr being repaired is the one under the
+    pinned home. Done here rather than asked of the caller, because a caller who forgets
+    gets a success message and an unchanged broken tool. Already-set values are left
+    alone, so build_workspace.sh's own pin still wins.
+    """
+    env = dict(base_env)
+    home = tool_env.tool_home()
+    env.setdefault("UV_TOOL_DIR", str(tool_env.tools_dir(home)))
+    env.setdefault("UV_TOOL_BIN_DIR", str(tool_env.bin_dir(home)))
+    return env
+
+
+def install_mngr(repo_root: Path, env: Mapping[str, str]) -> list[str]:
+    """Run the install under ``env``; return the command that was run."""
     manifest = (repo_root / MANIFEST_PATH).read_text()
     command = build_install_command(
         repo_root, plugin_paths_for_tool(manifest, MNGR_PLUGIN_KEY)
     )
-    subprocess.run(command, cwd=repo_root, check=True)
+    subprocess.run(command, cwd=repo_root, env=dict(env), check=True)
     return command
 
 
@@ -85,16 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         help="The workspace root to install from (default: $REPO_ROOT, else cwd).",
     )
     args = parser.parse_args(argv)
-    # The install must land in the pinned tool directories, not wherever $HOME points: an
-    # agent running this by hand has HOME=/home/user while the mngr being repaired is the
-    # one on PATH under the pinned home. Done here rather than asked of the caller,
-    # because a caller who forgets gets a success message and an unchanged broken tool.
-    # ``setdefault``, so build_workspace.sh's own pin (already exported) still wins.
-    home = tool_env.tool_home()
-    os.environ.setdefault("UV_TOOL_DIR", str(tool_env.tools_dir(home)))
-    os.environ.setdefault("UV_TOOL_BIN_DIR", str(tool_env.bin_dir(home)))
     try:
-        install_mngr(Path(args.repo_root))
+        install_mngr(Path(args.repo_root), install_environment(os.environ))
     except NoPluginsListed as error:
         sys.stderr.write(f"install_mngr: {error}\n")
         return 1
