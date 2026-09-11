@@ -192,26 +192,28 @@ export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto
 const FLYOUT_ROW_SHAPE =
   "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
-/** `pr-14` reserves the right edge for the tick and the removal control beside it, so the row's
- *  text never reflows when the bin appears. Those controls are positioned against the row's
- *  WRAPPER rather than the row, so they stay put while the highlight insets around them. */
-const FLYOUT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-14`;
-/** An ACCOUNT row reserves two slots more, for the rename pencil and the default star. Its
- *  own base rather than a wider shared one: model rows carry neither, and widening what they
- *  share would truncate every model name to make room for controls that are never drawn on
- *  them. */
+/** An ACCOUNT row reserves its right edge for the rename pencil, the bin and the tick, which are
+ *  positioned against the row's WRAPPER rather than the row, so they stay put while the
+ *  highlight insets around them, and the provider name never reflows when the bin appears. Its
+ *  own base rather than a wider shared one: a MODEL row carries none of the three -- only the
+ *  tick, as a child -- and reserving that width on model rows too would truncate every model
+ *  name to make room for controls that are never drawn on them. */
 const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-26`;
-export const FLYOUT_ROW = `${FLYOUT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
-export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
+export const FLYOUT_ROW = `${FLYOUT_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
+export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
 export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 export const FLYOUT_ROW_NAME = "truncate";
 export const FLYOUT_ROW_SUB = "type-helper text-faint";
-/** Pinned to the row's right edge and never moved. A SIBLING of the row button rather than a
- *  child, so the removal control can sit to its LEFT without either one having to give way.
+/** The MODEL row's tick: the last thing in the row, pushed out by `ml-auto` and so landing on
+ *  the row's own `px-2` padding edge -- which is where the account rows' pinned tick sits too,
+ *  13px in from the flyout's edge, so the two lists' ticks share one line.
  *
- *  It does not slide aside on hover: the tick says which provider this chat is running on, and
- *  that fact does not change because the pointer passed over the row. */
+ *  That alignment is why the model row reserves no right padding of its own. It used to carry
+ *  the account row's `pr-14`, for a bin and a pencil a model row never draws, and `ml-auto`
+ *  duly stopped at the inside edge of that reserve: a tick floating 56px short of the row's
+ *  end, which is what it looked like. A flex tick reads the row's padding, so the padding has
+ *  to be the truth about what else is in the row. */
 export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
 /** The same tick on a row that also carries a removal control: pinned to the row's right edge
  *  as a SIBLING of the button, so the bin can sit to its LEFT without either giving way. It
