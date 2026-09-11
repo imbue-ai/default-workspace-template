@@ -90,9 +90,11 @@ goes to stdout; with it, the parent directories are created.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
 - `wiring` is the `system/supervisord.conf` sections the app owns: its own
-  `program:<program>` block plus every `program:<name>-<role>` sidecar (a
-  sidecar not named after its app, such as the browser's `xvfb`, is not found,
-  and an unrelated program that happens to share the prefix is). Empty
+  `program:<program>` block, every `program:<name>-<role>` sidecar, and every
+  program the manifest's `[wiring] programs` declares (the browser declares
+  `xvfb`, which exists only for it; a declared program with no block is an
+  error). The first label of every standalone program is a reserved app name,
+  so the sidecar prefix cannot claim an unrelated program. Empty
   when the conf runs none of them, which is the normal state before an app is
   first registered.
 - `references` copies the manifest's entries through, with `kind` derived from

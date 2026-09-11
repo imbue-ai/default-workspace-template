@@ -14,7 +14,15 @@ from app_manifest.errors import InvalidManifestValueError
 # hostname. A drift test in forward_port_test.py keeps the two identical.
 APP_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 MAX_APP_NAME_LENGTH: Final[int] = 32
-RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset({"localhost", "auth"})
+# ``localhost`` and ``auth`` are origin labels. The rest are the first label of every
+# standalone supervisord program with a hyphen in its name (``share-gateway``,
+# ``app-watcher``, ``owner-exec``, ``vm-exec-register``, ``host-backup``,
+# ``env-converge``): an app named after one would claim that program as its
+# ``<name>-<role>`` sidecar. ``system/test_app_manifests.py`` keeps this set in step
+# with ``system/supervisord.conf``.
+RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
+    {"localhost", "auth", "share", "app", "owner", "vm", "host", "env"}
+)
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 MAX_DISPLAY_NAME_LENGTH: Final[int] = 64

@@ -865,6 +865,9 @@ path = "system/scripts/run_files.sh"
 
 [scope]
 exclude = ["system/apps/files/frontend/dist/**"]
+
+[wiring]
+programs = ["files-indexer"]
 """
 
 
@@ -887,6 +890,7 @@ def test_registration_ignores_the_manifests_references_and_scope_tables(
     row = _read_apps(apps_file)[0]
     assert "references" not in row
     assert "scope" not in row
+    assert "wiring" not in row
     # The keys the manifest does own still land, so this is not a vacuous pass.
     assert row["display_name"] == "File Viewer"
     assert row["priority"] == "files"

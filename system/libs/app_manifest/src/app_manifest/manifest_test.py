@@ -381,6 +381,16 @@ exclude = ["system/apps/news/frontend/dist/**"]
 """
 
 
+def test_wiring_programs_are_unique_and_never_the_apps_own() -> None:
+    base = {"name": "news", "display_name": "News", "icon": "icon.svg"}
+
+    assert AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb"]}}).wiring.programs == ("xvfb",)
+    with pytest.raises(ValidationError, match="unique"):
+        AppManifest.model_validate({**base, "wiring": {"programs": ["xvfb", "xvfb"]}})
+    with pytest.raises(ValidationError, match="own program"):
+        AppManifest.model_validate({**base, "wiring": {"programs": ["news"]}})
+
+
 def test_a_manifest_reads_its_references_and_scope() -> None:
     manifest = AppManifest.model_validate(
         {

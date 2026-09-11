@@ -1,9 +1,5 @@
 # Verification
 
-No run loads this file: the two gates below are parked in the harden pass, so
-`harden-creation.md` does not list it. The invocations stay correct for a
-by-hand run.
-
 Run the repo's review gates -- `/verify-architecture` and `/autofix` -- and
 fix what they flag **before** writing the final gate report, so the user sees
 a single report that already reflects the review verdicts rather than a
@@ -13,12 +9,12 @@ The gates are part of the harden contract, not a step you may adapt. Run them
 as written unless the operation's own reference defines an explicit skip
 condition (as `update-self` does for a pure clean pull) and you can show its
 conditions hold. You are not permitted to skip gates or narrow them, even with full
-disclosure in your report. Where your operation reference defines a mid-flight
-gate for it (`update-self`'s `question`), surface it there and stop. Where it
-defines none -- the crystallize / update / heal enums are stage-bound approval
-gates, and `final-creation` does not fire until after the gates -- run the gates
-as written and record your reasoning in the report for the lead to weigh: the
-fallback is always more coverage, never less. A scoped-down or hand-rolled
+disclosure in your report. If you believe a gate should not run, or should run
+at another scope, in a situation no skip condition covers, surface that as a
+mid-flight `question` gate and stop -- `question` is valid on every run,
+whatever gate names your operation reference lists. If you do not ask, run the
+gates as written and record your reasoning in the report for the lead to weigh:
+the fallback is always more coverage, never less. A scoped-down or hand-rolled
 substitute reported as "review" is worse than no gate at all, because it reads as
 coverage that does not exist.
 

@@ -59,19 +59,24 @@ cat << 'BODY_EOF'
 
 ## Reporting back
 Follow `.agents/shared/references/worker-reporting.md` for the full
-report procedure: it has you parse this task's frontmatter to get
-`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
-its parent directory back to the lead. Substitutions for this task:
+report procedure: parse this task's frontmatter for `TASK_FILE` /
+`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write your report body to a
+file and deliver it with the launcher's `report` subcommand, which
+writes the report and pushes it to the lead for you:
 
-- `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
-- `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
-  i.e. `dirname "$FINISH_REPORT_PATH"` (your worktree path matches the
-  lead's destination for this flow)
-- Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
-  (terminal), plus `milestone` reports (`type: milestone`, any name;
-  non-blocking, see `worker-reporting.md`).
+`create_worker.py report --task-file "$TASK_FILE" --type <gate|status> --name <name> --body-file <body-file>`
 
-For a mid-flight `question` gate, stop your turn after pushing -- the
+Substitutions for this task:
+
+- `<TASK_FILE>` -> the `task_file` path stamped in this file's frontmatter
+- Valid `name:` values: `question` (a mid-flight gate, valid at any
+  point of any run), `done` / `stuck` (terminal).
+- Milestones (`type: milestone`, any name; non-blocking) follow
+  `worker-reporting.md`'s "Milestone reports": a file under
+  `milestones/` beside `report.md`, pushed the same way; its
+  `<RUNTIME_REPORTS_DIR>` is `dirname "$FINISH_REPORT_PATH"`.
+
+For a mid-flight `question` gate, stop your turn after reporting -- the
 lead replies via `mngr message` and you resume. For terminal statuses,
 the run ends. A milestone is the exception: it never stops your turn --
 push it and carry straight on.
@@ -97,6 +102,12 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --runtime-dir data/.tasks/launch-task/$NAME/ \
     --task-file data/.tasks/launch-task/$NAME/task.md
 ```
+
+`launch` stamps this task file's own path as `task_file` and your agent name
+as `lead_agent` into its frontmatter before sending it, and labels the worker
+`lead_agent=<you>`, so the worker knows exactly where its task file is and who
+to report to. The same steps apply when you are yourself a worker: your
+sub-worker's runtime dir and report land in your worktree, and you are its lead.
 
 If the task references gitignored files outside the runtime dir, set
 `source_artifacts_dir: <dir>` in the task frontmatter; `launch`
@@ -125,12 +136,16 @@ reports never reach the user and the worker deadlocks waiting for a
 reply. Reports surface as task notifications when the background job
 completes; handle them at that point, not by blocking on the poll.
 
+Once it has printed a report, `await` archives it under
+`data/.tasks/launch-task/$NAME/reports/consumed/`, so the poll path is
+clear for the worker's next push and you never move a report by hand.
+
 ## 4. Handle the report
 
 Follow `.agents/shared/references/lead-proxy.md` for parsing the
 report's frontmatter (`type` + `name`), deciding whether to answer a
-gate yourself vs. escalate to the user, consuming the report so the
-next push can land a fresh `report.md`, and acting on terminal statuses
+gate yourself vs. escalate to the user, re-arming the poll after a gate
+(the report is already archived), and acting on terminal statuses
 (`done` -> merge the worker's branch; `stuck` or 30m timeout without a
 report -> diagnose worker liveness, then surface to the user per
 `references/worker-failure.md` if the worker is genuinely wedged).
@@ -142,14 +157,15 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - Task file (pass to `create_worker.py await --task-file`): `data/.tasks/launch-task/$NAME/task.md`
 - `finish_report_path`: `data/.tasks/launch-task/$NAME/reports/report.md`
 - Reports dir (for `<REPORTS_DIR>`, i.e. `dirname finish_report_path`): `data/.tasks/launch-task/$NAME/reports/`
-- Consumed dir: `data/.tasks/launch-task/$NAME/reports/consumed/`
+- Consumed dir (where `await` archives each report it prints; a milestone
+  keeps its own file name there): `data/.tasks/launch-task/$NAME/reports/consumed/`
 - Milestones dir: `data/.tasks/launch-task/$NAME/reports/milestones/`
 - Gate names: `question` (mid-flight; default-escalate to the user
   unless you can answer from context).
 - Milestone names: any name; non-blocking -- handle per `lead-proxy.md`'s
   "Milestone reports: provisional merge" (provisionally merge the pinned
-  `commit:`, consume the file either way, re-arm the poll; the worker keeps
-  working regardless).
+  `commit:` or defer it, then re-arm the poll; `await` has already archived
+  the file either way, and the worker keeps working regardless).
 - Terminal statuses: `done` (merge); `stuck` (failure flow).
 
 ## Guidelines

@@ -8,7 +8,7 @@ Every rule below is normative and describes the current contract; where a phase 
 
 ## 1. Identifiers and addresses
 
-- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not starting with `host-` or `agent-`.
+- An **app name** obeys `system/scripts/forward_port.py`'s rule: lowercase alphanumeric or underscore runs joined by single hyphens, at most 32 characters, not `localhost` or `auth`, not the first label of a standalone supervisord program (`share`, `app`, `owner`, `vm`, `host`, `env`, which `system/test_app_manifests.py` keeps in step with the conf), not starting with `host-` or `agent-`.
 - An **instance key** matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
   It is unique within its app and never changes for the life of the instance.
   Keys ride addresses, URLs, and JSON keys unencoded; a key never needs percent-encoding because its alphabet is URL-safe.
@@ -41,6 +41,7 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `references` | array of tables | no | `[]` | Each `{path, note?}`. `path` is a literal repo-root-relative POSIX file or directory the app owns outside its own folder (no globs, no `.` or `..` segments, no empty segments, no trailing slash, no backslashes, never under `system/vendor/` or `data/`, and never through a symlinked directory, which git does not report diffs through) and is unique within the manifest. `note` is one non-empty line, at most 200 characters, saying why it belongs to the app and which surface it uses. Location rules below. |
 | `scope` | table | no | `{}` | `{exclude = ["<glob>", ...]}`. Each glob is repo-root-relative gitignore syntax (non-empty, not absolute, no `.` or `..` segments, no empty segments, no backslashes, no leading `!` -- negation would re-include a built-in). A glob that covers the app's own directory or one of its references is rejected when the footprint is computed. A hard denylist for the footprint, combined with the built-in excludes `system/vendor/**`, `data/**`, `**/node_modules/**`, `**/dist/**`, `**/.venv/**`. |
+| `wiring` | table | no | `{}` | `{programs = ["<program>", ...]}`: further `[program:*]` blocks in `system/supervisord.conf` the app owns beyond its own and its `<name>-<role>` sidecars (the browser declares `xvfb`). Unique, never the app's own `program`; each must exist in the conf when the footprint is computed. |
 | `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.

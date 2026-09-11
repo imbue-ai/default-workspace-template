@@ -231,9 +231,29 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 ## 6. Report back
 
-Per `.agents/shared/references/worker-reporting.md` (`<TASK_FILE_GLOB>` ->
-`data/.tasks/update-self/task.md`; `<RUNTIME_REPORTS_DIR>` ->
-`data/.tasks/update-self/reports`). Valid `name:` values:
+Take the frontmatter parse, the report frontmatter, and the body shapes from
+`.agents/shared/references/worker-reporting.md` (`<TASK_FILE>` ->
+`data/.tasks/update-self/task.md`).
+
+Deliver the report **by hand**, not with that reference's `report` subcommand:
+this flow runs cross-version, and the launcher in your checkout is whatever
+release the workspace is still on, which may predate the subcommand. Write the
+file and push its directory yourself, using the `LEAD_AGENT` /
+`FINISH_REPORT_PATH` from the parse:
+
+```bash
+mkdir -p data/.tasks/update-self/reports
+# write the frontmatter + body to data/.tasks/update-self/reports/report.md, then:
+mngr rsync ./data/.tasks/update-self/reports/ \
+    "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
+    --uncommitted-changes=clobber
+```
+
+If the push fails or `LEAD_AGENT` is unset, copy the file straight to
+`$FINISH_REPORT_PATH` in the lead's worktree -- the main worktree of this same
+repo -- rather than ending the run with the report only in yours.
+
+Valid `name:` values:
 
 - `question` (`type: gate`) -- three cases; say which in the first line.
   (a) A genuine, unresolvable merge conflict: the file, what each side did,
