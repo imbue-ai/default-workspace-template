@@ -177,7 +177,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
       "button",
       {
         type: "button",
-        class: opts.isDefault ? css.ROW_STAR_PINNED : css.ROW_STAR,
+        class: opts.isDefault ? css.rowStarPinnedClass(isCurrent) : css.ROW_STAR,
         "aria-label": opts.isDefault
           ? `Stop opening new chats on ${row.provider} by default`
           : `Open new chats on ${row.provider} by default`,

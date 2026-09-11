@@ -218,7 +218,11 @@ const FLYOUT_ROW_SHAPE =
 const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-20`;
 export const FLYOUT_ROW = `${FLYOUT_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
-export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
+/** Lit from the WRAPPER, not the row button. The star, the pencil and the bin are SIBLINGS of
+ *  that button, so a pointer on one of them is not on the row by CSS's reckoning -- and the
+ *  row would drop its highlight at exactly the moment the pointer arrived at the controls that
+ *  highlight had just revealed. */
+export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary group-hover/conn:bg-fill-hover cursor-pointer`;
 export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 export const FLYOUT_ROW_NAME = "truncate";
 /** A MODEL name, truncated from the FRONT. `openrouter/qwen/qwen-2.5-72b-instruct` is a path
@@ -279,19 +283,24 @@ export const ROW_STAR =
 /** The star of the account new chats open on: visible whether or not the row is hovered, since
  *  it is a fact about the account rather than a control that only matters under a pointer.
  *
- *  At rest it sits BESIDE the tick, one lane in, so a row's marks read as a pair at its end
- *  rather than as one mark and a gap. On hover it steps out to the control lane it shares with
- *  the pencil and the bin, which is the only way a group flush with the row's end can also
- *  keep its own order.
+ *  Its resting lane depends on whether the row also carries a tick. With one it sits BESIDE the
+ *  tick, one lane in, so the row's two marks read as a pair at its end. Without one it takes
+ *  the last lane itself: a lone mark stopping a slot short of the row's end reads as
+ *  misaligned, not as room held for something that is not there. On hover it steps out to the
+ *  control lane it shares with the pencil and the bin either way, which is the only way a group
+ *  flush with the row's end can also keep its own order.
  *
  *  `fill-current` rather than the icon's own `filled`, which drops the stroke: a star painted
  *  by its fill alone is a stroke-width smaller all round than the outline beside it, so the
  *  marked row's star read as the smaller of the two. Filling the outlined glyph keeps one
  *  silhouette and changes only what is inside it. */
-export const ROW_STAR_PINNED =
-  "absolute right-9 group-hover/conn:right-15 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 " +
-  "cursor-pointer items-center justify-center rounded text-accent transition-colors " +
-  "hover:text-primary [&>svg]:fill-current";
+export function rowStarPinnedClass(hasTick: boolean): string {
+  return (
+    `absolute ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15 top-1/2 inline-flex ` +
+    "h-5 w-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-accent " +
+    "transition-colors hover:text-primary [&>svg]:fill-current"
+  );
+}
 /** The row mid-rename: the field takes the whole row, since every control is hidden while it
  *  is up. The wrapper insets the bordered field from the card's full-bleed edges; the field
  *  keeps the row's height, so nothing shifts on the way in or out. */
