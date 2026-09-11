@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from app_instances.data_types import InstanceStatus
 from app_instances.testing import StubInstanceSource
+from app_instances.testing import wait_until
 from flask import Flask
 from flask.testing import FlaskClient
 
@@ -30,9 +31,12 @@ from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import layout_showing
+from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -235,6 +239,50 @@ def test_instance_verbs_are_relayed_and_the_list_refetched(
     assert client.post("/api/apps/unknown/instances", json={"action": "new", "params": {}}).status_code == 404
     # A key that fails the key rule is refused by the shell, before the app (which would say 404) is asked.
     assert client.post("/api/apps/stub/instances/-not-a-key/rename", json={"title": "x"}).status_code == 400
+
+
+def test_a_preview_shell_refuses_every_verb_that_would_act_on_live_instances(
+    tmp_path: Path,
+    broadcaster: WebSocketBroadcaster,
+    stub_source: StubInstanceSource,
+    stub_app_url: str,
+) -> None:
+    """A preview reads the live apps' instances but changes none of them: each verb is refused with
+    the same detail, and its document says it is a preview."""
+    stub_source.records.append(instance_record("stub-1"))
+    stub_source.is_stoppable = True
+    inventory = build_inventory(
+        write_registry(
+            tmp_path / "apps.toml",
+            registry_row_toml("stub", stub_app_url, True, actions=[("new", "New")], program="stub"),
+        ),
+        broadcaster,
+        fetcher=HttpInstanceFetcher(),
+    )
+    inventory.refetch_now("stub")
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    client = application.test_client()
+
+    refusals = [
+        client.post("/api/apps/stub/instances", json={"action": "new", "params": {}}),
+        client.post("/api/apps/stub/instances/stub-1/rename", json={"title": "Renamed"}),
+        client.post("/api/apps/stub/instances/stub-1/location", json={"path": "/deeper"}),
+        client.post("/api/apps/stub/instances/stub-1/stop"),
+        client.post("/api/apps/stub/instances/stub-1/start"),
+        client.post("/api/apps/stub/instances/stub-1/delete"),
+        client.post("/api/apps/stub/stop"),
+        client.post("/api/apps/stub/start"),
+    ]
+    assert [refusal.status_code for refusal in refusals] == [403] * len(refusals)
+    assert all("preview" in refusal.get_json()["detail"] for refusal in refusals)
+    # Nothing reached the app: its one instance is as it was, and no second one exists.
+    assert [record.key for record in stub_source.records] == ["stub-1"]
+    assert stub_source.records[0].title == "stub-1"
+    # A create through the op route (layout.py open of a bare app) is refused the same way.
+    _register_client(application, "c1", "everything")
+    opened = _broadcast(client, "open", {"address": "app:stub", "client": "c1"})
+    assert opened.status_code == 403 and "preview" in opened.get_json()["detail"]
+    assert client.get("/api/inventory").get_json()["is_preview"] is True
 
 
 # ---------- section 6: stop and start ----------
@@ -920,3 +968,88 @@ def test_reload_system_interface_reaches_every_view_and_null_args_are_refused(cl
         assert [message["op"] for message in reloads] == ["reload_system_interface"]
         assert reloads[0]["target_client_id"] is None
     assert client.post("/api/layout/broadcast", json={"op": "refresh", "args": None}).status_code == 400
+
+
+# ---------- section 5: the update notice ----------
+
+
+def _repo_root(app: Flask) -> Path:
+    return _shell(app).update_notice.repo_root
+
+
+def test_the_pending_update_is_the_kept_rollback_point_or_null(client: FlaskClient, app: Flask) -> None:
+    assert client.get("/api/updates/pending").get_json() is None
+    write_rollback_point(_repo_root(app), apps=["terminal", "system_interface"], needs_services_restart=True)
+    notice = client.get("/api/updates/pending").get_json()
+    assert notice["apps"] == ["terminal", "system_interface"]
+    assert notice["needs_services_restart"] is True
+    assert notice["progress"] is None and notice["outcome"] is None
+
+
+def test_confirming_the_pending_update_closes_it_through_the_script(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app))
+
+    assert client.post("/api/updates/pending/confirm").status_code == 204
+
+    assert [call["argv"] for call in read_stub_update_self_calls(_repo_root(app))] == [["confirm-last"]]
+    assert client.get("/api/updates/pending").get_json() is None
+    # Nothing left to confirm: a second click is told so rather than run the script again.
+    refused = client.post("/api/updates/pending/confirm")
+    assert refused.status_code == 409 and "no update notice" in refused.get_json()["detail"]
+
+
+def test_a_failing_confirm_names_the_failure_and_keeps_the_notice(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app), exit_code=1)
+    write_rollback_point(_repo_root(app))
+    failed = client.post("/api/updates/pending/confirm")
+    assert failed.status_code == 500
+    assert "told to fail" in failed.get_json()["detail"]
+    assert client.get("/api/updates/pending").get_json() is not None
+
+
+@pytest.mark.timeout(30)
+def test_rolling_back_the_pending_update_starts_the_script_and_answers_accepted(
+    client: FlaskClient, app: Flask
+) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    write_rollback_point(_repo_root(app), apps=["terminal"])
+
+    accepted = client.post("/api/updates/pending/rollback")
+
+    assert accepted.status_code == 202
+    assert wait_until(lambda: len(read_stub_update_self_calls(_repo_root(app))) == 1, timeout_seconds=10)
+    assert read_stub_update_self_calls(_repo_root(app))[0]["argv"] == ["rollback-last"]
+
+
+def test_a_rollback_is_refused_while_one_runs_and_once_the_point_settled(client: FlaskClient, app: Flask) -> None:
+    write_stub_update_self_script(_repo_root(app))
+    assert client.post("/api/updates/pending/rollback").status_code == 409
+
+    write_rollback_point(_repo_root(app), progress="Reverting the update")
+    running = client.post("/api/updates/pending/rollback")
+    assert running.status_code == 409 and "already running" in running.get_json()["detail"]
+
+    write_rollback_point(_repo_root(app), outcome="Rolled back to the previous version.")
+    settled = client.post("/api/updates/pending/rollback")
+    assert settled.status_code == 409 and "already rolled back" in settled.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(app)) == []
+
+
+def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, fetcher: FakeInstanceFetcher
+) -> None:
+    """The notice is live workspace state; a preview shows it (its page is the live shell's page, one app
+    swapped) but the two verbs act on the live tree and its copies."""
+    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster, fetcher=fetcher)
+    application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
+    write_stub_update_self_script(_repo_root(application))
+    write_rollback_point(_repo_root(application))
+    client = application.test_client()
+
+    assert client.get("/api/updates/pending").get_json()["apps"] == ["terminal"]
+    for verb in ("confirm", "rollback"):
+        refusal = client.post(f"/api/updates/pending/{verb}")
+        assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
+    assert read_stub_update_self_calls(_repo_root(application)) == []
+    assert client.get("/api/updates/pending").get_json() is not None

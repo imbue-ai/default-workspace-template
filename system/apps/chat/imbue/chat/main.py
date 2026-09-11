@@ -25,8 +25,8 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.instances import CHAT_APP_NAME
-from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_stamps import STAMPS_FILENAME
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatState
 from imbue.chat.state import state_of
@@ -72,9 +72,25 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Boot without side effects, for the update apply's pre-flight check: no account "
-            "reconciliation (it reaps sign-in processes), no agent manager (no mngr observe, "
-            "no sweep, no memory prioritizer, no nudges to the shell), and no registration"
+            "reconciliation (it reaps sign-in processes), no agent manager (no follower of the "
+            "agent observer, no sweep, no memory prioritizer, no nudges to the shell), and no "
+            "registration"
         ),
+    )
+    parser.add_argument(
+        "--secondary",
+        action="store_true",
+        help=(
+            "Boot as a second chat beside the live one (a preview): follows the same agent "
+            "observer and reads the live accounts, but reconciles no accounts, writes no memory "
+            "scores, registers nothing, and nudges no shell unless --nudge-shell-url names one; "
+            "point CHAT_DATA_DIR at a scratch copy so its stamps never land in the live data"
+        ),
+    )
+    parser.add_argument(
+        "--nudge-shell-url",
+        default="",
+        help="With --secondary, the shell (a preview shell) to nudge about instance-list changes",
     )
     return parser.parse_args(argv)
 
@@ -84,17 +100,22 @@ def build_production_state(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
+    is_secondary: bool = False,
 ) -> ChatState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
-    app is assembled), so it spawns no ``mngr observe`` pipeline by itself.
-    Tests do not use this; they build a ``ChatState`` with fakes via
-    ``testing.build_test_state``.
+    app is assembled), so it follows no event stream by itself. Tests build a
+    ``ChatState`` with fakes via ``testing.build_test_state`` instead, except where
+    what is under test is this wiring itself (where the chat's data directory lands).
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH))
+    agent_manager = AgentManager.build(
+        broadcaster,
+        message_stamps=MessageStampStore(path=config.chat_data_dir / STAMPS_FILENAME),
+        is_secondary=is_secondary,
+    )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
@@ -130,14 +151,14 @@ def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args, threading the agent filters through.
 
     Wires the production object graph and assembles the app, but does not start
-    the agent manager's ``mngr observe`` pipeline -- ``main`` does that once the
-    app is built.
+    the agent manager's follower -- ``main`` does that once the app is built.
     """
     state = build_production_state(
         config,
         provider_names=tuple(args.provider) if args.provider else None,
         include_filters=tuple(args.include),
         exclude_filters=tuple(args.exclude),
+        is_secondary=args.secondary,
     )
     return create_application(state)
 
@@ -173,17 +194,24 @@ def _reconcile_account_store() -> None:
 
 
 def main() -> None:
-    """Run the chat app: register with the shell, start ``mngr observe``, and serve.
+    """Run the chat app: register with the shell, follow the agent observer, and serve.
 
     Under ``--preflight`` the app only imports, builds, and serves: the update apply boots
     the merged chat this way on a throwaway port to learn whether it can start at all
     (mngr and the harness plugins import here, so a broken plugin table or a missing
     dependency surfaces here first) without touching the live workspace.
+
+    Under ``--secondary`` the app is a second chat beside the live one: it follows the
+    same observer and tracks the same agents, but withholds the writes a second instance
+    must not make (the account reconcile, the memory scores, the registration) and
+    nudges only the shell ``--nudge-shell-url`` names.
     """
     args = _parse_args(None)
     config = load_config()
     if args.preflight:
         logger.info("Booting in pre-flight mode: no account reconciliation, no agent manager, no registration")
+    elif args.secondary:
+        logger.info("Booting as a secondary chat: no account reconciliation, no memory scores, no registration")
     else:
         _reconcile_account_store()
     application = build_application(config, args)
@@ -192,14 +220,18 @@ def main() -> None:
     if not args.preflight:
         # The chat app tells the shell when its instance list changes (contracts.md section
         # 5). Installed here, at the process entry point, so a manager a test builds nudges
-        # nobody; on a thread of its own, so an agent event never waits on the shell.
-        state.agent_manager.set_nudger(
-            ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=shell_base_url()))
-        )
+        # nobody; on a thread of its own, so an agent event never waits on the shell. A
+        # secondary chat nudges only a shell that was named for it: the live shell lists
+        # the live chat's instances, not a preview's.
+        nudge_shell_url = args.nudge_shell_url if args.secondary else shell_base_url()
+        if nudge_shell_url:
+            state.agent_manager.set_nudger(
+                ThreadedNudger(inner=ShellNudger(app_name=CHAT_APP_NAME, shell_url=nudge_shell_url))
+            )
 
-        # Start the ``mngr observe`` pipeline now that the app is assembled. This is
-        # the one place observe is started; ``build_application`` only constructs, so
-        # tests that build an app never spawn it.
+        # Follow the agent observer's event stream now that the app is assembled. This is
+        # the one place the follower is started; ``build_application`` only constructs, so
+        # tests that build an app never follow anything.
         state.agent_manager.start()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
@@ -219,7 +251,7 @@ def main() -> None:
     # Registered once the socket is bound and just before serving, so the shell's first
     # fetch after the registration finds the app answering (a 503 until the agent list is
     # known, never a refused connection).
-    if not (args.no_register or args.preflight):
+    if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
     server.serve_forever()
 

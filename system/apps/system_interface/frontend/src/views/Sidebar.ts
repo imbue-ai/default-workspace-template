@@ -20,6 +20,7 @@
 
 import m from "mithril";
 import { findInstance, getApp, getOpenableApps, isAppStoppable, primaryActionForApp } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import { normalizeTabTitle } from "./tab-rename";
 import type {
   AppAction,
@@ -451,8 +452,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   function shortcutMenuEntries(resolved: ResolvedShortcut, attrs: SidebarAttrs): ShortcutMenuEntry[] {
     const isEverything = isEverythingView(attrs.activeViewId);
     const entries: ShortcutMenuEntry[] = [];
+    // A preview shell creates nothing and stops nothing: its backend refuses the verbs that
+    // would act on the live apps, so the menu does not offer them.
+    const canActOnLive = !isPreviewShell();
     if (resolved.mode === "focus") {
-      entries.push({ label: resolved.action.label, run: () => attrs.onRunShortcutAsNew(resolved.shortcut) });
+      if (canActOnLive) {
+        entries.push({ label: resolved.action.label, run: () => attrs.onRunShortcutAsNew(resolved.shortcut) });
+      }
     } else {
       entries.push({
         label: `Focus last ${resolved.app.display_name}`,
@@ -472,7 +478,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     // The app's own Stop and Start live here: the rail row is the app's presence in the view
     // (under Everything every app has one), whereas a tab or a rail row of an instance acts on
     // that instance alone. Offered only for an app the workspace can honestly stop.
-    if (isAppStoppable(resolved.app)) {
+    if (isAppStoppable(resolved.app) && canActOnLive) {
       const action = resolved.app.is_running ? "stop" : "start";
       entries.push({
         label: `${action === "stop" ? "Stop" : "Start"} ${resolved.app.display_name}`,
@@ -667,7 +673,12 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 : isStopped
                   ? "project-rail-shortcut-stopped text-faint opacity-60"
                   : "text-primary"),
-            onclick: isAwaiting ? undefined : () => pick(() => attrs.onRunShortcut(resolved.shortcut)),
+            // A "new" shortcut creates an instance, which a preview shell cannot; a "focus" one
+            // only finds a tab, which it can.
+            onclick:
+              isAwaiting || (resolved.mode === "new" && isPreviewShell())
+                ? undefined
+                : () => pick(() => attrs.onRunShortcut(resolved.shortcut)),
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(resolved.app, ROW_ICON_SIZE))), railLabel(label, "")],
         ),

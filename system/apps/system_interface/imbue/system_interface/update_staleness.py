@@ -66,6 +66,11 @@ STALENESS_TREE_MOVED = "updated-not-activated"
 # is running; absent when consistent.
 UPDATE_STALENESS_META_TAG = "system-interface-update-staleness"
 
+# The meta tag a preview shell's page carries (absent on the live shell), which
+# the frontend reads to hide the verbs a preview refuses.
+PREVIEW_META_TAG = "system-interface-preview"
+PREVIEW_META_CONTENT = "true"
+
 # Bound on the git reads. rev-parse/diff on a local repo are milliseconds; the
 # bound only keeps a wedged git from stalling the app shell.
 _GIT_TIMEOUT_SECONDS = 10.0

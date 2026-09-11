@@ -13,8 +13,9 @@ The `chat` program (`system/supervisord.conf`) runs `chat-app`, the console
 script of this package, from its own uv tool environment (installed by
 `system/scripts/build_workspace.sh` with the mngr harness plugins
 `system/config/mngr_plugins.toml` assigns to `chat`). At startup it registers
-its manifest and port 8010 through `system/scripts/forward_port.py`, starts
-`mngr observe` for the workspace's agents, and serves:
+its manifest and port 8010 through `system/scripts/forward_port.py`, follows
+the agent lifecycle event file the workspace's `agent-observer` program (`mngr
+observe`, its own supervised service) writes, and serves:
 
 - `GET /<agent-id>` (and `/<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
@@ -35,11 +36,26 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   `/api/lanes`, and `/api/latchkey`.
 - `/api/ws`: the chat pages' socket, carrying `agents_updated` and the
   proto-agent events.
-- `/api/health`: `{"status", "is_frontend_built"}`, the probe the update apply
-  polls on the `--preflight` boot (after the restart it polls `/_instances`, the
-  route that answers only once the agent manager has its first list).
+- `/api/health`: `{"status", "is_frontend_built", "agent_events"}`, the probe
+  the update apply polls on the `--preflight` boot (after the restart it polls
+  `/_instances`, the route that answers only once the agent manager has its
+  first list). `agent_events` (`{"is_stream_healthy", "detail"}`) says whether
+  lifecycle events are actually reaching this instance; `status` stays `ok`
+  either way.
 - Agent-authored files by their absolute on-disk path (`file_serving.py`), so a
   chat's markdown can show an image the agent wrote.
+
+## The agent observer
+
+The chat does not run an observer of its own. `agent-observer`
+(`system/supervisord.conf`) runs `mngr observe --quiet` from the primary
+agent's work dir, and every chat instance follows the event file it writes
+through mngr's `ObserveEventFollower`. supervisord starts the two in no
+guaranteed order, so the chat starts without the observer: its instances API
+answers `503` until the observer's first full snapshot is folded, and
+`/api/health` reports the outage. When the observer dies mid-run the chat keeps
+serving its last known list and reports degraded; the returning observer's
+opening snapshot replaces the folded view and the health recovers.
 
 The chat page talks to the shell only through the browser-side contract
 (`shell:open`, `shell:focused`, the handshake) and the shell reaches the chat
@@ -75,11 +91,18 @@ registry, for a throwaway boot on another port (`CHAT_PORT`).
 
 `--preflight` is the update apply's throwaway boot (`.agents/skills/update-self`):
 the app imports, builds, and serves `/api/health` but reconciles no accounts (the
-boot sweep reaps sign-in processes), starts no agent manager (so no `mngr observe`,
-session sweep, memory prioritizer, or nudges to the shell), and registers nothing.
-The apply boots the merged chat this way on a free port before restarting the live
-services, since this is the process that imports mngr and the harness plugins, and
-refuses the update when it cannot come up.
+boot sweep reaps sign-in processes), starts no agent manager (so no follower of
+the observer, session sweep, memory prioritizer, or nudges to the shell), and
+registers nothing. The apply boots the merged chat this way on a free port before
+restarting the live services, since this is the process that imports mngr and the
+harness plugins, and refuses the update when it cannot come up.
+
+`--secondary` is a second chat beside the live one, the preview of a proposed
+change: it follows the same observer, reads the live accounts, and tracks every
+agent the live chat tracks, but reconciles no accounts, writes no memory scores,
+registers nothing, and nudges no shell unless `--nudge-shell-url` names one (a
+preview shell). Sends from it are real. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its message stamps never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

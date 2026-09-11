@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import m from "mithril";
 
+import { markPageAsPreviewShell } from "../testing/previewShell";
 import { appRecord, catalogTemplateRecord } from "../testing/records";
 import type { TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
 import {
@@ -220,6 +221,19 @@ describe("NewTabLauncher", () => {
     m.mount(root, { view: () => m(NewTabLauncher, attrs) });
     return attrs;
   }
+
+  it("in a preview shell, a tile runs nothing", () => {
+    const restore = markPageAsPreviewShell();
+    try {
+      const attrs = mount({});
+      const tile = root.querySelector<HTMLElement>('[data-launch="terminal:new"]')!;
+      expect(tile.getAttribute("aria-disabled")).toBe("true");
+      tile.click();
+      expect(attrs.onRunAction).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
 
   function type(text: string): void {
     const input = root.querySelector<HTMLInputElement>(".new-tab-launcher-search input")!;

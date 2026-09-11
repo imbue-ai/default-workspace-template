@@ -112,7 +112,11 @@ def test_a_chat_page_without_a_bundle_is_the_not_built_placeholder(tmp_path: Pat
 
 def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:
     client, _ = _client(tmp_path, _agent_id())
-    assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
+    health = client.get("/api/health").get_json()
+    assert health["status"] == "ok"
+    assert health["is_frontend_built"] is True
+    # A never-started manager follows nothing, which the probe says rather than hides.
+    assert health["agent_events"]["is_stream_healthy"] is False
 
 
 def test_the_instances_api_lists_the_chat(tmp_path: Path) -> None:

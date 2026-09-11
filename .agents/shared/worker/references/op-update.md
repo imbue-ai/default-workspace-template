@@ -29,24 +29,38 @@ absent or unrecognized.
   (both).
 - Terminal statuses: `done`, `stuck`, `no-update-needed`.
 
-**System-interface exception.** When the creation is the system interface, there
-is no `## Change origin` toggle and **no gate report at all**: the change is
-handed to you as a plain brief, and user approval happens through the lead's
-pre-merge live preview, not a worker gate. Implement the brief, verify it per
-`type-system-interface.md`, then report `done` (or a mid-flight `question`,
-or `stuck`) with a body that summarizes the work so the lead can frame the
-preview:
+**Critical-app handoff.** When the task says it is the careful flow's handoff
+for a critical app (the shell, the chat, the terminal, or a user app whose
+manifest says `critical = true`; see `type-app.md`, "Critical apps"), there is
+no `## Change origin` toggle and **no gate report at all**. The user already
+approved the shape in the lead's live editing loop, before you existed, and the
+lead committed every round it showed them, so the branch you are checked out on
+*already carries the approved change*. There is nothing for a worker gate to ask.
+
+Read the task body for which of the two handoff shapes you were given:
+
+- **Implement for real, then harden.** The branch carries an approved but
+  deliberately rough edit. Turn it into the real implementation, keeping the shape
+  the user approved, then harden it.
+- **Harden only.** The branch already carries the real, user-approved change.
+  Verify and harden it -- **do not re-implement it**, and do not redesign the
+  approved shape.
+
+Either way, verify per `type-app.md` and `web-frontend-testing.md`, then report
+`done` (or a mid-flight `question`, or `stuck`) with a body that tells the lead
+what landed:
 
 ```
-Updated the system interface on branch `<branch>`. Ready to preview.
+Hardened <app> on branch `<branch>`.
 - Change: <one-sentence>
 - Frontend / backend: <which, and the files touched>
+- Bundles built: <the static/ path of every bundle you built, both when the shared library changed>
 - Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>
 - Screenshots reviewed: <pages/states you eyeballed>
 ```
 
-The committed/emergent paths and gates below apply only to skill, app, and service
-creations.
+The committed/emergent paths and gates below apply to every other skill, app,
+and service task.
 
 ## Emergent path
 

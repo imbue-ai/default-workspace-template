@@ -13,14 +13,15 @@ exists; you are not redesigning it, just repairing it.
 - Gate: `final-creation` (Stage 6).
 - Terminal statuses: `done`, `stuck`.
 
-**System-interface exception.** When the creation is the system interface, emit
-**no `final-creation` gate**: user approval happens through the lead's pre-merge
-live preview, not a worker gate. Run Stages 1-5 as written, then -- once the fix
-is implemented and verified per `type-system-interface.md` -- report `done`
-with a body that summarizes the work so the lead can frame the preview:
+**Critical-app exception.** When the creation is a critical app (the shell, the
+chat, the terminal, or an app whose manifest says so; see `type-app.md`,
+"Critical apps"), emit **no `final-creation` gate**: user approval happens
+through the lead's live preview, not a worker gate. Run Stages 1-5 as written,
+then -- once the fix is implemented and verified per `type-app.md` -- report
+`done` with a body that summarizes the work so the lead can frame the preview:
 
 ```
-Fixed the system interface on branch `<branch>`. Ready to preview.
+Fixed <app> on branch `<branch>`. Ready to preview.
 - Change: <one-sentence (root cause + fix)>
 - Frontend / backend: <which, and the files touched>
 - Tests run: <backend pytest / frontend lint+test / Playwright -- all pass>

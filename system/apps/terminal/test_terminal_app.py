@@ -64,7 +64,7 @@ class _TerminalAppUnderTest(FrozenModel):
 
 
 def _prepare(
-    environment: SidecarEnvironment, fake_tmux: FakeTmux
+    environment: SidecarEnvironment, fake_tmux: FakeTmux, is_registered: bool = True
 ) -> _TerminalAppUnderTest:
     app_name = AppName(f"terminal-{uuid4().hex[:8]}")
     ttyd_port = free_port()
@@ -114,6 +114,7 @@ def _prepare(
             str(archive),
             "--ttyd",
             str(environment.scratch_dir / "fake-ttyd" / "bin" / "ttyd"),
+            *(() if is_registered else ("--no-register",)),
         ),
         environment=process_environment,
     )
@@ -266,5 +267,28 @@ def test_terminal_app_installs_dispatch_registers_serves_sessions_and_stops_with
         process.send_signal(signal.SIGTERM)
         assert process.wait(timeout=_EXIT_TIMEOUT_SECONDS) == 143, _read_log(app)
         assert not is_port_accepting(app.instances_port)
+    finally:
+        _kill_if_running(process)
+
+
+@pytest.mark.timeout(60)
+def test_a_terminal_booted_without_registration_serves_but_registers_nothing(
+    terminal_environment: SidecarEnvironment, tmp_path: Path
+) -> None:
+    # A preview boots the terminal on two free ports beside the live one; it must serve its
+    # instances API and ttyd without touching the live terminal's registry row.
+    fake_tmux = install_fake_tmux(tmp_path / "fake-tmux")
+    fake_tmux.set_sessions([])
+    fake_tmux.set_clients([])
+    app = _prepare(terminal_environment, fake_tmux, is_registered=False)
+    process = _spawn(app)
+    try:
+        assert wait_until(lambda: is_port_accepting(app.instances_port), _STARTUP_TIMEOUT_SECONDS), _read_log(app)
+        assert wait_until(
+            lambda: read_fake_ttyd_argv(app.ttyd_record_dir) is not None, _STARTUP_TIMEOUT_SECONDS
+        ), _read_log(app)
+        listed = httpx.get(f"{app.instances_url}/_instances", timeout=5.0)
+        assert listed.status_code == 200
+        assert not terminal_environment.registry_path.exists()
     finally:
         _kill_if_running(process)

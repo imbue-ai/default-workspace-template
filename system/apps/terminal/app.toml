@@ -16,3 +16,21 @@ mode = "focus"
 id = "new"
 label = "New Terminal"
 params = [{name = "workdir", label = "Working directory", required = false}]
+
+# A terminal preview serves the ttyd page and its instances API on two free ports,
+# over a copy of the terminal's store and a scratch state directory; the sessions
+# it creates are real tmux sessions.
+[preview]
+ports = ["main", "sidecar"]
+command = [
+    "terminal-app", "--no-register",
+    "--app-url", "http://127.0.0.1:{port:main}",
+    "--instances-url", "http://127.0.0.1:{port:sidecar}",
+    "--store", "{copy:store}/instances.json",
+    "--state-dir", "{scratch}/state",
+]
+copies = {store = "data/.apps/terminal"}
+# The probe reaches the main port, which here is ttyd's, so it asks for ttyd's own
+# page rather than the instances API on the sidecar. Nothing is lost: the sidecar
+# serves before it spawns ttyd, so a ttyd that answers is a whole terminal.
+health_path = "/"

@@ -39,7 +39,9 @@ def _shell_over_stub(
     )
     inventory = build_inventory(registry_path, broadcaster, fetcher=HttpInstanceFetcher(), clock=lambda: clock[0])
     inventory.refetch_now("stub")
-    return build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    return build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
+    )
 
 
 def test_unreferenced_referenced_instances_are_deleted_after_the_grace_period(
@@ -121,7 +123,9 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
 ) -> None:
     registry_path = write_registry(tmp_path / "apps.toml", registry_row_toml("stub", stub_app_url, True))
     inventory = build_inventory(registry_path, broadcaster)
-    built = build_shell_state(tmp_path / "state", registry_path, broadcaster, inventory=inventory)
+    built = build_shell_state(
+        tmp_path / "state", registry_path, broadcaster, inventory=inventory, repo_root=tmp_path / "repo"
+    )
     shell = built.model_copy_update(to_update(built.field_ref().client_prune_interval_seconds, 0.05))
     stale_at = TEST_NOW - CLIENT_RETENTION - timedelta(days=1)
     shell.clients.record_report(

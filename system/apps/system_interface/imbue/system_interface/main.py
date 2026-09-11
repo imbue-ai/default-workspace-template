@@ -38,10 +38,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         default=DEFAULT_STATE_DIRECTORY,
         help="Where the shell keeps its projects, layouts, and client records (contracts.md section 7)",
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help=(
+            "Boot as a preview of a proposed change: read-only over the state directory it is given "
+            "(a seeded copy) and the registry MINDS_APPS_FILE names, refusing every verb that would "
+            "act on a live instance"
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def build_production_state(config: Config, state_directory: Path) -> SystemInterfaceState:
+def build_production_state(config: Config, state_directory: Path, is_preview: bool = False) -> SystemInterfaceState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together. It builds but
@@ -53,6 +62,7 @@ def build_production_state(config: Config, state_directory: Path) -> SystemInter
         shell=build_shell_state(
             state_directory=state_directory, registry_path=registry_path(), broadcaster=WebSocketBroadcaster()
         ),
+        is_preview=is_preview,
         template_catalog=build_template_catalog_store(
             catalog_url=config.system_interface_template_catalog_url, state_directory=state_directory
         ),
@@ -61,7 +71,7 @@ def build_production_state(config: Config, state_directory: Path) -> SystemInter
 
 def build_application(config: Config, args: argparse.Namespace) -> Flask:
     """Build the Flask app from parsed CLI args: the state over the state directory, and the routes over it."""
-    return create_application(build_production_state(config, state_directory=args.state_dir))
+    return create_application(build_production_state(config, state_directory=args.state_dir, is_preview=args.preview))
 
 
 def main() -> None:

@@ -3,7 +3,6 @@
 import json
 import os
 import queue
-import shutil
 import signal
 import time
 import tomllib
@@ -26,7 +25,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
-from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
@@ -48,13 +46,18 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
+from imbue.chat.testing import observer_holding_the_lock
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.observe import acquire_observe_lock
+from imbue.mngr.api.observe import append_observe_event
+from imbue.mngr.api.observe import get_observe_events_dir
 from imbue.mngr.api.observe import make_agent_removed_event
 from imbue.mngr.api.observe import make_agent_state_event
 from imbue.mngr.api.observe import make_full_agent_state_event
+from imbue.mngr.api.observe import release_observe_lock
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.interfaces.data_types import HostDetails
 from imbue.mngr.primitives import AgentId as MngrAgentId
@@ -64,7 +67,6 @@ from imbue.mngr.primitives import CommandString
 from imbue.mngr.primitives import HostId
 from imbue.mngr.primitives import HostState
 from imbue.mngr.primitives import ProviderInstanceName
-from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
@@ -603,7 +605,7 @@ def test_unknown_observe_event_type_is_ignored(agent_manager: AgentManager) -> N
             "source": "mngr/agent_states",
         }
     )
-    agent_manager._handle_observe_output_line(line, True)
+    agent_manager._handle_observe_line(line)
     assert agent_manager.get_agents() == []
 
 
@@ -712,20 +714,20 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     assert "the real reason" in proto.error
 
 
-def test_handle_observe_output_line_empty_is_ignored(agent_manager: AgentManager) -> None:
-    """Empty lines from the observe subprocess are silently ignored."""
-    agent_manager._handle_observe_output_line("   ", True)
+def test_handle_observe_line_empty_is_ignored(agent_manager: AgentManager) -> None:
+    """Blank lines of the event file are silently ignored."""
+    agent_manager._handle_observe_line("   ")
     assert agent_manager.get_agents() == []
 
 
-def test_handle_observe_output_line_raises_on_invalid_json(agent_manager: AgentManager) -> None:
-    """Invalid JSON on stdout from mngr observe surfaces as JSONDecodeError so the upstream bug is visible."""
+def test_handle_observe_line_raises_on_invalid_json(agent_manager: AgentManager) -> None:
+    """Invalid JSON in the event file surfaces as JSONDecodeError so the upstream bug is visible."""
     with pytest.raises(json.JSONDecodeError):
-        agent_manager._handle_observe_output_line("not json {", True)
+        agent_manager._handle_observe_line("not json {")
     assert agent_manager.get_agents() == []
 
 
-def test_handle_observe_output_line_dispatches_agent_state(
+def test_handle_observe_line_dispatches_agent_state(
     agent_manager: AgentManager,
 ) -> None:
     """Valid AGENT_STATE JSONL lines are parsed and dispatched."""
@@ -734,7 +736,7 @@ def test_handle_observe_output_line_dispatches_agent_state(
     event = make_agent_state_event(agent)
     line = json.dumps(event.model_dump(mode="json"))
 
-    agent_manager._handle_observe_output_line(line, True)
+    agent_manager._handle_observe_line(line)
 
     agents = agent_manager.get_agents()
     assert len(agents) == 1
@@ -821,16 +823,6 @@ def test_full_snapshot_omitting_agent_drops_it(
 
     agent_manager._handle_observe_event(make_full_agent_state_event([]))
     assert len(agent_manager.get_agents()) == 0
-
-
-def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroadcaster) -> None:
-    """The ``mngr_binary`` argument to ``build()`` overrides the default binary path."""
-    manager = AgentManager.build(broadcaster, mngr_binary="/path/to/custom-mngr")
-    try:
-        cmd = manager._build_observe_command()
-        assert cmd == ["/path/to/custom-mngr", "observe", "--stream-events"]
-    finally:
-        manager.stop()
 
 
 # --- mngr CLI argv contract ---
@@ -1385,164 +1377,95 @@ def test_get_chat_agent_ids_excludes_workers_and_primary(broadcaster: WebSocketB
         manager.stop()
 
 
-def test_observe_argv_accepted_by_live_cli() -> None:
-    argv = _build_observe_command_argv("mngr")
-    assert_mngr_argv_valid(argv)
-    assert "--stream-events" in argv
+def _events_status_detail(manager: AgentManager) -> str:
+    return manager.get_agent_events_status().detail
 
 
-def test_resolve_observe_cwd_prefers_existing_work_dir(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When ``MNGR_AGENT_WORK_DIR`` points at a real directory, observe runs there."""
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == tmp_path
-    finally:
-        manager.stop()
+def test_manager_folds_the_events_the_observer_writes(agent_manager: AgentManager, tmp_path: Path) -> None:
+    """The live agent view is the fold of the observer's event file, written by mngr's own writer.
 
-
-def test_resolve_observe_cwd_falls_back_when_work_dir_missing(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If ``MNGR_AGENT_WORK_DIR`` is set but the path does not exist, use ``$HOME``.
-
-    Guards the fallback that keeps observe runnable in tests that stub the env
-    var with a non-existent path (e.g. the shared ``agent_manager`` fixture).
+    A full snapshot seeds the view, a state event upserts one agent, and a removal drops it;
+    the stream reads healthy once the first snapshot has been folded.
     """
-    missing = tmp_path / "does-not-exist"
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(missing))
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == Path.home()
-    finally:
-        manager.stop()
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    with observer_holding_the_lock(tmp_path):
+        agent_manager._start_follow()
+        assert not agent_manager.get_agent_events_status().is_stream_healthy
+        first = _agent_details("first-agent")
+        append_observe_event(tmp_path, make_full_agent_state_event([first]))
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(first.id)], timeout=10.0)
+        assert agent_manager.is_agent_list_known()
+        assert agent_manager.get_agent_events_status().is_stream_healthy
+
+        second = _agent_details("second-agent")
+        append_observe_event(tmp_path, make_agent_state_event(second))
+        wait_for(lambda: len(agent_manager.get_agents()) == 2, timeout=10.0)
+
+        append_observe_event(tmp_path, make_agent_removed_event(first.id, first.name, first.host.id))
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(second.id)], timeout=10.0)
 
 
-def test_resolve_observe_cwd_falls_back_when_work_dir_unset(
-    broadcaster: WebSocketBroadcaster,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.allow_warnings
+def test_chat_booting_ahead_of_its_observer_reports_degraded_then_folds(
+    agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """With ``MNGR_AGENT_WORK_DIR`` unset, observe runs from ``$HOME``."""
-    monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
-    manager = AgentManager.build(broadcaster)
-    try:
-        assert manager._resolve_observe_cwd() == Path.home()
-    finally:
-        manager.stop()
+    """supervisord starts the chat and the observer together in no guaranteed order.
 
-
-def test_start_observe_spawns_long_lived_subprocess(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """End-to-end: the observe subprocess stays alive after startup.
-
-    A healthy ``mngr observe`` keeps running until it is explicitly stopped;
-    this test asserts that after ``_start_observe`` returns, the child is
-    still running a short window later rather than having exited on its own.
+    The chat must come up first without retrying: its health says no observer holds the
+    lock, and the observer's opening snapshot seeds the view when it arrives.
     """
-    if shutil.which("mngr") is None:
-        pytest.skip("mngr binary not on PATH")
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    agent_manager._start_follow()
+    wait_for(lambda: "holds the lock" in _events_status_detail(agent_manager), timeout=10.0)
+    assert not agent_manager.get_agent_events_status().is_stream_healthy
+    assert not agent_manager.is_agent_list_known()
 
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # Point the subprocess at a clean cwd with no project-local .mngr/settings.toml;
-    # otherwise running pytest from inside a mngr-managed worktree would inherit
-    # a config with ``is_allowed_in_pytest = false`` and the child would abort.
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    # And at an empty host dir: with the developer's real ~/.mngr, the spawned
-    # observe enumerates their live agents and queries tmux about them, which
-    # trips the tmux resource guard on any machine with running agents. The
-    # test only asserts the child stays alive, which an empty world satisfies.
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
-    manager = AgentManager.build(broadcaster)
-    try:
-        manager._start_observe()
-        assert manager._observe_process is not None
-        # If the subprocess exits within the window it's a failure (bad command,
-        # crashed on startup, etc.). A healthy observe keeps running.
-        exited = poll_until(
-            lambda: manager._observe_process is not None and manager._observe_process.poll() is not None,
-            timeout=1.5,
-            poll_interval=0.1,
-        )
-        assert not exited, (
-            "mngr observe subprocess exited within 1.5s of startup "
-            f"(returncode={manager._observe_process.returncode}); stderr: "
-            f"{manager._observe_process.read_stderr()!r}"
-        )
-    finally:
-        manager.stop()
+    with observer_holding_the_lock(tmp_path):
+        agent = _agent_details("late-agent")
+        append_observe_event(tmp_path, make_full_agent_state_event([agent]))
+        wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=10.0)
+        assert [a.id for a in agent_manager.get_agents()] == [str(agent.id)]
 
 
-def test_start_observe_logs_error_when_subprocess_exits_unexpectedly(
-    broadcaster: WebSocketBroadcaster,
-    false_binary: str,
-    loguru_records: list[str],
+@pytest.mark.allow_warnings
+def test_observer_dying_mid_run_keeps_the_last_list_and_reports_degraded(
+    agent_manager: AgentManager, tmp_path: Path
 ) -> None:
-    """If the observe subprocess exits on its own, the watchdog logs an ERROR.
+    """A shed or restarted observer no longer freezes the chat's agent view for good.
 
-    Uses ``/usr/bin/false`` (or equivalent) as a stand-in mngr binary so the
-    spawned process exits immediately with a non-zero code.
+    The last known list stays served and the health says why it may be stale; the
+    returning observer's opening snapshot replaces it and the health recovers.
     """
-    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    get_observe_events_dir(tmp_path).mkdir(parents=True)
+    before = _agent_details("before-restart")
+    fd = acquire_observe_lock(tmp_path)
+    agent_manager._start_follow()
+    append_observe_event(tmp_path, make_full_agent_state_event([before]))
+    wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=10.0)
+
+    release_observe_lock(fd)
+    # Releasing the lock changes nothing under the follower's directory watch, so the
+    # outage is noticed on its next wake: a change in the events dir here, the fallback
+    # poll (ten seconds) in production.
+    (get_observe_events_dir(tmp_path) / "wake").touch()
+    wait_for(lambda: "exited" in _events_status_detail(agent_manager), timeout=10.0)
+    assert not agent_manager.get_agent_events_status().is_stream_healthy
+    assert [a.id for a in agent_manager.get_agents()] == [str(before.id)]
+
+    with observer_holding_the_lock(tmp_path):
+        after = _agent_details("after-restart")
+        append_observe_event(tmp_path, make_full_agent_state_event([after]))
+        wait_for(lambda: agent_manager.get_agent_events_status().is_stream_healthy, timeout=15.0)
+        wait_for(lambda: [a.id for a in agent_manager.get_agents()] == [str(after.id)], timeout=10.0)
+
+
+def test_secondary_manager_never_writes_chat_memory_scores(broadcaster: WebSocketBroadcaster) -> None:
+    """A second chat beside the live one is handed no capability to re-tag chats' scores."""
+    manager = AgentManager.build(broadcaster, is_secondary=True)
     try:
-        manager._start_observe()
-        logged_error = poll_until(
-            lambda: any(r.startswith("ERROR") and "mngr observe" in r for r in loguru_records),
-            timeout=5.0,
-            poll_interval=0.05,
-        )
-        assert logged_error, (
-            "Expected an ERROR log from the observe watchdog; got: "
-            f"{[r for r in loguru_records if r.startswith('ERROR')]}"
-        )
+        assert manager._oom_prioritizer._set_adj(os.getpid(), 0) is False
     finally:
         manager.stop()
-
-
-def test_start_observe_watchdog_stays_quiet_on_clean_shutdown(
-    broadcaster: WebSocketBroadcaster,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    loguru_records: list[str],
-) -> None:
-    """Calling ``stop()`` on a healthy observe subprocess must not produce errors."""
-    if shutil.which("mngr") is None:
-        pytest.skip("mngr binary not on PATH")
-
-    monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(tmp_path))
-    # See test_start_observe_spawns_long_lived_subprocess for why these are needed.
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "mngr-host"))
-    manager = AgentManager.build(broadcaster)
-    manager._start_observe()
-    # ``_start_observe`` only returns after ``run_process_in_background``
-    # has spawned the child and its RunningProcess thread has started, so the
-    # subprocess is guaranteed to be running by the time we call stop().
-    assert manager._observe_process is not None
-    manager.stop()
-
-    errors = [r for r in loguru_records if r.startswith("ERROR") and "mngr observe" in r]
-    assert errors == [], f"Watchdog logged errors during clean shutdown: {errors}"
-
-
-def test_handle_observe_output_line_logs_stderr_as_warning(
-    agent_manager: AgentManager,
-    loguru_records: list[str],
-) -> None:
-    """Stderr output from the observe subprocess is surfaced as a warning."""
-    agent_manager._handle_observe_output_line("something bad happened", is_stdout=False)
-
-    warnings = [r for r in loguru_records if r.startswith("WARNING") and "mngr observe stderr" in r]
-    assert warnings, f"Expected a stderr warning; got: {loguru_records}"
-    assert "something bad happened" in warnings[0]
 
 
 # ---------------------------------------------------------------------------

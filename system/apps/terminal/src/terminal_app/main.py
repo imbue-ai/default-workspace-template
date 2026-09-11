@@ -66,6 +66,10 @@ class TerminalAppArguments(FrozenModel):
     oom_tag_script: Path = Field(
         description="The memory-shedding tag wrapper a terminal session runs its shell through"
     )
+    is_registered: bool = Field(
+        default=True,
+        description="Whether the boot registers the app; a preview on free ports must not re-point the live row",
+    )
     agent_state_dir: Path | None = Field(
         description="The mngr agent state directory the discovery event is written under; None writes none"
     )
@@ -131,6 +135,7 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
             commands_dir=paths.commands_dir,
         ),
         build_app=build_app,
+        is_registered=arguments.is_registered,
     )
 
 
@@ -193,6 +198,13 @@ def run_terminal_app(arguments: TerminalAppArguments) -> int:
     show_default=True,
     help="The memory-shedding tag wrapper a terminal session runs its shell through",
 )
+@click.option(
+    "--no-register",
+    "is_unregistered",
+    is_flag=True,
+    default=False,
+    help="Skip the registration (a throwaway boot, such as a preview, that must not re-point the live terminal row)",
+)
 def main(
     manifest_path: Path,
     app_url: str,
@@ -202,6 +214,7 @@ def main(
     ttyd_web_client_archive: Path,
     ttyd_executable: str,
     oom_tag_script: Path,
+    is_unregistered: bool,
 ) -> None:
     """Run the workspace terminal: ttyd plus the instances API over the workspace's tmux sessions."""
     agent_state_dir = os.environ.get(ENV_AGENT_STATE_DIR, "")
@@ -214,6 +227,7 @@ def main(
         ttyd_web_client_archive=ttyd_web_client_archive,
         ttyd_executable=ttyd_executable,
         oom_tag_script=oom_tag_script,
+        is_registered=not is_unregistered,
         agent_state_dir=Path(agent_state_dir) if agent_state_dir else None,
         agent_session_prefix=os.environ.get(
             ENV_AGENT_SESSION_PREFIX, DEFAULT_AGENT_SESSION_PREFIX

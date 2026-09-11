@@ -62,6 +62,8 @@ from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StaleLayoutSaveError
 from imbue.system_interface.shell.errors import SupervisorProgramActionError
 from imbue.system_interface.shell.errors import UnknownAppError
+from imbue.system_interface.shell.errors import UpdateNoticeCommandError
+from imbue.system_interface.shell.errors import UpdateNoticeRefusedError
 from imbue.system_interface.shell.instance_relay import RelayOutcome
 from imbue.system_interface.shell.instance_relay import relay_create
 from imbue.system_interface.shell.instance_relay import relay_delete
@@ -104,6 +106,7 @@ LOOPBACK_CLIENT_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "l
 
 HTTP_OK: Final[int] = 200
 HTTP_CREATED: Final[int] = 201
+HTTP_ACCEPTED: Final[int] = 202
 HTTP_NO_CONTENT: Final[int] = 204
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_FORBIDDEN: Final[int] = 403
@@ -160,8 +163,11 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
             | InstanceNotListedError()
         ):
             return _detail(str(error), HTTP_NOT_FOUND)
-        case ProjectConflictError() | StaleLayoutSaveError():
+        case ProjectConflictError() | StaleLayoutSaveError() | UpdateNoticeRefusedError():
             return _detail(str(error), HTTP_CONFLICT)
+        case UpdateNoticeCommandError():
+            logger.opt(exception=error).error("An update-notice verb failed")
+            return _detail(str(error), HTTP_INTERNAL_ERROR)
         case (
             ProjectValueError()
             | InvalidAddressError()
@@ -182,6 +188,18 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
 def _require_loopback() -> ResponseReturnValue | None:
     if (request.remote_addr or "") not in LOOPBACK_CLIENT_HOSTS:
         return _detail("this route is only callable from loopback", HTTP_FORBIDDEN)
+    return None
+
+
+# What a preview shell answers to a verb that would act on a live instance or program. A
+# preview reads the live apps' instances but owns nothing it could change: the verbs would
+# reach the live apps (or supervisord) exactly as the live shell's do.
+PREVIEW_REFUSAL_DETAIL = "This is a preview of a proposed change; it cannot change the live workspace."
+
+
+def _refuse_if_preview() -> ResponseReturnValue | None:
+    if get_state().is_preview:
+        return _detail(PREVIEW_REFUSAL_DETAIL, HTTP_FORBIDDEN)
     return None
 
 
@@ -284,6 +302,9 @@ def client_activity_route() -> ResponseReturnValue:
 
 
 def relay_create_route(name: str) -> ResponseReturnValue:
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     entry = _entry_or_raise(name)
     outcome = relay_create(_shell().http_client, entry, request.get_data())
     if outcome.status_code < HTTP_BAD_REQUEST:
@@ -291,10 +312,11 @@ def relay_create_route(name: str) -> ResponseReturnValue:
     return _relay_response(outcome)
 
 
-def _relay_keyed(
-    name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]
-) -> ResponseReturnValue:
+def _relay_keyed(name: str, key: str, send: Callable[[AppInventoryEntry], RelayOutcome]) -> ResponseReturnValue:
     """One instance verb through the relay: the app's answer as it is, and a refetch of its list when it accepted."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     entry = _entry_or_raise(name)
     _instance_key_or_raise(key)
     outcome = send(entry)
@@ -329,6 +351,9 @@ def relay_start_route(name: str, key: str) -> ResponseReturnValue:
 
 
 def _lifecycle(name: str, action: AppLifecycleAction) -> ResponseReturnValue:
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
     shell = _shell()
     entry = _entry_or_raise(name)
     program = entry.row.program or ""
@@ -511,8 +536,36 @@ def inventory_document() -> ResponseReturnValue:
             clients,
             shell.broadcaster.connected_client_ids(),
             docked_by_client_id,
+            is_preview=get_state().is_preview,
         )
     )
+
+
+# ---------- section 5: the update notice ----------
+
+
+def pending_update() -> ResponseReturnValue:
+    """The kept rollback point of the last careful-flow apply, or ``null`` when there is none."""
+    notice = _shell().update_notice.current()
+    return jsonify(notice.wire_json() if notice is not None else None)
+
+
+def confirm_pending_update() -> ResponseReturnValue:
+    """ "Everything seems good": discard the kept copies and the record. Refused in a preview, which owns no live state."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    _shell().update_notice.confirm()
+    return Response(status=HTTP_NO_CONTENT)
+
+
+def rollback_pending_update() -> ResponseReturnValue:
+    """ "Roll back": start the rollback detached and answer at once; the record's progress and outcome follow on the socket."""
+    refusal = _refuse_if_preview()
+    if refusal is not None:
+        return refusal
+    _shell().update_notice.launch_rollback()
+    return _detail("The rollback has started.", HTTP_ACCEPTED)
 
 
 # ---------- the agent-facing op route (contracts.md section 12) ----------
@@ -572,6 +625,24 @@ def register_shell_routes(application: Flask) -> None:
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
+    )
+    application.add_url_rule(
+        "/api/updates/pending",
+        view_func=pending_update,
+        methods=["GET"],
+        endpoint="pending_update",
+    )
+    application.add_url_rule(
+        "/api/updates/pending/confirm",
+        view_func=confirm_pending_update,
+        methods=["POST"],
+        endpoint="confirm_pending_update",
+    )
+    application.add_url_rule(
+        "/api/updates/pending/rollback",
+        view_func=rollback_pending_update,
+        methods=["POST"],
+        endpoint="rollback_pending_update",
     )
     application.add_url_rule(
         "/api/apps/<name>/instances",
@@ -948,6 +1019,8 @@ def _create_through_relay(
 ) -> _CreatedInstance:
     """Run the app's action through the relay (the same route the browser uses) and answer the instance it made. The
     title comes from the app's answer rather than the inventory, which may not have listed the instance yet."""
+    if get_state().is_preview:
+        raise InstanceCreateRefusedError(HTTP_FORBIDDEN, PREVIEW_REFUSAL_DETAIL)
     body = json.dumps(
         {
             "action": _create_action_id(entry, arguments),

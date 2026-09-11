@@ -40,18 +40,19 @@ Parsed by the `app_manifest` library (section 14) with pydantic, `extra = "forbi
 | `actions` | array of tables | no | `[]` | Each `{id, label, params?}`; `id` matches `^[a-z0-9][a-z0-9-]{0,31}$` and is unique; `label` non-empty. `params` is an optional array of `{name, label, required}` describing the create body's `params` keys, for documentation, `layout.py --param` validation, and the New Tab page (an action with a `message` param is one the page can seed a first message into). Forbidden when `instances = false`. |
 | `launcher_rank` | integer | no | absent | At least 1. The app's place among the New Tab page's leading "Open new" tiles, lowest first; an app without one follows every ranked app. The built-ins declare 10 (`chat`), 20 (`files`), 30 (`browser`), 40 (`terminal`). |
 | `handles` | table | no | absent | Reserved for protocol and intent handlers (deferred); must be absent or empty. |
+| `preview` | table | no | the scaffold convention | How a throwaway instance boots for a preview (`PreviewSpec`): `command` (default: the program as its console script), `ports` (named free ports; `main` always), `env`, `args`, `copies` (repo-relative directories copied into the instance's scratch space, by key), `health_path` (default `/health`), `open_path` (default `/`), `open_path_takes_key`. `command`, `args`, and `env` values may carry `{port:<name>}`, `{copy:<key>}`, `{host}`, `{scratch}`, `{registry}` (a copied registry with previewed siblings rewritten), and `{shell_url}` (the preview shell's URL when one is up, else empty); `open_path` may carry `{key}` exactly when `open_path_takes_key`. A placeholder naming an undeclared port or copy fails validation. Absent, the table is `env = {<PACKAGE_UPPER>_PORT = "{port:main}", <PACKAGE_UPPER>_HOST = "{host}", <PACKAGE_UPPER>_DATA_DIR = "{copy:data}"}` over `copies = {data = "data/.apps/<name>"}`. |
 
 A single-instance app (`instances = false`) has exactly one synthesized action, `open`, labelled `Open <display_name>`, which the shell adds when it reads the registry; the manifest never declares it.
 
 Built-in manifests:
 
-| App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` |
-|---|---|---|---|---|---|---|
-| `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` |
-| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) |
-| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) |
-| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) |
-| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) |
+| App | `instances` | `instances_url` | `critical` | `priority` | `default_shortcut` | `actions` | `preview` |
+|---|---|---|---|---|---|---|---|
+| `system_interface` | false | | true | `system_interface` | none | none; also `internal = true` | `system-interface --preview --state-dir {copy:state}` over `copies = {state = "data/.state/system_interface"}`, `MINDS_APPS_FILE = "{registry}"`, health `/api/health` |
+| `chat` | true | app URL | true | `chat` | `{action = "new", mode = "new"}` | `new` ("New Chat", params `account_id` optional: a signed-in account to launch on; absent, the most recently used one, or a chat that waits for one when nothing is signed in; `message` optional: the first message the chat sends once it runs, kept by a waiting chat for its launch), `subagent` ("Open subagent", params `parent` and `session` required, `description` optional: the subagent's title) | `chat-app --secondary --nudge-shell-url {shell_url}` over `copies = {data = "data/.apps/chat"}` (`CHAT_DATA_DIR`), health `/api/health`, opens on `/{key}` |
+| `terminal` | true | `http://127.0.0.1:7682` | true | `terminal` | `{action = "new", mode = "focus"}` | `new` ("New Terminal", params `workdir` optional) | `terminal-app --no-register` on ports `main` and `sidecar`, over `copies = {store = "data/.apps/terminal"}` and a `{scratch}` state dir, health `/` (the main port is ttyd's) |
+| `files` | true | `http://127.0.0.1:8301` | false | `files` | `{action = "new", mode = "focus"}` | `new` ("New File Viewer", params `path` optional) | the convention |
+| `browser` | true | app URL | false | `browser` | `{action = "new", mode = "focus"}` | `new` ("New Browser", params `url` optional) | the convention |
 
 Every built-in except the shell points `icon` at an `icon.svg` beside its manifest; the shell is `internal` and has none.
 
@@ -139,6 +140,8 @@ Every mutating route, `DELETE` of an unknown key included, nudges the shell; the
 | browser | browser name | `/?session=<key>` | `Browser <N>` for `browser-<N>`, any other name verbatim | `working` while an agent holds control, else `idle` (a browser still launching included); `error` for a crashed browser; `stopped` while the user has it stopped. Every route but create and rename is `503` until the daemon's init gate opens (while it restores the saved browsers): list, delete, location, stop, and start (rename is `400`, gate or no gate); a create during restore queues behind the relaunches and the shell's next fetch picks the browser up | `explicit` | false | `POST /browsers`; `params.url` (optional, an absolute `http(s)` URL) is the first page the new browser opens on, so `layout.py open <url>` is one create rather than a create and a location the launching browser would refuse | `DELETE /browsers/<key>`; `503` before the init gate opens | navigates the live browser's active tab to the absolute URL in `path` (a rooted path is `400` for this app) and checkpoints its fleet manifest; `409` while an agent holds the browser or while it is launching, stopped, or crashed; `503` before the init gate opens | true for every browser; stop ends its Chromium after refreshing its tab list and keeps the browser, its profile, and its tabs (`409` while it is still launching); start relaunches it on those tabs from the same profile (`409` when the fleet is full); both `503` before the init gate opens; a stopped browser does not count toward the fleet cap, is restored as stopped after a daemon restart, and refuses the fleet CLI's verbs with status `stopped` |
 | chat | agent id, or `<agent-id>.<session-id>` for a subagent | `/<key>` | the agent's display name; `Subagent: <description>` for a subagent (the session id when the create gave no description); the minted display name for a provisional instance (`New chat` when there is none yet) | a dead lifecycle (stopped or done; unknown is not evidence of death and counts as alive) `stopped`; else pending permission `attention`; else thinking or tool-running `working`; else `idle`; a provisional chat by its phase: `attention` while it waits for an account, `working` while its create runs, `error` when the create failed; subagent `idle` | `explicit` for agents, `referenced` for provisional and subagent instances | true for agents, false otherwise | `new` mints the agent id and a provisional record: with `account_id`, or with any signed-in account (the most recently used), the create starts at once; with nothing signed in the chat waits for an account and its page shows the provider chooser, whose sign-in launches it under the same id (`POST /api/agents/create-chat` with `agent_id`); a failed create keeps the record in the `failed` phase with the reason, and the page can try again on the same account; `subagent` requires `parent` (a listed chat) and `session`, takes an optional `description`, and returns an existing record when one exists | `mngr destroy` for an agent; drops the record for a subagent; drops a provisional chat that is waiting for an account or failed, and is a no-op for a create in flight | `400` | true for an agent, false for a provisional or subagent instance; stop is `mngr stop` (the chat's transcript and name stay, and the record answers `stopped` at once), start is the in-process ensure-started path a send takes to revive a stopped agent |
 
+The chat's `GET /api/health` (section 5) additionally carries `agent_events`, `{"is_stream_healthy": bool, "detail": "<text>"}`: whether agent lifecycle events from the workspace's `agent-observer` program are actually reaching this chat instance. `status` stays `ok` whatever it says (the update apply's pre-flight boot polls the route on a chat that follows nothing); the instances API's `503` until the first full snapshot is folded is what says the app is not usable yet, and a chat whose observer died mid-run keeps serving its last known list with `is_stream_healthy` false and the reason in `detail`.
+
 ## 5. Shell routes apps and scripts call
 
 All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http://127.0.0.1:8000`).
@@ -148,7 +151,12 @@ All routes below are on the shell (`MINDS_WORKSPACE_SERVER_URL`, default `http:/
 | `POST /api/apps/<name>/changed` | any app, loopback only | empty | `204`; unknown name `404` |
 | `POST /api/tabs/<tab_id>/instance` | an app, loopback only | `{"app": "<name>", "key": "<key>"}` | `204`; unknown tab `404`; app mismatch with the tab's address `400` |
 | `POST /api/client-activity` | the chat app on a send; the shell itself on a view switch | `{"client_id", "device_kind", "view_id", "kind": "message" \| "view_switch", "app"?, "key"?, "text"?, "from_view_id"?}` | `204` |
-| `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}` |
+| `GET /api/health` | probes | | `200 {"status": "ok", "is_frontend_built": bool}`; the chat's answer additionally carries `agent_events` (section 4.3) |
+| `GET /api/updates/pending` | the browser; the update-app careful flow | | `200` with the update notice, or `null` when no rollback point is kept |
+| `POST /api/updates/pending/confirm` | the browser ("Everything seems good", or Close on a settled notice) | empty | `204` after `update_self.py confirm-last` discarded the kept copies and the record; `409` when none is kept; `500` naming the script's failure; a preview shell `403` |
+| `POST /api/updates/pending/rollback` | the browser ("Roll back") | empty | `202` once `update_self.py rollback-last` is started detached (its output goes to `data/.state/update-apply/rollback-last.log`); `409` when none is kept, one is already running, or the point was already taken back; a preview shell `403` |
+
+The update notice is `{"merge_sha", "applied_at", "driven_by", "apps", "programs", "needs_services_restart", "progress", "outcome"}`: the record an apply run with `--keep-rollback-point` leaves at `data/.state/update-apply/last-good.json` (section 17), less its rollback target and copies. `apps` are the critical apps whose program or bundle the apply changed (their tabs carry the band; `system_interface` among them means the shell's own banner), `programs` what a rollback restarts, `progress` what a running rollback is doing, and `outcome` how it ended; a notice with an `outcome` is settled and only closes.
 
 `POST /api/apps/<name>/changed`, `POST /api/tabs/<tab_id>/instance`, `POST /api/client-activity`, and `POST /api/layout/broadcast` are loopback-only and reject non-loopback peers with `403`; `GET /api/health` is not.
 
@@ -174,6 +182,8 @@ Instance verbs are relayed by the shell, so browsers never reach an `instances_u
 | `POST /api/apps/<name>/instances/<key>/start` | | passthrough |
 
 After any successful relay the shell refetches that app's list immediately rather than waiting for the nudge.
+
+A preview shell (`system-interface --preview`, booted read-only over a seeded copy of the live state directory and a copied registry) answers every relay route above, `POST /api/apps/<name>/stop`, `POST /api/apps/<name>/start`, and a create through the op route with `403 {"detail": "This is a preview of a proposed change; it cannot change the live workspace."}`, and its page hides those verbs; its page carries the meta tag `system-interface-preview` (content `true`) and never the staleness tag. Project and layout edits land in its copy.
 
 Projects and views:
 
@@ -236,6 +246,7 @@ Outbound (shell to browser):
 | `active_view_changed` | `{"client_id", "view_id"}` | after a `client_state` report or a `load` op (or an op's `--view`) changed the client's stored active view; never when the report names the view already stored; the other windows of that client switch and report back without a previous view |
 | `tab_rebound` | `{"client_id", "view_id", "tab_id", "address"}` | after `POST /api/tabs/<tab_id>/instance`; the owning client re-addresses that tab, adds the address to the view's tab set through the projects route, and saves |
 | `layout_op` | `{"op", "args", "requester", "target_client_id"}` | only the four transient verbs of section 12 (`maximize`, `restore`, `refresh`, `reload_system_interface`); `requester` is the address of the instance that posted the op (its own chat), `""` when unknown, and is what `self` resolves to; `target_client_id` names the client whose windows apply it, `null` for the two machine-wide forms |
+| `update_notice_changed` | `{"notice": notice \| null}` | on connect, and whenever the kept rollback point's record (section 17) is written or removed and reads differently: an apply kept it, a rollback's progress and outcome, a confirm cleared it; `notice` is the document of section 5's `GET /api/updates/pending` |
 
 `app` is `{"name", "display_name", "icon", "label", "url", "internal", "program", "critical", "instances_url", "has_instances", "actions": [{"id", "label", "params": [name, ...]}], "default_shortcut", "launcher_rank", "is_running", "is_listed", "instances": [record, ...]}`.
 `is_listed` is false until the app's instances API has answered a list once (a single-instance app's synthesized record counts): a client prunes a tab whose address is missing only from a list that has arrived, never from the empty seed.
@@ -259,6 +270,7 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 ```
 
 `everything.tabs` is every address of every listed instance, apps in registry order, instances in list order.
+The document also carries `is_preview`, whether the answering shell is a preview (section 6).
 `clients` is every stored client record (section 7's retention), each carrying `is_connected` and additionally `docked`, the addresses in that client's layout of its active view, so `layout.py list` can say where an instance is docked without reading layouts.
 
 ## 10. The browser-side contract (`app_contract.js`)
@@ -335,7 +347,7 @@ The minds chrome does not forward a deep link's query to the shell frame; that l
 
 ## 15. Memory priority
 
-`oom_priority.bands.SERVICE_BANDS` carries `"chat": 25`, between `system_interface` (20) and `share-gateway` (35).
+`oom_priority.bands.SERVICE_BANDS` carries `"chat": 25`, between `system_interface` (20) and `share-gateway` (35), and `"agent-observer": 24` just below it: the observer is the writer of the agent lifecycle event file every chat instance follows, so shedding it blinds every chat at once while freeing almost nothing.
 The backstop listener resolves a program's band by finding the registry row whose `program` equals the program name and reading its `priority`: a `SERVICE_BANDS` key gives that band, and `user` (or an unknown name) gives `USER_SERVICE`. A program with no row falls back to `SERVICE_BANDS` by program name, then to `_NON_SERVICE_PROGRAM_BANDS` (the programs that are not apps), then to `USER_SERVICE`.
 The `oom_tag_service.py <key>` prefix on a program line tags the program into its band at launch; the backstop covers what the prefix cannot.
 
@@ -351,6 +363,6 @@ Everything a program persists goes under `data/` (gitignored, restic-backed), in
   Every app's instance records live here, at `data/.apps/<name>/instances.json`, whatever document shape the app uses (the library's `JsonStoreInstanceSource` for the files app; the terminal's own `{name, title, workdir}` records).
   A terminal's title and starting directory, and a file viewer's folder, are things the user chose, so they belong here even when the instance is backed by state elsewhere.
   The update-app skill treats this directory as the user's real data: verification never writes to it.
-- `data/.state/` (a program's own under `data/.state/<name>/`): what a program keeps about this machine and can rebuild, or must not outlive it: the registry (`data/.state/apps.toml`), the terminal's dispatch scripts and pty-to-tab files (`data/.state/terminal/commands/`), and the shell's client layouts and client records (section 7).
+- `data/.state/` (a program's own under `data/.state/<name>/`): what a program keeps about this machine and can rebuild, or must not outlive it: the registry (`data/.state/apps.toml`), the terminal's dispatch scripts and pty-to-tab files (`data/.state/terminal/commands/`), the shell's client layouts and client records (section 7), every isolated instance's state under `data/.state/isolated-instances/<name>/` (its pids, ports, logs, `copies/<key>/` for the directories its manifest's preview table names, and `scratch/`), beside a preview's registry copy `<name>-preview.registry.toml`, and the update apply's own state under `data/.state/update-apply/`: its in-flight marker and emergency record, its `snapshots/`, and, after an apply run with `--keep-rollback-point`, `last-good.json` (the kept rollback point the shell's notice reads, rewritten by a rollback with its progress and outcome, removed by a confirm) and `rollback-last.log` (what a rollback started from the notice printed).
 
 A path an app takes on its command line (`--store`, `--state-dir`) defaults to these locations and is overridden only by tests.

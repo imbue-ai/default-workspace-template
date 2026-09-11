@@ -218,9 +218,16 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     "owner-exec": 5,
     "terminal": 10,
     "system_interface": 20,
-    # The chat app (the agent harness UI): just above the shell it is embedded
-    # in, and below every other service, since a shed chat app costs every open
-    # chat its page until it restarts.
+    # The agent observer ('mngr observe', the writer of the lifecycle event file
+    # every chat instance follows): just below the chat, because shedding it
+    # blinds every chat's agent view at once until supervisord brings it back
+    # while freeing almost nothing (it is a small Python process), whereas a shed
+    # chat app comes back to a stream the observer kept writing.
+    "agent-observer": 24,
+    # The chat app (the agent harness UI): just above the observer it follows,
+    # itself just above the shell the chat is embedded in, and below every other
+    # service, since a shed chat app costs every open chat its page until it
+    # restarts.
     "chat": 25,
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.

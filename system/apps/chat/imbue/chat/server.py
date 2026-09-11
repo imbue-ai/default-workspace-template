@@ -1180,9 +1180,22 @@ def _serve_asset(filename: str) -> Response:
 
 
 def _health_endpoint() -> Response:
-    """The probe route (contracts.md section 5): alive, and whether the built chat page is being served."""
-    is_frontend_built = (get_state().static_directory / CHAT_DOCUMENT_FILENAME).exists()
-    return json_response({"status": "ok", "is_frontend_built": is_frontend_built})
+    """The probe route (contracts.md section 5): alive, whether the built chat page is being served,
+    and whether agent lifecycle events are reaching this instance.
+
+    ``status`` stays ``ok`` whatever the stream says: the update apply's pre-flight boot polls
+    this route on a chat that follows nothing, and the instances API is what says the app is
+    usable. ``agent_events`` is for whoever has to tell a frozen agent view from a quiet one.
+    """
+    state = get_state()
+    is_frontend_built = (state.static_directory / CHAT_DOCUMENT_FILENAME).exists()
+    return json_response(
+        {
+            "status": "ok",
+            "is_frontend_built": is_frontend_built,
+            "agent_events": state.agent_manager.get_agent_events_status().model_dump(mode="json"),
+        }
+    )
 
 
 def _serve_static_file(basename: str) -> Response:

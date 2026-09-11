@@ -35,6 +35,8 @@ from imbue.system_interface.shell.primitives import ViewId
 from imbue.system_interface.shell.primitives import mint_save_id
 from imbue.system_interface.shell.projects import ProjectStore
 from imbue.system_interface.shell.projects import project_wire_json
+from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
+from imbue.system_interface.update_staleness import WORKSPACE_ROOT_DIRECTORY
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 CLIENT_ACTIVITY_EVENTS_PATH: Final[str] = "events/client_activity/events.jsonl"
@@ -43,7 +45,7 @@ CLIENT_PRUNE_INTERVAL_SECONDS: Final[float] = 24 * 60 * 60.0
 
 
 class ShellState(MutableModel):
-    """The shell's collaborators: the inventory, the three stores, the activity log, and the broadcaster."""
+    """The shell's collaborators: the inventory, the three stores, the activity log, the update notice, and the broadcaster."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -55,6 +57,9 @@ class ShellState(MutableModel):
     activity: ClientActivityLog = Field(frozen=True, description="The client-activity event log")
     broadcaster: WebSocketBroadcaster = Field(frozen=True, description="The WebSocket fan-out to the shell's windows")
     http_client: httpx.Client = Field(frozen=True, description="The client the relay uses to reach the apps")
+    update_notice: UpdateNoticeWatch = Field(
+        frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
+    )
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
@@ -71,8 +76,10 @@ class ShellState(MutableModel):
         thread.start()
         self.inventory.add_removed_listener(self.on_instances_removed)
         self.inventory.start()
+        self.update_notice.start()
 
     def stop(self) -> None:
+        self.update_notice.stop()
         self._prune_stop.set()
         if self._prune_thread is not None:
             self._prune_thread.join(timeout=5)
@@ -220,8 +227,10 @@ def build_shell_state(
     registry_path: Path,
     broadcaster: WebSocketBroadcaster,
     inventory: AppInventory | None = None,
+    repo_root: Path = WORKSPACE_ROOT_DIRECTORY,
 ) -> ShellState:
-    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests."""
+    """Wire the shell's collaborators over ``state_directory``; ``inventory`` is injectable for tests, and
+    ``repo_root`` (the workspace the update notice's record and script live under) is the served tree by default."""
     return ShellState(
         state_directory=state_directory,
         inventory=inventory
@@ -233,4 +242,5 @@ def build_shell_state(
         activity=ClientActivityLog(events_path=state_directory / CLIENT_ACTIVITY_EVENTS_PATH),
         broadcaster=broadcaster,
         http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
     )

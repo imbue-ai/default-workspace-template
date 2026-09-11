@@ -7,10 +7,13 @@ from pydantic import ValidationError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.manifest import (
     AppManifest,
+    PreviewSpec,
     ShortcutMode,
     load_manifest,
     manifest_icon_path,
+    scaffold_preview_spec,
 )
+from app_manifest.primitives import AppName
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -359,3 +362,93 @@ def test_load_manifest_reports_invalid_toml_and_invalid_values(tmp_path: Path) -
 def test_load_manifest_reports_a_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ManifestLoadError, match="cannot read"):
         load_manifest(tmp_path / "nope.toml")
+
+
+def _manifest_with_preview(preview: dict[str, object]) -> AppManifest:
+    return AppManifest.model_validate(
+        {
+            "name": "news-feed",
+            "display_name": "News",
+            "icon": "icon.svg",
+            "preview": preview,
+        }
+    )
+
+
+def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> (
+    None
+):
+    # The scaffold binds <PACKAGE_UPPER>_PORT/_HOST and reads <PACKAGE_UPPER>_DATA_DIR, with the
+    # package name being the app name with hyphens as underscores.
+    manifest = AppManifest.model_validate(
+        {"name": "news-feed", "display_name": "News", "icon": "icon.svg"}
+    )
+
+    assert manifest.preview == scaffold_preview_spec(AppName("news-feed"))
+    assert manifest.preview.env == {
+        "NEWS_FEED_PORT": "{port:main}",
+        "NEWS_FEED_HOST": "{host}",
+        "NEWS_FEED_DATA_DIR": "{copy:data}",
+    }
+    assert manifest.preview.copies == {"data": "data/.apps/news-feed"}
+    assert manifest.preview.command == ()
+    assert manifest.preview.ports == ("main",)
+    assert manifest.preview.health_path == "/health"
+    assert manifest.preview.open_path == "/"
+
+
+def test_an_explicit_preview_table_says_what_it_needs_and_nothing_else() -> None:
+    manifest = _manifest_with_preview(
+        {
+            "ports": ["main", "sidecar"],
+            "command": [
+                "news-server",
+                "--instances-url",
+                "http://127.0.0.1:{port:sidecar}",
+            ],
+            "env": {
+                "NEWS_PORT": "{port:main}",
+                "NEWS_STORE": "{copy:store}/records.json",
+            },
+            "copies": {"store": "data/.apps/news-feed"},
+            "health_path": "/_instances",
+            "open_path": "/{key}",
+            "open_path_takes_key": True,
+        }
+    )
+
+    assert manifest.preview.ports == ("main", "sidecar")
+    assert manifest.preview.command[0] == "news-server"
+    assert manifest.preview.copies == {"store": "data/.apps/news-feed"}
+    assert manifest.preview.open_path_takes_key is True
+
+
+@pytest.mark.parametrize(
+    ("preview", "problem"),
+    [
+        ({"env": {"NEWS_PORT": "{port:sidecar}"}}, "port 'sidecar'"),
+        ({"args": ["--store", "{copy:store}"]}, "copy 'store'"),
+        ({"command": ["news-server", "{worktree}"]}, "unknown placeholder"),
+        ({"env": {"X": "{host:main}"}}, "takes no name"),
+        ({"ports": ["sidecar"]}, "must include 'main'"),
+        ({"ports": ["main", "main"]}, "unique"),
+        ({"copies": {"data": "/etc"}}, "repo-relative"),
+        ({"copies": {"data": "../outside"}}, "repo-relative"),
+        ({"open_path": "/{key}"}, "open_path_takes_key"),
+        ({"open_path": "/", "open_path_takes_key": True}, "open_path_takes_key"),
+        ({"open_path": "/{port:main}"}, "may carry only"),
+        ({"health_path": "health"}, "start with '/'"),
+    ],
+)
+def test_a_preview_table_that_cannot_be_resolved_is_rejected(
+    preview: dict[str, object], problem: str
+) -> None:
+    with pytest.raises(ValidationError, match=problem):
+        _manifest_with_preview(preview)
+
+
+def test_the_scaffold_preview_spec_validates_its_own_placeholders() -> None:
+    # The convention is itself a table, so it obeys the rules every table does.
+    spec = scaffold_preview_spec(AppName("news"))
+
+    assert PreviewSpec.model_validate(spec.model_dump()) == spec

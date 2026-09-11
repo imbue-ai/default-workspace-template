@@ -34,6 +34,9 @@ PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
 
 ICON_SUFFIX: Final[str] = ".svg"
 
+# A name in a preview table: a port name or a copy key, referenced by placeholder.
+PREVIEW_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
 
 @pure
 def describe_app_name_problem(name: str) -> str | None:
@@ -161,6 +164,25 @@ class ProgramName(NonEmptyStr):
         if not value or any(character.isspace() for character in value):
             raise InvalidManifestValueError(
                 f"invalid program {value!r}: must be a non-empty name without whitespace"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+class PreviewName(str):
+    """A name a preview table declares and its placeholders refer to: a port name or a copy key."""
+
+    def __new__(cls, value: str) -> Self:
+        if not PREVIEW_NAME_PATTERN.fullmatch(value):
+            raise InvalidManifestValueError(
+                f"invalid preview name {value!r}: names match ^[a-z][a-z0-9_-]{{0,31}}$"
             )
         return super().__new__(cls, value)
 

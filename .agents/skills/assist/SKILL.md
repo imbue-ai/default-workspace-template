@@ -71,7 +71,7 @@ You are editing in the **same work directory the user's live workspace is served
 - State the cause you found, the evidence that backs it, and the exact change you propose to make.
 - Wait for their go-ahead. Do not start editing on your own authority, even when you are confident -- the user asked you to help diagnose a problem, not to perform an unrequested rewrite.
 
-(For a system-interface fix, this verbal go-ahead covers the *plan*; the `update-system-interface` preview in step 5 is where the user approves the actual change before it goes live.)
+(For a critical-app fix, this verbal go-ahead covers the *plan*; the careful flow's preview in step 5 is where the user approves the actual change before it goes live.)
 
 ## 5. Fix what you can: quick live fix, then defer the hardening
 
@@ -79,7 +79,7 @@ If the issue is **not fixable from here** (per B -- it lives in the installed ou
 
 If it **is fixable from here**, unblock the user fast, then harden in the background. *How* you apply the fix depends on the creation:
 
-- **`system/apps/system_interface`** (the workspace UI: the dockview shell, the sidebar, the New Tab launcher): **never edit it directly here.** Because your checkout is the one being served, a hand-edit-and-rebuild can take the user's entire UI down with no surface left to show an error. Route the fix through the **`update-system-interface`** skill, whose preview lets the user approve the change and whose reveal step pre-flights on a throwaway port and auto-rolls-back on failure -- the only safe go-live for the UI. Since `/assist` shares the work dir and can spawn the worker, you drive that flow yourself.
+- **A critical app** (the shell `system/apps/system_interface`, the chat, the terminal, or an app whose `app.toml` says `critical = true`): **never edit it directly here.** Because your checkout is the one being served, a hand-edit-and-rebuild can take the user's entire UI down with no surface left to show an error. Route the fix through **`update-app`**, which reads the manifest and follows its careful flow (`references/critical-app.md`): a preview lets the user approve the change, and the go-live pre-flights on a throwaway port and auto-rolls-back on failure -- the only safe go-live for these apps. Since `/assist` shares the work dir and can spawn the worker, you drive that flow yourself.
 - **A skill, or an app whose code is broken:** make the quick fix live so the user is unblocked now, then at turn-end defer the hardening (tests, review gates, isolated verification) to the **`heal-creation`** skill rather than treating your inline edit as the finished article. Use **`update-app`** instead if the fix is to add, remove, or reconfigure a service rather than repair its code.
 - **User-written code:** make the fix live and verify it actually resolves the problem (run it -- don't assume). This is the user's own code, so there is no lifecycle skill to defer to; just tell them what you changed.
 
@@ -128,7 +128,7 @@ Always confirm the diagnosis and plan with the user (step 4) before applying any
 | Cause is...                                   | How to fix it                                                                 | Report to imbue? |
 |-----------------------------------------------|-------------------------------------------------------------------------------|------------------|
 | User-created code                             | Fix live, verify it works                                                     | No               |
-| Template built-in: `system/apps/system_interface`    | Route through `update-system-interface` (never edit the served tree directly) | Yes              |
+| Template built-in: a critical app (the shell, the chat, the terminal) | Route through `update-app`'s careful flow (never edit the served tree directly) | Yes              |
 | Template built-in: a skill or app             | Quick live fix, then defer hardening to `heal-creation` (`update-app` for service config) | Yes |
 | Other template built-in (scripts, etc.)       | Fix live, verify it works                                                     | Yes              |
 | `system/vendor/mngr` affecting this container         | Fix live, verify it works                                                      | Yes              |

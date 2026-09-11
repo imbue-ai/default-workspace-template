@@ -28,3 +28,15 @@ params = [
     {name = "session", label = "Subagent session", required = true},
     {name = "description", label = "Description", required = false},
 ]
+
+# A chat preview is a secondary chat: it follows the live observer and reads the
+# live accounts, but writes nothing the live chat owns. It opens on the
+# conversation the user is in ({key} is an agent id) and nudges the preview shell
+# when one is up ({shell_url}, else empty).
+[preview]
+command = ["chat-app", "--secondary", "--nudge-shell-url", "{shell_url}"]
+env = {CHAT_PORT = "{port:main}", CHAT_HOST = "{host}", CHAT_DATA_DIR = "{copy:data}"}
+copies = {data = "data/.apps/chat"}
+health_path = "/api/health"
+open_path = "/{key}"
+open_path_takes_key = true

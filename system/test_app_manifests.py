@@ -154,6 +154,46 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
     assert manifest.priority != "user"
 
 
+def _console_scripts(package: str) -> set[str]:
+    return set(
+        tomllib.loads((_APPS_DIR / package / "pyproject.toml").read_text())
+        .get("project", {})
+        .get("scripts", {})
+    )
+
+
+@pytest.mark.parametrize("package", ("system_interface", "chat", "terminal"))
+def test_every_critical_built_in_previews_from_its_own_entry_point(
+    package: str,
+) -> None:
+    # A critical app's preview table names the app's real console script, so a preview
+    # boots the tool the program itself runs rather than a stale spelling of it.
+    manifest = load_manifest(_APPS_DIR / package / MANIFEST_FILENAME)
+
+    assert manifest.critical is True
+    assert manifest.preview.command, f"{package} declares no preview command"
+    assert manifest.preview.command[0] in _console_scripts(package), (
+        f"{package}'s preview runs {manifest.preview.command[0]!r}, which its pyproject does not export"
+    )
+
+
+def test_the_chat_preview_opens_on_a_conversation_and_the_shell_preview_reads_a_copied_state() -> (
+    None
+):
+    by_name = {
+        manifest.name: manifest
+        for manifest in map(load_manifest, _built_in_manifest_paths())
+    }
+
+    assert by_name["chat"].preview.open_path_takes_key is True
+    assert "{shell_url}" in by_name["chat"].preview.command
+    assert by_name["system_interface"].preview.copies == {
+        "state": "data/.state/system_interface"
+    }
+    assert by_name["system_interface"].preview.env["MINDS_APPS_FILE"] == "{registry}"
+    assert by_name["terminal"].preview.ports == ("main", "sidecar")
+
+
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
         manifest.name: manifest

@@ -200,6 +200,10 @@ class WebSocketBroadcaster(MutableModel):
             }
         )
 
+    def broadcast_update_notice_changed(self, notice: Mapping[str, Any] | None) -> None:
+        """The kept rollback point changed (raised, progressing, settled, or cleared); every window re-renders its notice."""
+        self.broadcast({"type": "update_notice_changed", "notice": dict(notice) if notice is not None else None})
+
     def broadcast_active_view_changed(self, client_id: str, view_id: str) -> None:
         """A client's stored active view moved; its other windows switch to it."""
         self.broadcast({"type": "active_view_changed", "client_id": client_id, "view_id": view_id})

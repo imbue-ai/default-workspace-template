@@ -132,7 +132,10 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   picks the lowest free port at or above 8080 by parsing
   `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
   manually, avoid `8000` (system_interface), `8010` (the chat app) and
-  `8081` (the browser service).
+  `8081` (the browser service). Two things do not show up there: the
+  `agent-observer` program binds no port at all, and a preview of any app
+  (`update-app`'s `preview_app.py`) takes free ports at boot, so nothing to
+  avoid is written down for it.
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
   app from inside the same container; binding to all interfaces is
   noise. The scaffolder does this. For the wrap-existing path, many

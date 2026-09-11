@@ -7,7 +7,7 @@ the environment converge. On any failure it
 reverts the entire merge and restores the pre-apply snapshots -- a recovery
 path needing no network, no package manager, and no working ``mngr``.
 
-It serves every update flow, not just update-self: ``update-system-interface``
+It serves every update flow, not just update-self: the careful flow for a critical app
 hands it an ordinary merge and its own already-built bundle, so both flows
 land the same way. What it must protect is therefore whole-repo -- the root
 venv, the uv tool environments (the mngr tool and each critical app's own),
@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import traceback
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,22 +40,28 @@ from update_apply_contract import (
     PHASE_SNAPSHOTTED,
     PHASE_STARTED,
     ApplyMarker,
+    LastGoodRecord,
     SnapshotRecord,
     clear_emergency,
+    clear_last_good,
     clear_marker,
     clear_provision_incomplete,
     default_is_pid_a_live_apply,
     provision_incomplete_path,
+    read_last_good,
     read_marker,
     snapshots_root,
     write_emergency,
+    write_last_good,
     write_marker,
     write_provision_incomplete,
 )
 from update_banding import ExpendWrapper, as_expendable, keep_protected
 from update_classification import (
+    CLASS_DOCKERFILE,
     ApplyPlan,
     AppTool,
+    classify_path,
     plan_apply,
     read_app_tools,
     read_provisioner_inputs,
@@ -72,6 +79,7 @@ from update_environment import (
     tool_snapshot_name,
 )
 from update_layout import (
+    APPS_DIR,
     BUNDLE_STAMP_FILENAME,
     DEFAULT_WORKSPACE_URL,
     ENV_WORKSPACE_URL,
@@ -79,24 +87,24 @@ from update_layout import (
     FRONTEND_DIR,
     FRONTEND_LIB_DIR,
     LAYOUT_MIGRATION_SCRIPT,
+    MANIFEST_FILENAME,
     NPM_LOCKFILE,
     NPM_ROOT_DIR,
     PROVISIONER_SCRIPT,
+    SUPERVISORD_CONF,
     FrontendBundle,
 )
 from update_ledger import LedgerCommitError, write_version_history_entry
 from update_probes import (
-    HEALTH_ATTEMPTS,
-    HEALTH_INTERVAL_SECONDS,
     HEALTH_PATH,
+    SHELL_PROGRAM,
     describe_frontend_failure,
     has_chat_program,
     preflight,
     preflight_chat,
     read_critical_instance_apps,
     refresh_workspace_view,
-    wait_healthy,
-    wait_instances_healthy,
+    wait_settled,
 )
 from update_runtime import (
     ApplyFailed,
@@ -671,37 +679,30 @@ def _recover_running_state(
                 repo_root,
                 "mngr start --restart",
             )
-        healthy = wait_healthy(
-            http,
-            f"{base_url}{HEALTH_PATH}",
-            HEALTH_ATTEMPTS,
-            HEALTH_INTERVAL_SECONDS,
-            sleeper,
-        )
-        # Every critical app with an instances API is probed beside the shell as
-        # the forward apply does, read off the restored tree: a tree whose
+        # Settled, not point-in-time, for the same reason as the apply path: a
+        # single 200 can land while supervisord is still turning the pid over.
+        # Every critical app with an instances
+        # API is held beside the shell, read off the restored tree: a tree whose
         # manifests declare none is confirmed by the shell alone.
-        if healthy:
-            for app in read_critical_instance_apps(repo_root):
-                app_failure = wait_instances_healthy(
-                    http,
-                    repo_root,
-                    app,
-                    HEALTH_ATTEMPTS,
-                    HEALTH_INTERVAL_SECONDS,
-                    sleeper,
-                )
-                if app_failure is not None:
-                    healthy = False
-                    sys.stderr.write(
-                        f"recovery: the {app.name} app did not become healthy after the "
-                        f"restart ({app_failure})\n"
-                    )
-                    break
+        instance_apps = read_critical_instance_apps(repo_root)
+        unsettled = wait_settled(
+            http,
+            repo_root,
+            runner,
+            sleeper,
+            shell_url=f"{base_url}{HEALTH_PATH}",
+            programs=[SHELL_PROGRAM, *(app.program for app in instance_apps)],
+            instance_apps=instance_apps,
+            require_stable_pid=live_service_restarted,
+        )
+        if unsettled is not None:
+            sys.stderr.write(
+                f"recovery: the workspace did not settle healthy ({unsettled})\n"
+            )
     except (ApplyFailed, OSError) as exc:
         sys.stderr.write(f"recovery step failed: {exc}\n")
         return _NOT_RECOVERED
-    if not healthy:
+    if unsettled is not None:
         return _NOT_RECOVERED
     frontend_failure = describe_frontend_failure(http, base_url, sleeper)
     if frontend_failure is not None:
@@ -797,6 +798,7 @@ def apply_update(
     today: str | None = None,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
     expend: ExpendWrapper = as_expendable,
+    keep_rollback_point: bool = False,
 ) -> int:
     """Land ``merge_ref`` and make the live workspace consistent with it, as one
     atomic, idempotent, rollback-on-failure motion. Returns the process exit
@@ -806,6 +808,11 @@ def apply_update(
     (merge already landed -> skip; snapshot already taken -> reuse; ledger
     entry present -> skip), so re-running ``apply`` after any interruption is
     safe -- that re-run *is* the DRI agent's recovery path.
+
+    With ``keep_rollback_point`` a successful apply leaves its snapshots in
+    place and writes the rollback-point record the shell raises its notice
+    from (:func:`rollback_last`, :func:`confirm_last`); any apply, with the
+    flag or without, first discards the previous record's snapshots.
     """
     resolved_base = (
         base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
@@ -888,6 +895,12 @@ def apply_update(
         _refuse_a_re_merge_that_drops_a_rolled_back_target(
             target_ref, merge_ref, repo_root, runner
         )
+    # A fresh apply replaces whatever rollback point the last one kept: its copies
+    # describe a tree this apply is about to move past. A resumed apply already
+    # did this on its first run, and its own copies now live where the old ones did.
+    if read_last_good(repo_root) is not None and marker.phase == PHASE_STARTED:
+        clear_last_good(repo_root)
+        discard_snapshots(repo_root)
     write_marker(marker, repo_root, now)
 
     def _advance(phase: str) -> None:
@@ -1128,33 +1141,30 @@ def apply_update(
             timeout=_RESTART_TIMEOUT_SECONDS,
         )
         _advance(PHASE_RESTARTED)
-        if not wait_healthy(
-            http,
-            f"{resolved_base}{HEALTH_PATH}",
-            HEALTH_ATTEMPTS,
-            HEALTH_INTERVAL_SECONDS,
-            sleeper,
-        ):
-            raise ApplyFailed(
-                "backend did not become healthy after restart",
-                live_service_restarted=True,
-            )
         # Every critical app that serves instances restarts with the shell (all are
         # the services agent's programs), so each one's instances API answering is
         # the update's health too: the chat is the process that imports mngr, and
         # the terminal is what the not-built placeholder hands over. Which apps
         # those are comes from the merged tree's manifests; where each is reached
-        # follows the registry as the app re-registers, and the failure names what
-        # the last poll found.
-        for app in read_critical_instance_apps(repo_root):
-            app_failure = wait_instances_healthy(
-                http, repo_root, app, HEALTH_ATTEMPTS, HEALTH_INTERVAL_SECONDS, sleeper
+        # follows the registry as the app re-registers. The verdict is settled
+        # state -- several consecutive healthy answers on unchanging supervisord
+        # pids -- and the failure names what the last poll found.
+        instance_apps = read_critical_instance_apps(repo_root)
+        unsettled = wait_settled(
+            http,
+            repo_root,
+            runner,
+            sleeper,
+            shell_url=f"{resolved_base}{HEALTH_PATH}",
+            programs=[SHELL_PROGRAM, *(app.program for app in instance_apps)],
+            instance_apps=instance_apps,
+            require_stable_pid=True,
+        )
+        if unsettled is not None:
+            raise ApplyFailed(
+                f"the workspace did not settle into a healthy state after restart ({unsettled})",
+                live_service_restarted=True,
             )
-            if app_failure is not None:
-                raise ApplyFailed(
-                    f"the {app.name} app did not become healthy after restart ({app_failure})",
-                    live_service_restarted=True,
-                )
 
         # Scoped to a *regression*: only a frontend that was serving before
         # this apply has to be serving after it. Ahead of the view refresh,
@@ -1191,7 +1201,28 @@ def apply_update(
         elif plan.provisioner:
             clear_provision_incomplete(repo_root)
         clear_marker(repo_root)
-        discard_snapshots(repo_root)
+        if keep_rollback_point:
+            # The copies stay where they are, and the record says what this apply
+            # touched, so the shell can offer the previous version back until a
+            # person confirms the update or the next apply replaces the point.
+            touched = _touched_critical_apps(plan, name_status, repo_root)
+            write_last_good(
+                LastGoodRecord(
+                    merge_sha=git_out(runner, repo_root, ["rev-parse", "HEAD"]),
+                    rollback_to=marker.rollback_to,
+                    applied_at=now(),
+                    driven_by=marker.dri_agent,
+                    snapshots=list(marker.snapshots),
+                    programs=sorted({program for _, program in touched}),
+                    apps=[name for name, _ in touched],
+                    needs_services_restart=_needs_services_restart(
+                        plan, [path for _, path in name_status]
+                    ),
+                ),
+                repo_root,
+            )
+        else:
+            discard_snapshots(repo_root)
         # The emergency record only comes down on confirmed health, which
         # is more than this exit code carries: an apply over a UI that was
         # already broken lands, exits 0 naming the breakage, and leaves a
@@ -1348,6 +1379,303 @@ def apply_update(
     sys.stderr.write(
         "applied: the update is landed and the live workspace is confirmed healthy.\n"
     )
+    return 0
+
+
+def _touched_critical_apps(
+    plan: ApplyPlan, name_status: Sequence[tuple[str, str]], repo_root: Path
+) -> list[tuple[str, str]]:
+    """The critical apps whose program or bundle this apply changed: ``(name, program)``.
+
+    Read off the merged tree's manifests: an app is touched when a changed path is
+    under its directory, or when the frontend was rebuilt and the app owns one of
+    the bundles (a shared-library change rebuilds both), or, for the shell, when
+    anything the shell's process runs changed.
+    """
+    paths = [path for _, path in name_status]
+    apps_dir = repo_root / APPS_DIR
+    if not apps_dir.is_dir():
+        return []
+    bundle_owners = {bundle.app for bundle in FRONTEND_BUNDLES}
+    touched: list[tuple[str, str]] = []
+    for directory in sorted(apps_dir.iterdir()):
+        manifest_path = directory / MANIFEST_FILENAME
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = tomllib.loads(manifest_path.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        name = manifest.get("name")
+        if (
+            not isinstance(name, str)
+            or not name
+            or manifest.get("critical") is not True
+        ):
+            continue
+        app_prefix = f"{APPS_DIR}/{directory.name}/"
+        is_touched = (
+            any(path.startswith(app_prefix) for path in paths)
+            or (plan.frontend and name in bundle_owners)
+            or (name == SHELL_PROGRAM and plan.backend)
+        )
+        if not is_touched:
+            continue
+        program = manifest.get("program")
+        touched.append(
+            (name, program if isinstance(program, str) and program else name)
+        )
+    return touched
+
+
+# The trees a rollback cannot undo by restarting programs: the bootstrap and the
+# services agent's own setup run before supervisord, so restoring them takes the
+# services agent restarting.
+_SERVICES_SETUP_PREFIXES = ("system/scripts/bootstrap", "system/libs/bootstrap/")
+
+
+def _needs_services_restart(plan: ApplyPlan, paths: Sequence[str]) -> bool:
+    if plan.provisioner:
+        return True
+    for path in paths:
+        if classify_path(path).reveal_class == CLASS_DOCKERFILE:
+            return True
+        if any(path.startswith(prefix) for prefix in _SERVICES_SETUP_PREFIXES):
+            return True
+    return False
+
+
+# What the notice reads while a rollback runs, step by step.
+_ROLLBACK_PROGRESS_REVERTING = "Reverting the update"
+_ROLLBACK_PROGRESS_RESTORING = "Restoring the previous version"
+_ROLLBACK_PROGRESS_RESTARTING = "Restarting"
+_ROLLBACK_PROGRESS_CHECKING = "Checking that everything came back"
+SERVICES_RESTART_COMMAND = "mngr start --restart system-services"
+
+
+def _record_rollback_progress(
+    record: LastGoodRecord, repo_root: Path, progress: str
+) -> None:
+    record.progress = progress
+    write_last_good(record, repo_root)
+
+
+def _settle_rollback_record(
+    record: LastGoodRecord, repo_root: Path, outcome: str
+) -> None:
+    """Write the outcome the notice shows and stop it reading as a rollback in flight.
+
+    A record with ``progress`` set and no ``outcome`` is what the shell refuses both
+    verbs on, so every way out of a rollback has to come through here -- including the
+    ones nobody predicted -- or the notice sits on the user's tabs with no way to close
+    it.
+    """
+    record.progress = None
+    record.outcome = outcome
+    write_last_good(record, repo_root)
+
+
+def _finish_rollback(record: LastGoodRecord, repo_root: Path, outcome: str) -> None:
+    """Settle the record and drop the copies; the record stays until a person closes it."""
+    _settle_rollback_record(record, repo_root, outcome)
+    discard_snapshots(repo_root)
+
+
+def rollback_last(
+    repo_root: Path,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    sleeper: Callable[[float], None] = time.sleep,
+    base_url: str | None = None,
+    now: Callable[[], float] = time.time,
+    is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
+) -> int:
+    """Take the kept rollback point back: the apply's own forward revert plus snapshot restore,
+    restarting only the touched programs. Returns 0 rolled back / 1 refused / 3 emergency.
+
+    The outcome is written into the record (the notice shows it) rather than sent to
+    the agent that drove the apply; the record stays until a person closes it.
+    """
+    record = read_last_good(repo_root)
+    if record is None:
+        sys.stderr.write("error: no kept rollback point; nothing to roll back to.\n")
+        return 1
+    if record.outcome is not None:
+        sys.stderr.write(
+            f"error: this rollback point is already settled: {record.outcome}\n"
+        )
+        return 1
+    marker = read_marker(repo_root)
+    if marker is not None and is_pid_live(marker.pid):
+        sys.stderr.write(
+            f"error: an apply is running (pid {marker.pid}); a rollback cannot interleave with it.\n"
+        )
+        return 1
+    assert_clean_tree(repo_root, runner)
+    resolved_base = (
+        base_url or os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL)
+    ).rstrip("/")
+
+    _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_REVERTING)
+    try:
+        return _run_rollback(
+            record,
+            repo_root,
+            runner=runner,
+            http=http,
+            sleeper=sleeper,
+            resolved_base=resolved_base,
+            now=now,
+        )
+    except BaseException as exc:
+        # From the progress write above until an outcome is written, the notice reads
+        # as a rollback in flight and refuses every verb, so an exception that simply
+        # ended this (detached) script would leave it that way on the user's tabs
+        # forever. Settle it with what happened, keep the copies -- the tree may be
+        # half-restored and they are what an agent finishes by hand from -- and let the
+        # traceback out to the log the launcher captured.
+        _settle_rollback_record(
+            record,
+            repo_root,
+            f"The rollback stopped partway through ({type(exc).__name__}: {exc}). The "
+            "previous version's copies are still kept. Ask your agent to look at it.",
+        )
+        raise
+
+
+def _run_rollback(
+    record: LastGoodRecord,
+    repo_root: Path,
+    *,
+    runner: Runner,
+    http: HttpClient,
+    sleeper: Callable[[float], None],
+    resolved_base: str,
+    now: Callable[[], float],
+) -> int:
+    """Revert the merge forward, restore the copies, restart the touched programs, and
+    confirm health. Every ``return`` here has already settled the record."""
+    reverted = runner.run(
+        ["git", "revert", "-m", "1", "--no-commit", record.merge_sha],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(reverted, "returncode", 0) != 0:
+        runner.run(
+            ["git", "revert", "--abort"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stderr = (getattr(reverted, "stderr", "") or "").strip()
+        _finish_rollback(
+            record,
+            repo_root,
+            f"The update could not be reverted, so nothing was changed: {stderr or 'git revert failed'}. "
+            "Ask your agent to look at it.",
+        )
+        return 1
+    _commit_rollback(
+        repo_root,
+        runner,
+        record.rollback_to,
+        f"Rolled back on the user's request from the update notice (reverting {record.merge_sha[:12]})",
+    )
+
+    _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_RESTORING)
+    failed = restore_snapshots(record.snapshots)
+    if failed:
+        sys.stderr.write(
+            f"warning: could not restore {', '.join(sorted(failed))}; the restored tree serves "
+            "whatever the program rebuilds from it.\n"
+        )
+    changed = git_out(
+        runner, repo_root, ["diff", "--name-only", record.rollback_to, record.merge_sha]
+    ).splitlines()
+    if SUPERVISORD_CONF in changed:
+        for argv in (["supervisorctl", "reread"], ["supervisorctl", "update"]):
+            runner.run(
+                argv, cwd=str(repo_root), capture_output=True, text=True, check=False
+            )
+
+    if record.needs_services_restart:
+        _finish_rollback(
+            record,
+            repo_root,
+            "The previous version is restored, but this update also changed how the workspace "
+            "starts, which only a restart of the workspace finishes. Ask your agent to run "
+            f"`{SERVICES_RESTART_COMMAND}`.",
+        )
+        sys.stderr.write(
+            "rolled back: the files are restored; the workspace must be restarted to finish "
+            f"(`{SERVICES_RESTART_COMMAND}`).\n"
+        )
+        return 0
+
+    programs = list(record.programs)
+    _record_rollback_progress(
+        record, repo_root, f"{_ROLLBACK_PROGRESS_RESTARTING} {', '.join(programs)}"
+    )
+    restarted = runner.run(
+        ["supervisorctl", "restart", *programs],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(restarted, "returncode", 0) != 0:
+        stderr = (
+            getattr(restarted, "stderr", "") or getattr(restarted, "stdout", "") or ""
+        ).strip()
+        sys.stderr.write(f"warning: supervisorctl restart reported: {stderr}\n")
+    _record_rollback_progress(record, repo_root, _ROLLBACK_PROGRESS_CHECKING)
+    instance_apps = [
+        app for app in read_critical_instance_apps(repo_root) if app.name in record.apps
+    ]
+    unsettled = wait_settled(
+        http,
+        repo_root,
+        runner,
+        sleeper,
+        shell_url=f"{resolved_base}{HEALTH_PATH}",
+        programs=sorted({SHELL_PROGRAM, *programs}),
+        instance_apps=instance_apps,
+        require_stable_pid=True,
+    )
+    if unsettled is not None:
+        write_emergency(
+            repo_root,
+            f"a rollback from the update notice restored the previous version but the "
+            f"workspace did not settle healthy: {unsettled}",
+            record.driven_by,
+            now,
+        )
+        _finish_rollback(
+            record,
+            repo_root,
+            f"The previous version is restored, but the workspace did not come back healthy: "
+            f"{unsettled}. Ask your agent to look at it.",
+        )
+        sys.stderr.write(f"rollback did not restore health: {unsettled}\n")
+        return 3
+    refresh_workspace_view(repo_root, runner)
+    _finish_rollback(record, repo_root, "Rolled back to the previous version.")
+    sys.stderr.write("rolled back: the previous version is restored and healthy.\n")
+    return 0
+
+
+def confirm_last(repo_root: Path) -> int:
+    """Close the notice: discard the kept copies and the record. Idempotent."""
+    if read_last_good(repo_root) is None:
+        sys.stderr.write("no kept rollback point; nothing to confirm.\n")
+        return 0
+    clear_last_good(repo_root)
+    discard_snapshots(repo_root)
+    sys.stderr.write("confirmed: the kept rollback point is discarded.\n")
     return 0
 
 

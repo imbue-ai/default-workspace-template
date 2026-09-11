@@ -42,6 +42,8 @@ from imbue.system_interface.shell.primitives import EVERYTHING_VIEW_ID
 from imbue.system_interface.shell.testing import instance_record
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import write_registry
+from imbue.system_interface.shell.testing import write_rollback_point
+from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.testing import FakeTemplateCatalogFetcher
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import catalog_document
@@ -130,6 +132,7 @@ class E2EServer(FrozenModel):
 
     base_url: str = Field(description="The shell's loopback URL")
     state_dir: Path = Field(description="The shell's state directory")
+    repo_root: Path = Field(description="The workspace root the update notice reads its record under")
     stub_source: StubInstanceSource = Field(description="The stub app's in-memory instances")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     second_source: StubInstanceSource | None = Field(description="The second stub app's instances, when offered")
@@ -211,13 +214,17 @@ def _running_e2e_server(
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", base_url)
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
+        repo_root = tmp_path / "repo"
         catalog_fetcher: FakeTemplateCatalogFetcher | None = None
         if is_catalog_offered:
             catalog_fetcher = FakeTemplateCatalogFetcher()
             if catalog_body is not None:
                 catalog_fetcher.body_by_url[config.system_interface_template_catalog_url] = catalog_body
         state = build_test_state(
-            config=config, shell_state_directory=state_dir, template_catalog_fetcher=catalog_fetcher
+            config=config,
+            shell_state_directory=state_dir,
+            template_catalog_fetcher=catalog_fetcher,
+            repo_root=repo_root,
         )
         app = create_application(state)
 
@@ -263,6 +270,7 @@ def _running_e2e_server(
                     yield E2EServer(
                         base_url=base_url,
                         state_dir=state_dir,
+                        repo_root=repo_root,
                         stub_source=stub_source,
                         stub_url=stub_url,
                         second_source=second_source,
@@ -1503,3 +1511,34 @@ def test_a_deep_link_lands_on_the_view_and_docks_the_instance(tmp_path: Path, pa
         page.goto(f"{server.base_url}/?open=app%3Anowhere%3Finstance%3Dgone")
         _wait_for_view(page, EVERYTHING_VIEW_ID)
         expect(page.locator(".dv-default-tab-content", has_text=_FIXTURE_TITLE).first).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_kept_rollback_point_raises_the_band_on_its_apps_tabs_and_everything_seems_good_clears_it(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The record an apply kept names the apps it touched; their tabs carry the band and the shell its
+    banner, "Everything seems good" runs the script's confirm, and the cleared record reaches every
+    window through the watch, so the band goes without a reload."""
+    write_stub_update_self_script(e2e_server.repo_root)
+    page.goto(e2e_server.base_url)
+    _wait_for_view(page, STARTER_PROJECT_ID)
+    _serve_stub_pages(page, e2e_server)
+    _open_fixture_instance(page)
+    expect(page.locator(".update-notice-band")).to_have_count(0)
+    expect(page.locator(".update-notice-banner")).to_have_count(0)
+
+    write_rollback_point(e2e_server.repo_root, apps=[_STUB_APP_NAME, "system_interface"])
+
+    band = page.locator(f'.si-iframe-panel:has(iframe[data-address="{_FIXTURE_ADDRESS}"]) .update-notice-band')
+    expect(band).to_be_visible(timeout=15000)
+    expect(band).to_contain_text("updated a moment ago")
+    expect(page.locator(".update-notice-banner")).to_be_visible()
+    # The frame the band sits above is still the same page: the notice's arrival reloaded nothing.
+    expect(page.frame_locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]').locator("#held")).to_be_visible()
+
+    band.locator(".update-notice-confirm").click()
+
+    expect(page.locator(".update-notice-band")).to_have_count(0, timeout=15000)
+    expect(page.locator(".update-notice-banner")).to_have_count(0)
+    assert _get_json(f"{e2e_server.base_url}/api/updates/pending") is None

@@ -17,10 +17,12 @@ request is already delivered.
 ## The type parameter
 
 `type` is `skill` (the default), `app`, or `service`. The worker reads it and loads
-`type-<TYPE>.md`. (A system-interface regression is a heal *operation*
-too, but it is driven through `update-system-interface`, which owns the
-preview and the apply-or-roll-back go-live -- do not drive a system-interface
-heal from here.)
+`type-<TYPE>.md`. A heal of a critical app (the shell, the chat, the terminal, or
+an app whose manifest says `critical = true`) is a live edit of the served tree
+at your own risk: there is no preview, no kept rollback point, and no notice
+behind it, so a wrong fix takes the user's surface down with nothing to undo it
+but your next edit. The safe path is `update-app`'s careful flow
+(`references/critical-app.md`); take it whenever the fix can wait for a preview.
 
 ## When NOT to heal
 
@@ -125,8 +127,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/heal-$TARGET/task.md
 ```
 
-Then background-poll (`create_worker.py await --task-file ... --timeout 90m`,
-`run_in_background: true`) and follow `.agents/shared/references/lead-proxy.md`.
+Then background-poll (`create_worker.py await --name heal-$TARGET --task-file ...
+--timeout 90m`, `run_in_background: true`) and follow
+`.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 
 - Worker name: `heal-$TARGET`; branch: `mngr/heal-$TARGET`

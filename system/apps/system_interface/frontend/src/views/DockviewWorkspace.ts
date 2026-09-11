@@ -114,6 +114,7 @@ import {
   type ShortcutMode,
   type TabReboundEvent,
 } from "../models/Inventory";
+import { isPreviewShell } from "../models/PreviewShell";
 import { getActiveProjectId, getClientId, setActiveProjectId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { fetchOwnActiveView } from "../models/Clients";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "../models/deepLinks";
@@ -517,13 +518,14 @@ export function requestAppLifecycle(appName: string, action: "stop" | "start"): 
 }
 
 /** What a pane shows in place of a not-running app's page, or null while the app runs. The
- *  Start button is offered only where the workspace can honestly start the app. */
+ *  Start button is offered only where the workspace can honestly start the app, and never
+ *  from a preview shell, whose backend refuses the start. */
 export function stoppedPlaceholderForApp(app: AppRecord): StoppedAppPlaceholderAttrs | null {
   if (app.is_running) return null;
   return {
     label: app.display_name,
     detail: appStoppedDetail(app),
-    onStart: isAppStoppable(app) ? () => requestAppLifecycle(app.name, "start") : null,
+    onStart: isAppStoppable(app) && !isPreviewShell() ? () => requestAppLifecycle(app.name, "start") : null,
   };
 }
 
