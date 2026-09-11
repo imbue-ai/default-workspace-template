@@ -30,6 +30,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Protocol
 
 import tool_env
 from list_mngr_plugins import plugin_paths_for_tool
@@ -46,6 +47,25 @@ MANIFEST_PATH = "system/config/mngr_plugins.toml"
 
 class NoPluginsListed(Exception):
     """The manifest assigned the mngr tool no plugins, so an install would strand it."""
+
+
+class Run(Protocol):
+    """How the install reaches uv, injected so a test can watch what it was handed.
+
+    The alternative -- a stub ``uv`` on PATH -- cannot run where this code does: pytest's
+    ``tmp_path`` lives under a ``/tmp`` that a workspace container mounts ``noexec``, so
+    the stub is unexecutable, PATH resolution walks past it, and the real ``uv`` runs.
+    """
+
+    def __call__(
+        self,
+        command: Sequence[str],
+        /,
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        check: bool,
+    ) -> object: ...
 
 
 def build_install_command(repo_root: Path, plugin_paths: Sequence[str]) -> list[str]:
@@ -83,15 +103,15 @@ def install_environment(base_env: Mapping[str, str]) -> dict[str, str]:
     return env
 
 
-def install_mngr(repo_root: Path, base_env: Mapping[str, str]) -> list[str]:
+def install_mngr(
+    repo_root: Path, base_env: Mapping[str, str], run: Run = subprocess.run
+) -> list[str]:
     """Run the install under ``base_env``, pinned; return the command that was run."""
     manifest = (repo_root / MANIFEST_PATH).read_text()
     command = build_install_command(
         repo_root, plugin_paths_for_tool(manifest, MNGR_PLUGIN_KEY)
     )
-    subprocess.run(
-        command, cwd=repo_root, env=install_environment(base_env), check=True
-    )
+    run(command, cwd=repo_root, env=install_environment(base_env), check=True)
     return command
 
 
