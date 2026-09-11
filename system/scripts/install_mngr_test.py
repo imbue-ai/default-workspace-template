@@ -1,15 +1,14 @@
 """Tests for the mngr tool install.
 
-The install itself is a ``uv tool install`` against the network, so what is exercised here
-is everything that decides *what* it runs: the argument vector, the refusal that keeps a
-plugin-less install from happening at all, and the environment the install runs under.
-None of it shells out: the refusal returns before any subprocess, and the pin is an
-environment the install computes from the caller's rather than a mutation of the process's
-own.
+The real install is a ``uv tool install`` against the network, so ``uv`` is a stub on
+PATH: the program runs whole, and what the stub writes down is what it was told to do --
+the argument vector, the tool directories in its environment, and its working directory.
+The pieces that decide those are also checked on their own, where a failure names itself.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import install_mngr
@@ -22,12 +21,57 @@ path = "system/vendor/mngr/libs/mngr_claude"
 tools = ["chat"]
 """
 
+# Two plugins for the mngr tool and one for an app's, so the tool the paths are looked up
+# under is something the install can get wrong.
+_MANIFEST = """
+[[plugins]]
+path = "system/vendor/mngr/libs/mngr_claude"
+tools = ["mngr", "chat"]
+
+[[plugins]]
+path = "system/vendor/mngr/libs/mngr_wait"
+tools = ["mngr"]
+
+[[plugins]]
+path = "system/vendor/mngr/libs/mngr_only_an_app_wants"
+tools = ["chat"]
+"""
+
 
 def _repo(tmp_path: Path, manifest: str) -> Path:
     path = tmp_path / install_mngr.MANIFEST_PATH
     path.parent.mkdir(parents=True)
     path.write_text(manifest)
     return tmp_path
+
+
+class _StubUv:
+    """A ``uv`` on PATH that records one invocation instead of installing anything."""
+
+    def __init__(self, bin_dir: Path, record: Path) -> None:
+        self._record = record
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        script = bin_dir / "uv"
+        script.write_text(
+            "#!/bin/sh\n"
+            f'exec > "{record}"\n'
+            'printf "%s\\n" "$PWD" "$UV_TOOL_DIR" "$UV_TOOL_BIN_DIR" "$@"\n'
+        )
+        script.chmod(0o755)
+
+    @property
+    def working_directory(self) -> Path:
+        return Path(self._record.read_text().splitlines()[0])
+
+    @property
+    def tool_directories(self) -> list[str]:
+        """``UV_TOOL_DIR`` and ``UV_TOOL_BIN_DIR`` as the install handed them over."""
+        return self._record.read_text().splitlines()[1:3]
+
+    @property
+    def arguments(self) -> list[str]:
+        """The argument vector, less the ``uv`` the shell consumed as $0."""
+        return self._record.read_text().splitlines()[3:]
 
 
 def test_the_base_package_and_every_plugin_go_in_one_command(tmp_path: Path) -> None:
@@ -92,6 +136,42 @@ def test_a_caller_that_already_pinned_the_tool_directory_wins(
     """build_workspace.sh pins before calling, and its pin is the one that must hold."""
     monkeypatch.setenv("TOOL_ENV_HOME", str(tmp_path / "ignored"))
 
-    env = install_mngr.install_environment({"UV_TOOL_DIR": "/already/chosen"})
+    env = install_mngr.install_environment(
+        {"UV_TOOL_DIR": "/already/chosen", "UV_TOOL_BIN_DIR": "/already/chosen/bin"}
+    )
 
     assert env["UV_TOOL_DIR"] == "/already/chosen"
+    assert env["UV_TOOL_BIN_DIR"] == "/already/chosen/bin"
+
+
+def test_the_install_runs_the_command_it_built_under_the_pin_it_computed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The program end to end, which is where the pin either reaches uv or does not.
+
+    The build pins the tool directories in its own shell before calling, so an install
+    that computed the pin and then failed to hand it over would still look right there.
+    The other caller is a person following AGENTS.md, who runs this with HOME=/home/user
+    while the mngr being repaired is the one under the pinned home -- and would get a
+    success message and an untouched broken tool.
+    """
+    repo = _repo(tmp_path, _MANIFEST)
+    pinned_home = tmp_path / "root"
+    uv = _StubUv(tmp_path / "stub-bin", tmp_path / "uv-invocation")
+    monkeypatch.setenv("TOOL_ENV_HOME", str(pinned_home))
+    monkeypatch.setenv(
+        "PATH", f"{tmp_path / 'stub-bin'}{os.pathsep}{os.environ['PATH']}"
+    )
+
+    command = install_mngr.install_mngr(repo, os.environ)
+
+    assert uv.arguments == command[1:]
+    assert command == install_mngr.build_install_command(
+        repo,
+        ["system/vendor/mngr/libs/mngr_claude", "system/vendor/mngr/libs/mngr_wait"],
+    )
+    assert uv.tool_directories == [
+        str(tool_env.tools_dir(pinned_home)),
+        str(tool_env.bin_dir(pinned_home)),
+    ]
+    assert uv.working_directory.resolve() == repo.resolve()
