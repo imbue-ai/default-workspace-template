@@ -119,9 +119,10 @@ def test_every_option_declares_the_full_effort_set() -> None:
 #
 #     strings -n 8 claude | grep -oE "claude-(opus|sonnet|haiku|fable|mythos)[a-z0-9._-]*(\\[[12]m\\])?"
 #
-# Truncation fragments ("claude-opus-", "claude-haiku-3-55") and the news-URL slug
-# (claude-fable-5-mythos-5) are dropped; everything else is a real id the statusline could
-# report. Regenerate this list against the binary whenever CLAUDE_CODE_VERSION moves.
+# Truncation fragments ("claude-fable-", "claude-haiku-", "claude-mythos-",
+# "claude-haiku-3-55") and the news-URL slug (claude-fable-5-mythos-5) are dropped;
+# everything else is a real id the statusline could report. Regenerate this list against
+# the binary whenever CLAUDE_CODE_VERSION moves.
 _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-fable-5",
     "claude-fable-5-1",
