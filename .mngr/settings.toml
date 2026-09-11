@@ -143,6 +143,9 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
+# feedbackSurveyRate = 0 and feedbackDrafts = "off" silence Claude Code's session quality
+# survey and feedback drafts: both prompt a human mid-session, which garbles an unattended
+# chat's automated input and output. Same overlay reasoning as skipDangerousModePermissionPrompt.
 # tui = "fullscreen" pins the input bar and any dialog to the pane instead of letting them
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
@@ -159,7 +162,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
