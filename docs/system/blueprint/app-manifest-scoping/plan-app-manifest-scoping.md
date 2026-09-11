@@ -135,6 +135,11 @@ One channel: `$ARGUMENTS` on `/autofix` and `/verify-architecture`. Both skills 
 
 `verification.md` stays unloaded by `harden-creation.md`: the gates remain parked. Its invocations stay correct for a by-hand run, which is how the toy measurement below exercises them.
 
+Two hazards for whoever revisits that decision:
+
+- A cross-reference in a loaded reference is a routing instruction. `harden-creation.md` is the worker's "every run" entry, so a sentence in it that names `verification.md` makes every worker read the file and run both gates (measured at about 22 minutes and $26 per trial in a nine-trial A/B). `git grep verification.md -- .agents system` must stay empty outside the changelog.
+- Live gates race a milestone's provisional merge: the worker declares a milestone, the lead merges it, and the worker's `validate-diff` then runs against a base that already holds the milestone, sees an empty diff, and widens to the whole app (681 s in one trial). Parking hides the race rather than fixing it; a revived gate has to diff from the task's `diff_base`, not the moving base branch.
+
 ### The read budget and the expansion rule
 
 Given to every review agent verbatim:
