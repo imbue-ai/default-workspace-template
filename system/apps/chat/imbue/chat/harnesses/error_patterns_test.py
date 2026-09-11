@@ -1,7 +1,10 @@
 """Unit tests for the Claude API-error classifier."""
 
+import pytest
+
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
+from imbue.chat.harnesses.error_patterns import kind_for_status
 
 
 def test_overloaded_is_a_provider_fault() -> None:
@@ -43,6 +46,30 @@ def test_auth_errors_are_not_reclassified_here() -> None:
     # recovery surface), so the API-error classifier leaves them alone.
     assert classify_api_error("API Error: 401 Unauthorized") is None
     assert classify_api_error('{"type": "authentication_error"}') is None
+
+
+@pytest.mark.parametrize("status", [429, 500, 529])
+def test_a_stated_status_names_the_same_kind_its_wording_would(status: int) -> None:
+    """A harness that records the status as a field states the same fact as one that words it,
+    so the two entry points must not drift apart."""
+    assert kind_for_status(status) == classify_api_error(f"API Error: {status} something")
+
+
+@pytest.mark.parametrize("status", [None, 502])
+def test_a_status_we_do_not_name_yields_no_kind(status: int | None) -> None:
+    """A failure can carry no status at all, or one outside the table; both leave the kind
+    unnamed rather than guessing one."""
+    assert kind_for_status(status) is None
+
+
+def test_the_auth_family_is_left_to_the_caller_here() -> None:
+    """The asymmetry with `classify_api_error`, which screens the auth vocabulary out: this
+    function sees a number and no text, so it cannot tell a permission failure from a rejected
+    credential. 401 is simply absent from the table, and 403 is named -- callers that read a
+    status must settle the auth question before consulting it, or a credential dead end loses
+    its sign-in action to a bare `permission`."""
+    assert kind_for_status(401) is None
+    assert kind_for_status(403) == "permission"
 
 
 def test_ordinary_assistant_text_is_not_an_error() -> None:
