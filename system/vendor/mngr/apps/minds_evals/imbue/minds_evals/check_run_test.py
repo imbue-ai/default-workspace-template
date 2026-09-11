@@ -6,21 +6,19 @@ from typing import Final
 
 import pytest
 
-from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.minds_evals.check_run import check_job_directory
 from imbue.minds_evals.check_run import collect_judge_scores
 from imbue.minds_evals.check_run import is_gates_dimension_passed
 from imbue.minds_evals.check_run import render_summary_markdown
 from imbue.minds_evals.check_run import write_run_check_reports
 from imbue.minds_evals.data_types import CheckStatus
-from imbue.minds_evals.data_types import JudgeScore
 from imbue.minds_evals.data_types import RunCheck
-from imbue.minds_evals.data_types import TrialCheck
 from imbue.minds_evals.errors import JobReadError
 from imbue.minds_evals.template_loading import load_template_module
 from imbue.minds_evals.testing import GATES_CRITERION_NAMES
 from imbue.minds_evals.testing import SCHEDULED_WORKFLOW_PATH
 from imbue.minds_evals.testing import expected_modal_environment_name
+from imbue.minds_evals.testing import read_scheduled_workflow_text
 from imbue.minds_evals.testing import write_trial_dir
 
 
@@ -627,38 +625,13 @@ def test_collect_judge_scores_reports_both_judge_kinds_rewardkit_emits() -> None
     ]
 
 
-# The local name the scheduled workflow's Slack report binds each of check-run's rows to, and the
-# model that writes that row. The workflow cannot import Python, so it reads the rows by string
-# literal; the test below asserts every literal is still a field of the model behind it.
-_REPORTED_ROW_MODELS: Final[tuple[tuple[str, type[FrozenModel]], ...]] = (
-    ("trial", TrialCheck),
-    ("score", JudgeScore),
-    ("report", RunCheck),
-)
+def test_the_workflow_gates_a_cell_on_a_name_this_package_still_writes() -> None:
+    """A cell reads its pair's oracle verdict straight out of the summary JSON with `jq`, because a
+    matrix job cannot depend on one leg of another matrix job. Renaming that field makes every jq
+    read print `null`, which fails closed -- but only after the pair's oracle pass has been paid
+    for, and with no diagnosis of why."""
+    names_read = set(re.findall(r"""jq -r '\.([a-z_]+)' "\$ORACLE_SUMMARY""", read_scheduled_workflow_text()))
 
-
-@pytest.mark.parametrize(
-    ("row_name", "model"),
-    [pytest.param(row_name, model, id=model.__name__) for row_name, model in _REPORTED_ROW_MODELS],
-)
-def test_the_slack_report_reads_keys_this_package_still_writes(row_name: str, model: type[FrozenModel]) -> None:
-    """The Slack message is the only thing anyone reads on a nightly, and it reads check-run's JSON
-    by string key with a fallback on every access -- deliberately, so a notification can never be
-    what makes a run red. That forgiveness is what makes a rename here silent rather than loud:
-    rename incompletion_reason and every trial row says "did not complete (unknown)"; rename
-    judge_scores and the judge column simply disappears. So the keys are pinned from this side, the
-    way the sweep prefix is."""
-    key_pattern = r'{}(?:\.get\(|\[)"([a-z_]+)"'.format(row_name)
-    reported_keys = set(re.findall(key_pattern, SCHEDULED_WORKFLOW_PATH.read_text()))
-
-    # A rewrite that renamed the script's own local variables would otherwise leave this test
-    # passing over nothing at all.
-    assert reported_keys, "no {} keys found in {}; the report no longer reads it the way this test looks for".format(
-        model.__name__, SCHEDULED_WORKFLOW_PATH
-    )
-    # Computed fields count: `is_passed` is one on both TrialCheck and RunCheck, and it decides
-    # which emoji every row gets.
-    known_fields = set(model.model_fields) | set(model.model_computed_fields)
-    assert reported_keys <= known_fields, "{} does not carry {}".format(
-        model.__name__, sorted(reported_keys - known_fields)
-    )
+    assert names_read, "no oracle summary reads found in {}".format(SCHEDULED_WORKFLOW_PATH)
+    known = set(RunCheck.model_fields) | set(RunCheck.model_computed_fields)
+    assert names_read <= known, "RunCheck does not carry {}".format(sorted(names_read - known))

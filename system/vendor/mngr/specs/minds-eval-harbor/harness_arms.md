@@ -5,7 +5,7 @@
 This spec lets one minds_evals run drive every case of a dataset, from workspace creation to grading, on a chosen harness and model.
 The harness is chosen by the provider lane the workspace is signed in on, because that is how the product itself decides it; the model, effort and speed tier are then set through the product's own model endpoint before the first turn.
 The primary deliverable is the local run: `just minds-evals-run` with a handful of `--ak` flags.
-A secondary section describes how the same flags become a matrix of arms -- pair times harness config -- in the scheduled CI of PR #796.
+A secondary section describes how the same flags become a matrix of arms -- pair times harness config -- in the scheduled CI workflow.
 The audience is the engineer implementing the driver change and whoever maintains the CI workflow.
 Background, the product facts this design rests on, and the measurements behind them are recorded in imbue-ai/mngr-internal issue #712.
 
@@ -45,7 +45,7 @@ Everything in this spec happens inside that sequence.
 - Harness-aware grading.
   The verifier's harness-quality dimension is claude-shaped; this spec only stops it from mis-scoring other harnesses.
 - A proxy path for non-Anthropic lanes; those trials are priced from the transcript.
-- Choosing which arms the CI runs; that is a configuration decision made when the matrix lands.
+- Choosing which arms the CI runs; that decision is recorded in the harness config file, not here.
 
 ## Design
 
@@ -76,7 +76,7 @@ It is not an authentication method: each lane lists its own sign-in methods (`ap
 It makes no switch and changes no setting of the workspace; the chat runs exactly as the product ships it, which for the first chat on claude means the pinned model in fast mode, and on pi-coding the provider's default at standard speed.
 It still records everything the recording section describes (the harness from the accounts listing, the observed models from the transcript), it just requests nothing.
 A run with no harness flags at all is the default harness config on the `anthropic` lane, on whichever pair the dataset was generated from.
-Today's runs, including the CI in PR #796, are that arm, byte-for-byte unchanged.
+A run line with no harness flags, and the scheduled CI's `default` cell, are that arm, byte-for-byte the product as shipped.
 
 **Every other checked-in harness config** names `model` and `effort` and leaves `fast` at `false`.
 Fast mode doubles the rate and changes nothing else, so configs compared on cost must all run standard; the default harness config is the one exception, and its cost is read as the product's cost, not as a point on that comparison.
@@ -96,11 +96,11 @@ just minds-evals-run $DS opus-standard 3 --ak model='opus[1m]' --ak effort=high
 # cheap claude config
 just minds-evals-run $DS haiku 3 --ak model=haiku --ak effort=medium
 # pi-coding on an Anthropic key
-just minds-evals-run $DS pi-anthropic 3 --ak lane=api-key --ak key_provider=anthropic \
+just minds-evals-run $DS pi-haiku 3 --ak lane=api-key --ak key_provider=anthropic \
   --ak model=anthropic/claude-haiku-4-5 --ak effort=medium
 # pi-coding on OpenRouter
-OPENROUTER_API_KEY=... just minds-evals-run $DS pi-openrouter 3 --ak lane=openrouter \
-  --ak model='openrouter/<vendor>/<model>' --ak effort=medium
+OPENROUTER_API_KEY=... just minds-evals-run $DS pi-gpt-5-mini 3 --ak lane=openrouter \
+  --ak model=openrouter/openai/gpt-5-mini --ak effort=medium
 ```
 
 ### Credentials
@@ -254,29 +254,100 @@ The README's usage section gains the kwarg table and one example per lane, and i
 
 ## CI integration
 
-The scheduled workflow of PR #796 freezes a (mngr, dwt) pair, generates one dataset per pair, runs an oracle pass and one live pass, and remembers a green pair by `(pair, mngr_sha, dwt_sha, config)`.
-Harness configs extend it along one axis, so that a matrix cell is one arm: a frozen pair times one harness config.
-Two cells that differ in both halves attribute nothing to either, so a matrix is worth reading only where it varies one at a time.
+The scheduled workflow `.github/workflows/minds-evals-scheduled.yml` evaluates a **matrix of arms**: each frozen (mngr, dwt) pair times each selected harness config.
+A cell is one arm, and two cells that differ in both halves attribute nothing to either, so a matrix is worth reading only where it varies one thing at a time.
 
-- A harness config file, `apps/minds_evals/configs/harness_configs.json`, lists named configs as the kwargs above: `{"name": "haiku", "lane": "anthropic", "model": "haiku", "effort": "medium"}`.
-  The `resolve` job reads it and emits pair x config as the `evaluate` matrix.
-- Each cell runs the live pass with its harness config's flags appended to the `just minds-evals-run` line, under its own concurrency group `minds-evals-<pair>-<config>` and job name `<pair>-<config>-live-<run_id>`, where `<config>` is the harness config's name.
-  The oracle pass runs once per pair, because it never boots a workspace.
-- The green marker key gains the harness config's name, and the harness config file's path joins the eval config path in the key so an edited harness config re-runs.
-- Each cell fetches only the secrets it uses: `ANTHROPIC_API_KEY` and the Modal pair as today (the decider and judges need the key on every arm), plus the one variable its config's `key_env` names, which the harness config file carries into the matrix and the Vault step reads as `mngr/ci/<key_env>`.
-  A lane's key is never exported into a cell that does not sign in on that lane.
-  A `key_env` with no Vault secret behind it fails that cell at the fetch step, before a box is built, and the driver's construction-time check is the backstop for a runner where the fetch succeeded but the variable is empty; either way it is the cell that fails, not the run.
-- `check-run` and the Slack summary group by pair and harness config, which together name the cell's arm, and the arm block from `state.json` is what the summary prints for requested-versus-observed.
-  `check-run` also fails a trial whose harness config named a `model` and whose `is_model_confirmed` is `false`, with a reason naming the requested model and the ones observed, so a cell goes red on a switch that did not take; `null` is neutral, and a config that named no model is not judged on it.
-- A `workflow_dispatch` input `harness_configs` (comma-separated names, default all) selects cells the way `pair` does.
+### The harness config file
 
-Cost is one box per case per arm.
-Which harness configs run nightly is a spend decision recorded in the harness config file, not in this spec.
+`apps/minds_evals/configs/harness_configs.json` holds the named configs, as `{"harness_configs": [{"name": "haiku", "is_nightly": true, "lane": "anthropic", "model": "haiku", "effort": "medium"}, ...]}`.
+Only `name` and `is_nightly` are required; every other field is one of the run line's own kwargs from the table above and carries the same default an unset kwarg has, so an entry that names nothing beyond its lane is the default harness config.
+A name matches `^[a-z0-9][a-z0-9.-]*$`, is at most 30 characters, is unique in the file, and is never `oracle`, because it labels a job, a concurrency group, an artifact and a line of the report, beside the oracle's own.
+Dots are in the pattern because a model version is part of what names an arm (`pi-glm-4.7-flash`), and a job name, a concurrency group, an artifact name and a cache key all take one.
+The checked-in entries are, in file order, `default` (the `anthropic` lane and nothing else: the product exactly as it ships), `haiku` (`haiku`, effort `medium`), `pi-haiku` (the `api-key` lane on an `anthropic` key, `anthropic/claude-haiku-4-5`, effort `medium`), `pi-gpt-5-mini` (the `openrouter` lane, `openrouter/openai/gpt-5-mini`, effort `medium`), `pi-glm-4.7-flash` (the `openrouter` lane, `openrouter/z-ai/glm-4.7-flash`, effort `medium`) and `opus-standard` (`opus[1m]`, effort `high`).
+`default`, `haiku` and `pi-gpt-5-mini` are nightly; the rest run only when a dispatch names them.
+The file's order is the order the cells are decided in and so the order of the report's grid columns, which is why arms worth reading against each other -- `haiku` beside `pi-haiku` -- are listed side by side.
+Which configs run nightly is a spend decision, and `is_nightly` is where it is recorded: the file carries the decision rather than this spec, and a config the file lists but no night selects costs nothing to keep.
+Every entry is validated through the driver's own `parse_harness_config` on the free `resolve` job, selected or not, so a config the driver would refuse at construction fails before any paid runner starts; a unit test validates the checked-in file on every test run.
+
+The `workflow_dispatch` input `harness_configs` takes comma-separated names.
+Empty is the default, and is what a schedule and a `minds-evals-run/**` push get: it selects the nightly set rather than every config in the file, which is what makes a non-nightly entry free to check in.
+An unknown name fails the `resolve` job.
+
+### The jobs
+
+- `resolve` (free) freezes each pair's refs to SHAs, lists the green markers once with `gh cache list --key minds-evals-green-`, and runs `minds-evals ci-matrix` to decide the cells: which pairs run, which cells run, and what each cell's run line and marker key are.
+- `oracle` is a matrix over the pairs with at least one running cell.
+  Each entry generates the dataset, runs the oracle pass, checks it, runs the Modal environment cleanup (the named deletion and the 8 h backstop sweep), and uploads `minds-evals-summary-<pair>` and `minds-evals-jobs-<pair>-oracle-<run_id>`.
+  The oracle pass boots no workspace, so it is independent of the harness config and runs once per pair rather than once per cell; a pair's live cells run only after its oracle passed.
+- `evaluate` is a matrix over the running cells.
+  A cell fetches only its own secrets, downloads its pair's oracle summary and refuses to start the live pass unless that oracle passed, regenerates the same dataset at the same SHAs (so the image build is a Modal cache hit), runs `just minds-evals-run` with its harness config's `--ak` flags appended, checks it, deletes the environments its own job recorded, uploads `minds-evals-summary-<pair>-<config>` and `minds-evals-jobs-<pair>-<config>-<run_id>`, and writes its green marker on success.
+- `notify` posts one Slack message per pair through `minds-evals ci-report`, and writes the same reports into the run summary.
+
+The oracle job's concurrency group is `minds-evals-oracle-<pair>` and a cell's is `minds-evals-<pair>-<config>`; the harbor job names are `<pair>-oracle-<run_id>` and `<pair>-<config>-live-<run_id>`.
+
+### Secrets and green markers
+
+Every job that runs a pass -- the oracle and the cells -- fetches `mngr/ci/ANTHROPIC_API_KEY` (the judges spend it on every pass and the decider on every live one) and the Modal token pair; `resolve` fetches nothing and `notify` only the Slack webhook.
+A cell additionally fetches `mngr/ci/<key_env>` when its config's `key_env` is not `ANTHROPIC_API_KEY`, which is how the `pi-gpt-5-mini` cell gets `mngr/ci/OPENROUTER_API_KEY`.
+A lane's key is never exported into a cell that does not sign in on that lane.
+A `key_env` with no Vault secret behind it fails that cell at the fetch step, before a box is built, and the driver's construction-time check is the backstop for a runner where the fetch succeeded but the variable is empty; either way it is the cell that fails, not the run.
+
+A cell that passes end to end is recorded green under the cache key `minds-evals-green-<pair>-mngr-<mngr sha>-dwt-<dwt sha>-cfg-<config path slug>-hc-<harness config name>-<12-hex digest>`.
+The digest is over the parsed harness config's kwargs rather than the harness config file's path, so editing one config re-runs its own cells under the same name while leaving the others green.
+A cell is skipped when its exact key is among the markers the run may restore -- those saved on the run's own ref or on the default branch -- and `force` runs it anyway.
+A pair whose every cell is skipped runs no oracle pass either.
+A key with no `-hc-` segment names no cell, so a marker written before the matrix existed is never read as green.
+The lookup is one `gh cache list` call rather than one `actions/cache/restore` step per cell, because that action cannot be looped over a matrix decided at run time.
+
+### What the run reports
+
+`check-run` needs nothing from the matrix: it fails a trial whose harness config named a `model` and whose `is_model_confirmed` is `false`, with a reason naming the requested model and the ones observed, so a cell goes red on a switch that did not take, while `null` is neutral and a config that named no model is not judged on it.
+Its summary's arm column names the cell's harness half, with the pair in the SHA columns beside it.
+
+`minds-evals ci-report` renders one Slack message per pair -- the two pairs answer different questions, and a reader acts on one of them at a time -- and writes them as a JSON array of webhook payloads, one per message.
+Only the blocks an incoming webhook accepts are used: a webhook refuses `data_table` outright (a minimal one is answered with `400 invalid_blocks`), so the sorting and paging it would bring are out of reach until the notify job posts as an app with a bot token, and `markdown` is refused as well; `table` and `container` are what the layout is built from.
+A message is a header (`minds-evals: <pair> -- <verdict>`, the verdict being the worst of the pair's oracle pass and its cells), a section carrying the pair's label and oracle verdict, the run's duration and trigger, and the `(oracle only)` and red-job notes where they apply, a `table` block holding the grid with a context line under it legending its colours, a `*failed trials*` section and `table` block where something failed, a collapsed `container` holding the pair's judge scores, a details section, and a context line linking the run's logs and artifacts.
+The message posts under `:big_brain:` when every arm it reports came out green -- every cell passed, every cell was skipped as already green, or an oracle-only run's oracle passed -- and under `:brainless:` for anything else, the undecided-run message included; the choice is read off the same verdict the header spells out, so the avatar and the words cannot disagree, and a run whose arms all passed but whose job went red keeps the green one because the icon answers "are the arms good?".
+
+The grid is one column per harness config in matrix order -- or a single `oracle` column on an oracle-only run -- and one row per case.
+A cell is a `rich_text` cell placing the trial's reward on the absolute 0..1 scale as a coloured square (red under 0.25, orange under 0.50, yellow under 0.75, green at or above it), then the reward, then a bold cross where the trial did not pass (incomplete, gates failed, unmeasured evidence, wrong model) or a spacer of the same width where it did.
+The colour therefore says one thing throughout and the verdict never competes with it; the context line under the grid states the bands and the cross, derived from the bands themselves so the legend cannot drift from the cells.
+`:heavy_minus_sign:` is a pass that was never attempted (skipped because it is already green, or gated off by a failed oracle) and `:grey_question:` a cell with no reward to place: a broken pass, a case that column has no trial for, or a trial that was never graded.
+The header row and the case column stay `raw_text`, and a pair that graded nothing -- skipped, unresolved, or every cell broken -- has no grid at all.
+
+The failures table lists every graded trial that did not pass, in column order, as the harness config, the case and the reason `check-run` recorded (a wrong-model reason, unmeasured evidence ids, gates failed, or `did not complete (...)`).
+It is drawn only when something failed: a heading over an empty table reads as a measurement that went missing rather than as a night with nothing to report.
+
+The container, titled `judge scores`, is collapsed by default and holds a context line and one table for the whole pair rather than one table per harness config, so a criterion can be compared straight down its own column and the message does not grow two blocks per config.
+Its rows are every graded trial of the pair: the harness config, the case, the reward to two decimals, each criterion's raw likert answer as an integer, and what became of the trial.
+The criteria are the union across every arm in first-seen order, so a criterion only one config was scored on still gets a column and the arms not scored on it print `-` rather than a zero.
+A heading is the bare criterion name, and `<dimension>: <criterion>` only where two dimensions scored criteria of the same name; the context line above the table states which dimension scored which criteria once instead.
+
+Slack refuses the whole message over 20 cells in a table row or 10,000 characters across the cells of all its tables, so the message holds itself under both.
+Every cell is clamped to 120 characters first, a case id and an incompletion reason being unbounded; then a pair scored on more than 16 criteria keeps the first 16; then the judge table, the only part that grows with cases times configs times criteria, is cut to whole rows of what the grid and the failures table left of the character budget.
+Whole rows, because a row cut in half would line its scores up under the wrong headings.
+Each cut says so out loud: in the context line above the table, or, where no row fits at all, in a context block where the container would have gone.
+
+The details section is left with what belongs to no arm's own row: one line per skipped, broken or not-evaluated cell, the failing trials of a pass with no grid column of its own (a failed oracle on a pair whose cells ran), and every passing trial whose requested model nothing confirmed.
+It is budgeted at 2900 characters and cut on a line boundary.
+A run that resolved nothing gets a single `minds-evals -- broken` message naming the three job results instead of pairs.
+Every message also carries a plain mrkdwn `text` saying the same thing with the grid, the failures and the judge table as fixed-width fences, which is what `notify` writes into the step summary and what it re-posts on its own, with a `::warning::`, when Slack refuses a payload's blocks.
+The grid's fence keeps the words `ok`, `FAIL`, `-` and `?` in place of the emoji, because Slack renders no emoji inside a fence, and the judge fence carries the same dimension legend on the line above it.
+The report never fails the run: an unreadable matrix or a missing summary is reported as such and the exit code is zero.
+
+Testing the workflow before it is on the default branch goes through a push to `minds-evals-run/<anything>`: the main pair, the nightly configs, and the oracle pass only unless the head commit message carries `[live]`.
+A push and a run that stops at the oracle both decide every cell as if `force` were set, because the green markers would otherwise skip the whole matrix on a night when nothing moved and leave the run with nothing to exercise -- an oracle-only run with no oracle pass, a `[live]` push with no live pass.
+An oracle-only run writes no marker of its own, the marker step being in the live pass it never reaches, and a push writes its markers under its own ref, which a nightly on the default branch cannot restore.
+
+Cost is one box per case per running cell.
 
 ## Testing
 
 - Unit tests for the kwarg parsing (each refusal above), the `key_env` derivation, the sign-in dispatch by lane, the switch payload, and the arm block written to `state.json` and the trajectory.
 - Unit tests for the observed-model confirmation table, including an unknown id leaving the field `null`.
+- A unit test that loads the checked-in `configs/harness_configs.json` and validates every entry through the driver's own kwarg parsing, so a config that would be refused at construction is caught by the test run rather than by a night's `resolve` job.
+- Unit tests for `ci-matrix`: the selection an empty `--select` makes, an unknown name refused, the marker key composed for a cell, a cell skipped on a matching marker and run under `--force`, a marker on a ref the run cannot restore ignored, and a pair with no running cell dropped from the oracle matrix.
+- Unit tests for `ci-report`: a message per pair, a header verdict for each of passed, failed, skipped, not evaluated and broken, the icon each of those posts under, the grid marks for a graded, a never-attempted and a broken cell, a failures-table row carrying a wrong-model reason and a details line naming an unconfirmed model, the judge table's dimension-qualified headings and its dash for an unscored criterion, the criteria dropped from a table that would exceed a Slack row, the rows dropped from one that would exceed the message's character budget, a truncated details block, and a matrix that cannot be read still producing a message.
 - Unit tests for the verifier's not-applicable path: a pi-coding `agent.name` drops the harness share and records the dimension as not applicable; a claude one is unchanged.
 - A live probe run, by hand, of a one-turn case (a checked-in `configs/eval-config-probe.json`, one literal prompt, no expectations) on the `api-key` lane with an Anthropic key, reading `arm.harness_config.harness == "pi-coding"`, `model_choice_switch == "applied"` and `is_model_confirmed` off the trial's `state.json`.
   It stays a run rather than a test: every case here boots a Modal box and spends real money, this app has no live suite to put such a test in, and the claude path is covered by the existing runs.

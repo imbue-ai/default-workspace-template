@@ -13,7 +13,9 @@ from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_upser
 from imbue.minds_admin.slices.bare_metal_db import build_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import claim_pool_host_for_removal
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
+from imbue.minds_admin.slices.bare_metal_db import fetch_leased_slice_hosts
 from imbue.minds_admin.slices.bare_metal_db import fetch_pool_host_destroy_target
+from imbue.minds_admin.slices.bare_metal_db import fetch_slice_hosts_by_host_id
 from imbue.minds_admin.slices.bare_metal_db import fetch_unleased_slice_teardown_row_ids
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
@@ -267,3 +269,47 @@ def test_count_slices_counts_removing_rows_as_occupied() -> None:
     # A 'removing' row's VM may still be tearing down; it holds its box slot until the
     # VM is destroyed and the row deleted, so slot accounting must not exclude it.
     assert "status" not in _COUNT_SLICES_SQL
+
+
+def _slice_host_row(host_id: str, status: str) -> tuple:
+    server_columns = (
+        "11111111-1111-1111-1111-111111111111",
+        None,
+        "ns1.example",
+        "plan",
+        "hil",
+        "203.0.113.7",
+        32,
+        64,
+        256,
+        2000,
+        16,
+        1.5,
+        14,
+        "RAID1",
+        "limahost",
+        "ready",
+        None,
+        None,
+        "ssh-ed25519 AAAA box",
+    )
+    return (host_id, "workspace-1", status, f"mngr-slice-production-{host_id[5:21]}", *server_columns)
+
+
+def test_fetch_slice_hosts_by_host_id_maps_the_row_and_its_box() -> None:
+    fake_conn = _FakeConn([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
+    rows = fetch_slice_hosts_by_host_id(fake_conn, ["host-abcdef0123456789abcdef0123456789", "host-unknown"])
+    assert [row.host_id for row in rows] == ["host-abcdef0123456789abcdef0123456789"]
+    assert rows[0].lima_instance_name == "mngr-slice-production-abcdef0123456789"
+    assert rows[0].server.public_address == "203.0.113.7"
+    assert rows[0].server.lima_service_user == "limahost"
+    assert rows[0].server.box_host_public_key == "ssh-ed25519 AAAA box"
+    # The ids go down as one array bind parameter; a missing id is simply absent from the result.
+    assert fake_conn._cursor.executed_params == (["host-abcdef0123456789abcdef0123456789", "host-unknown"],)
+
+
+def test_fetch_leased_slice_hosts_binds_the_leased_status() -> None:
+    fake_conn = _FakeConn([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
+    rows = fetch_leased_slice_hosts(fake_conn)
+    assert [row.status for row in rows] == ["leased"]
+    assert fake_conn._cursor.executed_params == ("leased",)
