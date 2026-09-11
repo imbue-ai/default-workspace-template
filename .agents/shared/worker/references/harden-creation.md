@@ -103,11 +103,15 @@ of doing all of it yourself. Nothing prescribes the split: you decide it for the
 creation at hand, or decide there is none worth making.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
-(`.agents/skills/launch-task/SKILL.md`). You are its lead, and the rules that
-are yours are in `.agents/shared/references/lead-proxy.md` under "When you are a
-worker yourself": answer a sibling's `question` yourself or re-raise it to your
-own lead, merge exactly one level with `--no-ff`, stop a finished sibling rather
-than destroy it, and await it with `--timeout 60m`.
+(`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
+name as the prefix (`update-todo-backend`, `update-todo-frontend`): names are
+unique across the host in every state, so a re-run of the same pass reaches
+the same names only after the old pass has been superseded and destroyed. You
+are its lead, and the rules that are yours are in
+`.agents/shared/references/lead-proxy.md` under "When you are a worker
+yourself": answer a sibling's `question` yourself or re-raise it to your own
+lead, merge exactly one level with `--no-ff`, destroy a merged sibling and stop
+a stuck one, and await it with `--timeout 60m`.
 
 - Each sibling's task file carries the same `operation` and `type` as yours plus
   its boundary in prose; when your run carries a scope file, give the sibling its

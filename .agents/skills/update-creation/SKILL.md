@@ -185,8 +185,9 @@ Flow-specific substitutions:
 - Gates: `outline-approval` (emergent only -- the design gate) and
   `final-creation` (both).
 - Terminal statuses: `done` (go live, Step 4); `no-update-needed` (no change --
-  close the ticket, no merge); `stuck` (failure flow per
-  `.agents/skills/launch-task/references/worker-failure.md`).
+  close the ticket, destroy the worker per `lead-proxy.md`, no merge); `stuck`
+  (failure flow per `.agents/skills/launch-task/references/worker-failure.md`,
+  which stops the worker).
 
 ## Step 4: Merge and go live
 
@@ -198,7 +199,8 @@ branched), and never hand-resolve a conflicted merge -- a stale or conflicted
 pass is discarded and superseded by one new pass covering everything since the
 last hardened merge.
 
-Then merge `mngr/update-$TARGET` and go live by creation:
+Then merge `mngr/update-$TARGET`, destroy the worker per `lead-proxy.md`
+(`create_worker.py destroy --name update-$TARGET`), and go live by creation:
 
 - **skill**: nothing beyond the merge (the worker's cross-reference sweep is part
   of the change). If the target is a built-in upstream skill, note the local
