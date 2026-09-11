@@ -134,3 +134,17 @@ def test_a_synthetic_message_that_is_not_a_failure_is_not_an_error() -> None:
     assert notice.is_api_error is False
     assert notice.is_auth_error is False
     assert notice.api_error_kind is None
+
+
+def test_an_error_field_that_is_not_a_name_is_ignored_rather_than_raised_on() -> None:
+    """``error`` is read as a lookup key, so a record carrying a structured body there
+    instead of a name would raise on an unhashable value -- inside the watcher thread,
+    which wedges the read path for the rest of the session (the failure the null-message
+    guard in the session parser prevents). The unreadable field is dropped, not the
+    record: the status still names the failure."""
+    notice = classify_error_notice(
+        _stamped(error={"type": "rate_limit"}, apiErrorStatus=429),
+        "You've hit your monthly spend limit",
+    )
+    assert notice.is_api_error is True
+    assert notice.api_error_kind == "rate_limit"
