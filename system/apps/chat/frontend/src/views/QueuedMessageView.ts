@@ -159,7 +159,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
           class:
             "queued-info shrink-0 cursor-help text-(length:--font-size-helper) leading-none text-secondary opacity-70 hover:opacity-100",
           tabindex: 0,
-          ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP),
+          ...hoverTooltipAttrs(QUEUED_INFO_TOOLTIP, "above"),
           "aria-label": QUEUED_INFO_TOOLTIP,
         },
         "ⓘ",
@@ -171,7 +171,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
         sm: true,
         extra: "queued-action queued-action--flush shrink-0",
         ...(isDisabled ? { "aria-disabled": "true" } : {}),
-        ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
+        ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP, "above"),
         "aria-label": SHOULDER_TAP_TOOLTIP,
         onclick: () => shoulderTapQueuedMessages(agentId),
       },

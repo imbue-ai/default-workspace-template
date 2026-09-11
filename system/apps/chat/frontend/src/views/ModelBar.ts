@@ -417,7 +417,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   /** A row's tooltip attrs, or nothing when it has none to give. Spread, not wrapped: the
    *  bubble lives on <body>, so the row needs no container of its own. */
   function tooltipAttrs(text: string | null): m.Attributes {
-    return text === null ? {} : hoverTooltipAttrs(text);
+    return text === null ? {} : hoverTooltipAttrs(text, "above");
   }
 
   /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
@@ -964,7 +964,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           // The workspace's own bubble, not a native `title`: one tooltip mechanism everywhere
           // (and this one can say what the button DOES, where a native title is stuck reading
           // as a label for what is already written on the chip).
-          ...hoverTooltipAttrs("Change model or provider"),
+          ...hoverTooltipAttrs("Change model or provider", "above"),
           "aria-expanded": cardAnchor !== null ? "true" : "false",
           onclick: (event: MouseEvent) => {
             event.stopPropagation();

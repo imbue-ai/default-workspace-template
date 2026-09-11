@@ -184,7 +184,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         "aria-pressed": opts.isDefault ? "true" : "false",
         // The short visible form of the aria-label above it: a label on the control says which
         // of three same-sized glyphs this one is, which nothing else in the row does.
-        ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default"),
+        ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           // Same shape as the rename: a failure is reloaded over rather than left on screen as
@@ -210,7 +210,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_TRASH,
         "aria-label": `Sign out of ${row.provider}`,
-        ...hoverTooltipAttrs("Delete"),
+        ...hoverTooltipAttrs("Delete", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           state.confirmingRemoval = row.id;
@@ -224,7 +224,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_PENCIL,
         "aria-label": `Rename ${row.provider}`,
-        ...hoverTooltipAttrs("Rename"),
+        ...hoverTooltipAttrs("Rename", "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           beginRename(state, row);
