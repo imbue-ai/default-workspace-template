@@ -137,14 +137,6 @@ def parse_repair_script_output(stdout: str) -> tuple[bool, str | None]:
     return False, f"repair produced no verdict marker: {stdout[-300:]!r}"
 
 
-def _run_in_vm(
-    client: LimaSliceVpsClient, vm_name: str, command: str, *, timeout: float, label: str
-) -> tuple[int | None, str, str]:
-    """Run a root shell command inside a slice VM through the box's lima user."""
-    remote_command = f"limactl shell --workdir / {shlex.quote(vm_name)} sudo bash -c {shlex.quote(command)}"
-    return client.run_on_box(remote_command, timeout=timeout, label=label)
-
-
 def _write_lima_yaml_on_box(client: LimaSliceVpsClient, vm_name: str, patched_text: str) -> tuple[bool, str]:
     """Atomically replace the slice's stored lima.yaml on the box; returns (is_ok, error)."""
     encoded = base64.b64encode(patched_text.encode()).decode()
@@ -234,8 +226,7 @@ def repair_slice_keys_on_box(
             is_yaml_patched = True
 
         # Restore the VM root's authorized_keys from the container's own copy.
-        repair_rc, repair_out, repair_err = _run_in_vm(
-            client,
+        repair_rc, repair_out, repair_err = client.run_in_vm_as_root(
             vm_name,
             build_vm_root_key_repair_script(),
             timeout=_REPAIR_TIMEOUT_SECONDS,

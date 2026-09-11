@@ -29,7 +29,7 @@ on:
       minds_pool_slice_count:
         description: "Pool slices the bake stage pre-provisions (remote-workspace test roster + spares)"
         type: string
-        default: "5"
+        default: "6"
       minds_release_test_filter:
         description: "Run only minds_services tests matching this pytest -k expression; empty runs them all. Pair with a smaller minds_pool_slice_count for cheap single-test re-runs."
         type: string
@@ -1065,7 +1065,7 @@ jobs:
           printf '%s' "$VAULT_TOKEN" > "$HOME/.vault-token"
           uv run python apps/minds_admin/scripts/test_deployments.py bake-pool \
             --template-ref "${MINDS_TEMPLATE_REF:-main}" \
-            --count "${MINDS_POOL_SLICE_COUNT:-5}"
+            --count "${MINDS_POOL_SLICE_COUNT:-6}"
       # `!cancelled()` so a bake-step failure still uploads the config the
       # destroy job needs to tear the (already-deployed) env down; when `up`
       # itself failed the file does not exist and the default

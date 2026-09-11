@@ -41,11 +41,20 @@ def test_prevent_global_keyword() -> None:
     rc.check_global_keyword(_DIR, snapshot(0))
 
 
+# ``slices/home_layout.py`` carries the shell script it runs INSIDE a workspace
+# container as a string; that script's one python line writes the agent names
+# it parsed to stdout for the surrounding shell to read. The rule's regex cannot
+# tell a string literal from code, which is the misfire this exists for (the
+# same one apps/minds excludes its embedded container scripts for) -- it is not
+# an exemption for the module's own output, which goes through loguru.
+_EMBEDDED_CONTAINER_SCRIPTS: tuple[str, ...] = ("slices/home_layout.py",)
+
+
 def test_prevent_bare_print() -> None:
     # Justified matches in ``main.py``: the bootstrap-failure path prints an
     # actionable one-liner to stderr before any logging is configured (the
     # same pattern as ``imbue.minds.main``).
-    rc.check_bare_print(_DIR, snapshot(2))
+    rc.check_bare_print(_DIR, snapshot(2), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
 
 
 # --- Exception handling ---
