@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 _TOOL_ENV = Path(__file__).with_name("_tool_env.sh")
 _MNGR_TOOL = "imbue-mngr"
 
@@ -56,15 +58,33 @@ def test_the_pin_installs_into_the_directory_it_puts_on_path() -> None:
     assert first_on_path == bin_dir
 
 
+# How the shadow install's paths can be spelled by the time the cleanup reads them. uv
+# bakes an absolute path into the console script's shebang at install time, and both
+# `$HOME` and that shebang can arrive in another form: a trailing slash or a symlinked
+# home, and the `#! /path` spelling the update apply accepts too
+# (update_environment.py::_tool_location strips before splitting). Matching either as a
+# string would remove the environment and leave the script -- a `mngr` on PATH with a
+# dead interpreter, worse than the stale but working copy it replaced.
+@pytest.mark.parametrize(
+    "home_suffix, shebang_prefix",
+    [("", "#!"), ("/", "#!"), ("", "#! ")],
+    ids=["as-installed", "home-with-trailing-slash", "space-after-shebang-marker"],
+)
 def test_an_install_under_another_home_is_removed_with_its_console_script(
-    tmp_path: Path,
+    tmp_path: Path, home_suffix: str, shebang_prefix: str
 ) -> None:
     runtime_home = tmp_path / "home" / "user"
     image_home = tmp_path / "root"
-    shadow_env, shadow_script = _install_mngr_tool(runtime_home)
+    shadow_env, shadow_script = _install_mngr_tool(
+        runtime_home, shebang_prefix=shebang_prefix
+    )
     pinned_env, pinned_script = _install_mngr_tool(image_home)
 
-    _run("tool_env_drop_shadowing_mngr", home=runtime_home, tool_home=image_home)
+    _run(
+        f'HOME="{runtime_home}{home_suffix}" tool_env_drop_shadowing_mngr',
+        home=runtime_home,
+        tool_home=image_home,
+    )
 
     assert not shadow_env.exists()
     assert not shadow_script.exists()
@@ -92,45 +112,6 @@ def test_the_pinned_install_is_not_removed_when_home_reaches_it_by_another_path(
 
     assert pinned_env.is_dir()
     assert pinned_script.is_file()
-
-
-def test_the_console_script_goes_even_when_home_is_spelled_differently_than_the_shebang(
-    tmp_path: Path,
-) -> None:
-    """uv bakes an absolute path into the shebang at install time; `$HOME` now may be
-    spelled another way (a trailing slash, a symlink). Matching those as strings would
-    remove the environment and leave the script -- a `mngr` on PATH with a dead
-    interpreter, which is worse than the stale but working copy it replaced."""
-    runtime_home = tmp_path / "home" / "user"
-    image_home = tmp_path / "root"
-    shadow_env, shadow_script = _install_mngr_tool(runtime_home)
-    _install_mngr_tool(image_home)
-
-    _run(
-        f'HOME="{runtime_home}/" tool_env_drop_shadowing_mngr',
-        home=runtime_home,
-        tool_home=image_home,
-    )
-
-    assert not shadow_env.exists()
-    assert not shadow_script.exists()
-
-
-def test_the_console_script_goes_when_its_shebang_has_a_space_after_the_marker(
-    tmp_path: Path,
-) -> None:
-    """The update apply reads the same shebang with a ``strip()`` before splitting
-    (update_environment.py::_tool_location), so the two must agree on a `#! /path`
-    spelling; disagreeing here removes the environment and strands the script on PATH."""
-    runtime_home = tmp_path / "home" / "user"
-    image_home = tmp_path / "root"
-    shadow_env, shadow_script = _install_mngr_tool(runtime_home, shebang_prefix="#! ")
-    _install_mngr_tool(image_home)
-
-    _run("tool_env_drop_shadowing_mngr", home=runtime_home, tool_home=image_home)
-
-    assert not shadow_env.exists()
-    assert not shadow_script.exists()
 
 
 def test_a_console_script_already_resolving_to_the_pinned_install_is_left_alone(
