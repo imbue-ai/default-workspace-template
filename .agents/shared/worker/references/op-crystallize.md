@@ -12,9 +12,9 @@ There are two shapes, selected by which creation you are crystallizing:
 | skill | **Reconstruct** -- does not yet exist on disk; build it from the lead's transcript and/or a handed-off sample | outline gate (Stage 2) + final gate (Stage 6) |
 | app | **Pre-existing, confirmed-live** -- already on disk; the user signed off on its shape live | none -- the live confirmation stands in for the final gate |
 
-- **Reconstruct** (skill): you build the creation from scratch, so both the
+- **Reconstruct**: you build the creation from scratch, so both the
   outline gate and the final gate apply.
-- **Pre-existing, confirmed-live** (app): nothing is reconstructed and there
+- **Pre-existing, confirmed-live**: nothing is reconstructed and there
   is no outline gate; harden it and report `done`.
 
 ## Valid report `name:` values
@@ -70,16 +70,16 @@ Build (reconstruct shape) or harden in place (pre-existing shape) per your
 creation reference's layout and validation steps. Apply the universal
 testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 
-**Pre-existing shape (app):** once the app's own tests pass on your branch,
+**Pre-existing shape:** Once its own tests pass on your branch,
 commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit, and make its
 `## Tested` section list exactly what you ran here and what you have not. The
 lead may merge that commit and let the user start using the hardened build
 while you work through the rest of the pass, so do not stop your turn: push it
-and go straight on to Stage 4.
+and go straight on to Stage 4. 
 
-**Reconstruct shape (skill):** do not declare a milestone yet. The user has
-approved only an outline, and a skill whose scenarios have never run is not
+**Reconstruct shape:** do not declare a milestone yet. The user has
+approved only an outline. As an example, a skill whose scenarios have never run is not
 worth putting in front of them; the milestone comes at the end of Stage 4.
 
 ## Stage 4: Scenarios
