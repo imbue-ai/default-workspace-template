@@ -936,7 +936,10 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           // A stable hook for the composer's own styles and for tests.
           class: `model-selector-trigger ${css.TRIGGER}`,
           [POPOVER_ATTR]: "trigger",
-          title: "Model, effort and speed",
+          // The workspace's own bubble, not a native `title`: one tooltip mechanism everywhere
+          // (and this one can say what the button DOES, where a native title is stuck reading
+          // as a label for what is already written on the chip).
+          ...hoverTooltipAttrs("Change model or provider"),
           "aria-expanded": cardAnchor !== null ? "true" : "false",
           onclick: (event: MouseEvent) => {
             event.stopPropagation();
