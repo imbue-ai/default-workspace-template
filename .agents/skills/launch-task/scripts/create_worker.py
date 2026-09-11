@@ -765,6 +765,24 @@ def launch(
         )
         return 2
 
+    # A taken name is refused up front, in the launcher's own terms: mngr
+    # refuses duplicate names in any state, and a worker stopped after a
+    # failure keeps its name on purpose (see ``stop``), so this is an expected
+    # event with a known remedy rather than an opaque ``mngr create`` failure.
+    # Checked before the task file is stamped, so a refused launch changes
+    # nothing. A listing that cannot be read never blocks (the create surfaces
+    # its own refusal then).
+    existing = _record_named(_agent_records(runner), name)
+    if existing is not None:
+        print(
+            f"create_worker: refusing to launch {name}: {_existing_agent_text(name, existing)}"
+            " mngr refuses duplicate names in any state. If it is finished with, "
+            f"run `create_worker.py destroy --name {name}` and relaunch; otherwise "
+            "pick another name.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Stamp the lead agent (this launcher) into the task file before creating
     # the worker, so the report has a valid return address and an unaddressable
     # case fails fast rather than after provisioning.
@@ -806,15 +824,15 @@ def launch(
     try:
         runner.run(create_argv, check=True)
     except subprocess.CalledProcessError as exc:
-        # mngr's own refusals (a duplicate name, a dirty tree) are printed by
-        # mngr itself; the launch reports the failure in its own terms rather
-        # than as a traceback. A duplicate name is the expected case -- a
-        # worker stopped after a failure keeps its name until it is destroyed
-        # -- so name the agent that holds it and the remedy.
+        # mngr's own refusals (a dirty tree, a failed provisioning command) are
+        # printed by mngr itself; the launch reports the failure in its own
+        # terms rather than as a traceback. A create that fails during
+        # provisioning leaves a STOPPED agent record behind that would make the
+        # relaunch fail on the name instead, so that leftover is named too.
         print(
             f"create_worker: `mngr create {name}` failed with exit code "
             f"{exc.returncode}; no worker was created. See mngr's output above."
-            f"{_name_collision_hint(name, runner)}",
+            f"{_leftover_record_hint(name, runner)}",
             file=sys.stderr,
         )
         return 2
@@ -956,26 +974,32 @@ def _record_label(record: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _name_collision_hint(name: str, runner: Runner) -> str:
-    """The sentence to append to a failed-create message when ``name`` is taken.
+def _existing_agent_text(name: str, record: Mapping[str, object]) -> str:
+    """``record`` (the agent named ``name``) described by state and lead."""
+    state = _record_field(record, "state") or "unknown"
+    lead = _record_label(record, _LEAD_AGENT_LABEL)
+    lead_text = f" (a worker of {lead})" if lead is not None else ""
+    return f"an agent named {name!r} already exists in state {state}{lead_text}."
 
-    An agent of the requested name already existing is the one ``mngr create``
-    failure the launcher can explain in its own terms: mngr refuses a duplicate
-    name in *any* state, and a worker its lead stopped after a failure keeps
-    its name on purpose (see ``stop``). Empty when the listing shows no such
-    agent, so an unrelated failure gets no misleading hint.
+
+def _leftover_record_hint(name: str, runner: Runner) -> str:
+    """The sentence to append to a failed-create message when the failed
+    ``mngr create`` left an agent record named ``name`` behind.
+
+    mngr registers the agent before it provisions it, so a create that fails
+    in a provisioning command (a ``uv sync`` that cannot resolve, say) leaves a
+    STOPPED record that makes the *next* launch of the same name fail on the
+    name alone. The launch checked the name was free before creating, so a
+    record now is this create's leftover, not a pre-existing worker. Empty
+    when the listing shows none, so an unrelated failure gets no misleading
+    hint.
     """
     record = _record_named(_agent_records(runner), name)
     if record is None:
         return ""
-    state = _record_field(record, "state") or "unknown"
-    lead = _record_label(record, _LEAD_AGENT_LABEL)
-    lead_text = f" (a worker of {lead})" if lead is not None else ""
     return (
-        f" An agent named {name!r} already exists in state {state}{lead_text}, "
-        "and mngr refuses duplicate names in any state. If it is finished "
-        f"with, run `create_worker.py destroy --name {name}` and relaunch; "
-        "otherwise pick another name."
+        f" The failed create left {_existing_agent_text(name, record)[:-1]}; "
+        f"run `create_worker.py destroy --name {name}` before relaunching."
     )
 
 

@@ -172,6 +172,7 @@ def test_happy_path_no_artifacts(
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
@@ -264,7 +265,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(
     # the subcommand names (that would re-introduce the hand-mirrored
     # expectation this test exists to replace) -- assert_mngr_argv_valid is what
     # confronts each argv with the live CLI.
-    assert len(mngr_calls) == 4
+    assert len(mngr_calls) == 5
     # Vacuity guard for the two argv details this launch newly depends on: the
     # lead label and the clobber sync mode have to be *in* what we validate,
     # or the loop below would prove nothing about either.
@@ -408,6 +409,7 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
     assert rc == 0
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["mngr", "list"],
         ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
@@ -622,8 +624,9 @@ def test_unresolved_lead_agent_without_env_is_fatal(
     )
 
     assert rc == 2
-    # Only the preflight cleanliness probe ran -- no worker was provisioned.
-    assert [c.argv for c in runner.calls] == [["git", "status", "--porcelain"]]
+    # Only the preflight probes ran (cleanliness, name free) -- no worker was
+    # provisioned.
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
     assert "lead_agent is unresolved" in capsys.readouterr().err
 
 
@@ -924,10 +927,11 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
         runner=runner,
     )
     assert rc == 2
-    # Nothing past the create runs but the listing that explains a taken name:
-    # no sync, no task message.
+    # Nothing past the create runs but the listing that looks for a record the
+    # failed create left behind: no sync, no task message.
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["mngr", "list"],
         ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "list"],
@@ -996,6 +1000,7 @@ def test_common_transcript_flushed_before_message_send(
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
@@ -2284,14 +2289,15 @@ def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
         ) == 1
 
 
-def test_a_taken_name_is_explained_from_the_listing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """A stopped failure keeps its name, so a relaunch of that name is an
+    expected event: refused up front with the holder's state and lead and the
+    remedy, before the task file is stamped and before mngr is asked."""
     runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
     runner = _RecordingRunner()
-    runner.respond(
-        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
-    )
     runner.respond(
         ("mngr", "list"),
         _listing(
@@ -2308,12 +2314,58 @@ def test_a_taken_name_is_explained_from_the_listing(
     )
 
     assert rc == 2
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
+    assert "task_file:" not in task.read_text()
+    assert "lead_agent: lead" in task.read_text()
     err = capsys.readouterr().err
     assert "already exists in state STOPPED (a worker of lead)" in err
     assert "create_worker.py destroy --name demo-worker" in err
 
 
-def test_an_unrelated_create_failure_gets_no_collision_hint(
+def test_a_create_that_leaves_a_record_behind_names_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """mngr registers the agent before provisioning it, so a create that fails
+    in a provisioning command leaves a STOPPED record the next launch would
+    trip on; the failure names that leftover and the destroy that clears it,
+    without calling it a pre-existing worker."""
+    runtime, task, _ = _make_layout(tmp_path)
+    listings = iter(
+        [
+            _listing(),  # before the create: the name is free
+            _listing(_agent_record("demo-worker", "STOPPED", lead_agent="lead")),
+        ]
+    )
+
+    class _ListingChanges(_RecordingRunner):
+        def run(self, argv: Sequence[str], **kwargs):
+            if list(argv)[:2] == ["mngr", "list"]:
+                self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
+                return next(listings)
+            return super().run(argv, **kwargs)
+
+    runner = _ListingChanges()
+    runner.respond(
+        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no worker was created" in err
+    assert "The failed create left an agent named 'demo-worker'" in err
+    assert "state STOPPED" in err
+    assert "destroy --name demo-worker` before relaunching" in err
+
+
+def test_an_unrelated_create_failure_gets_no_leftover_hint(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runtime, task, _ = _make_layout(tmp_path)
@@ -2335,6 +2387,7 @@ def test_an_unrelated_create_failure_gets_no_collision_hint(
     err = capsys.readouterr().err
     assert "no worker was created" in err
     assert "already exists" not in err
+    assert "left an agent" not in err
 
 
 def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
