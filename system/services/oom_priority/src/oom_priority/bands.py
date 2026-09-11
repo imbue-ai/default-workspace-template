@@ -44,12 +44,13 @@ USER_AGENT: Final[int] = 300
 WORKER_AGENT: Final[int] = 600
 AGENT_SUBPROCESS: Final[int] = 900
 
-# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_BASE`` and is re-tagged
+# Dynamic chat-agent band. A chat launches at ``CHAT_AGENT_LAUNCH`` and is re-tagged
 # at runtime from live activity (see the chat app's ``ChatOomPrioritizer``)
 # anywhere within ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``:
 #
 #   300 CHAT_AGENT_FLOOR         a chat the user is engaged with right now
-#   560 CHAT_AGENT_BASE          idle but fresh; also the chat launch band
+#       CHAT_AGENT_LAUNCH        (the same band) a chat still launching
+#   560 CHAT_AGENT_BASE          idle but fresh
 #   600 WORKER_AGENT             (for reference -- not a chat band)
 #   800 CHAT_AGENT_STALE_CEILING untouched long enough to be abandoned
 #
@@ -61,12 +62,39 @@ AGENT_SUBPROCESS: Final[int] = 900
 # ``AGENT_SUBPROCESS``, so any agent's build/test/browser subprocess is shed
 # before any agent itself.
 #
-# Starting at ``CHAT_AGENT_BASE`` rather than the floor means a chat that is never
-# re-tagged at all stays middling-expendable rather than pinned to the protected
-# floor; only a positive staleness signal pushes one past the worker band.
-CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh; also the chat launch band
+# ``CHAT_AGENT_BASE`` rather than the floor is where the scoring settles a chat
+# past its launch grace that nothing has been reported about: middling-expendable,
+# with only a positive staleness signal pushing one past the worker band.
+CHAT_AGENT_BASE: Final[int] = 560  # idle but fresh
 CHAT_AGENT_FLOOR: Final[int] = 300  # fully-engaged chat (most protected)
 CHAT_AGENT_STALE_CEILING: Final[int] = 800  # abandoned chat (shed before a worker)
+
+# A chat spends its first seconds unable to earn any of the protection above: no
+# client has reported its tab open or visible yet, and it has not been messaged,
+# so the engagement-only score leaves a brand-new chat the most expendable chat in
+# the workspace. That inverts the intent -- shedding a chat is meant to be cheap
+# because it revives on its next message with its transcript intact, and a chat
+# this young has no transcript to revive into. Its opening message (the `first`
+# template's `/welcome`, or whatever the creator seeded) is in flight and
+# unrepeatable, so a shed here loses it outright instead of costing a cold start.
+# So a chat launches at, and is held at, the protected floor until it is old
+# enough for the ordinary signals to describe it.
+#
+# This is the one place the chat policy fails *protected* rather than expendable,
+# which is worth stating because everything else here fails the other way (an
+# unrecognized service lands at ``USER_SERVICE``, an unclassifiable agent at
+# ``WORKER_AGENT``). A chat that is never re-tagged at all -- created while the
+# chat app is down, or one whose pid ``reapply`` cannot resolve -- keeps this band
+# for the life of its process, which leaves it above a worker doing unrecoverable
+# work rather than below one, until the next ``reapply`` re-scores it. The floor
+# is still above every service band, so this protects a launching chat among the
+# agents, not against the workspace itself: with no worker or agent subprocess
+# running, a launching chat is still the container's top victim.
+CHAT_AGENT_LAUNCH: Final[int] = CHAT_AGENT_FLOOR  # too young to have earned a band
+# Long enough to cover a create (the harness start, the readiness wait, and the
+# initial-message send), short enough that a chat nobody touches is back under the
+# ordinary policy well inside the staleness ramp's first point.
+CHAT_LAUNCH_GRACE_SECONDS: Final[float] = 120.0
 
 # --- Chat band tunables. Every knob of the chat policy lives in this block. ---
 #
@@ -130,11 +158,19 @@ def chat_agent_oom_score_adj(
     recency_rank: int | None,
     idle_seconds: float | None,
     is_mid_turn: bool,
+    age_seconds: float | None,
 ) -> int:
     """Map a chat agent's live activity to its ``oom_score_adj``.
 
-    Lower is more protected. Two forces move a chat within its band, starting
-    from ``CHAT_AGENT_BASE``. Engagement pulls it down:
+    A chat younger than ``CHAT_LAUNCH_GRACE_SECONDS`` short-circuits to
+    ``CHAT_AGENT_LAUNCH``: none of the signals below can have arrived yet, so
+    scoring it on their absence would read "unengaged" when the truth is "too
+    new to tell". ``age_seconds`` is None when the caller could not read the
+    process's start time, which earns no grace -- an age we cannot measure may
+    be long spent.
+
+    Lower is more protected. Past the grace, two forces move a chat within its
+    band, starting from ``CHAT_AGENT_BASE``. Engagement pulls it down:
 
     - ``is_open``: the chat has an open tab in the workspace UI.
     - ``is_visible``: the chat's tab is currently visible (implies open).
@@ -155,6 +191,8 @@ def chat_agent_oom_score_adj(
 
     The result is clamped to ``[CHAT_AGENT_FLOOR, CHAT_AGENT_STALE_CEILING]``.
     """
+    if age_seconds is not None and age_seconds < CHAT_LAUNCH_GRACE_SECONDS:
+        return CHAT_AGENT_LAUNCH
     engagement_bonus = 0
     if is_open:
         engagement_bonus += _CHAT_OPEN_BONUS

@@ -12,13 +12,14 @@ _HOUR = 3600.0
 
 
 def _fresh(*, is_open: bool, is_visible: bool, recency_rank: int | None) -> int:
-    """The score for a just-engaged chat: the engagement-only behaviour."""
+    """The score for a just-engaged chat past its launch grace: the engagement-only behaviour."""
     return bands.chat_agent_oom_score_adj(
         is_open=is_open,
         is_visible=is_visible,
         recency_rank=recency_rank,
         idle_seconds=0.0,
         is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -30,13 +31,14 @@ def _aged(
     recency_rank: int | None = None,
     is_mid_turn: bool = False,
 ) -> int:
-    """The score for a chat last engaged with ``idle_seconds`` ago."""
+    """The score for a chat last engaged with ``idle_seconds`` ago, past its launch grace."""
     return bands.chat_agent_oom_score_adj(
         is_open=is_open,
         is_visible=is_visible,
         recency_rank=recency_rank,
         idle_seconds=idle_seconds,
         is_mid_turn=is_mid_turn,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -233,6 +235,7 @@ def test_chat_score_always_within_the_chat_band() -> None:
                             recency_rank=rank,
                             idle_seconds=idle,
                             is_mid_turn=mid_turn,
+                            age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
                         )
                         assert (
                             bands.CHAT_AGENT_FLOOR
@@ -308,6 +311,7 @@ def test_unknown_idle_time_is_treated_as_fresh() -> None:
         recency_rank=None,
         idle_seconds=None,
         is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
     )
 
 
@@ -334,3 +338,61 @@ def test_a_program_without_a_registry_row_keeps_its_by_name_band() -> None:
 
 def test_the_chat_app_sits_between_the_shell_and_the_sharing_stack() -> None:
     assert bands.SERVICE_BANDS["system_interface"] < bands.SERVICE_BANDS["chat"] < bands.SERVICE_BANDS["share-gateway"]
+
+
+def test_a_launching_chat_is_pinned_to_the_protected_floor() -> None:
+    # Every signal that earns protection is still absent at this age, so the
+    # engagement-only score would leave a chat at its most expendable in the window
+    # where losing it costs the most.
+    launching = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=0.0,
+    )
+    assert launching == bands.CHAT_AGENT_LAUNCH
+    assert launching == bands.CHAT_AGENT_FLOOR
+    assert launching < _fresh(is_open=False, is_visible=False, recency_rank=None)
+
+
+def test_launch_protection_expires_into_the_ordinary_bands() -> None:
+    # The grace is a head start, not a permanent pin. The same unengaged chat, scored
+    # on either side of the boundary: pinned to the floor a second short of it, and
+    # back on the engagement-only score the moment it reaches it.
+    still_launching = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS - 1.0,
+    )
+    aged_out = bands.chat_agent_oom_score_adj(
+        is_open=False,
+        is_visible=False,
+        recency_rank=None,
+        idle_seconds=0.0,
+        is_mid_turn=False,
+        age_seconds=bands.CHAT_LAUNCH_GRACE_SECONDS,
+    )
+    assert still_launching == bands.CHAT_AGENT_LAUNCH
+    assert aged_out == bands.CHAT_AGENT_BASE
+    assert aged_out > still_launching
+
+
+def test_an_unknown_age_earns_no_launch_protection() -> None:
+    # Age comes from the chat's live process; when there is none to read, the chat
+    # must not be handed a launch grace it may have used up long ago.
+    assert (
+        bands.chat_agent_oom_score_adj(
+            is_open=False,
+            is_visible=False,
+            recency_rank=None,
+            idle_seconds=0.0,
+            is_mid_turn=False,
+            age_seconds=None,
+        )
+        == bands.CHAT_AGENT_BASE
+    )

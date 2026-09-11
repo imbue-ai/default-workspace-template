@@ -21,7 +21,7 @@ into one of a few bands.
   (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
   at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
-  `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
+  `CHAT_AGENT_BASE` (560, idle but recently used) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
   The chat app's prioritizer moves a chat within that range from live
   engagement and elapsed idle time (see "Dynamic chat band" below).
@@ -172,10 +172,20 @@ over the seconds *after* the event; between events the sweeper sleeps.
 Every agent's band is set once at launch and never changes -- with one exception:
 **chat agents**. A chat is a user-facing agent (`user_created` label), and how
 expendable it should be depends on how engaged the user is with it, which is only
-known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_BASE` (560),
-and the chat app's `ChatOomPrioritizer` moves it in both directions from
-there: down toward `CHAT_AGENT_FLOOR` (300) as the user engages with it, and up
-toward `CHAT_AGENT_STALE_CEILING` (800) as it is left alone.
+known at runtime. So the launch wrapper tags a chat at `CHAT_AGENT_LAUNCH` --
+the protected floor -- and the chat app's `ChatOomPrioritizer` holds it there
+until its process is older than `CHAT_LAUNCH_GRACE_SECONDS`, then moves it in
+both directions from `CHAT_AGENT_BASE` (560): down toward `CHAT_AGENT_FLOOR`
+(300) as the user engages with it, and up toward `CHAT_AGENT_STALE_CEILING`
+(800) as it is left alone.
+
+The launch grace exists because every signal below is *earned*, and a chat
+seconds old has earned none of them: no client has reported its tab, and it has
+not been messaged. Scored on their absence it would be the most expendable chat
+in the workspace during the one window where a shed cannot be recovered from --
+it has no transcript to revive into, and its opening message (the `first`
+template's `/welcome`, or whatever the creator seeded) is in flight and
+unrepeatable. A chat whose process start time cannot be read gets no grace.
 
 Two forces, combined through a single **freshness** factor that decays with idle
 time (1.0 for the first hour, reaching 0.0 at 24 hours -- the ramp is a table in

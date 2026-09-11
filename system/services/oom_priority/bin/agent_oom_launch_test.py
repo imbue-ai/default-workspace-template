@@ -96,15 +96,20 @@ def test_band_for_pins_the_primary_agent(
     assert wrapper._band_for("services") == wrapper.bands.PRIMARY_AGENT
 
 
-def test_band_for_starts_a_chat_expendable(
+def test_band_for_starts_a_chat_protected_while_it_launches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A chat (user_created) launches at the most-expendable chat band, to be
-    protected later by live UI engagement -- not at the protected floor."""
+    """A chat (user_created) launches at the protected floor. The live UI engagement
+    that would otherwise protect it cannot have been reported yet, and its opening
+    message is in flight and unrepeatable, so it must not be scored on their absence
+    until the prioritizer's launch grace runs out."""
     host = tmp_path / "host"
     _write_agent_record(host, "c1", is_worker=False, labels={"user_created": "true"})
     monkeypatch.setenv("MNGR_HOST_DIR", str(host))
-    assert wrapper._band_for("c1") == wrapper.bands.CHAT_AGENT_BASE
+    assert wrapper._band_for("c1") == wrapper.bands.CHAT_AGENT_LAUNCH
+    # Still strictly more expendable than the workspace's services, which it must
+    # never outlive; the launch grace protects it among chats, not above them.
+    assert wrapper._band_for("c1") > max(wrapper.bands.SERVICE_BANDS.values())
 
 
 def test_band_for_puts_workers_and_unidentifiable_agents_in_the_worker_band(

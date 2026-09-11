@@ -1,7 +1,12 @@
-"""Discover mngr-managed agents using the mngr Python API."""
+"""Discover mngr-managed agents, mostly through the mngr Python API.
+
+A few answers the API does not expose are read straight from the agent's state
+directory instead (its ``env`` file, its message-delivery events).
+"""
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from collections.abc import Sequence
@@ -45,6 +50,53 @@ def get_host_dir() -> Path:
     and the activity-state tracker (``AgentManager``).
     """
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
+
+
+# The message-delivery event types that mean "this send did not become a turn". Both are
+# reported to the caller as a successful send, so the event stream is the only way to
+# learn about them. Spelled out rather than imported because mngr has no constant for
+# them either.
+_UNDELIVERED_SEND_EVENT_TYPES: frozenset[str] = frozenset({"relaxed_send_unconfirmed", "send_rejected_by_agent"})
+
+
+def has_undelivered_message_send(agent_id: str) -> bool:
+    """Whether mngr recorded a send to ``agent_id`` that never became a turn.
+
+    mngr confirms a send by watching the agent for evidence that it took the message.
+    A slash command leaves no durable evidence, so an unwitnessed one is reported as a
+    successful best-effort send and recorded in the agent's message-delivery events
+    rather than raised; an outright rejection by the agent is likewise recorded, not
+    raised. Read right after a create, this answers whether that create's initial
+    message went in, because the initial message is the only one a create sends.
+
+    This is evidence of absence, not proof: an unconfirmed send means "no evidence
+    within the timeout", so a send whose evidence merely arrived late reads as
+    undelivered here. That is the safe direction for the one caller -- handing a
+    first-chat claim back costs a duplicate greeting, keeping it costs the only one.
+
+    An events file we cannot read answers False rather than raising: this runs on the
+    create path, where an exception would turn a chat that was created perfectly well
+    into a failed one.
+    """
+    events_path = get_host_dir() / "agents" / agent_id / "events" / "messages" / "events.jsonl"
+    try:
+        lines = events_path.read_text().splitlines()
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        logger.opt(exception=e).warning("Could not read the message-delivery events of {}", agent_id)
+        return False
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as e:
+            # Another process appends this a line at a time, so a read can catch a torn
+            # one. Every whole line still counts, but the damage is worth seeing.
+            logger.opt(exception=e).warning("Skipping a malformed message-delivery event of {}", agent_id)
+            continue
+        if isinstance(event, dict) and event.get("type") in _UNDELIVERED_SEND_EVENT_TYPES:
+            return True
+    return False
 
 
 class AgentInfo(FrozenModel):

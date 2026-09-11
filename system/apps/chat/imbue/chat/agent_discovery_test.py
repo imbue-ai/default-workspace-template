@@ -1,5 +1,6 @@
 """Tests for agent_discovery module."""
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import _first_failure
 from imbue.chat.agent_discovery import discover_agents
+from imbue.chat.agent_discovery import has_undelivered_message_send
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.message import AgentSendFailure
@@ -312,3 +314,66 @@ def test_unknown_config_field_degrades_to_a_warning_not_a_failure(
     # the unknown field was reported rather than swallowed silently.
     assert agents == []
     assert any("field_from_a_newer_mngr" in record for record in loguru_records)
+
+
+def _message_delivery_events_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agent_id: str) -> Path:
+    """Point the host dir at ``tmp_path`` and return where mngr appends ``agent_id``'s
+    message-delivery events. The directory exists; the file is the caller's to write."""
+    host_dir = tmp_path / "host"
+    events_path = host_dir / "agents" / agent_id / "events" / "messages" / "events.jsonl"
+    events_path.parent.mkdir(parents=True)
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    return events_path
+
+
+def test_a_torn_event_line_does_not_hide_a_whole_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """mngr appends the message-delivery events a line at a time from another process, so a
+    read taken right after a create can catch a half-written line. This runs on the create
+    path, where a raised JSONDecodeError would report a chat that was created perfectly well
+    as a failed one -- and where missing the whole line after it would cost the workspace its
+    one `/welcome`."""
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    events_path.write_text(
+        '{"type": "some_other_delivery_event", "detail": "tor\n'
+        + json.dumps({"type": "relaxed_send_unconfirmed", "detail": "no submission evidence"})
+        + "\n"
+    )
+
+    assert has_undelivered_message_send("chat-1") is True
+
+
+def test_an_agent_that_rejected_the_message_counts_as_undelivered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rejected send is reported to the caller as a successful one, exactly like an
+    unwitnessed one. The greeting did not happen either way, so the claim it was spending
+    has to come back either way."""
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    events_path.write_text(json.dumps({"type": "send_rejected_by_agent", "detail": "agent rejected it"}) + "\n")
+
+    assert has_undelivered_message_send("chat-1") is True
+
+
+def test_a_delivered_send_records_nothing_to_find(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The ordinary case: a send that landed writes no delivery event at all, so a create
+    that greeted its chat keeps the claim it spent."""
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    assert not events_path.exists()
+
+    assert has_undelivered_message_send("chat-1") is False
+
+
+def test_an_unreadable_events_file_does_not_fail_the_create(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, loguru_records: list[str]
+) -> None:
+    """The unreadable case answers False like the absent one, rather than raising: this runs
+    on the create path, where an exception would report a chat that was created perfectly
+    well as a failed one. It is still logged, since unlike an absent file it is a fault."""
+    events_path = _message_delivery_events_path(monkeypatch, tmp_path, "chat-1")
+    # A directory where the file belongs: read_text raises IsADirectoryError (an OSError)
+    # for any user, unlike a permission bit, which root ignores.
+    events_path.mkdir()
+
+    assert has_undelivered_message_send("chat-1") is False
+    # The level is part of the claim: demoted to debug, the fault stops being visible.
+    assert any(record.startswith("WARNING") and "chat-1" in record for record in loguru_records)
