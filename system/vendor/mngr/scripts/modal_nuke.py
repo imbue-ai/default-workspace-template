@@ -31,10 +31,10 @@ from typing import Final
 from loguru import logger
 
 from imbue.imbue_common.logging import setup_logging
-from imbue.mngr.utils.modal_cli import ModalAppListing
-from imbue.mngr.utils.modal_cli import ModalVolumeListing
-from imbue.mngr.utils.modal_cli import parse_modal_app_listings
-from imbue.mngr.utils.modal_cli import parse_modal_volume_listings
+from imbue.mngr_modal.modal_cli import ModalAppListing
+from imbue.mngr_modal.modal_cli import ModalVolumeListing
+from imbue.mngr_modal.modal_cli import parse_modal_app_listings
+from imbue.mngr_modal.modal_cli import parse_modal_volume_listings
 
 DEFAULT_MNGR_DIR: Final[Path] = Path("~/.mngr")
 DEFAULT_PREFIX: Final[str] = "mngr-"

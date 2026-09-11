@@ -934,6 +934,152 @@ class CleanupReport(FrozenModel):
     failed_names: tuple[str, ...] = Field(description="Environments Modal refused to remove")
 
 
+class HarnessConfigEntry(FrozenModel):
+    """One named harness config in `configs/harness_configs.json`: the kwargs a scheduled cell
+    appends to its run line, under a name that labels the cell wherever it is reported.
+
+    The kwarg fields are the run line's own (`--ak lane=`, `--ak model=`, ...) and carry the same
+    defaults an empty kwarg does, so an entry that names nothing but its lane is the default harness
+    config: the product exactly as it ships. Validation is the driver's `parse_harness_config`, not
+    anything here; this model only holds the file's shape.
+    """
+
+    name: str = Field(description="The config's name, as job names, artifact names and the Slack report spell it")
+    is_nightly: bool = Field(description="Whether a scheduled run (and a dispatch naming no configs) runs it")
+    lane: str = Field(default="", description="The provider lane to sign in on; empty means anthropic")
+    key_provider: str = Field(default="", description="Which provider the key belongs to, on the api-key lane only")
+    key_env: str = Field(default="", description="The variable holding the lane's key; empty derives it from the lane")
+    model: str = Field(default="", description="The catalog id to switch the chat to before turn 1; empty means none")
+    effort: str = Field(default="", description="The effort level set with the model; empty means none")
+    fast: bool | None = Field(default=None, description="The speed tier set with the model; None leaves it unset")
+
+
+class HarnessConfigsFile(FrozenModel):
+    """The shape of `configs/harness_configs.json`."""
+
+    harness_configs: tuple[HarnessConfigEntry, ...] = Field(description="Every named config, nightly or not")
+
+
+class PairDecision(LowerCaseStrEnum):
+    """What a scheduled run decided about one (mngr, dwt) pair.
+
+    UNRESOLVED means one of its refs is not on its remote, so it has no SHAs and no cells; SKIP means
+    every one of its cells is already green; RUN means at least one cell runs, and with it the pair's
+    oracle pass.
+    """
+
+    RUN = auto()
+    SKIP = auto()
+    UNRESOLVED = auto()
+
+
+class CellDecision(LowerCaseStrEnum):
+    """What a scheduled run decided about one cell: run it, or skip it because its green marker
+    says this exact arm was already verified."""
+
+    RUN = auto()
+    SKIP = auto()
+
+
+class FrozenPair(FrozenModel):
+    """A (mngr, dwt) pair as the scheduled run's resolve job froze it: each ref resolved to a SHA
+    once, so nothing can drift between dataset generation and the run.
+
+    An unresolvable pair keeps its refs and carries empty SHAs; that is how the freeze reports it.
+    """
+
+    pair: str = Field(description="The pair's name: main, released, or custom")
+    mngr_ref: str = Field(description="The mngr ref the pair was asked for")
+    mngr_sha: str = Field(description="The mngr SHA it resolved to; empty when it did not resolve")
+    dwt_ref: str = Field(description="The workspace-template ref the pair was asked for")
+    dwt_sha: str = Field(description="The workspace-template SHA it resolved to; empty when it did not resolve")
+
+    @property
+    def is_resolved(self) -> bool:
+        return bool(self.mngr_sha) and bool(self.dwt_sha)
+
+
+class DecidedPair(FrozenPair):
+    """A frozen pair with the run's decision about it."""
+
+    decision: PairDecision = Field(description="Whether the pair runs, is skipped, or never resolved")
+
+
+class MatrixCell(FrozenModel):
+    """One arm of a scheduled run: a frozen pair times one named harness config, with everything
+    the cell's job needs spelled out so the workflow reads values and composes nothing.
+
+    Every field is a string or an enum on purpose: the cell is a GitHub Actions matrix entry, and
+    `harbor_args` is therefore a JSON-encoded list rather than a list.
+    """
+
+    pair: str = Field(description="The pair's name")
+    harness_config: str = Field(description="The harness config's name")
+    mngr_ref: str = Field(description="The mngr ref the pair was asked for")
+    mngr_sha: str = Field(description="The mngr SHA the pair froze to")
+    dwt_ref: str = Field(description="The workspace-template ref the pair was asked for")
+    dwt_sha: str = Field(description="The workspace-template SHA the pair froze to")
+    config: str = Field(description="The repo-relative eval config the dataset is generated from")
+    lane_key_env: str = Field(description="The environment variable the driver reads the lane's key from")
+    harbor_args: str = Field(description="JSON-encoded list of the `--ak` arguments appended to the run line")
+    cache_key: str = Field(description="The green marker's cache key: pair, both SHAs, config, and the harness config")
+    decision: CellDecision = Field(description="Whether the cell runs or its green marker already holds")
+
+
+class CiMatrix(FrozenModel):
+    """What the scheduled run's resolve job decided, for the jobs after it: the pairs and cells it
+    considered, and the two matrices (oracle passes per running pair, live passes per running cell)
+    read straight out of the serialized form."""
+
+    config: str = Field(description="The repo-relative eval config every cell generates its dataset from")
+    pairs: tuple[DecidedPair, ...] = Field(description="Every pair considered, skipped and unresolved ones included")
+    cells: tuple[MatrixCell, ...] = Field(description="Every cell of every resolved pair, skipped ones included")
+
+    @computed_field
+    @cached_property
+    def oracle_matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `oracle` job's matrix: one entry per pair that has a cell to run."""
+        return {
+            "include": [
+                pair.model_dump(mode="json", exclude={"decision"})
+                for pair in self.pairs
+                if pair.decision is PairDecision.RUN
+            ]
+        }
+
+    @computed_field
+    @cached_property
+    def matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `evaluate` job's matrix: one entry per running cell."""
+        return {
+            "include": [
+                cell.model_dump(mode="json", exclude={"decision"})
+                for cell in self.cells
+                if cell.decision is CellDecision.RUN
+            ]
+        }
+
+    @computed_field
+    @cached_property
+    def is_any_cell_running(self) -> bool:
+        return any(cell.decision is CellDecision.RUN for cell in self.cells)
+
+
+class CiReportContext(FrozenModel):
+    """What the Slack report of a scheduled run knows about the run beyond its summaries: where it
+    is, what started it, how long it took, and how its jobs ended as GitHub reports them."""
+
+    run_url: str = Field(description="The workflow run's URL")
+    trigger: str = Field(description="The event that started the run: schedule, workflow_dispatch, or push")
+    duration_seconds: int | None = Field(
+        description="Wall clock since the run was queued; None when it could not be read"
+    )
+    is_live_pass_skipped: bool = Field(description="Whether the run stopped after the oracle passes")
+    resolve_result: str = Field(description="The resolve job's result: success, failure, cancelled, or skipped")
+    oracle_result: str = Field(description="The oracle job's result, or empty when GitHub reported none")
+    evaluate_result: str = Field(description="The evaluate job's result, or empty when GitHub reported none")
+
+
 class GoalDecision(FrozenModel):
     """What a goal-holding client decided for one exchange: say something else, or stop asking.
 
