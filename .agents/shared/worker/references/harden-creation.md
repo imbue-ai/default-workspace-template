@@ -208,8 +208,42 @@ evicts is not hardened, no matter how well-tested its happy path is.
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed
-2. Ensure that tests pass. If there are long running tests, this is the moment to run them
-3. Fix failing tests with narrowly targeted changes
+2. Run the scoped test set below and fix what it flags with narrowly targeted
+   changes
+
+### The scoped test set
+
+Three parts, in order. A bare `uv run pytest` from the repo root is not one of
+them: it collects the whole monorepo -- on this workspace about 2,500 tests and
+several minutes -- to check a change that usually touches a handful of files.
+
+1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
+
+2. **The repo guards** -- the cross-cutting checks no creation owns: manifest
+   and registry consistency, template stacking, hook wiring, the meta-ratchets.
+   Run them whatever you touched:
+
+   ```bash
+   uv run pytest system/*.py system/scripts
+   ```
+
+   A few hundred tests, well under a minute. This is what catches a change that
+   breaks a contract the rest of the tree depends on, which part 1 by
+   construction cannot see.
+
+3. **The full suite, only when the change left the footprint.** Regenerate the
+   scope file, then read `diff.outside_footprint`. Empty means parts 1 and 2
+   cover the change. Non-empty means it reached code outside the creation, and
+   whatever depends on that code is in neither set:
+
+   ```bash
+   jq -e '.diff.outside_footprint | length == 0' "$SCOPE_FILE" >/dev/null \
+       || echo "changed files outside the footprint -- run the full suite"
+   ```
+
+A run that carries no scope file -- a pre-manifest app, a standalone service,
+the system interface, per "The scope file" above -- cannot make that check, so
+it runs parts 1 and 2 and then the full suite once.
 
 When complete, report back to the lead.
 
