@@ -11,7 +11,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 import tool_env
 
 _TOOL_ENV_SH = Path(__file__).with_name("_tool_env.sh")
