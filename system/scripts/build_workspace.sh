@@ -60,7 +60,7 @@ git config --global --add safe.directory "$REPO_ROOT"
 # plugin-specific config; the update-self apply reads the same table, so a
 # release adding a plugin registers it in existing workspaces as well as here.
 # mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
-python3 "$REPO_ROOT/system/scripts/install_mngr.py"
+python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
