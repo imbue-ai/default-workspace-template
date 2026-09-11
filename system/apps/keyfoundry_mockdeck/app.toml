@@ -1,0 +1,6 @@
+name = "keyfoundry-mockdeck"
+display_name = "KeyFoundry mock deck"
+icon = "icon.svg"
+instances = false
+priority = "user"
+program = "keyfoundry-mockdeck"
