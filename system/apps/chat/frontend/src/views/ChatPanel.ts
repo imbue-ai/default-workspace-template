@@ -782,7 +782,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               // typed while the chat is being created is held and delivered when it lands.
               !hasComposer(agentId)
                 ? null
-                : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
+                : m("footer", { class: "app-footer relative shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
                     isConversationNotFound(agentId)
                       ? null
@@ -800,20 +800,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
           // the flip would be one-way. Everything here describes the conversation rather than
           // either rendering of it, which is the same reason it belongs to neither face.
-          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
-          // under-bar rather than between the composer and it.
+          // Carries the bottom gutter the footer used to supply, so it sits under the under-bar
+          // rather than between the composer and it. 8px, matching the 8px above the row: the
+          // row is a caption on the composer, so it sits evenly in its own band rather than
+          // hugging the composer with a page-sized margin underneath.
           !hasComposer(agentId)
             ? null
             : m(
                 "div",
-                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
+                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-2" },
                 m(
                   "div",
                   {
                     // Same max-width as the composer card above it; relative as
                     // the containing block for centered overlays.
                     class:
-                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
+                      "composer-under-bar relative mx-auto mt-2 flex w-full " +
                       "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
                   },
                   [
