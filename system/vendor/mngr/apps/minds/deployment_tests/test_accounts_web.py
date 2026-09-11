@@ -164,7 +164,8 @@ def test_hosted_pages_signup_via_playwright(shared_env: Callable[[str], SharedEn
                 page.click("#reveal-email-form-btn")
             page.wait_for_selector("#auth-submit-btn", timeout=30_000)
             # The plan selector renders with Explorer preselected; keep it.
-            assert page.locator("#plan-select").input_value() == "explorer"
+            page.wait_for_selector("#plan-card-explorer", timeout=30_000)
+            assert "Selected" in page.locator("#plan-card-explorer").inner_text()
             page.fill("#email", email)
             page.fill("#password", password)
             page.fill("#confirm-password", password)
