@@ -816,7 +816,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                     // the containing block for centered overlays.
                     class:
                       "composer-under-bar relative mx-auto mt-2 flex w-full " +
-                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
                   },
                   [
                     m(ModelBar, { agentId }),

@@ -20,8 +20,11 @@ import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-
  *  spec sheet rather than a cramped list. */
 export const CARD_WIDTH = 340;
 export const FLYOUT_WIDTH = 300;
-/** macOS submenu geometry: the flyout tucks 4px UNDER the card's right edge. */
-export const FLYOUT_OVERLAP = 4;
+/** macOS submenu geometry: the flyout tucks UNDER the card's edge rather than sitting beside
+ *  it. 5px, because that is where the opening ROW ends -- the card's 1px border plus the 4px
+ *  its row highlight is inset by -- and the flyout meeting that highlight is what reads as the
+ *  row continuing sideways. Tucking under the card's edge alone left a 1px seam. */
+export const FLYOUT_OVERLAP = 5;
 
 /** Show ten rows before the list starts scrolling. Fewer and a long catalog reads as a
  *  keyhole -- pi's was showing three; many more and the flyout is a wall. Derived rather than
