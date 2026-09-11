@@ -2,6 +2,8 @@
 
 When a worker (sub-agent created via `launch-task`) is in `STOPPED` state -- claude session died mid-iteration, but the worktree (and any uncommitted work in it) is still intact -- the default path is to restart it, not to manually salvage. `mngr start` only re-creates the tmux session and re-execs claude in the existing worktree; it does not touch git state, so uncommitted changes survive the restart.
 
+This applies to a worker that *crashed*: STOPPED with no `archived_at` label in `mngr list --format jsonl`. A STOPPED worker that carries `archived_at` was stopped on purpose by its lead (`create_worker.py stop`, the failure flow's last step) and is not a restart candidate -- its lead has already reported the failure; read its branch and transcript instead.
+
 ## First: was the worker shed for memory pressure?
 
 A worker can die because the **OOM daemon** (earlyoom) shed it -- the container was running out of memory and earlyoom killed the most-expendable work first. Check the shed ledger before reviving:
@@ -62,12 +64,12 @@ Only fall back to this path when the default doesn't apply: `mngr start` itself 
    git commit -m "WIP: <substantive summary> (worker <name> killed mid-iteration)"
    ```
 
-4. Destroy the dead agent without dropping its branch:
+4. Destroy the dead agent (and any sub-workers it launched) without dropping its branch:
 
    ```bash
-   mngr destroy <worker> --force --no-allow-worktree-removal
+   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <worker>
    ```
 
-   `--no-allow-worktree-removal` is what keeps the branch alive once the agent is gone.
+   Destroy keeps the branch unless `--delete-branches` is passed, and mngr preserves the transcript, so the WIP commit you just made stays reachable.
 
 5. The branch lives on. Finalize it like any other worker branch: cherry-pick onto your working branch, address ratchet/test fixups in follow-up commits, then push to `submit/<name>` per the `submit-upstream-changes` skill.

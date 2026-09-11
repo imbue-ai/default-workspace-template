@@ -31,8 +31,18 @@ is not where worker bugs get fixed.
 2. **Tell the user** in plain language: what was supposed to happen, what
    happened instead, and where the evidence lives (branch name, transcript
    command). Keep it short -- the user decides the next step.
-3. **Leave the worker's branch and tmux session intact** unless the user
-   asks you to clean up. The evidence is more useful than the tidiness.
+3. **Stop the worker, keep its evidence.** Once the context is captured and
+   the user told, stop the worker and any sub-workers it launched:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <worker>
+   ```
+
+   Its branch, worktree, and transcript remain for inspection; only the
+   processes go, and the `archived_at` label the stop leaves marks it as
+   stopped on purpose (so nobody restarts it as a crash). A stopped failure
+   is destroyed only when a later pass supersedes it
+   (`.agents/shared/references/harden-contention.md`) or the user asks.
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
    note describing the failure; do not close them -- leave them open so the
    user can resume.
