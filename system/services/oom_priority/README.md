@@ -92,8 +92,8 @@ vm-exec-register) are never demoted. Because this path *raises*, a built-in
 missing from either band map is not merely left alone but actively pushed to
 `USER_SERVICE`, above every other built-in -- so
 `oom_tag_service_test.test_every_built_in_supervisord_program_has_an_explicit_band`
-requires every program the config declares -- the main file and the drop-ins
-its `[include]` globs reach alike -- to name its band outright, unless it
+requires every program the config declares -- the main file and every drop-in
+under `system/supervisord.conf.d/` alike -- to name its band outright, unless it
 declares itself user-created by passing the `user` key (for those the
 fallback is the intended band, and the two mechanisms agree on it), and
 `system/test_app_manifests.py` requires every built-in app manifest's

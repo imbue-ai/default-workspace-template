@@ -4,25 +4,12 @@ version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
-    # Every BUILT-IN service supervisord runs via `uv run <name>` is listed
-    # here, and must stay listed: a root-closure-scoped `uv sync` prunes
-    # workspace members that are not in the root closure, which deletes the
-    # service's console script and makes the next `uv run <name>` a supervisord
-    # spawn error. (That is not hypothetical -- it took owner-exec down once,
-    # via the backup restore flow's sync, back when owner-exec was a Python
-    # member rather than the pinned Go binary it is now.)
-    #
-    # Scaffolded creations are deliberately NOT listed, so that adding one
-    # touches no shared file and two agents can build two apps at once. What
-    # protects them is that mngr's restore and update scripts sync with
-    # --all-packages (pinned by a test in backup_workspace_scripts_test.py),
-    # so the pruning never happens. Nothing recovers from it if it does: a
-    # scaffolded app's program command runs the app's own name, and the only
-    # copy of that console script on supervisord's PATH is the one in
-    # `.venv/bin` that the prune deletes (`uv tool install -e` puts the other
-    # under the agent's HOME, which supervisord's children do not inherit), so
-    # the next restart is a spawn error and the program sits in BACKOFF until
-    # someone runs `uv sync --all-packages` by hand.
+    # Built-in services that supervisord runs via `uv run <name>` must be listed
+    # here: a `uv sync` without --all-packages prunes members outside the root
+    # closure, deleting their console scripts, and the next spawn fails.
+    # Scaffolded creations are deliberately absent so adding one touches no
+    # shared file; they depend on mngr's restore and update scripts syncing
+    # with --all-packages (pinned in backup_workspace_scripts_test.py).
     "bootstrap",
     "app-watcher",
     "github-sync",

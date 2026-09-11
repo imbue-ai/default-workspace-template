@@ -37,11 +37,7 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 """
 
 import argparse
-import configparser
-import fnmatch
-import glob
 import importlib.util
-import os
 import re
 import subprocess
 import sys
@@ -126,58 +122,26 @@ def _validate_name(name: str) -> None:
         sys.exit(f"error: --name {name!r} is reserved")
 
 
-def _supervisord_include_globs(supervisord_conf: Path) -> list[str]:
-    """The glob patterns the config's ``[include] files`` declares, as supervisord resolves them.
+def _supervisord_dropin_dir(supervisord_conf: Path) -> Path:
+    """``<supervisord.conf>.d/``: the one directory the config's ``[include]`` glob names.
 
-    supervisord joins each whitespace-separated pattern to the directory of the
-    config declaring it and expands ``%(here)s`` to that same directory.
-    ``configparser`` does not follow ``[include]`` -- that is a supervisord
-    feature, not a configparser one -- so the patterns are expanded here, and
-    ``interpolation=None`` leaves ``%(here)s`` verbatim for that substitution.
-
-    The patterns are read rather than assumed: which directory holds the
-    per-program drop-ins is per-workspace configuration, so a workspace that
-    declares a different one must still be scanned and written correctly.
+    Fixed by convention rather than read out of the config, and pinned by
+    ``system/test_supervisord_layout.py``: every reader of the config, here and in
+    the evals capture that reads it from outside the workspace, assumes it.
     """
-    parser = configparser.ConfigParser(interpolation=None, strict=False)
-    parser.read(supervisord_conf)
-    conf_dir = str(supervisord_conf.parent)
-    return [
-        os.path.join(conf_dir, pattern.replace("%(here)s", conf_dir))
-        for pattern in (parser.get("include", "files", fallback="") or "").split()
-    ]
+    return supervisord_conf.parent / f"{supervisord_conf.name}.d"
 
 
 def _supervisord_conf_files(supervisord_conf: Path) -> list[Path]:
-    """The main config plus every file its ``[include]`` globs match, in supervisord's read order.
+    """The main config plus every drop-in, in supervisord's read order.
 
-    Only regular files: a glob is matched against whatever is on disk, so a directory named like
-    a drop-in (``supervisord.conf.d/archive.conf/``) is a match, and every caller here reads what
-    it is handed. Skipping it costs nothing -- supervisord cannot read it either.
+    Only regular files: a directory named like a drop-in (``supervisord.conf.d/archive.conf/``)
+    would otherwise be handed to a caller that reads it. supervisord cannot read it either.
     """
     files = [supervisord_conf] if supervisord_conf.is_file() else []
-    for pattern in _supervisord_include_globs(supervisord_conf):
-        files.extend(Path(path) for path in sorted(glob.glob(pattern)) if os.path.isfile(path))
+    dropin_dir = _supervisord_dropin_dir(supervisord_conf)
+    files.extend(path for path in sorted(dropin_dir.glob("*.conf")) if path.is_file())
     return files
-
-
-def _is_matched_by_glob(path: Path, pattern: str) -> bool:
-    """Whether ``glob.glob(pattern)`` would name ``path``, were ``path`` on disk.
-
-    Matched component by component rather than with one ``fnmatch`` over the whole
-    string: ``fnmatch``'s ``*`` happily matches ``/``, so it calls a pattern like
-    ``<dir>/*.conf`` a match for a file one directory deeper, which glob never
-    yields. Component-wise is exactly non-recursive glob's rule, which is how both
-    supervisord and ``_supervisord_conf_files`` expand these patterns.
-    """
-    path_parts = path.parts
-    pattern_parts = Path(pattern).parts
-    if len(path_parts) != len(pattern_parts):
-        return False
-    return all(
-        fnmatch.fnmatch(part, pattern_part)
-        for part, pattern_part in zip(path_parts, pattern_parts)
-    )
 
 
 def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
@@ -186,30 +150,17 @@ def _supervisord_program_path(supervisord_conf: Path, name: str) -> Path:
     One program per file, named after it, is what the teardown in
     ``references/cleanup.md`` deletes and what
     ``system/test_supervisord_layout.py`` pins.
-
-    Exits when the config's own ``[include]`` globs would not match that path.
-    supervisord reads only what those globs match, so a drop-in outside them is
-    dead config: the program never starts, and nothing fails -- which is worse
-    than refusing to write it.
     """
-    path = supervisord_conf.parent / f"{supervisord_conf.name}.d" / f"{name}.conf"
-    patterns = _supervisord_include_globs(supervisord_conf)
-    if not any(_is_matched_by_glob(path, pattern) for pattern in patterns):
-        sys.exit(
-            f"error: no [include] glob in {supervisord_conf} matches {path} "
-            f"(globs: {patterns or 'none declared'}), so supervisord would never "
-            "read the program written there"
-        )
-    return path
+    return _supervisord_dropin_dir(supervisord_conf) / f"{name}.conf"
 
 
 def _supervisord_conf_ports(supervisord_conf: Path) -> set[int]:
     # Every app registers its localhost backend via a forward_port.py call in
     # its [program:*] command, so scanning the config text for
     # http://localhost:<port> / http://127.0.0.1:<port> finds all in-use ports.
-    # Scans the main config AND every drop-in its [include] globs match, which
-    # is where every program lives -- missing the drop-ins would hand a new app
-    # a port another program already holds.
+    # Scans the main config AND every drop-in, which is where every program
+    # lives -- missing the drop-ins would hand a new app a port another program
+    # already holds.
     ports: set[int] = set()
     for path in _supervisord_conf_files(supervisord_conf):
         ports.update(
@@ -313,7 +264,6 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
-import os
 from pathlib import Path
 
 from flask import Flask, Response

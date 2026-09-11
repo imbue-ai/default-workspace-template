@@ -504,48 +504,22 @@ def test_parse_supervisord_ports_reads_the_real_template_config(
     assert [port.name for port in ports].count("system_interface") == 1
 
 
-def test_local_supervisord_configs_follow_a_here_relative_include_glob(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # supervisord resolves %(here)s to the ABSOLUTE directory of the config declaring it. Left
-    # relative, the substituted pattern gets joined back onto that same relative directory, so
-    # every drop-in is looked for one level deeper than it is and none is found -- and a scan
-    # that finds no drop-in calls every app's port free, which is how a collision reaches the
-    # far side of a migration instead of being caught before it.
-    (tmp_path / "system" / "programs.d").mkdir(parents=True)
-    (tmp_path / "system" / "supervisord.conf").write_text(
-        "[supervisord]\nnodaemon=true\n\n[include]\nfiles = %(here)s/programs.d/*.conf\n"
-    )
-    (tmp_path / "system" / "programs.d" / "todo.conf").write_text(
-        '[program:todo]\ncommand=bash -c "python3 system/scripts/forward_port.py '
-        '--name todo --url http://localhost:8099 && todo-app"\n'
-    )
-    monkeypatch.chdir(tmp_path)
+def _write_dropin_workspace(root: Path) -> Path:
+    """A workspace with two drop-ins, a directory named like one, and a decoy directory beside them.
 
-    ports = [
-        port
-        for conf in migrate_workspace._local_supervisord_configs(Path())
-        for port in migrate_workspace.parse_supervisord_ports(
-            conf.read_text(encoding="utf-8")
-        )
-    ]
-
-    assert [(port.name, port.port) for port in ports] == [("todo", 8099)]
-
-
-def _write_dropin_workspace(root: Path, include_section: str) -> Path:
-    """A workspace declaring the given ``[include]`` section, and three drop-ins to find or miss.
-
-    ``disabled.d`` is on disk but named by no live pattern, so a reader that widens too far -- one
-    that reads a commented-out pattern as a live one -- shows up as ``ghost`` in the listing.
+    ``archive.conf/`` is what the listing must skip (it lists regular files only), and
+    ``programs.d/`` holds a program no reader of this template is meant to find: the drop-in
+    directory is fixed, not read out of the config.
     """
-    for directory, program in (("a.d", "alpha"), ("b.d", "beta"), ("disabled.d", "ghost")):
-        (root / "system" / directory).mkdir(parents=True)
-        (root / "system" / directory / f"{program}.conf").write_text(
-            f"[program:{program}]\ncommand={program}-app\n"
-        )
+    dropins = root / "system" / "supervisord.conf.d"
+    dropins.mkdir(parents=True)
+    for program in ("alpha", "beta"):
+        (dropins / f"{program}.conf").write_text(f"[program:{program}]\ncommand={program}-app\n")
+    (dropins / "archive.conf").mkdir()
+    (root / "system" / "programs.d").mkdir()
+    (root / "system" / "programs.d" / "ghost.conf").write_text("[program:ghost]\ncommand=ghost-app\n")
     conf = root / "system" / "supervisord.conf"
-    conf.write_text("[supervisord]\nnodaemon=true\n\n" + include_section)
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n")
     return conf
 
 
@@ -553,8 +527,7 @@ def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
     """What the listing shell prints for that config, through a real shell instead of over SSH.
 
     Run from the filesystem root, which is neither the workspace nor the config's directory: the
-    login shell this really runs in is not ours to choose, and a pattern globbed against the
-    shell's own directory would otherwise pass by luck.
+    login shell this really runs in is not ours to choose.
     """
     command = migrate_workspace._supervisord_dropin_listing_command(str(supervisord_conf))
     listing = subprocess.run(
@@ -568,51 +541,30 @@ def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
     return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
 
-@pytest.mark.parametrize(
-    "include_section",
-    [
-        "[include]\nfiles = a.d/*.conf b.d/*.conf\n",
-        "[include]\nfiles: a.d/*.conf b.d/*.conf\n",
-        "[include]\nfiles = a.d/*.conf\n    b.d/*.conf\n",
-        "[include]\nfiles = a.d/*.conf\n    ; disabled.d/*.conf\n    b.d/*.conf\n",
-        "[include]\nfiles = %(here)s/a.d/*.conf %(here)s/b.d/*.conf\n",
-    ],
-    ids=["equals", "colon", "continuation", "commented-out-pattern", "here"],
-)
-def test_remote_dropin_listing_reads_the_include_setting_as_configparser_does(
-    tmp_path: Path, include_section: str
+@pytest.mark.parametrize("directory_name", ["workspace", "with space", "amp&and"])
+def test_remote_dropin_listing_names_every_regular_file_in_the_dropin_directory(
+    tmp_path: Path, directory_name: str
 ) -> None:
-    """The source's config is written by someone else, so every spelling supervisord takes counts.
+    """The listing is the source's ``system/supervisord.conf.d/*.conf`` and nothing else.
 
-    supervisord parses with configparser: ``files:`` is as good as ``files =``, an indented line
-    continues the value above it, and a comment is dropped before a value is ever assembled.
-    Missing a spelling loses whichever drop-ins its patterns named, and the loss is silent -- an
-    empty listing is also what a source with no drop-ins gives, so every real app's port is
-    reported free and a collision reaches the far side of the migration.
+    The source's path is interpolated into the shell, so one holding a space or an ``&`` has to
+    stay one path: splitting it costs the listing every drop-in at once, which is the same empty
+    answer a source with none gives, so every real app's port is reported free.
     """
-    conf = _write_dropin_workspace(tmp_path, include_section)
+    conf = _write_dropin_workspace(tmp_path / directory_name)
 
     assert _run_dropin_listing(conf) == [
-        str(tmp_path / "system/a.d/alpha.conf"),
-        str(tmp_path / "system/b.d/beta.conf"),
+        str(tmp_path / directory_name / "system/supervisord.conf.d/alpha.conf"),
+        str(tmp_path / directory_name / "system/supervisord.conf.d/beta.conf"),
     ]
 
 
-@pytest.mark.parametrize("directory_name", ["with space", "amp&and", "pipe|bar"])
-def test_remote_dropin_listing_survives_a_source_path_the_shell_would_read_as_syntax(
-    tmp_path: Path, directory_name: str
-) -> None:
-    """The source's path is interpolated into a glob and into a ``%(here)s`` substitution.
+def test_remote_dropin_listing_is_empty_for_a_source_predating_the_split(tmp_path: Path) -> None:
+    (tmp_path / "system").mkdir()
+    conf = tmp_path / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[program:todo]\ncommand=todo-app\n")
 
-    A space would split one pattern into several words, and a ``|`` or an ``&`` would be read as a
-    delimiter or a back-reference by a ``sed``-based substitution. Each costs the listing every
-    drop-in at once, which is the same empty answer a source with none gives.
-    """
-    conf = _write_dropin_workspace(
-        tmp_path / directory_name, "[include]\nfiles = %(here)s/a.d/*.conf\n"
-    )
-
-    assert _run_dropin_listing(conf) == [str(tmp_path / directory_name / "system/a.d/alpha.conf")]
+    assert _run_dropin_listing(conf) == []
 
 
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:

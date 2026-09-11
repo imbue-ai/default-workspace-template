@@ -10,7 +10,6 @@ that the band is actually applied and survives the exec.
 from __future__ import annotations
 
 import configparser
-import glob
 import os
 import subprocess
 import sys
@@ -39,20 +38,16 @@ def _command_by_supervisord_program() -> dict[str, str]:
 
     Programs live one per file under ``supervisord.conf.d/``, so the main config
     declares none of them. ``configparser`` does not follow supervisord's
-    ``[include]`` directive -- that is a supervisord feature, not a configparser
-    one -- so the globs are expanded here. Reading only the main config would
-    leave the band checks below asserting over nothing at all while appearing to
-    pass, which is exactly the silent gap they exist to close.
+    ``[include]``, so the drop-ins are read after it (``system/test_supervisord_layout.py``
+    pins that directory as the one the include glob names). Reading only the main
+    config would leave the band checks below asserting over nothing at all while
+    appearing to pass, which is exactly the silent gap they exist to close.
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)
-    conf_dir = _SUPERVISORD_CONF.parent
-    for pattern in (parser.get("include", "files", fallback="") or "").split():
-        # supervisord joins each pattern to the directory of the config
-        # declaring it, and expands %(here)s to that same directory;
-        # interpolation=None leaves that token verbatim, so substitute it.
-        expanded = str(conf_dir / pattern.replace("%(here)s", str(conf_dir)))
-        parser.read(sorted(glob.glob(expanded)))
+    parser.read(
+        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
+    )
     return {
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()
