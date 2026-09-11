@@ -118,11 +118,10 @@ the keep/revert judgment to you:
 
     /autofix Run fully unattended: never call AskUserQuestion. Review
     <REVIEW_BASE>..HEAD; the configured `base_branch` is already pinned to
-    that commit. Run the fix loop a single time, not 10 times. Leave every
-    fix commit applied, and
-    report the fix commits (hash + full message). Do not revert anything yourself
-    -- the caller will decide. Include this scope brief verbatim in the
-    description you pass to agents: {scope_brief}
+    that commit. Run the fix loop a single time, not 10 times. Leave every fix
+    commit applied, and report the fix commits (hash + full message). Do not
+    revert anything yourself -- the caller will decide. Include this scope
+    brief verbatim in the description you pass to agents: {scope_brief}
 
 Then review those fix commits against what this branch is meant to do. You hold
 the task context the fix subagents run without, so you are the right judge of
