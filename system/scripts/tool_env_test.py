@@ -16,10 +16,17 @@ import tool_env
 _TOOL_ENV_SH = Path(__file__).with_name("_tool_env.sh")
 
 
-def _run_shell(snippet: str, *, home: Path, tool_home: Path) -> str:
+def _run_shell(snippet: str, *, home: Path, tool_home: Path | None = None) -> str:
+    """Run ``snippet`` with ``_tool_env.sh`` sourced. ``tool_home=None`` leaves
+    ``TOOL_ENV_HOME`` unset, so the shell falls to its own default."""
+    env = {**os.environ, "HOME": str(home)}
+    if tool_home is None:
+        env.pop("TOOL_ENV_HOME", None)
+    else:
+        env["TOOL_ENV_HOME"] = str(tool_home)
     result = subprocess.run(
         ["bash", "-c", f'. "{_TOOL_ENV_SH}"\n{snippet}'],
-        env={**os.environ, "HOME": str(home), "TOOL_ENV_HOME": str(tool_home)},
+        env=env,
         capture_output=True,
         text=True,
         check=True,
@@ -66,12 +73,14 @@ def test_the_shell_pin_and_the_module_agree_on_where_tools_live(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The pin is shell and the sweep is Python, so they have to name the same directory;
-    otherwise the build installs into one place and cleans around another."""
-    monkeypatch.setenv("TOOL_ENV_HOME", "/somewhere")
+    otherwise the build installs into one place and cleans around another. Neither side is
+    overridden here, because what they hold separately -- and can therefore drift -- is the
+    default each falls back to when nothing sets TOOL_ENV_HOME, which is the production
+    case."""
+    monkeypatch.delenv("TOOL_ENV_HOME", raising=False)
     pinned = _run_shell(
         'tool_env_pin\nprintf "%s\\n" "$UV_TOOL_DIR"',
         home=Path("/home/user"),
-        tool_home=Path("/somewhere"),
     ).strip()
 
     assert pinned == str(tool_env.tools_dir(tool_env.tool_home()))
