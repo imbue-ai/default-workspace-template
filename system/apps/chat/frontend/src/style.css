@@ -275,6 +275,20 @@
 }
 .chat-flip-back {
   transform: rotateY(180deg);
+  /* The terminal brings its own dark surface, so it sits IN the pane rather than filling it:
+     a 4px gutter all round, which is also what keeps the face's own corners from having to
+     line up with the pane's. */
+  padding: 4px;
+}
+/* The ttyd frame fills that padded box and carries the corner. 8px is what the pane's own 12px
+   corner leaves once you step 4px inward, so the terminal reads as concentric with the pane
+   rather than pasted into it -- the same inset-and-shrink the menu rows use. An iframe clips
+   its own painting to its border-radius, so the terminal's background rounds with the frame. */
+.terminal-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius-lg);
 }
 
 /* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
