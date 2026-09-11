@@ -271,7 +271,10 @@
      as a hole with two pictures behind it. */
   background: var(--c-surface);
   border-radius: inherit;
-  overflow: hidden;
+  /* No `overflow: hidden` here, on purpose. Every child that needs clipping does its own --
+     the transcript scrolls inside its own scroller, the terminal frame carries its own corner
+     -- so a clip at the face's edge only ever caught what a child cast PAST that edge, which
+     is what trimmed the composer's shadow along the card's bottom. */
 }
 .chat-flip-back {
   transform: rotateY(180deg);
