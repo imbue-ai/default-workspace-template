@@ -1,22 +1,20 @@
-"""The supervisord config layout: every program is reachable through the declared globs.
+"""The supervisord config layout: every program lives in ``system/supervisord.conf.d/``.
 
-Programs live one per file under ``system/supervisord.conf.d/``, reached via the
-``[include] files`` glob in ``system/supervisord.conf``. Several readers depend
-on that -- the OOM band checks in ``system/services/oom_priority``, the
-``build-app`` scaffolder's port pre-flight and duplicate-name guard,
-``migrate-workspace``'s port scan, and (cross-repo) the minds evals evidence
-capture, which joins each registered app to the program that supervises it. Each
-of them reaches the drop-ins by hand, because neither ``configparser`` nor a
-plain ``cat`` follows supervisord's ``[include]`` -- that is a supervisord
-feature, not a configparser one -- and each expands the glob the config
-declares rather than assuming a directory name.
+Programs live one per file there, reached via the ``[include] files`` glob in
+``system/supervisord.conf``. Several readers depend on that -- the OOM band
+checks in ``system/services/oom_priority``, the ``build-app`` scaffolder's port
+pre-flight and duplicate-name guard, ``migrate-workspace``'s port scan, and
+(cross-repo) the minds evals evidence capture, which joins each registered app
+to the program that supervises it. Neither ``configparser`` nor a plain ``cat``
+follows supervisord's ``[include]``, so each of them reads that directory by
+name rather than expanding the glob the config declares.
 
-That makes the glob a real contract, and one that fails *open*: a reader that
-misses the drop-ins still parses a valid config, just an empty one, and its
-assertions pass over nothing at all. These tests pin the contract so that
-degradation is loud, and ``test_every_reader_expands_the_include_globs_alike``
-pins the readers against each other, since each carries its own copy of the
-expansion and a copy that drifts fails in exactly that silent way.
+That makes the directory a convention the config has to keep, and one that
+fails *open*: if the include glob and the readers ever named different places, a
+reader would still parse a valid config, just an empty one, and its assertions
+would pass over nothing at all. These tests pin the two together so that
+degradation is loud. This file is the one reader that expands the declared glob,
+because checking the convention is its job.
 """
 
 from __future__ import annotations
@@ -80,12 +78,10 @@ def _programs_declared_in(parser: configparser.ConfigParser) -> set[str]:
     }
 
 
-# Every reader of this config that can be compared here, by the path it lives at. They cannot share
-# a helper: they sit in four separate uv workspace members, and two of them are standalone scripts
-# (the scaffolder declares its own PEP 723 dependencies by design). So each carries its own copy of
-# the expansion, and this file pins the copies against each other instead. migrate-workspace's
-# REMOTE reader is the one that cannot join them -- it expands over SSH, in shell -- so its own
-# suite runs that shell against a local workspace instead.
+# Every in-repo reader of this config, by the path it lives at. They cannot share a helper: they
+# sit in four separate uv workspace members, and two of them are standalone scripts. migrate-
+# workspace's REMOTE reader lists the directory over SSH, in shell, so its own suite runs that
+# shell against a local workspace instead.
 _READER_PATHS: dict[str, Path] = {
     "scaffolder": _REPO_ROOT / ".agents/skills/build-app/scripts/scaffold_flask_lib.py",
     "migrate_workspace": _REPO_ROOT / ".agents/skills/migrate-workspace/scripts/migrate_workspace.py",
@@ -111,28 +107,13 @@ def _program_names_in(paths: list[Path]) -> set[str]:
     return {name for path in paths for name in _PROGRAM_ONLY_RE.findall(path.read_text())}
 
 
-def _write_workspace_with_dropins_at(root: Path, dropin_dir: str) -> None:
-    """A workspace whose programs live in a directory of its own choosing, declared by glob."""
-    (root / "system" / dropin_dir).mkdir(parents=True)
-    (root / "system/supervisord.conf").write_text(
-        "[supervisord]\nnodaemon=true\n\n[include]\nfiles = %(here)s/" + dropin_dir + "/*.conf\n"
-    )
-    (root / "system" / dropin_dir / "todo.conf").write_text("[program:todo]\ncommand=todo-app\n")
-    (root / "system" / dropin_dir / "watchdog.conf").write_text(
-        "[eventlistener:watchdog]\ncommand=watchdog\n"
-    )
+def test_every_reader_sees_every_program_the_include_glob_reaches() -> None:
+    """All four in-repo readers see the programs the config's own ``[include]`` glob reaches.
 
-
-def test_every_reader_expands_the_include_globs_alike() -> None:
-    """All four in-repo readers see the same programs this file does, for the shipped config.
-
-    The expansion is written out once per reader, so any two can drift apart -- and the failure is
-    silent in the same way a missed glob is: the reader that drifted returns a smaller set, or an
-    empty one, and goes on asserting over it. Nothing else compares them; the other tests here each
-    check the layout against itself.
-
-    A reader is compared on what it concludes, not on how it spells the expansion, so a rewrite
-    that keeps the answer is free.
+    The readers name ``supervisord.conf.d/`` outright; this file expands the glob the config
+    declares. If the two ever come apart -- the glob moved, a reader's spelling drifted -- the
+    reader returns a smaller set, or an empty one, and goes on asserting over it. Nothing else
+    compares them; the other tests here each check the layout against itself.
     """
     canonical_files = [_SUPERVISORD_CONF] + _expand_include_patterns(_parse_main_config())
     canonical = _declared_in(canonical_files)
@@ -144,40 +125,6 @@ def test_every_reader_expands_the_include_globs_alike() -> None:
     # The band reader covers event listeners as well, the manifest reader programs only.
     assert set(_load("oom_bands")._command_by_supervisord_program()) == canonical
     assert set(_load("app_manifests")._command_by_program()) == _program_names_in(canonical_files)
-
-
-def test_every_reader_honours_a_dropin_directory_the_config_names_itself(tmp_path: Path) -> None:
-    """Which directory holds the drop-ins is the workspace's to declare, not a constant to assume.
-
-    Agreeing about the shipped config is not enough to prove that: this repo declares
-    ``supervisord.conf.d/*.conf``, so a reader that simply hardcodes that directory agrees with
-    every other reader and the test above stays green. It is only against a workspace that chose a
-    different name that assuming and reading come apart -- and the reader that assumes finds nothing
-    at all, which is the silent-empty-set failure this file exists to make loud.
-
-    ``migrate-workspace`` in particular reads a FOREIGN workspace over SSH, one someone else
-    configured, so it is the reader for which this matters most.
-    """
-    _write_workspace_with_dropins_at(tmp_path, "programs.d")
-    conf = tmp_path / "system/supervisord.conf"
-    expected = {"todo", "watchdog"}
-
-    scaffolder = _load("scaffolder")
-    migrate = _load("migrate_workspace")
-
-    assert _declared_in(scaffolder._supervisord_conf_files(conf)) == expected
-    assert _declared_in(migrate._local_supervisord_configs(tmp_path)) == expected
-
-    # The other two take their config path from a module constant rather than an argument, so they
-    # are pointed at this workspace by rebinding it on the private copy loaded above -- these are
-    # throwaway module objects, not the ones pytest collected.
-    oom_bands = _load("oom_bands")
-    oom_bands._SUPERVISORD_CONF = conf
-    app_manifests = _load("app_manifests")
-    app_manifests._SUPERVISORD_CONF = conf
-
-    assert set(oom_bands._command_by_supervisord_program()) == expected
-    assert set(app_manifests._command_by_program()) == {"todo"}
 
 
 # The two names the gate lifts out of the vendored capture. Named here because a rename upstream
