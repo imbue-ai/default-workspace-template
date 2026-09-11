@@ -259,7 +259,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
     ? m("span", {
         class: `subagent-card-status-dot subagent-card-status-dot--running ${activityDotClass("h-[7px] w-[7px]")}`,
         "aria-label": "Sub-agent is working",
-        ...hoverTooltipAttrs("Working"),
+        ...hoverTooltipAttrs("Working", "above"),
       })
     : m(
         "svg",
@@ -270,7 +270,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
           viewBox: "0 0 16 16",
           fill: "none",
           "aria-label": "Sub-agent finished",
-          ...hoverTooltipAttrs("Finished"),
+          ...hoverTooltipAttrs("Finished", "above"),
         },
         // Same filled-circle-with-check mark used for a done step in the progress timeline.
         m.trust(

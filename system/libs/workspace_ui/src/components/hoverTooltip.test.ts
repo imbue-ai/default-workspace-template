@@ -49,6 +49,30 @@ describe("placeTooltip", () => {
   });
 });
 
+describe("placeTooltip above placement", () => {
+  it("centers the bubble over the trigger with a 6px gap", () => {
+    const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "above")).toEqual({ left: 370, top: 274 });
+  });
+
+  it("flips below the trigger when the bubble would overflow the top", () => {
+    const anchor = { left: 400, top: 10, bottom: 40, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "above")).toEqual({ left: 370, top: 46 });
+  });
+
+  it("stays above when flipping below would not fit either", () => {
+    // A trigger taller than the viewport: neither side has room, so the bubble keeps its
+    // natural place over the trigger and only the edge clamp applies.
+    const anchor = { left: 400, top: 5, bottom: 795, width: 40 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "above")).toEqual({ left: 370, top: 6 });
+  });
+
+  it("clamps to 6px from the right edge for a trigger against it", () => {
+    const anchor = { left: 980, top: 300, bottom: 320, width: 20 };
+    expect(placeTooltip(anchor, BUBBLE, VIEWPORT, "above").left).toBe(894);
+  });
+});
+
 describe("placeTooltip right placement", () => {
   it("sits beside the trigger with a 6px gap, vertically centered on it", () => {
     const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
