@@ -209,6 +209,32 @@ class _HelperResult(FrozenModel):
     snapshot_path: str = ""
 
 
+def _resolve_snapshot_read_path(
+    *, snapshot_root: Path, read_subpath: str | None
+) -> Path:
+    """The path restic should read inside a fresh snapshot; raises SnapshotError when it is absent.
+
+    Handing restic a path that is not there does not fail here -- it fails two
+    steps later, with "does not exist, skipping" and then "Fatal: all source
+    directories/files do not exist". That is a complaint about restic's
+    arguments and says nothing about the snapshot they were derived from, so
+    the snapshot's own entries are read here and reported instead.
+    """
+    read_path = snapshot_root if read_subpath is None else snapshot_root / read_subpath
+    if read_path.exists():
+        return read_path
+    try:
+        entries = sorted(entry.name for entry in snapshot_root.iterdir())
+    except OSError as e:
+        raise SnapshotError(
+            f"The outer helper reported a snapshot at {snapshot_root}, but it cannot be listed: {e}"
+        ) from e
+    raise SnapshotError(
+        f"Snapshot {snapshot_root} does not contain {read_subpath!r}, the subtree the backup reads. "
+        f"It contains: {', '.join(entries) if entries else '(nothing)'}"
+    )
+
+
 class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
     """Writes request.json, waits for the outer helper to produce result.json."""
 
@@ -233,9 +259,10 @@ class OuterTriggerSnapshotTaker(SnapshotTakerInterface):
         outer_snapshot_path = result.snapshot_path or str(
             self.capabilities.snapshot_current_path.parent / snapshot_name
         )
-        read_path = self.capabilities.snapshot_read_path.parent / snapshot_name
-        if self.capabilities.read_subpath is not None:
-            read_path = read_path / self.capabilities.read_subpath
+        read_path = _resolve_snapshot_read_path(
+            snapshot_root=self.capabilities.snapshot_read_path.parent / snapshot_name,
+            read_subpath=self.capabilities.read_subpath,
+        )
         return SnapshotResult(
             method=SnapshotMethod.OUTER_TRIGGER,
             snapshot_path=outer_snapshot_path,
