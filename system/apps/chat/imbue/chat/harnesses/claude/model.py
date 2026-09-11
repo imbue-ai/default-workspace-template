@@ -44,9 +44,10 @@ Each option's ``harness_reported_model_id`` is the suffix-free API id
 suffix reports it too (``claude-opus-5[1m]``), which reaches the same option through
 :func:`match_option`'s prefix pass rather than by an exact key hit. That prefix pass
 walks the options in catalog order and takes the first key the reported id starts with,
-so the hidden keys are chosen never to prefix one another -- ``claude-opus-4-5`` is not
-a prefix of ``claude-opus-4-6``, and the bare family keys (``claude-opus-4``) that WOULD
-swallow their dated siblings are deliberately absent.
+so the catalog is ORDERED such that no key precedes a longer key it prefixes: the offered
+``claude-fable-5-1`` comes before the hidden ``claude-fable-5``, ``claude-mythos-5-1``
+before ``claude-mythos-5``, and the bare family catch-alls (``claude-opus-4``) that would
+swallow their dated siblings come last. A test pins that no earlier key shadows a later one.
 
 Hidden options are not decoration: they make the catalog complete against what the
 harness can report, and each says what its model actually does. ``supports_fast`` follows
