@@ -246,7 +246,15 @@ export const FLYOUT_ROW_SUB = "type-helper text-faint";
  *  duly stopped at the inside edge of that reserve: a tick floating 56px short of the row's
  *  end, which is what it looked like. A flex tick reads the row's padding, so the padding has
  *  to be the truth about what else is in the row. */
-export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
+export const FLYOUT_CHECK =
+  "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent";
+/* Both ticks stand in the same 20x20 box the row's control buttons do, centred in it.
+ *
+ * A bare 13px glyph and a 13px glyph centred in a 20px button do not share a centre line even
+ * when their boxes end on the same pixel: the button's padding puts its glyph 3.5px further in.
+ * So the tick sat half a glyph-width off the star above it, which is exactly what a column of
+ * marks makes visible. Giving the tick the button's box is what puts every glyph in these
+ * lists -- tick, star, pencil, bin, in either flyout -- on one centre line. */
 /** The same tick on a row that also carries controls: pinned to the row's right edge as a
  *  SIBLING of the button, since buttons cannot nest.
  *
@@ -255,7 +263,8 @@ export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
  *  is the one thing there that can afford to go: what it says is still said by the row's own
  *  selected fill, and it comes straight back when the pointer leaves. */
 export const FLYOUT_CHECK_PINNED =
-  "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-accent group-hover/conn:hidden";
+  "pointer-events-none absolute right-3 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center " +
+  "justify-center text-accent group-hover/conn:hidden";
 export const FLYOUT_EMPTY = "type-helper text-faint px-3 py-2";
 export const FLYOUT_ADD = menuRowClass({ extra: "text-secondary" });
 
