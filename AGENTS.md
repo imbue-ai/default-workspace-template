@@ -266,26 +266,7 @@ When GitHub sync is not enabled, there is no auto-push and no GitHub remote to p
 
 If you get a failure in `test_no_type_errors` that seems spurious, try running `uv sync --all-packages` and then re-running the tests. If that doesn't work, the error is probably real, and should be fixed.
 
-If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), which refresh fixes it depends on *which* install you ran, because a standard workspace has two: `uv run mngr ...` resolves from the root venv, and a bare `mngr` on PATH is the uv-managed tool that `system/scripts/build_workspace.sh` installs at build time. For the venv one, run `uv sync --all-packages`. For the tool one, reinstall the base package and its plugins in a SINGLE command, which is what `system/scripts/build_workspace.sh` does:
-
-```bash
-(
-    . system/scripts/_tool_env.sh && tool_env_pin
-    plugin_paths="$(python3 system/scripts/list_mngr_plugins.py --tool mngr)"
-    test -n "$plugin_paths"
-    uv tool install -e system/vendor/mngr/libs/mngr --reinstall \
-        $(printf -- '--with-editable %s ' $plugin_paths)
-)
-```
-
-Every line of that snippet is load-bearing; each failure mode below ends in the same place, an mngr that cannot parse `[agent_types.*]`, which breaks `mngr create --template chat` and with it the app's whole update path.
-
-- **The pin.** uv's tool directories follow `$HOME`, which for an agent is `/home/user`, while the `mngr` you are fixing is on `PATH` under `/root/.local/bin`. Unpinned, the install reports success into a directory nothing runs from and leaves the broken copy untouched.
-- **The variable and `test -n`.** A command substitution inside an argument list contributes only its text, so `set -e` cannot see the lister fail there. An empty list installs the base package alone -- the broken state, produced by the command meant to repair it.
-- **The subshell.** Sourcing `_tool_env.sh` asserts `set -euo pipefail`; the parentheses keep that and the pin off the rest of your session.
-- **One command, not two.** Do NOT split it into an install plus `mngr plugin add`. Installing the base alone rebuilds the environment from it and drops every extra, so between the two the tool is broken -- and if the second never runs, it stays that way.
-
-The vendored tree is the whole mngr monorepo, so the installable package is its `libs/mngr`; installing the root fails with a setuptools flat-layout error. `system/config/mngr_plugins.toml` is the plugin list, and `uv tool list` shows what is installed. Then try running the command again.
+If you get a "ModuleNotFoundError" error for a 3rd-party dependency when running a command that is defined in this repo (like `mngr`), which refresh fixes it depends on *which* install you ran, because a standard workspace has two: `uv run mngr ...` resolves from the root venv, and a bare `mngr` on PATH is the uv-managed tool that `system/scripts/build_workspace.sh` installs at build time. For the venv one, run `uv sync --all-packages`. For the tool one, run `python3 system/scripts/install_mngr.py` -- the same program the build runs, which reinstalls it with the plugins `system/config/mngr_plugins.toml` assigns it, into the tool directory the `mngr` on your PATH actually comes from. Do not hand-roll the `uv tool install`: the ways that goes wrong (installing under the wrong `$HOME`, or with no plugins, leaving an mngr that cannot parse `[agent_types.*]`) are exactly what that program exists to prevent. `uv tool list` shows what is installed. Then try running the command again.
 
 If you get a failure when trying to commit the first time, just try committing again (the pre-commit hook returns a non-zero exit code when ruff reformats files).
 
