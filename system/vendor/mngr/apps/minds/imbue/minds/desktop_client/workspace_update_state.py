@@ -63,6 +63,21 @@ class UpdateDetection(FrozenModel):
     )
 
 
+def is_below_in_place_update_floor(workspace_ref: str | None) -> bool:
+    """Whether a workspace's own version predates everything an in-place update supports.
+
+    A fact about the workspace alone, not about this build, so it is answerable
+    without a ceiling -- and it gates every mutation that checks the running
+    release's template code out onto the workspace, not only the full update.
+    An unreadable version is never below the floor: refusing on a version nobody
+    could read would strand ordinary workspaces.
+    """
+    workspace_version = parse_minds_version(workspace_ref)
+    cutoff_version = parse_minds_version(OLDEST_IN_PLACE_UPDATABLE_VERSION)
+    assert cutoff_version is not None
+    return workspace_version is not None and workspace_version < cutoff_version
+
+
 def derive_update_detection(workspace_ref: str | None, ceiling_ref: str | None) -> UpdateDetection:
     """Classify one workspace against the in-place cutoff and the app's template ceiling.
 
@@ -74,9 +89,7 @@ def derive_update_detection(workspace_ref: str | None, ceiling_ref: str | None) 
     """
     workspace_version = parse_minds_version(workspace_ref)
     ceiling_version = parse_minds_version(ceiling_ref)
-    cutoff_version = parse_minds_version(OLDEST_IN_PLACE_UPDATABLE_VERSION)
-    assert cutoff_version is not None
-    if workspace_version is not None and workspace_version < cutoff_version:
+    if is_below_in_place_update_floor(workspace_ref):
         return UpdateDetection(availability=UpdateAvailability.NEEDS_RECREATION)
     if ceiling_version is None:
         return UpdateDetection(
@@ -473,12 +486,17 @@ class _CachedVersionRead(FrozenModel):
 
     version_ref: str = Field(description="The ``minds-v*`` tag that was read")
     read_at_monotonic: float = Field(description="``time.monotonic()`` when the read landed")
+    is_reread_due: bool = Field(
+        default=False,
+        description="Set once the machine has been unreadable since the read; the next readable sweep re-reads "
+        "whatever the interval says",
+    )
 
 
 class WorkspaceUpdateDetector(MutableModel):
     """Background sweep that keeps every workspace's detection slice current.
 
-    One pass per interval plus on-demand passes; an unreachable workspace falls back to its create-time label.
+    One pass per interval plus on-demand passes; a workspace never read this session falls back to its create-time label.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -630,27 +648,39 @@ class WorkspaceUpdateDetector(MutableModel):
     def _read_git_version(self, agent_id: AgentId, host_state: HostState | None) -> str | None:
         """The workspace's own ``minds-v*`` tag, from the cache or a fresh exec.
 
-        Only a successful read is cached: an empty read may be transient, and
-        caching it would pin a machine that just came up at "unknown" for a whole
-        interval. ``read_workspace_git_version`` would answer too, but runs a
-        further exec for the upgrade-merge history that detection has no use for.
+        A read this session outranks the create-time label for as long as the
+        machine is known: its version moves only when an update lands inside it,
+        which invalidates the cache, so neither a stretch of unreadability (a
+        stop, a start the app itself announced, a discovery gap) nor a read that
+        failed (an exec timeout under slow discovery) is evidence that the last
+        read is wrong. The label answers only for a machine never read at all.
+
+        A machine that was unreadable is re-read as soon as it is readable again,
+        whatever the cache's age. Only a successful read is cached: an empty read
+        may be transient, and caching it would pin a machine that just came up at
+        "unknown" for a whole interval. ``read_workspace_git_version`` would
+        answer too, but runs a further exec for the upgrade-merge history that
+        detection has no use for.
         """
         aid_str = str(agent_id)
-        if not is_workspace_readable(host_state):
-            # A read from when the machine was up says nothing about one that has since stopped.
-            with self._cache_lock:
-                self._cached_read_by_agent.pop(aid_str, None)
-            return None
         with self._cache_lock:
             cached = self._cached_read_by_agent.get(aid_str)
-            if cached is not None and time.monotonic() - cached.read_at_monotonic < self.interval_seconds:
+            if not is_workspace_readable(host_state):
+                if cached is not None:
+                    self._cached_read_by_agent[aid_str] = cached.model_copy_update(
+                        to_update(cached.field_ref().is_reread_due, True)
+                    )
+                return cached.version_ref if cached is not None else None
+            is_fresh = cached is not None and time.monotonic() - cached.read_at_monotonic < self.interval_seconds
+            if cached is not None and is_fresh and not cached.is_reread_due:
                 return cached.version_ref
         version = read_workspace_current_version(agent_id=agent_id, mngr_caller=self.mngr_caller)
-        if version is not None:
-            with self._cache_lock:
-                self._cached_read_by_agent[aid_str] = _CachedVersionRead(
-                    version_ref=version, read_at_monotonic=time.monotonic()
-                )
+        if version is None:
+            return cached.version_ref if cached is not None else None
+        with self._cache_lock:
+            self._cached_read_by_agent[aid_str] = _CachedVersionRead(
+                version_ref=version, read_at_monotonic=time.monotonic()
+            )
         return version
 
     def _is_stopping(self) -> bool:

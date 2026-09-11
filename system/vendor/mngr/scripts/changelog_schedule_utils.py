@@ -53,7 +53,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Final
 
-from imbue.mngr.utils.modal_cli import parse_modal_app_listings
+from imbue.mngr_modal.modal_cli import parse_modal_app_listings
 
 TRIGGER_NAME: Final[str] = "changelog-consolidation"
 MNGR_ROOT_NAME: Final[str] = "mngr-changelog-schedule"

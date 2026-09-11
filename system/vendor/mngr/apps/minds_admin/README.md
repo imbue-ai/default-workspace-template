@@ -17,6 +17,7 @@ All commands are env-aware: with an activated env (`eval "$(uv run minds-admin e
 - `minds-admin sweep {r2, lease-records}` -- on-demand connector sweeps (`lease-records --dry-run` is the audit view of pool-lease vs workspace-record drift).
 - `minds-admin relays {list, add, remove}` -- the sharing relay fleet inventory.
 - `minds-admin repair-keys` -- fleet sweep for the historical slice authorized_keys wipe.
+- `minds-admin repair-home-layout` -- probe (`--all-leased` for the whole pool), migrate, or roll back the home-tree layout of slice workspaces the slow path rebuilt on the legacy volume layout.
 
 Run any command with `--help` for details; the deployment runbooks live in `apps/minds/docs/deploy/` (private).
 
