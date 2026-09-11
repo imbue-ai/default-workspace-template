@@ -343,9 +343,8 @@ python3 system/scripts/layout.py close si-preview
 ```
 
 Do this on every one of those exits, not only the successful one. Once the
-preview is down and its tab is closed, finish the worker's lifecycle -- this
-flow merges through the apply rather than `update-creation` Step 4, so the
-destroy that step performs is yours here. After a `0`, destroy it:
+preview is down and its tab is closed, destroy the worker (this flow does not
+pass through `update-creation` Step 4, so the destroy is yours). After a `0`:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name update-$SLUG

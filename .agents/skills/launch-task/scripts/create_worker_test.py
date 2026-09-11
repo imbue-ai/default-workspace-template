@@ -62,8 +62,14 @@ class _RecordingRunner(create_worker_mod.Runner):
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
-        key = tuple(argv_list[:2])
-        canned = self._responses.get(key, _StubResult())
+        canned = next(
+            (
+                self._responses[prefix]
+                for prefix in sorted(self._responses, key=len, reverse=True)
+                if tuple(argv_list[: len(prefix)]) == prefix
+            ),
+            _StubResult(),
+        )
         if isinstance(canned, BaseException):
             raise canned
         return canned
@@ -90,9 +96,7 @@ def _agent_record(
     """One ``mngr list --format jsonl`` agent record, in mngr's own shape.
 
     Mirrors ``AgentDetails``: ``resource_type``/``name``/``state``, the optional
-    ``labels`` map ``launch`` writes ``lead_agent`` and ``runtime_dir`` into
-    (plus the ``archived_at`` a ``mngr stop --archive`` adds), and the
-    ``work_dir`` the report fallback resolves a lead's checkout by.
+    ``labels`` map, and ``work_dir``.
     """
     record: dict[str, object] = {
         "resource_type": "agent",
@@ -675,8 +679,9 @@ def test_repo_relative_task_path_resolves_against_the_real_git_toplevel(
     task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
     monkeypatch.chdir(tmp_path / "data" / ".tasks")
 
-    relative = create_worker_mod._repo_relative_task_path(
-        Path("launch-task/demo/task.md"), create_worker_mod.Runner()
+    relative = create_worker_mod._repo_relative_path(
+        Path("launch-task/demo/task.md"),
+        create_worker_mod._repo_toplevel(create_worker_mod.Runner()),
     )
 
     assert relative == "data/.tasks/launch-task/demo/task.md"
@@ -695,8 +700,8 @@ def test_repo_relative_task_path_falls_back_for_a_file_outside_the_repo(
     outside.write_text("---\nlead_agent: lead\n---\n\nbody\n")
     monkeypatch.chdir(repo)
 
-    relative = create_worker_mod._repo_relative_task_path(
-        outside, create_worker_mod.Runner()
+    relative = create_worker_mod._repo_relative_path(
+        outside, create_worker_mod._repo_toplevel(create_worker_mod.Runner())
     )
 
     assert relative == outside.as_posix()
@@ -1800,10 +1805,6 @@ def _write_launch_sync_task(task_file: Path, report_path: Path) -> None:
     )
 
 
-def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    return [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "destroy"]]
-
-
 def test_parse_report_extracts_type_name_and_body() -> None:
     result = create_worker_mod.parse_report(
         "---\ntype: status\nname: done\n---\n\nall finished\n"
@@ -1835,21 +1836,27 @@ def test_parse_report_tolerates_malformed_yaml() -> None:
 # --- teardown: destroy and stop ---------------------------------------------
 
 
+def _mngr_argvs(runner: _RecordingRunner, *subcommands: str) -> list[list[str]]:
+    """Every recorded ``mngr <subcommand>`` argv, in call order."""
+    wanted = [["mngr", sub] for sub in subcommands]
+    return [c.argv for c in runner.calls if c.argv[:2] in wanted]
+
+
+def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "destroy")
+
+
 def _stop_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    return [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "stop"]]
+    return _mngr_argvs(runner, "stop")
 
 
 def _rsync_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    return [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "rsync"]]
+    return _mngr_argvs(runner, "rsync")
 
 
 def _lifecycle_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    """The mngr calls that move or remove agents, in order: rsync, destroy, stop."""
-    return [
-        c.argv
-        for c in runner.calls
-        if c.argv[:2] in (["mngr", "rsync"], ["mngr", "destroy"], ["mngr", "stop"])
-    ]
+    """The mngr calls that move or remove agents, in order."""
+    return _mngr_argvs(runner, "rsync", "destroy", "stop")
 
 
 def _pull_argv(agent: str, own_runtime_dir: str | None) -> list[str]:
@@ -1918,8 +1925,7 @@ def test_dispatch_subtree_is_post_order_and_excludes_the_root() -> None:
         for r in create_worker_mod._dispatch_subtree(root, [*records, unrelated])
     ]
 
-    # Each agent comes after everything under it; the root itself is not listed,
-    # and sharing a name prefix without the lead chain does not make an agent kin.
+    # A shared name prefix without the lead chain does not make an agent kin.
     assert names == [grandchild, child, stuck]
 
 
@@ -1952,12 +1958,9 @@ def test_destroy_pulls_each_descendant_out_of_its_lead_then_destroys_deepest_fir
 
     assert rc == 0
     assert _lifecycle_argvs(runner) == [
-        # Each agent's own workers' runtime dirs are pulled out of its worktree
-        # (everything under data/.tasks/ but its own dir) right before it goes,
-        # deepest first: the grandchild, then the child that holds the
-        # grandchild's dir, then the stopped, archived sibling (part of the
-        # subtree too, not left behind), then the root, which holds the dirs of
-        # both children -- including any it had already destroyed itself.
+        # Deepest first, so each lead's worktree still exists when its workers'
+        # dirs are pulled; the stopped, archived sibling is part of the subtree
+        # too.
         _pull_argv(grandchild, f"data/.tasks/launch-task/{grandchild}"),
         ["mngr", "destroy", grandchild, "--force"],
         _pull_argv(child, f"data/.tasks/launch-task/{child}"),
@@ -2038,7 +2041,7 @@ def test_destroy_continues_past_a_failed_relocation(
         ["mngr", "destroy", root, "--force"],
     ]
     assert (
-        f"could not relocate the runtime dirs of the workers of {child}"
+        f"could not relocate the runtime dirs of {child}'s workers"
         in capsys.readouterr().err
     )
 
@@ -2047,7 +2050,7 @@ def test_destroy_skips_the_pull_for_an_agent_without_a_runtime_dir_label(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without the label the agent's own runtime dir cannot be excluded from
-    the pull (and its own report copy would land at the caller's report path),
+    the pull,
     so an agent launched by an older launcher is destroyed without one; the
     reason is named."""
     root = _unique("root")
@@ -2093,15 +2096,9 @@ def test_destroy_reports_a_failed_agent_and_still_destroys_the_rest(
     root = _unique("root")
     records, child, stuck, grandchild = _three_level_tree(root)
 
-    class _FailOnChild(_RecordingRunner):
-        def run(self, argv: Sequence[str], **kwargs):
-            result = super().run(argv, **kwargs)
-            if list(argv)[:3] == ["mngr", "destroy", child]:
-                return _StubResult(returncode=1)
-            return result
-
-    runner = _FailOnChild()
+    runner = _RecordingRunner()
     runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "destroy", child), _StubResult(returncode=1))
 
     rc = create_worker_mod.destroy(root, runner)
 
@@ -2157,6 +2154,66 @@ def test_destroy_with_no_listing_still_destroys_the_named_agent() -> None:
     assert _lifecycle_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
 
 
+def test_destroy_pulls_into_the_repo_root_from_a_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pull's destination is the repo's ``data/.tasks/``, not the cwd's,
+    so a destroy run from a subdirectory lands the runtime dirs where every
+    lead's own runtime dirs are."""
+    root = _unique("root")
+    monkeypatch.chdir(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path.parent))
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING", runtime_dir=f"data/.tasks/harden/{root}")
+        ),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [
+        [
+            "mngr",
+            "rsync",
+            f"{root}:data/.tasks/",
+            f"{tmp_path.parent}/data/.tasks/",
+            "--uncommitted-changes=clobber",
+            "--",
+            "--update",
+            f"--exclude=/harden/{root}",
+        ]
+    ]
+
+
+def test_a_timed_out_teardown_command_is_a_reported_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "destroy"), subprocess.TimeoutExpired(cmd=["mngr"], timeout=1)
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 1
+    assert f"create_worker: {root}: NOT destroyed" in capsys.readouterr().err
+    assert runner.calls[-1].kwargs["timeout"] > 0
+
+
+def test_stop_with_no_listing_still_stops_the_named_agent() -> None:
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.stop("demo-worker", runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "stop", "demo-worker", "--archive"]]
+
+
 def test_stop_archives_children_first_then_the_root() -> None:
     root = _unique("root")
     records, child, stuck, grandchild = _three_level_tree(root)
@@ -2194,15 +2251,9 @@ def test_stop_reports_a_failed_agent_and_still_stops_the_rest(
     root = _unique("root")
     records, child, stuck, grandchild = _three_level_tree(root)
 
-    class _FailOnGrandchild(_RecordingRunner):
-        def run(self, argv: Sequence[str], **kwargs):
-            result = super().run(argv, **kwargs)
-            if list(argv)[:3] == ["mngr", "stop", grandchild]:
-                return _StubResult(returncode=1)
-            return result
-
-    runner = _FailOnGrandchild()
+    runner = _RecordingRunner()
     runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "stop", grandchild), _StubResult(returncode=1))
 
     rc = create_worker_mod.stop(root, runner)
 
@@ -2224,6 +2275,9 @@ def test_main_destroy_and_stop_flags_reach_the_functions() -> None:
     runner = _RecordingRunner()
     assert create_worker_mod.main(["stop", "--name", "x"], runner=runner) == 0
     assert _stop_argvs(runner) == [["mngr", "stop", "x", "--archive"]]
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
+    assert create_worker_mod.main(["destroy", "--name", "x"], runner=runner) == 1
 
 
 # --- the stuck-worker edge case ----------------------------------------------
@@ -2283,7 +2337,17 @@ def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
         )
         assert _labels(create_argv)["runtime_dir"] == "data/.tasks/launch-task/demo"
         assert_mngr_argv_valid(create_argv)
-        # One repo-root lookup serves both the stamp and the label.
+        # The sync agrees with the label: the worker gets the dir at the same
+        # repo-relative path, pushed from the repo root rather than the cwd.
+        assert _rsync_argvs(runner) == [
+            [
+                "mngr",
+                "rsync",
+                f"{tmp_path}/data/.tasks/launch-task/demo/",
+                "demo-worker:data/.tasks/launch-task/demo/",
+                "--uncommitted-changes=clobber",
+            ]
+        ]
         assert [c.argv for c in runner.calls].count(
             ["git", "rev-parse", "--show-toplevel"]
         ) == 1
@@ -2318,7 +2382,8 @@ def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
     assert "task_file:" not in task.read_text()
     assert "lead_agent: lead" in task.read_text()
     err = capsys.readouterr().err
-    assert "already exists in state STOPPED (a worker of lead)" in err
+    assert "STOPPED" in err
+    assert "a worker of lead" in err
     assert "create_worker.py destroy --name demo-worker" in err
 
 
@@ -2360,9 +2425,9 @@ def test_a_create_that_leaves_a_record_behind_names_it(
     assert rc == 2
     err = capsys.readouterr().err
     assert "no worker was created" in err
-    assert "The failed create left an agent named 'demo-worker'" in err
-    assert "state STOPPED" in err
-    assert "destroy --name demo-worker` before relaunching" in err
+    assert "already exists" not in err
+    assert "STOPPED" in err
+    assert "create_worker.py destroy --name demo-worker" in err
 
 
 def test_an_unrelated_create_failure_gets_no_leftover_hint(

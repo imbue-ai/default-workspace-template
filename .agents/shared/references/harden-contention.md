@@ -134,9 +134,8 @@ tk close <old-ticket-id> "Superseded -- base moved under the pass; re-dispatched
 ```
 
 Deleting the branches is deliberate: the verification ran against a base
-that no longer exists, so nothing on the pass -- the worker's branch or any
-sibling sub-worker's -- is trustworthy to keep. A stopped, in-flight, or
-finished sub-worker of the old pass goes with it. Then dispatch a
+that no longer exists, so nothing on the pass or its sub-workers is worth
+keeping. Then dispatch a
 fresh pass through the normal flow (Steps 1-3 of the calling skill) whose
 scope covers **everything since the last hardened merge**: at minimum the
 `$BASE..HEAD` commits touching the creation, plus whatever any notes on the

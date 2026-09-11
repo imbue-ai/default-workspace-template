@@ -189,15 +189,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   was stopped on purpose by its lead after a failure; leave it. See
   `references/dead-worker-recovery.md` for the manual salvage fallback when
   restart isn't viable.
-- If `launch` fails because an agent of that name already exists, its
-  message names that agent's state and lead. A stopped failure keeps its
-  name until it is destroyed: run `create_worker.py destroy --name <name>`
-  if that worker is finished with (its branch survives), or pick another
-  name.
-- Never leave a process running for a worker you are done with: `done` and
-  `no-update-needed` end in `create_worker.py destroy`, `stuck` and a dead
-  worker in `create_worker.py stop`. Both take the worker's own sub-workers
-  with it.
+- If `launch` refuses a taken name, destroy that worker
+  (`create_worker.py destroy --name <name>`) if it is finished with, or pick
+  another name.
 - If the task references gitignored files outside the runtime dir,
   declare them with `source_artifacts_dir: <dir>` in the task
   frontmatter -- `create_worker.py launch` pushes that directory automatically.

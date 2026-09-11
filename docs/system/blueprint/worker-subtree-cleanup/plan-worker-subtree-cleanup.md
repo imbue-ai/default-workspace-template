@@ -55,7 +55,7 @@
 
 ### Launcher: `.agents/skills/launch-task/scripts/create_worker.py`
 
-- `_repo_relative_path(path, runner)`: generalize `_repo_relative_task_path` so `launch` can relativize the runtime dir the same way it relativizes the task file; `_repo_relative_task_path` becomes a call to it.
+- `_repo_toplevel(runner)` and `_repo_relative_path(path, toplevel)`: split `_repo_relative_task_path` so `launch` resolves the repo root once and relativizes the task file, the runtime dir label, and the runtime dir sync against it.
 - `launch`: append `--label runtime_dir=<_repo_relative_path(runtime_dir)>` to `create_argv` after the `lead_agent` label. On a `CalledProcessError` from `mngr create`, call `_agent_records` and `_record_named(records, name)`; when a record exists, extend the failure message with its `state`, its `lead_agent` label, and the `destroy --name` remedy.
 - New label helpers next to `_record_label`: `_RUNTIME_DIR_LABEL = "runtime_dir"`, `_LEAD_AGENT_LABEL = "lead_agent"` (replace the string literals already used in `_worker_is_idle` and `_deliver_report_through_listing`).
 - `_dispatch_subtree(root_name, records) -> tuple[Mapping, ...]`: every record whose `lead_agent` chain reaches `root_name`, in post-order (children before their lead), excluding the root. Cycle-safe (a visited set) and tolerant of records with no name. One `mngr list` feeds it.
@@ -67,7 +67,7 @@
 - `launch_sync`: `destroy(name, runner)` now returns an exit code; a non-zero destroy is reported in the result JSON as `"destroy_failed": true` and the command exits non-zero after emitting the JSON, so a service sees both the report and the leftover.
 - `_run_destroy`, new `_run_stop`, `build_parser`: `destroy` gains `--no-recursive` and `--delete-branches`; new `stop` subparser with `--name` (required) and `--no-recursive`; `main` dispatches `stop`.
 - Module docstring: the subcommand list gains `stop`, the `destroy` paragraph describes recursion, relocation, `--delete-branches`, and the outcome lines; the "Launch lifecycle commands" block gains the `runtime_dir` label; a new "Teardown commands" block lists the `mngr rsync` pull, `mngr destroy ... --force [-b]`, and `mngr stop ... --archive` argv shapes.
-- Adjacent fix while in the file: the idle-exit message at the end of `await_report` points at `data/worktrees/<name>-*/`; worktrees live under the template's `worktree_base_folder` (`/home/user/worktrees/`), and the record's `work_dir` from `mngr list` is the exact path. Say that instead.
+- The idle-exit message at the end of `await_report` names the record's `work_dir` from `mngr list` as where the worker's worktree is.
 
 ### Prose
 
@@ -95,7 +95,7 @@
   - stuck-worker edge case: a STOPPED child carrying `archived_at` does not hold its parent busy in `_worker_is_idle`; a STOPPED sibling inside a subtree is relocated and destroyed by a recursive destroy of its lead.
   - launch_sync destroys recursively and reports `destroy_failed` on a non-zero destroy; `--keep-agent` runs neither stop nor destroy.
   - every new argv (`destroy` with flags, `stop`, the rsync pull) goes through `assert_mngr_argv_valid`.
-- `.agents/skills/launch-task/scripts/dispatch_contract_test.py`: the prose-invocation sweep must reach `lead-proxy.md`, `harden-contention.md`, `worker-failure.md`, `dead-worker-recovery.md`, and `harden-creation.md` so every `create_worker.py stop|destroy ...` line in prose parses with the real parser; extend `_all_prose_launcher_invocations` to those shared references if it only scans dispatcher `SKILL.md` files today.
+- `.agents/skills/launch-task/scripts/dispatch_contract_test.py`: the prose-invocation sweep already reaches `.agents/shared`; it must also reach fenced blocks indented inside list items, where the new `stop`/`destroy` lines sit, so every one parses with the real parser.
 - `.agents/shared/scripts/test_skill_mngr_references.py`: unchanged; it keeps checking that any raw `mngr` subcommand in prose exists.
 - `.agents/skills/update-self/scripts/launcher_contract_test.py`: unchanged, and update-self prose stays on the floor interface (no new flags reach it).
 - `.agents/skills/launch-task/scripts/test_nested_dispatch_live.py` (release, tmux): Step 5 of the outer body runs `create_worker.py destroy --name <inner>` after the merge; the top-level body destroys the outer after merging it. Assertions: the inner is absent from `mngr list` and has a preserved transcript under the isolated host dir; after the top-level destroy, the inner's runtime dir (task file and the consumed `done` report) exists in the top-level agent's work dir at `data/.tasks/launch-task/<inner>/`; the outer's branch still carries both markers; teardown's best-effort destroys stay for the failure case.
@@ -119,5 +119,3 @@
 - **Milestone subcommand overlap.** `/tmp/milestone-report-subcommand.md` keeps a worker's own `report.md` in its tree "for a later capture". With destroy-after-merge that copy is gone with the worktree, and the lead's `consumed/` archive is the record. Whichever change lands second should drop that sentence; nothing else overlaps.
 - **Crystallize deletes its own runtime dir on `done`.** The post-crystallize migration removes `data/.tasks/harden/crystallize-<name>/`, which is where the eval reads that worker's reports. Pre-existing, and not touched here, but it means a crystallize pass's top-level reports can vanish before capture while its siblings' relocated dirs survive.
 - **Branch deletion ordering inside mngr.** `mngr destroy -b` deletes the branch after its post-destroy GC removes the worktree; the live test should confirm that a subtree destroy with `--delete-branches` leaves no `mngr/*` branches behind, since a GC that skips a worktree would make the branch delete fail with a warning rather than an error.
-- **Contract test reach.** Resolved during implementation: the sweep already covered `.agents/shared`, and the cross-version flows' floor-interface invocations still parse (no new flag is required). What it did not reach was a fenced block indented inside a list item, which is where the new `stop`/`destroy` lines sit; the scanner now accepts indented fences and dedents their content.
-- **Live proof pending.** The nested release test skips on a machine whose installed claude differs from the version `.mngr/settings.toml` pins, so phase 3 has to run in a workspace.

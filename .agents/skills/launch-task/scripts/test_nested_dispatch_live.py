@@ -514,28 +514,31 @@ Then report `done` (see below), with a body naming your branch
 {_reporting_section(outer_name)}"""
 
 
+def _rewrite_one_line(settings: Path, prefix: str, replacement: str) -> None:
+    """Replace the one line of ``settings`` starting with ``prefix``.
+
+    Rewritten in place rather than appended, because a second key of the same
+    name is a TOML duplicate-key error -- and asserted, so a rename upstream
+    fails here loudly instead of silently leaving the committed value in use.
+    """
+    lines = settings.read_text(encoding="utf-8").splitlines(keepends=True)
+    matches = [i for i, line in enumerate(lines) if line.startswith(prefix)]
+    assert len(matches) == 1, (
+        f"expected exactly one line starting with {prefix!r} in {settings}, "
+        f"found {len(matches)}"
+    )
+    lines[matches[0]] = replacement
+    settings.write_text("".join(lines), encoding="utf-8")
+
+
 def _pin_claude_to_the_installed_version(settings: Path, installed: str) -> None:
     """Point the clone's ``[agent_types.claude] version`` at the claude on this machine.
 
-    The committed pin is enforced at provisioning time -- mngr refuses to start a
-    claude agent whose installed binary diverges from it -- and it exists so a
-    workspace's workers run the build the workspace was set up with. This test wants
-    the opposite: to run wherever *a* claude can run, on a laptop whose build has
-    drifted as much as in a workspace on the pin. So the clone's pin follows the
-    installed version. Rewritten in place, like the worktree root, and asserted through
-    a real TOML parse so a moved or renamed key fails here rather than as a refused
-    ``mngr create``.
+    mngr refuses a claude that differs from the committed pin, so the clone's pin
+    follows the installed build. Verified by a TOML parse so a moved key fails here
+    rather than as a refused ``mngr create``.
     """
-    lines = settings.read_text(encoding="utf-8").splitlines(keepends=True)
-    replaced = 0
-    for index, line in enumerate(lines):
-        if line.startswith("version = "):
-            lines[index] = f'version = "{installed}"\n'
-            replaced += 1
-    assert replaced == 1, (
-        f"expected exactly one `version = ...` line in {settings}, found {replaced}"
-    )
-    settings.write_text("".join(lines), encoding="utf-8")
+    _rewrite_one_line(settings, "version = ", f'version = "{installed}"\n')
     pinned = tomllib.loads(settings.read_text(encoding="utf-8"))["agent_types"][
         "claude"
     ]["version"]
@@ -557,9 +560,7 @@ _MACOS_PROVISION_SYNC = (
 def _make_provisioning_resolvable_here(settings: Path) -> None:
     """On macOS, rewrite the worker template's provisioning sync so it resolves.
 
-    Linux (every workspace) keeps the committed command. Asserted like the other
-    rewrites, so a changed provisioning line fails here rather than as a refused
-    ``mngr create``.
+    Linux (every workspace) keeps the committed command.
     """
     if sys.platform != "darwin":
         return
@@ -579,21 +580,11 @@ def _isolate_worktree_base(settings: Path, worktree_base: Path) -> None:
 
     The committed value is the workspace's own shared worktree root, which every real
     worker on the host uses; a test that borrowed it would drop two agents' worktrees in
-    among the user's. Rewritten in place rather than prepended, because a second
-    top-level key of the same name is a TOML duplicate-key error -- and asserted, so a
-    rename upstream fails here loudly instead of silently leaving the shared root in use.
+    among the user's.
     """
-    lines = settings.read_text(encoding="utf-8").splitlines(keepends=True)
-    replaced = 0
-    for index, line in enumerate(lines):
-        if line.startswith("worktree_base_folder"):
-            lines[index] = f'worktree_base_folder = "{worktree_base}"\n'
-            replaced += 1
-    assert replaced == 1, (
-        f"expected exactly one top-level `worktree_base_folder` in {settings}, "
-        f"found {replaced}"
+    _rewrite_one_line(
+        settings, "worktree_base_folder", f'worktree_base_folder = "{worktree_base}"\n'
     )
-    settings.write_text("".join(lines), encoding="utf-8")
 
 
 def _clone_repo_at_head(
@@ -606,10 +597,8 @@ def _clone_repo_at_head(
     they must not run in the checkout the suite is running from. A local clone hardlinks
     the object store, so this costs a couple of seconds and no meaningful disk.
 
-    The clone's project config is edited and committed (``launch`` refuses a dirty
-    tree): the pytest opt-in mngr demands of every config it loads, the worktree root
-    the two workers will be given, the claude version pin (which follows the claude
-    installed here), and on macOS the worker template's provisioning sync.
+    The clone's project config is edited (the helpers above say how) and committed,
+    since ``launch`` refuses a dirty tree.
     """
     branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], _REPO_ROOT).strip()
     clone = work_repo_parent / f"nested-dispatch-repo-{suffix}"
@@ -847,6 +836,9 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
             f"{inner_runtime_dir} exists before the outer's destroy; the relocation "
             "assertion below would be vacuous"
         )
+        # A bare Runner is right here only because the monkeypatched MNGR_HOST_DIR
+        # and chdir(clone) above are still in effect; moving this call out from
+        # under them would hit the real host dir.
         destroy_rc = create_worker_mod.destroy(outer_name, create_worker_mod.Runner())
         assert destroy_rc == 0, f"destroying {outer_name} exited {destroy_rc}"
         assert _record_named(_agent_records(env, clone), outer_name) is None, (
