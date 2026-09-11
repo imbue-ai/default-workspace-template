@@ -41,6 +41,7 @@ members = [
     "keyfoundry-mockdeck",
     "mngr-cli-contract",
     "oom-priority",
+    "passkey-home-pitch",
     "quick-view-projects",
     "resource-monitor",
     "share-gateway",
@@ -2320,6 +2321,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1f/e7/81fdcbc7f190cdb058cffc9431587eb289833bdd633e2002455ca9bb13d4/paramiko-4.0.0.tar.gz", hash = "sha256:6a25f07b380cc9c9a88d2b920ad37167ac4667f8d9886ccebd8f90f654b5d69f", size = 1630743, upload-time = "2025-08-04T01:02:03.711Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/90/a744336f5af32c433bd09af7854599682a383b37cfd78f7de263de6ad6cb/paramiko-4.0.0-py3-none-any.whl", hash = "sha256:0e20e00ac666503bf0b4eda3b6d833465a2b7aff2e2b3d79a8bba5ef144ee3b9", size = 223932, upload-time = "2025-08-04T01:02:02.029Z" },
+]
+
+[[package]]
+name = "passkey-home-pitch"
+version = "0.1.0"
+source = { editable = "system/apps/passkey_home_pitch" }
+dependencies = [
+    { name = "flask" },
+    { name = "flask-sock" },
+    { name = "werkzeug" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "flask", specifier = ">=3.0" },
+    { name = "flask-sock", specifier = ">=0.7" },
+    { name = "werkzeug", specifier = ">=3.0" },
 ]
 
 [[package]]
