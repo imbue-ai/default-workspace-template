@@ -465,7 +465,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       [
         m("span", { class: css.ROW_LABEL }, opts.label),
         m("span", { class: css.ROW_VALUE }, [
-          m("span", { class: css.ROW_TEXT }, opts.value),
+          // The model row's value is a model name, so it truncates from the front like the list's
+          // rows do; the provider's is a word, and truncates the ordinary way.
+          opts.which === "model"
+            ? m("span", { class: css.MODEL_NAME }, m("bdi", opts.value))
+            : m("span", { class: css.ROW_TEXT }, opts.value),
           opts.sub !== undefined ? m("span", { class: css.ROW_SUBTEXT }, `(${opts.sub})`) : null,
           // No chevron when there is nothing to drill into. A disclosure arrow on a row that
           // opens nothing is a promise the card cannot keep.
@@ -608,7 +612,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             {
               type: "button",
               role: "switch",
-              class: `${css.switchClass("md")} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
+              class: `${css.switchClass("sm")} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
               "aria-label": "Fast Mode",
               "aria-checked": opts.on ? "true" : "false",
               disabled: !opts.interactive,
@@ -618,9 +622,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             },
             m(
               "span",
-              { class: css.switchKnobClass("md", opts.on) },
+              { class: css.switchKnobClass("sm", opts.on) },
               opts.on
-                ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
+                ? m(
+                    "span",
+                    { class: css.SWITCH_CHECK },
+                    m.trust(icon("check", { size: css.switchCheckSize("sm"), strokeWidth: 3.5 })),
+                  )
                 : null,
             ),
           ),
@@ -890,7 +898,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                     },
                   },
                   [
-                    m("span", { class: css.FLYOUT_ROW_NAME }, option.label),
+                    m("span", { class: css.MODEL_NAME }, m("bdi", option.label)),
                     isCurrent
                       ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
                       : null,

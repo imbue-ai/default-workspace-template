@@ -137,13 +137,17 @@ export const SLIDER =
  *  is the only way to get one, so the two can no longer disagree.
  *
  *  Each row is arithmetic, not taste: the knob is the track's height less 2px of inset top and
- *  bottom, and the on-position is `width - inset - knob`, which leaves the knob the same 2px
- *  from either end. `md` is the combo card's fast-mode row; `sm` is the composer's under-bar,
- *  where the switch sits beside a line of helper text and has to read as its equal, not as the
- *  loudest thing down there. */
+ *  bottom, the on-position is `width - inset - knob`, which leaves the knob the same 2px from
+ *  either end, and the tick is the fraction of the knob that leaves it a rim.
+ *
+ *  Both switches in the chat are `sm` today -- the composer's under-bar one, which sits beside
+ *  a line of helper text and has to read as its equal, and the card's fast-mode row, which sits
+ *  in a column of values and should not be the loudest thing in it. `md` is the full-size step,
+ *  which nothing asks for at the moment; it stays because a size that is not in this table is a
+ *  size that can disagree with itself, which is the whole reason the table exists. */
 const SWITCH_SIZES = {
-  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]" },
-  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]" },
+  md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]", check: 12 },
+  sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]", check: 8 },
 } as const;
 
 export type SwitchSize = keyof typeof SWITCH_SIZES;
@@ -164,6 +168,14 @@ export function switchKnobClass(size: SwitchSize, on: boolean): string {
     `inline-flex ${chosen.knob} items-center justify-center rounded-full bg-surface shadow-raised ` +
     `transition-transform ${on ? chosen.on : SWITCH_KNOB_OFF}`
   );
+}
+
+/** The tick inside the knob, at the size that knob can hold: 12px in a 20px knob, 8px in a
+ *  12px one, which is the same rim either way. Asked for by name with the track and the throw,
+ *  for the same reason they are -- a tick sized by hand would be the one part of a switch free
+ *  to disagree with the size it is drawn in. */
+export function switchCheckSize(size: SwitchSize): number {
+  return SWITCH_SIZES[size].check;
 }
 
 export const SWITCH_ON = "bg-accent";
@@ -207,6 +219,17 @@ export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_SHAPE} bg-fill-active text-prim
 export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const ACCOUNT_ROW_SELECTED = `${ACCOUNT_ROW_BASE} bg-fill-active text-primary cursor-pointer`;
 export const FLYOUT_ROW_NAME = "truncate";
+/** A MODEL name, truncated from the FRONT. `openrouter/qwen/qwen-2.5-72b-instruct` is a path
+ *  whose head repeats down the whole list and whose tail is the only part that tells one row
+ *  from another, so dropping the head is the only truncation that leaves anything to read by.
+ *
+ *  `direction: rtl` is what moves the ellipsis: it puts the line's END at the LEFT, which is
+ *  the side the box overflows, and a name too long to fit hangs its beginning off there. The
+ *  name goes in a `<bdi>` so it stays one isolated left-to-right run -- without the isolation a
+ *  name ending in a neutral character, `Sonnet 4.5 (thinking)` say, would have its bracket
+ *  reordered to the far left. `text-align: left` is for names that DO fit, which an rtl box
+ *  would otherwise push against its right edge. */
+export const MODEL_NAME = "truncate text-left [direction:rtl]";
 export const FLYOUT_ROW_SUB = "type-helper text-faint";
 /** The MODEL row's tick: the last thing in the row, pushed out by `ml-auto` and so landing on
  *  the row's own `px-2` padding edge -- which is where the account rows' pinned tick sits too,
