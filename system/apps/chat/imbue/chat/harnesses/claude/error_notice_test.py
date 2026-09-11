@@ -122,6 +122,44 @@ def test_the_credential_family_keeps_its_own_surface(claude_kind: str, text: str
     assert notice.api_error_kind is None
 
 
+@pytest.mark.parametrize(
+    ("record", "text"),
+    [
+        pytest.param(
+            _stamped(error="invalid_request"),
+            "Invalid API key · Fix external API key",
+            id="prose-rescues-an-invalid-request-stamp",
+        ),
+        pytest.param(
+            _stamped(error="invalid_request"),
+            "Authentication error · The gateway could not authenticate with its upstream provider"
+            " — contact your gateway administrator",
+            id="prose-rescues-the-gateway-rejection",
+        ),
+        pytest.param(
+            _stamped(error="authentication_failed", apiErrorStatus=403),
+            "OAuth token revoked · Please run /login",
+            id="stamp-outranks-the-status",
+        ),
+    ],
+)
+def test_neither_half_of_the_auth_precedence_can_be_dropped(record: dict[str, Any], text: str) -> None:
+    """The auth question is settled by the stamp OR the prose, in that order, and each arm
+    carries records the other misses.
+
+    The first two are credential dead ends Claude Code files under `invalid_request`, a bucket
+    that is mostly not credentials at all (request-too-large, tool-use concurrency) -- so the
+    stamp cannot veto the prose without stranding them on the API-error surface with no way
+    forward. The third is the converse: its wording is invisible to the auth vocabulary, and it
+    carries a 403, which `kind_for_status` names `permission` -- so consulting the status before
+    the stamp would relabel a revoked token as an ordinary failure and drop the sign-in button.
+    """
+    notice = classify_error_notice(record, text)
+    assert notice.is_auth_error is True
+    assert notice.is_api_error is False
+    assert notice.api_error_kind is None
+
+
 def test_an_unstamped_notice_falls_back_to_its_prose() -> None:
     """A record from a Claude Code build that predates the stamp still classifies."""
     notice = classify_error_notice({"type": "assistant"}, "API Error: 529 Overloaded")
