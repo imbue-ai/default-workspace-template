@@ -98,19 +98,21 @@ def classify_api_error(text: str) -> str | None:
     return None
 
 
-def kind_for_status(status: object) -> str | None:
+def kind_for_status(status: int | None) -> str | None:
     """Return a normalized API-error kind for an HTTP status a harness recorded as a FIELD,
     or ``None`` when the status is absent or not one we name.
 
     The counterpart to :func:`classify_api_error` for a harness that states the status
     instead of wording it: a stated status is the same fact without the prose in between,
-    and a failure whose wording never mentions a status still has one.
+    and a failure whose wording never mentions a status still has one. Each harness narrows
+    its own transcript's value to an ``int`` before calling; this is shared code and should
+    not widen for one caller's convenience.
 
     Unlike that function it does NOT screen the auth family, having no text to screen it
     with, so the caller must settle the auth question first: ``403`` is named here as
     ``permission`` and claimed by the auth vocabulary too.
     """
-    if not isinstance(status, int):
+    if status is None:
         return None
     return _STATUS_KINDS.get(str(status))
 
