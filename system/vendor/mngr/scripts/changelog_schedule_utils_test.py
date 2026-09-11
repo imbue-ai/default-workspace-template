@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from imbue.mngr.errors import ModalCliOutputError
+from imbue.mngr_modal.errors import ModalCliOutputError
 from scripts.changelog_schedule_utils import MNGR_ROOT_NAME
 from scripts.changelog_schedule_utils import ModalCommandError
 from scripts.changelog_schedule_utils import ModalSchemaError
