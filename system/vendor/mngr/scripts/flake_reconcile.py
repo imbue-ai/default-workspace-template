@@ -184,11 +184,25 @@ class CheckRunRecord(FrozenModel):
     parsed: ParsedCheckRun = Field(description="Structured content of the summary")
 
 
+class FailureMode(FrozenModel):
+    """One distinct failure first-line seen for a test, plus the branches it appeared on.
+
+    A single test can fail for unrelated reasons -- a timeout on `main` and a
+    broken feature branch's own error, say -- and those are separate clusters for
+    separate fixers. Branch evidence therefore hangs off the failure mode, not the
+    test: the test-level union would present a mode only ever seen on one unmerged
+    branch as a live problem on `main`.
+    """
+
+    first_line: str = Field(description="First line of the failure message (unescaped)")
+    branches: tuple[str, ...] = Field(description="Distinct branches this failure line was seen on")
+
+
 class FlakyTest(FrozenModel):
     """A test that flaked in CI over the window, with the failures seen for it.
 
-    No root cause is assigned -- `sample_failure_lines` is raw material for the
-    calling agent to cluster by understanding.
+    No root cause is assigned -- `failure_modes` is raw material for the calling
+    agent to cluster by understanding.
     """
 
     test: str = Field(description="The junit test id (path::name)")
@@ -199,10 +213,12 @@ class FlakyTest(FrozenModel):
     branches: tuple[str, ...] = Field(description="Distinct branches it flaked on")
     first_seen: str = Field(description="Earliest observation timestamp in the window")
     last_seen: str = Field(description="Latest observation timestamp in the window")
-    sample_failure_lines: tuple[str, ...] = Field(description="Distinct failure first-lines seen for this test")
+    failure_modes: tuple[FailureMode, ...] = Field(
+        description="Distinct failure first-lines seen for this test, each with the branches it appeared on"
+    )
 
 
-_MAX_SAMPLE_FAILURE_LINES: Final[int] = 8
+_MAX_FAILURE_MODES: Final[int] = 8
 
 
 @pure
@@ -225,7 +241,7 @@ def aggregate_flaky_tests(records: Sequence[CheckRunRecord]) -> tuple[FlakyTest,
     suites_by_test: dict[str, set[str]] = defaultdict(set)
     branches_by_test: dict[str, set[str]] = defaultdict(set)
     timestamps_by_test: dict[str, set[str]] = defaultdict(set)
-    failure_lines_by_test: dict[str, list[str]] = defaultdict(list)
+    branches_by_failure_line: dict[str, dict[str, set[str]]] = defaultdict(dict)
 
     for record in records:
         representative_line_by_test = _earliest_failure_line_by_test(record.parsed.failure_lines)
@@ -242,14 +258,18 @@ def aggregate_flaky_tests(records: Sequence[CheckRunRecord]) -> tuple[FlakyTest,
             timestamps_by_test[row.test].add(record.occurred_at)
             representative_line = representative_line_by_test.get(row.test)
             if representative_line is not None:
-                failure_lines_by_test[row.test].append(representative_line)
+                branches_by_failure_line[row.test].setdefault(representative_line, set()).add(record.branch)
 
     # A test qualifies as a flake only if it recovered on at least one commit; this
     # deliberately drops pure hard failures (ruff/type/docs gates) that never flake.
     flaky_tests: list[FlakyTest] = []
     for test in flake_commits_by_test:
         sorted_timestamps = sorted(timestamps_by_test[test])
-        distinct_failure_lines = tuple(dict.fromkeys(failure_lines_by_test.get(test, [])))[:_MAX_SAMPLE_FAILURE_LINES]
+        # Modes keep first-seen order, so the cap drops the least-established ones.
+        failure_modes = tuple(
+            FailureMode(first_line=first_line, branches=tuple(sorted(branches)))
+            for first_line, branches in list(branches_by_failure_line.get(test, {}).items())[:_MAX_FAILURE_MODES]
+        )
         flaky_tests.append(
             FlakyTest(
                 test=test,
@@ -260,7 +280,7 @@ def aggregate_flaky_tests(records: Sequence[CheckRunRecord]) -> tuple[FlakyTest,
                 branches=tuple(sorted(branches_by_test[test])),
                 first_seen=sorted_timestamps[0],
                 last_seen=sorted_timestamps[-1],
-                sample_failure_lines=distinct_failure_lines,
+                failure_modes=failure_modes,
             )
         )
     return tuple(sorted(flaky_tests, key=lambda flaky_test: (-flaky_test.flake_commit_count, flaky_test.test)))

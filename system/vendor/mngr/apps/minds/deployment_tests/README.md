@@ -30,7 +30,7 @@ Both marks are excluded from the standard `test-offload` jobs and from `just tes
 
 ## Remote-workspace (pool) tests
 
-`test_pool_lease.py`, `test_pool_fast_path_create.py`, and `test_workspace_stop_start.py` lease real pre-baked bare-metal slices. In CI (the opt-in release dispatch) the `build-minds-ci-env` job pre-bakes slices onto the standing CI boxes before the tests run -- see [`specs/remote-workspaces-in-ci.md`](../../../specs/remote-workspaces-in-ci.md). An empty pool **fails** these tests by default (a broken bake stage must not turn the suite green); `MINDS_ALLOW_EMPTY_POOL=1` restores the skip for envs that legitimately have no pool (`just minds-test-services-against` sets it automatically).
+`test_pool_lease.py`, `test_pool_fast_path_create.py`, `test_pool_slow_path_create.py`, and `test_workspace_stop_start.py` lease real pre-baked bare-metal slices. In CI (the opt-in release dispatch) the `build-minds-ci-env` job pre-bakes slices onto the standing CI boxes before the tests run -- see [`specs/remote-workspaces-in-ci.md`](../../../specs/remote-workspaces-in-ci.md). An empty pool **fails** these tests by default (a broken bake stage must not turn the suite green); `MINDS_ALLOW_EMPTY_POOL=1` restores the skip for envs that legitimately have no pool (`just minds-test-services-against` sets it automatically).
 
 Local iterate loop (each test consumes its slice at release; top up between re-runs -- warm-content re-bakes take minutes):
 

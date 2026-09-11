@@ -84,3 +84,11 @@ class AgentKwargError(MindsEvalsError, ValueError):
     trial has burned a workspace on a setting that was never applied."""
 
     ...
+
+
+class CiMatrixError(MindsEvalsError, ValueError):
+    """The scheduled run's inputs cannot be turned into a matrix: an unreadable or invalid harness
+    configs file, a selection naming a config it does not hold, or a pairs or markers file that
+    is not shaped as the resolve job writes it."""
+
+    ...
