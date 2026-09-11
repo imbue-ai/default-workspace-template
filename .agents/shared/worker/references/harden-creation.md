@@ -249,9 +249,12 @@ evicts is not hardened, no matter how well-tested its happy path is.
 
 ### The scoped test set
 
-Three parts, in order. A bare `uv run pytest` from the repo root is not one of
-them: it collects the whole monorepo -- on this workspace about 2,500 tests and
-several minutes -- to check a change that usually touches a handful of files.
+Three parts, in order, **each its own `pytest` invocation** -- passing two of
+these path sets to one command makes `conftest` resolve to whichever it reaches
+first and dies during collection. A bare `uv run pytest` from the repo root is
+not one of them: it collects the whole monorepo -- on this workspace about 2,500
+tests and several minutes -- to check a change that usually touches a handful of
+files.
 
 1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
 
