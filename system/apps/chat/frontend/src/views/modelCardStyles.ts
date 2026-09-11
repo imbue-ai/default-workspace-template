@@ -207,13 +207,15 @@ export const FLYOUT_SCROLL = "model-flyout-scroll min-h-0 flex-1 overflow-y-auto
 const FLYOUT_ROW_SHAPE =
   "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
-/** An ACCOUNT row reserves its right edge for the rename pencil, the bin and the tick, which are
+/** An ACCOUNT row reserves its right edge for the star, the rename pencil and the bin, which are
  *  positioned against the row's WRAPPER rather than the row, so they stay put while the
- *  highlight insets around them, and the provider name never reflows when the bin appears. Its
- *  own base rather than a wider shared one: a MODEL row carries none of the three -- only the
- *  tick, as a child -- and reserving that width on model rows too would truncate every model
- *  name to make room for controls that are never drawn on them. */
-const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-26`;
+ *  highlight insets around them, and the provider name never reflows when they appear. 80px is
+ *  the outermost of the three at its far edge (`right-15` plus its own 20px), so the reserve
+ *  says exactly what is in the row and not a pixel more. Its own base rather than a wider
+ *  shared one: a MODEL row carries none of them -- only the tick, as a child -- and reserving
+ *  this width on model rows too would truncate every model name to make room for controls that
+ *  are never drawn on them. */
+const ACCOUNT_ROW_BASE = `${FLYOUT_ROW_SHAPE} pr-20`;
 export const FLYOUT_ROW = `${FLYOUT_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const FLYOUT_ROW_SELECTED = `${FLYOUT_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
 export const ACCOUNT_ROW = `${ACCOUNT_ROW_BASE} text-primary hover:bg-fill-hover cursor-pointer`;
@@ -241,44 +243,58 @@ export const FLYOUT_ROW_SUB = "type-helper text-faint";
  *  end, which is what it looked like. A flex tick reads the row's padding, so the padding has
  *  to be the truth about what else is in the row. */
 export const FLYOUT_CHECK = "ml-auto shrink-0 text-accent";
-/** The same tick on a row that also carries a removal control: pinned to the row's right edge
- *  as a SIBLING of the button, so the bin can sit to its LEFT without either giving way. It
- *  does not slide aside on hover, for the same reason as above. */
-export const FLYOUT_CHECK_PINNED = "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-accent";
+/** The same tick on a row that also carries controls: pinned to the row's right edge as a
+ *  SIBLING of the button, since buttons cannot nest.
+ *
+ *  It stands down while the row is hovered. The three controls want the row's end -- a control
+ *  group that stops short of the edge to leave a mark room reads as misaligned -- and the tick
+ *  is the one thing there that can afford to go: what it says is still said by the row's own
+ *  selected fill, and it comes straight back when the pointer leaves. */
+export const FLYOUT_CHECK_PINNED =
+  "pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-accent group-hover/conn:hidden";
 export const FLYOUT_EMPTY = "type-helper text-faint px-3 py-2";
 export const FLYOUT_ADD = menuRowClass({ extra: "text-secondary" });
 
 /** The sign-out control: a SIBLING of the row button (buttons cannot nest), floated over the
- *  row's reserved right padding. `right-7` puts it LEFT of the tick rather than on top of it,
- *  so the tick never has to move out of its way. */
+ *  row's reserved right padding. It takes the row's LAST lane, the one the tick occupies at
+ *  rest -- the tick hides for the hover, so the three controls end flush with the row's end
+ *  rather than one slot short of it. */
 export const ROW_TRASH =
-  "absolute right-9 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "absolute right-3 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded text-faint transition-colors hover:text-danger group-hover/conn:inline-flex";
 /** Armed: stays visible whether or not the row is hovered, and says what it will do. Same right
  *  edge as the bin it replaces, so arming it does not shift anything. */
 /** Armed, it is wider than the bin it replaces, so it carries the row's own background: it may
  *  overhang the provider name rather than forcing every row to reserve space for a word that is
  *  almost never shown. */
-/** The rename control: a SIBLING of the row button like the bin, one slot further in at
- *  `right-14`, so the pencil, the bin and the tick each keep their own lane and none of the
- *  three ever moves. Hidden while the bin is armed -- "Remove?" is wide enough to sit under
- *  the pencil, and a row asking whether to delete itself should not also offer to rename. */
+/** The rename control: a SIBLING of the row button like the bin, one slot further in, so each
+ *  control keeps its own lane and none of them ever displaces another. */
 export const ROW_PENCIL =
+  "absolute right-9 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
+  "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
+/** The default toggle, in the outermost lane, shown on hover like the pencil and the bin. */
+export const ROW_STAR =
   "absolute right-15 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
   "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
+/** The star of the account new chats open on: visible whether or not the row is hovered, since
+ *  it is a fact about the account rather than a control that only matters under a pointer.
+ *
+ *  At rest it sits BESIDE the tick, one lane in, so a row's marks read as a pair at its end
+ *  rather than as one mark and a gap. On hover it steps out to the control lane it shares with
+ *  the pencil and the bin, which is the only way a group flush with the row's end can also
+ *  keep its own order.
+ *
+ *  `fill-current` rather than the icon's own `filled`, which drops the stroke: a star painted
+ *  by its fill alone is a stroke-width smaller all round than the outline beside it, so the
+ *  marked row's star read as the smaller of the two. Filling the outlined glyph keeps one
+ *  silhouette and changes only what is inside it. */
+export const ROW_STAR_PINNED =
+  "absolute right-9 group-hover/conn:right-15 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 " +
+  "cursor-pointer items-center justify-center rounded text-accent transition-colors " +
+  "hover:text-primary [&>svg]:fill-current";
 /** The row mid-rename: the field takes the whole row, since every control is hidden while it
  *  is up. The wrapper insets the bordered field from the card's full-bleed edges; the field
  *  keeps the row's height, so nothing shifts on the way in or out. */
-/** The default toggle: the outermost lane at `right-21`, shown on hover like the pencil and
- *  the bin. The pinned account's star stays visible (and filled) whether or not the row is
- *  hovered: it is a fact about which account a new chat opens on, not a control that only
- *  matters while the pointer is there. */
-export const ROW_STAR =
-  "absolute right-21 top-1/2 hidden h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-faint transition-colors hover:text-primary group-hover/conn:inline-flex";
-export const ROW_STAR_PINNED =
-  "absolute right-21 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 cursor-pointer items-center " +
-  "justify-center rounded text-accent transition-colors hover:text-primary";
 export const ROW_RENAME_WRAP = `${ROW_WRAP} px-1.5`;
 export const ROW_RENAME_INPUT =
   "h-8 w-full rounded-md border border-default bg-surface px-2 text-primary outline-none";

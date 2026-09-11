@@ -15,6 +15,7 @@
 import m from "mithril";
 import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import * as css from "./modelCardStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
@@ -181,6 +182,9 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
           ? `Stop opening new chats on ${row.provider} by default`
           : `Open new chats on ${row.provider} by default`,
         "aria-pressed": opts.isDefault ? "true" : "false",
+        // The short visible form of the aria-label above it: a label on the control says which
+        // of three same-sized glyphs this one is, which nothing else in the row does.
+        ...hoverTooltipAttrs(opts.isDefault ? "Remove as default" : "Set as default"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           // Same shape as the rename: a failure is reloaded over rather than left on screen as
@@ -196,7 +200,9 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
             });
         },
       },
-      m.trust(icon("star", { size: 13, filled: opts.isDefault })),
+      // Outlined even when it is the default -- `ROW_STAR_PINNED` fills it in CSS, which keeps
+      // the stroke that `filled` would drop and with it the size the glyph reads at.
+      m.trust(icon("star", { size: 13 })),
     ),
     m(
       "button",
@@ -204,6 +210,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_TRASH,
         "aria-label": `Sign out of ${row.provider}`,
+        ...hoverTooltipAttrs("Delete"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           state.confirmingRemoval = row.id;
@@ -217,6 +224,7 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         type: "button",
         class: css.ROW_PENCIL,
         "aria-label": `Rename ${row.provider}`,
+        ...hoverTooltipAttrs("Rename"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           beginRename(state, row);
