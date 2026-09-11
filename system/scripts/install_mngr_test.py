@@ -15,16 +15,6 @@ import install_mngr
 import pytest
 import tool_env
 
-_MANIFEST = """
-[[plugins]]
-path = "system/vendor/mngr/libs/mngr_claude"
-tools = ["mngr", "chat"]
-
-[[plugins]]
-path = "system/vendor/mngr/libs/mngr_wait"
-tools = ["mngr"]
-"""
-
 _MANIFEST_WITHOUT_MNGR = """
 [[plugins]]
 path = "system/vendor/mngr/libs/mngr_claude"
