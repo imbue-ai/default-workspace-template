@@ -9,7 +9,6 @@ their own, where a failure names itself.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -160,13 +159,17 @@ def test_the_install_runs_the_command_it_built_under_the_pin_it_computed(
     The other caller is a person following AGENTS.md, who runs this with HOME=/home/user
     while the mngr being repaired is the one under the pinned home -- and would get a
     success message and an untouched broken tool.
+
+    The environment handed over is empty rather than the process's own: an already-set
+    ``UV_TOOL_DIR`` wins over the computed pin (by design, covered above), and
+    ``_tool_env.sh``'s ``tool_env_pin`` exports one into every shell that sources it.
     """
     repo = _repo(tmp_path, _MANIFEST)
     pinned_home = tmp_path / "root"
     uv = _RecordingUv()
     monkeypatch.setenv("TOOL_ENV_HOME", str(pinned_home))
 
-    command = install_mngr.install_mngr(repo, os.environ, uv)
+    command = install_mngr.install_mngr(repo, {}, uv)
 
     assert uv.command == command
     assert command == install_mngr.build_install_command(
