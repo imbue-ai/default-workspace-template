@@ -24,8 +24,6 @@ If the worker was *not* in the ledger, it died for some other reason (e.g. a cla
 
 ## Default: restart the worker and resume
 
-For a worker without the `archived_at` label:
-
 1. Bring claude back up in the existing worktree:
 
    ```bash

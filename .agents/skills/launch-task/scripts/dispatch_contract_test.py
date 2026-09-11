@@ -367,10 +367,12 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     runtime_dir = create_worker._normalize_dir(
         dispatcher.launch_option("--runtime-dir")
     )
+    # The local side is rooted at the repo (tmp_path here), the agent side is
+    # repo-relative, so the two agree wherever the lead runs the launch from.
     assert [
         "mngr",
         "rsync",
-        f"./{runtime_dir}",
+        f"{tmp_path}/{runtime_dir}",
         f"{worker_name}:{runtime_dir}",
         "--uncommitted-changes=clobber",
     ] in argvs

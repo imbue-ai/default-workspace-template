@@ -206,20 +206,16 @@ On `type: status`:
   reports: provisional merge") are ancestors of HEAD, so this merge brings only
   the remainder and the freshness check covers exactly the window since that
   provisional merge.
-  On a clean merge, close any tracking ticket and destroy the worker --
-  before the calling skill's go-live, so nothing is left running for work
-  that has landed:
+  On a clean merge, close any tracking ticket and destroy the worker before
+  the calling skill's go-live:
   ```bash
   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
   ```
-  Destroy frees the worker's process, worktree, and name, and takes its
-  own sub-workers with it (deepest first). It keeps the branch
-  `mngr/<WORKER_NAME>`, the transcript (mngr preserves it under
-  `$MNGR_HOST_DIR/preserved/`), and the runtime dirs of every sub-worker
-  the worker dispatched, which the launcher pulls out of the worker's
-  worktree (its `data/.tasks/` tree, minus the worker's own runtime dir)
-  into your tree at the same paths before the worktree goes. It prints one outcome line per
-  agent and exits non-zero if any could not be destroyed; report that
+  Destroy takes the worker's sub-workers with it and keeps what you may
+  still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
+  `$MNGR_HOST_DIR/preserved/`), and every sub-worker's runtime dir,
+  relocated into your tree at the same paths. It prints one outcome line
+  per agent and exits non-zero if any could not be destroyed; report that
   rather than retrying blindly.
   On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
@@ -234,9 +230,8 @@ On `type: status`:
   ```bash
   uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
-  Its branch, worktree, and transcript stay for inspection; it is destroyed
-  only when a later pass supersedes it or the user asks. A timeout is the
-  same once the liveness diagnosis says the worker is dead or wedged.
+  Its branch, worktree, and transcript stay for inspection. A timeout is
+  the same once the liveness diagnosis says the worker is dead or wedged.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
@@ -271,10 +266,6 @@ that launched its own worker. Four rules are yours alone.
   once it has merged you. This matters for your own lead too: a merged
   sub-worker left in WAITING still reads as a live child, which keeps you
   counted as busy after you have finished, while a STOPPED one does not.
-  Nothing is lost by destroying: mngr preserves the sub-worker's transcript,
-  its runtime dir (task file and consumed reports) is already in your
-  worktree, and your own lead's destroy later pulls every runtime dir under
-  your `data/.tasks/` up into its tree before your worktree goes.
 - **Await sub-workers with `--timeout 60m`**, which fits inside the window your
   own lead is waiting out (90m for the harden flows).
 
