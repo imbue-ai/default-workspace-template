@@ -122,10 +122,8 @@ import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 
-# The in-workspace chat messenger, relative to the repo root (this file is at
-# .agents/skills/launch-task/scripts/).
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_MESSAGE_CHAT_SCRIPT = _REPO_ROOT / "system" / "scripts" / "message_chat.py"
+# The in-workspace chat messenger, relative to the repo root (see ``_repo_root``).
+_MESSAGE_CHAT_SCRIPT_REL = Path("system") / "scripts" / "message_chat.py"
 
 _LEAD_AGENT_FIELD = "lead_agent"
 _WORKER_AGENT_ID_FIELD = "worker_agent_id"
@@ -366,9 +364,26 @@ def _stamp_worker_agent_id(task_file: Path, agent_id: str) -> None:
     )
 
 
+def _repo_root() -> Path:
+    """The template repo root: the ancestor of this file that holds ``system/scripts``.
+
+    Found by walking up rather than counting a fixed number of parent directories,
+    so the lookup keeps working if this script is ever relocated within the repo.
+    Raises ``RuntimeError`` if no ancestor qualifies: the script only makes sense
+    inside the template repo, so that is a real misconfiguration.
+    """
+    for ancestor in Path(__file__).resolve().parents:
+        if (ancestor / "system" / "scripts").is_dir():
+            return ancestor
+    raise RuntimeError(
+        f"could not locate the template repo root above {Path(__file__).resolve()}"
+        " -- the launch-task script must run from within the template repo"
+    )
+
+
 def _message_chat_argv(chat_id: str) -> list[str]:
     """The messenger invocation for one chat; the caller appends the message source."""
-    return [sys.executable, str(_MESSAGE_CHAT_SCRIPT), chat_id]
+    return [sys.executable, str(_repo_root() / _MESSAGE_CHAT_SCRIPT_REL), chat_id]
 
 
 class Runner:
@@ -694,22 +709,18 @@ def _oom_priority_src() -> Path:
 
     ``oom_priority`` is a first-party, stdlib-only package that the OOM Claude
     hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
-    dependency anywhere); this script does the same. We locate ``src`` by
-    walking up to the repo root -- the ancestor that contains
-    ``system/services/oom_priority/src`` -- rather than counting a fixed number of parent
-    directories, so the lookup keeps working if this script is ever relocated
-    within the repo. Raises ``RuntimeError`` if it can't be found, since the
+    dependency anywhere); this script does the same. ``src`` is resolved under
+    ``_repo_root()``. Raises ``RuntimeError`` if it is not there, since the
     package is always present in the repo and its absence is a real
     misconfiguration, not a condition to paper over.
     """
-    for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "system" / "services" / "oom_priority" / "src"
-        if candidate.is_dir():
-            return candidate
-    raise RuntimeError(
-        f"could not locate system/services/oom_priority/src above {Path(__file__).resolve()}"
-        " -- the launch-task script must run from within the template repo"
-    )
+    candidate = _repo_root() / "system" / "services" / "oom_priority" / "src"
+    if not candidate.is_dir():
+        raise RuntimeError(
+            f"{candidate} is not a directory -- the launch-task script must run "
+            "from within the template repo"
+        )
+    return candidate
 
 
 def _worker_has_pending_shed(worker_name: str) -> bool:
