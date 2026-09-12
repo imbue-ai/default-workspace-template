@@ -31,6 +31,33 @@ plus a body. If await exits non-zero (timeout) without printing a report, do
 *not* immediately treat it as a terminal failure -- see "Diagnose worker
 liveness" below.
 
+### Never sleep on a worker
+
+Arming the poll is half of it; what you do next is the other half. Once the poll
+is armed, **end your turn**. The command's completion wakes you within seconds
+and carries the report. Do not issue `sleep N` against a worker: it is a guess at
+someone else's finishing time, and every second between the report landing and
+your sleep expiring is dead time on the critical path. Ending your turn here is
+safe -- a worker with a live sub-worker of its own never counts as idle, so the
+liveness check below will not mistake you for a wedged one.
+
+This is a rule about waiting, not about one command: **a worker's report is never
+polled.** The only sanctioned wait on a sibling is an armed `await` plus ending
+the turn. Sleeping on a `find` over its reports directory, on `mngr list`, or on
+`tmux capture-pane` against its pane is the same blind guess wearing a different
+command, and it costs the same dead time -- `await` already watches exactly those
+files and returns the moment one lands.
+
+With several workers out, arm one poll per worker before ending the turn. Each
+completion wakes you separately, so you act on whichever reports first and merge
+it while the others are still running.
+
+Your own backgrounded commands are the one exception. Nothing else holds your
+turn open there, so a worker that ends its turn waiting on its own command is
+declared wedged after three idle polls -- about fifteen seconds. Wait on those
+with `sleep 60`, repeated until the output lands: it stays clear of that
+threshold and bounds the overshoot.
+
 `await` also returns **milestone** reports: any file under
 `<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
 It prints the file like `report.md`, exits 0, archives it under its own name in

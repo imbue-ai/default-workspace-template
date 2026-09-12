@@ -2,7 +2,7 @@
 
 The contract tests (``create_worker_test.py``, ``dispatch_contract_test.py``) prove the
 level-agnostic dispatch contract on argv and prose without ever starting an agent. This
-release test proves the same contract against reality, end to end and exactly once: a
+live test proves the same contract against reality, end to end and exactly once: a
 real ``worker``-template claude agent (the *outer* worker) reads the launch-task
 procedure out of its own checkout, dispatches a *second* real worker (the *inner* one),
 answers the mid-flight ``question`` gate the inner raises, merges the inner's branch,
@@ -53,6 +53,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 import tomllib
 import uuid
@@ -61,8 +62,6 @@ from typing import Mapping
 
 import pytest
 from imbue.mngr.utils.polling import wait_for
-
-pytestmark = pytest.mark.release
 
 # .agents/skills/launch-task/scripts/<this file> -> the repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -86,6 +85,8 @@ _REPORT_TIMEOUT_SECONDS = 1500.0
 # idle detection has to survive before the report lands.
 _REPORT_POLL_INTERVAL_SECONDS = 3.0
 _LISTING_SETTLE_TIMEOUT_SECONDS = 120.0
+# The outer backstop: no single run of this test can still be in flight after it.
+_TEST_TIMEOUT_SECONDS = 1800
 
 # The top-level lead is a `command` agent that does nothing but stay alive so it has a
 # work dir the outer worker's report can be pushed to. A distinctive duration keeps the
@@ -97,6 +98,8 @@ _TOP_AGENT_SLEEP_SECONDS = 86423
 # `mngr message` -> inner agent -> committed marker file, so line 3 of that marker is a
 # genuine end-to-end read of the gate round trip.
 _GATE_ANSWER = "alpha"
+
+_CLONE_DIR_PREFIX = "nested-dispatch-repo-"
 
 _LIVE_CHILD_MERGE_SUBJECT = "Merge {inner}"
 _INNER_MARKER_COMMIT_SUBJECT = "inner marker"
@@ -587,6 +590,25 @@ def _isolate_worktree_base(settings: Path, worktree_base: Path) -> None:
     )
 
 
+def _remove_abandoned_clones(work_repo_parent: Path) -> None:
+    """Delete work-repo clones an earlier run left behind.
+
+    The clone is torn down in the test's ``finally``, which covers a pass and a
+    failure but not an interrupt -- a Ctrl-C, a pytest timeout kill, or an OOM shed
+    leaves the whole clone behind. That debris is not inert: it is a full copy of
+    the tree under the repo root, so the next run's ``system/test_meta_ratchets.py``
+    counts every pattern twice and fails with nothing in its output pointing at the
+    cause.
+
+    Only clones older than this test's own timeout are removed, so a run that is
+    still in flight is never touched.
+    """
+    cutoff = time.time() - _TEST_TIMEOUT_SECONDS
+    for candidate in work_repo_parent.glob(f"{_CLONE_DIR_PREFIX}*"):
+        if candidate.is_dir() and candidate.stat().st_mtime < cutoff:
+            shutil.rmtree(candidate, ignore_errors=True)
+
+
 def _clone_repo_at_head(
     work_repo_parent: Path, suffix: str, worktree_base: Path, installed_claude: str
 ) -> Path:
@@ -601,7 +623,7 @@ def _clone_repo_at_head(
     since ``launch`` refuses a dirty tree.
     """
     branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], _REPO_ROOT).strip()
-    clone = work_repo_parent / f"nested-dispatch-repo-{suffix}"
+    clone = work_repo_parent / f"{_CLONE_DIR_PREFIX}{suffix}"
     _run_git(
         ["clone", "--quiet", "--branch", branch, str(_REPO_ROOT), str(clone)],
         work_repo_parent,
@@ -634,13 +656,22 @@ def _clone_repo_at_head(
     return clone
 
 
-@pytest.mark.timeout(1800, func_only=False)
+# Skipped by default: this boots two real claude agents through a full gate round
+# trip -- minutes of wall clock and real API turns. CI never ran it even when it was
+# marked `release`, because the runner has no claude binary and no credential and
+# `_skip_unless_live_nested_dispatch_possible` always skipped it there. A bare
+# `uv run pytest` inside a workspace, which is what a harden pass runs, executed it
+# in full. Skipping unconditionally makes that asymmetry explicit; drop this marker
+# to run it deliberately.
+@pytest.mark.skip(reason="requires claude and credentials")
+@pytest.mark.timeout(_TEST_TIMEOUT_SECONDS, func_only=False)
 def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     work_repo_parent = _REPO_ROOT / ".test_output"
     work_repo_parent.mkdir(exist_ok=True)
     _skip_unless_live_nested_dispatch_possible(work_repo_parent)
+    _remove_abandoned_clones(work_repo_parent)
 
     host_dir = tmp_path / "host"
     _prepare_isolated_host_dir(host_dir)
@@ -886,3 +917,28 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
         shutil.rmtree(clone, ignore_errors=True)
         shutil.rmtree(worktree_base, ignore_errors=True)
         shutil.rmtree(tmux_dir, ignore_errors=True)
+
+
+def test_an_abandoned_clone_is_removed_but_a_live_one_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    """The interrupt case: debris older than the timeout goes, anything else stays.
+
+    An interrupted run is the only way a clone outlives the test, so this is the
+    path that actually matters -- and the one the ``finally`` block cannot cover.
+    """
+    abandoned = tmp_path / f"{_CLONE_DIR_PREFIX}aaaaaaaaaaaa"
+    in_flight = tmp_path / f"{_CLONE_DIR_PREFIX}bbbbbbbbbbbb"
+    unrelated = tmp_path / "something-else"
+    for directory in (abandoned, in_flight, unrelated):
+        directory.mkdir()
+        (directory / "marker").write_text("x", encoding="utf-8")
+    stale = time.time() - _TEST_TIMEOUT_SECONDS - 60
+    os.utime(abandoned, (stale, stale))
+    os.utime(unrelated, (stale, stale))
+
+    _remove_abandoned_clones(tmp_path)
+
+    assert not abandoned.exists(), "a clone past the timeout should have been removed"
+    assert in_flight.is_dir(), "a clone inside the timeout may still be running"
+    assert unrelated.is_dir(), "only this test's own clones are in scope"

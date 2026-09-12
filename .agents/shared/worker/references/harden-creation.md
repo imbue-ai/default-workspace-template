@@ -97,15 +97,19 @@ directory, the `[[references]]` entry it adds to that app's manifest, sits under
 the scope file's `context` and is counted as inside the footprint.
 ## Splitting the pass across sub-workers
 
-When the creation has genuinely independent areas -- a Flask app's backend and
-its frontend, say -- you may split the pass across sibling sub-workers instead
-of doing all of it yourself. Nothing prescribes the split: you decide it for the
-creation at hand, or decide there is none worth making.
+Split the pass across sibling sub-workers when the creation has two or more
+parts a user would name separately -- the code that reads the data, the server,
+a front end with several views, one of two unrelated features -- and each has
+enough in it to keep a worker busy; otherwise harden it yourself, since every
+sibling pays a venv converge and a plugin install before it does any work. A
+page with three views over an ingested export splits: the interface is one
+worker's job and the ingestion is another's. A single page whose backend only
+serves it does not, nor do a few small files or a script.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
-name as the prefix (`update-todo-backend`, `update-todo-frontend`): names are
-unique across the host in every state, so a re-run of the same pass reaches
+name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
+are unique across the host in every state, so a re-run of the same pass reaches
 the same names only after the old pass has been superseded and destroyed. You
 are its lead, and the rules that are yours are in
 `.agents/shared/references/lead-proxy.md` under "When you are a worker
@@ -125,12 +129,8 @@ a stuck one, and await it with `--timeout 60m`.
   immediately (`mngr message`) rather than let it find out at merge time.
 - Merge the siblings in a fixed order and resolve any conflicts yourself. Then
   run exactly the verification a direct pass runs -- the "Review gates" section
-  below: the full suite and the ratchets -- once on the merged result, and
-  report `done` with the same body a direct pass would.
-
-Weigh the cost before splitting: every sibling pays a venv converge and a plugin
-install before it does any work, and on a small creation that overhead can
-exceed what the parallelism saves.
+  below, scoped to your own footprint rather than any sibling's -- once on the
+  merged result, and report `done` with the same body a direct pass would.
 
 ## Testing and hardening contract
 
@@ -285,8 +285,8 @@ the system interface, per "The scope file" above -- cannot make that check, so
 it runs parts 1 and 2 and then the full suite once.
 
 If your own task file says your lead runs this verification on the merged
-result -- the scoped-sibling case above -- skip this section and run only your
-scope's tests.
+result -- the scoped-sibling case above -- run your own scope's tests and skip
+the rest of this section.
 
 When complete, report back to the lead.
 

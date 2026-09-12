@@ -52,7 +52,10 @@ worker side:
     ``report.md`` wins when both are present. On timeout it returns non-zero so
     the caller drops into the liveness diagnosis described in
     ``.agents/shared/references/lead-proxy.md``. Callers run this in the
-    *background* and re-invoke it once per gate cycle. The archive step is what
+    *background* and then **end the turn**: the completion wakes the agent and
+    carries the report, so sleeping against it only adds the gap between the
+    report landing and the sleep expiring (see ``lead-proxy.md``, "Never sleep
+    on a worker"). Re-invoke it once per gate cycle. The archive step is what
     makes re-invocation safe: ``launch`` refuses to start while anything sits at
     ``finish_report_path`` (or an unconsumed milestone beside it), so a relaunch
     after a gate would otherwise trip that guard until the lead moved the file
@@ -1976,7 +1979,8 @@ def build_parser() -> argparse.ArgumentParser:
         "await",
         help="Block until the worker's report file appears (or an unconsumed "
         "milestone lands beside it), then print it. "
-        "Run in the background; re-invoke once per gate cycle.",
+        "Run in the background, then end the turn -- the completion wakes you. "
+        "Re-invoke once per gate cycle.",
     )
     await_parser.add_argument(
         "--task-file",
