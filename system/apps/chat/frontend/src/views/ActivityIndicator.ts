@@ -26,7 +26,7 @@
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 
@@ -186,7 +186,7 @@ export function wakeUpSpinnerDeadline(events: TranscriptEvent[], now: number): n
 const TOOL_CAPTION_MIN_MS = 700;
 
 interface ActivityIndicatorAttrs {
-  agentId: string;
+  chatId: string;
   events: TranscriptEvent[];
 }
 
@@ -220,8 +220,8 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       cancelWake();
     },
     view(vnode) {
-      const { agentId, events } = vnode.attrs;
-      const state = getAgentById(agentId)?.activity_state ?? null;
+      const { chatId, events } = vnode.attrs;
+      const state = getChatById(chatId)?.activity_state ?? null;
       const label = labelForActivityState(state, events);
 
       const now = Date.now();

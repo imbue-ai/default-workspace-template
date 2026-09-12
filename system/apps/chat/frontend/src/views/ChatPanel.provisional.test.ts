@@ -11,18 +11,18 @@ const mocks = vi.hoisted(() => {
     proto: null as unknown,
     accountsLoaded: true,
     selectedAccount: null as { id: string } | null,
-    launchChat: vi.fn(async (_agentId: string, _accountId: string) => ({})),
+    launchChat: vi.fn(async (_chatId: string, _accountId: string) => ({})),
     openProviderChooser: vi.fn(),
     closeProviderChooser: vi.fn(),
   };
 });
 
-vi.mock("../models/AgentManager", () => ({
-  getAgentById: () => undefined,
-  getProtoAgent: () => mocks.proto,
-  launchChat: (agentId: string, accountId: string) => mocks.launchChat(agentId, accountId),
-  addAgentsUpdatedListener: () => undefined,
-  removeAgentsUpdatedListener: () => undefined,
+vi.mock("../models/Chats", () => ({
+  getChatById: () => undefined,
+  getProvisionalChat: () => mocks.proto,
+  launchChat: (chatId: string, accountId: string) => mocks.launchChat(chatId, accountId),
+  addChatsUpdatedListener: () => undefined,
+  removeChatsUpdatedListener: () => undefined,
   buildAgentTerminalUrl: () => "",
   getTerminalUrl: () => "",
 }));
@@ -41,7 +41,7 @@ vi.mock("../models/Response", () => ({
   fetchForwardEvents: async () => undefined,
   fetchWindowAtOffset: async () => undefined,
   getConversationLoadState: () => null,
-  getEventsForAgent: () => [],
+  getEventsForChat: () => [],
   getEventCount: () => 0,
   getFirstOffset: () => 0,
   getRenderVersion: () => 0,
@@ -56,7 +56,7 @@ vi.mock("../models/StreamingMessage", () => ({
 vi.mock("../models/ComposerAttachments", () => ({ uploadFilesToComposer: () => undefined }));
 vi.mock("./transcript-scroll-engine", () => ({
   createTranscriptScrollEngine: () => ({
-    setAgent: () => undefined,
+    setChat: () => undefined,
     detach: () => undefined,
     noteMessageSent: () => undefined,
     afterRender: () => undefined,
@@ -121,8 +121,8 @@ async function flushAsync(): Promise<void> {
 
 function mountPanel(): () => unknown {
   const panel = ChatPanel();
-  panel.oninit!({ attrs: { agentId: AGENT_ID } } as never);
-  return () => panel.view({ attrs: { agentId: AGENT_ID } } as m.Vnode<{ agentId: string }>);
+  panel.oninit!({ attrs: { chatId: AGENT_ID } } as never);
+  return () => panel.view({ attrs: { chatId: AGENT_ID } } as m.Vnode<{ chatId: string }>);
 }
 
 function awaiting(): void {

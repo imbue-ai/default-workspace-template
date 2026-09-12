@@ -41,6 +41,6 @@ function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
 
 /** The optimistic outgoing bubbles for an agent, in send order. Returns [] when
  *  there are none. */
-export function renderOutgoingMessages(agentId: string): m.Vnode[] {
-  return getOutgoingMessages(agentId).map(renderOutgoingBubble);
+export function renderOutgoingMessages(chatId: string): m.Vnode[] {
+  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
 }

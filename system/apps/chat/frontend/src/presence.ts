@@ -16,12 +16,12 @@ const HEARTBEAT_MS = 60_000;
 
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 let currentState: PresenceState = "hidden";
-let reportingAgentId: string | null = null;
+let reportingChatId: string | null = null;
 let reportingClientId: string | null = null;
 
-function post(agentId: string, clientId: string, state: PresenceState): void {
+function post(chatId: string, clientId: string, state: PresenceState): void {
   // keepalive lets the closed report leave with the page on pagehide.
-  void fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/presence`), {
+  void fetch(apiUrl(`/api/agents/${encodeURIComponent(chatId)}/presence`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, state }),
@@ -32,15 +32,15 @@ function post(agentId: string, clientId: string, state: PresenceState): void {
 }
 
 /** Start reporting for this page's chat as `clientId`; a second call re-keys the reports. */
-export function startPresenceReporting(agentId: string, clientId: string, initialState: PresenceState): void {
-  reportingAgentId = agentId;
+export function startPresenceReporting(chatId: string, clientId: string, initialState: PresenceState): void {
+  reportingChatId = chatId;
   reportingClientId = clientId;
   currentState = initialState;
-  post(agentId, clientId, initialState);
+  post(chatId, clientId, initialState);
   if (heartbeat === null) {
     heartbeat = setInterval(() => {
-      if (reportingAgentId !== null && reportingClientId !== null && currentState !== "closed") {
-        post(reportingAgentId, reportingClientId, currentState);
+      if (reportingChatId !== null && reportingClientId !== null && currentState !== "closed") {
+        post(reportingChatId, reportingClientId, currentState);
       }
     }, HEARTBEAT_MS);
   }
@@ -49,8 +49,8 @@ export function startPresenceReporting(agentId: string, clientId: string, initia
 /** Report a change of state; a no-op until reporting has started. */
 export function reportPresence(state: PresenceState): void {
   currentState = state;
-  if (reportingAgentId === null || reportingClientId === null) return;
-  post(reportingAgentId, reportingClientId, state);
+  if (reportingChatId === null || reportingClientId === null) return;
+  post(reportingChatId, reportingClientId, state);
 }
 
 export function currentPresenceState(): PresenceState {

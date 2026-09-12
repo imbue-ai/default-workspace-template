@@ -12,7 +12,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 
-export interface AgentState {
+export interface ChatSnapshot {
   id: string;
   name: string;
   state: string;
@@ -59,7 +59,7 @@ export interface QueuedMessage {
 export type ProvisionalChatPhase = "awaiting_account" | "creating" | "failed";
 
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
-export interface ProtoAgent {
+export interface ProvisionalChat {
   agent_id: string;
   name: string;
   // The account it launches on; empty while it waits for one.
@@ -70,30 +70,30 @@ export interface ProtoAgent {
 }
 
 type WsEvent =
-  | { type: "agents_updated"; agents: AgentState[] }
-  | ({ type: "proto_agent_created" } & ProtoAgent)
+  | { type: "agents_updated"; agents: ChatSnapshot[] }
+  | ({ type: "proto_agent_created" } & ProvisionalChat)
   | { type: "proto_agent_completed"; agent_id: string; success: boolean; error: string | null };
 
-export type AgentsUpdatedListener = (agents: AgentState[]) => void;
+export type ChatsUpdatedListener = (agents: ChatSnapshot[]) => void;
 /**
  * Notified when a single agent's ``activity_state`` changes between two consecutive
  * ``agents_updated`` snapshots. ``previous`` is ``null`` when the agent had no prior tracked
  * state (it just appeared, or its state was untracked).
  */
-export type AgentActivityListener = (agentId: string, previous: string | null, current: string | null) => void;
+export type ChatActivityListener = (chatId: string, previous: string | null, current: string | null) => void;
 
-let agents: AgentState[] = [];
+let agents: ChatSnapshot[] = [];
 // The JSON of the last agents_updated payload, to skip redundant identical pushes.
-let lastAgentsSerialized = "";
-let protoAgents: ProtoAgent[] = [];
+let lastChatsSerialized = "";
+let provisionalChats: ProvisionalChat[] = [];
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the agent list that ends it. Null otherwise.
 let replayedProtoIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
-let agentsUpdatedListeners: AgentsUpdatedListener[] = [];
-let agentActivityListeners: AgentActivityListener[] = [];
+let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
+let chatActivityListeners: ChatActivityListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
@@ -113,7 +113,7 @@ function connect(): void {
     // The app replays what it holds (its provisional chats, then its agent list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProtoIds = new Set();
-    lastAgentsSerialized = "";
+    lastChatsSerialized = "";
     m.redraw();
   };
 
@@ -156,35 +156,35 @@ function handleEvent(event: WsEvent): void {
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
       const serialized = JSON.stringify(event.agents);
-      if (serialized === lastAgentsSerialized) break;
-      lastAgentsSerialized = serialized;
+      if (serialized === lastChatsSerialized) break;
+      lastChatsSerialized = serialized;
       // Diff against the outgoing snapshot (still in `agents` here) so per-agent activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(agents.map((a) => [a.id, a.activity_state ?? null]));
       agents = event.agents;
       // A provisional chat the list now names is an agent, whatever order the pushes came in.
       const registeredIds = new Set(agents.map((a) => a.id));
-      protoAgents = protoAgents.filter((p) => !registeredIds.has(p.agent_id));
-      for (const agentId of registeredIds) settleRegistration(agentId, null);
+      provisionalChats = provisionalChats.filter((p) => !registeredIds.has(p.agent_id));
+      for (const chatId of registeredIds) settleRegistration(chatId, null);
       if (replayedProtoIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
         // longer holds (it restarted while the create ran), so no push is coming for it: the
         // record goes, and a send held for it proceeds to report the backend's refusal.
         const replayed = replayedProtoIds;
         replayedProtoIds = null;
-        protoAgents = protoAgents.filter((p) => replayed.has(p.agent_id));
-        for (const agentId of [...registrationWaiters.keys()]) {
-          if (getProtoAgent(agentId) === undefined) settleRegistration(agentId, null);
+        provisionalChats = provisionalChats.filter((p) => replayed.has(p.agent_id));
+        for (const chatId of [...registrationWaiters.keys()]) {
+          if (getProvisionalChat(chatId) === undefined) settleRegistration(chatId, null);
         }
       }
-      for (const listener of agentsUpdatedListeners) {
-        listener(getAgents());
+      for (const listener of chatsUpdatedListeners) {
+        listener(getChats());
       }
       for (const agent of agents) {
         const current = agent.activity_state ?? null;
         const previous = previousActivityById.get(agent.id) ?? null;
         if (previous !== current) {
-          for (const listener of agentActivityListeners) {
+          for (const listener of chatActivityListeners) {
             listener(agent.id, previous, current);
           }
         }
@@ -197,7 +197,7 @@ function handleEvent(event: WsEvent): void {
       // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
       const { type: _type, ...proto } = event;
-      protoAgents = [...protoAgents.filter((p) => p.agent_id !== proto.agent_id), proto];
+      provisionalChats = [...provisionalChats.filter((p) => p.agent_id !== proto.agent_id), proto];
       replayedProtoIds?.add(proto.agent_id);
       if (proto.phase === "failed") {
         settleRegistration(proto.agent_id, new Error(proto.error ?? "The chat could not be started"));
@@ -207,24 +207,26 @@ function handleEvent(event: WsEvent): void {
     case "proto_agent_completed":
       if (event.success) {
         // The agent itself arrives on the agents_updated push, which is what settles waiters.
-        protoAgents = protoAgents.filter((p) => p.agent_id !== event.agent_id);
+        provisionalChats = provisionalChats.filter((p) => p.agent_id !== event.agent_id);
       } else if (event.error === null) {
         // Discarded (its tab was closed before it launched): gone, with nothing to show.
-        protoAgents = protoAgents.filter((p) => p.agent_id !== event.agent_id);
+        provisionalChats = provisionalChats.filter((p) => p.agent_id !== event.agent_id);
         settleRegistration(event.agent_id, new Error("The chat was closed before it started"));
       } else {
         const error = event.error;
-        protoAgents = protoAgents.map((p) => (p.agent_id === event.agent_id ? { ...p, phase: "failed", error } : p));
+        provisionalChats = provisionalChats.map((p) =>
+          p.agent_id === event.agent_id ? { ...p, phase: "failed", error } : p,
+        );
         settleRegistration(event.agent_id, new Error(error));
       }
       break;
   }
 }
 
-function settleRegistration(agentId: string, error: Error | null): void {
-  const waiters = registrationWaiters.get(agentId);
+function settleRegistration(chatId: string, error: Error | null): void {
+  const waiters = registrationWaiters.get(chatId);
   if (waiters === undefined) return;
-  registrationWaiters.delete(agentId);
+  registrationWaiters.delete(chatId);
   for (const waiter of waiters) {
     if (error === null) waiter.resolve();
     else waiter.reject(error);
@@ -232,7 +234,7 @@ function settleRegistration(agentId: string, error: Error | null): void {
 }
 
 /**
- * Resolves once ``agentId`` is an agent the app lists: at once for one it already lists, and
+ * Resolves once ``chatId`` is an agent the app lists: at once for one it already lists, and
  * for a chat still being created when its create lands. Rejects, with the reason, when the
  * create fails or the chat is discarded first -- at once for a chat whose create has already
  * failed, since nothing but a retry could ever land it. What a send typed into a chat that
@@ -243,18 +245,18 @@ function settleRegistration(agentId: string, error: Error | null): void {
  * send itself reports the backend's refusal. A held send is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
-export function whenAgentRegistered(agentId: string): Promise<void> {
-  const proto = getProtoAgent(agentId);
-  if (getAgentById(agentId) !== undefined || proto === undefined) return Promise.resolve();
+export function whenChatRegistered(chatId: string): Promise<void> {
+  const proto = getProvisionalChat(chatId);
+  if (getChatById(chatId) !== undefined || proto === undefined) return Promise.resolve();
   if (proto.phase === "failed") return Promise.reject(new Error(proto.error ?? "The chat could not be started"));
   return new Promise((resolve, reject) => {
-    const waiters = registrationWaiters.get(agentId) ?? [];
+    const waiters = registrationWaiters.get(chatId) ?? [];
     waiters.push({ resolve, reject });
-    registrationWaiters.set(agentId, waiters);
+    registrationWaiters.set(chatId, waiters);
   });
 }
 
-export function initAgentManager(): void {
+export function initChats(): void {
   connect();
 }
 
@@ -264,47 +266,47 @@ export function isConnected(): boolean {
 
 /** Whether the agent is the workspace's services-only "primary" agent, which is hidden from the
  *  user-facing agent list because destroying it would tear down the whole workspace. */
-export function isPrimaryAgent(agent: AgentState): boolean {
+export function isPrimaryChat(agent: ChatSnapshot): boolean {
   return agent.labels?.is_primary === "true";
 }
 
-export function getAgents(): AgentState[] {
-  return agents.filter((a) => !isPrimaryAgent(a));
+export function getChats(): ChatSnapshot[] {
+  return agents.filter((a) => !isPrimaryChat(a));
 }
 
-export function getAgentById(id: string): AgentState | undefined {
+export function getChatById(id: string): ChatSnapshot | undefined {
   return agents.find((a) => a.id === id);
 }
 
 /** The full snapshot of an agent's currently-queued messages, in enqueue order. */
-export function getQueuedMessagesForAgent(agentId: string): QueuedMessage[] {
-  return getAgentById(agentId)?.queued_messages ?? [];
+export function getQueuedMessagesForChat(chatId: string): QueuedMessage[] {
+  return getChatById(chatId)?.queued_messages ?? [];
 }
 
 /** Whether the shoulder-tap is available for this agent, per the backend. */
-export function getShoulderTapAvailableForAgent(agentId: string): boolean {
-  return getAgentById(agentId)?.shoulder_tap_available === true;
+export function getShoulderTapAvailableForChat(chatId: string): boolean {
+  return getChatById(chatId)?.shoulder_tap_available === true;
 }
 
-/** The provisional record of ``agentId``, while the app lists it as one. */
-export function getProtoAgent(agentId: string): ProtoAgent | undefined {
-  return protoAgents.find((p) => p.agent_id === agentId);
+/** The provisional record of ``chatId``, while the app lists it as one. */
+export function getProvisionalChat(chatId: string): ProvisionalChat | undefined {
+  return provisionalChats.find((p) => p.agent_id === chatId);
 }
 
-export function addAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
-  agentsUpdatedListeners.push(listener);
+export function addChatsUpdatedListener(listener: ChatsUpdatedListener): void {
+  chatsUpdatedListeners.push(listener);
 }
 
-export function removeAgentsUpdatedListener(listener: AgentsUpdatedListener): void {
-  agentsUpdatedListeners = agentsUpdatedListeners.filter((l) => l !== listener);
+export function removeChatsUpdatedListener(listener: ChatsUpdatedListener): void {
+  chatsUpdatedListeners = chatsUpdatedListeners.filter((l) => l !== listener);
 }
 
-export function addAgentActivityListener(listener: AgentActivityListener): void {
-  agentActivityListeners.push(listener);
+export function addChatActivityListener(listener: ChatActivityListener): void {
+  chatActivityListeners.push(listener);
 }
 
-export function removeAgentActivityListener(listener: AgentActivityListener): void {
-  agentActivityListeners = agentActivityListeners.filter((l) => l !== listener);
+export function removeChatActivityListener(listener: ChatActivityListener): void {
+  chatActivityListeners = chatActivityListeners.filter((l) => l !== listener);
 }
 
 /** The terminal app's origin, where the chat's terminal back face is served from: derived
@@ -326,8 +328,8 @@ export function buildAgentTerminalUrl(agentName: string): string {
 }
 
 /** A freshly-created chat agent's identity: its id and its name pair. */
-export interface CreatedChatAgent {
-  agentId: string;
+export interface CreatedChat {
+  chatId: string;
   name: string;
   displayName: string;
 }
@@ -340,7 +342,7 @@ export interface CreatedChatAgent {
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project. Throws with the server's detail on rejection.
  */
-export function createChatAgent(projectId: string, accountId: string = ""): Promise<CreatedChatAgent> {
+export function createChat(projectId: string, accountId: string = ""): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
   return postCreateChat({ project_id: projectId, account_id: accountId });
 }
@@ -349,11 +351,11 @@ export function createChatAgent(projectId: string, accountId: string = ""): Prom
  * Launch a chat minted earlier (one that waited for an account, or one whose create failed)
  * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
  */
-export function launchChat(agentId: string, accountId: string): Promise<CreatedChatAgent> {
-  return postCreateChat({ agent_id: agentId, account_id: accountId });
+export function launchChat(chatId: string, accountId: string): Promise<CreatedChat> {
+  return postCreateChat({ agent_id: chatId, account_id: accountId });
 }
 
-async function postCreateChat(body: Record<string, string>): Promise<CreatedChatAgent> {
+async function postCreateChat(body: Record<string, string>): Promise<CreatedChat> {
   const response = await fetch(apiUrl("/api/agents/create-chat"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -368,7 +370,7 @@ async function postCreateChat(body: Record<string, string>): Promise<CreatedChat
     throw new Error("Chat creation returned no agent id");
   }
   return {
-    agentId: created.agent_id,
+    chatId: created.agent_id,
     name: created.name ?? "",
     displayName: created.display_name ?? created.name ?? "",
   };

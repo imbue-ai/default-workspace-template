@@ -7,7 +7,7 @@ import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import { openProviderChooser } from "../models/Providers";
 import { openSubagentTab, startChatOnAccount } from "../shell";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -181,7 +181,7 @@ function resolvedResultSignature(
 export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
-  agentId: string;
+  chatId: string;
 }> {
   let renderedEvent: AssistantMessageEvent | null = null;
   let renderedToolResultCount = 0;
@@ -190,7 +190,7 @@ export function StableAssistantMessage(): m.Component<{
   let renderedDetailVersion = -1;
   return {
     onbeforeupdate(vnode) {
-      const { event, toolResults, agentId } = vnode.attrs;
+      const { event, toolResults, chatId } = vnode.attrs;
       const currentToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       // A subagent card can appear after the message was first rendered: the
       // backend re-broadcasts the parent with subagent_metadata once a running
@@ -208,20 +208,20 @@ export function StableAssistantMessage(): m.Component<{
         currentToolResultCount !== renderedToolResultCount ||
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
-        getEventDetailVersion(agentId) !== renderedDetailVersion
+        getEventDetailVersion(chatId) !== renderedDetailVersion
       );
     },
     view(vnode) {
       const event = vnode.attrs.event;
       const toolResults = vnode.attrs.toolResults;
-      const agentId = vnode.attrs.agentId;
+      const chatId = vnode.attrs.chatId;
       renderedEvent = event;
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
-      renderedDetailVersion = getEventDetailVersion(agentId);
+      renderedDetailVersion = getEventDetailVersion(chatId);
 
-      return m("div", renderAssistantMessageChildren(event, toolResults, agentId));
+      return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
     },
   };
 }
@@ -229,7 +229,7 @@ export function StableAssistantMessage(): m.Component<{
 export function renderAssistantMessage(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
-  agentId: string,
+  chatId: string,
 ): m.Vnode {
   return m(
     "div",
@@ -238,11 +238,11 @@ export function renderAssistantMessage(
       class: "message message-assistant mb-5",
       key: event.event_id,
     },
-    m(StableAssistantMessage, { event, toolResults, agentId }),
+    m(StableAssistantMessage, { event, toolResults, chatId }),
   );
 }
 
-export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunning: boolean): m.Vnode {
+export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning: boolean): m.Vnode {
   const metadata = toolCall.subagent_metadata;
   // Description and agent type come from the tool call itself, so the card renders fully
   // even before the subagent session is linked; fall back to metadata if the tool input
@@ -312,7 +312,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
               onclick(e: Event) {
                 e.preventDefault();
                 e.stopPropagation();
-                openSubagentTab(agentId, sessionId, description);
+                openSubagentTab(chatId, sessionId, description);
               },
             },
             "View conversation",
@@ -331,7 +331,7 @@ export function renderSubagentCard(toolCall: ToolCall, agentId: string, isRunnin
 export function renderToolCallBlock(
   toolCall: ToolCall,
   toolResult: ToolResultEvent | null,
-  agentId: string,
+  chatId: string,
   assistantEventId: string,
 ): m.Vnode {
   // The harness's parser already worked out what this call should read as -- for
@@ -347,10 +347,10 @@ export function renderToolCallBlock(
   // (cached frontend-side for the page session) the first time the row is expanded.
   const requestPayloads = () => {
     if (toolCall.input_chars > 0) {
-      requestEventDetail(agentId, assistantEventId);
+      requestEventDetail(chatId, assistantEventId);
     }
     if (toolResult && toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-")) {
-      requestEventDetail(agentId, toolResult.event_id);
+      requestEventDetail(chatId, toolResult.event_id);
     }
   };
   if (isBlockExpanded(expansionKey)) {
@@ -362,7 +362,7 @@ export function renderToolCallBlock(
   let inputText = "";
   let inputState: PayloadState = "loaded";
   if (toolCall.input_chars > 0 || Boolean(toolCall.tk_command)) {
-    const inputDetail = getEventDetailState(agentId, assistantEventId);
+    const inputDetail = getEventDetailState(chatId, assistantEventId);
     if (inputDetail?.state === "loaded") {
       inputText = inputDetail.detail.inputs_by_tool_call_id[toolCall.tool_call_id] ?? toolCall.tk_command ?? "";
     } else if (toolCall.input_chars === 0) {
@@ -380,7 +380,7 @@ export function renderToolCallBlock(
     // output is fetched. When both exist (a Skill call with real output plus its
     // expansion), the fetched output leads and the expansion follows.
     const isFetchable = toolResult.output_chars > 0 && !toolResult.event_id.startsWith("skill-expansion-");
-    const fetched = isFetchable ? getEventDetailState(agentId, toolResult.event_id) : undefined;
+    const fetched = isFetchable ? getEventDetailState(chatId, toolResult.event_id) : undefined;
     const inline = toolResult.output ?? "";
     if (fetched?.state === "loaded") {
       outputText = [fetched.detail.output ?? "", inline].filter((part) => part).join("\n\n");
@@ -421,8 +421,8 @@ export function renderToolCallBlock(
  */
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
-function renderReauthAction(agentId: string): m.Children {
-  const accountId = getAgentById(agentId)?.labels?.account ?? "";
+function renderReauthAction(chatId: string): m.Children {
+  const accountId = getChatById(chatId)?.labels?.account ?? "";
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(
@@ -465,15 +465,15 @@ function providerFaultNote(kind: string | null): string {
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
  *  readable reasoning. The text itself loads on demand (payload-free wire) and expands
  *  inline; the toggle is deliberately minimal -- most readers never open it. */
-function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string): m.Vnode {
+function renderThinkingDisclosure(event: AssistantMessageEvent, chatId: string): m.Vnode {
   const expansionKey = `think:${event.event_id}`;
   const isExpanded = isBlockExpanded(expansionKey);
   if (isExpanded) {
-    requestEventDetail(agentId, event.event_id);
+    requestEventDetail(chatId, event.event_id);
   }
   // The body is always in the DOM (CSS reveals it under --expanded), so the click
   // handler's direct class toggle is all a collapse needs -- no re-render.
-  const detail = getEventDetailState(agentId, event.event_id);
+  const detail = getEventDetailState(chatId, event.event_id);
   let body: m.Vnode;
   if (detail?.state === "loaded") {
     body = m("div", { class: "thinking-body" }, detail.detail.thinking ?? "");
@@ -498,7 +498,7 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string)
             if (nowExpanded) {
               // Kick off the fetch; the redraw renders the loading note (or the
               // cached text) into the just-revealed body.
-              requestEventDetail(agentId, event.event_id);
+              requestEventDetail(chatId, event.event_id);
               m.redraw();
             }
           }
@@ -517,7 +517,7 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, agentId: string)
 export function renderAssistantMessageChildren(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
-  agentId: string,
+  chatId: string,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution> = new Map(),
 ): m.Children[] {
   const textContent = event.text || "";
@@ -525,7 +525,7 @@ export function renderAssistantMessageChildren(
 
   const children: m.Children[] = [];
   if (event.has_thinking) {
-    children.push(renderThinkingDisclosure(event, agentId));
+    children.push(renderThinkingDisclosure(event, chatId));
   }
   if (textContent) {
     if (event.is_api_error || event.is_auth_error) {
@@ -550,7 +550,7 @@ export function renderAssistantMessageChildren(
                 providerFaultNote(event.api_error_kind),
               )
             : null,
-          event.is_auth_error ? renderReauthAction(agentId) : null,
+          event.is_auth_error ? renderReauthAction(chatId) : null,
         ]),
       );
     } else {
@@ -567,7 +567,7 @@ export function renderAssistantMessageChildren(
       // The Agent call's tool result arrives only when the sub-agent finishes, so its
       // absence is our signal that the sub-agent is still actively working.
       const subagentRunning = !toolResults.has(toolCall.tool_call_id);
-      children.push(renderSubagentCard(toolCall, agentId, subagentRunning));
+      children.push(renderSubagentCard(toolCall, chatId, subagentRunning));
       continue;
     }
     const result = toolResults.get(toolCall.tool_call_id) ?? null;
@@ -581,11 +581,11 @@ export function renderAssistantMessageChildren(
     if (isFiledPermissionRequest(toolCall, result)) {
       const resolution = resolutionForCall(toolCall, result, resolutionsByRequestId);
       children.push(
-        m(PermissionCard, { toolCall, toolResult: result, resolution, agentId, assistantEventId: event.event_id }),
+        m(PermissionCard, { toolCall, toolResult: result, resolution, chatId, assistantEventId: event.event_id }),
       );
       continue;
     }
-    children.push(renderToolCallBlock(toolCall, result, agentId, event.event_id));
+    children.push(renderToolCallBlock(toolCall, result, chatId, event.event_id));
   }
   return children;
 }
@@ -600,7 +600,7 @@ export function renderAssistantMessageChildren(
 export function renderPermissionItem(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
-  agentId: string,
+  chatId: string,
   resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>,
   domId: string = event.event_id,
 ): m.Vnode {
@@ -612,6 +612,6 @@ export function renderPermissionItem(
   return m(
     "div",
     { id: domId, class: "message message-assistant mb-5", key: event.event_id },
-    renderAssistantMessageChildren(event, toolResults, agentId, resolutionsByRequestId),
+    renderAssistantMessageChildren(event, toolResults, chatId, resolutionsByRequestId),
   );
 }

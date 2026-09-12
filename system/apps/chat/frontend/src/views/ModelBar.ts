@@ -16,7 +16,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
@@ -71,7 +71,7 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
 }
 
-export function ModelBar(): m.Component<{ agentId: string }> {
+export function ModelBar(): m.Component<{ chatId: string }> {
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
@@ -106,11 +106,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
 
-  // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
+  // Recompute the offerable models for `chatId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
   // a fetch failure both leave `offeredModels` null -- the picker then shows the whole
   // catalog rather than an empty list.
-  async function fetchOfferedModels(agentId: string): Promise<void> {
+  async function fetchOfferedModels(chatId: string): Promise<void> {
     offeredLoading = true;
     offeredLoaded = false;
     offeredModels = null;
@@ -119,15 +119,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     try {
       const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/model-options"),
-        params: { agentId },
+        url: apiUrl("/api/agents/:chatId/model-options"),
+        params: { chatId },
       });
       // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness
       // answers with `models` (ids), null meaning "offer the whole catalog".
       offeredModels = response.models == null ? null : new Set(response.models);
       dynamicOptions = response.options ?? null;
     } catch (error) {
-      console.warn(`Failed to load offered models for agent ${agentId}`, error);
+      console.warn(`Failed to load offered models for agent ${chatId}`, error);
       offeredModels = null;
       dynamicOptions = null;
     } finally {
@@ -414,7 +414,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
    *  start brings back. No confirmation -- it is one message away from undone. The agent list
    *  catches up through the observe stream. */
-  function stopAgentRow(targetAgentId: string): m.Vnode {
+  function stopAgentRow(targetChatId: string): m.Vnode {
     return m(
       "button",
       {
@@ -424,7 +424,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           closeCard();
-          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
+          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
             .then(async (response) => {
               if (response.ok) return;
               const data = (await response.json().catch(() => ({}))) as { detail?: string };
@@ -526,7 +526,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
 
   /** The Model row's menu: the models this account can actually use. */
   function modelFlyout(
-    agentId: string,
+    chatId: string,
     sourceOptions: readonly CatalogModelOption[],
     matched: CatalogModelOption | null,
     currentIdentity: ModelIdentity,
@@ -566,7 +566,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                         effort: clampEffort(option, currentIdentity.effort),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
-                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
                       setFlyout(null);
                     },
                   },
@@ -614,11 +614,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     },
 
     view(vnode) {
-      const agentId = vnode.attrs.agentId;
-      const agent = getAgentById(agentId);
+      const chatId = vnode.attrs.chatId;
+      const agent = getChatById(chatId);
       const account = accountForAgent(agent?.labels?.account);
       const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-      const choice = catalog === null ? null : effectiveChoice(agentId, agent?.model_choice);
+      const choice = catalog === null ? null : effectiveChoice(chatId, agent?.model_choice);
       const matched = choice?.matched ?? null;
 
       // THREE states have no model, not one, and the Provider row must render in all of them:
@@ -663,7 +663,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             // fetch is the slow part (pi shells out to `pi --list-models`), and by the time a
             // pointer has crossed the card it is usually already back.
             if (catalog?.picker_mode === "search" || catalog?.picker_mode === "dynamic") {
-              void fetchOfferedModels(agentId);
+              void fetchOfferedModels(chatId);
             }
           },
         },
@@ -721,7 +721,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 openable: interactive,
                 tooltip: readOnlyTooltip,
                 onOpen: () => {
-                  if (searchable || dynamic) void fetchOfferedModels(agentId);
+                  if (searchable || dynamic) void fetchOfferedModels(chatId);
                 },
               })
             : null,
@@ -733,7 +733,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 tooltip: readOnlyTooltip,
                 onPick: (level) => {
                   const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
               })
             : null,
@@ -744,12 +744,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 tooltip: readOnlyTooltip,
                 onToggle: () => {
                   const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
               })
             : null,
           m("div", { class: css.DIVIDER }),
-          stopAgentRow(agentId),
+          stopAgentRow(chatId),
         ]),
       );
 
@@ -757,7 +757,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         flyout === "providers"
           ? providerFlyout(account)
           : flyout === "model"
-            ? modelFlyout(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
+            ? modelFlyout(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
             : null;
 
       // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's

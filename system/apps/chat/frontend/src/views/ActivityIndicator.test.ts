@@ -10,10 +10,10 @@ import {
 } from "./ActivityIndicator";
 import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } from "./permission-card";
 
-// The component reads the agent's server-derived state through AgentManager; the
+// The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
 const agentState: { activity_state: string | null } = { activity_state: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState }));
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState }));
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };
@@ -253,7 +253,7 @@ describe("ActivityIndicator — what the strip actually renders", () => {
 
   const render = (): m.Vnode | null => {
     const component = ActivityIndicator();
-    return component.view({ attrs: { agentId: "agent-1", events } } as unknown as Parameters<
+    return component.view({ attrs: { chatId: "agent-1", events } } as unknown as Parameters<
       typeof component.view
     >[0]) as m.Vnode | null;
   };

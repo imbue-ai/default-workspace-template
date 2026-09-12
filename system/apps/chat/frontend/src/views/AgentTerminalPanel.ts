@@ -10,12 +10,12 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import { isAgentProcessDead } from "./agentLiveness";
 import { TerminalFrame } from "./TerminalFrame";
 
 interface AgentTerminalPanelAttrs {
-  agentId: string;
+  chatId: string;
   url: string;
   title: string;
 }
@@ -24,18 +24,18 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
   let starting = true;
   let startError: string | null = null;
 
-  async function ensureAgentStarted(agentId: string): Promise<void> {
-    // Defensive: if the panel was constructed without an agentId (e.g. a
+  async function ensureAgentStarted(chatId: string): Promise<void> {
+    // Defensive: if the panel was constructed without an chatId (e.g. a
     // legacy or corrupt PanelParams entry from a restored layout), there is
     // no agent to start. POSTing to `/api/agents//start` would just 404;
     // skip straight to mounting the iframe with no error banner.
-    if (agentId === "") {
+    if (chatId === "") {
       starting = false;
       m.redraw();
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/agents/${encodeURIComponent(agentId)}/start`), {
+      const response = await fetch(apiUrl(`/api/agents/${encodeURIComponent(chatId)}/start`), {
         method: "POST",
       });
       if (!response.ok) {
@@ -52,7 +52,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
 
   return {
     oninit(vnode) {
-      ensureAgentStarted(vnode.attrs.agentId);
+      ensureAgentStarted(vnode.attrs.chatId);
     },
 
     view(vnode) {
@@ -70,7 +70,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       // pattern as the shell's stopped-app placeholder: unmount the iframe while
       // the agent is positively dead; the agents push after a start swaps it back in.
       // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
-      const agent = vnode.attrs.agentId === "" ? undefined : getAgentById(vnode.attrs.agentId);
+      const agent = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId);
       if (agent !== undefined && isAgentProcessDead(agent.state)) {
         return m(
           "div",
@@ -101,7 +101,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
                 onclick: () => {
                   starting = true;
                   startError = null;
-                  void ensureAgentStarted(vnode.attrs.agentId);
+                  void ensureAgentStarted(vnode.attrs.chatId);
                 },
               },
               "Start agent",
