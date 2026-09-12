@@ -117,7 +117,7 @@ vi.mock("../models/HarnessCatalog", () => {
   };
 });
 vi.mock("../models/Chats", () => ({
-  getChatById: () => mocks.agent,
+  getChatById: () => ({ active_agent: mocks.agent }),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));

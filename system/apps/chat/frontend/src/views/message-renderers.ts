@@ -422,7 +422,7 @@ export function renderToolCallBlock(
 const REAUTH_ACTION_CLASS = "message-api-error-action cursor-pointer text-accent underline hover:text-accent-hover";
 
 function renderReauthAction(chatId: string): m.Children {
-  const accountId = getChatById(chatId)?.labels?.account ?? "";
+  const accountId = getChatById(chatId)?.active_agent.account_id ?? "";
   return m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, [
     "This provider is no longer working. ",
     m(

@@ -119,7 +119,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     try {
       const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
-        url: apiUrl("/api/agents/:chatId/model-options"),
+        url: apiUrl("/api/chats/:chatId/model-options"),
         params: { chatId },
       });
       // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness
@@ -424,7 +424,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           closeCard();
-          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
+          void fetch(apiUrl(`/api/chats/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
             .then(async (response) => {
               if (response.ok) return;
               const data = (await response.json().catch(() => ({}))) as { detail?: string };
@@ -615,10 +615,10 @@ export function ModelBar(): m.Component<{ chatId: string }> {
 
     view(vnode) {
       const chatId = vnode.attrs.chatId;
-      const agent = getChatById(chatId);
-      const account = accountForAgent(agent?.labels?.account);
-      const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-      const choice = catalog === null ? null : effectiveChoice(chatId, agent?.model_choice);
+      const chat = getChatById(chatId);
+      const account = accountForAgent(chat?.active_agent.account_id ?? undefined);
+      const catalog: HarnessCatalog | null = getHarnessCatalog(chat?.active_agent.harness);
+      const choice = catalog === null ? null : effectiveChoice(chatId, chat?.active_agent.model_choice);
       const matched = choice?.matched ?? null;
 
       // THREE states have no model, not one, and the Provider row must render in all of them:
@@ -626,7 +626,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (agent === undefined) return null;
+      if (chat === undefined) return null;
       // Nothing at all to say: no account to name and no model to show.
       if (account === null && matched === null) return null;
 

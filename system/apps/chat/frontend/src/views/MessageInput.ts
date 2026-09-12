@@ -308,7 +308,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         // catalog when it has not loaded yet -- otherwise an early /login could
         // slip through the fetch window.
         if (messageText.trim().startsWith("/")) {
-          const harness = getChatById(chatId)?.harness;
+          const harness = getChatById(chatId)?.active_agent.harness;
           if (getHarnessCatalog(harness) === null) {
             await ensureHarnessCatalogs();
           }
@@ -800,10 +800,10 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       // The stop button is only meaningful while the agent has an interruptible
       // turn in progress -- the same condition that drives the activity indicator
       // above the input, read straight off the backend-derived activity state.
-      const isAgentWorking = isWorkingActivityState(getChatById(chatId)?.activity_state ?? null);
+      const isAgentWorking = isWorkingActivityState(getChatById(chatId)?.active_agent.activity_state ?? null);
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight;
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
-      const hasQueuedMessages = (getChatById(chatId)?.queued_messages ?? []).length > 0;
+      const hasQueuedMessages = (getChatById(chatId)?.active_agent.queued_messages ?? []).length > 0;
       const stopButtonLabel = hasQueuedMessages
         ? "Interrupt agent and bring queued messages to draft area"
         : "Interrupt agent";

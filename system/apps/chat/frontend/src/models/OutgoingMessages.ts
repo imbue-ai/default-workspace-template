@@ -123,11 +123,11 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
  * are harmless. Installed once by the chat document at boot.
  */
 export function trackBackendArrivals(): void {
-  addChatsUpdatedListener((agents) => {
-    for (const agent of agents) {
-      const queuedIds = (agent.queued_messages ?? []).map((queued) => queued.queued_id);
+  addChatsUpdatedListener((chats) => {
+    for (const chat of chats) {
+      const queuedIds = chat.active_agent.queued_messages.map((queued) => queued.queued_id);
       if (queuedIds.length > 0) {
-        noteBackendArrivals(agent.id, queuedIds);
+        noteBackendArrivals(chat.chat_id, queuedIds);
       }
     }
   });

@@ -146,7 +146,7 @@ describe("effectiveChoice", () => {
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
     expect(call).toBeDefined();
     const options = call![0] as RequestOptions;
-    expect(options.url).toBe("/api/agents/:chatId/model");
+    expect(options.url).toBe("/api/chats/:chatId/model");
     expect(options.body).toEqual({ model_id: "opus[1m]", effort: "high", fast: true, axes: ["effort", "fast"] });
   });
 
@@ -182,12 +182,12 @@ describe("effectiveChoice", () => {
 
 describe("fast mode helpers", () => {
   it("reads the agent's fast state from the live choice", () => {
-    mockGetChatById.mockReturnValue({ model_choice: live("opus[1m]", "medium", true, OPUS) });
+    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("opus[1m]", "medium", true, OPUS) } });
     expect(getChatFastMode("a6")).toBe(true);
   });
 
   it("setFastMode applies fast to the current model, keeping the effort", async () => {
-    mockGetChatById.mockReturnValue({ model_choice: live("opus[1m]", "high", false, OPUS) });
+    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("opus[1m]", "high", false, OPUS) } });
     setFastMode("a7", true);
     await flush();
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
@@ -200,7 +200,7 @@ describe("fast mode helpers", () => {
   });
 
   it("setFastMode is a no-op for a model that does not support fast", async () => {
-    mockGetChatById.mockReturnValue({ model_choice: live("sonnet", "medium", false, SONNET) });
+    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("sonnet", "medium", false, SONNET) } });
     setFastMode("a8", true);
     await flush();
     expect(mockRequest).not.toHaveBeenCalled();

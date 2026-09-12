@@ -21,7 +21,7 @@ let reportingClientId: string | null = null;
 
 function post(chatId: string, clientId: string, state: PresenceState): void {
   // keepalive lets the closed report leave with the page on pagehide.
-  void fetch(apiUrl(`/api/agents/${encodeURIComponent(chatId)}/presence`), {
+  void fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/presence`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId, state }),

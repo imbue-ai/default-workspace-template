@@ -13,7 +13,7 @@ import { notePermissionResolutions, resetShellPermissionResolutionsForTesting } 
 // The component reads the agent's server-derived state through the chats model; the
 // mock factory is hoisted, so the state it serves lives in a mutable holder.
 const agentState: { activity_state: string | null } = { activity_state: null };
-vi.mock("../models/Chats", () => ({ getChatById: () => agentState }));
+vi.mock("../models/Chats", () => ({ getChatById: () => ({ active_agent: agentState }) }));
 
 function userMsg(ts: string): TranscriptEvent {
   return { timestamp: ts, type: "user_message", event_id: `u-${ts}`, source: "test", role: "user", content: "hi" };

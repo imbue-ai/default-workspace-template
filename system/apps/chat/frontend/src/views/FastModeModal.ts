@@ -24,7 +24,7 @@ function promptingAgentName(): string | null {
   if (chatId === null) {
     return null;
   }
-  return getChatById(chatId)?.name ?? null;
+  return getChatById(chatId)?.title ?? null;
 }
 
 export function FastModeModal(): m.Component {

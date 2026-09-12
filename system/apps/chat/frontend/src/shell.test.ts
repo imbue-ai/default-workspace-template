@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
 const createChat = vi.fn();
-vi.mock("./models/Chats", () => ({ createChat }));
+vi.mock("./models/Chats", () => ({ createChat, getChatById: () => undefined }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),

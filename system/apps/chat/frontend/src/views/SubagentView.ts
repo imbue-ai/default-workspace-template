@@ -16,12 +16,20 @@ import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 
 interface SubagentViewAttrs {
   chatId: string;
+  // The agent of the chat whose harness session the subagent is a session of.
+  agentId: string;
   subagentSessionId: string;
 }
 
 interface SubagentEventsResponse {
   events: TranscriptEvent[];
   metadata: SubagentMetadata | null;
+}
+
+/** The chat app's route for one subagent session: the chat, the agent it ran under, the session. */
+function subagentRoute(chatId: string, agentId: string, sessionId: string, leaf: "events" | "stream"): string {
+  const parts = [chatId, "agents", agentId, "subagents", sessionId, leaf];
+  return `/api/chats/${parts.map(encodeURIComponent).join("/")}`;
 }
 
 export function SubagentView(): m.Component<SubagentViewAttrs> {
@@ -70,16 +78,14 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     return added;
   }
 
-  async function fetchSubagentEvents(chatId: string, subagentSessionId: string): Promise<void> {
+  async function fetchSubagentEvents(chatId: string, agentId: string, subagentSessionId: string): Promise<void> {
     loading = true;
     loadingError = null;
 
     try {
       const result = await m.request<SubagentEventsResponse>({
         method: "GET",
-        url: apiUrl(
-          `/api/agents/${encodeURIComponent(chatId)}/subagents/${encodeURIComponent(subagentSessionId)}/events`,
-        ),
+        url: apiUrl(subagentRoute(chatId, agentId, subagentSessionId, "events")),
       });
       events = [];
       eventIds.clear();
@@ -92,14 +98,12 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     }
   }
 
-  function connectToStream(chatId: string, subagentSessionId: string): void {
+  function connectToStream(chatId: string, agentId: string, subagentSessionId: string): void {
     if (eventSource !== null) {
       return;
     }
 
-    const url = apiUrl(
-      `/api/agents/${encodeURIComponent(chatId)}/subagents/${encodeURIComponent(subagentSessionId)}/stream`,
-    );
+    const url = apiUrl(subagentRoute(chatId, agentId, subagentSessionId, "stream"));
     eventSource = new EventSource(url);
 
     eventSource.onmessage = (messageEvent: MessageEvent) => {
@@ -159,10 +163,10 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
   return {
     oninit(vnode) {
-      const { chatId, subagentSessionId } = vnode.attrs;
+      const { chatId, agentId, subagentSessionId } = vnode.attrs;
       engine.setChat(null);
-      fetchSubagentEvents(chatId, subagentSessionId).then(() => {
-        connectToStream(chatId, subagentSessionId);
+      fetchSubagentEvents(chatId, agentId, subagentSessionId).then(() => {
+        connectToStream(chatId, agentId, subagentSessionId);
       });
     },
 

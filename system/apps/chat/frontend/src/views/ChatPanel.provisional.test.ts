@@ -126,7 +126,7 @@ function mountPanel(): () => unknown {
 }
 
 function awaiting(): void {
-  mocks.proto = { agent_id: AGENT_ID, name: "Chat 1", account_id: "", phase: "awaiting_account", error: null };
+  mocks.proto = { chat_id: AGENT_ID, name: "Chat 1", account_id: "", phase: "awaiting_account", error: null };
 }
 
 describe("ChatPanel over a provisional chat", () => {
@@ -212,10 +212,10 @@ describe("ChatPanel over a provisional chat", () => {
     await flushAsync();
     expect(renderedText(render())).toContain("is not waiting to be launched");
 
-    mocks.proto = { agent_id: AGENT_ID, name: "Chat 1", account_id: "acct-1", phase: "creating", error: null };
+    mocks.proto = { chat_id: AGENT_ID, name: "Chat 1", account_id: "acct-1", phase: "creating", error: null };
     render();
     mocks.proto = {
-      agent_id: AGENT_ID,
+      chat_id: AGENT_ID,
       name: "Chat 1",
       account_id: "acct-1",
       phase: "failed",
@@ -229,7 +229,7 @@ describe("ChatPanel over a provisional chat", () => {
 
   it("shows a failed create's reason and retries it on the record's account", () => {
     mocks.proto = {
-      agent_id: AGENT_ID,
+      chat_id: AGENT_ID,
       name: "Chat 1",
       account_id: "acct-1",
       phase: "failed",

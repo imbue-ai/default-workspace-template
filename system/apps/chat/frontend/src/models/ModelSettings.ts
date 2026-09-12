@@ -151,7 +151,7 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
   try {
     await m.request({
       method: "POST",
-      url: apiUrl("/api/agents/:chatId/model"),
+      url: apiUrl("/api/chats/:chatId/model"),
       params: { chatId },
       body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });
@@ -175,8 +175,7 @@ function schedulePendingTimeout(chatId: string, identity: ModelIdentity): void {
  *  false when the agent's model is not resolved. Used by the workspace fast-mode
  *  prompt to decide whether the question is still open. */
 export function getChatFastMode(chatId: string): boolean {
-  const agent = getChatById(chatId);
-  const choice = effectiveChoice(chatId, agent?.model_choice);
+  const choice = effectiveChoice(chatId, getChatById(chatId)?.active_agent.model_choice);
   return choice?.identity.fast ?? false;
 }
 
@@ -184,8 +183,7 @@ export function getChatFastMode(chatId: string): boolean {
  *  Used by the workspace fast-mode prompt. No-op when the agent's model is unknown
  *  or does not support fast mode. */
 export function setFastMode(chatId: string, enabled: boolean): void {
-  const agent = getChatById(chatId);
-  const choice = effectiveChoice(chatId, agent?.model_choice);
+  const choice = effectiveChoice(chatId, getChatById(chatId)?.active_agent.model_choice);
   if (!choice || choice.matched === null || !choice.matched.supports_fast) {
     return;
   }

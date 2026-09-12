@@ -20,7 +20,7 @@ export interface Conversation {
 }
 
 function toAgent(a: ChatSnapshot): Agent {
-  return { id: a.id, name: a.name, state: a.state };
+  return { id: a.chat_id, name: a.name, state: a.active_agent.state };
 }
 
 export function getAgents(): Agent[] {
@@ -42,9 +42,9 @@ export async function fetchAgents(): Promise<void> {
 // Compatibility shim for hooks/slots that expect conversations
 export function getConversations(): Conversation[] {
   return getListedChats().map((a) => ({
-    id: a.id,
+    id: a.chat_id,
     name: a.name,
-    model: a.state,
+    model: a.active_agent.state,
     latest_response_datetime_utc: null,
   }));
 }

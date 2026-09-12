@@ -3,7 +3,7 @@
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING -- delivered on ``activity_state`` via the
- * ``agents_updated`` WS payload. This component's job is to render a label:
+ * ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
@@ -11,7 +11,7 @@
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
  * A null ``activity_state`` means the server has no per-agent activity tracking
- * for this agent (proto-agents, remote agents) -- the strip collapses.
+ * for this chat (provisional chats, remote agents) -- the strip collapses.
  *
  * One state has no backend signal at all: the beat between the user resolving a
  * permission request and the agent being told. The verdict reaches this page
@@ -221,7 +221,7 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     },
     view(vnode) {
       const { chatId, events } = vnode.attrs;
-      const state = getChatById(chatId)?.activity_state ?? null;
+      const state = getChatById(chatId)?.active_agent.activity_state ?? null;
       const label = labelForActivityState(state, events);
 
       const now = Date.now();

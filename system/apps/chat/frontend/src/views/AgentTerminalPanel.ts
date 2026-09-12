@@ -27,7 +27,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
   async function ensureAgentStarted(chatId: string): Promise<void> {
     // Defensive: if the panel was constructed without an chatId (e.g. a
     // legacy or corrupt PanelParams entry from a restored layout), there is
-    // no agent to start. POSTing to `/api/agents//start` would just 404;
+    // no agent to start. POSTing to `/api/chats//start` would just 404;
     // skip straight to mounting the iframe with no error banner.
     if (chatId === "") {
       starting = false;
@@ -35,7 +35,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       return;
     }
     try {
-      const response = await fetch(apiUrl(`/api/agents/${encodeURIComponent(chatId)}/start`), {
+      const response = await fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/start`), {
         method: "POST",
       });
       if (!response.ok) {
@@ -70,7 +70,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       // pattern as the shell's stopped-app placeholder: unmount the iframe while
       // the agent is positively dead; the agents push after a start swaps it back in.
       // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
-      const agent = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId);
+      const agent = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId)?.active_agent;
       if (agent !== undefined && isAgentProcessDead(agent.state)) {
         return m(
           "div",
