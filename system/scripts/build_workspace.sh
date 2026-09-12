@@ -9,7 +9,12 @@
 # idempotent.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-export PATH="/root/.local/bin:$PATH"
+
+# Pin the uv tool directories and put their bin dir first on PATH, so the installs
+# below land in the environment every later lookup resolves -- whichever $HOME this
+# script happens to run under (see _tool_env.sh).
+. "$(dirname "$0")/_tool_env.sh"
+tool_env_pin
 
 # NOTE: intentionally NOT guarded by the provisioning skip cache -- this produces
 # in-repo outputs (frontend dist, .venv) that the create's git-mirror landing does
@@ -22,8 +27,8 @@ export PATH="/root/.local/bin:$PATH"
 # SIGILLs in `_armv8_sve_get_vl_bytes`. OPENSSL_armcap=0 falls back to
 # NEON-only paths, which run on both real M-series silicon and the VZ guest.
 # The same env var rides the agent's runtime env via .mngr/settings.toml
-# `host_env__extend`; this export covers the build-time `mngr plugin add`
-# below, which runs before /home/user/.mngr/env is sourced.
+# `host_env__extend`; this export covers the build-time `uv tool install`s
+# below, which run before /home/user/.mngr/env is sourced.
 export OPENSSL_armcap=0
 
 # Pin uv to a Python that satisfies the lockfile (>=3.12). The Docker base ships
@@ -49,18 +54,13 @@ git config --global --add safe.directory "$REPO_ROOT"
 # own pyproject, so no app runs from the root venv and one app's pins never
 # constrain another's. The manifest is the discriminator: an app with a
 # pyproject but no manifest runs `uv run <name>` from the root venv, and both
-# forms are supported. An app's
-# tool also gets the mngr plugins system/config/mngr_plugins.toml assigns to
-# its manifest name, as editable extras, so it can parse plugin-specific
-# config; the update-self apply reads the same table, so a release adding a
-# plugin registers it in existing workspaces as well as here. mngr_modal is
-# intentionally not registered (providers.modal.is_enabled=false).
-MNGR_PLUGIN_ARGS=()
-while IFS= read -r plugin_path; do
-    MNGR_PLUGIN_ARGS+=(--path "$plugin_path")
-done < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool mngr --repo-root "$REPO_ROOT")
-
-uv tool install -e "$REPO_ROOT/system/vendor/mngr/libs/mngr"
+# forms are supported. Each tool also gets the mngr plugins
+# system/config/mngr_plugins.toml assigns to it -- `mngr` for the mngr tool,
+# an app's manifest name for that app's -- as editable extras, so it can parse
+# plugin-specific config; the update-self apply reads the same table, so a
+# release adding a plugin registers it in existing workspaces as well as here.
+# mngr_modal is intentionally not registered (providers.modal.is_enabled=false).
+python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-root "$REPO_ROOT"
 
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
@@ -72,7 +72,11 @@ for app_dir in "$REPO_ROOT"/system/apps/*/; do
     uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 
-mngr plugin add "${MNGR_PLUGIN_ARGS[@]}"
+# Drop an mngr install left under a different $HOME by a create that ran before the pin
+# above: it shadows the pinned one on every login shell's PATH and no update refreshes it.
+# Shared with the update apply, which does the same for workspaces whose update can still
+# run -- see tool_env.py. Runs after the install, so it always has a confirmed copy to keep.
+python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-shadowing-mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.

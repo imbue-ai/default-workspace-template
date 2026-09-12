@@ -2,8 +2,8 @@
 """Print the plugin paths ``system/config/mngr_plugins.toml`` assigns to one tool.
 
 One path per line, relative to the workspace root, for ``build_workspace.sh``
-to feed ``uv tool install --with-editable`` (keyed by an app's manifest name)
-and ``mngr plugin add --path`` (keyed by ``mngr``).
+to feed ``uv tool install --with-editable`` -- keyed by ``mngr`` for the mngr
+tool, and by an app's manifest name for that app's.
 The update-self apply reads the same file itself.
 """
 
