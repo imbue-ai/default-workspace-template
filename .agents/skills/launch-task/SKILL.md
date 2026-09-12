@@ -79,7 +79,7 @@ BODY_EOF
 
 ## 2. Launch the worker
 
-`system/scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
+`.agents/skills/launch-task/scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
 the runtime-dir push, and the task message. Run it in the foreground so a
 failed launch surfaces immediately.
 

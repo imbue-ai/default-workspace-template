@@ -127,6 +127,7 @@ _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
 _MESSAGE_CHAT_SCRIPT_REL = Path("system") / "scripts" / "message_chat.py"
 
 _LEAD_AGENT_FIELD = "lead_agent"
+_LEAD_WORK_DIR_FIELD = "lead_work_dir"
 _WORKER_AGENT_ID_FIELD = "worker_agent_id"
 
 _DEFAULT_TIMEOUT = "30m"
@@ -284,7 +285,7 @@ def _set_frontmatter_field(text: str, key: str, value: str) -> str:
 
 
 def _ensure_lead_agent(task_file: Path) -> int | None:
-    """Stamp the launching agent as the report recipient in the task file.
+    """Stamp the launching agent, and its work dir, as the report recipient in the task file.
 
     The agent running ``launch`` *is* the lead that polls for the worker's
     report, so its own ``MNGR_AGENT_ID`` is the authoritative ``lead_agent`` --
@@ -292,14 +293,21 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     rather than trusting the task file. That frees task-file authors from setting
     the field at all and eliminates a silent-failure class: a literal,
     unexpanded ``$MNGR_AGENT_ID`` (or a stale/omitted value) used to leave the
-    worker with no valid address, so it could not rsync its report back and the
+    worker with no valid address, so its report never reached the lead and the
     lead's poll waited forever.
 
-    The id, not the name: ``mngr rsync`` and ``mngr transcript`` accept either,
-    and a user can rename the lead's chat mid-task, which changes its mngr name
-    and leaves a name-addressed worker pushing to an agent that no longer
-    exists. The field keeps its ``lead_agent`` key so older workers and task
-    files still parse.
+    The id, not the name: ``mngr transcript`` accepts either, and a user can
+    rename the lead's chat mid-task, which changes its mngr name and leaves a
+    name-addressed worker reading an agent that no longer exists. It is the
+    dispatching *agent*, not its chat: a chat is the chat app's notion, and mngr
+    (whose transcript the worker reads) knows only agents. The field keeps its
+    ``lead_agent`` key so older workers and task files still parse.
+
+    ``lead_work_dir`` (``MNGR_AGENT_WORK_DIR``, the lead's own checkout) is what
+    the worker writes its report into: the worker's worktree hangs off the same
+    repo, so the lead's work dir is a plain local path for it. Stamped only when
+    the environment names it; a worker without it falls back to the repo's main
+    worktree, which is the lead's work dir for every chat agent.
 
     When ``MNGR_AGENT_ID`` is unset -- i.e. ``launch`` is running outside an
     mngr agent, as in a manual invocation or a test -- the file's existing value
@@ -318,6 +326,10 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     if frontmatter is None:
         return None
     current = frontmatter.get(_LEAD_AGENT_FIELD)
+    lead_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
+    if lead_work_dir and frontmatter.get(_LEAD_WORK_DIR_FIELD) != lead_work_dir:
+        text = _set_frontmatter_field(text, _LEAD_WORK_DIR_FIELD, lead_work_dir)
+        task_file.write_text(text, encoding="utf-8")
     lead_id = os.environ.get("MNGR_AGENT_ID")
     if lead_id:
         if current == lead_id:

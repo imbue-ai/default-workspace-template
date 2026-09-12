@@ -52,11 +52,13 @@ When a request comes back with the "request not permitted by the user" message, 
 # The request goes in a tool call of its own, with nothing else in it and its output untouched.
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "READ"}, "rationale": "I'"'"'d like to access the /home/hynek/project directory in order to find the most recent accounting spreadsheet you asked me about."}'
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "file-sharing", "payload": {"path": "/home/hynek/project", "access": "READ"}, "rationale": "I'"'"'d like to access the /home/hynek/project directory in order to find the most recent accounting spreadsheet you asked me about."}'
 ```
 
 The body must be a JSON object with exactly four fields:
-`agent_id` (use `$MNGR_AGENT_ID`), `rationale`, `type` (use "file-sharing"), and `payload`.
+`agent_id` (the chat the request belongs to: use `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`, since the chat app
+sets `MINDS_CHAT_ID` on every agent it creates and an agent created any other way is its own
+chat), `rationale`, `type` (use "file-sharing"), and `payload`.
 
 `payload` must be an object with exactly two string fields: `path` and `access`. `path` should be absolute, `access` must be "READ" or "WRITE".
 

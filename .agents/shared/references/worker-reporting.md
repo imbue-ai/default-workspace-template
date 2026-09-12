@@ -14,20 +14,23 @@ alongside it. At the start of your run, extract the lead's address with:
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py '<TASK_FILE_GLOB>')"
 ```
 
-Quote the pattern. `LEAD_AGENT` is the lead's `mngr` agent id (an
-`agent-<hex>` value; older launchers stamped its name, which a rename of the
-lead's chat invalidates mid-task, so never resolve or copy it as a name). It
-is the address you rsync to when the lead's work dir is not this repo's main
-worktree, and the agent whose transcript you read; `FINISH_REPORT_PATH` is
-the destination path on the lead's worktree where your report file must
-land -- the lead polls for exactly this file. Any additional string fields
-the lead set in the frontmatter also become shell variables -- see your
-worker SKILL.md for which extras (if any) the calling flow stages.
+Quote the pattern. `LEAD_AGENT` is the `mngr` agent id of the agent that
+dispatched you (an `agent-<hex>` value; older launchers stamped its name,
+which a rename of the lead's chat invalidates mid-task, so never resolve or
+copy it as a name). It is the agent whose transcript you read (`mngr
+transcript $LEAD_AGENT`): mngr knows agents, not chats, so it names the agent
+even though the lead's chat may have run on others before it.
+`LEAD_WORK_DIR` is the lead's own checkout, where your report must land, and
+`FINISH_REPORT_PATH` is the report's path relative to it -- the lead polls for
+exactly this file. Any additional string fields the lead set in the frontmatter
+also become shell variables -- see your worker SKILL.md for which extras (if
+any) the calling flow stages.
 
-`LEAD_AGENT` may legitimately be unset: a launcher that predates
-launch-time stamping does not write it (the parser warns instead of
-failing). That never blocks reporting -- the primary delivery in step 2
-does not need it.
+`LEAD_AGENT` and `LEAD_WORK_DIR` may legitimately be unset: a launcher that
+predates launch-time stamping does not write them, and a launch from outside an
+agent has no work dir to stamp (the parser warns instead of failing). That never
+blocks reporting -- the delivery in step 2 falls back to the repo's main
+worktree, which is the lead's work dir for every chat agent.
 
 ## Reporting procedure
 
@@ -46,39 +49,19 @@ At each gate or terminal status:
    <body: the message the user needs to see, addressing the user directly>
    ```
 
-2. Deliver the report by writing it straight into the lead's workspace. Your
-   worktree hangs off the lead's own git repo, so the repo's *main* worktree is
-   the lead's workspace (every chat agent's work dir is the workspace root) and
-   the lead polls the same `FINISH_REPORT_PATH` relative to it:
+2. Deliver the report by writing it straight into the lead's work dir. Your
+   worktree hangs off the lead's own git repo on the same host, so the lead's
+   checkout is a plain local path for you: `LEAD_WORK_DIR` when the launcher
+   stamped it (a lead in a worktree of its own, such as a worker that launched a
+   worker, is reached this way), else the repo's *main* worktree (every chat
+   agent's work dir is the workspace root). The lead polls the same
+   `FINISH_REPORT_PATH` relative to it:
 
    ```bash
-   LEAD_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+   LEAD_WORKTREE="${LEAD_WORK_DIR:-$(git worktree list --porcelain | head -1 | sed 's/^worktree //')}"
    mkdir -p "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")"
    cp "<RUNTIME_REPORTS_DIR>/report.md" "$LEAD_WORKTREE/$FINISH_REPORT_PATH"
    ```
-
-   **Lead in a worktree of its own** (its work dir is not the repo's main
-   worktree, e.g. a worker that launched a worker): the write above lands in the
-   wrong checkout, so push the report directory to the lead by its id instead:
-
-   ```bash
-   mngr rsync ./<RUNTIME_REPORTS_DIR>/ \
-       "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
-       --uncommitted-changes=merge
-   ```
-
-   `mngr rsync` takes `SOURCE DESTINATION`: your local `<RUNTIME_REPORTS_DIR>/`
-   first, then the lead endpoint. `LEAD_AGENT` / `FINISH_REPORT_PATH` come from
-   the `eval` above; `<RUNTIME_REPORTS_DIR>` is your worker SKILL.md's local
-   reports dir. mngr treats an argument as a local path only when it starts with
-   `/`, `./`, `../`, or `~/` (hence the `./` on the source; a bare `data/foo`
-   reads as an agent name), and a relative path on the lead endpoint resolves
-   against the lead's workdir. You sync the report's *parent directory*
-   (`dirname`) rather than the file itself: the trailing slashes matter (rsync
-   directory semantics) and rsync cannot transfer a single file.
-   `--uncommitted-changes=merge` is required because the lead's worktree usually
-   has uncommitted local state. If the push fails, or `LEAD_AGENT` is unset, fall
-   back to the write above.
 
    Never end a run with the report sitting only in your own worktree -- a
    finished worker that cannot say so looks identical to a hung one from the
