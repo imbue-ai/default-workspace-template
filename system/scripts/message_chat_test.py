@@ -262,7 +262,7 @@ def test_a_404_that_clears_within_the_window_is_delivered_by_the_chat_app(
 
 
 def test_the_chat_app_url_comes_from_the_registry_row_else_the_fixed_port(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     registry = tmp_path / "apps.toml"
 
@@ -279,12 +279,16 @@ def test_the_chat_app_url_comes_from_the_registry_row_else_the_fixed_port(
         message_chat.chat_app_url({message_chat.ENV_APPS_FILE: str(registry)}, tmp_path)
         == "http://127.0.0.1:8123"
     )
+    # A missing or rowless registry is the expected "not registered yet"; nothing is said.
+    assert capsys.readouterr().err == ""
 
     registry.write_text("not toml at all [[")
     assert (
         message_chat.chat_app_url({message_chat.ENV_APPS_FILE: str(registry)}, tmp_path)
         == message_chat.CHAT_APP_FALLBACK_URL
     )
+    # One that exists but does not parse is a real fault, so it is named before the fallback.
+    assert f"{registry} does not parse" in capsys.readouterr().err
 
 
 def test_no_message_on_a_terminal_is_a_usage_error(

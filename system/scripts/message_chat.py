@@ -155,14 +155,22 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     """The chat app's base URL: its registry row, else the fixed fallback.
 
     A missing, unreadable, or rowless registry reads as "not registered yet", never as an
-    error: the fallback is the port the chat app has always used.
+    error: the fallback is the port the chat app has always used. A registry that exists
+    but does not parse takes the same fallback, noted on stderr.
     """
     apps_file = Path(environ.get(ENV_APPS_FILE) or DEFAULT_APPS_FILE)
     if not apps_file.is_absolute():
         apps_file = cwd / apps_file
     try:
         rows = tomllib.loads(apps_file.read_text(encoding="utf-8")).get("apps", [])
-    except (OSError, tomllib.TOMLDecodeError):
+    except OSError:
+        return CHAT_APP_FALLBACK_URL
+    except tomllib.TOMLDecodeError as exc:
+        print(
+            f"The app registry at {apps_file} does not parse ({exc}); "
+            f"using the chat app's fixed address {CHAT_APP_FALLBACK_URL}",
+            file=sys.stderr,
+        )
         return CHAT_APP_FALLBACK_URL
     for row in rows:
         if (
