@@ -1256,8 +1256,10 @@ class LiveBrowser(MutableModel):
 
     async def _message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
         """Best-effort: message a queued agent's chat through the chat app (the same path
-        launch-task uses). Failures are logged, not raised -- the claim window / lifecycle
-        handling is the backstop if a message never lands.
+        launch-task uses). Failures are logged, not raised -- a messenger that cannot be
+        spawned and one that exits nonzero (``mngr message``'s codes: 1 not delivered, 7
+        delivered but the agent's input is blocked) both leave a warning; the claim window /
+        lifecycle handling is the backstop if a message never lands.
 
         These are automated, non-human nudges, so they go with ``--system``: the transcript
         UI renders them as a collapsed system chip instead of a bare user bubble. This is
@@ -1278,10 +1280,18 @@ class LiveBrowser(MutableModel):
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await proc.wait()
         except OSError as e:
             logger.warning(
                 "could not message agent {} for browser {} ({})", agent_name or agent_id, self.browser_id, e
+            )
+            return
+        returncode = await proc.wait()
+        if returncode != 0:
+            logger.warning(
+                "message_chat.py exited {} messaging agent {} for browser {}; the message may not have landed",
+                returncode,
+                agent_name or agent_id,
+                self.browser_id,
             )
 
     async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:

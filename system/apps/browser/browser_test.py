@@ -22,6 +22,7 @@ from browser.errors import (
     UnknownBrowserError,
 )
 from browser.primitives import BrowserName
+from loguru import logger
 from mock_cdp_client_test import NavigatingCdpClient
 
 
@@ -2028,3 +2029,27 @@ def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message
         "the browser is yours",
     )
     assert Path(str(kwargs["cwd"])).joinpath("system", "scripts", "message_chat.py").is_file()
+
+
+def test_message_agent_logs_a_messenger_that_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The messenger's exit status is the failure signal (its output goes to DEVNULL), so a nonzero one
+    leaves a warning naming it and the agent; the wake itself stays best-effort and raises nothing."""
+
+    class _Blocked:
+        async def wait(self) -> int:
+            return 7
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _Blocked:
+        return _Blocked()
+
+    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        asyncio.run(bsession.LiveBrowser(browser_id="b1")._message_agent("agent-1", "riley", "the browser is yours"))
+    finally:
+        logger.remove(sink_id)
+
+    [warning] = warnings
+    assert "exited 7" in warning
+    assert "riley" in warning
