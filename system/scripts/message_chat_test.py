@@ -193,6 +193,22 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
 
 
+def test_a_backoff_with_no_mngr_on_path_is_a_failure_not_a_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    rc, _ = _run("-m", "hello")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert "could not run `mngr`" in capsys.readouterr().err
+
+
 def test_a_connection_dropped_after_the_connect_is_a_failure_not_a_backoff(
     fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
