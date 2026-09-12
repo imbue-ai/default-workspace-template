@@ -137,9 +137,9 @@ def parse(task_file: Path) -> dict[str, str]:
             if field == _ADDRESS_FIELD:
                 print(
                     f"warning: task frontmatter has no `{_ADDRESS_FIELD}` (the "
-                    "launcher predates launch-time stamping?); the lead cannot be "
-                    "addressed by rsync -- deliver the report by writing it into "
-                    "the lead's workspace, per worker-reporting.md.",
+                    "launcher predates launch-time stamping?); the lead's transcript "
+                    "cannot be read by id. Reporting is unaffected: write the report "
+                    "into the lead's work dir, per worker-reporting.md.",
                     file=sys.stderr,
                 )
                 continue
