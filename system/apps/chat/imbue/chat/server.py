@@ -139,6 +139,11 @@ def _chat_not_found_response(chat_id: str) -> Response:
     return json_response(error.model_dump(), status_code=404)
 
 
+def _agent_list_not_known_response() -> Response:
+    failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
+    return json_response(failure.model_dump(), status_code=503)
+
+
 # Default number of events for tail-first loading
 _DEFAULT_TAIL_COUNT = 50
 
@@ -357,8 +362,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # message` on a 404 (`system/scripts/message_chat.py`), and a 404 during the seconds after
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
-        failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
-        return json_response(failure.model_dump(), status_code=503)
+        return _agent_list_not_known_response()
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         return _chat_not_found_response(chat_id)
@@ -1096,8 +1100,7 @@ def _list_chats_endpoint() -> Response:
     """List every chat this app lists, as the snapshots the pages see."""
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
-        failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
-        return json_response(failure.model_dump(), status_code=503)
+        return _agent_list_not_known_response()
     response = ChatListResponse(chats=tuple(agent_manager.get_chat_snapshots()))
     return json_response(response.model_dump(mode="json"))
 
