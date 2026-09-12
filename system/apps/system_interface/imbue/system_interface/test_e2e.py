@@ -1150,13 +1150,16 @@ def test_launcher_app_filter_hides_an_app_and_reset_restores_it(tmp_path: Path, 
         expect(stub_row).to_have_count(1, timeout=15000)
 
         section.locator("button[aria-expanded]").click()
-        notes_checkbox = section.locator("label", has_text=_SECOND_APP_DISPLAY_NAME)
+        # The filter is the shared menu, which portals to <body>: its rows are on the page, not
+        # under the section that opened it.
+        menu = page.locator('[data-menu-part="menu"]')
+        notes_checkbox = menu.locator("label", has_text=_SECOND_APP_DISPLAY_NAME)
         expect(notes_checkbox).to_be_visible(timeout=5000)
         notes_checkbox.click()
         expect(notes_row).to_have_count(0)
         expect(stub_row).to_have_count(1)
 
-        section.locator("button", has_text="Reset filters").click()
+        menu.locator("button", has_text="Reset filters").click()
         expect(notes_row).to_have_count(1)
         expect(stub_row).to_have_count(1)
 
