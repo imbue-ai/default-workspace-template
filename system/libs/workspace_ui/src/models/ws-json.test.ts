@@ -11,8 +11,8 @@ afterEach(() => {
 
 describe("parseJsonMessage", () => {
   it("parses a well-formed payload", () => {
-    const result = parseJsonMessage<SampleMessage>('{"type":"agents_updated"}');
-    expect(result).toEqual({ type: "agents_updated" });
+    const result = parseJsonMessage<SampleMessage>('{"type":"chats_updated"}');
+    expect(result).toEqual({ type: "chats_updated" });
   });
 
   it("returns null on a malformed payload without throwing", () => {

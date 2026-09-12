@@ -11,7 +11,8 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   wsUrl: (path: string) => `ws://test${path}`,
 }));
 
-import type { ChatSnapshot, ProvisionalChat } from "./Chats";
+import type { ProvisionalChat } from "./Chats";
+import { chatSnapshotFixture } from "./chatSnapshotFixture";
 
 type ChatsModule = typeof import("./Chats");
 
@@ -44,12 +45,10 @@ function open(): void {
   socket.onopen();
 }
 
-function agent(id: string): ChatSnapshot {
-  return { id, name: id, state: "RUNNING", labels: {}, work_dir: null };
-}
+const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { agent_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error };
+  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A
@@ -80,42 +79,42 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("stores a pushed record and replaces it when the same chat is pushed in a new phase", () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "awaiting_account") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_account") });
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("awaiting_account");
 
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");
   });
 
-  it("drops the record and releases a held send once the agent list names the chat", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+  it("drops the record and releases a held send once the chat list names the chat", async () => {
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
     expect(await settledState(registered)).toBe("pending");
 
-    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
 
     await expect(registered).resolves.toBeUndefined();
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
-    expect(manager.getChatById("agent-1")?.id).toBe("agent-1");
+    expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
   });
 
   it("resolves at once for a chat the app already lists", async () => {
-    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();
   });
 
   it("resolves at once for a chat the app neither lists nor is creating, so the send reports the refusal", async () => {
-    push({ type: "agents_updated", agents: [] });
+    push({ type: "chats_updated", chats: [] });
     await expect(manager.whenChatRegistered("agent-gone")).resolves.toBeUndefined();
   });
 
   it("marks a failed create on its record and rejects a held send with the reason", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
     push({
-      type: "proto_agent_completed",
-      agent_id: "agent-1",
+      type: "provisional_chat_completed",
+      chat_id: "agent-1",
       success: false,
       error: "mngr create exited with code 3",
     });
@@ -128,58 +127,58 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("rejects a send at once for a chat whose create already failed", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "failed", "mngr create exited with code 3") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "failed", "mngr create exited with code 3") });
 
     await expect(manager.whenChatRegistered("agent-1")).rejects.toThrow("mngr create exited with code 3");
   });
 
-  it("keeps a held send waiting after a successful completion until the agent list names the chat", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+  it("keeps a held send waiting after a successful completion until the chat list names the chat", async () => {
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
-    push({ type: "proto_agent_completed", agent_id: "agent-1", success: true, error: null });
+    push({ type: "provisional_chat_completed", chat_id: "agent-1", success: true, error: null });
 
     // The record is gone, but the send has nothing to reach until the list carries the agent.
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
     expect(await settledState(registered)).toBe("pending");
-    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
     await expect(registered).resolves.toBeUndefined();
   });
 
-  it("lets the agent list win over a record replayed after the chat registered", async () => {
-    push({ type: "agents_updated", agents: [agent("agent-1")] });
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+  it("lets the chat list win over a record replayed after the chat registered", async () => {
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
 
-    // A late record does not unlist the agent, and a send reaches it at once: the record is
+    // A late record does not unlist the chat, and a send reaches it at once: the record is
     // what the page's provisionalRecord discards while the list names the chat.
-    expect(manager.getChatById("agent-1")?.id).toBe("agent-1");
+    expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();
   });
 
   it("drops a discarded chat and rejects a held send", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
-    push({ type: "proto_agent_completed", agent_id: "agent-1", success: false, error: null });
+    push({ type: "provisional_chat_completed", chat_id: "agent-1", success: false, error: null });
 
     await expect(registered).rejects.toThrow("closed before it started");
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
   });
 
   it("drops a record a reconnect's replay does not carry and releases the send held for it", async () => {
-    push({ type: "agents_updated", agents: [] });
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
-    push({ type: "proto_agent_created", ...proto("agent-2", "creating") });
+    push({ type: "chats_updated", chats: [] });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-2", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
     // The chat app restarted while agent-1's create ran: the new process replays only the
-    // record it holds, then an agent list identical to the last one.
+    // record it holds, then a chat list identical to the last one.
     open();
-    push({ type: "proto_agent_created", ...proto("agent-2", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-2", "creating") });
     // Nothing is dropped until the list says the replay is over.
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");
     expect(await settledState(registered)).toBe("pending");
-    push({ type: "agents_updated", agents: [] });
+    push({ type: "chats_updated", chats: [] });
 
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
     expect(manager.getProvisionalChat("agent-2")?.phase).toBe("creating");
@@ -187,24 +186,24 @@ describe("the provisional chats over the socket", () => {
   });
 
   it("keeps a record a reconnect's replay carries, and the send held for it", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
     open();
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
-    push({ type: "agents_updated", agents: [] });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
+    push({ type: "chats_updated", chats: [] });
 
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("creating");
     expect(await settledState(registered)).toBe("pending");
-    push({ type: "agents_updated", agents: [agent("agent-1")] });
+    push({ type: "chats_updated", chats: [chat("agent-1")] });
     await expect(registered).resolves.toBeUndefined();
   });
 
   it("rejects a held send when a reconnect replays the chat as failed", async () => {
-    push({ type: "proto_agent_created", ...proto("agent-1", "creating") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });
     const registered = manager.whenChatRegistered("agent-1");
 
-    push({ type: "proto_agent_created", ...proto("agent-1", "failed", "the real reason") });
+    push({ type: "provisional_chat_created", ...proto("agent-1", "failed", "the real reason") });
 
     await expect(registered).rejects.toThrow("the real reason");
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("failed");

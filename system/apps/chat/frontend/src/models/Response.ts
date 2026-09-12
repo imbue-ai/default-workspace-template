@@ -667,7 +667,7 @@ export async function fetchEvents(chatId: string): Promise<TranscriptEvent[]> {
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:chatId/events"),
+      url: apiUrl("/api/chats/:chatId/events"),
       params: { chatId },
       config: applyEventsRequestTimeout,
     });
@@ -706,7 +706,7 @@ export async function fetchWindowAtOffset(chatId: string, offset: number, limit:
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:chatId/events"),
+      url: apiUrl("/api/chats/:chatId/events"),
       params: { chatId, offset: String(Math.max(0, offset)), limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
@@ -728,7 +728,7 @@ export async function fetchBackfillEvents(chatId: string, limit: number): Promis
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:chatId/events"),
+      url: apiUrl("/api/chats/:chatId/events"),
       params: { chatId, before: firstEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
@@ -767,7 +767,7 @@ export async function fetchForwardEvents(chatId: string, limit: number): Promise
   try {
     const result = await m.request<EventsResponse>({
       method: "GET",
-      url: apiUrl("/api/agents/:chatId/events"),
+      url: apiUrl("/api/chats/:chatId/events"),
       params: { chatId, after: lastEventId, limit: String(limit) },
       config: applyEventsRequestTimeout,
     });
@@ -840,7 +840,7 @@ export function requestEventDetail(chatId: string, eventId: string): void {
   void m
     .request<EventDetail>({
       method: "GET",
-      url: apiUrl("/api/agents/:chatId/events/:eventId/detail"),
+      url: apiUrl("/api/chats/:chatId/events/:eventId/detail"),
       params: { chatId, eventId },
       config: applyEventsRequestTimeout,
     })
@@ -910,7 +910,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
   // the stable send-time id the backend reconciles delivery against (A4).
   await m.request({
     method: "POST",
-    url: apiUrl("/api/agents/:chatId/message"),
+    url: apiUrl("/api/chats/:chatId/message"),
     params: { chatId },
     body: {
       message: trimmed,
@@ -926,7 +926,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
 export async function interruptAgent(chatId: string): Promise<void> {
   await m.request({
     method: "POST",
-    url: apiUrl("/api/agents/:chatId/interrupt"),
+    url: apiUrl("/api/chats/:chatId/interrupt"),
     params: { chatId },
   });
 }
@@ -941,7 +941,7 @@ export async function interruptAgent(chatId: string): Promise<void> {
 export async function shoulderTap(chatId: string): Promise<{ status: string; block: string }> {
   const result = await m.request<{ status: string; block?: string }>({
     method: "POST",
-    url: apiUrl("/api/agents/:chatId/shoulder-tap-atomic"),
+    url: apiUrl("/api/chats/:chatId/shoulder-tap-atomic"),
     params: { chatId },
   });
   // ``block`` is non-empty only when a native (codex) tap's combined resend failed to submit: the
@@ -955,7 +955,7 @@ export async function shoulderTap(chatId: string): Promise<{ status: string; blo
 export async function drainToComposer(chatId: string): Promise<{ block: string }> {
   return await m.request<{ block: string }>({
     method: "POST",
-    url: apiUrl("/api/agents/:chatId/drain-to-composer"),
+    url: apiUrl("/api/chats/:chatId/drain-to-composer"),
     params: { chatId },
   });
 }

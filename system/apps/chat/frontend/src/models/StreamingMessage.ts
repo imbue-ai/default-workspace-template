@@ -56,7 +56,7 @@ export function connectToStream(chatId: string): void {
   explicitlyDisconnectedChats.delete(chatId);
 
   console.info(`[si-sse] opening stream for agent ${chatId}`);
-  const eventSource = new EventSource(apiUrl(`/api/agents/${encodeURIComponent(chatId)}/stream`));
+  const eventSource = new EventSource(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/stream`));
   activeStreams.set(chatId, eventSource);
 
   eventSource.onopen = () => {

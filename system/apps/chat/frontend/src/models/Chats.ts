@@ -1,7 +1,7 @@
 /**
- * The chat pages' live agent state: the agent list (activity, model choice, queued messages)
- * and the provisional chats (minted here, not agents yet), as the chat app pushes them over
- * its own WebSocket (``/api/ws``).
+ * The chat pages' live chat state: the chat list (each with its active agent's activity, model
+ * choice and queued messages) and the provisional chats (minted here, not agents yet), as the
+ * chat app pushes them over its own WebSocket (``/api/ws``).
  */
 
 import m from "mithril";
@@ -12,35 +12,60 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice } from "./ModelSettings";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 
-export interface ChatSnapshot {
-  id: string;
+/** The agent-level facts about a chat's active agent that the pages render (the backend's
+ *  ``ActiveAgentSnapshot``). */
+export interface ActiveAgent {
+  agent_id: string;
+  // The agent's mngr name: what its tmux session is addressed by.
   name: string;
+  // The agent's harness ("claude", "codex", ...). Used only as a lookup key into the
+  // per-harness catalog (GET /api/harnesses).
+  harness: string;
+  // The account the agent is bound to (its ``account`` label), or null for one from before accounts.
+  account_id: string | null;
+  // The agent's mngr lifecycle state.
   state: string;
-  labels: Record<string, string>;
-  // The mngr ``project`` label, lifted out of ``labels`` by the backend: the project this chat
-  // was created in, which mngr propagates to the agent's own children. Null when the agent
-  // carries no label.
-  project?: string | null;
-  // The mngr ``display_name`` label, lifted out of ``labels`` by the backend: the
-  // human-readable name mngr holds for this agent, as the user typed it. Its canonical form is
-  // the true ``name`` above, which stays the only way to address the agent by name.
-  display_name?: string | null;
-  work_dir: string | null;
-  // The agent's harness ("claude", "codex", ...), from the backend. Used only as a lookup key
-  // into the per-harness catalog (GET /api/harnesses).
-  harness?: string;
-  // Per-agent chat activity. THINKING/TOOL_RUNNING/IDLE, or null when the chat app has
-  // no per-agent activity tracking available.
-  activity_state?: string | null;
-  // The agent's live model/effort/fast selection plus the catalog option it matched, pushed by
-  // the backend beside activity_state. Null when no model resolution is available.
-  model_choice?: ModelChoice | null;
-  // Full snapshot of the messages currently parked in the agent's harness queue, in enqueue
-  // order. Replaced wholesale on each push; the frontend holds no queued state of its own.
-  queued_messages?: QueuedMessage[];
+  // THINKING/TOOL_RUNNING/IDLE, or null when the chat app has no activity tracking for it.
+  activity_state: string | null;
+  // The live model/effort/fast selection plus the catalog option it matched. Null when no
+  // model resolution is available.
+  model_choice: ModelChoice | null;
+  // Full snapshot of the messages currently parked in the harness queue, in enqueue order.
+  // Replaced wholesale on each push; the frontend holds no queued state of its own.
+  queued_messages: QueuedMessage[];
   // Backend-computed shoulder-tap availability: true iff something is queued AND no send is in
-  // flight. Absent = treat as unavailable.
-  shoulder_tap_available?: boolean;
+  // flight.
+  shoulder_tap_available: boolean;
+}
+
+export type HandoffPhase = "draining" | "summarizing" | "switching" | "failed";
+
+/** The in-progress handoff a chat carries while it converges on a new agent. */
+export interface HandoffState {
+  phase: HandoffPhase;
+  target_lane: string;
+  target_account_id: string;
+}
+
+/** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
+export interface ChatSnapshot {
+  chat_id: string;
+  // The name the user sees: the ``display_name`` label, else the mngr name.
+  title: string;
+  // The chat's canonical mngr name, the only way to address it by name.
+  name: string;
+  // The mngr ``project`` label: the project this chat was created in, which mngr propagates to
+  // the agent's own children. Null when the agent carries no label.
+  project: string | null;
+  // The chat's status, as its instance record reports it.
+  status: string;
+  // The active agent's mngr labels.
+  labels: Record<string, string>;
+  // Every agent of the chat, in order; the last is the active one.
+  agent_ids: string[];
+  // Null while the chat is not converging on a new agent.
+  handoff: HandoffState | null;
+  active_agent: ActiveAgent;
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -60,7 +85,7 @@ export type ProvisionalChatPhase = "awaiting_account" | "creating" | "failed";
 
 /** A chat the app minted but mngr does not know yet: the backend's ``ProvisionalChat``. */
 export interface ProvisionalChat {
-  agent_id: string;
+  chat_id: string;
   name: string;
   // The account it launches on; empty while it waits for one.
   account_id: string;
@@ -70,20 +95,20 @@ export interface ProvisionalChat {
 }
 
 type WsEvent =
-  | { type: "agents_updated"; agents: ChatSnapshot[] }
-  | ({ type: "proto_agent_created" } & ProvisionalChat)
-  | { type: "proto_agent_completed"; agent_id: string; success: boolean; error: string | null };
+  | { type: "chats_updated"; chats: ChatSnapshot[] }
+  | ({ type: "provisional_chat_created" } & ProvisionalChat)
+  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null };
 
-export type ChatsUpdatedListener = (agents: ChatSnapshot[]) => void;
+export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
- * Notified when a single agent's ``activity_state`` changes between two consecutive
- * ``agents_updated`` snapshots. ``previous`` is ``null`` when the agent had no prior tracked
+ * Notified when a chat's active agent's ``activity_state`` changes between two consecutive
+ * ``chats_updated`` snapshots. ``previous`` is ``null`` when the chat had no prior tracked
  * state (it just appeared, or its state was untracked).
  */
 export type ChatActivityListener = (chatId: string, previous: string | null, current: string | null) => void;
 
-let agents: ChatSnapshot[] = [];
-// The JSON of the last agents_updated payload, to skip redundant identical pushes.
+let chats: ChatSnapshot[] = [];
+// The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
@@ -110,7 +135,7 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // The app replays what it holds (its provisional chats, then its agent list) on every
+    // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProtoIds = new Set();
     lastChatsSerialized = "";
@@ -152,19 +177,19 @@ function scheduleReconnect(): void {
 
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
-    case "agents_updated": {
+    case "chats_updated": {
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
-      const serialized = JSON.stringify(event.agents);
+      const serialized = JSON.stringify(event.chats);
       if (serialized === lastChatsSerialized) break;
       lastChatsSerialized = serialized;
-      // Diff against the outgoing snapshot (still in `agents` here) so per-agent activity
+      // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
-      const previousActivityById = new Map(agents.map((a) => [a.id, a.activity_state ?? null]));
-      agents = event.agents;
+      const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
+      chats = event.chats;
       // A provisional chat the list now names is an agent, whatever order the pushes came in.
-      const registeredIds = new Set(agents.map((a) => a.id));
-      provisionalChats = provisionalChats.filter((p) => !registeredIds.has(p.agent_id));
+      const registeredIds = new Set(chats.map((c) => c.chat_id));
+      provisionalChats = provisionalChats.filter((p) => !registeredIds.has(p.chat_id));
       for (const chatId of registeredIds) settleRegistration(chatId, null);
       if (replayedProtoIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
@@ -172,7 +197,7 @@ function handleEvent(event: WsEvent): void {
         // record goes, and a send held for it proceeds to report the backend's refusal.
         const replayed = replayedProtoIds;
         replayedProtoIds = null;
-        provisionalChats = provisionalChats.filter((p) => replayed.has(p.agent_id));
+        provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
         for (const chatId of [...registrationWaiters.keys()]) {
           if (getProvisionalChat(chatId) === undefined) settleRegistration(chatId, null);
         }
@@ -180,44 +205,44 @@ function handleEvent(event: WsEvent): void {
       for (const listener of chatsUpdatedListeners) {
         listener(getChats());
       }
-      for (const agent of agents) {
-        const current = agent.activity_state ?? null;
-        const previous = previousActivityById.get(agent.id) ?? null;
+      for (const chat of chats) {
+        const current = chat.active_agent.activity_state;
+        const previous = previousActivityById.get(chat.chat_id) ?? null;
         if (previous !== current) {
           for (const listener of chatActivityListeners) {
-            listener(agent.id, previous, current);
+            listener(chat.chat_id, previous, current);
           }
         }
       }
       break;
     }
-    case "proto_agent_created": {
+    case "provisional_chat_created": {
       // Also how a chat moves between phases (a reserved chat launched, a failed one retried):
       // the backend pushes the whole record again. A reconnect replays every provisional chat
       // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
       const { type: _type, ...proto } = event;
-      provisionalChats = [...provisionalChats.filter((p) => p.agent_id !== proto.agent_id), proto];
-      replayedProtoIds?.add(proto.agent_id);
+      provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== proto.chat_id), proto];
+      replayedProtoIds?.add(proto.chat_id);
       if (proto.phase === "failed") {
-        settleRegistration(proto.agent_id, new Error(proto.error ?? "The chat could not be started"));
+        settleRegistration(proto.chat_id, new Error(proto.error ?? "The chat could not be started"));
       }
       break;
     }
-    case "proto_agent_completed":
+    case "provisional_chat_completed":
       if (event.success) {
-        // The agent itself arrives on the agents_updated push, which is what settles waiters.
-        provisionalChats = provisionalChats.filter((p) => p.agent_id !== event.agent_id);
+        // The chat itself arrives on the chats_updated push, which is what settles waiters.
+        provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
       } else if (event.error === null) {
         // Discarded (its tab was closed before it launched): gone, with nothing to show.
-        provisionalChats = provisionalChats.filter((p) => p.agent_id !== event.agent_id);
-        settleRegistration(event.agent_id, new Error("The chat was closed before it started"));
+        provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
+        settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
       } else {
         const error = event.error;
         provisionalChats = provisionalChats.map((p) =>
-          p.agent_id === event.agent_id ? { ...p, phase: "failed", error } : p,
+          p.chat_id === event.chat_id ? { ...p, phase: "failed", error } : p,
         );
-        settleRegistration(event.agent_id, new Error(error));
+        settleRegistration(event.chat_id, new Error(error));
       }
       break;
   }
@@ -234,7 +259,7 @@ function settleRegistration(chatId: string, error: Error | null): void {
 }
 
 /**
- * Resolves once ``chatId`` is an agent the app lists: at once for one it already lists, and
+ * Resolves once ``chatId`` is a chat the app lists: at once for one it already lists, and
  * for a chat still being created when its create lands. Rejects, with the reason, when the
  * create fails or the chat is discarded first -- at once for a chat whose create has already
  * failed, since nothing but a retry could ever land it. What a send typed into a chat that
@@ -264,33 +289,33 @@ export function isConnected(): boolean {
   return connected;
 }
 
-/** Whether the agent is the workspace's services-only "primary" agent, which is hidden from the
- *  user-facing agent list because destroying it would tear down the whole workspace. */
-export function isPrimaryChat(agent: ChatSnapshot): boolean {
-  return agent.labels?.is_primary === "true";
+/** Whether the chat runs on the workspace's services-only "primary" agent, which is hidden
+ *  from the user-facing chat list because destroying it would tear down the whole workspace. */
+export function isPrimaryChat(chat: ChatSnapshot): boolean {
+  return chat.labels?.is_primary === "true";
 }
 
 export function getChats(): ChatSnapshot[] {
-  return agents.filter((a) => !isPrimaryChat(a));
+  return chats.filter((c) => !isPrimaryChat(c));
 }
 
-export function getChatById(id: string): ChatSnapshot | undefined {
-  return agents.find((a) => a.id === id);
+export function getChatById(chatId: string): ChatSnapshot | undefined {
+  return chats.find((c) => c.chat_id === chatId);
 }
 
-/** The full snapshot of an agent's currently-queued messages, in enqueue order. */
+/** The full snapshot of the messages queued on the chat's active agent, in enqueue order. */
 export function getQueuedMessagesForChat(chatId: string): QueuedMessage[] {
-  return getChatById(chatId)?.queued_messages ?? [];
+  return getChatById(chatId)?.active_agent.queued_messages ?? [];
 }
 
-/** Whether the shoulder-tap is available for this agent, per the backend. */
+/** Whether the shoulder-tap is available for this chat, per the backend. */
 export function getShoulderTapAvailableForChat(chatId: string): boolean {
-  return getChatById(chatId)?.shoulder_tap_available === true;
+  return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
 /** The provisional record of ``chatId``, while the app lists it as one. */
 export function getProvisionalChat(chatId: string): ProvisionalChat | undefined {
-  return provisionalChats.find((p) => p.agent_id === chatId);
+  return provisionalChats.find((p) => p.chat_id === chatId);
 }
 
 export function addChatsUpdatedListener(listener: ChatsUpdatedListener): void {
@@ -327,7 +352,7 @@ export function buildAgentTerminalUrl(agentName: string): string {
   return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
 }
 
-/** A freshly-created chat agent's identity: its id and its name pair. */
+/** A freshly-created chat's identity: its id and its name pair. */
 export interface CreatedChat {
   chatId: string;
   name: string;
@@ -335,10 +360,10 @@ export interface CreatedChat {
 }
 
 /**
- * Start a chat agent, returning the id it will be known by and its name pair.
+ * Start a chat, returning the id it will be known by and its name pair.
  *
- * The create returns as soon as the agent has an id: the agent itself is still starting (it
- * shows up as a proto agent until mngr registers it). The display name is minted server-side.
+ * The create returns as soon as the chat has an id: its agent is still starting (the chat
+ * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project. Throws with the server's detail on rejection.
  */
@@ -352,11 +377,11 @@ export function createChat(projectId: string, accountId: string = ""): Promise<C
  * on ``accountId``: it keeps its id and name, so the tab showing it becomes the chat.
  */
 export function launchChat(chatId: string, accountId: string): Promise<CreatedChat> {
-  return postCreateChat({ agent_id: chatId, account_id: accountId });
+  return postCreateChat({ chat_id: chatId, account_id: accountId });
 }
 
 async function postCreateChat(body: Record<string, string>): Promise<CreatedChat> {
-  const response = await fetch(apiUrl("/api/agents/create-chat"), {
+  const response = await fetch(apiUrl("/api/chats/create"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -365,12 +390,12 @@ async function postCreateChat(body: Record<string, string>): Promise<CreatedChat
     const data = (await response.json().catch(() => ({}))) as { detail?: string };
     throw new Error(data.detail ?? `HTTP ${response.status}`);
   }
-  const created = (await response.json()) as { agent_id?: string; name?: string; display_name?: string };
-  if (!created.agent_id) {
-    throw new Error("Chat creation returned no agent id");
+  const created = (await response.json()) as { chat_id?: string; name?: string; display_name?: string };
+  if (!created.chat_id) {
+    throw new Error("Chat creation returned no chat id");
   }
   return {
-    chatId: created.agent_id,
+    chatId: created.chat_id,
     name: created.name ?? "",
     displayName: created.display_name ?? created.name ?? "",
   };

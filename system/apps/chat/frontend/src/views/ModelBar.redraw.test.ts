@@ -114,7 +114,7 @@ beforeEach(() => {
   chooserOpens.length = 0;
   deleted.length = 0;
   renamed.length = 0;
-  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
+  agentState.agent = { chat_id: "a1", active_agent: { harness: "claude", account_id: "acct-1" } };
   catalogState.catalog = {
     switch_mode: "eager_then_reconcile",
     picker_mode: "list",

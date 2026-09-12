@@ -9,7 +9,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addressFor } from "@imbue/workspace-ui/src/addresses";
-import { createChat } from "./models/Chats";
+import { createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
 import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
@@ -129,9 +129,14 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
  * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
  * created first through the chat app's own instances API (its `subagent` action, on this
  * page's origin), which nudges the shell, so the shell lists it before it is asked to dock it.
+ * The session belongs to the chat's active agent, which is what the app keys the view on.
  */
 export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
-  const key = `${chatId}.${sessionId}`;
+  // CLEANUP: a chat the page does not list yet is its own first agent under the own-chat
+  // rule; drop the fallback once the chat record store (phase 3 of the chat-agent split)
+  // names the active agent for every chat.
+  const agentId = getChatById(chatId)?.active_agent.agent_id ?? chatId;
+  const key = `${chatId}.${agentId}.${sessionId}`;
   try {
     await postJson(apiUrl("/_instances"), {
       action: "subagent",

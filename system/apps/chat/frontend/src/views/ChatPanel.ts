@@ -75,19 +75,19 @@ function getChatTerminalUrl(chatId: string): string {
   // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
   // When the agent isn't in the local cache yet, fall back to the bare
   // base URL and let agent.sh attach to the ambient session.
-  const agent = getChatById(chatId);
-  if (!agent?.name) {
+  const agentName = getChatById(chatId)?.active_agent.name;
+  if (!agentName) {
     const baseUrl = getTerminalUrl();
     const separator = baseUrl.includes("?") ? "&" : "?";
     return `${baseUrl}${separator}arg=_&arg=agent`;
   }
-  return buildAgentTerminalUrl(agent.name);
+  return buildAgentTerminalUrl(agentName);
 }
 
 /** The provisional record of a chat that is not an agent yet, or null once the app lists it
  *  as one. The proto list is rebuilt from pushes and can still name an agent that has since
- *  registered (a `proto_agent_created` for a finished creation, delivered late), so the agent
- *  list wins: every branch asks this, so none can show a registered chat as provisional. */
+ *  registered (a `provisional_chat_created` for a finished creation, delivered late), so the
+ *  chat list wins: every branch asks this, so none can show a registered chat as provisional. */
 function provisionalRecord(chatId: string): ProvisionalChat | null {
   const proto = getProvisionalChat(chatId);
   return proto !== undefined && getChatById(chatId) === undefined ? proto : null;
@@ -263,7 +263,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     try {
       const result = await m.request<{ screen: string | null; error?: string }>({
         method: "GET",
-        url: apiUrl("/api/agents/:chatId/screen"),
+        url: apiUrl("/api/chats/:chatId/screen"),
         params: { chatId, scrollback: "true" },
       });
       screenContent = result.screen;
@@ -484,18 +484,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
    * loaded -- so without this the panel sits on "No conversation data" until the
    * page is reloaded.
    *
-   * The trigger is the `agents_updated` snapshot rather than a retry timer, and
-   * it cannot spin: `/events` resolves the agent through the same
-   * `AgentManager` list that feeds `agents_updated`, so the agent being named
-   * here is exactly the condition under which the refetch stops 404ing.
+   * The trigger is the `chats_updated` snapshot rather than a retry timer, and
+   * it cannot spin: `/events` resolves the chat through the same list that
+   * feeds `chats_updated`, so the chat being named here is exactly the
+   * condition under which the refetch stops 404ing.
    */
   function retryAfterChatResolved(): void {
     const chatId = currentChatId;
     if (chatId === null || notFoundRetryInFlight || !isConversationNotFound(chatId)) {
       return;
     }
-    // Read the agent store rather than the broadcast payload, which is filtered
-    // to the user-facing agents.
+    // Read the chat store rather than the broadcast payload, which is filtered
+    // to the user-facing chats.
     if (getChatById(chatId) === undefined) {
       return;
     }
@@ -604,8 +604,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       ]);
     }
 
-    const agent = getChatById(chatId);
-    const agentIsIdle = agent?.activity_state === "IDLE";
+    const chat = getChatById(chatId);
+    const agentIsIdle = chat?.active_agent.activity_state === "IDLE";
 
     // The first chat starts on fast mode; once it has run its grace period, ask
     // the user whether to keep it. Checked here because this is where the loaded
@@ -616,7 +616,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // turn count, which walks the held transcript. Which agents owe the prompt
     // at all is the harness's declaration (the fast_mode_prompt popup on its
     // catalog), not a harness-name check here.
-    maybePromptForFastMode(agent, events, agentIsIdle);
+    maybePromptForFastMode(chat, events, agentIsIdle);
 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
@@ -739,7 +739,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
               m(AgentTerminalPanel, {
                 chatId,
                 url: getChatTerminalUrl(chatId),
-                title: `${getChatById(chatId)?.name ?? "agent"} terminal`,
+                title: `${getChatById(chatId)?.active_agent.name ?? "agent"} terminal`,
               }),
             front: [
               // The transcript area: the scroll container (native scrolling, native

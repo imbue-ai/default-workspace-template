@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent, UserMessageEvent } from "../models/Response";
 import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { countUserTurns, isFastModePromptOwed } from "./fast-mode-prompt";
 import { getChatFastMode } from "../models/ModelSettings";
 import { hasFastModePrompt } from "../models/HarnessCatalog";
@@ -59,14 +60,7 @@ function conversation(count: number): TranscriptEvent[] {
 
 /** A first-labelled agent on a prompt-declaring harness -- the one the prompt is for. */
 function firstAgent(labels: Record<string, string> = { first: "true" }): ChatSnapshot {
-  return {
-    id: "agent-1",
-    name: "demo",
-    state: "started",
-    labels,
-    work_dir: null,
-    harness: "claude",
-  } as ChatSnapshot;
+  return chatSnapshotFixture("agent-1", { name: "demo", labels, active_agent: { name: "demo", state: "started" } });
 }
 
 describe("countUserTurns", () => {
