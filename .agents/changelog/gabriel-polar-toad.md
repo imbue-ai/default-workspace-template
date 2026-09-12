@@ -1,1 +1,0 @@
-The manage-scheduled-tasks skill now says which account and harness an automation agent runs on (the workspace's default, from `.mngr/settings.local.toml`) and documents `run_automation.sh`'s new `--type <harness>` option. The service-processes reference no longer claims every claude uses `~/.claude`.

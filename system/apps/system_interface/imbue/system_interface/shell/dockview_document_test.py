@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_json
+from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.dockview_document import Direction
 from imbue.system_interface.shell.dockview_document import HORIZONTAL
 from imbue.system_interface.shell.dockview_document import NOMINAL_ROOT_HEIGHT
@@ -20,7 +20,6 @@ from imbue.system_interface.shell.errors import PanelNotFoundError
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import DeviceKind
 from imbue.system_interface.shell.primitives import TabId
-from imbue.system_interface.shell.testing import addresses_by_panel_id
 
 _FILES = Address("app:files")
 _TERMINAL_1 = Address("app:terminal?instance=terminal-1")
@@ -29,10 +28,6 @@ _TAB_A = TabId("tab-000000000000000a")
 _TAB_B = TabId("tab-000000000000000b")
 _TAB_C = TabId("tab-000000000000000c")
 _TAB_D = TabId("tab-000000000000000d")
-
-
-def _panel(panel_id: str, address: Address, tab_id: TabId) -> dict[str, Any]:
-    return {"id": panel_id, "params": instance_panel_params_json(address, tab_id, 0)}
 
 
 def _leaf(group_id: str, *views: str, size: int) -> dict[str, Any]:
@@ -52,10 +47,18 @@ def _two_groups_side_by_side() -> LayoutRecord:
             "height": 800,
             "orientation": HORIZONTAL,
         },
-        "panels": {"pa": _panel("pa", _FILES, _TAB_A), "pb": _panel("pb", _TERMINAL_1, _TAB_B)},
+        "panels": {"pa": {"id": "pa"}, "pb": {"id": "pb"}},
         "activeGroup": "g1",
     }
-    return LayoutRecord(dockview=dockview, device_kind=DeviceKind.DESKTOP, updated_at=None)
+    return LayoutRecord(
+        dockview=dockview,
+        tabs={
+            "pa": TabRecord(address=_FILES, tab_id=_TAB_A, last_focused_ms=0),
+            "pb": TabRecord(address=_TERMINAL_1, tab_id=_TAB_B, last_focused_ms=0),
+        },
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
 
 
 def _placement(
@@ -94,7 +97,7 @@ def test_panel_lookup_widens_a_bare_app_to_any_of_its_instances() -> None:
 
 
 def test_adding_to_a_never_arranged_view_builds_a_root_branch_dockview_accepts() -> None:
-    empty = LayoutRecord(dockview=None, device_kind=DeviceKind.DESKTOP, updated_at=None)
+    empty = LayoutRecord(dockview=None, tabs={}, device_kind=DeviceKind.DESKTOP, updated_at=None)
     added = add_panel(empty, _FILES, _TAB_A, "Files", _placement(None))
     dockview = added.dockview
     assert dockview is not None
@@ -104,8 +107,8 @@ def test_adding_to_a_never_arranged_view_builds_a_root_branch_dockview_accepts()
     assert dockview["activeGroup"] == "g-new"
     panel = dockview["panels"][str(_TAB_A)]
     assert panel["contentComponent"] == "instance" and panel["tabComponent"] == "custom" and panel["title"] == "Files"
-    assert panel["params"] == {"kind": "instance", "address": str(_FILES), "tabId": str(_TAB_A), "lastFocusedMs": 0}
-    assert addresses_by_panel_id(added.dockview) == {str(_TAB_A): _FILES}
+    assert panel["params"] == {"kind": "instance", "address": str(_FILES), "tabId": str(_TAB_A)}
+    assert added.tabs == {str(_TAB_A): TabRecord(address=_FILES, tab_id=_TAB_A, last_focused_ms=0)}
 
 
 def test_adding_with_no_anchor_tabs_into_the_active_group_and_drops_its_launcher() -> None:
@@ -192,21 +195,23 @@ def test_removing_a_panel_collapses_its_group_and_the_wrapper_it_leaves_behind()
     assert [child["type"] for child in root["data"]] == ["leaf", "leaf"]
     assert root["data"][1]["data"]["id"] == "g2" and root["data"][1]["size"] == 600
     assert removed.dockview["activeGroup"] == "g1"
-    assert (
-        set(addresses_by_panel_id(removed.dockview)) == {"pa", "pb"} and str(_TAB_C) not in removed.dockview["panels"]
-    )
+    assert set(removed.tabs) == {"pa", "pb"} and str(_TAB_C) not in removed.dockview["panels"]
 
     last_two = remove_panel(removed, "pb")
     assert last_two.dockview is not None and [leaf["data"]["id"] for leaf in _leaves(last_two.dockview)] == ["g1"]
     gone = remove_panel(last_two, "pa")
-    assert gone.dockview is None
+    assert gone.dockview is None and gone.tabs == {}
     with pytest.raises(PanelNotFoundError):
         remove_panel(gone, "pa")
 
 
 def test_a_document_without_a_grid_is_repaired_into_one_group_by_every_op() -> None:
     gridless = LayoutRecord(
-        dockview={"panels": {"pa": _panel("pa", _FILES, _TAB_A), "pb": _panel("pb", _TERMINAL_1, _TAB_B)}},
+        dockview={"panels": {"pa": {"id": "pa"}, "pb": {"id": "pb"}}},
+        tabs={
+            "pa": TabRecord(address=_FILES, tab_id=_TAB_A, last_focused_ms=0),
+            "pb": TabRecord(address=_TERMINAL_1, tab_id=_TAB_B, last_focused_ms=0),
+        },
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )
@@ -220,8 +225,7 @@ def test_a_document_without_a_grid_is_repaired_into_one_group_by_every_op() -> N
     assert [leaf["data"]["views"] for leaf in _leaves(moved.dockview)] == [["pb"], ["pa"]]
     removed = remove_panel(gridless, "pa")
     assert removed.dockview is not None
-    assert [leaf["data"]["views"] for leaf in _leaves(removed.dockview)] == [["pb"]]
-    assert set(addresses_by_panel_id(removed.dockview)) == {"pb"}
+    assert [leaf["data"]["views"] for leaf in _leaves(removed.dockview)] == [["pb"]] and set(removed.tabs) == {"pb"}
     # The panel an add docks lands beside the repaired group only, not in it as well.
     added = add_panel(gridless, _TERMINAL_2, _TAB_C, "Terminal 2", _placement("pb", Direction.BELOW))
     assert added.dockview is not None
@@ -243,8 +247,7 @@ def test_move_relocates_a_panel_keeping_its_record_and_is_a_noop_within_its_own_
     moved = move_panel(layout, "pa", _placement("pb", Direction.WITHIN))
     assert moved.dockview is not None
     assert [leaf["data"]["views"] for leaf in _leaves(moved.dockview)] == [["pb", "pa"]]
-    assert addresses_by_panel_id(moved.dockview) == addresses_by_panel_id(layout.dockview)
-    assert set(moved.dockview["panels"]) == {"pa", "pb"}
+    assert moved.tabs == layout.tabs and set(moved.dockview["panels"]) == {"pa", "pb"}
     assert move_panel(moved, "pa", _placement("pb", Direction.WITHIN)) == moved
 
     beside = move_panel(layout, "pa", _placement("pb", Direction.BELOW))
@@ -276,9 +279,10 @@ def test_an_open_into_a_launcher_only_view_fills_the_pane_rather_than_splitting_
                 "height": 800,
                 "orientation": HORIZONTAL,
             },
-            "panels": {launcher_id: {"id": launcher_id, "params": {"kind": "launcher"}}},
+            "panels": {launcher_id: {"id": launcher_id}},
             "activeGroup": "g1",
         },
+        tabs={},
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )
