@@ -907,22 +907,29 @@ def _drain_to_composer_endpoint(chat_id: str) -> Response:
     return json_response(DrainToComposerResponse(block=block).model_dump())
 
 
-def _find_chat_agent(chat_id: str, agent_id: str) -> AgentInfo | None:
-    """The agent ``agent_id`` of chat ``chat_id``, or None when the chat has no such agent."""
+def _chat_agent_not_found_response(chat_id: str, agent_id: str) -> Response:
+    error = ErrorResponse(detail=f"Chat '{chat_id}' has no agent '{agent_id}'")
+    return json_response(error.model_dump(), status_code=404)
+
+
+def _find_chat_agent(chat_id: str, agent_id: str) -> AgentInfo | Response:
+    """The agent ``agent_id`` of chat ``chat_id``, or the 404 that says which of the two is missing."""
     agent_info = _find_active_agent(chat_id)
+    if agent_info is None:
+        return _chat_not_found_response(chat_id)
     # CLEANUP: resolve any member of the chat (an archived one included) through the chat
     # record store once phase 3 of the chat-agent split lands; today a chat's one agent is
     # its active agent.
-    if agent_info is None or agent_info.id != agent_id:
-        return None
+    if agent_info.id != agent_id:
+        return _chat_agent_not_found_response(chat_id, agent_id)
     return agent_info
 
 
 def _get_subagent_events(chat_id: str, agent_id: str, subagent_session_id: str) -> Response:
     """Get events for one subagent session of one agent of a chat."""
     agent_info = _find_chat_agent(chat_id, agent_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
+    if isinstance(agent_info, Response):
+        return agent_info
 
     watcher = get_state().get_or_create_watcher(agent_info)
     events = watcher.get_all_events(session_id=subagent_session_id)
@@ -936,8 +943,8 @@ def _get_subagent_events(chat_id: str, agent_id: str, subagent_session_id: str) 
 def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: str) -> Response:
     """SSE stream for a subagent's new events, filtered by session_id."""
     agent_info = _find_chat_agent(chat_id, agent_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
+    if isinstance(agent_info, Response):
+        return agent_info
 
     state = get_state()
     state.get_or_create_watcher(agent_info)
