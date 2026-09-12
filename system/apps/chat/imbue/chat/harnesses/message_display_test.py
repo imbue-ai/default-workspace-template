@@ -5,6 +5,9 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
+import importlib.util
+from pathlib import Path
+
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import classify_user_message
@@ -246,3 +249,18 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.display == DisplayKind.PERMISSION_RESOLUTION
     assert display.resolution == "denied"
     assert display.request_id == "evt-9"
+
+
+def test_the_messaging_scripts_system_tag_is_the_one_this_classifier_strips() -> None:
+    """``system/scripts/message_chat.py --system`` wraps a nudge in the tag this module recognises; the script
+    is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
+    script = Path(__file__).resolve().parents[5] / "scripts" / "message_chat.py"
+    spec = importlib.util.spec_from_file_location("message_chat_for_tag_pin", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.SYSTEM_MESSAGE_TAG == BROWSER_FLEET_TAG
+    decision = classify_user_message(module.wrap_system_message("Browser b1 was handed back to you."))
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP

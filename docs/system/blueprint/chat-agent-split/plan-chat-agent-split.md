@@ -261,14 +261,14 @@ Messaging a chat from inside the workspace goes through the chat app:
 - A script under `system/scripts/` takes exactly one chat id (never a name) and a message, posts to the chat app's loopback message route for that chat (the existing send route, addressed by chat id), and returns the route's verdict.
   It is a drop-in for `mngr message`: it takes the message as `-m`, `--message-file`, or stdin, and exits 0 for delivered or queued, 1 for a failure, and 7 for delivered but blocked on a dialog, which the route already reports as a 500 whose `kind` is `INPUT_BLOCKED`.
   It is standard-library only (`urllib`, `tomllib`), like `require_create_account.py`, because skills run it as `python3 system/scripts/...` and cron runs before any venv; it finds the chat app through the `chat` row of `data/.state/apps.toml`, with `http://127.0.0.1:8010` as the fallback, the way the update-self probes do.
-- It falls back to `mngr message <chat id>` only when the connection to the chat app fails or the route answers 404 (an older chat app, or an agent the chat app does not know), never when the chat app answers a refusal, since a refusal during converging is the hold that makes the handoff safe.
+- It falls back to `mngr message <chat id>` only when the connection to the chat app fails or the route keeps answering 404 for a few seconds (an older chat app, or an agent the chat app does not know; a just-created agent is unknown until the observe stream reports it, so a 404 is retried briefly first), never when the chat app answers a refusal, since a refusal during converging is the hold that makes the handoff safe.
   A blocked send (exit 7) is a refusal for this purpose: the text is already in the pane.
   Once the server has accepted the request, the outcome is whatever the route answers, however long it takes: the route blocks through mngr's locked paste-and-confirm for claude and pi, so the script uses a short connect timeout and no read timeout.
 - The route answers 503 until the chat app has read its agent list from mngr once, the same rule the instances API follows, so a send during the seconds after a chat-app boot is retried rather than mistaken for an unknown chat and delivered around the app.
   The script retries 503 for a bounded window (the route's own revive budget also surfaces as 503) and then reports a failure.
-- The script mints one `message_id` per invocation and reuses it on every retry against the chat app, and the route keeps a bounded per-chat ledger of recently delivered ids beside the message stamps, answering 200 for a replay.
-  Delivery is at least once, not exactly once: a chat app that dies between the paste and the ledger write delivers twice on replay, which is accepted (an agent sorts out a repeated message), and the `mngr message` backoff has no id and is sent once.
-  The ledger is the same store phase 4's held sends are keyed by.
+- The script mints one `message_id` per invocation and sends it on every retry against the chat app, which is the id the route keys its Sending record by (contract A4).
+  Delivery is at least once, not exactly once: the script's retries are all on answers that mean nothing was delivered (503), so a duplicate can only come from a caller re-running the script, and that is accepted (an agent sorts out a repeated message).
+  A delivered-id ledger that would make a replay a 200 is deferred to phase 4, where held sends are keyed by the same id.
 - A send from a script carries no client fields, so the route records no client-activity report for it and it counts as engagement for the memory prioritizer like any other send; nothing on the route changes for that.
   The script offers `--system`, which wraps the text in the system-message sentinel the browser app wraps its nudges in today (`_wrap_system_message`), so the transcript renders a collapsed chip; the wrapping moves into the script and the browser app calls the script.
 - Every in-workspace `mngr message` moves to the script, with no exceptions: the browser app's wake, the lead's replies to a worker (`lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, fetch-process-show), the task message `create_worker.py` sends after its syncs, and the automation runner's `/clear` and `/<skill>` sends (the route revives a stopped agent on send, which is what the runner's `--start` asked for).
@@ -336,7 +336,7 @@ A chat's transcript is its segments in agent order.
 
 ### 4.8 Per-chat state
 
-Presence reports, message stamps, the delivered-message-id ledger (4.5), pending permission ids, the auto-open ledger (`auto_open.py`, `data/.apps/chat/auto_opened_chats.json`), and the OOM prioritizer's entries are keyed by chat id.
+Presence reports, message stamps, pending permission ids, the auto-open ledger (`auto_open.py`, `data/.apps/chat/auto_opened_chats.json`), and the OOM prioritizer's entries are keyed by chat id.
 Where a process is needed (the prioritizer's pid lookup), the chat maps to its active agent.
 The auto-open reactor fires for an agent that appears carrying an `auto_open` or `assist` label; a successor agent carries neither, so a handoff never re-pops a tab.
 
@@ -510,11 +510,11 @@ Where the minds repo is touched, the paired branch is named.
 
 - The `system/scripts` messaging script (4.5): one chat id, the message as `-m`, `--message-file`, or stdin, the `--system` wrap, the loopback route found through the registry, the caller-minted `message_id` reused across retries, `mngr message` exit codes, and the backoff to `mngr message` only on a failed connection or a 404.
   In this phase the chat id it takes is `$MNGR_AGENT_ID`.
-- The chat app's message route: 503 until the agent list is known, and the bounded per-chat ledger of delivered message ids that makes a replay a 200 (4.5).
+- The chat app's message route: 503 until the agent list is known (4.5).
   Nothing changes about how a send with no client fields is recorded.
 - Every in-workspace `mngr message` switches to the script: the browser app's wake (which hands its sentinel wrapping to the script), the lead-to-worker replies in `lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, and fetch-process-show, `create_worker.py`'s task message, and `run_automation.sh`.
 - The worker path (4.5): `create_worker.py` stamps `lead_agent` with the lead's agent id, `worker-reporting.md` makes the same-repo write the primary delivery with the id-addressed rsync as the worktree case, and `transcript-exploration.md` reads the lead's transcript by that id.
-- Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, 404, and a replayed id); the route's 503 gate and its ledger in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr rsync` and `mngr transcript` still resolve it by id.
+- Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, and 404); the route's 503 gate in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr rsync` and `mngr transcript` still resolve it by id.
 - Exit check: a worker's report reaches a lead that was renamed mid-task, its `mngr transcript $LEAD_AGENT` still reads, and a lead's reply reaches the worker through the chat app.
 
 ### Phase 2: the rename
