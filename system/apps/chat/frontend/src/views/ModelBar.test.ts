@@ -17,7 +17,7 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent,
 }));
@@ -62,6 +62,8 @@ vi.mock("../shell", () => ({
 
 import m from "mithril";
 
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ModelBar } from "./ModelBar";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
@@ -118,7 +120,7 @@ beforeEach(() => {
   started.length = 0;
   pins.length = 0;
   providerState.defaultId = null;
-  agentState.agent = { chat_id: "a1", active_agent: { harness: "claude", account_id: "acct-1" } };
+  agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];

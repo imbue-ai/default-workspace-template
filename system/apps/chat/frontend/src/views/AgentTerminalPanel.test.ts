@@ -14,7 +14,7 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
 vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 // The stub just marks where the terminal iframe would mount.
@@ -26,6 +26,8 @@ vi.mock("./TerminalFrame", () => ({
 
 import m from "mithril";
 
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 
 const ATTRS = { chatId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
@@ -54,7 +56,7 @@ describe("the agent terminal's liveness gate", () => {
   });
 
   it("unmounts the iframe for a positively-dead agent and offers a Start button", async () => {
-    agentState.agent = { chat_id: "agent-1", active_agent: { name: "sunny-hollow", state: "STOPPED" } };
+    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { name: "sunny-hollow", state: "STOPPED" } });
     const root = mountPanel();
     await settle();
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
@@ -66,7 +68,7 @@ describe("the agent terminal's liveness gate", () => {
   it("keeps the iframe for a live agent and for UNKNOWN (non-evidence is not death)", async () => {
     for (const state of ["RUNNING", "UNKNOWN"]) {
       document.body.innerHTML = "";
-      agentState.agent = { chat_id: "agent-1", active_agent: { name: "sunny-hollow", state } };
+      agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { name: "sunny-hollow", state } });
       const root = mountPanel();
       await settle();
       expect(root.querySelector(".iframe-panel-stub"), state).not.toBeNull();
@@ -75,7 +77,7 @@ describe("the agent terminal's liveness gate", () => {
   });
 
   it("surfaces a failed start on the stopped face instead of failing silently", async () => {
-    agentState.agent = { chat_id: "agent-1", active_agent: { name: "sunny-hollow", state: "STOPPED" } };
+    agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { name: "sunny-hollow", state: "STOPPED" } });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: "no such agent" }) })),
