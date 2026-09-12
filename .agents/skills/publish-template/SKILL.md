@@ -355,7 +355,7 @@ cat << 'BODY_EOF'
 Assemble a clean, bootable "template" snapshot on your worktree's branch,
 then finish its manifest and thumbnail. Do ALL of it in this one run.
 
-**Before anything else**, extract `LEAD_AGENT` / `FINISH_REPORT_PATH` per
+**Before anything else**, extract `LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH` per
 `.agents/shared/references/worker-reporting.md`: step 1's script resets your
 worktree to a clean template base and deletes gitignored state -- including
 `data/` and this task file -- so parse the frontmatter FIRST.
