@@ -82,6 +82,7 @@ from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import chat_id_of_first_agent
 from imbue.chat.primitives import first_agent_id_of_chat
+from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import InvalidConcurrencyGroupStateError
@@ -765,7 +766,8 @@ class AgentManager:
 
     def get_chat_snapshot(self, chat_id: str) -> ChatSnapshot | None:
         """One chat's snapshot, or None when no listed chat has that id (a provisional chat included)."""
-        agent = self.get_agent_by_id(first_agent_id_of_chat(ChatId(chat_id))) if chat_id else None
+        parsed = parse_chat_ref(chat_id)
+        agent = self.get_agent_by_id(first_agent_id_of_chat(parsed)) if parsed is not None else None
         if agent is None or is_primary_agent(agent):
             return None
         return chat_snapshot_for_agent(
@@ -774,9 +776,10 @@ class AgentManager:
 
     def get_active_agent_info(self, chat_id: str) -> AgentInfo | None:
         """The agent a chat currently runs on (with its resolved dirs), or None for an id that names no chat."""
-        if not chat_id:
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
             return None
-        return self.get_agent_info_by_id(first_agent_id_of_chat(ChatId(chat_id)))
+        return self.get_agent_info_by_id(first_agent_id_of_chat(parsed))
 
     def get_chat_ids(self) -> list[ChatId]:
         """Ids of the chats the OOM prioritizer manages: user-facing chats only.
@@ -866,8 +869,11 @@ class AgentManager:
 
     def has_pending_permission(self, chat_id: str) -> bool:
         """Whether a permission request the chat's agent filed is still awaiting the user's verdict."""
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
+            return False
         with self._lock:
-            return bool(self._pending_permission_ids_by_agent.get(first_agent_id_of_chat(ChatId(chat_id))))
+            return bool(self._pending_permission_ids_by_agent.get(first_agent_id_of_chat(parsed)))
 
     # ---- chat-level: the verbs (destroy, stop, rename, create) -----------------------------
 
@@ -1051,11 +1057,12 @@ class AgentManager:
         if not canonical_agent_name(display_name):
             raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
 
+        parsed = parse_chat_ref(chat_ref)
         with self._lock:
-            agent_state = self._agents.get(first_agent_id_of_chat(ChatId(chat_ref))) if chat_ref else None
+            agent_state = self._agents.get(first_agent_id_of_chat(parsed)) if parsed is not None else None
             if agent_state is None:
                 agent_state = next((agent for agent in self._agents.values() if agent.name == chat_ref), None)
-            provisional = self._provisional_chats.get(ChatId(chat_ref)) if chat_ref else None
+            provisional = self._provisional_chats.get(parsed) if parsed is not None else None
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
         if agent_state is None:
@@ -1178,10 +1185,11 @@ class AgentManager:
             return list(self._provisional_chats.values())
 
     def get_provisional_chat(self, chat_id: str) -> ProvisionalChat | None:
-        if not chat_id:
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
             return None
         with self._lock:
-            return self._provisional_chats.get(ChatId(chat_id))
+            return self._provisional_chats.get(parsed)
 
     def get_own_agent_id(self) -> str:
         """Return this server's own agent ID from the environment."""
@@ -1242,14 +1250,15 @@ class AgentManager:
         """Drop a provisional chat that is not being created: one awaiting an account, or one
         whose create failed. Returns whether anything was dropped; a create in flight cannot be
         taken back and is left alone."""
-        if not chat_id:
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
             return False
         with self._lock:
-            provisional = self._provisional_chats.get(ChatId(chat_id))
+            provisional = self._provisional_chats.get(parsed)
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
-            del self._provisional_chats[ChatId(chat_id)]
-        self._broadcaster.broadcast_provisional_chat_completed(chat_id=ChatId(chat_id), success=False, error=None)
+            del self._provisional_chats[parsed]
+        self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._nudger.nudge()
         return True
 
