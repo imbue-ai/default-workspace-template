@@ -130,7 +130,7 @@ def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_poppin
     reactor = _reactor(shell, AutoOpenLedger(path=path))
 
     reactor.seed_at_startup(
-        {ChatId("old-1"): _LABELED, ChatId("old-2"): _LABELED, ChatId("plain"): {ChatId("user_created"): "true"}}
+        {ChatId("old-1"): _LABELED, ChatId("old-2"): _LABELED, ChatId("plain"): {"user_created": "true"}}
     )
     reactor.flush()
 
