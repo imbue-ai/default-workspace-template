@@ -80,6 +80,7 @@ from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
 from imbue.chat.models import AttachmentUploadResponse
+from imbue.chat.models import ChatListResponse
 from imbue.chat.models import CreateAgentResponse
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreateChatResponse
@@ -1098,9 +1099,8 @@ def _list_chats_endpoint() -> Response:
     if not agent_manager.is_agent_list_known():
         failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
         return json_response(failure.model_dump(), status_code=503)
-    return json_response(
-        {"chats": [snapshot.model_dump(mode="json") for snapshot in agent_manager.get_chat_snapshots()]}
-    )
+    response = ChatListResponse(chats=tuple(agent_manager.get_chat_snapshots()))
+    return json_response(response.model_dump(mode="json"))
 
 
 def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: str) -> Response | None:
