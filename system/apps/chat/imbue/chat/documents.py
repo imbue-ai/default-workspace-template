@@ -22,6 +22,7 @@ FRONTEND_BUILT_HEADER: Final[str] = "X-Frontend-Built"
 
 BASE_PATH_META_NAME: Final[str] = "system-interface-base-path"
 HOSTNAME_META_NAME: Final[str] = "system-interface-hostname"
+PRIMARY_AGENT_ID_META_NAME: Final[str] = "system-interface-agent-id"
 # The chat document's own identity: which chat it shows and, when it is a subagent view, which
 # agent of the chat the subagent session belongs to and which session it is.
 CHAT_ID_META_NAME: Final[str] = "system-interface-chat-id"
@@ -99,6 +100,11 @@ def inject_hostname_meta_tag(html_content: str) -> str:
 def inject_plugin_script_tags(html_content: str, plugin_basenames: Sequence[str], root_path: str) -> str:
     script_tags = "\n".join(f'<script src="{root_path}/plugins/{basename}"></script>' for basename in plugin_basenames)
     return html_content.replace("</body>", f"{script_tags}\n</body>")
+
+
+def inject_primary_agent_id_meta_tag(html_content: str) -> str:
+    """Inject the primary agent ID as a meta tag for the frontend."""
+    return inject_meta_tag(html_content, PRIMARY_AGENT_ID_META_NAME, os.environ.get("MNGR_AGENT_ID", ""))
 
 
 def inject_chat_identity_meta_tags(html_content: str, chat_id: str, agent_id: str, session_id: str) -> str:

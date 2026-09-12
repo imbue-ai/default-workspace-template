@@ -53,6 +53,7 @@ from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
 from imbue.chat.documents import inject_hostname_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
+from imbue.chat.documents import inject_primary_agent_id_meta_tag
 from imbue.chat.documents import inject_terminal_label_meta_tag
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.file_serving import try_serve_file
@@ -1234,6 +1235,7 @@ def _chat_document(key: str) -> Response:
     html_content = document_path.read_text()
     html_content = inject_base_path_meta_tag(html_content, root_path)
     html_content = inject_hostname_meta_tag(html_content)
+    html_content = inject_primary_agent_id_meta_tag(html_content)
     html_content = inject_chat_identity_meta_tags(html_content, chat_id, agent_id, session_id)
     html_content = inject_terminal_label_meta_tag(html_content, _terminal_origin_label())
     if config.javascript_plugin_basenames:
