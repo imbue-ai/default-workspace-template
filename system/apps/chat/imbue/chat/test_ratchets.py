@@ -57,7 +57,7 @@ def test_prevent_broad_exception_catch() -> None:
     # agent_manager._run_creation. The thread runs with is_checked=False, so any
     # exception that escapes is silently swallowed; without that catch-all a bug
     # anywhere inside leaves the chat's page on "Starting the chat..." forever,
-    # because the provisional chat is never settled and proto_agent_completed
+    # because the provisional chat is never settled and provisional_chat_completed
     # never fires. Treat this one as load-bearing rather than sloppy.
     # One for auth_flows._credentials_restored_on_error, which puts the previous
     # credential back on any failure of the write inside it and re-raises: a
@@ -235,7 +235,7 @@ def test_prevent_monkeypatch_setattr() -> None:
     # No `monkeypatch.setattr` anywhere in the package. Collaborators are
     # constructor-injected end to end: the composition root (`main`) builds the
     # real graph and is the sole caller of `AgentManager.start`, while
-    # `create_application` takes an already-built `ChatState` and tests
+    # `create_application` takes an already-built `ChatAppState` and tests
     # assemble one with fakes via `testing.build_test_state` (e.g. a
     # `RecordingMngrMessenger` for the message-send path). `ClaudeAuthService`
     # likewise takes its outside-world dependencies as constructor arguments,
