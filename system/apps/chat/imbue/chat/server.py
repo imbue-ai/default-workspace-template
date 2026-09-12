@@ -685,10 +685,10 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
 
     Refuses to interrupt agents carrying the ``is_primary=true`` label: that's
     the services agent for the workspace, and restarting it would stop the
-    bootstrap, web, share-gateway, and other supervised services. The
-    frontend already hides ``is_primary=true`` agents from the visible agent
-    list; this is defense-in-depth for callers that hit the endpoint directly
-    (curl, scripted use, etc.).
+    bootstrap, web, share-gateway, and other supervised services. The chat
+    list the app pushes already omits ``is_primary=true`` agents (they are
+    never a chat), so this is defense-in-depth for callers that hit the
+    endpoint directly (curl, scripted use, etc.).
     """
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
@@ -743,8 +743,9 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
     """A 400 refusing a restart-based queue action on the primary services agent, or None.
 
     Both queue actions restart the agent; restarting the ``is_primary=true``
-    services agent would tear down the workspace's supervised services. The
-    frontend hides primary agents, so this is defense-in-depth for direct callers.
+    services agent would tear down the workspace's supervised services. The chat
+    list the app pushes omits primary agents, so this is defense-in-depth for
+    direct callers.
     """
     if agent_info.labels.get("is_primary") == "true":
         error = ErrorResponse(
