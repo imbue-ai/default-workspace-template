@@ -66,7 +66,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
-from typing import IO
+from typing import IO, assert_never
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -333,27 +333,31 @@ def main(
     result = send_through_chat_app(
         base_url, args.chat_id, text, uuid.uuid4().hex, clock, sleep
     )
-    if result.outcome is Outcome.DELIVERED:
-        print(f"Sent to chat {args.chat_id} through the chat app")
-        return EXIT_DELIVERED
-    if result.outcome is Outcome.BLOCKED:
-        print(
-            f"Delivered to chat {args.chat_id}, but its input is blocked: {result.detail}",
-            file=sys.stderr,
-        )
-        return EXIT_DELIVERED_BUT_BLOCKED
-    if result.outcome is Outcome.REFUSED:
-        print(
-            f"The chat app refused the message for chat {args.chat_id}: {result.detail}",
-            file=sys.stderr,
-        )
-        return EXIT_FAILED
-    # UNREACHABLE or UNKNOWN_CHAT: the chat app cannot take this message, so mngr delivers it.
-    print(
-        f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
-        file=sys.stderr,
-    )
-    return send_through_mngr(args.chat_id, text)
+    match result.outcome:
+        case Outcome.DELIVERED:
+            print(f"Sent to chat {args.chat_id} through the chat app")
+            return EXIT_DELIVERED
+        case Outcome.BLOCKED:
+            print(
+                f"Delivered to chat {args.chat_id}, but its input is blocked: {result.detail}",
+                file=sys.stderr,
+            )
+            return EXIT_DELIVERED_BUT_BLOCKED
+        case Outcome.REFUSED:
+            print(
+                f"The chat app refused the message for chat {args.chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
+        case Outcome.UNREACHABLE | Outcome.UNKNOWN_CHAT:
+            # The chat app cannot take this message, so mngr delivers it.
+            print(
+                f"Falling back to `mngr message` for chat {args.chat_id}: {result.detail}",
+                file=sys.stderr,
+            )
+            return send_through_mngr(args.chat_id, text)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 if __name__ == "__main__":
