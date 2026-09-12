@@ -727,7 +727,7 @@ class AgentManager:
         self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots())
         self._nudger.nudge()
 
-    # ---- agent-level: the tracked agents ------------------------------------------------
+    # Agent-level: the tracked agents.
 
     def get_agents(self) -> list[AgentStateItem]:
         """Return current agent list."""
@@ -739,7 +739,7 @@ class AgentManager:
         with self._lock:
             return self._agents.get(agent_id)
 
-    # ---- chat-level: the chats and their snapshots ---------------------------------------
+    # Chat-level: the chats and their snapshots.
 
     def get_chat_snapshots(self) -> list[ChatSnapshot]:
         """Every chat as the pages and the instances API see it: one per non-primary agent.
@@ -875,7 +875,7 @@ class AgentManager:
         with self._lock:
             return bool(self._pending_permission_ids_by_agent.get(first_agent_id_of_chat(parsed)))
 
-    # ---- chat-level: the verbs (destroy, stop, rename, create) -----------------------------
+    # Chat-level: the verbs (destroy, stop, rename, create).
 
     def destroy_chat(self, chat_id: ChatId) -> None:
         """Run ``mngr destroy --force`` for a chat's agent and drop it from the tracked state at once.
@@ -1177,7 +1177,7 @@ class AgentManager:
             return False
         return session.is_tap_available(has_queued=bool(agent_state.queued_messages))
 
-    # ---- chat-level: provisional chats and naming ------------------------------------------
+    # Chat-level: provisional chats and naming.
 
     def get_provisional_chats(self) -> list[ProvisionalChat]:
         """The provisional chats: minted here and not yet agents, in every phase."""
