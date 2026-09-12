@@ -54,6 +54,10 @@ def _isolate_chat_tests(
     that gap.
     """
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path_factory.mktemp("minds-accounts") / "accounts"))
+    # Every index write rewrites the workspace's create defaults beside mngr's project config,
+    # which mngr and the writer both find through this variable; without it a test's account
+    # writes would land a settings.local.toml in this package's own .mngr.
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path_factory.mktemp("mngr-project-config")))
     # The chat document reads the app registry (for the terminal's origin label) from the
     # working directory otherwise, which in a workspace is the live one.
     monkeypatch.setenv("MINDS_APPS_FILE", str(tmp_path_factory.mktemp("minds-registry") / "apps.toml"))
