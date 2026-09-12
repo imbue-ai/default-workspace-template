@@ -1,0 +1,1 @@
+Antigravity chats now let you switch model families and thinking effort from the chat model bar. Changes are saved per agent, preserve existing Antigravity settings, and keep older tier-specific model state readable.
