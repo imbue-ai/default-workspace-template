@@ -189,7 +189,7 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
     assert rc == 7
     assert slept == []
     [call] = _mngr_calls(fake_mngr)
-    assert call["argv"][:3] == ["message", _CHAT_ID, "--message-file"]
+    assert call["argv"][:4] == ["message", _CHAT_ID, "--start", "--message-file"]
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
 
 
@@ -223,7 +223,8 @@ def test_a_persisting_404_hands_the_message_to_mngr(
         interval == message_chat.UNKNOWN_RETRY_INTERVAL_SECONDS for interval in slept
     )
     [call] = _mngr_calls(fake_mngr)
-    assert call["argv"][:2] == ["message", _CHAT_ID]
+    # `--start` mirrors the chat app's revive-on-send, so a stopped agent is reached either way.
+    assert call["argv"][:3] == ["message", _CHAT_ID, "--start"]
     assert call["text"] == "hello"
 
 
