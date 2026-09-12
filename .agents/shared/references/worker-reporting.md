@@ -34,8 +34,8 @@ does not need it.
 At each gate or terminal status:
 
 1. Write your report to `<RUNTIME_REPORTS_DIR>/report.md` (create the directory
-   if missing). `report.md` is the basename of `FINISH_REPORT_PATH`, so pushing
-   the directory in step 2 lands it at the lead's `FINISH_REPORT_PATH`.
+   if missing). `report.md` is the basename of `FINISH_REPORT_PATH`, so
+   delivering it in step 2 lands it at the lead's `FINISH_REPORT_PATH`.
 
    ```
    ---
@@ -88,8 +88,8 @@ At each gate or terminal status:
    your chat and you resume; for terminal reports, the lead acts on the report
    and the run ends.
 
-The sync is the ready signal -- it only happens once you are finished writing.
-Do not sync a partial report.
+The delivery is the ready signal -- it only happens once you are finished
+writing. Do not deliver a partial report.
 
 ## Terminal status report bodies
 
