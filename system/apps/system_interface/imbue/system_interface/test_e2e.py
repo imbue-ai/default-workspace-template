@@ -1177,9 +1177,9 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
 def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp_path: Path, page: Page) -> None:
     """A rail shortcut in focus mode with nothing to focus creates an instance; expanding the rail never reflows it.
 
-    The rail expands over the dock by growing width alone, so a row shared by both states
-    sits at the same y whether collapsed or expanded; and picking a row inside the
-    still-hovered rail leaves it open, since only the pointer leaving closes it.
+    The rail expands over the dock by growing width alone, so a row shared by both states sits at
+    the same y whether collapsed or expanded; and picking a row that puts a tab on screen collapses
+    the rail off it, even with the pointer still inside.
     """
     with _running_e2e_server(tmp_path, _PORT + 16, stub_instances=(), project_names=()) as server:
         page.goto(server.base_url)
@@ -1208,11 +1208,14 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
 
         stub_shortcut.click()
         expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
-        expect(page.locator(".project-rail-search")).to_be_visible(timeout=1000)
+        # The rail got out of the way of the tab it just opened, without waiting for the pointer.
+        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
         assert [str(record.key) for record in server.stub_source.records] == ["stub-1"]
 
+        # And the pointer leaving and returning brings it back.
         page.mouse.move(600, 400)
-        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+        rail.hover()
+        expect(page.locator(".project-rail-search")).to_be_visible(timeout=5000)
 
 
 # ---------- the launcher ----------

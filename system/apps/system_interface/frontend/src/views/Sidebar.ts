@@ -405,6 +405,14 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     menuError = null;
   }
 
+  /** Pick something that puts a tab on screen. The rail collapses out of the way of what it just
+   *  revealed, rather than sitting over it until the pointer happens to leave; entering the rail
+   *  again brings it back. Picks that change the rail itself (pin, rename, a mode flip) do not. */
+  function reveal(action: () => void): void {
+    pick(action);
+    expanded = false;
+  }
+
   function commitRename(row: SidebarTabRow, typed: string, attrs: SidebarAttrs): void {
     endRename();
     const title = normalizeTabTitle(typed);
@@ -443,6 +451,8 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   interface ShortcutMenuEntry {
     label: string;
     run: () => void;
+    // Whether running it puts a tab on screen, and so collapses the rail.
+    isReveal?: boolean;
     isDisabled?: boolean;
   }
 
@@ -452,11 +462,16 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const isEverything = isEverythingView(attrs.activeViewId);
     const entries: ShortcutMenuEntry[] = [];
     if (resolved.mode === "focus") {
-      entries.push({ label: resolved.action.label, run: () => attrs.onRunShortcutAsNew(resolved.shortcut) });
+      entries.push({
+        label: resolved.action.label,
+        run: () => attrs.onRunShortcutAsNew(resolved.shortcut),
+        isReveal: true,
+      });
     } else {
       entries.push({
         label: `Focus last ${resolved.app.display_name}`,
         run: () => attrs.onFocusLastOfShortcut(resolved.shortcut),
+        isReveal: true,
         isDisabled: !attrs.rows.some((row) => row.appName === resolved.app.name),
       });
     }
@@ -500,7 +515,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
             iconMarkup: null,
             label: entry.label,
             isDisabled: entry.isDisabled,
-            onclick: () => pick(entry.run),
+            onclick: () => (entry.isReveal === true ? reveal : pick)(entry.run),
           }),
         ),
         canUnpin
@@ -667,7 +682,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
                 : isStopped
                   ? "project-rail-shortcut-stopped text-faint opacity-60"
                   : "text-primary"),
-            onclick: isAwaiting ? undefined : () => pick(() => attrs.onRunShortcut(resolved.shortcut)),
+            onclick: isAwaiting ? undefined : () => reveal(() => attrs.onRunShortcut(resolved.shortcut)),
           },
           [m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(resolved.app, ROW_ICON_SIZE))), railLabel(label, "")],
         ),
@@ -797,11 +812,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               ? "text-primary"
               : "text-faint"),
         ...(row.stoppedDetail === undefined ? {} : hoverTooltipAttrs(`${row.label} — ${row.stoppedDetail}`, "right")),
-        onclick: () =>
-          pick(() => {
-            attrs.onOpenRow(row);
-            if (row.isOpen) expanded = false;
-          }),
+        onclick: () => reveal(() => attrs.onOpenRow(row)),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           openMenuAt({ kind: "row", anchor: anchorForPointer(event), address: row.address });
@@ -1095,7 +1106,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
       children: m(AllAppsPicker, {
         projectName: project?.name ?? null,
         pinnedKeys: (project?.shortcuts ?? []).map(shortcutKey),
-        onRunAction: (app, action) => pick(() => attrs.onRunAppAction(app, action)),
+        onRunAction: (app, action) => reveal(() => attrs.onRunAppAction(app, action)),
         onPin: (app, action) => {
           // Pinning is not picking: the popover stays open so several rows can be pinned.
           attrs.onPinShortcut(app, action);

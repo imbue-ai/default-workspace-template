@@ -174,6 +174,10 @@ describe("Sidebar", () => {
     m.redraw.sync();
   }
 
+  function isExpanded(): boolean {
+    return root.querySelector(".machine-sidebar")!.className.includes("w-[240px]");
+  }
+
   it("runs a project's shortcut and unpins it from the hover control", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
@@ -257,6 +261,48 @@ describe("Sidebar", () => {
     expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
   });
 
+  describe("getting out of the way", () => {
+    it("collapses when a shortcut row puts a tab on screen", () => {
+      mount({});
+      expand();
+      expect(isExpanded()).toBe(true);
+      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
+      m.redraw.sync();
+      expect(isExpanded()).toBe(false);
+    });
+
+    it("collapses whether the row it opened was already docked or not", () => {
+      for (const address of ["app:terminal?instance=one", "app:chat?instance=one"]) {
+        mount({});
+        expand();
+        root.querySelector<HTMLElement>(`[data-address="${address}"]`)!.click();
+        m.redraw.sync();
+        expect(isExpanded(), address).toBe(false);
+        m.mount(root, null);
+      }
+    });
+
+    it("collapses when the All apps popover runs an action", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>(".project-rail-all-apps")!.click();
+      m.redraw.sync();
+      // terminal is pinned in this fixture, so the popover offers chat.
+      root.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
+      m.redraw.sync();
+      expect(attrs.onRunAppAction).toHaveBeenCalled();
+      expect(isExpanded()).toBe(false);
+    });
+
+    it("stays open for a pick that acts on the rail rather than the dock", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>(".project-rail-shortcut-unpin")!.click();
+      m.redraw.sync();
+      expect(attrs.onRemoveShortcut).toHaveBeenCalled();
+      expect(isExpanded()).toBe(true);
+    });
+  });
   it("switches views from the header menu", () => {
     const attrs = mount({});
     root.querySelector<HTMLElement>(".project-rail-header")!.click();
