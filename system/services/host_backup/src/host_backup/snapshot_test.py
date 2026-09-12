@@ -62,15 +62,17 @@ def test_make_snapshot_taker_raises_when_btrfs_local_missing_paths() -> None:
 # --- OuterTriggerSnapshotTaker (faked outer helper) ---
 
 
-def _outer_trigger_capabilities(trigger_dir: Path) -> BackupCapabilities:
+def _outer_trigger_capabilities(tmp_path: Path) -> BackupCapabilities:
+    """Capabilities whose read dir is a real directory the fake helper populates."""
     return BackupCapabilities(
         method=SnapshotMethod.OUTER_TRIGGER,
         btrfs_mount_path=Path("/mngr-btrfs"),
         host_subvolume_path=Path("/mngr-btrfs/abcdef"),
         snapshot_current_path=Path("/mngr-btrfs/snapshots/current"),
-        snapshot_read_path=Path("/mngr-snapshots/current"),
-        trigger_dir=trigger_dir,
+        snapshot_read_path=tmp_path / "snapshots" / "current",
+        trigger_dir=tmp_path / "trigger",
         outer_helper_timeout_seconds=10.0,
+        read_subpath="home",
     )
 
 
@@ -82,6 +84,12 @@ def _start_fake_outer_helper(
     error_message: str = "",
     fail_after_requests: int | None = None,
     requests_seen: list[dict[str, object]] | None = None,
+    # Where the helper materializes each snapshot it reports success for; None
+    # keeps it reporting success without creating anything (the cleanup tests,
+    # which populate the read dir themselves).
+    read_dir: Path | None = None,
+    # Entries created inside each snapshot it materializes.
+    snapshot_entries: tuple[str, ...] = ("home",),
     stop_event: threading.Event,
 ) -> threading.Thread:
     """Background thread that watches `trigger_dir` and produces result.json files.
@@ -117,6 +125,15 @@ def _start_fake_outer_helper(
                 if fail_after_requests is not None and handled > fail_after_requests:
                     effective_exit = 2
                     effective_error = "boom"
+                if (
+                    effective_exit == 0
+                    and read_dir is not None
+                    and payload.get("operation") == "snapshot"
+                ):
+                    snapshot_dir = read_dir / str(payload.get("request_id", ""))
+                    snapshot_dir.mkdir(parents=True, exist_ok=True)
+                    for entry in snapshot_entries:
+                        (snapshot_dir / entry).mkdir(exist_ok=True)
                 response = {
                     "request_id": payload.get("request_id", ""),
                     "operation": payload.get("operation", ""),
@@ -136,16 +153,21 @@ def _start_fake_outer_helper(
 
 
 def test_outer_trigger_snapshot_takes_then_returns_result(tmp_path: Path) -> None:
-    capabilities = _outer_trigger_capabilities(tmp_path / "trigger")
+    capabilities = _outer_trigger_capabilities(tmp_path)
+    snapshots_dir = tmp_path / "snapshots"
     stop = threading.Event()
-    helper = _start_fake_outer_helper(tmp_path / "trigger", stop_event=stop)
+    helper = _start_fake_outer_helper(
+        tmp_path / "trigger", read_dir=snapshots_dir, stop_event=stop
+    )
     try:
         taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
         result = taker.take_snapshot()
         assert result.method == SnapshotMethod.OUTER_TRIGGER
-        # The read path is a fresh, uniquely-named child of the snapshots dir.
-        assert result.read_path.parent == Path("/mngr-snapshots")
-        assert result.read_path != Path("/mngr-snapshots/current")
+        # The read path is the backup subtree of a fresh, uniquely-named child
+        # of the snapshots dir.
+        assert result.read_path.name == "home"
+        assert result.read_path.parent.parent == snapshots_dir
+        assert result.read_path.parent != snapshots_dir / "current"
         assert result.snapshot_path == "/mngr-btrfs/snapshots/current"
         assert result.helper_exit_code == 0
     finally:
@@ -153,8 +175,39 @@ def test_outer_trigger_snapshot_takes_then_returns_result(tmp_path: Path) -> Non
         helper.join(timeout=2.0)
 
 
+def test_outer_trigger_snapshot_names_the_snapshot_entries_when_the_subtree_is_absent(
+    tmp_path: Path,
+) -> None:
+    """A snapshot of an unexpected layout must be reported here, not by restic later.
+
+    Restic would otherwise fail two steps on with "does not exist, skipping"
+    and "all source directories/files do not exist" -- an error about its own
+    arguments that never mentions the snapshot they came from.
+    """
+    capabilities = _outer_trigger_capabilities(tmp_path)
+    stop = threading.Event()
+    helper = _start_fake_outer_helper(
+        tmp_path / "trigger",
+        read_dir=tmp_path / "snapshots",
+        # A pre-declutter volume: the host dir sits beside the provider's own
+        # bookkeeping, with no home/ anywhere.
+        snapshot_entries=("host_dir", "agents"),
+        stop_event=stop,
+    )
+    try:
+        taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
+        with pytest.raises(SnapshotError) as excinfo:
+            taker.take_snapshot()
+        message = str(excinfo.value)
+        assert "'home'" in message
+        assert "agents, host_dir" in message
+    finally:
+        stop.set()
+        helper.join(timeout=2.0)
+
+
 def test_outer_trigger_snapshot_propagates_helper_failure(tmp_path: Path) -> None:
-    capabilities = _outer_trigger_capabilities(tmp_path / "trigger")
+    capabilities = _outer_trigger_capabilities(tmp_path)
     stop = threading.Event()
     helper = _start_fake_outer_helper(
         tmp_path / "trigger",
@@ -182,7 +235,7 @@ def test_outer_trigger_snapshot_times_out_when_no_helper_responds(
         btrfs_mount_path=Path("/mngr-btrfs"),
         host_subvolume_path=Path("/mngr-btrfs/abcdef"),
         snapshot_current_path=Path("/mngr-btrfs/snapshots/current"),
-        snapshot_read_path=Path("/mngr-snapshots/current"),
+        snapshot_read_path=tmp_path / "snapshots" / "current",
         trigger_dir=tmp_path / "trigger",
         outer_helper_timeout_seconds=1.0,
     )
@@ -193,9 +246,11 @@ def test_outer_trigger_snapshot_times_out_when_no_helper_responds(
 
 
 def test_outer_trigger_writes_request_atomically(tmp_path: Path) -> None:
-    capabilities = _outer_trigger_capabilities(tmp_path / "trigger")
+    capabilities = _outer_trigger_capabilities(tmp_path)
     stop = threading.Event()
-    helper = _start_fake_outer_helper(tmp_path / "trigger", stop_event=stop)
+    helper = _start_fake_outer_helper(
+        tmp_path / "trigger", read_dir=tmp_path / "snapshots", stop_event=stop
+    )
     try:
         taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
         taker.take_snapshot()
@@ -214,10 +269,11 @@ def test_outer_trigger_take_snapshot_uses_unique_timestamped_names(
     tmp_path: Path,
 ) -> None:
     """Two successive snapshots must land on distinct, never-reused paths."""
-    capabilities = _outer_trigger_capabilities(tmp_path / "trigger")
+    capabilities = _outer_trigger_capabilities(tmp_path)
+    snapshots_dir = tmp_path / "snapshots"
     stop = threading.Event()
     helper = _start_fake_outer_helper(
-        tmp_path / "trigger", snapshot_path="", stop_event=stop
+        tmp_path / "trigger", snapshot_path="", read_dir=snapshots_dir, stop_event=stop
     )
     try:
         taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
@@ -226,8 +282,8 @@ def test_outer_trigger_take_snapshot_uses_unique_timestamped_names(
         first = taker.take_snapshot()
         second = taker.take_snapshot()
         assert first.read_path != second.read_path
-        assert first.read_path.parent == Path("/mngr-snapshots")
-        assert second.read_path.parent == Path("/mngr-snapshots")
+        assert first.read_path.parent.parent == snapshots_dir
+        assert second.read_path.parent.parent == snapshots_dir
         # The helper returned an empty snapshot_path, so the taker falls back to
         # the outer snapshots dir + the timestamped name it generated.
         assert first.snapshot_path.startswith("/mngr-btrfs/snapshots/")
@@ -334,7 +390,10 @@ def test_take_snapshot_sweeps_leftover_snapshots_before_taking_a_new_one(
     stop = threading.Event()
     requests_seen: list[dict[str, object]] = []
     helper = _start_fake_outer_helper(
-        tmp_path / "trigger", requests_seen=requests_seen, stop_event=stop
+        tmp_path / "trigger",
+        requests_seen=requests_seen,
+        read_dir=tmp_path / "snapshots",
+        stop_event=stop,
     )
     try:
         taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
