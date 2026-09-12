@@ -1190,13 +1190,14 @@ def test_skill_md_task_template_carries_the_lead_agent_and_report_fields() -> No
     only thing that gives the worker a report address there. Removing either
     line reintroduces the v0.3.11 -> v0.3.16 failure where the worker finished
     but could never deliver its report and the lead waited out the full
-    timeout in silence.
+    timeout in silence. The address is the lead's agent id, which a rename of
+    its chat does not change; its name would.
     """
     skill_md = (_MODULE_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8")
     start = skill_md.index("cat << FRONTMATTER_EOF")
     end = skill_md.index("FRONTMATTER_EOF", start + len("cat << FRONTMATTER_EOF"))
     frontmatter_template = skill_md[start:end]
-    assert "lead_agent: $MNGR_AGENT_NAME" in frontmatter_template
+    assert "lead_agent: $MNGR_AGENT_ID" in frontmatter_template
     assert "finish_report_path: " in frontmatter_template
 
 

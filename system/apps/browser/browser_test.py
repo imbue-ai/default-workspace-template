@@ -2,6 +2,7 @@ import asyncio
 import json
 import queue
 import shutil
+import sys
 import tempfile
 import time
 from collections import deque
@@ -21,11 +22,12 @@ from browser.errors import (
     UnknownBrowserError,
 )
 from browser.primitives import BrowserName
+from loguru import logger
 from mock_cdp_client_test import NavigatingCdpClient
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent`` in tests: skip the real ``mngr message`` subprocess."""
+    """Stand-in for ``_wake_agent`` in tests: skip the real ``message_chat.py`` subprocess."""
 
 
 def _running_browser(browser_id: str) -> bsession.LiveBrowser:
@@ -1994,3 +1996,60 @@ def test_navigate_active_tab_reports_a_refused_navigation_and_a_tabless_browser_
     with pytest.raises(NavigationFailedError, match="no tab to navigate"):
         asyncio.run(tabless.navigate_active_tab("https://example.com/"))
     assert refusing._active_target() is None
+
+
+def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wake rides ``system/scripts/message_chat.py`` (the chat app, with ``mngr message`` as
+    its own backoff), addressed by the agent's id and marked ``--system`` so the transcript
+    renders it as a collapsed chip; the agent's name is never the address."""
+    spawned: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    class _Done:
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _Done:
+        spawned.append((argv, kwargs))
+        return _Done()
+
+    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    browser = bsession.LiveBrowser(browser_id="b1")
+
+    asyncio.run(browser._message_agent("agent-0123456789abcdef0123456789abcdef", "riley", "the browser is yours"))
+
+    [(argv, kwargs)] = spawned
+    assert argv == (
+        sys.executable,
+        str(Path("system") / "scripts" / "message_chat.py"),
+        "agent-0123456789abcdef0123456789abcdef",
+        "--system",
+        "--message",
+        "the browser is yours",
+    )
+    assert Path(str(kwargs["cwd"])).joinpath("system", "scripts", "message_chat.py").is_file()
+
+
+def test_message_agent_logs_a_messenger_that_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The messenger's exit status is the failure signal (its output goes to DEVNULL), so a nonzero one
+    leaves a warning naming it and the agent; the wake itself stays best-effort and raises nothing."""
+
+    class _Blocked:
+        async def wait(self) -> int:
+            return 7
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _Blocked:
+        return _Blocked()
+
+    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    warnings: list[str] = []
+    sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
+    try:
+        asyncio.run(bsession.LiveBrowser(browser_id="b1")._message_agent("agent-1", "riley", "the browser is yours"))
+    finally:
+        logger.remove(sink_id)
+
+    [warning] = warnings
+    assert "exited 7" in warning
+    assert "riley" in warning

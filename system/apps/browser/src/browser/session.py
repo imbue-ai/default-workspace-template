@@ -51,6 +51,7 @@ import queue
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -383,27 +384,12 @@ def _repo_root() -> Path:
     return Path.cwd()
 
 
-# Sentinel the fleet wraps its agent-facing nudges in before sending them via
-# `mngr message` (see `_message_agent`). These nudges land in the agent's
-# transcript as an ordinary user turn; without a marker the system_interface
-# transcript UI shows them as a bare user bubble, as if the human had typed
-# them. Wrapping lets that UI recognise the message and render it as a collapsed
-# system chip instead (like Stop-hook feedback).
-#
-# CROSS-LAYER CONTRACT: the reading side is the frontend's `BROWSER_FLEET_TAG` in
-# system/apps/system_interface/frontend/src/views/message-kinds.ts -- keep the tag in
-# sync. We wrap here in the fleet's OWN service (not in mngr, which is an
-# independent product with no stake in this display concern). The wrapper adds no
-# newlines, so a wrapped message types into the agent's pane identically to the
-# same text sent unwrapped.
-_SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
-
-
-def _wrap_system_message(text: str) -> str:
-    """Wrap an automated agent-facing nudge in the ``_SYSTEM_MESSAGE_TAG`` sentinel
-    (see its comment). Adds no newlines, so the wrapped text types into the agent's
-    pane identically to ``text`` sent unwrapped."""
-    return f"<{_SYSTEM_MESSAGE_TAG}>{text}</{_SYSTEM_MESSAGE_TAG}>"
+# The in-workspace chat messenger (see `_message_agent`): a chat is addressed by its agent
+# id through the chat app, which knows which agent is taking the chat's messages, and the
+# script falls back to `mngr message` itself when the chat app cannot take the message. Its
+# `--system` flag wraps the fleet's nudges in the sentinel the chat transcript renders as a
+# collapsed system chip instead of a bare user bubble.
+_MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
 # workspace volume under $MNGR_HOST_DIR -- Tier A durability: they survive stop/start
@@ -1269,34 +1255,44 @@ class LiveBrowser(MutableModel):
         return {"ok": False, "status": "starting", **self._control_state()}
 
     async def _message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
-        """Best-effort: message a queued agent via ``mngr message`` (the same path
-        launch-task uses). Failures are logged, not raised -- the claim window / lifecycle
-        handling is the backstop if a message never lands.
+        """Best-effort: message a queued agent's chat through the chat app (the same path
+        launch-task uses). Failures are logged, not raised -- a messenger that cannot be
+        spawned and one that exits nonzero (``mngr message``'s codes: 1 not delivered, 7
+        delivered but the agent's input is blocked) both leave a warning; the claim window /
+        lifecycle handling is the backstop if a message never lands.
 
-        These are automated, non-human nudges, so the text is wrapped in the
-        ``_SYSTEM_MESSAGE_TAG`` sentinel: the transcript UI recognises it and
-        renders a collapsed system chip instead of a bare user bubble. This is
-        display-only -- the agent still receives the message and resumes its turn
-        exactly as before."""
-        target = agent_name or agent_id
-        wrapped = _wrap_system_message(text)
+        These are automated, non-human nudges, so they go with ``--system``: the transcript
+        UI renders them as a collapsed system chip instead of a bare user bubble. This is
+        display-only -- the agent still receives the message and resumes its turn exactly
+        as before. The chat is addressed by the agent's id, never its name."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "mngr",
-                "message",
-                target,
+                sys.executable,
+                str(_MESSAGE_CHAT_SCRIPT),
+                agent_id,
+                "--system",
                 "--message",
-                wrapped,
-                # Run from the repo root so the `mngr` dev shim resolves this checkout
-                # (repo-relative paths assume cwd = repo root; don't rely on the
-                # daemon's inherited cwd).
+                text,
+                # Run from the repo root: the script path is repo-relative and the `mngr`
+                # dev shim the script's backoff runs resolves this checkout from there
+                # (don't rely on the daemon's inherited cwd).
                 cwd=str(_repo_root()),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await proc.wait()
         except OSError as e:
-            logger.warning("could not message agent {} for browser {} ({})", target, self.browser_id, e)
+            logger.warning(
+                "could not message agent {} for browser {} ({})", agent_name or agent_id, self.browser_id, e
+            )
+            return
+        returncode = await proc.wait()
+        if returncode != 0:
+            logger.warning(
+                "message_chat.py exited {} messaging agent {} for browser {}; the message may not have landed",
+                returncode,
+                agent_name or agent_id,
+                self.browser_id,
+            )
 
     async def _wake_agent(self, agent_id: str, agent_name: str | None) -> None:
         """Message a queued agent that the browser is its again, so it resumes in a

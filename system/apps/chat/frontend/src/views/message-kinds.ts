@@ -154,15 +154,16 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
 };
 
 /**
- * Cross-layer contract: the sentinel the agentic browser fleet wraps its
- * agent-facing nudges in before sending them via `mngr message`, so this
+ * Cross-layer contract: the sentinel an automated in-workspace sender (today the
+ * agentic browser fleet's wake-ups) wraps its agent-facing nudges in, so this
  * frontend can recognise them (-> UserMessageKind.SystemChip) instead of showing a
- * bare user bubble. The fleet is the only sender; mngr itself is untouched (it is
- * an independent product and has no business knowing about this display concern).
+ * bare user bubble. mngr itself is untouched (it is an independent product and has
+ * no business knowing about this display concern).
  *
- * The wrapping side is `system/apps/browser/src/browser/session.py`
- * (`_SYSTEM_MESSAGE_TAG` in `_message_agent`). Keep the tag string in sync.
- * The tag adds no newlines, so a wrapped message types into the agent's pane
- * identically to the same text sent unwrapped.
+ * The wrapping side is `system/scripts/message_chat.py --system`
+ * (`SYSTEM_MESSAGE_TAG`), which posts through the chat app's send route; the
+ * backend's copy is `BROWSER_FLEET_TAG` in `harnesses/message_display.py`. Keep the
+ * tag string in sync. The tag adds no newlines, so a wrapped message types into the
+ * agent's pane identically to the same text sent unwrapped.
  */
 export const BROWSER_FLEET_TAG = "agentic-browser-fleet";

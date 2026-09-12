@@ -5,7 +5,7 @@
 # ///
 """Worker-creation driver for the launch-task family of skills.
 
-Four subcommands cover the lead-side lifecycle:
+Five subcommands cover the lead-side lifecycle:
 
 ``launch``
     Runs the worker-creation lifecycle synchronously (``mngr create`` + the
@@ -31,6 +31,13 @@ Four subcommands cover the lead-side lifecycle:
     that JSON to a caller-named file as the machine-readable contract.
     ``--keep-agent`` skips the destroy; a timeout never destroys (the report may
     still be coming).
+
+``reply``
+    Sends the lead's answer to a worker's gate (or any nudge) to the worker's
+    chat, through the chat app (``system/scripts/message_chat.py``), addressed
+    by the ``worker_agent_id`` that ``launch`` stamped into the task file. A
+    task file from before that stamp is reached by ``mngr message <name>``
+    instead, with the worker's name given through ``reply --name``.
 
 ``destroy``
     Destroys the worker agent (``mngr destroy <name> --force``). The git branch
@@ -61,11 +68,19 @@ and syncs the directory alongside the runtime dir -- no extra CLI flag.
 
 Launch lifecycle commands:
 
-    mngr create <NAME> -t <TEMPLATE>
+    mngr create <NAME> -t <TEMPLATE> --format jsonl   (its ``created`` event names the worker's id)
     mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=merge
     mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=merge
                 (when frontmatter declares it)
-    mngr message <NAME> --message-file <TASK_FILE>
+    python3 system/scripts/message_chat.py <WORKER_ID> --message-file <TASK_FILE>
+
+The task message goes through the chat app by the worker's id rather than
+through ``mngr message`` by its name: a chat is addressed by id (a rename
+changes the name; see ``docs/system/blueprint/chat-agent-split/``), and the
+script falls back to ``mngr message`` itself when the chat app cannot take the
+message. The id is read back from the create's ``created`` event and stamped
+into the task frontmatter as ``worker_agent_id`` so ``reply`` can address the
+worker later without a lookup.
 
 ``mngr rsync`` takes ``SOURCE DESTINATION`` (the local source dir first, then
 the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
@@ -75,7 +90,7 @@ agent destination stays repo-relative so mngr resolves it against the worker's
 workdir. The ``--uncommitted-changes=merge`` flag is required (see
 ``.agents/shared/references/lead-proxy.md``).
 
-Why ``mngr message`` *after* the syncs (instead of using ``mngr create
+Why the task message goes *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
 dir sync lands in its worktree, the task file's ``finish_report_path`` will
 resolve to nothing. Sending the task as a follow-up message guarantees the
@@ -107,6 +122,12 @@ from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
 import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
+
+# The in-workspace chat messenger, relative to the repo root (see ``_repo_root``).
+_MESSAGE_CHAT_SCRIPT_REL = Path("system") / "scripts" / "message_chat.py"
+
+_LEAD_AGENT_FIELD = "lead_agent"
+_WORKER_AGENT_ID_FIELD = "worker_agent_id"
 
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
@@ -266,15 +287,21 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     """Stamp the launching agent as the report recipient in the task file.
 
     The agent running ``launch`` *is* the lead that polls for the worker's
-    report, so its own ``MNGR_AGENT_NAME`` is the authoritative ``lead_agent`` --
+    report, so its own ``MNGR_AGENT_ID`` is the authoritative ``lead_agent`` --
     we fill it in (overwriting whatever the file holds) from the environment
     rather than trusting the task file. That frees task-file authors from setting
     the field at all and eliminates a silent-failure class: a literal,
-    unexpanded ``$MNGR_AGENT_NAME`` (or a stale/omitted value) used to leave the
+    unexpanded ``$MNGR_AGENT_ID`` (or a stale/omitted value) used to leave the
     worker with no valid address, so it could not rsync its report back and the
     lead's poll waited forever.
 
-    When ``MNGR_AGENT_NAME`` is unset -- i.e. ``launch`` is running outside an
+    The id, not the name: ``mngr rsync`` and ``mngr transcript`` accept either,
+    and a user can rename the lead's chat mid-task, which changes its mngr name
+    and leaves a name-addressed worker pushing to an agent that no longer
+    exists. The field keeps its ``lead_agent`` key so older workers and task
+    files still parse.
+
+    When ``MNGR_AGENT_ID`` is unset -- i.e. ``launch`` is running outside an
     mngr agent, as in a manual invocation or a test -- the file's existing value
     is used as a fallback; an unresolved value (missing, blank, or an unexpanded
     ``$...``) in that case is fatal (exit 2) rather than launching an
@@ -290,16 +317,16 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     frontmatter, _body = _split_frontmatter(text)
     if frontmatter is None:
         return None
-    current = frontmatter.get("lead_agent")
-    lead_name = os.environ.get("MNGR_AGENT_NAME")
-    if lead_name:
-        if current == lead_name:
+    current = frontmatter.get(_LEAD_AGENT_FIELD)
+    lead_id = os.environ.get("MNGR_AGENT_ID")
+    if lead_id:
+        if current == lead_id:
             return None
         task_file.write_text(
-            _set_frontmatter_field(text, "lead_agent", lead_name), encoding="utf-8"
+            _set_frontmatter_field(text, _LEAD_AGENT_FIELD, lead_id), encoding="utf-8"
         )
         print(
-            f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
+            f"create_worker: set {_LEAD_AGENT_FIELD} to {lead_id!r} (was {current!r})",
             file=sys.stderr,
         )
         return None
@@ -308,12 +335,56 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     if resolved:
         return None
     print(
-        "create_worker: lead_agent is unresolved "
-        f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have no "
+        f"create_worker: {_LEAD_AGENT_FIELD} is unresolved "
+        f"({current!r}) and MNGR_AGENT_ID is unset -- the worker would have no "
         "address to send its report to.",
         file=sys.stderr,
     )
     return 2
+
+
+def _created_agent_id(create_stdout: str) -> str | None:
+    """The worker's agent id from ``mngr create --format jsonl``'s ``created`` event, or None."""
+    for line in create_stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "created":
+            agent_id = event.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                return agent_id
+    return None
+
+
+def _stamp_worker_agent_id(task_file: Path, agent_id: str) -> None:
+    """Record the worker's id in the task frontmatter, where ``reply`` reads it back."""
+    text = task_file.read_text(encoding="utf-8")
+    task_file.write_text(
+        _set_frontmatter_field(text, _WORKER_AGENT_ID_FIELD, agent_id), encoding="utf-8"
+    )
+
+
+def _repo_root() -> Path:
+    """The template repo root: the ancestor of this file that holds ``system/scripts``.
+
+    Found by walking up rather than counting a fixed number of parent directories,
+    so the lookup keeps working if this script is ever relocated within the repo.
+    Raises ``RuntimeError`` if no ancestor qualifies: the script only makes sense
+    inside the template repo, so that is a real misconfiguration.
+    """
+    for ancestor in Path(__file__).resolve().parents:
+        if (ancestor / "system" / "scripts").is_dir():
+            return ancestor
+    raise RuntimeError(
+        f"could not locate the template repo root above {Path(__file__).resolve()}"
+        " -- the launch-task script must run from within the template repo"
+    )
+
+
+def _message_chat_argv(chat_id: str) -> list[str]:
+    """The messenger invocation for one chat; the caller appends the message source."""
+    return [sys.executable, str(_repo_root() / _MESSAGE_CHAT_SCRIPT_REL), chat_id]
 
 
 class Runner:
@@ -517,7 +588,7 @@ def launch(
         return lead_rc
 
     try:
-        runner.run(
+        created = runner.run(
             [
                 "mngr",
                 "create",
@@ -530,8 +601,15 @@ def launch(
                 # subprocesses) under memory pressure.
                 "--label",
                 "agent_created=true",
+                # The ``created`` event on stdout names the worker's agent id,
+                # which is how the task message and every later ``reply``
+                # address it. mngr's progress output stays on stderr.
+                "--format",
+                "jsonl",
             ],
             check=True,
+            stdout=subprocess.PIPE,
+            text=True,
         )
     except subprocess.CalledProcessError as exc:
         # mngr's own refusals (a duplicate name the listing could not reveal,
@@ -545,25 +623,89 @@ def launch(
         )
         return 2
 
+    worker_agent_id = _created_agent_id(getattr(created, "stdout", "") or "")
+    if worker_agent_id is not None:
+        _stamp_worker_agent_id(task_file, worker_agent_id)
+    else:
+        print(
+            f"create_worker: warning: `mngr create {name}` reported no agent id; "
+            "the task goes to the worker by name and `reply` needs --name",
+            file=sys.stderr,
+        )
+
     rsync_dir(name, runtime_dir, runner)
     if artifacts_dir is not None:
         rsync_dir(name, artifacts_dir, runner)
 
     _flush_common_transcript(state_dir, runner)
 
-    runner.run(
-        [
-            "mngr",
-            "message",
-            name,
-            "--message-file",
-            str(task_file),
-        ],
-        check=True,
-    )
+    if worker_agent_id is not None:
+        runner.run(
+            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+            check=True,
+        )
+    else:
+        runner.run(
+            ["mngr", "message", name, "--message-file", str(task_file)],
+            check=True,
+        )
 
-    print(f"create_worker: worker {name} launched and runtime synced")
+    print(
+        f"create_worker: worker {name} launched and runtime synced"
+        + (f" (agent id {worker_agent_id})" if worker_agent_id is not None else "")
+    )
     return 0
+
+
+def reply(
+    task_file: Path,
+    message: str | None,
+    message_file: Path | None,
+    name: str | None,
+    runner: Runner | None = None,
+) -> int:
+    """Send the lead's reply to the worker's chat. Returns the process exit code.
+
+    Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
+    through the chat app; a task file without it (a worker launched before the
+    stamp existed) is reached by ``mngr message`` with ``--name``, and is a usage
+    error without one. The messenger's exit status (``mngr message``'s codes) is
+    passed through.
+    """
+    runner = runner or Runner()
+    if (message is None) == (message_file is None):
+        print(
+            "create_worker: reply takes exactly one of -m/--message or --message-file",
+            file=sys.stderr,
+        )
+        return 2
+    if not task_file.is_file():
+        print(f"create_worker: --task-file not found: {task_file}", file=sys.stderr)
+        return 2
+    # ``--message=<text>`` rather than ``-m <text>``: the messenger parses with argparse,
+    # which reads a separate dash-initial value (a reply that is a markdown bullet, or
+    # ``-continue``) as an option and rejects it.
+    source = (
+        ["--message-file", str(message_file)]
+        if message_file is not None
+        else [f"--message={message}"]
+    )
+    worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
+    if worker_agent_id is not None:
+        argv = [*_message_chat_argv(worker_agent_id), *source]
+    elif name:
+        # CLEANUP: drop this name-addressed fallback once no in-flight worker
+        # predates the ``worker_agent_id`` stamp (a template release after this one).
+        argv = ["mngr", "message", name, *source]
+    else:
+        print(
+            f"create_worker: {task_file} has no {_WORKER_AGENT_ID_FIELD} (launched before "
+            "it was stamped?); pass --name to reach the worker by its mngr name.",
+            file=sys.stderr,
+        )
+        return 2
+    result = runner.run(argv, check=False)
+    return int(getattr(result, "returncode", 0) or 0)
 
 
 def _oom_priority_src() -> Path:
@@ -571,22 +713,18 @@ def _oom_priority_src() -> Path:
 
     ``oom_priority`` is a first-party, stdlib-only package that the OOM Claude
     hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
-    dependency anywhere); this script does the same. We locate ``src`` by
-    walking up to the repo root -- the ancestor that contains
-    ``system/services/oom_priority/src`` -- rather than counting a fixed number of parent
-    directories, so the lookup keeps working if this script is ever relocated
-    within the repo. Raises ``RuntimeError`` if it can't be found, since the
+    dependency anywhere); this script does the same. ``src`` is resolved under
+    ``_repo_root()``. Raises ``RuntimeError`` if it is not there, since the
     package is always present in the repo and its absence is a real
     misconfiguration, not a condition to paper over.
     """
-    for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "system" / "services" / "oom_priority" / "src"
-        if candidate.is_dir():
-            return candidate
-    raise RuntimeError(
-        f"could not locate system/services/oom_priority/src above {Path(__file__).resolve()}"
-        " -- the launch-task script must run from within the template repo"
-    )
+    candidate = _repo_root() / "system" / "services" / "oom_priority" / "src"
+    if not candidate.is_dir():
+        raise RuntimeError(
+            f"{candidate} is not a directory -- the launch-task script must run "
+            "from within the template repo"
+        )
+    return candidate
 
 
 def _worker_has_pending_shed(worker_name: str) -> bool:
@@ -704,10 +842,10 @@ def await_report(
                 "daemon to relieve memory pressure -- its agent process was shed "
                 "and its background tasks (including its own report poll) were "
                 "cancelled, so it will NOT report until it is revived. Revive it "
-                f"with: mngr start {worker_name} --restart  (a plain `mngr message` "
+                f"with: mngr start {worker_name} --restart  (a plain message "
                 "or `mngr start` will not relaunch a shed agent), then nudge it to "
-                f"continue (mngr message {worker_name} -m continue). You do not "
-                "need to resend the task -- it survives in the worker's "
+                "continue (create_worker.py reply --task-file <task file> -m "
+                "continue). You do not need to resend the task -- it survives in the worker's "
                 "conversation history, and a SessionStart hook already tells the "
                 "revived worker it was paused, so it re-checks state before "
                 "continuing.",
@@ -727,8 +865,8 @@ def await_report(
                     f"worker's own worktree, e.g. data/worktrees/{worker_name}-*/ "
                     "under the report's relative path, and copy it to the path "
                     "above), or it stopped without reporting (read its transcript: "
-                    f"mngr transcript {worker_name}; nudge it with mngr message "
-                    f"{worker_name} -m 'deliver your report per "
+                    f"mngr transcript {worker_name}; nudge it with create_worker.py "
+                    "reply --task-file <task file> -m 'deliver your report per "
                     "worker-reporting.md'). Not waiting out the remaining timeout.",
                     file=sys.stderr,
                 )
@@ -1000,6 +1138,16 @@ def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:
     return 0
 
 
+def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
+    return reply(
+        task_file=args.task_file,
+        message=args.message,
+        message_file=args.message_file,
+        name=args.name,
+        runner=runner,
+    )
+
+
 def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int:
     """CLI entry point. Tests inject ``runner`` to capture the launch argv lifecycle."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1121,6 +1269,27 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
     )
     destroy_parser.add_argument("--name", required=True, help="Worker name to destroy.")
 
+    reply_parser = subparsers.add_parser(
+        "reply",
+        help="Send the lead's reply (a gate answer, a nudge) to the worker's chat, "
+        "through the chat app, addressed by the id launch stamped into the task file.",
+    )
+    reply_parser.add_argument(
+        "--task-file",
+        required=True,
+        type=Path,
+        help="Same task file as launch; its frontmatter `worker_agent_id` names the worker.",
+    )
+    reply_source = reply_parser.add_mutually_exclusive_group(required=True)
+    reply_source.add_argument("-m", "--message", help="The reply text.")
+    reply_source.add_argument(
+        "--message-file", type=Path, help="A file whose contents are the reply."
+    )
+    reply_parser.add_argument(
+        "--name",
+        help="Worker name, used only when the task file predates the `worker_agent_id` stamp.",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "launch":
@@ -1129,6 +1298,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         return _run_launch_sync(args, runner)
     if args.command == "destroy":
         return _run_destroy(args, runner)
+    if args.command == "reply":
+        return _run_reply(args, runner)
     return _run_await(args)
 
 
