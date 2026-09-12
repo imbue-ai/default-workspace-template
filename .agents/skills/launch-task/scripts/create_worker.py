@@ -682,10 +682,13 @@ def reply(
     if not task_file.is_file():
         print(f"create_worker: --task-file not found: {task_file}", file=sys.stderr)
         return 2
+    # ``--message=<text>`` rather than ``-m <text>``: the messenger parses with argparse,
+    # which reads a separate dash-initial value (a reply that is a markdown bullet, or
+    # ``-continue``) as an option and rejects it.
     source = (
         ["--message-file", str(message_file)]
         if message_file is not None
-        else ["-m", str(message)]
+        else [f"--message={message}"]
     )
     worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
     if worker_agent_id is not None:

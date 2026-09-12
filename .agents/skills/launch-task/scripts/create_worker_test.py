@@ -1580,14 +1580,16 @@ def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
     )
 
+    # A dash-initial reply must reach the messenger as one bound token: given as a
+    # separate `-m` value, its argparse would read it as an option and refuse it.
     rc = create_worker_mod.reply(
-        task_file=task, message="continue", message_file=None, name=None, runner=runner
+        task_file=task, message="-continue", message_file=None, name=None, runner=runner
     )
 
     # The messenger's exit status (mngr message's codes) is passed through.
     assert rc == 7
     assert [c.argv for c in runner.calls] == [
-        [sys.executable, str(_MESSAGE_CHAT_SCRIPT), _WORKER_ID, "-m", "continue"],
+        [sys.executable, str(_MESSAGE_CHAT_SCRIPT), _WORKER_ID, "--message=-continue"],
     ]
 
 
@@ -1637,9 +1639,9 @@ def test_reply_falls_back_to_mngr_message_by_name_for_a_task_file_without_the_st
     )
 
     assert rc == 0
-    assert [c.argv for c in runner.calls] == [
-        ["mngr", "message", "demo-worker", "-m", "hi"]
-    ]
+    [fallback_argv] = [c.argv for c in runner.calls]
+    assert fallback_argv == ["mngr", "message", "demo-worker", "--message=hi"]
+    assert_mngr_argv_valid(fallback_argv)
 
 
 def test_main_reply_requires_exactly_one_message_source(tmp_path: Path) -> None:
@@ -1656,7 +1658,7 @@ def test_main_reply_requires_exactly_one_message_source(tmp_path: Path) -> None:
         ["reply", "--task-file", str(task), "-m", "go"], runner=runner
     )
     assert rc == 0
-    assert runner.calls[0].argv[-2:] == ["-m", "go"]
+    assert runner.calls[0].argv[-1] == "--message=go"
 
 
 @pytest.mark.parametrize(

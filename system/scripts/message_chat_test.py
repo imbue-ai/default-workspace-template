@@ -84,6 +84,18 @@ def test_the_message_comes_from_a_file_or_stdin_when_not_given_inline(
     ]
 
 
+def test_a_dash_initial_message_is_taken_when_bound_with_an_equals_sign(
+    fake_chat_app: Any, fake_mngr: Path
+) -> None:
+    """``--message=-continue`` is how a caller (``create_worker.py reply``) hands over a reply
+    that begins with a dash; as a separate ``-m`` value, argparse would read it as an option."""
+    rc, _ = _run("--message=-continue")
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [(_path, body)] = fake_chat_app.posted
+    assert body["message"] == "-continue"
+
+
 def test_a_system_message_is_wrapped_in_the_sentinel(
     fake_chat_app: Any, fake_mngr: Path
 ) -> None:
