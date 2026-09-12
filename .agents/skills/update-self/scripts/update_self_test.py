@@ -1735,6 +1735,11 @@ _PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_R
 # The real tree's Python apps, so the plan tests see the apps the template ships.
 _APP_TOOLS = update_classification.read_app_tools(_WORKSPACE_ROOT)
 
+# What a change to a *shared* manifest has to fan out to. Read off the tree
+# rather than spelled out, because a workspace accumulates apps the user built:
+# naming the template's five here would make every new app fail this file.
+_EVERY_APP_TOOL = {app.tool_name for app in _APP_TOOLS}
+
 
 def _plan(paths: list[str]) -> update_classification.ApplyPlan:
     return update_classification.plan_apply(paths, _PROVISIONER_INPUTS, _APP_TOOLS)
@@ -1841,22 +1846,10 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         # A shared backend manifest is part of every app tool's closure: the
         # vendored packages an app depends on editable, and the plugin table
         # that assigns plugins to its tool.
-        (
-            "system/apps/system_interface/pyproject.toml",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            "system/vendor/mngr/libs/mngr/pyproject.toml",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            update_layout.PLUGIN_MANIFEST_PATH,
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
-        (
-            "uv.lock",
-            {"system-interface", "chat", "browser", "terminal-app", "files-app"},
-        ),
+        ("system/apps/system_interface/pyproject.toml", _EVERY_APP_TOOL),
+        ("system/vendor/mngr/libs/mngr/pyproject.toml", _EVERY_APP_TOOL),
+        (update_layout.PLUGIN_MANIFEST_PATH, _EVERY_APP_TOOL),
+        ("uv.lock", _EVERY_APP_TOOL),
     ],
 )
 def test_plan_apply_refreshes_the_tool_of_every_changed_app_directory(
