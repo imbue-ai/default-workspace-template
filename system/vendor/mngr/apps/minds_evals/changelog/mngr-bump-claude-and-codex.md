@@ -1,0 +1,1 @@
+The `fable[1m]` claude catalog id now answers under `claude-fable-5-1` in transcripts, following the Claude Code bump to 2.1.269, whose `fable` alias resolves to Claude Fable 5.1 instead of Fable 5. The reported-model table the driver uses to recognise a claude arm's model in a trial's transcript is updated to match.

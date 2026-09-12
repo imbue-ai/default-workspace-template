@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 from typing import Sequence
 
+import tool_env
 from update_apply_contract import SnapshotRecord, snapshots_root
 from update_banding import ExpendWrapper
 from update_classification import ApplyPlan, AppTool
@@ -250,29 +251,10 @@ def discard_snapshots(repo_root: Path) -> None:
     shutil.rmtree(snapshots_root(repo_root), ignore_errors=True)
 
 
-def _tool_location(script: Path, tool_name: str) -> tuple[Path, Path] | None:
-    """Return ``(tool_dir, bin_dir)`` for the uv tool that owns console
-    ``script``, resolved from the script's shebang; ``None`` when it cannot be
-    confirmed. Resolved from the shebang rather than asked of uv, for two
-    reasons: uv's default tool dir follows ``$HOME``, which is not the one the
-    workspace was built under, and a venv console script must not masquerade
-    as a tool."""
-    try:
-        shebang = script.read_text(errors="replace").split("\n", 1)[0]
-    except OSError:
-        return None
-    if not shebang.startswith("#!"):
-        return None
-    interpreter = shebang[2:].strip().split(" ", 1)[0]
-    if not interpreter:
-        return None
-    parents = Path(interpreter).parents
-    if len(parents) < 3:
-        return None
-    tool_dir = parents[2]
-    if not (tool_dir / tool_name / RECEIPT).is_file():
-        return None
-    return tool_dir, script.parent
+# Shared with the build (see tool_env.py's module docstring on why it is vendored here
+# rather than imported across trees). Kept as a name in this module because the tests and
+# the rest of the file already speak it.
+_tool_location = tool_env.tool_location
 
 
 def _installed_tool_location(
@@ -290,43 +272,24 @@ def _installed_tool_location(
 def remove_shadowing_mngr_installs(runner: Runner) -> list[Path]:
     """Delete stale copies of the mngr tool that shadow the one this apply refreshes.
 
-    A pre-minds-v0.4.3 apply reinstalled the tool wherever uv's default pointed,
-    which at runtime is ``$HOME/.local`` rather than the ``/root/.local`` the
-    image was built under. That copy sits first on every login shell's PATH (the
-    terminal app, the desktop app's ``mngr exec``) and is never refreshed again,
-    so the first release adding a dependency breaks every command those shells
-    run while the refreshed copy reports success.
+    A pre-minds-v0.4.3 apply reinstalled the tool wherever uv's default pointed, which at
+    runtime is ``$HOME/.local`` rather than the ``/root/.local`` the image was built
+    under. That copy sits first on every login shell's PATH (the terminal app, the desktop
+    app's ``mngr exec``) and is never refreshed again, so the first release adding a
+    dependency breaks every command those shells run while the refreshed copy reports
+    success.
 
-    Only a copy that is not the one behind ``mngr`` on this apply's PATH is
-    removed: its tool environment, and the console script that points into it.
-    Returns what was removed.
+    This resolves which installation to keep -- the one behind ``mngr`` on this apply's
+    PATH, which is what ``Runner`` is for -- and hands the rest to the shared sweep the
+    build also runs.
     """
     canonical = _installed_tool_location(MNGR_EXECUTABLE, MNGR_TOOL_NAME, runner)
     if canonical is None:
         return []
-    canonical_tools = canonical[0].resolve()
-    removed: list[Path] = []
     homes = [Path(PROVISIONER_HOME)]
     if os.environ.get("HOME"):
         homes.insert(0, Path(os.environ["HOME"]))
-    for home in homes:
-        tools = home / ".local" / "share" / "uv" / "tools"
-        stale_env = tools / MNGR_TOOL_NAME
-        try:
-            is_present = stale_env.is_dir()
-        except PermissionError:
-            # A home this process cannot read (a non-root run) holds nothing it could remove.
-            is_present = False
-        if not is_present or tools.resolve() == canonical_tools:
-            continue
-        shim = home / ".local" / "bin" / MNGR_EXECUTABLE
-        shim_location = _tool_location(shim, MNGR_TOOL_NAME)
-        if shim_location is not None and shim_location[0].resolve() == tools.resolve():
-            shim.unlink()
-            removed.append(shim)
-        shutil.rmtree(stale_env)
-        removed.append(stale_env)
-    return removed
+    return tool_env.remove_shadowing_mngr_installs(canonical[0], homes)
 
 
 def _uv_tool_env(executable: str, tool_name: str, runner: Runner) -> dict:

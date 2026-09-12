@@ -77,7 +77,14 @@ function skillExpansion(ts: string, skillName: string, eventId: string): Transcr
   };
 }
 
-function apiErrorEvent(text: string, kind: string | null, providerFault: boolean): AssistantMessageEvent {
+// `isApiError` is separate from `kind`: the backend flags a failure it cannot name, so the
+// two are not in lockstep on the wire.
+function apiErrorEvent(
+  text: string,
+  kind: string | null,
+  providerFault: boolean,
+  isApiError: boolean = kind !== null,
+): AssistantMessageEvent {
   return {
     timestamp: "2026-08-06T00:00:00.000Z",
     type: "assistant_message",
@@ -89,7 +96,7 @@ function apiErrorEvent(text: string, kind: string | null, providerFault: boolean
     stop_reason: null,
     usage: null,
     is_auth_error: false,
-    is_api_error: kind !== null,
+    is_api_error: isApiError,
     api_error_kind: kind,
     is_provider_fault: providerFault,
   };
@@ -113,6 +120,20 @@ describe("renderAssistantMessageChildren API errors", () => {
   it("styles a client-side error red but adds no not-our-fault note", () => {
     const children = renderAssistantMessageChildren(
       apiErrorEvent("API Error: 429 rate_limit_error", "rate_limit", false),
+      new Map(),
+      "agent-1",
+    );
+    const classes = collectClasses(children);
+    expect(classes).toContain("message-api-error");
+    expect(classes).not.toContain("message-api-error-note");
+  });
+
+  it("styles a failure whose kind is unnamed red, with no not-our-fault note", () => {
+    // The largest family of Claude Code failures: stamped as a failure, but its `server_error`
+    // label covers failures that never reached a server, so no kind is claimed. The red block
+    // hangs off `is_api_error` alone -- gate it on the kind and these render as plain prose.
+    const children = renderAssistantMessageChildren(
+      apiErrorEvent("API Error: Your computer went to sleep mid-response.", null, false, true),
       new Map(),
       "agent-1",
     );
