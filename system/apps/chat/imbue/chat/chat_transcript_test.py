@@ -23,6 +23,8 @@ def test_a_single_segment_transcript_reads_as_its_one_agent_does() -> None:
     assert _ids(transcript.get_tail_events(2)) == ["e3", "e4"]
     assert _ids(transcript.get_backfill_events("e3", 5)) == ["e1", "e2"]
     assert _ids(transcript.get_forward_events("e2", 1)) == ["e3"]
+    assert transcript.get_backfill_events("missing", 5) == []
+    assert transcript.get_forward_events("missing", 5) == []
     assert _ids(transcript.get_events_at_offset(1, 2)) == ["e2", "e3"]
     assert transcript.get_event_offset("e4") == 3
     assert transcript.get_event_offset("missing") == -1

@@ -21,12 +21,16 @@ class ListTranscriptReader(TranscriptReader):
         self, before_event_id: str, limit: int, session_id: str | None = None
     ) -> list[dict[str, Any]]:
         index = self.get_event_offset(before_event_id)
+        if index < 0:
+            return []
         return self._events[max(0, index - limit) : index]
 
     def get_forward_events(
         self, after_event_id: str, limit: int, session_id: str | None = None
     ) -> list[dict[str, Any]]:
         index = self.get_event_offset(after_event_id)
+        if index < 0:
+            return []
         return self._events[index + 1 : index + 1 + limit]
 
     def get_events_at_offset(self, offset: int, limit: int, session_id: str | None = None) -> list[dict[str, Any]]:
