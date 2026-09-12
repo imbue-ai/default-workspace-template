@@ -1,6 +1,6 @@
 ---
 name: blueprint-generate
-description: End the Q&A phase and generate the plan. Use after the blueprint skill has gathered enough context.
+description: Close a blueprint Q&A session and write the plan file from what it gathered. Use when the user says the questions are done, or invokes this directly after a blueprint session. Only the user ends the Q&A phase, so do not reach for this on your own mid-session.
 metadata:
   author: imbue
 ---

@@ -1,6 +1,6 @@
 ---
 name: welcome
-description: Greet the user with a short, friendly welcome message when a new project/agent is first started. Invoked automatically as the first message from the minds desktop client.
+description: Send the workspace's opening greeting, and offer the starter suggestions if the user asks what they could do. The minds desktop client invokes this automatically as the very first message of a new workspace, so it is the first thing the user ever sees. The greeting is fixed copy sent verbatim with no tool calls.
 metadata:
   author: imbue
 ---
@@ -11,7 +11,7 @@ This skill has two parts: the opening greeting you always send first, and a list
 
 ## Opening message
 
-Output the following welcome message to the user, verbatim, as your entire response. Do NOT call any tools, do NOT look at the codebase, and do NOT add anything else:
+Output the following welcome message verbatim, as your entire response. Do not call any tools, look at the codebase, or add anything around it:
 
 ---
 

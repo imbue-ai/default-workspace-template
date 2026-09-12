@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use to read and write files and directories on the user's local filesystem.
+description: Read, write, and list files and directories on the user's own computer, over WebDAV through the Latchkey gateway. Use when the user asks you to work with files that live on their machine rather than in this workspace. Only their home directory and system temp directory are reachable; access is granted per path by a permission prompt the user answers, so a first request on a new path comes back unpermitted and needs one; MOVE and COPY are unsupported. An upstream connection failure usually means their Minds app is closed.
 metadata:
   author: imbue
 ---

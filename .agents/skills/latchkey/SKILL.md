@@ -1,6 +1,6 @@
 ---
 name: latchkey
-description: Use whenever you want to use latchkey commands or interact with third-party or self-hosted services (Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify...) using their HTTP APIs on the user's behalf.
+description: Call a third-party or self-hosted service's HTTP API on the user's behalf -- Slack, Google Workspace, Dropbox, GitHub, Linear, Coolify and many more. Use whenever a task needs the user's account somewhere outside this workspace. `latchkey curl` is a transparent curl wrapper that injects the credential, so you never see or handle the secret; the Minds app owns the credentials, and asking for a permission triggers the login flow when one is needed. Covers listing which services are available, requesting access to one, and registering a domain latchkey does not already know.
 compatibility: Requires node.js, curl and latchkey (npm install -g latchkey).
 metadata:
   author: imbue

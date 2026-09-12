@@ -1,6 +1,6 @@
 ---
 name: manage-layout
-description: Use when you want to rearrange the workspace dock tabs (open, split, move, focus, close, maximize, reload, rename, delete, stop or start an instance) or inspect the live layout.
+description: Inspect or rearrange the tabbed dock the user works in -- open, split, move, focus, close, maximize, reload, rename, delete, stop or start an app instance. Use when a request is about which tabs exist or where they sit, and whenever you want to surface something you just built. Drives system/scripts/layout.py; the dock's saved layouts are not to be hand-edited. For which tabs belong to which project or view, see manage-projects.
 metadata:
   author: imbue
   crystallized: true
