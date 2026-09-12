@@ -2,7 +2,7 @@
 
 `create_worker.py launch` stamps `lead_agent` with the lead's id, and `worker-reporting.md`
 has the worker read `mngr transcript $LEAD_AGENT`. This runs the real vendored mngr to pin
-the fact that rests on: an agent stays reachable by its id across a `mngr rename`, and is
+the fact it rests on: an agent stays reachable by its id across a `mngr rename`, and is
 not reachable by its old name. It costs a `uv run mngr create`.
 """
 
