@@ -1172,7 +1172,7 @@ def _start_chat(chat_id: str) -> Response:
 def _presence_endpoint(chat_id: str) -> Response:
     """Record one client's presence report about this chat's page (see ``presence.py``).
 
-    Accepted for any well-formed agent id, a chat still being created included: the
+    Accepted for any well-formed chat id, a chat still being created included: the
     prioritizer ignores ids it does not manage, and a page that reports before its agent
     exists must not be told it is wrong.
     """
