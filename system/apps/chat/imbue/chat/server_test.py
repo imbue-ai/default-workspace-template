@@ -133,6 +133,20 @@ def test_get_events_for_unknown_agent(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
+def test_the_chat_routes_answer_beside_their_agent_keyed_aliases(client: FlaskClient) -> None:
+    """A per-chat route lives under ``/api/chats/`` and at its older ``/api/agents/`` spelling,
+    both reading their id as a chat id; the subagent read takes the chat and the agent."""
+    with patch("imbue.chat.server.discover_agents", return_value=[]):
+        by_chat = client.get("/api/chats/nonexistent/events")
+        by_alias = client.get("/api/agents/nonexistent/events")
+        subagent = client.get("/api/chats/nonexistent/agents/nonexistent/subagents/s1/events")
+        subagent_alias = client.get("/api/agents/nonexistent/subagents/s1/events")
+    assert by_chat.status_code == by_alias.status_code == 404
+    assert by_chat.get_json() == by_alias.get_json()
+    assert subagent.status_code == subagent_alias.status_code == 404
+    assert client.put("/api/chats/x/destroy").status_code == 405
+
+
 def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     """Sending a message to a nonexistent agent returns 404."""
     with patch("imbue.chat.server.discover_agents", return_value=[]):
@@ -279,9 +293,11 @@ def test_get_events_with_session_files(client: FlaskClient, tmp_path: Path) -> N
     )
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.get("/api/agents/agent-123/events")
+        by_chat_route = client.get("/api/chats/agent-123/events")
 
     assert response.status_code == 200
     data = response.get_json()
+    assert by_chat_route.get_json() == data
     assert len(data["events"]) == 2
     assert data["events"][0]["type"] == "user_message"
     assert data["events"][0]["content"] == "Hello"

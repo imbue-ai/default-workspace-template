@@ -27,6 +27,7 @@ from imbue.chat.errors import ChatStopFailedError
 from imbue.chat.errors import ChatTitleConflictError
 from imbue.chat.instances import AgentManagerInstanceSource
 from imbue.chat.instances import AgentManagerNudger
+from imbue.chat.instances import parse_subagent_key
 from imbue.chat.instances import subagent_instance_key
 from imbue.chat.models import CreatedChat
 from imbue.chat.models import ProvisionalChat
@@ -188,6 +189,17 @@ def test_a_provisional_record_becomes_the_agents_record_once_observed(agent_mana
 
     assert record.lifetime is InstanceLifetime.EXPLICIT
     assert record.renameable is True
+
+
+def test_a_subagent_key_is_the_chat_the_agent_and_the_session() -> None:
+    """A subagent view's key names all three; a chat's own key and the older two-part shape are not one."""
+    key = subagent_instance_key(ChatId("agent-1"), "agent-2", "sess-3")
+    assert key == "agent-1.agent-2.sess-3"
+    parsed = parse_subagent_key(key)
+    assert parsed is not None
+    assert (parsed.chat_id, parsed.agent_id, parsed.session_id) == ("agent-1", "agent-2", "sess-3")
+    assert parse_subagent_key("agent-1") is None
+    assert parse_subagent_key("agent-1.sess-3") is None
 
 
 def test_subagent_create_is_idempotent_and_listed(agent_manager: AgentManager) -> None:
