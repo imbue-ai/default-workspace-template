@@ -136,6 +136,16 @@ class SendResult:
         self.detail = detail
 
 
+class ChatAppUnreachableError(Exception):
+    """The connection to the chat app could not be made at all.
+
+    Its own class, not ``ConnectionError``: the stdlib raises ``ConnectionError`` subclasses
+    for drops *after* the connect too (``http.client.RemoteDisconnected`` is a
+    ``ConnectionResetError``), and those must never be read as "unreachable", because the
+    request may already have been acted on.
+    """
+
+
 def wrap_system_message(text: str) -> str:
     """Wrap an automated nudge in the sentinel; adds no newlines, so the wrapped text types into a pane like the bare text."""
     return f"<{SYSTEM_MESSAGE_TAG}>{text}</{SYSTEM_MESSAGE_TAG}>"
@@ -168,10 +178,10 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
 def _post_json(base_url: str, path: str, body: Mapping[str, str]) -> ChatAppAnswer:
     """POST ``body`` and wait for the answer, however long it takes.
 
-    Raises ``ConnectionError`` (a subclass of ``OSError``) only when the connection itself
-    cannot be made; anything after the connect is either an answer or a plain ``OSError``,
-    which the caller treats as a failure rather than a reason to back off, because the
-    request may have been acted on.
+    Raises ``ChatAppUnreachableError`` only when the connection itself cannot be made;
+    anything after the connect is either an answer or an ``OSError`` /
+    ``http.client.HTTPException``, which the caller treats as a failure rather than a
+    reason to back off, because the request may have been acted on.
     """
     parsed = urllib.parse.urlsplit(base_url)
     connection = http.client.HTTPConnection(
@@ -182,7 +192,7 @@ def _post_json(base_url: str, path: str, body: Mapping[str, str]) -> ChatAppAnsw
     try:
         connection.connect()
     except OSError as exc:
-        raise ConnectionError(
+        raise ChatAppUnreachableError(
             f"could not connect to the chat app at {base_url}: {exc}"
         ) from exc
     try:
@@ -227,9 +237,9 @@ def send_through_chat_app(
     while True:
         try:
             answer = _post_json(base_url, path, body)
-        except ConnectionError as exc:
+        except ChatAppUnreachableError as exc:
             return SendResult(Outcome.UNREACHABLE, str(exc))
-        except OSError as exc:
+        except (OSError, http.client.HTTPException) as exc:
             return SendResult(
                 Outcome.REFUSED, f"the chat app dropped the request: {exc}"
             )

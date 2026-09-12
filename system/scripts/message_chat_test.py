@@ -193,6 +193,22 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
 
 
+def test_a_connection_dropped_after_the_connect_is_a_failure_not_a_backoff(
+    fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once the chat app has taken the connection, a drop is a failure: the request may have
+    been acted on, so resending it through ``mngr message`` could deliver the text twice."""
+    fake_chat_app.drop_connections = True
+
+    rc, slept = _run("-m", "hello")
+
+    assert rc == message_chat.EXIT_FAILED
+    assert slept == []
+    assert "dropped the request" in capsys.readouterr().err
+    assert len(fake_chat_app.posted) == 1
+    assert _mngr_calls(fake_mngr) == []
+
+
 def test_a_persisting_404_hands_the_message_to_mngr(
     fake_chat_app: Any, fake_mngr: Path
 ) -> None:
