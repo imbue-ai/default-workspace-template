@@ -338,9 +338,8 @@ Land the app in the shape `build-app` writes today -- `uv tool install -e
 system/apps/<package>`, and a program command ending in the app's own name --
 rather than carrying over a source command that runs it out of the root venv with
 `uv run <name>`. Then `uv sync --all-packages` (never a bare `uv sync`: that is
-root-closure-scoped, so it prunes every workspace member that is not a root
-dependency and deletes the console scripts the built-in `uv run <name>` services
-resolve on PATH) and `supervisorctl reread && supervisorctl update`. An app that will not come up gets
+root-closure-scoped, and it prunes the member and deletes the console script
+supervisord resolves on PATH) and `supervisorctl reread && supervisorctl update`. An app that will not come up gets
 a **bounded** repair attempt (read its stderr log, fix the obvious break, retry
 once or twice); whatever is still broken becomes an explicit summary item naming
 what you tried.
