@@ -494,8 +494,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     if (chatId === null || notFoundRetryInFlight || !isConversationNotFound(chatId)) {
       return;
     }
-    // Read the chat store rather than the broadcast payload, which is filtered
-    // to the user-facing chats.
+    // Read the chat store rather than the listener's payload, so the retry does not
+    // depend on which push woke it.
     if (getChatById(chatId) === undefined) {
       return;
     }
