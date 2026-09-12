@@ -4,6 +4,9 @@ from datetime import timezone
 from typing import Any
 from typing import Final
 
+from pydantic import Field
+
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
@@ -122,7 +125,30 @@ _UPSERT_BARE_METAL_SERVER_SQL: Final[str] = (
     "wg_public_key = EXCLUDED.wg_public_key, updated_at = NOW()"
 )
 
+# Column order is what _server_from_row indexes into.
+_SERVER_COLUMNS: Final[tuple[str, ...]] = (
+    "id",
+    "ovh_order_id",
+    "ovh_service_name",
+    "plan_code",
+    "region",
+    "public_address",
+    "cpu_cores",
+    "cpu_threads",
+    "ram_gb",
+    "disk_gb",
+    "memory_per_slice_gb",
+    "cpu_overcommit_ratio",
+    "slot_count",
+    "raid_level",
+    "lima_service_user",
+    "status",
+    "created_at",
+    "updated_at",
+    "box_host_public_key",
+)
 _SELECT_SERVERS_SQL: Final[str] = (
+<<<<<<< HEAD
     "SELECT id, ovh_order_id, ovh_service_name, plan_code, region, public_address, "
     "cpu_cores, cpu_threads, ram_gb, disk_gb, memory_per_slice_gb, cpu_overcommit_ratio, "
     "slot_count, raid_level, COALESCE(slice_service_user, lima_service_user), status, "
@@ -132,6 +158,9 @@ _SELECT_SERVERS_SQL: Final[str] = (
     "created_at, updated_at, box_host_public_key, box_generation, uplink_mbps, "
     "COALESCE(wireguard_address, wg_address), COALESCE(wireguard_public_key, wg_public_key) "
     "FROM bare_metal_servers ORDER BY created_at ASC"
+=======
+    f"SELECT {', '.join(_SERVER_COLUMNS)} FROM bare_metal_servers ORDER BY created_at ASC"
+>>>>>>> origin/main
 )
 
 # Count the baked slices currently on a server. Every row -- including 'removing'
@@ -343,6 +372,59 @@ def fetch_server_by_id(conn: Any, server_id: BareMetalServerDbId) -> BareMetalSe
         cur.execute(_SELECT_SERVERS_SQL.replace("ORDER BY created_at ASC", "WHERE id = %s"), (str(server_id),))
         row = cur.fetchone()
     return _server_from_row(row) if row else None
+
+
+class SlicePoolHostRow(FrozenModel):
+    """A slice pool_hosts row joined with the box it lives on (the coordinates a per-VM repair needs)."""
+
+    host_id: str = Field(description="pool_hosts.host_id")
+    host_name: str = Field(description="pool_hosts.host_name")
+    status: str = Field(description="pool_hosts.status")
+    lima_instance_name: str = Field(description="The slice's lima instance name on its box")
+    server: BareMetalServer = Field(description="The bare_metal_servers row of the slice's box")
+
+
+# The projection _slice_pool_host_row indexes into: the four pool_hosts columns,
+# then the box's _SERVER_COLUMNS.
+_SELECT_SLICE_HOSTS_SQL_PREFIX: Final[str] = (
+    "SELECT p.host_id, p.host_name, p.status, p.lima_instance_name, "
+    + ", ".join(f"s.{column}" for column in _SERVER_COLUMNS)
+    + " FROM pool_hosts p JOIN bare_metal_servers s ON p.bare_metal_server_id = s.id"
+)
+_SELECT_SLICE_HOSTS_BY_HOST_ID_SQL: Final[str] = (
+    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.host_id = ANY(%s) AND p.lima_instance_name IS NOT NULL"
+)
+_SELECT_LEASED_SLICE_HOSTS_SQL: Final[str] = (
+    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.status = %s AND p.lima_instance_name IS NOT NULL "
+    "ORDER BY p.leased_at ASC"
+)
+
+
+@pure
+def _slice_pool_host_row(row: tuple[Any, ...]) -> SlicePoolHostRow:
+    return SlicePoolHostRow(
+        host_id=str(row[0]),
+        host_name=str(row[1]),
+        status=str(row[2]),
+        lima_instance_name=str(row[3]),
+        server=_server_from_row(tuple(row[4:])),
+    )
+
+
+def fetch_slice_hosts_by_host_id(conn: Any, host_ids: Sequence[str]) -> list[SlicePoolHostRow]:
+    """Return the slice pool_hosts rows (with their boxes) for ``host_ids``; VPS rows and unknown ids are absent."""
+    with conn.cursor() as cur:
+        cur.execute(_SELECT_SLICE_HOSTS_BY_HOST_ID_SQL, (list(host_ids),))
+        rows = cur.fetchall()
+    return [_slice_pool_host_row(tuple(row)) for row in rows]
+
+
+def fetch_leased_slice_hosts(conn: Any) -> list[SlicePoolHostRow]:
+    """Return every leased slice pool_hosts row (with its box), oldest lease first."""
+    with conn.cursor() as cur:
+        cur.execute(_SELECT_LEASED_SLICE_HOSTS_SQL, (POOL_HOST_STATUS_LEASED,))
+        rows = cur.fetchall()
+    return [_slice_pool_host_row(tuple(row)) for row in rows]
 
 
 def count_slices_on_server(conn: Any, server_id: BareMetalServerDbId) -> int:

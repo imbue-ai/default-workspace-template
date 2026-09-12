@@ -355,6 +355,11 @@ minds-evals-run dataset job_name concurrency="4" *harbor_args="":
     #!/usr/bin/env bash
     set -euo pipefail
     : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
+    # just splices a variadic parameter in as raw text, so `{{harbor_args}}` below is subject to
+    # word splitting (which is how several --ak flags arrive as several words) AND to pathname
+    # expansion, which nothing here wants: `--ak model=opus[1m]` is a valid glob bracket
+    # expression, and a matching file in the working directory would rewrite the model.
+    set -f
     # --project selects the standalone minds_evals venv (harbor and the driver
     # package live only there); it leaves cwd at the repo root, so the
     # root-relative -o/-p paths below stay correct.

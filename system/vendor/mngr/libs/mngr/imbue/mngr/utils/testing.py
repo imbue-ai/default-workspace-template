@@ -17,7 +17,6 @@ from collections.abc import Generator
 from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from enum import auto
 from io import StringIO
@@ -26,7 +25,6 @@ from typing import Any
 from typing import Final
 from typing import IO
 from typing import TypeVar
-from typing import assert_never
 from uuid import uuid4
 
 import pluggy
@@ -69,7 +67,6 @@ from imbue.mngr.providers.local.instance import LOCAL_HOST_NAME
 from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.providers.registry import load_local_backend_only
 from imbue.mngr.utils.deps import CLAUDE
-from imbue.mngr.utils.env_utils import TEST_ENV_PATTERN
 from imbue.mngr.utils.env_utils import TEST_ENV_PREFIX
 from imbue.mngr.utils.modal_cli import parse_modal_app_listings
 from imbue.mngr.utils.modal_cli import parse_modal_volume_listings
@@ -1207,6 +1204,7 @@ def setup_claude_trust_config_for_subprocess(
 
 
 # =============================================================================
+<<<<<<< HEAD
 # Modal test environment cleanup utilities
 # =============================================================================
 
@@ -1476,6 +1474,8 @@ def cleanup_old_modal_test_environments(
 
 
 # =============================================================================
+=======
+>>>>>>> origin/main
 # SSH test utilities
 # =============================================================================
 

@@ -1,3 +1,10 @@
+<<<<<<< HEAD
+=======
+from collections.abc import Mapping
+from typing import Any
+from typing import Final
+
+>>>>>>> origin/main
 from loguru import logger
 
 from imbue.imbue_common.pure import pure
@@ -38,21 +45,39 @@ def _slice_memory_mib_from_lease(lease_result: LeaseResult) -> int | None:
     return compute_slice_memory_mib(units)
 
 
+# Every field the delegated rebuild providers share with the account config:
+# the rebuild must carve and run the container exactly as a provider created
+# under this config would, so the whole VpsProviderConfig surface is forwarded
+# structurally rather than field by field (a hand-copied list silently drops
+# any knob it does not name).
+_DELEGATED_FIELDS: Final[frozenset[str]] = frozenset(VpsProviderConfig.model_fields) - {"backend"}
+# A slice VM is the isolation boundary and its Docker is plain runc (the lima
+# provision script installs no runsc, and the rebuild skips the runsc host
+# setup for slices), so the account block's gVisor knobs must stay off the
+# slice config: with them the rebuilt container's `docker run --runtime runsc`
+# fails on the VM.
+_SLICE_DELEGATED_FIELDS: Final[frozenset[str]] = _DELEGATED_FIELDS - {"docker_runtime", "install_gvisor_runtime"}
+
+
+@pure
+def _delegated_vps_fields(config: ImbueCloudProviderConfig, fields: frozenset[str]) -> dict[str, Any]:
+    """The named VpsProviderConfig fields of the account config, ready to re-validate into a delegated config."""
+    return config.model_dump(include=set(fields))
+
+
 @pure
 def _build_delegated_vps_config(config: ImbueCloudProviderConfig) -> VpsProviderConfig:
     """Build the delegated vps_docker config for the slow-path rebuild.
 
-    Forwards the runtime knobs (``docker_runtime`` / ``install_gvisor_runtime`` /
-    ``default_start_args``) from the imbue_cloud config so the rebuilt container
-    runs under the configured runtime with the configured hardening args.
+    Forwards every VpsProviderConfig field of the imbue_cloud config -- the
+    runtime knobs (``docker_runtime`` / ``install_gvisor_runtime`` /
+    ``default_start_args``), the user-data layout knobs (``volume_home_path`` /
+    ``host_log_dir``), and the rest -- so the rebuilt container runs under the
+    configured runtime with the configured hardening args and gets the same
+    volume layout as a baked one.
     """
     return VpsProviderConfig(
-        backend=ProviderBackendName("vps_docker"),
-        host_dir=config.host_dir,
-        container_ssh_port=config.container_ssh_port,
-        docker_runtime=config.docker_runtime,
-        install_gvisor_runtime=config.install_gvisor_runtime,
-        default_start_args=config.default_start_args,
+        backend=ProviderBackendName("vps_docker"), **_delegated_vps_fields(config, _DELEGATED_FIELDS)
     )
 
 
@@ -69,12 +94,14 @@ def build_delegated_vps_provider(
     and make no VPS-API calls), so its ``vps_client`` is the
     ``ExternallyManagedVpsClient`` stub that raises on any ordering call.
 
-    Forwards the runtime knobs from ``config`` (an ``ImbueCloudProviderConfig``,
-    which extends ``VpsProviderConfig``) so the rebuilt container runs under
-    the configured runtime with the configured hardening args -- e.g.
-    ``docker_runtime='runsc'`` plus ``--workdir=/`` /
-    ``--security-opt=no-new-privileges`` from ``default_start_args``, which minds
-    bootstrap writes into the per-account block.
+    Forwards every VpsProviderConfig field of ``config`` (an
+    ``ImbueCloudProviderConfig``, which extends ``VpsProviderConfig``; see
+    ``_build_delegated_vps_config``) so the rebuilt container runs under the
+    configured runtime with the configured hardening args and volume layout --
+    e.g. ``docker_runtime='runsc'`` plus ``--workdir=/`` /
+    ``--security-opt=no-new-privileges`` from ``default_start_args``, and
+    ``volume_home_path='/home/user'``, as minds writes into the per-account
+    block.
     """
     vps_config = _build_delegated_vps_config(config)
     return MinimalVpsProvider(
@@ -87,6 +114,7 @@ def build_delegated_vps_provider(
 
 
 @pure
+<<<<<<< HEAD
 def build_slice_rebuild_config(
     config: ImbueCloudProviderConfig, lease_result: LeaseResult
 ) -> SliceVpsDockerProviderConfig:
@@ -110,6 +138,25 @@ def build_slice_rebuild_config(
         slice_memory_mib=slice_memory_mib,
         docker_runtime=config.docker_runtime if is_gen2 else None,
         default_start_args=(tuple(config.default_start_args) + GEN2_CONTAINER_TMPFS_START_ARGS if is_gen2 else ()),
+=======
+def _build_slice_rebuild_config(
+    config: ImbueCloudProviderConfig,
+    *,
+    box_public_address: str,
+    slice_memory_mib: int | None,
+) -> SliceVpsDockerProviderConfig:
+    """Build the slice provider config for the slow-path rebuild on a leased slice.
+
+    Forwards every VpsProviderConfig field of the imbue_cloud config except the
+    gVisor knobs (see ``_SLICE_DELEGATED_FIELDS``) and layers the slice-specific
+    coordinates on top; the slice class keeps its own backend name and
+    slice-only defaults.
+    """
+    return SliceVpsDockerProviderConfig(
+        **_delegated_vps_fields(config, _SLICE_DELEGATED_FIELDS),
+        box_public_address=box_public_address,
+        slice_memory_mib=slice_memory_mib,
+>>>>>>> origin/main
     )
 
 
@@ -137,6 +184,12 @@ def build_slice_rebuild_provider(
             "Lease {} carries no machine size (an older connector); rebuilding the container without a memory cap",
             lease_result.host_db_id,
         )
+<<<<<<< HEAD
+=======
+    slice_config = _build_slice_rebuild_config(
+        config, box_public_address=lease_result.vps_address, slice_memory_mib=slice_memory_mib
+    )
+>>>>>>> origin/main
     # The rebuild never carves/destroys a VM (it only tears down + rebuilds the
     # container on the already-leased slice via the forwarded ports below), so
     # the slice client's box-SSH coordinates are unused here regardless of the

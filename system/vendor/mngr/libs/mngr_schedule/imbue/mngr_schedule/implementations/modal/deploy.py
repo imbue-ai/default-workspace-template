@@ -38,6 +38,7 @@ from imbue.mngr.providers.deploy_utils import detect_mngr_install_mode as _share
 from imbue.mngr.providers.deploy_utils import resolve_mngr_install_mode as _shared_resolve_mngr_install_mode
 from imbue.mngr.utils.modal_cli import parse_modal_app_listings
 from imbue.mngr_modal.instance import ModalProviderInstance
+from imbue.mngr_modal.modal_cli import parse_modal_app_listings
 from imbue.mngr_schedule.data_types import ModalScheduleCreationRecord
 from imbue.mngr_schedule.data_types import ScheduleTriggerDefinition
 from imbue.mngr_schedule.data_types import VerifyMode

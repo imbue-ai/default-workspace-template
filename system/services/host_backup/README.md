@@ -66,7 +66,12 @@ an encrypted restic repo on cheaper object storage.
     one would pin the copy-on-write delta of everything deleted since it was
     taken -- under the slice data disk's quota, space the workspace could not
     reclaim until the next tick. A leftover from a crashed tick is swept the
-    same way before the next snapshot is taken.
+    same way before the next snapshot is taken. The snapshot is checked for
+    the subtree restic is about to read (`read_subpath`, `home`) before restic
+    runs: without it the tick fails a step later with restic complaining about
+    its own arguments, saying nothing about the snapshot they came from, so a
+    missing subtree instead aborts the tick with a `snapshot_failed` event
+    naming what the snapshot does hold.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
@@ -75,9 +80,14 @@ an encrypted restic repo on cheaper object storage.
   `~/.rustup/toolchains`, `~/.rustup/downloads`) are excluded by default while
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
-- After every successful backup, `restic forget --keep-hourly N --keep-daily
-  M --keep-weekly W --keep-monthly O` runs (cheap, index-only). At most
-  once per `prune_interval_hours` (default 24) we additionally run
+- After every successful backup, `restic forget --group-by '' --keep-hourly N
+  --keep-daily M --keep-weekly W --keep-monthly O` runs (cheap, index-only).
+  Grouping is disabled because restic applies the keep-* policy per group and
+  its default grouping (`host,paths`) would put every snapshot in a group of
+  its own -- `outer_trigger` reads each tick from a uniquely-named snapshot
+  path, and a container rebuild changes the hostname -- so the whole
+  repository (which belongs to this one workspace) is thinned as a unit. At
+  most once per `prune_interval_hours` (default 24) we additionally run
   `restic prune` (the slow data deletion step); gated by
   `data/.state/last-restic-prune` (a timestamp file under data/, covered by
   the opt-in GitHub sync when enabled).

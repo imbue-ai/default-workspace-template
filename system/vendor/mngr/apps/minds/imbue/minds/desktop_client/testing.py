@@ -46,11 +46,14 @@ from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.latchkey.gateway_client import AccountsRequestPayload
+from imbue.minds.desktop_client.latchkey.gateway_client import CustomServiceLogin
+from imbue.minds.desktop_client.latchkey.gateway_client import CustomServiceRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingAccess
 from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import PermissionEffect
 from imbue.minds.desktop_client.latchkey.gateway_client import PredefinedRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_ACCOUNTS
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_CUSTOM_SERVICE
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_FILE_SHARING
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_PREDEFINED
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_WORKSPACE
@@ -65,6 +68,8 @@ from imbue.minds.desktop_client.restic_cli import _get_restic_binary
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_BEGIN_SENTINEL
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_END_SENTINEL
 from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_EXIT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_ABSENT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_PRESENT_SENTINEL
 from imbue.minds.desktop_client.skill_chat import NO_ACCOUNT_STORE_SENTINEL
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import set_state
@@ -107,6 +112,7 @@ from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_server_credentials
 from imbue.mngr_latchkey.core import LatchkeyError
+from imbue.mngr_latchkey.custom_services import Scheme
 
 
 def device_id_for_test(name: str) -> DeviceId:
@@ -901,14 +907,22 @@ def account_binding_probe_stdout(*, account_dir: str | None = SIGNED_IN_ACCOUNT_
     )
 
 
-def ready_machine_probe_stdout(skill_probe_stdout: str, *, account_dir: str | None = SIGNED_IN_ACCOUNT_DIR) -> str:
+def ready_machine_probe_stdout(
+    skill_probe_stdout: str,
+    *,
+    account_dir: str | None = SIGNED_IN_ACCOUNT_DIR,
+    is_local_settings_present: bool = False,
+) -> str:
     """The one answer a machine ready to host a skill chat gives, whichever pre-spawn probe asks.
 
-    ``RecordingMngrCaller`` answers every call alike, so this carries the skill sentinel and
-    the account probe's fenced binding together. ``account_dir`` keeps
-    ``account_binding_probe_stdout``'s three-way contract.
+    ``RecordingMngrCaller`` answers every call alike, so this carries the skill sentinel,
+    the local-settings sentinel, and the account probe's fenced binding together.
+    ``is_local_settings_present`` renders a workspace that writes its own create defaults
+    (the app then asks its resolver nothing); ``account_dir`` keeps
+    ``account_binding_probe_stdout``'s three-way contract for one that does not.
     """
-    return skill_probe_stdout + account_binding_probe_stdout(account_dir=account_dir)
+    local_settings = LOCAL_SETTINGS_PRESENT_SENTINEL if is_local_settings_present else LOCAL_SETTINGS_ABSENT_SENTINEL
+    return f"{skill_probe_stdout}{local_settings}\n" + account_binding_probe_stdout(account_dir=account_dir)
 
 
 def update_run_probe_stdout(*, run: str = "", agents: str | None = "") -> str:
@@ -1003,7 +1017,13 @@ def _streamed_request(
     agent_id: str,
     rationale: str,
     request_type: str,
-    payload: PredefinedRequestPayload | FileSharingRequestPayload | WorkspaceRequestPayload | AccountsRequestPayload,
+    payload: (
+        PredefinedRequestPayload
+        | FileSharingRequestPayload
+        | WorkspaceRequestPayload
+        | AccountsRequestPayload
+        | CustomServiceRequestPayload
+    ),
     target: str,
 ) -> StreamedPermissionRequest:
     """Assemble one gateway permission request with a fresh request id."""
@@ -1079,6 +1099,27 @@ def create_accounts_permission_request(
         rationale=rationale,
         request_type=REQUEST_TYPE_ACCOUNTS,
         payload=AccountsRequestPayload(),
+        target="/tmp/permissions.json",
+    )
+
+
+def create_custom_service_permission_request(
+    agent_id: str,
+    domain: str,
+    rationale: str,
+    scheme: Scheme = Scheme.HTTPS,
+    login: CustomServiceLogin | None = None,
+) -> StreamedPermissionRequest:
+    """Build a custom-service permission request as the gateway would stream it.
+
+    ``login`` is the browser sign-in when the service has one; ``None`` is the
+    other real case, where the user supplies a token instead.
+    """
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_CUSTOM_SERVICE,
+        payload=CustomServiceRequestPayload(domain=domain, scheme=scheme, login=login),
         target="/tmp/permissions.json",
     )
 
