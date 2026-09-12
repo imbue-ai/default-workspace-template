@@ -221,6 +221,28 @@ body
     }
 
 
+def test_lead_work_dir_rides_through_as_a_shell_variable(tmp_path: Path) -> None:
+    """The launcher's ``lead_work_dir`` stamp reaches the worker as ``LEAD_WORK_DIR``; a task
+    file without it (an older launcher, or a launch from outside an agent) defines nothing."""
+    stamped = _write_task(
+        tmp_path,
+        """---
+lead_agent: agent-abc
+finish_report_path: b
+lead_work_dir: /home/user/.mngr/worktrees/lead-checkout
+---
+body
+""",
+    )
+    rendered = parse_task_frontmatter._render(parse_task_frontmatter.parse(stamped))
+    assert "LEAD_WORK_DIR=/home/user/.mngr/worktrees/lead-checkout\n" in rendered
+
+    (tmp_path / "unstamped").mkdir()
+    unstamped = _write_task(tmp_path / "unstamped", _VALID_FRONTMATTER)
+    rendered = parse_task_frontmatter._render(parse_task_frontmatter.parse(unstamped))
+    assert "LEAD_WORK_DIR" not in rendered
+
+
 def test_non_string_extra_keys_are_dropped(tmp_path: Path) -> None:
     """Only string values survive -- lists / mappings / numbers don't eval cleanly."""
     task = _write_task(

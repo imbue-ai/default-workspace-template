@@ -1,18 +1,19 @@
 """The chat app's instances (contracts.md section 4.3, the chat row) over the agent manager.
 
-Every non-primary agent is an ``explicit``, renameable instance keyed by its agent id, with
-its status derived from the activity state, the pending permission requests, and the
-lifecycle. A chat that is not an agent yet (a proto agent) is a ``referenced`` provisional
-instance under the id mngr will give it, whose status is its phase: waiting for an account
-(``attention``), being created (``working``), or failed (``error``). A subagent view is a
-``referenced`` instance keyed ``<agent-id>.<session-id>`` that the parent's page creates on
-demand.
+Every chat is an ``explicit``, renameable instance keyed by its chat id, with its status
+taken from the chat's snapshot (the activity state, the pending permission requests, and the
+lifecycle of its active agent). A chat whose first agent mngr does not know yet (a provisional
+chat) is a ``referenced`` instance under its chat id, whose status is its phase: waiting for
+an account (``attention``), being created (``working``), or failed (``error``). A subagent
+view is a ``referenced`` instance keyed ``<chat-id>.<agent-id>.<session-id>`` that the
+parent's page creates on demand; the middle part names the agent whose harness session the
+subagent belongs to.
 """
 
-import re
 import threading
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import Final
 
 from app_instances.data_types import InstanceLifetime
@@ -38,7 +39,6 @@ from pydantic import Field
 from pydantic import PrivateAttr
 
 from imbue.chat.accounts import AccountError
-from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.errors import ChatCreateRefusedError
@@ -52,10 +52,13 @@ from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
-from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
+from imbue.chat.primitives import AGENT_ID_PATTERN
+from imbue.chat.primitives import ChatId
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import MngrError
@@ -75,10 +78,8 @@ DESCRIPTION_PARAM: Final[str] = "description"
 _NEW_PARAMS: Final[frozenset[str]] = frozenset({ACCOUNT_ID_PARAM, MESSAGE_PARAM})
 _SUBAGENT_PARAMS: Final[frozenset[str]] = frozenset({PARENT_PARAM, SESSION_PARAM, DESCRIPTION_PARAM})
 
-# An agent id: ``agent-<32 hex>`` as mngr mints it, with the instance-key alphabet so a test
-# fixture's id counts too. A subagent key is one followed by a dot and the session id, which
-# is why the key alphabet has a dot.
-AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[A-Za-z0-9_-]{1,120}$")
+# A subagent key is the chat id, the agent id, and the session id joined by dots, which is why
+# the instance-key alphabet has a dot and the id alphabet does not.
 SUBAGENT_KEY_SEPARATOR: Final[str] = "."
 
 PROVISIONAL_TITLE: Final[str] = "New chat"
@@ -88,18 +89,12 @@ SUBAGENT_TITLE_PREFIX: Final[str] = "Subagent: "
 MAX_SUBAGENT_DESCRIPTION_LENGTH: Final[int] = MAX_INSTANCE_TITLE_LENGTH - len(SUBAGENT_TITLE_PREFIX)
 
 
-@pure
-def instance_status_for_agent(
-    lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
-) -> InstanceStatus:
-    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn."""
-    if is_lifecycle_dead(lifecycle_state):
-        return InstanceStatus.STOPPED
-    if is_permission_pending:
-        return InstanceStatus.ATTENTION
-    if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
-        return InstanceStatus.WORKING
-    return InstanceStatus.IDLE
+class SubagentKey(FrozenModel):
+    """The three parts of a subagent view's instance key."""
+
+    chat_id: ChatId = Field(description="The chat the subagent view belongs to")
+    agent_id: str = Field(description="The agent whose harness session the subagent is a session of")
+    session_id: str = Field(description="The subagent's own session id")
 
 
 @pure
@@ -108,18 +103,12 @@ def instance_url_for_key(key: str) -> InstanceUrl:
 
 
 @pure
-def display_title_for_agent(agent: AgentStateItem) -> InstanceTitle:
-    """The name the user gave the chat (its ``display_name`` label), else its true name."""
-    return InstanceTitle(agent.labels.get("display_name") or agent.name)
-
-
-@pure
-def instance_record_for_agent(agent: AgentStateItem, is_permission_pending: bool) -> InstanceRecord:
+def instance_record_for_chat(snapshot: ChatSnapshot) -> InstanceRecord:
     return InstanceRecord(
-        key=InstanceKey(agent.id),
-        url=instance_url_for_key(agent.id),
-        title=display_title_for_agent(agent),
-        status=instance_status_for_agent(agent.state, agent.activity_state, is_permission_pending),
+        key=InstanceKey(snapshot.chat_id),
+        url=instance_url_for_key(snapshot.chat_id),
+        title=InstanceTitle(snapshot.title),
+        status=snapshot.status,
         lifetime=InstanceLifetime.EXPLICIT,
         last_active=None,
         renameable=True,
@@ -135,13 +124,13 @@ _STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] 
 
 
 @pure
-def instance_record_for_provisional_chat(proto: ProvisionalChat) -> InstanceRecord:
+def instance_record_for_provisional_chat(provisional: ProvisionalChat) -> InstanceRecord:
     """A chat that is not an agent yet: waiting for an account, being created, or failed."""
     return InstanceRecord(
-        key=InstanceKey(proto.agent_id),
-        url=instance_url_for_key(proto.agent_id),
-        title=InstanceTitle(proto.name or PROVISIONAL_TITLE),
-        status=_STATUS_BY_PROVISIONAL_PHASE[proto.phase],
+        key=InstanceKey(provisional.chat_id),
+        url=instance_url_for_key(provisional.chat_id),
+        title=InstanceTitle(provisional.name or PROVISIONAL_TITLE),
+        status=_STATUS_BY_PROVISIONAL_PHASE[provisional.phase],
         lifetime=InstanceLifetime.REFERENCED,
         last_active=None,
         renameable=False,
@@ -149,13 +138,26 @@ def instance_record_for_provisional_chat(proto: ProvisionalChat) -> InstanceReco
 
 
 @pure
-def subagent_instance_key(parent_agent_id: str, session_id: str) -> InstanceKey:
-    return InstanceKey(f"{parent_agent_id}{SUBAGENT_KEY_SEPARATOR}{session_id}")
+def subagent_instance_key(chat_id: ChatId, agent_id: str, session_id: str) -> InstanceKey:
+    return InstanceKey(SUBAGENT_KEY_SEPARATOR.join((chat_id, agent_id, session_id)))
 
 
 @pure
-def _parent_agent_id(subagent_key: InstanceKey) -> str:
-    return subagent_key.partition(SUBAGENT_KEY_SEPARATOR)[0]
+def parse_subagent_key(key: str) -> SubagentKey | None:
+    """The three parts of a subagent key, or None for a key of any other shape (a chat's own key included)."""
+    parts = key.split(SUBAGENT_KEY_SEPARATOR)
+    if len(parts) != 3:
+        return None
+    chat_id, agent_id, session_id = parts
+    if not AGENT_ID_PATTERN.fullmatch(chat_id) or not AGENT_ID_PATTERN.fullmatch(agent_id) or not session_id:
+        return None
+    return SubagentKey(chat_id=ChatId(chat_id), agent_id=agent_id, session_id=session_id)
+
+
+@pure
+def _is_subagent_of_a_listed_chat(subagent_key: InstanceKey, listed_chat_ids: AbstractSet[ChatId]) -> bool:
+    parsed = parse_subagent_key(subagent_key)
+    return parsed is not None and parsed.chat_id in listed_chat_ids
 
 
 @pure
@@ -169,11 +171,6 @@ def instance_record_for_subagent(key: InstanceKey, description: str) -> Instance
         last_active=None,
         renameable=False,
     )
-
-
-@pure
-def is_primary_agent(agent: AgentStateItem) -> bool:
-    return agent.labels.get("is_primary") == "true"
 
 
 @pure
@@ -205,28 +202,30 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    manager: AgentManager = Field(frozen=True, description="The agent manager the instances are read from")
+    manager: AgentManager = Field(frozen=True, description="The agent manager the chats are read from")
     # Starting rides the in-process mngr path a send uses to revive a stopped agent
     # (``agent_discovery.start_agent``), so a start and a message succeed or fail together.
     agent_starter: Callable[[str], None] = Field(
         frozen=True, description="Ensures the named agent is running; raises MngrError when it cannot"
     )
     # The subagent views the parent pages asked for, by key. In memory: a restart forgets
-    # them, and the parent's page recreates one on demand. A record whose parent chat is
-    # gone is dropped the next time the list is read.
+    # them, and the parent's page recreates one on demand. A record whose chat is gone is
+    # dropped the next time the list is read.
     _description_by_subagent_key: dict[InstanceKey, str] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def list_instances(self) -> list[InstanceRecord]:
         self._require_ready()
-        agents = [agent for agent in self.manager.get_agents() if not is_primary_agent(agent)]
-        records = [instance_record_for_agent(agent, self.manager.has_pending_permission(agent.id)) for agent in agents]
-        known_ids = {agent.id for agent in agents}
-        for proto in self.manager.get_proto_agents():
-            if proto.agent_id not in known_ids:
-                records.append(instance_record_for_provisional_chat(proto))
+        snapshots = self.manager.get_chat_snapshots()
+        records = [instance_record_for_chat(snapshot) for snapshot in snapshots]
+        known_ids = {snapshot.chat_id for snapshot in snapshots}
+        for provisional in self.manager.get_provisional_chats():
+            if provisional.chat_id not in known_ids:
+                records.append(instance_record_for_provisional_chat(provisional))
         with self._lock:
-            for key in [key for key in self._description_by_subagent_key if _parent_agent_id(key) not in known_ids]:
+            for key in [
+                key for key in self._description_by_subagent_key if not _is_subagent_of_a_listed_chat(key, known_ids)
+            ]:
                 del self._description_by_subagent_key[key]
             subagents = list(self._description_by_subagent_key.items())
         records.extend(instance_record_for_subagent(key, description) for key, description in subagents)
@@ -245,75 +244,75 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         with self._lock:
             if self._description_by_subagent_key.pop(key, None) is not None:
                 return
-        agent = self.manager.get_agent_by_id(key)
-        if agent is None or is_primary_agent(agent):
+        snapshot = self.manager.get_chat_snapshot(key)
+        if snapshot is None:
             # A provisional chat that is not being created is dropped; an unknown key is a
-            # no-op by contract, and so is a create in flight (the agent appears as an
-            # explicit instance once it lands).
+            # no-op by contract, and so is a create in flight (the chat appears as an
+            # explicit instance once its agent lands).
             self.manager.discard_provisional_chat(key)
             return
         try:
-            self.manager.destroy_chat_agent(key)
+            self.manager.destroy_chat(snapshot.chat_id)
         except AgentDestroyError as e:
             raise ChatDestroyFailedError(str(e)) from e
 
     def rename_instance(self, key: InstanceKey, title: InstanceTitle) -> InstanceRecord:
         self._require_ready()
-        agent = self.manager.get_agent_by_id(key)
-        if agent is None or is_primary_agent(agent):
+        snapshot = self.manager.get_chat_snapshot(key)
+        if snapshot is None:
             if self._is_provisional_or_subagent(key):
                 raise NotRenameableError(f"instance {key!r} cannot be renamed until its chat exists")
             raise UnknownInstanceError(f"no instance has the key {key!r}")
         try:
-            self.manager.rename_chat_agent(key, title)
+            self.manager.rename_chat(snapshot.chat_id, title)
         except AgentNameConflictError as e:
             raise ChatTitleConflictError(str(e)) from e
         except AgentRenameError as e:
             raise ChatRenameFailedError(str(e)) from e
-        return self._record_for_agent(key, None)
+        return self._record_for_chat(snapshot.chat_id, None)
 
     def set_location(self, key: InstanceKey, path: LocationTarget) -> InstanceRecord:
         raise LocationNotTrackedError("the chat app does not track where its pages are")
 
     def stop_instance(self, key: InstanceKey) -> InstanceRecord:
         """``mngr stop`` for a chat: the process ends, the transcript and name stay, and the record answers ``stopped``."""
-        agent = self._stoppable_agent(key)
-        if not is_lifecycle_dead(agent.state):
+        snapshot = self._stoppable_chat(key)
+        if not is_lifecycle_dead(snapshot.active_agent.state):
             try:
-                self.manager.stop_chat_agent(key)
+                self.manager.stop_chat(snapshot.chat_id)
             except AgentStopError as e:
                 raise ChatStopFailedError(str(e)) from e
-        return self._record_for_agent(key, InstanceStatus.STOPPED)
+        return self._record_for_chat(snapshot.chat_id, InstanceStatus.STOPPED)
 
     def start_instance(self, key: InstanceKey) -> InstanceRecord:
-        """Ensure a chat's agent is running, the same in-process path a send takes to revive one; a no-op for a live chat."""
-        agent = self._stoppable_agent(key)
-        if is_lifecycle_dead(agent.state):
+        """Ensure a chat's active agent is running, the same in-process path a send takes to revive one; a no-op for a live chat."""
+        snapshot = self._stoppable_chat(key)
+        if is_lifecycle_dead(snapshot.active_agent.state):
             try:
-                self.agent_starter(agent.name)
+                self.agent_starter(snapshot.active_agent.name)
             except MngrError as e:
-                raise ChatStartFailedError(f"Failed to start agent '{agent.name}': {e}") from e
+                raise ChatStartFailedError(f"Failed to start agent '{snapshot.active_agent.name}': {e}") from e
             # The observe stream sees the revival only minutes later (no pid to watch while the
             # agent was stopped); reflect it now so the record and the page's liveness follow the start.
-            self.manager.note_agent_alive(key)
-        return self._record_for_agent(key, None)
+            self.manager.note_agent_alive(snapshot.active_agent.agent_id)
+        return self._record_for_chat(snapshot.chat_id, None)
 
-    def _stoppable_agent(self, key: InstanceKey) -> AgentStateItem:
-        """The chat the verb acts on: a listed agent, never a provisional chat, a subagent view, or the primary agent."""
+    def _stoppable_chat(self, key: InstanceKey) -> ChatSnapshot:
+        """The chat the verb acts on: a listed chat, never a provisional chat or a subagent view."""
         self._require_ready()
-        agent = self.manager.get_agent_by_id(key)
-        if agent is None or is_primary_agent(agent):
+        snapshot = self.manager.get_chat_snapshot(key)
+        if snapshot is None:
             if self._is_provisional_or_subagent(key):
                 raise NotStoppableError(f"instance {key!r} has no agent process to stop or start")
             raise UnknownInstanceError(f"no instance has the key {key!r}")
-        return agent
+        return snapshot
 
-    def _record_for_agent(self, key: InstanceKey, status_override: InstanceStatus | None) -> InstanceRecord:
-        """The agent's record as tracked now; ``status_override`` reports a state the observe stream will only confirm later."""
-        agent = self.manager.get_agent_by_id(key)
-        if agent is None:
-            raise UnknownInstanceError(f"no instance has the key {key!r}")
-        record = instance_record_for_agent(agent, self.manager.has_pending_permission(key))
+    def _record_for_chat(self, chat_id: ChatId, status_override: InstanceStatus | None) -> InstanceRecord:
+        """The chat's record as tracked now; ``status_override`` reports a state the observe stream will only confirm later."""
+        snapshot = self.manager.get_chat_snapshot(chat_id)
+        if snapshot is None:
+            raise UnknownInstanceError(f"no instance has the key {chat_id!r}")
+        record = instance_record_for_chat(snapshot)
         if status_override is None:
             return record
         return record.model_copy_update(to_update(record.field_ref().status, status_override))
@@ -336,7 +335,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             created = self.manager.reserve_chat(message=message)
         else:
             try:
-                created = self.manager.create_chat_agent(
+                created = self.manager.create_chat(
                     requested_name="",
                     extra_role_templates=(),
                     project_id="",
@@ -345,15 +344,15 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
                 )
             except AgentCreationError as e:
                 raise ChatCreateRefusedError(str(e)) from e
-        proto = self.manager.get_proto_agent(created.agent_id)
-        if proto is not None:
-            return instance_record_for_provisional_chat(proto)
+        provisional = self.manager.get_provisional_chat(created.chat_id)
+        if provisional is not None:
+            return instance_record_for_provisional_chat(provisional)
         # The create can land before this reads the record back (the creation thread drops it
         # the moment ``mngr create`` exits 0): the chat is then an ordinary instance.
-        landed = self.manager.get_agent_by_id(created.agent_id)
+        landed = self.manager.get_chat_snapshot(created.chat_id)
         if landed is None:
-            raise ChatCreateRefusedError(f"chat {created.agent_id} vanished before it could be listed")
-        return instance_record_for_agent(landed, self.manager.has_pending_permission(landed.id))
+            raise ChatCreateRefusedError(f"chat {created.chat_id} vanished before it could be listed")
+        return instance_record_for_chat(landed)
 
     def _create_subagent(self, params: Mapping[str, str]) -> InstanceRecord:
         _require_params(SUBAGENT_ACTION_ID, params, _SUBAGENT_PARAMS)
@@ -361,10 +360,12 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         session = params.get(SESSION_PARAM, "")
         if not parent or not session:
             raise InvalidParamsError(f"action {SUBAGENT_ACTION_ID!r} requires {PARENT_PARAM!r} and {SESSION_PARAM!r}")
-        parent_agent = self.manager.get_agent_by_id(parent) if AGENT_ID_PATTERN.fullmatch(parent) else None
-        if parent_agent is None or is_primary_agent(parent_agent):
+        parent_chat = self.manager.get_chat_snapshot(parent) if AGENT_ID_PATTERN.fullmatch(parent) else None
+        if parent_chat is None:
             raise InvalidParamsError(f"{PARENT_PARAM!r} {parent!r} is not a chat this app lists")
-        key = subagent_instance_key(parent, session)
+        # The session belongs to the chat's active agent: a subagent is opened from the live
+        # transcript, and the key names that agent so the view keeps reading the right files.
+        key = subagent_instance_key(parent_chat.chat_id, parent_chat.active_agent.agent_id, session)
         with self._lock:
             description = self._description_by_subagent_key.get(key)
             if description is None:
@@ -376,7 +377,7 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
         with self._lock:
             if key in self._description_by_subagent_key:
                 return True
-        return self.manager.get_proto_agent(key) is not None
+        return self.manager.get_provisional_chat(key) is not None
 
     def _require_ready(self) -> None:
         if not self.manager.is_agent_list_known():

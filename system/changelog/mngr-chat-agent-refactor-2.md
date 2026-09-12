@@ -1,0 +1,7 @@
+Phase 2 of the chat-agent split (`docs/system/blueprint/chat-agent-split/plan-chat-agent-split.md`): the workspace names a chat apart from the agent it runs on. Every chat still runs on exactly one agent, so nothing behaves differently; the names, the wire, and the environment are ready for a chat that hands off between agents.
+
+- Every agent the chat app creates carries `MINDS_CHAT_ID`, the id of its chat. `system/scripts/layout.py` builds the requester (`self`) address from it, falling back to `MNGR_AGENT_ID` for an agent created any other way, which is its own chat; the `automation` template's prompt and the skills that open or message their own chat do the same. `system/scripts/message_chat.py`'s help names the chat id the same way.
+
+- `system/scripts/test_lead_address_by_id.py` pins only what a worker still does with its lead's agent id (`mngr transcript`); the report is now written into the lead's checkout, so the `mngr rsync` cases are gone.
+
+- Spec corrections: a permission request's `agent_id` field carries the chat id (the minds side uses it only for routing, and its resolution nudge moves to the chat in phase 4); `lead_agent` stays the dispatching agent's id since mngr knows only agents, with `lead_work_dir` beside it; the `mngr gc` that follows a destroy collects only orphans. `contracts.md` section 4.3, the workspace-app-model plan's 7.4, and `mngr_side_changes.md` describe chat ids, the `chats_updated` message, `/api/chats/create`, and the three-part subagent key.

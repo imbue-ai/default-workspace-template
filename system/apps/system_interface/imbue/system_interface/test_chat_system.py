@@ -22,6 +22,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from imbue.chat.agent_manager import DESTROY_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_AGENT_NAME
 from imbue.chat.testing import FIXTURE_CHAT_ADDRESS
@@ -86,12 +87,14 @@ def test_a_rename_through_the_shells_relay_reaches_the_chat_and_relists(tmp_path
         assert status == 200
         assert body["instance"]["title"] == "Design notes"
         wait_for(
-            lambda: [
-                instance["title"]
-                for instance in _chat_instances(workspace.shell_url)
-                if instance["key"] == FIXTURE_AGENT_ID
-            ]
-            == ["Design notes"],
+            lambda: (
+                [
+                    instance["title"]
+                    for instance in _chat_instances(workspace.shell_url)
+                    if instance["key"] == FIXTURE_AGENT_ID
+                ]
+                == ["Design notes"]
+            ),
             timeout=15.0,
             poll_interval=0.2,
             error_message="the shell's inventory never picked up the rename",
@@ -131,6 +134,7 @@ def test_not_built_repair_command_is_the_one_the_app_runs_for_a_chat() -> None:
     real = _build_chat_create_command(
         mngr_binary="mngr",
         name="repair",
+        chat_id=ChatId("agent-123"),
         agent_id="agent-123",
         primary_labels={},
         harness=HarnessType.CLAUDE,

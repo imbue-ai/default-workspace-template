@@ -33,7 +33,7 @@ interface ProgressBlockAttrs {
    *  expansions already folded in). Lookups by id work even though a section
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
-  agentId: string;
+  chatId: string;
   /** Optional DOM id for the root, so a virtualized list can measure this
    *  block's height by querying ``.message-list > [id]``. */
   id?: string;
@@ -102,10 +102,10 @@ function renderStepCaption(step: StepNode, isExpanded: boolean): m.Vnode | null 
   return m(`div.${captionClass}.markdown-content`, m.trust(renderMarkdown(step.narration)));
 }
 
-function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, agentId: string): m.Vnode {
+function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolResultEvent>, chatId: string): m.Vnode {
   const children: m.Children[] = [];
   for (const e of step.events) {
-    children.push(...renderAssistantMessageChildren(e, toolResults, agentId));
+    children.push(...renderAssistantMessageChildren(e, toolResults, chatId));
   }
   // The subtle indent + left rule containing the revealed work; its p and
   // tool-block child rules stay in style.css.
@@ -134,7 +134,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     step: StepNode,
     is_last: boolean,
     toolResults: Map<string, ToolResultEvent>,
-    agentId: string,
+    chatId: string,
   ): m.Vnode {
     const canExpand = step.events.length > 0;
     const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
@@ -180,7 +180,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
         ),
         renderStepCaption(step, isExpanded),
         isExpanded
-          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, agentId))
+          ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId))
           : null,
       ]),
     ]);
@@ -188,7 +188,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, agentId, id } = vnode.attrs;
+      const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
       // Index of the last step item, so only it gets the `--last` thread cap.
@@ -197,7 +197,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
       const timelineNodes: m.Children[] = items.map((item, idx) => {
         if (item.kind === "step") {
-          return renderStepNode(item.step, idx === lastStepIdx, toolResults, agentId);
+          return renderStepNode(item.step, idx === lastStepIdx, toolResults, chatId);
         }
         if (item.kind === "ungrouped") {
           // Real work / prose that happened with no step open -- including a
@@ -210,7 +210,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
-            item.events.map((e) => renderAssistantMessage(e, toolResults, agentId)),
+            item.events.map((e) => renderAssistantMessage(e, toolResults, chatId)),
           );
         }
         if (item.kind === "permission") {
@@ -224,7 +224,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           return m(
             "div",
             { class: "pv-permission relative z-[2] mt-1.5 mb-3.5", key: `perm-${item.event.event_id}` },
-            renderPermissionItem(item.event, toolResults, agentId, item.resolutionsByRequestId),
+            renderPermissionItem(item.event, toolResults, chatId, item.resolutionsByRequestId),
           );
         }
         // A stop-hook chip woven into the timeline at the point the hook

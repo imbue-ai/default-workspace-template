@@ -23,7 +23,7 @@ import {
   fetchForwardEvents,
   fetchWindowAtOffset,
   getConversationLoadState,
-  getEventsForAgent,
+  getEventsForChat,
   getEventCount,
   getFirstEventId,
   getLastEventId,
@@ -83,7 +83,7 @@ function assistantWithAgentToolCall(
   };
 }
 
-// getEventsForAgent returns the TranscriptEvent union; narrow to the assistant
+// getEventsForChat returns the TranscriptEvent union; narrow to the assistant
 // variant before touching tool_calls (the discriminated-union contract).
 function toolCallsOf(event: TranscriptEvent): ToolCall[] {
   if (event.type !== "assistant_message") {
@@ -93,7 +93,7 @@ function toolCallsOf(event: TranscriptEvent): ToolCall[] {
 }
 
 let counter = 0;
-function freshAgent(): string {
+function freshChat(): string {
   return `agent-${counter++}`;
 }
 
@@ -123,59 +123,59 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function ids(agentId: string): string[] {
-  return getEventsForAgent(agentId).map((e) => e.event_id);
+function ids(chatId: string): string[] {
+  return getEventsForChat(chatId).map((e) => e.event_id);
 }
 
 describe("appendEvents subagent_metadata merge", () => {
   it("merges late subagent_metadata onto an already-stored assistant message", () => {
-    const agentId = freshAgent();
+    const chatId = freshChat();
     const metadata = { agent_type: "Explore", description: "explore foo", session_id: "agent-sub1" };
 
     // Parent Agent tool_call streamed before its subagent linkage was known.
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
-    const before = getEventsForAgent(agentId);
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
+    const before = getEventsForChat(chatId);
     expect(before).toHaveLength(1);
     expect(toolCallsOf(before[0])[0].subagent_metadata).toBeUndefined();
 
     // Backend re-broadcasts the same event (same event_id) once linkage lands.
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-1", "toolu_1", metadata)]);
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-1", "toolu_1", metadata)]);
 
-    const after = getEventsForAgent(agentId);
+    const after = getEventsForChat(chatId);
     // Still a single message -- the re-broadcast must not be appended as a duplicate.
     expect(after).toHaveLength(1);
     expect(toolCallsOf(after[0])[0].subagent_metadata).toEqual(metadata);
   });
 
   it("ignores a re-broadcast that carries no new metadata", () => {
-    const agentId = freshAgent();
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
+    const chatId = freshChat();
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
 
-    const events = getEventsForAgent(agentId);
+    const events = getEventsForChat(chatId);
     expect(events).toHaveLength(1);
     expect(toolCallsOf(events[0])[0].subagent_metadata).toBeUndefined();
   });
 
   it("still appends genuinely new events", () => {
-    const agentId = freshAgent();
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
-    appendEvents(agentId, [assistantWithAgentToolCall("ev-2", "toolu_2")]);
+    const chatId = freshChat();
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-1", "toolu_1")]);
+    appendEvents(chatId, [assistantWithAgentToolCall("ev-2", "toolu_2")]);
 
-    expect(getEventsForAgent(agentId)).toHaveLength(2);
+    expect(getEventsForChat(chatId)).toHaveLength(2);
   });
 });
 
 describe("dedup", () => {
   it("appendEvents ignores ids already present", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(agent, [makeEvent("a"), makeEvent("b")]);
     appendEvents(agent, [makeEvent("b"), makeEvent("c")]);
     expect(ids(agent)).toEqual(["a", "b", "c"]);
   });
 
   it("prependEvents ignores ids already present and keeps order", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(agent, [makeEvent("c"), makeEvent("d")]);
     prependEvents(agent, [makeEvent("a"), makeEvent("b"), makeEvent("c")]);
     expect(ids(agent)).toEqual(["a", "b", "c", "d"]);
@@ -185,7 +185,7 @@ describe("dedup", () => {
     // The spine's supersession path: the backend re-broadcasts a held event (same id)
     // with updated content; the store upgrades it in place rather than dropping it as a
     // duplicate or appending a second copy.
-    const agent = freshAgent();
+    const agent = freshChat();
     const userEvent = (id: string, content: string): TranscriptEvent => ({
       timestamp: "2026-01-01T00:00:00Z",
       type: "user_message",
@@ -196,7 +196,7 @@ describe("dedup", () => {
       content,
     });
     const contentOf = (id: string) =>
-      getEventsForAgent(agent)
+      getEventsForChat(agent)
         .filter((e) => e.event_id === id)
         .map((e) => (e as { content?: string }).content);
     appendEvents(agent, [userEvent("a", "first"), makeEvent("b")]);
@@ -214,7 +214,7 @@ describe("dedup", () => {
 // below" is offset + held < total -- the client derives both, replacing has_more.
 describe("window position (offset / total)", () => {
   it("fetchEvents records offset and total from the server", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 5, total: 10 });
     await fetchEvents(agent);
     expect(getFirstOffset(agent)).toBe(5);
@@ -224,7 +224,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("treats a response without offset/total as a complete window", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")] });
     await fetchEvents(agent);
     expect(getFirstOffset(agent)).toBe(0);
@@ -233,7 +233,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("backfill stops once the window reaches the start", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     // Window holds [b, c] starting at index 1, so one older event (a) exists.
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b"), makeEvent("c")], offset: 1, total: 3 });
     await fetchEvents(agent);
@@ -253,7 +253,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("backfill pages before the first held event", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5")], offset: 5, total: 8 });
     await fetchEvents(agent);
 
@@ -267,7 +267,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("forward-pages newer events after a window moved off the tail", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     // A window in the middle: holds [m2, m3] at offset 2 of 6, so newer exist.
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
     await fetchEvents(agent);
@@ -288,7 +288,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("snaps the window to the tail when a forward page returns empty", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     // A window whose count arithmetic says it falls short of the total -- the
     // state left behind when events were missed during an outage (SSE
     // reconnected but the snapshot refetch failed).
@@ -311,7 +311,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("discards a stale backfill page that does not reach the window start", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("e5"), makeEvent("e6")], offset: 5, total: 10 });
     await fetchEvents(agent);
 
@@ -328,7 +328,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("discards a backfill response that lands after the window start moved", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b"), makeEvent("c")], offset: 4, total: 8 });
     await fetchEvents(agent);
 
@@ -345,7 +345,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("discards a forward page that lands after the tail advanced", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
     await fetchEvents(agent);
     expect(hasMoreAfter(agent)).toBe(true);
@@ -362,7 +362,7 @@ describe("window position (offset / total)", () => {
   });
 
   it("jumps the window to an arbitrary offset, replacing held events", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("tail")], offset: 99, total: 100 });
     await fetchEvents(agent);
 
@@ -380,7 +380,7 @@ describe("window position (offset / total)", () => {
 
 describe("evictEvents", () => {
   it("does nothing for a zero or negative count", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(
       agent,
       Array.from({ length: 10 }, (_v, i) => makeEvent(`e${i}`)),
@@ -391,7 +391,7 @@ describe("evictEvents", () => {
   });
 
   it("trims the oldest and flags more history above", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(
       agent,
       Array.from({ length: 300 }, (_v, i) => makeEvent(`e${i}`)),
@@ -409,7 +409,7 @@ describe("evictEvents", () => {
   });
 
   it("trims the newest, pulling the window off the live tail", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(
       agent,
       Array.from({ length: 300 }, (_v, i) => makeEvent(`e${i}`)),
@@ -425,14 +425,14 @@ describe("evictEvents", () => {
   });
 
   it("clamps the count to the held window", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(agent, [makeEvent("only")]);
     expect(evictEvents(agent, "older", 10)).toBe(1);
     expect(getEventCount(agent)).toBe(0);
   });
 
   it("re-admits evicted ids on a later prepend (dedup index was pruned)", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(
       agent,
       Array.from({ length: 100 }, (_v, i) => makeEvent(`e${i}`)),
@@ -452,7 +452,7 @@ describe("evictEvents", () => {
 // stale grouping; a spurious bump would defeat the scroll-time caching.
 describe("render version", () => {
   it("bumps on a real append but not on a duplicate", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     const v0 = getRenderVersion(agent);
     appendEvents(agent, [makeEvent("a")]);
     const v1 = getRenderVersion(agent);
@@ -463,7 +463,7 @@ describe("render version", () => {
   });
 
   it("bumps when a re-broadcast upgrades a held event in place", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(agent, [assistantWithAgentToolCall("e", "call-1")]);
     const v1 = getRenderVersion(agent);
     // Same event_id, now carrying subagent metadata: merged in place, so the
@@ -479,7 +479,7 @@ describe("render version", () => {
   });
 
   it("bumps on prepend and on eviction", () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     appendEvents(
       agent,
       Array.from({ length: 100 }, (_v, i) => makeEvent(`e${i}`)),
@@ -493,7 +493,7 @@ describe("render version", () => {
   });
 
   it("bumps on a fetch (window reset)", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     const v0 = getRenderVersion(agent);
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 0, total: 1 });
     await fetchEvents(agent);
@@ -506,7 +506,7 @@ describe("render version", () => {
   // those bounds has changed. These edge-reconciliation paths write the store
   // directly (no event delta), so they are the easiest place to forget the bump.
   it("bumps when an empty backfill page snaps the window start to the beginning", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("e2")], offset: 2, total: 5 });
     await fetchEvents(agent);
     expect(hasMoreBefore(agent)).toBe(true);
@@ -522,7 +522,7 @@ describe("render version", () => {
   });
 
   it("bumps when an empty forward page corrects total down to the tail", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("m2"), makeEvent("m3")], offset: 2, total: 6 });
     await fetchEvents(agent);
     expect(hasMoreAfter(agent)).toBe(true);
@@ -544,14 +544,14 @@ describe("render version", () => {
 // the loaded window's end so the window always fits inside it.
 describe("total event count", () => {
   it("reports the server total when it exceeds the held window", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("x")], offset: 100, total: 500 });
     await fetchEvents(agent);
     expect(getTotalEventCount(agent)).toBe(500);
   });
 
   it("falls back to the held count when the server omits total", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("a"), makeEvent("b")] });
     await fetchEvents(agent);
     expect(getTotalEventCount(agent)).toBe(2);
@@ -573,14 +573,14 @@ describe("snapshot load state", () => {
   }
 
   it("records a message naming the status when the body carries no detail", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
     expect(getConversationLoadState(agent)).toEqual({ phase: "error", error: "request failed (HTTP 503)" });
   });
 
   it("prefers the server's own detail when the body has one", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockRejectedValueOnce(
       Object.assign(new Error("{}"), { code: 404, response: { detail: "Agent 'x' not found" } }),
     );
@@ -589,7 +589,7 @@ describe("snapshot load state", () => {
   });
 
   it("reads as loading while the fetch is in flight, so nothing reports an empty transcript", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     const pending = deferredResponse();
     mockRequest.mockReturnValueOnce(pending.promise);
 
@@ -602,7 +602,7 @@ describe("snapshot load state", () => {
   });
 
   it("settles on the next successful fetch, whoever makes it", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockRejectedValueOnce(proxyUnavailableError());
     await expect(fetchEvents(agent)).rejects.toThrow();
     expect(getConversationLoadState(agent).phase).toBe("error");
@@ -618,7 +618,7 @@ describe("snapshot load state", () => {
     // request hung on a dead tunnel settles up to the 30s timeout after a later
     // one already landed. Its failure must not put the panel back on an error
     // screen for a transcript that has since loaded.
-    const agent = freshAgent();
+    const agent = freshChat();
     const hung = deferredResponse();
     mockRequest.mockReturnValueOnce(hung.promise);
     const stale = fetchEvents(agent);
@@ -637,7 +637,7 @@ describe("snapshot load state", () => {
     // data" renders ahead of it, ungated by whether a transcript is on screen,
     // and the live stream is disconnected. A late 404 from an attempt a later
     // one has already answered must not blank a chat that is loaded and live.
-    const agent = freshAgent();
+    const agent = freshChat();
     const hung = deferredResponse();
     mockRequest.mockReturnValueOnce(hung.promise);
     const stale = fetchEvents(agent);
@@ -658,7 +658,7 @@ describe("snapshot load state", () => {
     // transcript and strand everything placed since -- and it resets offset and
     // hasMoreAfter with it, so neither backfill nor forward paging could reach
     // the lost events again.
-    const agent = freshAgent();
+    const agent = freshChat();
     const hung = deferredResponse();
     mockRequest.mockReturnValueOnce(hung.promise);
     const stale = fetchEvents(agent);
@@ -676,7 +676,7 @@ describe("snapshot load state", () => {
   });
 
   it("is not moved by a failed backfill page, which leaves the window readable", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce({ events: [makeEvent("b")], offset: 1, total: 2 });
     await fetchEvents(agent);
 
@@ -698,9 +698,9 @@ describe("message-sent listeners", () => {
       setItem: () => {},
     });
     try {
-      const agent = freshAgent();
+      const agent = freshChat();
       const seen: string[] = [];
-      const listener = (agentId: string) => seen.push(agentId);
+      const listener = (chatId: string) => seen.push(chatId);
       addMessageSentListener(listener);
       try {
         mockRequest.mockResolvedValueOnce({});
@@ -729,7 +729,7 @@ describe("event detail cache", () => {
   const detail = { inputs_by_tool_call_id: { c1: "full input" }, output: "full output", thinking: null };
 
   it("fetches once and serves later requests from the cache", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockResolvedValueOnce(detail);
     requestEventDetail(agent, "e1");
     expect(getEventDetailState(agent, "e1")).toEqual({ state: "loading" });
@@ -743,7 +743,7 @@ describe("event detail cache", () => {
   });
 
   it("marks a 404 unavailable and never refetches it", async () => {
-    const agent = freshAgent();
+    const agent = freshChat();
     mockRequest.mockRejectedValueOnce(Object.assign(new Error("{}"), { code: 404 }));
     requestEventDetail(agent, "gone");
     await Promise.resolve();
@@ -760,7 +760,7 @@ describe("event detail cache", () => {
     // blocking re-requests until the retry delay elapses.
     vi.useFakeTimers();
     try {
-      const agent = freshAgent();
+      const agent = freshChat();
       mockRequest.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: 500 }));
       requestEventDetail(agent, "flaky");
       await Promise.resolve();

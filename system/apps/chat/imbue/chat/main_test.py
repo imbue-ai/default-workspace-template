@@ -4,11 +4,11 @@ from imbue.chat.config import Config
 from imbue.chat.main import MANIFEST_PATH
 from imbue.chat.main import _parse_args
 from imbue.chat.main import build_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 
 
-def _built_state(argv: list[str]) -> ChatState:
+def _built_state(argv: list[str]) -> ChatAppState:
     return state_of(build_application(Config(), _parse_args(argv)))
 
 

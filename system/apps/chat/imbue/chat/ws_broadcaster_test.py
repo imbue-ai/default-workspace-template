@@ -3,8 +3,11 @@
 import json
 import queue
 
+from imbue.chat.agent_manager import chat_snapshot_for_agent
+from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
+from imbue.chat.primitives import ChatId
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.ws_broadcaster import _CLIENT_QUEUE_MAX_SIZE
 from imbue.chat.ws_broadcaster import _MAX_CONSECUTIVE_QUEUE_FULL
@@ -56,42 +59,45 @@ def test_unregister_nonexistent_is_safe() -> None:
     broadcaster.unregister(other_queue)
 
 
-def test_broadcast_agents_updated() -> None:
+def test_broadcast_chats_updated() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    agents = [{"id": "a1", "name": "agent-1", "state": "RUNNING"}]
-    broadcaster.broadcast_agents_updated(agents)
+    agent = AgentStateItem(id="a1", name="agent-1", state="RUNNING", labels={}, work_dir=None)
+    snapshot = chat_snapshot_for_agent(agent, is_permission_pending=False, shoulder_tap_available=False)
+    broadcaster.broadcast_chats_updated([snapshot])
 
     msg = json.loads(_get_message(q))
-    assert msg["type"] == "agents_updated"
-    assert msg["agents"] == agents
+    assert msg["type"] == "chats_updated"
+    assert msg["chats"] == [snapshot.model_dump(mode="json")]
+    assert msg["chats"][0]["chat_id"] == "a1"
+    assert msg["chats"][0]["active_agent"]["agent_id"] == "a1"
 
 
-def test_broadcast_proto_agent_created() -> None:
+def test_broadcast_provisional_chat_created() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_proto_agent_created(
-        ProvisionalChat(agent_id="a1", name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
+    broadcaster.broadcast_provisional_chat_created(
+        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
     )
 
     msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_created"
-    assert msg["agent_id"] == "a1"
+    assert msg["type"] == "provisional_chat_created"
+    assert msg["chat_id"] == "a1"
     assert msg["name"] == "test"
     assert msg["phase"] == "awaiting_account"
     assert msg["error"] is None
 
 
-def test_broadcast_proto_agent_completed() -> None:
+def test_broadcast_provisional_chat_completed() -> None:
     broadcaster = WebSocketBroadcaster()
     q = broadcaster.register()
 
-    broadcaster.broadcast_proto_agent_completed(agent_id="a1", success=True, error=None)
+    broadcaster.broadcast_provisional_chat_completed(chat_id=ChatId("a1"), success=True, error=None)
 
     msg = json.loads(_get_message(q))
-    assert msg["type"] == "proto_agent_completed"
+    assert msg["type"] == "provisional_chat_completed"
     assert msg["success"] is True
     assert msg["error"] is None
 

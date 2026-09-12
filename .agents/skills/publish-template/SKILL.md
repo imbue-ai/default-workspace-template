@@ -355,7 +355,7 @@ cat << 'BODY_EOF'
 Assemble a clean, bootable "template" snapshot on your worktree's branch,
 then finish its manifest and thumbnail. Do ALL of it in this one run.
 
-**Before anything else**, extract `LEAD_AGENT` / `FINISH_REPORT_PATH` per
+**Before anything else**, extract `LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH` per
 `.agents/shared/references/worker-reporting.md`: step 1's script resets your
 worktree to a clean template base and deletes gitignored state -- including
 `data/` and this task file -- so parse the frontmatter FIRST.
@@ -867,13 +867,13 @@ verdict in between.
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this template as a new GitHub repo on your account."}'
+    -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-rest-api", "permissions": ["github-read-user", "github-write-all"]}, "rationale": "Publish this template as a new GitHub repo on your account."}'
 ```
 
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
     -H 'Content-Type: application/json' \
-    -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
+    -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the published template'"'"'s git history to the new repo."}'
 ```
 
 Tell the user in chat that a GitHub approval is waiting for them in minds (say

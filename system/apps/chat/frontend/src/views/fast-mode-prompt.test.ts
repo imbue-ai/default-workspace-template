@@ -1,19 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TranscriptEvent, UserMessageEvent } from "../models/Response";
-import type { AgentState } from "../models/AgentManager";
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { countUserTurns, isFastModePromptOwed } from "./fast-mode-prompt";
-import { getAgentFastMode } from "../models/ModelSettings";
+import { getChatFastMode } from "../models/ModelSettings";
 import { hasFastModePrompt } from "../models/HarnessCatalog";
 import { isFastModePromptAnswered } from "../models/FastModePrompt";
 
-vi.mock("../models/ModelSettings", () => ({ getAgentFastMode: vi.fn() }));
+vi.mock("../models/ModelSettings", () => ({ getChatFastMode: vi.fn() }));
 vi.mock("../models/HarnessCatalog", () => ({ hasFastModePrompt: vi.fn() }));
 vi.mock("../models/FastModePrompt", () => ({
   isFastModePromptAnswered: vi.fn(),
   openFastModePrompt: vi.fn(),
 }));
 
-const getAgentFastModeMock = vi.mocked(getAgentFastMode);
+const getChatFastModeMock = vi.mocked(getChatFastMode);
 const hasFastModePromptMock = vi.mocked(hasFastModePrompt);
 const isFastModePromptAnsweredMock = vi.mocked(isFastModePromptAnswered);
 
@@ -58,15 +59,8 @@ function conversation(count: number): TranscriptEvent[] {
 }
 
 /** A first-labelled agent on a prompt-declaring harness -- the one the prompt is for. */
-function firstAgent(labels: Record<string, string> = { first: "true" }): AgentState {
-  return {
-    id: "agent-1",
-    name: "demo",
-    state: "started",
-    labels,
-    work_dir: null,
-    harness: "claude",
-  } as AgentState;
+function firstAgent(labels: Record<string, string> = { first: "true" }): ChatSnapshot {
+  return chatSnapshotFixture("agent-1", { name: "demo", labels, active_agent: { name: "demo", state: "started" } });
 }
 
 describe("countUserTurns", () => {
@@ -103,7 +97,7 @@ describe("isFastModePromptOwed", () => {
   beforeEach(() => {
     hasFastModePromptMock.mockReturnValue(true);
     isFastModePromptAnsweredMock.mockReturnValue(false);
-    getAgentFastModeMock.mockReturnValue(true);
+    getChatFastModeMock.mockReturnValue(true);
   });
 
   it("waits for the grace period to be used up", () => {
@@ -134,7 +128,7 @@ describe("isFastModePromptOwed", () => {
   });
 
   it("stays quiet when the user already turned fast mode off themselves", () => {
-    getAgentFastModeMock.mockReturnValue(false);
+    getChatFastModeMock.mockReturnValue(false);
     expect(isFastModePromptOwed(firstAgent(), conversation(9), true)).toBe(false);
   });
 

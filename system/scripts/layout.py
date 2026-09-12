@@ -29,8 +29,9 @@ Subcommands:
 
 Every instance is named by one *address* (contracts.md section 1):
 
-- ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its agent id
-  (``app:chat?instance=agent-...``), a terminal by its tmux session name
+- ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its chat id
+  (``app:chat?instance=agent-...``, the id of its first agent), a terminal by its tmux
+  session name
   (``app:terminal?instance=terminal-3``), a browser by its name.
 - ``app:<name>`` -- a single-instance app's one tab (an app built without instances, say
   ``app:docs``), or, as an ``open`` / ``split`` target, "a fresh instance of this app" for an
@@ -68,9 +69,10 @@ that owns the instance and echo the app's refusal when it gives one (an instance
 be stopped on its own, such as a file viewer, refuses ``stop`` with a 400).
 
 All dock ops POST one body ``{op, args, requester}`` to a loopback-only endpoint on the
-shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MNGR_AGENT_ID``, which is
-what ``self`` means and how the shell attributes the op to a client (the one that last
-messaged that chat).
+shell: ``requester`` is the caller's own chat, ``app:chat?instance=$MINDS_CHAT_ID`` (the chat
+app sets ``MINDS_CHAT_ID`` on every agent it creates; ``MNGR_AGENT_ID`` stands in for an
+agent that is its own chat), which is what ``self`` means and how the shell attributes the
+op to a client (the one that last messaged that chat).
 
 Output for ``list`` / ``views`` / ``context`` / ``shortcuts`` is YAML by default; pass
 ``--json`` for the raw structured object. ``inspect`` and ``where`` default to a compact
@@ -96,6 +98,7 @@ DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
 DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"
+ENV_MINDS_CHAT_ID = "MINDS_CHAT_ID"
 ENV_MNGR_AGENT_ID = "MNGR_AGENT_ID"
 ADDRESS_SCHEME = "app:"
 ADDRESS_INSTANCE_PARAMETER = "instance="
@@ -164,18 +167,20 @@ def _workspace_base_url() -> str:
     return os.environ.get(ENV_WORKSPACE_URL, DEFAULT_WORKSPACE_URL).rstrip("/")
 
 
-def _mngr_agent_id() -> str:
-    return os.environ.get(ENV_MNGR_AGENT_ID, "")
+def _own_chat_id() -> str:
+    """The caller's chat id: ``MINDS_CHAT_ID`` from the chat app that created the agent, else the
+    agent's own id (an agent created any other way is its own chat), else "" outside an agent."""
+    return os.environ.get(ENV_MINDS_CHAT_ID, "") or os.environ.get(
+        ENV_MNGR_AGENT_ID, ""
+    )
 
 
 def _requester_address() -> str:
     """The caller's own chat as an address, or "" outside an agent: what ``self`` names and what
     every op carries so the shell knows who asked."""
-    agent_id = _mngr_agent_id()
+    chat_id = _own_chat_id()
     return (
-        f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{agent_id}"
-        if agent_id
-        else ""
+        f"{ADDRESS_SCHEME}chat?{ADDRESS_INSTANCE_PARAMETER}{chat_id}" if chat_id else ""
     )
 
 
@@ -199,11 +204,11 @@ def _retired_spelling_message(value: str) -> str:
     remainder = value[len(prefix) :]
     if prefix == "chat:":
         hint = (
-            f"a chat is addressed by its agent id, not its name: app:chat?instance=<agent-id> "
+            f"a chat is addressed by its chat id, not its name: app:chat?instance=<chat-id> "
             f"(the chat rows of 'layout.py list' carry the id of the one titled {remainder!r})"
         )
     elif prefix == "chat-terminal:":
-        hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<agent-id>"
+        hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<chat-id>"
     elif prefix == "terminal:":
         hint = f"a terminal is addressed by its tmux session name: app:terminal?instance={remainder or '<session>'}"
     elif prefix == "service:":
@@ -217,7 +222,7 @@ def _retired_spelling_message(value: str) -> str:
     elif prefix == "url:":
         hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
     else:
-        hint = "a subagent is an instance of the chat app: app:chat?instance=<parent-agent-id>.<session>"
+        hint = "a subagent is an instance of the chat app: app:chat?instance=<chat-id>.<agent-id>.<session>"
     return (
         f"{value!r} is not an address any more; {hint}. Addresses are app:<name> or "
         f"app:<name>?instance=<key>; run 'layout.py list' to see every one on the machine"
@@ -850,8 +855,8 @@ def _cmd_where(args: argparse.Namespace) -> int:
     address = _resolve_address(args.address)
     if address == _SELF_REF:
         sys.stderr.write(
-            "error: 'self' is your own chat, which needs MNGR_AGENT_ID in the environment; "
-            "pass the chat's address (app:chat?instance=<agent id>) or use ``inspect`` to "
+            "error: 'self' is your own chat, which needs MINDS_CHAT_ID (or MNGR_AGENT_ID) in the "
+            "environment; pass the chat's address (app:chat?instance=<chat id>) or use ``inspect`` to "
             "see every address\n"
         )
         return EXIT_ERROR
@@ -1507,19 +1512,16 @@ def main(argv: list[str] | None = None) -> int:
     p_delete.set_defaults(func=_cmd_delete)
 
     p_stop = subparsers.add_parser(
-        "stop", help="Stop what backs an instance through its app; the instance stays, as stopped"
+        "stop",
+        help="Stop what backs an instance through its app; the instance stays, as stopped",
     )
-    p_stop.add_argument(
-        "address", help="Instance address (app:<name>?instance=<key>)"
-    )
+    p_stop.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
     p_stop.set_defaults(func=_cmd_stop)
 
     p_start = subparsers.add_parser(
         "start", help="Bring a stopped instance back through its app"
     )
-    p_start.add_argument(
-        "address", help="Instance address (app:<name>?instance=<key>)"
-    )
+    p_start.add_argument("address", help="Instance address (app:<name>?instance=<key>)")
     p_start.set_defaults(func=_cmd_start)
 
     p_max = subparsers.add_parser(

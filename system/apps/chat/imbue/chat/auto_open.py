@@ -32,6 +32,7 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 
@@ -55,12 +56,12 @@ def is_auto_open_labeled(labels: Mapping[str, str]) -> bool:
     return any(labels.get(label) == "true" for label in AUTO_OPEN_LABELS)
 
 
-def chat_address(agent_id: str) -> str:
-    return f"app:chat?instance={agent_id}"
+def chat_address(chat_id: ChatId) -> str:
+    return f"app:chat?instance={chat_id}"
 
 
 class AutoOpenLedger(MutableModel):
-    """The set of chat agent ids whose open has reached a client.
+    """The set of chat ids whose open has reached a client.
 
     A ``path`` of None keeps the set in memory only (tests, and a boot with no workspace to
     persist into).
@@ -70,13 +71,13 @@ class AutoOpenLedger(MutableModel):
 
     path: Path | None = Field(description="Where the set is kept, or None for memory only")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _delivered: set[str] = PrivateAttr(default_factory=set)
+    _delivered: set[ChatId] = PrivateAttr(default_factory=set)
     _is_history_known: bool = PrivateAttr(default=True)
 
     def model_post_init(self, context: object, /) -> None:
         self._delivered, self._is_history_known = self._load()
 
-    def _load(self) -> tuple[set[str], bool]:
+    def _load(self) -> tuple[set[ChatId], bool]:
         if self.path is None:
             # Nothing is kept here at all, so an empty set is the whole history rather than a lost one.
             return set(), True
@@ -97,7 +98,7 @@ class AutoOpenLedger(MutableModel):
                 type(data).__name__,
             )
             return set(), False
-        return {str(agent_id) for agent_id in delivered}, True
+        return {ChatId(str(chat_id)) for chat_id in delivered}, True
 
     def _save_unlocked(self) -> None:
         if self.path is None:
@@ -119,18 +120,18 @@ class AutoOpenLedger(MutableModel):
         """
         return self._is_history_known
 
-    def is_delivered(self, agent_id: str) -> bool:
+    def is_delivered(self, chat_id: ChatId) -> bool:
         with self._lock:
-            return agent_id in self._delivered
+            return chat_id in self._delivered
 
-    def mark_delivered(self, agent_id: str) -> None:
+    def mark_delivered(self, chat_id: ChatId) -> None:
         with self._lock:
-            if agent_id in self._delivered:
+            if chat_id in self._delivered:
                 return
-            self._delivered.add(agent_id)
+            self._delivered.add(chat_id)
             self._save_unlocked()
 
-    def adopt_delivered(self, agent_ids: Iterable[str]) -> None:
+    def adopt_delivered(self, chat_ids: Iterable[ChatId]) -> None:
         """Take chats as already shown without showing them, and leave a ledger behind either way.
 
         What a first boot with no ledger finds is history this app cannot see: every chat the
@@ -139,16 +140,16 @@ class AutoOpenLedger(MutableModel):
         the set it reads is the real one.
         """
         with self._lock:
-            self._delivered.update(agent_ids)
+            self._delivered.update(chat_ids)
             self._is_history_known = True
             self._save_unlocked()
 
-    def forget(self, agent_id: str) -> None:
-        """Drop a destroyed agent's entry, so the ledger only ever names live chats."""
+    def forget(self, chat_id: ChatId) -> None:
+        """Drop a destroyed chat's entry, so the ledger only ever names live chats."""
         with self._lock:
-            if agent_id not in self._delivered:
+            if chat_id not in self._delivered:
                 return
-            self._delivered.discard(agent_id)
+            self._delivered.discard(chat_id)
             self._save_unlocked()
 
 
@@ -158,7 +159,7 @@ class ShellLayoutInterface(Protocol):
 
     def connected_client_ids(self) -> list[str]: ...
 
-    def open_chat(self, agent_id: str, client_id: str) -> bool: ...
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool: ...
 
 
 class ShellLayoutClient(FrozenModel):
@@ -196,19 +197,19 @@ class ShellLayoutClient(FrozenModel):
             if isinstance(client, dict) and client.get("is_connected") and client.get("id")
         ]
 
-    def open_chat(self, agent_id: str, client_id: str) -> bool:
-        body = {"op": "open", "args": {"address": chat_address(agent_id), "client": client_id}, "requester": ""}
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
+        body = {"op": "open", "args": {"address": chat_address(chat_id), "client": client_id}, "requester": ""}
         try:
             response = httpx.post(
                 f"{self.shell_url}/api/layout/broadcast", json=body, timeout=SHELL_POST_TIMEOUT_SECONDS
             )
         except httpx.HTTPError as e:
-            logger.debug("Could not ask the shell at {} to open chat {}: {}", self.shell_url, agent_id, e)
+            logger.debug("Could not ask the shell at {} to open chat {}: {}", self.shell_url, chat_id, e)
             return False
         if response.is_error:
             logger.info(
                 "The shell refused to open chat {} for client {} ({}): {}",
-                agent_id,
+                chat_id,
                 client_id,
                 response.status_code,
                 response.text.strip()[:300],
@@ -223,7 +224,7 @@ class DisconnectedShell(FrozenModel):
     def connected_client_ids(self) -> list[str]:
         return []
 
-    def open_chat(self, agent_id: str, client_id: str) -> bool:
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
         return False
 
 
@@ -241,22 +242,25 @@ class AutoOpenReactor(MutableModel):
     shell: ShellLayoutInterface = Field(description="The shell's client list and op route")
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _pending_agent_ids: set[str] = PrivateAttr(default_factory=set)
+    _pending_chat_ids: set[ChatId] = PrivateAttr(default_factory=set)
     _wake: threading.Event = PrivateAttr(default_factory=threading.Event)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
 
-    def note_appeared(self, agent_id: str, labels: Mapping[str, str]) -> None:
-        """A labeled agent the observe stream just added is owed its open unless it already had it."""
-        if not is_auto_open_labeled(labels) or self.ledger.is_delivered(agent_id):
+    def note_appeared(self, chat_id: ChatId, labels: Mapping[str, str]) -> None:
+        """A chat whose labeled agent the observe stream just added is owed its open unless it already had it.
+
+        A successor agent of an existing chat never carries the label, so a handoff never re-pops a tab.
+        """
+        if not is_auto_open_labeled(labels) or self.ledger.is_delivered(chat_id):
             return
         with self._lock:
-            if agent_id in self._pending_agent_ids:
+            if chat_id in self._pending_chat_ids:
                 return
-            self._pending_agent_ids.add(agent_id)
+            self._pending_chat_ids.add(chat_id)
         self._wake.set()
 
-    def seed_at_startup(self, agents: Mapping[str, Mapping[str, str]]) -> None:
+    def seed_at_startup(self, labels_by_chat_id: Mapping[ChatId, Mapping[str, str]]) -> None:
         """Decide what each labeled chat found at startup is owed: its open, or nothing.
 
         A restart normally restores the saved layout rather than reopening tabs, so a chat the
@@ -269,39 +273,39 @@ class AutoOpenReactor(MutableModel):
         the only thing that could tell the one chat owed a tab from a year of delivered ones.
         """
         if not self.ledger.is_history_known:
-            adopted = [agent_id for agent_id, labels in agents.items() if is_auto_open_labeled(labels)]
+            adopted = [chat_id for chat_id, labels in labels_by_chat_id.items() if is_auto_open_labeled(labels)]
             self.ledger.adopt_delivered(adopted)
             logger.info(
                 "Adopted {} labeled chat(s) as already shown: this workspace had no auto-open ledger to read",
                 len(adopted),
             )
             return
-        for agent_id, labels in agents.items():
-            self.note_appeared(agent_id, labels)
+        for chat_id, labels in labels_by_chat_id.items():
+            self.note_appeared(chat_id, labels)
 
-    def forget(self, agent_id: str) -> None:
+    def forget(self, chat_id: ChatId) -> None:
         with self._lock:
-            self._pending_agent_ids.discard(agent_id)
-        self.ledger.forget(agent_id)
+            self._pending_chat_ids.discard(chat_id)
+        self.ledger.forget(chat_id)
 
-    def pending_agent_ids(self) -> set[str]:
+    def pending_chat_ids(self) -> set[ChatId]:
         with self._lock:
-            return set(self._pending_agent_ids)
+            return set(self._pending_chat_ids)
 
     def flush(self) -> None:
         """Try every held open against every connected client; the first accepted open delivers it."""
-        pending = self.pending_agent_ids()
+        pending = self.pending_chat_ids()
         if not pending:
             return
         client_ids = self.shell.connected_client_ids()
         if not client_ids:
             return
-        for agent_id in pending:
-            accepted = [client_id for client_id in client_ids if self.shell.open_chat(agent_id, client_id)]
+        for chat_id in pending:
+            accepted = [client_id for client_id in client_ids if self.shell.open_chat(chat_id, client_id)]
             if accepted:
-                logger.info("Opened chat {} in {} client(s): {}", agent_id, len(accepted), ", ".join(accepted))
-                self.ledger.mark_delivered(agent_id)
-                self._drop(agent_id)
+                logger.info("Opened chat {} in {} client(s): {}", chat_id, len(accepted), ", ".join(accepted))
+                self.ledger.mark_delivered(chat_id)
+                self._drop(chat_id)
 
     def start(self) -> None:
         """Start the flush thread. Idempotent."""
@@ -323,7 +327,7 @@ class AutoOpenReactor(MutableModel):
             self._wake.clear()
             if self._stop.is_set():
                 return
-            if self.pending_agent_ids():
+            if self.pending_chat_ids():
                 self._flush_logging_failures()
 
     def _flush_logging_failures(self) -> None:
@@ -333,6 +337,6 @@ class AutoOpenReactor(MutableModel):
             # The thread has to outlive one bad answer from the shell; the next wake retries.
             logger.opt(exception=e).warning("An auto-open flush failed; retrying on the next wake")
 
-    def _drop(self, agent_id: str) -> None:
+    def _drop(self, chat_id: ChatId) -> None:
         with self._lock:
-            self._pending_agent_ids.discard(agent_id)
+            self._pending_chat_ids.discard(chat_id)

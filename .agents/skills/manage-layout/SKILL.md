@@ -29,12 +29,14 @@ Every tab is named by one **address**:
 
 | Form | Meaning | Example |
 |---|---|---|
-| `app:<name>?instance=<key>` | One instance of an app. | `app:chat?instance=agent-3f2a...` (a chat, keyed by its agent id), `app:terminal?instance=terminal-2` (a terminal, keyed by its tmux session name), `app:browser?instance=riley` (a browser, keyed by its name) |
+| `app:<name>?instance=<key>` | One instance of an app. | `app:chat?instance=agent-3f2a...` (a chat, keyed by its chat id: `$MINDS_CHAT_ID`, the id of its first agent), `app:terminal?instance=terminal-2` (a terminal, keyed by its tmux session name), `app:browser?instance=riley` (a browser, keyed by its name) |
 | `app:<name>` | A single-instance app's one tab (an app built without `instances = true`); or, as an `open` / `split` target for an app with instances, "a fresh instance of this app". | `app:docs` (a single-instance app you built), `open app:terminal` |
 
 A bare word is shorthand for `app:<word>` (`open files`). The literal `self`
 resolves to your own chat panel; most useful as `--relative-to=self` on
-`split` / `move`. Your own chat's address is `app:chat?instance=$MNGR_AGENT_ID`.
+`split` / `move`. Your own chat's address is `app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}`
+(the chat app sets `MINDS_CHAT_ID` on every agent it creates; an agent created any
+other way is its own chat).
 
 `layout.py list` prints every address on the machine, with each instance's
 title and status, so you never have to guess: find the row whose title the

@@ -17,9 +17,9 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({
-  getAgentById: () => agentState.agent,
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
+vi.mock("../models/Chats", () => ({
+  getChatById: () => agentState.agent,
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -62,12 +62,14 @@ vi.mock("../shell", () => ({
 
 import m from "mithril";
 
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ModelBar } from "./ModelBar";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
-  m.render(ROOT(), m(ModelBar as never, { agentId: "a1" }));
+  m.render(ROOT(), m(ModelBar as never, { chatId: "a1" }));
 }
 
 /** Everything on screen, card and flyout included -- both portal out of the component. */
@@ -118,7 +120,7 @@ beforeEach(() => {
   started.length = 0;
   pins.length = 0;
   providerState.defaultId = null;
-  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
+  agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];

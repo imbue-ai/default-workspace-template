@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { QueuedMessage } from "../models/AgentManager";
+import type { QueuedMessage } from "../models/Chats";
 
 // vi.mock factories are hoisted, so shared state comes from vi.hoisted. Mithril
 // itself is NOT mocked (its hyperscript builds the vnodes these tests inspect).
@@ -17,9 +17,9 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../models/AgentManager", () => ({
-  getQueuedMessagesForAgent: () => mocks.queued,
-  getShoulderTapAvailableForAgent: () => mocks.available,
+vi.mock("../models/Chats", () => ({
+  getQueuedMessagesForChat: () => mocks.queued,
+  getShoulderTapAvailableForChat: () => mocks.available,
 }));
 vi.mock("../models/Response", () => ({
   shoulderTap: mocks.shoulderTap,

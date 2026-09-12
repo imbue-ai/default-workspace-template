@@ -112,7 +112,7 @@ older template) takes `--name <WORKER_NAME>` as the fallback address.
 To escalate, ask the user, wait for the user's reply, then forward it the same
 way.
 
-After forwarding, consume the report so the next push can land a fresh
+After forwarding, consume the report so the next report can land a fresh
 `report.md`:
 
 ```bash
@@ -156,7 +156,7 @@ the directory is clean for future runs.
 
 ## `mngr rsync` rationale
 
-When syncing reports (or the initial runtime dir to the worker):
+When syncing the initial runtime dir (or any other directory) to the worker:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \

@@ -20,8 +20,8 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import type { AgentState } from "../models/AgentManager";
-import { getAgentFastMode } from "../models/ModelSettings";
+import type { ChatSnapshot } from "../models/Chats";
+import { getChatFastMode } from "../models/ModelSettings";
 import { hasFastModePrompt } from "../models/HarnessCatalog";
 import { isFastModePromptAnswered, openFastModePrompt } from "../models/FastModePrompt";
 import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
@@ -58,23 +58,23 @@ export function countUserTurns(events: TranscriptEvent[]): number {
  * its model state, so no prompt is owed for a speed nobody got).
  */
 export function isFastModePromptOwed(
-  agent: AgentState | undefined,
+  chat: ChatSnapshot | undefined,
   events: TranscriptEvent[],
   isAgentIdle: boolean,
 ): boolean {
-  if (agent === undefined || !hasFastModePrompt(agent.harness)) {
+  if (chat === undefined || !hasFastModePrompt(chat.active_agent.harness)) {
     return false;
   }
-  if (agent.labels["first"] !== "true") {
+  if (chat.labels["first"] !== "true") {
     return false;
   }
-  if (isFastModePromptAnswered(agent.id, agent.labels)) {
+  if (isFastModePromptAnswered(chat.chat_id, chat.labels)) {
     return false;
   }
   if (!isAgentIdle) {
     return false;
   }
-  if (!getAgentFastMode(agent.id)) {
+  if (!getChatFastMode(chat.chat_id)) {
     return false;
   }
   return countUserTurns(events) >= FAST_MODE_GRACE_TURN_COUNT;
@@ -84,11 +84,11 @@ export function isFastModePromptOwed(
  *  render: opening is idempotent, and the gates that walk the transcript sit
  *  behind the cheap ones (see isFastModePromptOwed). */
 export function maybePromptForFastMode(
-  agent: AgentState | undefined,
+  chat: ChatSnapshot | undefined,
   events: TranscriptEvent[],
   isAgentIdle: boolean,
 ): void {
-  if (agent !== undefined && isFastModePromptOwed(agent, events, isAgentIdle)) {
-    openFastModePrompt(agent.id);
+  if (chat !== undefined && isFastModePromptOwed(chat, events, isAgentIdle)) {
+    openFastModePrompt(chat.chat_id);
   }
 }

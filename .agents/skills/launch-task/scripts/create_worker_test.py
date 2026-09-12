@@ -521,6 +521,44 @@ def test_lead_agent_stamped_from_env_over_literal(
     assert _CREATE_ARGV in [c.argv for c in runner.calls]
 
 
+def test_lead_work_dir_stamped_from_env_beside_the_lead_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lead's work dir is stamped with its id, so the worker can write its report
+    straight into the lead's checkout; without it in the environment the field is left
+    alone (a manual launch outside an agent)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("---\nfinish_report_path: reports/report.md\n---\n\nbody\n")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/home/user/.mngr/worktrees/lead")
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=_RecordingRunner(),
+    )
+
+    assert rc == 0
+    body = task.read_text()
+    assert "lead_agent: agent-real0000000000000000000000000lead" in body
+    assert "lead_work_dir: /home/user/.mngr/worktrees/lead" in body
+    assert "finish_report_path: reports/report.md" in body
+
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR")
+    task.write_text("---\nfinish_report_path: reports/report.md\n---\n\nbody\n")
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=_RecordingRunner(),
+    )
+    assert rc == 0
+    assert "lead_work_dir" not in task.read_text()
+
+
 def test_lead_agent_env_overrides_resolved_file_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

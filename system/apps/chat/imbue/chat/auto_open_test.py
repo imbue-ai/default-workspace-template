@@ -16,6 +16,7 @@ from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.auto_open import is_auto_open_labeled
+from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingShell
 
 _LABELED = {"assist": "true"}
@@ -36,64 +37,64 @@ def test_a_labeled_chat_is_opened_once_in_every_connected_client_and_recorded() 
     shell = RecordingShell(client_ids=["c1", "c2"])
     reactor = _reactor(shell)
 
-    reactor.note_appeared("chat-1", _LABELED)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
     reactor.flush()
     reactor.flush()
 
     assert shell.opens == [("chat-1", "c1"), ("chat-1", "c2")]
-    assert reactor.ledger.is_delivered("chat-1")
-    assert reactor.pending_agent_ids() == set()
+    assert reactor.ledger.is_delivered(ChatId("chat-1"))
+    assert reactor.pending_chat_ids() == set()
 
 
 def test_an_unlabeled_chat_is_ignored() -> None:
     shell = RecordingShell(client_ids=["c1"])
     reactor = _reactor(shell)
 
-    reactor.note_appeared("chat-1", {"user_created": "true"})
+    reactor.note_appeared(ChatId("chat-1"), {"user_created": "true"})
     reactor.flush()
 
     assert shell.opens == []
-    assert not reactor.ledger.is_delivered("chat-1")
+    assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
 def test_with_no_client_the_open_is_held_until_one_arrives() -> None:
     """The app starts the chat while the user is still on their way in; the open must wait for them."""
     shell = RecordingShell()
     reactor = _reactor(shell)
-    reactor.note_appeared("chat-1", _LABELED)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
     reactor.flush()
     assert shell.opens == []
-    assert reactor.pending_agent_ids() == {"chat-1"}
-    assert not reactor.ledger.is_delivered("chat-1")
+    assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+    assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
     shell.client_ids = ["c1"]
     reactor.flush()
     assert shell.opens == [("chat-1", "c1")]
-    assert reactor.ledger.is_delivered("chat-1")
+    assert reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
 def test_a_refused_open_keeps_the_chat_pending() -> None:
     shell = RecordingShell(client_ids=["c1"], refused_client_ids=["c1"])
     reactor = _reactor(shell)
-    reactor.note_appeared("chat-1", _LABELED)
+    reactor.note_appeared(ChatId("chat-1"), _LABELED)
 
     reactor.flush()
 
-    assert reactor.pending_agent_ids() == {"chat-1"}
-    assert not reactor.ledger.is_delivered("chat-1")
+    assert reactor.pending_chat_ids() == {ChatId("chat-1")}
+    assert not reactor.ledger.is_delivered(ChatId("chat-1"))
 
 
 def test_a_delivered_chat_survives_a_ledger_reload(tmp_path: Path) -> None:
     """The update run restarts this app; the tab it already surfaced must not pop again."""
     path = tmp_path / "ledger.json"
     first = _reactor(RecordingShell(client_ids=["c1"]), AutoOpenLedger(path=path))
-    first.note_appeared("chat-1", _LABELED)
+    first.note_appeared(ChatId("chat-1"), _LABELED)
     first.flush()
 
     shell = RecordingShell(client_ids=["c1"])
     second = _reactor(shell, AutoOpenLedger(path=path))
-    second.note_appeared("chat-1", _LABELED)
+    second.note_appeared(ChatId("chat-1"), _LABELED)
     second.flush()
 
     assert shell.opens == []
@@ -103,16 +104,16 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     """A labeled chat nobody was shown is still owed its tab after a restart, however long it has
     waited; one the ledger names is left as the saved layout has it and never pops later."""
     ledger = AutoOpenLedger(path=None)
-    ledger.mark_delivered("delivered")
+    ledger.mark_delivered(ChatId("delivered"))
     shell = RecordingShell()
     reactor = _reactor(shell, ledger)
 
     reactor.seed_at_startup(
-        {"waiting": _LABELED, "delivered": _LABELED, "plain": {"user_created": "true"}},
+        {ChatId("waiting"): _LABELED, ChatId("delivered"): _LABELED, ChatId("plain"): {"user_created": "true"}},
     )
 
-    assert reactor.pending_agent_ids() == {"waiting"}
-    assert not ledger.is_delivered("plain")
+    assert reactor.pending_chat_ids() == {ChatId("waiting")}
+    assert not ledger.is_delivered(ChatId("plain"))
     shell.client_ids = ["c1"]
     reactor.flush()
     assert shell.opens == [("waiting", "c1")]
@@ -128,14 +129,16 @@ def test_a_workspace_with_no_ledger_adopts_what_it_already_has_instead_of_poppin
     shell = RecordingShell(client_ids=["c1"])
     reactor = _reactor(shell, AutoOpenLedger(path=path))
 
-    reactor.seed_at_startup({"old-1": _LABELED, "old-2": _LABELED, "plain": {"user_created": "true"}})
+    reactor.seed_at_startup(
+        {ChatId("old-1"): _LABELED, ChatId("old-2"): _LABELED, ChatId("plain"): {"user_created": "true"}}
+    )
     reactor.flush()
 
     assert shell.opens == []
     assert path.exists()
 
     next_boot = _reactor(shell, AutoOpenLedger(path=path))
-    next_boot.seed_at_startup({"old-1": _LABELED, "old-2": _LABELED, "since": _LABELED})
+    next_boot.seed_at_startup({ChatId("old-1"): _LABELED, ChatId("old-2"): _LABELED, ChatId("since"): _LABELED})
     next_boot.flush()
 
     assert shell.opens == [("since", "c1")]
@@ -157,14 +160,14 @@ def test_a_fresh_workspace_adopting_nothing_still_leaves_a_ledger_behind(tmp_pat
 def test_a_removed_chat_is_forgotten_everywhere() -> None:
     ledger = AutoOpenLedger(path=None)
     reactor = _reactor(RecordingShell(), ledger)
-    reactor.note_appeared("pending", _LABELED)
-    ledger.mark_delivered("done")
+    reactor.note_appeared(ChatId("pending"), _LABELED)
+    ledger.mark_delivered(ChatId("done"))
 
-    reactor.forget("pending")
-    reactor.forget("done")
+    reactor.forget(ChatId("pending"))
+    reactor.forget(ChatId("done"))
 
-    assert reactor.pending_agent_ids() == set()
-    assert not ledger.is_delivered("done")
+    assert reactor.pending_chat_ids() == set()
+    assert not ledger.is_delivered(ChatId("done"))
 
 
 def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
@@ -176,7 +179,7 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
 
     ledger = AutoOpenLedger(path=path)
 
-    assert not ledger.is_delivered("chat-1")
+    assert not ledger.is_delivered(ChatId("chat-1"))
     assert not ledger.is_history_known
     assert any("wrong shape" in record for record in loguru_records)
 
@@ -184,7 +187,7 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
 def test_the_disconnected_shell_reaches_nobody() -> None:
     shell = DisconnectedShell()
     assert shell.connected_client_ids() == []
-    assert shell.open_chat("chat-1", "c1") is False
+    assert shell.open_chat(ChatId("chat-1"), "c1") is False
 
 
 @pytest.mark.parametrize(
