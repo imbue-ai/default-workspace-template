@@ -763,7 +763,7 @@ def test_get_harnesses_lists_the_claude_catalog(client: FlaskClient) -> None:
     # Each option carries the suffix-free reported id the matcher keys on. Keyed by id
     # rather than by position, so reordering the picker does not break this.
     reported = {option["id"]: option["harness_reported_model_id"] for option in claude["options"]}
-    assert reported["fable[1m]"] == "claude-fable-5"
+    assert reported["fable[1m]"] == "claude-fable-5-1"
     assert reported["opus[1m]"] == "claude-opus-5"
     assert reported["sonnet[1m]"] == "claude-sonnet-5"
     assert claude["switch_mode"] == "eager_then_reconcile"

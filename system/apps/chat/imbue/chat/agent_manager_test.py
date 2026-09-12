@@ -8,6 +8,7 @@ import signal
 import time
 import tomllib
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.auto_open import AutoOpenLedger
+from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -48,6 +51,7 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
+from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -1456,6 +1460,10 @@ def test_start_observe_spawns_long_lived_subprocess(
     # otherwise running pytest from inside a mngr-managed worktree would inherit
     # a config with ``is_allowed_in_pytest = false`` and the child would abort.
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    # And at an empty project config dir: the account this module's autouse fixture commits
+    # writes a settings.local.toml into the shared one, which carries no
+    # ``is_allowed_in_pytest`` and so would make the child abort the same way.
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "mngr-project-config"))
     # And at an empty host dir: with the developer's real ~/.mngr, the spawned
     # observe enumerates their live agents and queries tmux about them, which
     # trips the tmux resource guard on any machine with running agents. The
@@ -2718,3 +2726,36 @@ def test_every_agent_list_broadcast_nudges_the_shell(agent_manager: AgentManager
     assert nudger.nudge_count == 1
     agent_manager.remove_agent(next(iter(agent_manager.get_agents())).id)
     assert nudger.nudge_count == 2
+
+
+# --- The auto-open reactor, fed from the observe stream ---
+
+
+def test_observe_events_feed_the_auto_open_reactor(
+    broadcaster: WebSocketBroadcaster, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The first listing seeds (a labeled chat the ledger does not name is owed its tab), every
+    labeled agent that appears afterwards is opened, and a removed one is forgotten."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/tmp/test-work")
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    shell = RecordingShell(client_ids=["c1"])
+    reactor = AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=shell)
+    manager = AgentManager.build(broadcaster, auto_open=reactor)
+    at_start = _agent_details("update-self-1", labels={"auto_open": "true"})
+    plain = _agent_details("chat-1", labels={"user_created": "true"})
+
+    manager._handle_observe_event(make_full_agent_state_event([at_start, plain]))
+    reactor.flush()
+
+    assert shell.opens == [(str(at_start.id), "c1")]
+    assert not reactor.ledger.is_delivered(str(plain.id))
+
+    appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
+    manager._handle_observe_event(make_agent_state_event(appeared))
+    reactor.flush()
+    assert shell.opens[-1] == (str(appeared.id), "c1")
+    assert reactor.ledger.is_delivered(str(appeared.id))
+
+    manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
+    assert not reactor.ledger.is_delivered(str(appeared.id))

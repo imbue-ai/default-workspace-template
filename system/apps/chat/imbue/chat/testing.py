@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Generator
@@ -57,6 +58,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
+from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
@@ -69,6 +71,7 @@ from imbue.chat.state import ChatState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
@@ -178,6 +181,33 @@ class RecordingMngrMessenger(MngrMessenger):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
         return self.press_succeeds
+
+
+class RecordingShell(MutableModel):
+    """A shell for the auto-open reactor whose connected clients a test sets, recording every open it is asked for."""
+
+    model_config = {"extra": "forbid", "frozen": False}
+
+    client_ids: list[str] = []
+    refused_client_ids: list[str] = []
+    opens: list[tuple[str, str]] = []
+
+    def connected_client_ids(self) -> list[str]:
+        return list(self.client_ids)
+
+    def open_chat(self, agent_id: str, client_id: str) -> bool:
+        self.opens.append((agent_id, client_id))
+        return client_id not in self.refused_client_ids
+
+
+def read_create_defaults_type(path: Path) -> str | None:
+    """The `commands.create.type` the workspace's local mngr settings name, or None when they name none."""
+    if not path.exists():
+        return None
+    raw = tomllib.loads(path.read_text())
+    create = raw.get("commands", {}).get("create", {})
+    agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
+    return agent_type if isinstance(agent_type, str) and agent_type else None
 
 
 class RecordingClientActivityShell:
@@ -618,6 +648,10 @@ def running_workspace(
                 "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
                 "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
+                # Committing the account below rewrites the workspace's create defaults beside
+                # mngr's project config, which the writer finds through this; without it they
+                # land in the .mngr of whatever directory the suite runs from.
+                "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
             },

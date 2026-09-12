@@ -28,6 +28,7 @@ import {
   type IDockviewPanel,
   type IHeaderActionsRenderer,
   type ITabRenderer,
+  type PanelUpdateEvent,
   type SerializedDockview,
   type TabPartInitParameters,
 } from "dockview-core";
@@ -61,7 +62,6 @@ import {
   setDragInProgress,
   unbindSlot,
   type LiveSurface,
-  type PanelParams,
 } from "./liveSurfaces";
 import { DestroyConfirmDialog } from "@imbue/workspace-ui/src/DestroyConfirmDialog";
 import { ProjectMembershipDialog } from "./ProjectMembershipDialog";
@@ -134,11 +134,12 @@ import {
   fetchLayout,
   isOwnSaveId,
   mintTabId,
+  panelParamsInDocument,
   panelsWithUnlistedAddresses,
+  parsePanelParams,
   saveLayout,
 } from "../models/Layouts";
-import type { LayoutRecord } from "../models/Layouts";
-import type { TabRecord } from "../models/Layouts";
+import type { InstancePanelParams, LayoutRecord, PanelParams } from "../models/Layouts";
 import {
   createInstance,
   deleteInstance,
@@ -191,9 +192,6 @@ let membershipDialog: MembershipDialogState | null = null;
 // Single shared dockview state
 let dockview: DockviewComponent | null = null;
 let dockviewContainer: HTMLElement | null = null;
-const panelParams = new Map<string, PanelParams>();
-// Epoch milliseconds each instance panel was last the active one, for the saved tab record.
-const lastFocusedMsByPanelId = new Map<string, number>();
 // The panels a restore in progress will remove as soon as ``fromJSON`` has rebuilt the grid:
 // their addresses left the inventory, so they get a silent placeholder rather than the
 // "could not be restored" warning a genuinely unknown panel earns.
@@ -203,6 +201,52 @@ let initialized = false;
 // True while a view's content is being mounted. The teardown half of that removes every
 // panel one at a time, which must not be mistaken for the user emptying the dock.
 let isApplyingLayout = false;
+
+// ---------- What a panel shows ----------
+//
+// Dockview is the one authority: what a panel shows is the ``params`` dockview keeps on it
+// (``PanelParams``), passed to ``addPanel``, restored by ``fromJSON``, serialized by ``toJSON``, and
+// handed to the renderers' ``init`` (then ``update``). Nothing here keeps a map of its own to hold in
+// step with dockview's panel list: the lookups below read the open panels, and a renderer holds only
+// what dockview last handed it.
+
+/** The open panel with ``panelId``, or undefined when no panel of that id is open. */
+function panelById(panelId: string): IDockviewPanel | undefined {
+  return dockview?.panels.find((candidate) => candidate.id === panelId);
+}
+
+/** The params dockview holds for an open panel; null for a panel that is not open or carries none it can read. */
+function panelParamsOf(panelId: string): PanelParams | null {
+  const panel = panelById(panelId);
+  return panel === undefined ? null : parsePanelParams(panel.params);
+}
+
+/** The instance a panel shows; null for a launcher, a closed panel, or one with no readable params. */
+function instanceParamsOf(panelId: string): InstancePanelParams | null {
+  const params = panelParamsOf(panelId);
+  return params !== null && params.kind === "instance" ? params : null;
+}
+
+/** Whether an open panel is a New Tab launcher rather than an instance. */
+function showsLauncher(panel: IDockviewPanel): boolean {
+  return parsePanelParams(panel.params)?.kind === "launcher";
+}
+
+function isLauncherPanel(panelId: string): boolean {
+  const panel = panelById(panelId);
+  return panel !== undefined && showsLauncher(panel);
+}
+
+/** Every open panel showing an instance, with what it shows. */
+function instancePanels(): { panel: IDockviewPanel; params: InstancePanelParams }[] {
+  if (!dockview) return [];
+  const found: { panel: IDockviewPanel; params: InstancePanelParams }[] = [];
+  for (const panel of dockview.panels) {
+    const params = parsePanelParams(panel.params);
+    if (params !== null && params.kind === "instance") found.push({ panel, params });
+  }
+  return found;
+}
 
 // ---------- Active-view state ----------
 
@@ -304,8 +348,8 @@ function tabIcon(name: TabIconName, size: number): string {
 
 /** The markup a tab's leading glyph is drawn from: the app's own icon (or its monogram), so a
  *  tab, its rail row and its launcher row all wear the same picture. */
-function tabIconMarkupForPanel(params: PanelParams | undefined): string {
-  if (params === undefined || params.kind === "launcher") return tabIcon("launcher", TAB_GLYPH_SIZE);
+function tabIconMarkupForPanel(params: PanelParams | null): string {
+  if (params === null || params.kind === "launcher") return tabIcon("launcher", TAB_GLYPH_SIZE);
   const appName = appNameFromAddress(params.address);
   const app = appName === null ? undefined : getApp(appName);
   const fallback = tabIcon("app", TAB_GLYPH_SIZE);
@@ -409,9 +453,8 @@ function openTabMenuAt(
 /** The instance a panel shows, resolved against the inventory, or null for a launcher or an
  *  address the machine no longer lists. */
 function resolvedInstanceForPanel(panelId: string): ResolvedInstance | null {
-  const params = panelParams.get(panelId);
-  if (params === undefined || params.kind === "launcher") return null;
-  return findInstance(params.address);
+  const params = instanceParamsOf(panelId);
+  return params === null ? null : findInstance(params.address);
 }
 
 /** The verb list of one tab's kebab menu: the shared set (tabMenu.ts) over closures on THIS
@@ -423,7 +466,7 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
       {
         label: "Close tab",
         iconName: "close",
-        run: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+        run: () => panelById(panelId)?.api.close(),
       },
     ];
   }
@@ -432,7 +475,7 @@ function tabMenuEntriesForPanel(panelId: string): TabMenuEntry[] {
     share: shareActionForApp(resolved.app),
     addToProjects: () => openMembershipDialog(resolved.address, resolved.instance.title),
     rename: () => tabHandlesByPanelId.get(panelId)?.beginTitleEdit(),
-    closeTab: () => dockview?.panels.find((candidate) => candidate.id === panelId)?.api.close(),
+    closeTab: () => panelById(panelId)?.api.close(),
     // The tab never offers this: unfiling is what you want while looking at the project's list
     // of what it shows; the rail's row menu carries it.
     removeFromProject: null,
@@ -599,6 +642,14 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
   // Whether this instance is a row in the tab-overflow dropdown rather than a tab on the strip.
   let isOverflowRow = false;
   let wasTabDraggable: boolean | null = null;
+  // What the tab shows, as dockview hands it over: in ``init``, and again through ``update`` when a
+  // rebind repoints the panel. Kept here rather than looked up through the open panel, because
+  // ``init`` runs before dockview lists the panel among its ``panels``.
+  let params: PanelParams | null = null;
+
+  /** The instance the tab shows, resolved against the inventory; null for a launcher or an unlisted address. */
+  const resolvedInstance = (): ResolvedInstance | null =>
+    params === null || params.kind === "launcher" ? null : findInstance(params.address);
 
   const refreshTitleFade = (): void => {
     const mask = isTitleTruncated(content.scrollWidth, content.clientWidth)
@@ -613,7 +664,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     refreshTitleFade();
   };
 
-  const isRenameable = (): boolean => resolvedInstanceForPanel(options.id)?.instance.renameable === true;
+  const isRenameable = (): boolean => resolvedInstance()?.instance.renameable === true;
 
   const tabElement = (): HTMLElement | null => element.closest(".dv-tab");
 
@@ -651,8 +702,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     if (!isCommitting) return;
     const title = normalizeTabTitle(typed);
     if (title === null || title === content.textContent) return;
-    const params = panelParams.get(options.id);
-    if (params === undefined || params.kind === "launcher") return;
+    if (params === null || params.kind !== "instance") return;
     renameAddress(params.address, title);
   };
 
@@ -681,7 +731,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 
   const statusDotTooltip = attachHoverTooltip(statusDot);
   const updateStatusDot = (): void => {
-    const resolved = resolvedInstanceForPanel(options.id);
+    const resolved = resolvedInstance();
     if (resolved === null) {
       statusDot.style.display = "none";
       statusDotTooltip.setText(null);
@@ -696,15 +746,15 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     element,
     init(parameters: TabPartInitParameters) {
       content.textContent = parameters.api.title ?? parameters.title ?? "";
-      kindIcon.innerHTML = tabIconMarkupForPanel(panelParams.get(options.id));
+      params = parsePanelParams(parameters.params);
+      kindIcon.innerHTML = tabIconMarkupForPanel(params);
       disposables.push(
         parameters.api.onDidTitleChange((event) => {
           content.textContent = event.title ?? "";
           refreshTitleFade();
         }),
       );
-      const params = panelParams.get(options.id);
-      const isLauncher = params === undefined || params.kind === "launcher";
+      const isLauncher = params === null || params.kind === "launcher";
       if (!isLauncher) {
         updateStatusDot();
         const statusListener = (): void => updateStatusDot();
@@ -768,6 +818,10 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
       });
       updateActionsVisibility();
       tabHandlesByPanelId.set(options.id, { element, refreshTitleFade, beginTitleEdit });
+    },
+    update(event: PanelUpdateEvent) {
+      params = parsePanelParams(event.params);
+      updateStatusDot();
     },
     dispose() {
       // A tab torn down mid-edit (a pushed view switch, a rebind, a prune) gets no blur for its
@@ -886,7 +940,7 @@ function groupForPanel(panelId: string): DockviewGroupPanel | null {
 function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null {
   if (!dockview || group === null) return null;
   for (const panel of dockview.panels) {
-    if (panelParams.get(panel.id)?.kind !== "launcher") continue;
+    if (!showsLauncher(panel)) continue;
     if (panel.api.group.id === group.id) return panel.id;
   }
   return null;
@@ -924,7 +978,6 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
   }
   const panelId = `${LAUNCHER_PANEL_ID_PREFIX}${mintTabId()}`;
   const params: PanelParams = { kind: "launcher" };
-  panelParams.set(panelId, params);
   dockview.addPanel({
     id: panelId,
     component: LAUNCHER_COMPONENT,
@@ -938,9 +991,9 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
 /** Retire the launcher a just-opened tab was asked for from. */
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
-  if (panelParams.get(panelId)?.kind !== "launcher") return;
-  const panel = dockview.panels.find((candidate) => candidate.id === panelId);
-  if (panel) dockview.removePanel(panel);
+  const panel = panelById(panelId);
+  if (panel === undefined || !showsLauncher(panel)) return;
+  dockview.removePanel(panel);
 }
 
 // The one focus change that must NOT fold launchers away: revealing an instance the view
@@ -954,9 +1007,9 @@ function retireLaunchersOnFocusLeaving(activePanelId: string): void {
   const revealedPanelId = revealedOpenPanelId;
   revealedOpenPanelId = null;
   if (revealedPanelId === activePanelId) return;
-  if (panelParams.get(activePanelId)?.kind === "launcher") return;
+  if (isLauncherPanel(activePanelId)) return;
   for (const panel of [...dockview.panels]) {
-    if (panel.id !== activePanelId && panelParams.get(panel.id)?.kind === "launcher") {
+    if (panel.id !== activePanelId && showsLauncher(panel)) {
       dockview.removePanel(panel);
     }
   }
@@ -965,7 +1018,7 @@ function retireLaunchersOnFocusLeaving(activePanelId: string): void {
 /** Grant a just-activated pane's page focus: clicking a tab is the user navigating to it, and
  *  a page (a terminal) never takes focus on its own. */
 function focusFrameOfActivatedPanel(activePanelId: string): void {
-  const key = liveKeyForPanel(panelParams.get(activePanelId));
+  const key = liveKeyForPanel(panelParamsOf(activePanelId));
   if (key === null) return;
   requestFrameFocus(liveSurfaceElement(key));
 }
@@ -1154,7 +1207,7 @@ function openAddressInGroup(address: string, targetGroup: DockviewGroupPanel | n
   revealedOpenPanelId = null;
   if (openPanelId !== null) {
     revealedOpenPanelId = openPanelId;
-    const panel = dockview.panels.find((candidate) => candidate.id === openPanelId);
+    const panel = panelById(openPanelId);
     if (panel) dockview.setActivePanel(panel);
     flashPanelTab(openPanelId);
     return openPanelId;
@@ -1208,21 +1261,19 @@ export function renameAddress(address: string, title: string): void {
 /** Reload whatever a tab is showing: every frame of the app, docked or not -- a refresh of an
  *  app means the app rather than this pane. */
 function refreshPanelContent(panelId: string): void {
-  const params = panelParams.get(panelId);
-  if (params === undefined || params.kind === "launcher") return;
+  const params = instanceParamsOf(panelId);
+  if (params === null) return;
   const appName = appNameFromAddress(params.address);
   if (appName !== null) reloadIframesForApp(appName);
 }
 
 // ---------- Shortcuts ----------
 
-/** Epoch milliseconds each open panel's address was last the active one, for the MRU rule. */
+/** Epoch milliseconds each open panel's address was last the active one (0 for never), for the MRU rule. */
 function lastFocusedMsByAddress(): Record<string, number> {
   const byAddress: Record<string, number> = {};
-  for (const [panelId, params] of panelParams) {
-    if (params.kind === "launcher") continue;
-    const focused = lastFocusedMsByPanelId.get(panelId);
-    if (focused !== undefined) byAddress[params.address] = focused;
+  for (const { params } of instancePanels()) {
+    byAddress[params.address] = Math.max(byAddress[params.address] ?? 0, params.lastFocusedMs);
   }
   return byAddress;
 }
@@ -1391,27 +1442,18 @@ export function removeShortcutFromView(appName: string, actionId: string): void 
 
 /** The panel currently showing ``address``, or null when the instance is not docked or is gone. */
 function panelIdForAddress(address: string): string | null {
-  for (const [panelId, params] of panelParams) {
-    if (params.kind === "instance" && params.address === address) return panelId;
-  }
-  return null;
+  return instancePanels().find(({ params }) => params.address === address)?.panel.id ?? null;
 }
 
-/** The panel whose tab record carries ``tabId``. The two ids coincide for panels this dock
- *  minted, but a layout the shell wrote (a migration) may name either, so the record decides. */
+/** The panel whose params carry the page ``tabId``. The two ids coincide for the panel that first
+ *  opened the page; a second view showing the same page docks it under its own panel id. */
 function panelIdForTabId(tabId: string): string | null {
-  for (const [panelId, params] of panelParams) {
-    if (params.kind === "instance" && params.tabId === tabId) return panelId;
-  }
-  return null;
+  return instancePanels().find(({ params }) => params.tabId === tabId)?.panel.id ?? null;
 }
 
 /** Any open panel of ``appName``, or null: what a bare app address resolves to for an agent. */
 function anyPanelIdOfApp(appName: string): string | null {
-  for (const [panelId, params] of panelParams) {
-    if (params.kind === "instance" && appNameFromAddress(params.address) === appName) return panelId;
-  }
-  return null;
+  return instancePanels().find(({ params }) => appNameFromAddress(params.address) === appName)?.panel.id ?? null;
 }
 
 /** Position + size options passed through to ``dockview.addPanel``. */
@@ -1434,8 +1476,7 @@ function addPanelForAddress(address: string, placement: AddPanelPlacementOptions
     return null;
   }
   const tabId = mintTabId();
-  const params: PanelParams = { kind: "instance", address, tabId };
-  panelParams.set(tabId, params);
+  const params: PanelParams = { kind: "instance", address, tabId, lastFocusedMs: 0 };
   dockview.addPanel({
     id: tabId,
     component: INSTANCE_COMPONENT,
@@ -1473,7 +1514,7 @@ function dropPanelsForAddress(address: string, options: { keepPage?: boolean } =
   if (!options.keepPage) destroyLiveSurface(address);
   if (!dockview) return;
   for (const panel of [...dockview.panels]) {
-    const params = panelParams.get(panel.id);
+    const params = parsePanelParams(panel.params);
     if (params?.kind === "instance" && params.address === address) dockview.removePanel(panel);
   }
 }
@@ -1483,30 +1524,23 @@ function dropPanelsForAddress(address: string, options: { keepPage?: boolean } =
  * under the new address. What a tab_rebound push (or a save-time reconcile) does.
  */
 function rebindPanel(panelId: string, address: string): void {
-  const params = panelParams.get(panelId);
-  if (params === undefined || params.kind === "launcher" || params.address === address) return;
+  const panel = panelById(panelId);
+  if (panel === undefined) return;
+  const params = parsePanelParams(panel.params);
+  if (params === null || params.kind !== "instance" || params.address === address) return;
   // One page per instance: a tab already showing the target closes (the rebound pane is where
   // the user acted), and its page goes with it rather than lingering unfiled.
   dropPanelsForAddress(address);
   rekeyLiveSurface(params.address, address);
-  params.address = address;
+  panel.api.updateParameters({ address });
   syncTabTitlesFromInventory();
   fileIntoActiveProject(address);
   m.redraw();
 }
 
-function buildLayoutPayload(): { dockview: SerializedDockview; tabs: Record<string, TabRecord> } | null {
-  if (!dockview) return null;
-  const tabs: Record<string, TabRecord> = {};
-  for (const [panelId, params] of panelParams) {
-    if (params.kind === "launcher") continue;
-    tabs[panelId] = {
-      address: params.address,
-      tab_id: params.tabId,
-      last_focused_ms: lastFocusedMsByPanelId.get(panelId) ?? 0,
-    };
-  }
-  return { dockview: dockview.toJSON(), tabs };
+/** What gets saved: dockview's own document, each panel's params included. */
+function buildLayoutPayload(): SerializedDockview | null {
+  return dockview === null ? null : dockview.toJSON();
 }
 
 async function persistLayout(): Promise<void> {
@@ -1518,7 +1552,7 @@ async function persistLayout(): Promise<void> {
   const serialized = JSON.stringify(payload);
   if (serialized === lastPersistedLayoutJson) return;
   try {
-    const outcome = await saveLayout(targetViewId, getClientId(), payload.dockview, payload.tabs, baseUpdatedAt);
+    const outcome = await saveLayout(targetViewId, getClientId(), payload, baseUpdatedAt);
     lastPersistedLayoutJson = serialized;
     if (outcome.updatedAt !== null && targetViewId === mountedViewId) baseUpdatedAt = outcome.updatedAt;
   } catch (e) {
@@ -1624,10 +1658,7 @@ function takeProjects(projects: ProjectInfo[]): void {
  * launcher. Panels whose address the machine no longer lists are dropped before the restore:
  * that observation is what prunes references, and the shell's own file already lost them.
  */
-async function applyLayout(
-  layout: { dockview: SerializedDockview | null; tabs: Record<string, TabRecord> } | null,
-  generation: number,
-): Promise<void> {
+async function applyLayout(layout: { dockview: SerializedDockview | null } | null, generation: number): Promise<void> {
   if (!dockview) return;
   // Every page url is derived from its app's origin label, which only resolves once the app
   // list has loaded; bounded, so a workspace that reports no apps still proceeds.
@@ -1636,29 +1667,23 @@ async function applyLayout(
   const dv = dockview;
   isApplyingLayout = true;
 
-  // Tear the outgoing layout down BEFORE seeding the incoming params. Only the panels go: the
-  // pages stay mounted and hidden until an incoming slot picks them up again.
+  // Tear the outgoing layout down. Only the panels go: the pages stay mounted and hidden until an
+  // incoming slot picks them up again.
   dv.clear();
-  panelParams.clear();
-  lastFocusedMsByPanelId.clear();
 
   if (layout !== null && layout.dockview !== null) {
     // Nothing is unlisted until the inventory has arrived: an empty seed is not an answer, and
     // the apps_updated that brings the list prunes then (contracts section 8).
     const unlisted = new Set(
-      isInventoryKnown ? panelsWithUnlistedAddresses(layout.tabs, (address) => !isAddressUnlisted(address)) : [],
+      isInventoryKnown
+        ? panelsWithUnlistedAddresses(panelParamsInDocument(layout.dockview), (address) => !isAddressUnlisted(address))
+        : [],
     );
-    for (const [panelId, tab] of Object.entries(layout.tabs)) {
-      if (unlisted.has(panelId)) continue;
-      panelParams.set(panelId, { kind: "instance", address: tab.address, tabId: tab.tab_id });
-      lastFocusedMsByPanelId.set(panelId, tab.last_focused_ms);
-    }
     panelsPrunedByRestore = unlisted;
     try {
       dv.fromJSON(layout.dockview);
     } catch (e) {
       console.warn(`[si] could not restore the saved arrangement of ${mountedViewId ?? "?"}; starting it over`, e);
-      panelParams.clear();
       dv.clear();
     }
     for (const panel of dv.panels.slice()) {
@@ -1668,9 +1693,9 @@ async function applyLayout(
     // An instance is a singleton with one page, so an arrangement naming the same one twice
     // would give two tabs a page to fight over. The first occurrence keeps it.
     for (const duplicatePanelId of duplicateLiveKeyPanelIds(
-      dv.panels.map((panel) => ({ panelId: panel.id, key: liveKeyForPanel(panelParams.get(panel.id)) })),
+      dv.panels.map((panel) => ({ panelId: panel.id, key: liveKeyForPanel(parsePanelParams(panel.params)) })),
     )) {
-      const panel = dv.panels.find((candidate) => candidate.id === duplicatePanelId);
+      const panel = panelById(duplicatePanelId);
       if (panel) dv.removePanel(panel);
     }
   }
@@ -1828,8 +1853,8 @@ function syncTabTitlesFromInventory(): void {
 function reconcilePanelsWithInventory(): void {
   if (!dockview) return;
   for (const panel of [...dockview.panels]) {
-    const params = panelParams.get(panel.id);
-    if (params === undefined || params.kind === "launcher") continue;
+    const params = parsePanelParams(panel.params);
+    if (params === null || params.kind === "launcher") continue;
     if (!isAddressUnlisted(params.address)) continue;
     destroyLiveSurface(params.address);
     dockview.removePanel(panel);
@@ -2001,19 +2026,18 @@ function mountLiveContent(surface: LiveSurface): void {
 }
 
 function renderLiveContent(surface: LiveSurface): m.Children {
-  const params = surface.params;
-  if (params.kind === "launcher") return null;
-  const resolved = findInstance(params.address);
+  const address = surface.key;
+  const resolved = findInstance(address);
   if (resolved === null) {
     // A stopped app's list is never fetched, so its addresses resolve to nothing until it
     // runs again; the pane still says the app is stopped and offers the Start.
-    const appName = appNameFromAddress(params.address);
+    const appName = appNameFromAddress(address);
     const app = appName === null ? undefined : getApp(appName);
     const stopped = app === undefined ? null : stoppedPlaceholderForApp(app);
     if (app !== undefined && stopped !== null) {
       return m(StoppedAppPlaceholder, { ...stopped, appName: app.name });
     }
-    const note = isAddressUnlisted(params.address)
+    const note = isAddressUnlisted(address)
       ? "This tab's app no longer lists it."
       : "Waiting for this tab's app to list it.";
     return m(
@@ -2023,41 +2047,56 @@ function renderLiveContent(surface: LiveSurface): m.Children {
     );
   }
   const { app, instance } = resolved;
-  const url = instancePageUrl(app, instance, params.tabId);
+  const url = instancePageUrl(app, instance, surface.tabId);
   return m(IframePanel, {
     url,
     isPageAtUrl: isPageAtListedUrl(url, surface.lastReportedPath),
     onNavigate: () => clearReportedPath(surface.key),
     title: instance.title,
     appName: app.name,
-    address: params.address,
+    address,
     stopped: stoppedPlaceholderForApp(app),
     contract: {
-      address: params.address,
-      tabId: params.tabId,
+      address,
+      tabId: surface.tabId,
       viewId: getActiveProjectId(),
       isVisible: surface.isVisible,
     },
   });
 }
 
+const UNRECOVERABLE_PANEL_TEXT =
+  "This tab's contents could not be restored. Close it and open it again from the sidebar.";
+const UNLISTED_PANEL_TEXT = "This tab's app no longer lists it.";
+
 /**
  * A dockview panel is only a place: an empty div dockview creates,
  * positions, hides and disposes at will, standing in for a live page that outlives it.
+ *
+ * Which page is learned in ``init``, from the params dockview hands over: the ones ``addPanel``
+ * was given, or the ones ``fromJSON`` restored. A slot whose params name no instance, or whose
+ * address the restore is about to prune, shows a placeholder and binds no page.
  */
-function createLiveSlotRenderer(
-  panelId: string,
-  params: Extract<PanelParams, { kind: "instance" }>,
-): IContentRenderer {
+function createLiveSlotRenderer(panelId: string): IContentRenderer {
   const element = document.createElement("div");
   element.className = "si-live-slot";
   return {
     element,
     init(parameters) {
-      const surface = ensureLiveSurface(params.address, params, mountLiveContent);
-      // What is on screen is what the next autosave has to record, so this view's bookkeeping
-      // entry becomes the very params object the page renders from.
-      panelParams.set(panelId, surface.params);
+      const params = parsePanelParams(parameters.params);
+      if (params === null || params.kind !== "instance") {
+        element.appendChild(unrecoverablePanelElement(panelId));
+        return;
+      }
+      if (panelsPrunedByRestore.has(panelId)) {
+        element.appendChild(createPlaceholderElement(UNLISTED_PANEL_TEXT));
+        return;
+      }
+      const surface = ensureLiveSurface(params.address, params.tabId, mountLiveContent);
+      // A page keeps the id it was opened under, whichever view docks it next: the page reports
+      // with the id in its url, and the rebind route finds the panels carrying that id. A panel
+      // that arrived with its own id takes the page's, so the next save records it.
+      if (surface.tabId !== params.tabId) parameters.api.updateParameters({ tabId: surface.tabId });
       bindSlot(surface, panelId, parameters.api);
     },
     dispose() {
@@ -2069,13 +2108,13 @@ function createLiveSlotRenderer(
 function closeActiveTabFromEmbedder(): void {
   const activePanel = dockview?.activePanel;
   if (!activePanel) return;
-  const key = liveKeyForPanel(panelParams.get(activePanel.id));
+  const key = liveKeyForPanel(parsePanelParams(activePanel.params));
   const frame = key === null ? null : (liveSurfaceElement(key)?.querySelector("iframe") ?? null);
   if (frame !== null) sendToChildFrame(frame, SHELL_CLOSE_REQUEST);
   activePanel.api.close();
 }
 
-function createPlaceholderPanelRenderer(text: string): IContentRenderer {
+function createPlaceholderElement(text: string): HTMLElement {
   const element = document.createElement("div");
   element.className = "dockview-panel-unrecoverable";
   element.style.display = "flex";
@@ -2085,18 +2124,22 @@ function createPlaceholderPanelRenderer(text: string): IContentRenderer {
   element.style.padding = "16px";
   element.style.textAlign = "center";
   element.textContent = text;
+  return element;
+}
+
+/** The placeholder a panel nothing can be shown for gets, logged so a damaged file can be traced. */
+function unrecoverablePanelElement(panelId: string): HTMLElement {
+  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
+  return createPlaceholderElement(UNRECOVERABLE_PANEL_TEXT);
+}
+
+/** A panel of a component this build does not know (a file written by some other build). */
+function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
   return {
-    element,
+    element: unrecoverablePanelElement(panelId),
     init() {},
     dispose() {},
   };
-}
-
-function createUnrecoverablePanelRenderer(panelId: string): IContentRenderer {
-  console.warn(`Rendering unrecoverable-panel placeholder for dockview panel ${panelId}`);
-  return createPlaceholderPanelRenderer(
-    "This tab's contents could not be restored. Close it and open it again from the sidebar.",
-  );
 }
 
 function initializeDockview(parentElement: HTMLElement): void {
@@ -2137,26 +2180,11 @@ function initializeDockview(parentElement: HTMLElement): void {
     defaultRenderer: "always",
     defaultTabComponent: "custom",
     createComponent(options) {
-      // dockview supplies ``params`` for panels created through ``addPanel`` but not for panels
-      // it recreates from ``fromJSON``; those fall back to the entry the restore seeded.
-      const suppliedParams = (options as unknown as { params?: PanelParams }).params;
-      const params = suppliedParams ?? panelParams.get(options.id);
-      if (params === undefined) {
-        if (options.name === LAUNCHER_COMPONENT || options.id.startsWith(LAUNCHER_PANEL_ID_PREFIX)) {
-          panelParams.set(options.id, { kind: "launcher" });
-          return createLauncherRenderer(options.id);
-        }
-        if (panelsPrunedByRestore.has(options.id)) {
-          return createPlaceholderPanelRenderer("This tab's app no longer lists it.");
-        }
-        return createUnrecoverablePanelRenderer(options.id);
-      }
-      if (params.kind === "launcher") {
-        panelParams.set(options.id, params);
-        return createLauncherRenderer(options.id);
-      }
-      panelParams.set(options.id, params);
-      return createLiveSlotRenderer(options.id, params);
+      // Only the id and the component name are known here; a panel's params reach its renderer
+      // in ``init``, on the ``addPanel`` path and the ``fromJSON`` path alike.
+      if (options.name === LAUNCHER_COMPONENT) return createLauncherRenderer(options.id);
+      if (options.name === INSTANCE_COMPONENT) return createLiveSlotRenderer(options.id);
+      return createUnrecoverablePanelRenderer(options.id);
     },
     createTabComponent(options) {
       return createCustomTab(options);
@@ -2207,9 +2235,7 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   // Closing a tab is nothing more than that: the instance keeps running, its page stays
   // mounted and hidden, and it stays in every tab set holding it.
-  dv.api.onDidRemovePanel((panel) => {
-    panelParams.delete(panel.id);
-    lastFocusedMsByPanelId.delete(panel.id);
+  dv.api.onDidRemovePanel(() => {
     ensureDockIsNotEmpty();
     scheduleTabWidthRecompute();
     scheduleStructuralSave();
@@ -2221,8 +2247,9 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   dv.api.onDidActivePanelChange((panel) => {
     if (panel === undefined || isApplyingLayout) return;
-    if (panelParams.get(panel.id)?.kind === "instance") {
-      lastFocusedMsByPanelId.set(panel.id, Date.now());
+    if (parsePanelParams(panel.params)?.kind === "instance") {
+      // The stamp rides in the panel's own params, so the next save carries it.
+      panel.api.updateParameters({ lastFocusedMs: Date.now() });
       scheduleSave();
     }
     retireLaunchersOnFocusLeaving(panel.id);
