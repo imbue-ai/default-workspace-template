@@ -220,11 +220,11 @@ def _holds_only_launchers(leaf: dict[str, Any]) -> bool:
 def _drop_placeholder_launcher(document: dict[str, Any], leaf: dict[str, Any], docked_panel_id: str) -> None:
     """Drop the launcher that stood in for an empty dock, now that a panel fills it.
 
-    A New Tab is an ordinary tab and survives an op docking beside it -- with one exception: the
-    launcher the browser mints so an emptied dock never shows nothing (its ``ensureDockIsNotEmpty``).
-    That stand-in needs no flag to recognize, because it is minted only at zero panels and with no
-    group there is no "+" to press: a launcher that is the document's only *other* panel is
-    necessarily it. The browser applies the same rule in ``retirePlaceholderLauncher``.
+    A New Tab is an ordinary tab and survives an op docking beside it, except for the one the
+    browser mints so an emptied dock never shows nothing (its ``ensureDockIsNotEmpty``). Being the
+    document's only *other* panel identifies that stand-in without a flag: it is minted only at
+    zero panels, and with no group there is no "+" to press. The browser applies the same rule in
+    ``retirePlaceholderLauncher``.
 
     The caller has already named ``docked_panel_id`` in ``panels``, hence counting around it.
     """

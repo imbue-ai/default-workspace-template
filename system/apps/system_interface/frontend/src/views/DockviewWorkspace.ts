@@ -331,16 +331,12 @@ const XMLNS = "http://www.w3.org/2000/svg";
 
 // The launcher tab's dashed squircle, and the kebab, on the same 24x24 Feather grid as `icons.ts`.
 const TAB_PATHS = {
-  // An unfilled outline, for the one tab that is not showing anything yet. Three details are
-  // load-bearing at the 14px this renders at (`TAB_GLYPH_SIZE`), and all three were picked by
-  // looking at it rather than by arithmetic:
-  //   - `rx` stays well under half the side. A rounded rect drawn in dashes loses its corners
-  //     first, and anything from about 6 up reads as a plain circle at this size.
-  //   - `pathLength` restates the perimeter as 64 so the dash pattern is in eighths, whatever the
-  //     real perimeter (72 - r*(8 - 2*pi)) works out to. The path therefore closes on a dash
-  //     instead of a ragged part-gap, without tuning fractional dash lengths against `rx`.
-  //   - `butt`, because this file's `<svg>` sets `round` for every other glyph: a round cap adds
-  //     half a stroke width to each end of every dash, which at this weight swallows the gaps.
+  // An unfilled outline, for the one tab that is not showing anything yet. Three details hold it
+  // together at the 14px this renders at (`TAB_GLYPH_SIZE`): an `rx` well under half the side,
+  // because a dashed rounded rect loses its corners first and reads as a circle from about 6 up;
+  // `pathLength`, which restates the perimeter as 64 so the dashes fall in eighths and the path
+  // closes on a dash rather than a part-gap; and `butt`, because the `<svg>` below sets `round`
+  // for every other glyph, and a round cap swallows the gaps at this weight.
   launcher:
     '<rect x="3" y="3" width="18" height="18" rx="4" pathLength="64" ' +
     'stroke-dasharray="4 4" stroke-linecap="butt"/>',
@@ -974,8 +970,7 @@ function flashPanelTab(panelId: string): void {
   tab.addEventListener("animationend", () => tab.classList.remove(TAB_FLASH_CLASS), { once: true });
 }
 
-/** Open a New Tab launcher in ``targetGroup``. A New Tab is an ordinary tab, so this always
- *  adds one: a group can hold as many as the user asks for, and so can the dock. */
+/** Open a New Tab launcher in ``targetGroup``. A group, and the dock, can hold any number. */
 function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
   const panelId = `${LAUNCHER_PANEL_ID_PREFIX}${mintTabId()}`;
@@ -1002,11 +997,11 @@ function retireLauncher(panelId: string | null): void {
 /**
  * The launcher a dock of ``dockedPanelId`` spends, or null when it spends none.
  *
- * A New Tab is an ordinary tab and survives a dock beside it -- with one exception: the launcher
- * ``ensureDockIsNotEmpty`` mints so an emptied dock never shows nothing. That stand-in needs no
- * flag to recognize, because it is minted only at zero panels and with no group there is no "+"
- * to press: a launcher that is the dock's only *other* panel is necessarily it. The shell applies
- * the same rule to an agent's ops (``_drop_placeholder_launcher``).
+ * A New Tab is an ordinary tab and survives a dock beside it, except for the one
+ * ``ensureDockIsNotEmpty`` mints so an emptied dock never shows nothing. Being the dock's only
+ * *other* panel identifies that stand-in without a flag: it is minted only at zero panels, and
+ * with no group there is no "+" to press. The shell applies the same rule to an agent's ops
+ * (``_drop_placeholder_launcher``).
  */
 export function placeholderLauncherToRetire(
   panels: readonly { id: string; isLauncher: boolean }[],
@@ -1062,12 +1057,9 @@ function ensureDockIsNotEmpty(): void {
 }
 
 /**
- * What the "+" tooltip says, naming the chord only where pressing it will do anything.
- *
- * Every browser keeps Cmd/Ctrl+T for a browser tab of its own and never hands it to the page, so
- * naming it there would be a promise the workspace cannot keep. The desktop client registers no
- * accelerator for it and the chord arrives normally, and it identifies itself in the UA. A UA that
- * says neither gets the bare label: a missing hint costs less than a wrong one.
+ * What the "+" tooltip says: the chord is named only in the desktop client, which is the one place
+ * it reaches the page (see ``isNewTabChord``) and which says so in its user agent. Anything else,
+ * an unrecognizable agent included, gets the bare label rather than a hint that would not work.
  */
 export function addTabTooltipText(userAgent: string, isApple: boolean): string {
   if (!/Electron/i.test(userAgent)) return LAUNCHER_PANEL_TITLE;

@@ -649,7 +649,7 @@ def test_many_new_tabs_stay_open_beside_each_other_and_survive_a_reload(tmp_path
             add_button.click()
             expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
 
-        # Clicking off to a real tab used to fold every one of them away.
+        # Focus landing on a real tab leaves every New Tab where it is.
         _tab(page, _FIXTURE_TITLE).click()
         expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=10000)
         expect(page.locator(".new-tab-launcher")).to_have_count(3)
