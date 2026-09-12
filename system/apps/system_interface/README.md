@@ -107,7 +107,11 @@ The rail shows the view's identity (the switcher; right-click for project
 settings), its shortcut rows (seeded from every app's `default_shortcut`;
 Everything's rail is every app's primary action), the "All apps" popover, a
 search pill, and the view's tab list. The New Tab page is
-the only empty state, and the page for starting things: a search field; "Open
+the only empty state, and the page for starting things. It is an ordinary tab:
+the "+" opens another however many are already up, in one pane or across panes,
+and one stays open until it is closed or answered -- by opening something from
+inside it, or by a dock into the pane it was standing in for while it was the
+only panel the dock had. Its contents: a search field; "Open
 new" (every app's primary action as a tile, four to a row, the apps that
 declare a `launcher_rank` in their manifest first in rank order and the rest
 after them); "In this project" (the tab set, with an app filter and a last-active

@@ -11,11 +11,14 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_NEW_TAB,
   SHELL_OPEN,
   SHELL_SHOWN,
   connectToShell,
 } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
+import { isNewTabChord } from "./chords";
+import { NEW_TAB_CHORD_CASES, chordKeys } from "./chords.test";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -118,5 +121,61 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("the new-tab chord from a framed page", () => {
+  it("carries the chord up to the shell and keeps the browser out of it", () => {
+    const parent = framed();
+    connection = connectToShell({});
+
+    const event = new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true });
+    Object.defineProperty(navigator, "userAgent", { value: "Mac OS X", configurable: true });
+    window.dispatchEvent(event);
+
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: SHELL_NEW_TAB }, "*");
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("stays out of the way on a page visited directly, which has no shell to open a tab in", () => {
+    connection = connectToShell({});
+
+    const event = new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("stops listening once disconnected", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    connection.disconnect();
+    connection = null;
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true }));
+
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+  // The contract module cannot import `chords.ts` (it is served standalone to every app origin), so
+  // it carries its own copy of the chord. This replays every case the shared one is specified
+  // against and asserts the two agree -- a disagreement would make the chord work in app frames but
+  // not in the shell's chrome, or the reverse.
+  it("matches the shared chord definition on every case, on both platforms", () => {
+    for (const [userAgent, isApple] of [
+      ["Mozilla/5.0 (Macintosh) Electron/38.0.0", true],
+      ["Mozilla/5.0 (Windows NT 10.0) Electron/38.0.0", false],
+    ] as const) {
+      Object.defineProperty(navigator, "userAgent", { value: userAgent, configurable: true });
+      for (const over of NEW_TAB_CHORD_CASES) {
+        const parent = framed();
+        connection = connectToShell({});
+        const keys = chordKeys(over);
+        window.dispatchEvent(new KeyboardEvent("keydown", { ...keys, cancelable: true }));
+        const forwarded = parent.postMessage.mock.calls.some(([message]) => message.type === SHELL_NEW_TAB);
+        expect(forwarded, `${userAgent} ${JSON.stringify(over)}`).toBe(isNewTabChord(keys, isApple));
+        connection.disconnect();
+        connection = null;
+      }
+    }
   });
 });

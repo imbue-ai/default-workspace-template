@@ -108,7 +108,12 @@ def test_adding_to_a_never_arranged_view_builds_a_root_branch_dockview_accepts()
     assert addresses_by_panel_id(added.dockview) == {str(_TAB_A): _FILES}
 
 
-def test_adding_with_no_anchor_tabs_into_the_active_group_and_drops_its_launcher() -> None:
+def test_adding_with_no_anchor_tabs_into_the_active_group_and_keeps_its_launcher() -> None:
+    """A New Tab beside real tabs is an ordinary tab: docking into its group leaves it open.
+
+    Only the stand-in for an empty dock is consumed, and this document holds two other panels,
+    so the launcher here cannot be one.
+    """
     layout = _two_groups_side_by_side()
     launcher_id = "new-tab-000000000000000f"
     dockview = layout.dockview
@@ -121,9 +126,38 @@ def test_adding_with_no_anchor_tabs_into_the_active_group_and_drops_its_launcher
 
     assert added.dockview is not None
     right = _leaves(added.dockview)[1]["data"]
-    assert right["views"] == ["pb", str(_TAB_C)] and right["activeView"] == str(_TAB_C)
-    assert launcher_id not in added.dockview["panels"]
+    assert right["views"] == ["pb", launcher_id, str(_TAB_C)] and right["activeView"] == str(_TAB_C)
+    assert launcher_id in added.dockview["panels"]
     assert added.dockview["activeGroup"] == "g2"
+
+
+def test_adding_into_a_dock_holding_only_a_launcher_consumes_that_launcher() -> None:
+    """The browser mints a launcher so an emptied dock shows something; filling the pane spends it.
+
+    It is the document's only other panel, which is what tells it apart from a New Tab the user
+    opened -- one can only be minted at zero panels, when there is no "+" to press.
+    """
+    launcher_id = "new-tab-000000000000000f"
+    placeholder_only = LayoutRecord(
+        dockview={
+            "grid": {
+                "root": {"type": "branch", "data": [_leaf("g1", launcher_id, size=1200)], "size": 800},
+                "width": 1200,
+                "height": 800,
+                "orientation": HORIZONTAL,
+            },
+            "panels": {launcher_id: {"id": launcher_id, "params": {"kind": "launcher"}}},
+            "activeGroup": "g1",
+        },
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
+
+    added = add_panel(placeholder_only, _TERMINAL_1, _TAB_A, "Terminal 1", _placement(None))
+
+    assert added.dockview is not None
+    assert _leaves(added.dockview)[0]["data"]["views"] == [str(_TAB_A)]
+    assert set(added.dockview["panels"]) == {str(_TAB_A)}
 
 
 def test_a_split_along_the_branchs_axis_inserts_a_sibling_sharing_the_anchors_extent() -> None:

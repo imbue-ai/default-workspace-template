@@ -327,6 +327,30 @@ def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None
     )
 
 
+def _wait_for_saved_launcher_count(state_dir: Path, view_id: str, count: int) -> None:
+    """Wait until the browser's autosave has written ``count`` New Tabs into the view's layout.
+
+    A document op is applied to the saved file, so an op issued before the (debounced) save lands
+    would edit an arrangement the browser has not finished describing -- and the refetch that
+    follows would put that older arrangement back on screen.
+    """
+
+    def _saved() -> bool:
+        for path in _client_layout_files(state_dir, view_id):
+            panels = (json.loads(path.read_text()).get("dockview") or {}).get("panels") or {}
+            launchers = [key for key, entry in panels.items() if (entry.get("params") or {}).get("kind") == "launcher"]
+            if len(launchers) == count:
+                return True
+        return False
+
+    wait_for(
+        _saved,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"autosave never wrote {count} New Tab(s) into the layout of {view_id}",
+    )
+
+
 def _wait_for_view(page: Page, view_id: str) -> None:
     """The dock names the view it has mounted; the active view itself lives in the shell's client record."""
     page.wait_for_selector(
@@ -602,6 +626,102 @@ def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: 
     )
     # And the launcher that was in the pane made way for it.
     expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_many_new_tabs_stay_open_beside_each_other_and_survive_a_reload(tmp_path: Path, page: Page) -> None:
+    """A New Tab is an ordinary tab: the "+" opens another, and clicking away leaves them all up.
+
+    Opens a real instance first, so the launchers under test are ones the user asked for rather
+    than the stand-in an empty dock mints (which a dock does still spend).
+    """
+    with _running_e2e_server(tmp_path, _PORT + 26) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+        # The "+" is offered even once the pane already holds a New Tab, and each press adds one.
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (1, 2, 3):
+            expect(add_button).to_have_count(1)
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # Focus landing on a real tab leaves every New Tab where it is.
+        _tab(page, _FIXTURE_TITLE).click()
+        expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=10000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3)
+        expect(page.locator(".dv-default-tab-content", has_text="New tab")).to_have_count(3)
+
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3, timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_an_agent_open_spends_the_stand_in_new_tab_but_not_ones_the_user_opened(
+    tmp_path: Path, page: Page
+) -> None:
+    """The launcher an emptied dock mints is spent by the next open; a second one is not.
+
+    The first open answers a dock holding nothing but that stand-in, so it replaces it. The user
+    then presses "+" twice, and the next open docks beside both.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 27, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_ADDRESS})
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0, timeout=10000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=10000)
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(2, timeout=10000)
+        _wait_for_saved_launcher_count(server.state_dir, STARTER_PROJECT_ID, 2)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-2")})
+        expect(_tab(page, "Stub 2")).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(2)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_opening_from_a_new_tab_takes_that_tab_s_place_in_the_strip(tmp_path: Path, page: Page) -> None:
+    """Opening from the middle of three New Tabs leaves the result in the middle.
+
+    Opening answers the New Tab it was asked from, so what it opens belongs where that tab stood
+    rather than on the end of the strip.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 28) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (2, 3):
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # The middle one of the three, by tab position rather than by DOM order.
+        middle_tab = page.locator(".dv-tab").nth(1)
+        middle_tab.click()
+        page.locator(f'.new-tab-launcher:visible .new-tab-launcher-tile[data-launch="{_STUB_APP_NAME}:new"]').click()
+        expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
+
+        titles = page.locator(".dv-tab .dv-default-tab-content")
+        expect(titles).to_have_count(3, timeout=10000)
+        strip = [titles.nth(i).inner_text() for i in range(3)]
+        assert [strip[0], strip[2]] == ["New tab", "New tab"] and _STUB_TAB_TITLE_RE.match(strip[1]), (
+            f"the opened tab did not take the middle New Tab's slot: {strip}"
+        )
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -1089,9 +1209,9 @@ def test_pinning_an_app_adds_a_rail_shortcut_and_unpinning_removes_it(tmp_path: 
 def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp_path: Path, page: Page) -> None:
     """A rail shortcut in focus mode with nothing to focus creates an instance; expanding the rail never reflows it.
 
-    The rail expands over the dock by growing width alone, so a row shared by both states
-    sits at the same y whether collapsed or expanded; and picking a row inside the
-    still-hovered rail leaves it open, since only the pointer leaving closes it.
+    The rail expands over the dock by growing width alone, so a row shared by both states sits at
+    the same y whether collapsed or expanded; and picking a row that puts a tab on screen collapses
+    the rail off it, even with the pointer still inside.
     """
     with _running_e2e_server(tmp_path, _PORT + 16, stub_instances=(), project_names=()) as server:
         page.goto(server.base_url)
@@ -1120,11 +1240,14 @@ def test_rail_shortcut_creates_an_instance_and_the_rail_holds_a_fixed_layout(tmp
 
         stub_shortcut.click()
         expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
-        expect(page.locator(".project-rail-search")).to_be_visible(timeout=1000)
+        # The rail got out of the way of the tab it just opened, without waiting for the pointer.
+        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
         assert [str(record.key) for record in server.stub_source.records] == ["stub-1"]
 
+        # And the pointer leaving and returning brings it back.
         page.mouse.move(600, 400)
-        expect(page.locator(".project-rail-search")).to_have_count(0, timeout=5000)
+        rail.hover()
+        expect(page.locator(".project-rail-search")).to_be_visible(timeout=5000)
 
 
 # ---------- the launcher ----------

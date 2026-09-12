@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import { appRecord } from "../testing/records";
 import {
   actionKey,
+  addTabTooltipText,
   equalTabWidth,
   isTitleTruncated,
   mostRecentAddressOfApp,
+  placeholderLauncherToRetire,
   stoppedPlaceholderForApp,
 } from "./DockviewWorkspace";
 
@@ -112,5 +114,53 @@ describe("stoppedPlaceholderForApp", () => {
 
     const critical = stoppedPlaceholderForApp(appRecord("docs", { is_running: false, critical: true }));
     expect(critical?.onStart).toBeNull();
+  });
+});
+
+describe("placeholderLauncherToRetire", () => {
+  const launcher = (id: string) => ({ id, isLauncher: true });
+  const instance = (id: string) => ({ id, isLauncher: false });
+
+  it("spends the launcher that was standing in for an empty dock", () => {
+    expect(placeholderLauncherToRetire([launcher("new-tab-1"), instance("tab-a")], "tab-a")).toBe("new-tab-1");
+  });
+
+  it("leaves a New Tab alone once any other tab is open beside it", () => {
+    expect(
+      placeholderLauncherToRetire([instance("tab-a"), launcher("new-tab-1"), instance("tab-b")], "tab-b"),
+    ).toBeNull();
+  });
+
+  it("leaves New Tabs alone when the user has opened more than one", () => {
+    expect(
+      placeholderLauncherToRetire([launcher("new-tab-1"), launcher("new-tab-2"), instance("tab-a")], "tab-a"),
+    ).toBeNull();
+  });
+
+  it("spends nothing when the dock held no launcher", () => {
+    expect(placeholderLauncherToRetire([instance("tab-a"), instance("tab-b")], "tab-b")).toBeNull();
+  });
+
+  it("spends nothing when the docked panel is all there is", () => {
+    expect(placeholderLauncherToRetire([instance("tab-a")], "tab-a")).toBeNull();
+  });
+});
+
+describe("addTabTooltipText", () => {
+  const DESKTOP_MAC = "Mozilla/5.0 (Macintosh) minds/1.2.3 Electron/38.0.0 Safari/537.36";
+  const DESKTOP_WINDOWS = "Mozilla/5.0 (Windows NT 10.0) minds/1.2.3 Electron/38.0.0 Safari/537.36";
+  const BROWSER = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36";
+
+  it("names the chord in the desktop app, in that platform's notation", () => {
+    expect(addTabTooltipText(DESKTOP_MAC, true)).toBe("New tab  ⌘T");
+    expect(addTabTooltipText(DESKTOP_WINDOWS, false)).toBe("New tab  Ctrl+T");
+  });
+
+  it("says nothing about a chord in a browser, which keeps Cmd/Ctrl+T for itself", () => {
+    expect(addTabTooltipText(BROWSER, true)).toBe("New tab");
+  });
+
+  it("omits the chord rather than guessing when the user agent names no client", () => {
+    expect(addTabTooltipText("", true)).toBe("New tab");
   });
 });
