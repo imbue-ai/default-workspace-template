@@ -963,7 +963,7 @@ export async function drainToComposer(chatId: string): Promise<{ block: string }
 // Compatibility shims
 export class ConversationNotFoundError extends Error {
   constructor(chatId: string) {
-    super(`Agent not found: ${chatId}`);
+    super(`Chat not found: ${chatId}`);
     this.name = "ConversationNotFoundError";
   }
 }

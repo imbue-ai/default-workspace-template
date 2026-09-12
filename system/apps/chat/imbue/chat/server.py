@@ -136,7 +136,7 @@ def _find_active_agent(chat_id: str) -> AgentInfo | None:
 
 
 def _chat_not_found_response(chat_id: str) -> Response:
-    error = ErrorResponse(detail=f"Agent '{chat_id}' not found")
+    error = ErrorResponse(detail=f"Chat '{chat_id}' not found")
     return json_response(error.model_dump(), status_code=404)
 
 
