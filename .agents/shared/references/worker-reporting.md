@@ -28,7 +28,8 @@ any) the calling flow stages.
 
 `LEAD_AGENT` and `LEAD_WORK_DIR` may legitimately be unset: a launcher that
 predates launch-time stamping does not write them, and a launch from outside an
-agent has no work dir to stamp (the parser warns instead of failing). That never
+agent has no work dir to stamp (the parser warns about a missing `LEAD_AGENT`
+and passes `LEAD_WORK_DIR` through only when the frontmatter has it). That never
 blocks reporting -- the delivery in step 2 falls back to the repo's main
 worktree, which is the lead's work dir for every chat agent.
 
