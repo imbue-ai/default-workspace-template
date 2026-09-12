@@ -7,15 +7,16 @@
 
 Pins the required schema so workers can't silently consume a task file
 whose `finish_report_path` was missing, misspelled, or the wrong type.
-`lead_agent` is the lead's mngr agent id (an `agent-<hex>` value; older
+`lead_agent` is the dispatching agent's mngr id (an `agent-<hex>` value; older
 launchers stamped the lead's name, which a rename invalidates), normally
-stamped by `create_worker.py launch`; it is deliberately OPTIONAL here
-(absent -> warn on stderr, emit no `LEAD_AGENT` line) because a task file
-can be authored by a *newer* flow than the launcher that provisioned the
-worker (update-self stages the target version's prose for an older lead),
-and a worker that finished its task must never be structurally unable to
-say so -- the primary delivery in `worker-reporting.md` is a write into the
-lead's workspace, which needs no address. Beyond those two, any additional top-level
+stamped by `create_worker.py launch` beside `lead_work_dir`, the lead's own
+checkout; both are deliberately OPTIONAL here (absent -> warn on stderr for
+`lead_agent`, emit no line) because a task file can be authored by a *newer*
+flow than the launcher that provisioned the worker (update-self stages the
+target version's prose for an older lead), and a worker that finished its
+task must never be structurally unable to say so -- the delivery in
+`worker-reporting.md` is a write into the lead's work dir, falling back to
+the repo's main worktree. Beyond those, any additional top-level
 string fields the lead sets are passed through to the worker -- so leads
 can attach flow-specific context (a ticket id, a feature flag, a list of
 staged inputs) without each new key requiring a parser change.

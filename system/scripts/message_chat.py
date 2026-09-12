@@ -9,7 +9,8 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> --system -m "an automated nudge"
 
 This is the in-workspace replacement for ``mngr message <agent>``. A chat is
-addressed by its chat id (today the id of its mngr agent, ``$MNGR_AGENT_ID``),
+addressed by its chat id (``$MINDS_CHAT_ID`` on an agent the chat app created; the
+id of its first agent, so ``$MNGR_AGENT_ID`` for an agent that is its own chat),
 never by its mngr name: a rename changes the name mid-task, and once a chat can
 hand off between agents (``docs/system/blueprint/chat-agent-split/``) the chat
 app is the only thing that knows which agent is currently taking its messages.
@@ -310,7 +311,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "chat_id",
-        help="The chat's id (its agent id, e.g. $MNGR_AGENT_ID); never a name.",
+        help="The chat's id ($MINDS_CHAT_ID, or the id of an agent that is its own chat); never a name.",
     )
     source = parser.add_mutually_exclusive_group()
     source.add_argument("-m", "--message", help="The message text.")
