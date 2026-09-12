@@ -543,9 +543,7 @@ def test_lead_agent_env_overrides_resolved_file_value(
 
     assert rc == 0
     assert "lead_agent: agent-real0000000000000000000000000lead" in task.read_text()
-    assert "real-lead" not in task.read_text().replace(
-        "agent-real0000000000000000000000000lead", ""
-    )
+    assert "real-lead" not in task.read_text()
 
 
 def test_lead_agent_injected_when_field_absent(
