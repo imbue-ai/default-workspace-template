@@ -108,8 +108,8 @@ it so the new path takes effect:
   config changes first, edit `system/supervisord.conf` then
   `supervisorctl reread && supervisorctl update`.
 - Subagents you started this session: send them a note via
-  `mngr message <agent> -m "..."` if they need to pick up the change,
-  or restart them.
+  `create_worker.py reply --task-file <their task file> -m "..."` if they
+  need to pick up the change, or restart them.
 
 ## 5. Close the tracking ticket
 
