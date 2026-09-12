@@ -318,6 +318,12 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
 
 
+class ChatListResponse(FrozenModel):
+    """Response from GET /api/chats: every chat this app lists, as the pages see it."""
+
+    chats: tuple[ChatSnapshot, ...] = Field(description="One snapshot per listed chat")
+
+
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent. The account decides which harness it runs on."""
 
