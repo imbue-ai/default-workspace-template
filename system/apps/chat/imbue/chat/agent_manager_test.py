@@ -356,9 +356,8 @@ def test_a_seeded_chat_leaves_the_first_chat_claim_for_a_plain_one(
 
 
 def _seed_failed_chat(
-    agent_manager: AgentManager, agent_id: str, name: str, account_id: str = "acct-1"
+    agent_manager: AgentManager, chat_id: ChatId, name: str, account_id: str = "acct-1"
 ) -> ProvisionalChat:
-    chat_id = ChatId(agent_id)
     proto = ProvisionalChat(
         chat_id=chat_id,
         name=name,
@@ -380,7 +379,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     ``mngr`` of this fixture fails at once, which would settle it again)."""
     # The account the conftest signed in: what the failed record binds to and the retry names.
     (signed_in,) = read_index().accounts
-    failed = _seed_failed_chat(agent_manager, "failed-1", "Chat 1", account_id=signed_in.id)
+    failed = _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1", account_id=signed_in.id)
     q = broadcaster.register()
 
     created = agent_manager.create_chat("", chat_id="failed-1", account_id=failed.account_id)
@@ -406,7 +405,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
 def test_discard_provisional_chat_drops_a_failed_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    _seed_failed_chat(agent_manager, "failed-1", "Chat 1")
+    _seed_failed_chat(agent_manager, ChatId("failed-1"), "Chat 1")
     q = broadcaster.register()
 
     assert agent_manager.discard_provisional_chat("failed-1") is True
@@ -673,17 +672,17 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
     assert len(msg["chats"]) == 2
 
 
-def _seed_creating_chat(agent_manager: AgentManager, agent_id: str, name: str) -> None:
+def _seed_creating_chat(agent_manager: AgentManager, chat_id: ChatId, name: str) -> None:
     with agent_manager._lock:
-        agent_manager._provisional_chats[ChatId(agent_id)] = ProvisionalChat(
-            chat_id=ChatId(agent_id), name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
         )
 
 
 def test_run_creation_registers_the_agent_and_settles_the_provisional_chat(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     q = broadcaster.register()
 
     agent_manager._run_creation("test-id", "test-agent", ["true"], tmp_path, {}, HarnessType.CLAUDE)
@@ -705,7 +704,7 @@ def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_t
     agent_manager: AgentManager, tmp_path: Path
 ) -> None:
     """A failed create is not forgotten: the page shows why, and can try again on the same account."""
-    _seed_creating_chat(agent_manager, "test-id", "Chat 1")
+    _seed_creating_chat(agent_manager, ChatId("test-id"), "Chat 1")
     cmd = ["sh", "-c", "echo first line; echo the real reason >&2; exit 3"]
 
     agent_manager._run_creation("test-id", "test-agent", cmd, tmp_path, {}, HarnessType.CLAUDE)
