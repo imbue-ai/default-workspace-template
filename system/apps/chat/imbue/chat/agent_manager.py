@@ -1476,6 +1476,7 @@ class AgentManager:
         success = False
         error: str | None = None
         output_tail = _CreationOutputTail()
+        chat_id = chat_id_of_first_agent(agent_id)
 
         try:
             _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
@@ -1501,7 +1502,6 @@ class AgentManager:
             if not success and is_first_chat:
                 release_first_chat()
 
-            chat_id = chat_id_of_first_agent(agent_id)
             with self._lock:
                 if success:
                     self._provisional_chats.pop(chat_id, None)
@@ -1531,7 +1531,7 @@ class AgentManager:
                 release_first_chat()
             try:
                 with self._lock:
-                    self._mark_creation_failed_locked(chat_id_of_first_agent(agent_id), error)
+                    self._mark_creation_failed_locked(chat_id, error)
             except (OSError, RuntimeError) as cleanup_exc:
                 _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
 
@@ -1544,12 +1544,10 @@ class AgentManager:
             # change (a success nudges through the broadcast above).
             self._nudger.nudge()
             # The pages show what the record holds: the reason and the output behind it.
-            failed = self.get_provisional_chat(agent_id)
+            failed = self.get_provisional_chat(chat_id)
             if failed is not None and failed.error is not None:
                 error = failed.error
-        self._broadcaster.broadcast_provisional_chat_completed(
-            chat_id=chat_id_of_first_agent(agent_id), success=success, error=error
-        )
+        self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
