@@ -16,7 +16,7 @@ script of this package, from its own uv tool environment (installed by
 its manifest and port 8010 through `system/scripts/forward_port.py`, starts
 `mngr observe` for the workspace's agents, and serves:
 
-- `GET /<agent-id>` (and `/<agent-id>.<session-id>` for a subagent view): the
+- `GET /<chat-id>` (and `/<chat-id>.<agent-id>.<session-id>` for a subagent view): the
   chat document, the built `chat.html` with the chat's ids, the workspace
   hostname, and the terminal app's origin label in meta tags.
 - `/_instances`: the instances API of `contracts.md` section 4.3 over the agent
