@@ -112,7 +112,7 @@ older template) takes `--name <WORKER_NAME>` as the fallback address.
 To escalate, ask the user, wait for the user's reply, then forward it the same
 way.
 
-After forwarding, consume the report so the next push can land a fresh
+After forwarding, consume the report so the next report can land a fresh
 `report.md`:
 
 ```bash
