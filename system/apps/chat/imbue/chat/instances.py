@@ -13,6 +13,7 @@ subagent belongs to.
 import threading
 from collections.abc import Callable
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import Final
 
 from app_instances.data_types import InstanceLifetime
@@ -154,6 +155,12 @@ def parse_subagent_key(key: str) -> SubagentKey | None:
 
 
 @pure
+def _is_subagent_of_a_listed_chat(subagent_key: InstanceKey, listed_chat_ids: AbstractSet[ChatId]) -> bool:
+    parsed = parse_subagent_key(subagent_key)
+    return parsed is not None and parsed.chat_id in listed_chat_ids
+
+
+@pure
 def instance_record_for_subagent(key: InstanceKey, description: str) -> InstanceRecord:
     return InstanceRecord(
         key=key,
@@ -216,7 +223,9 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             if provisional.chat_id not in known_ids:
                 records.append(instance_record_for_provisional_chat(provisional))
         with self._lock:
-            for key in [key for key in self._description_by_subagent_key if not self._is_chat_known(key, known_ids)]:
+            for key in [
+                key for key in self._description_by_subagent_key if not _is_subagent_of_a_listed_chat(key, known_ids)
+            ]:
                 del self._description_by_subagent_key[key]
             subagents = list(self._description_by_subagent_key.items())
         records.extend(instance_record_for_subagent(key, description) for key, description in subagents)
@@ -369,11 +378,6 @@ class AgentManagerInstanceSource(InstanceSourceInterface):
             if key in self._description_by_subagent_key:
                 return True
         return self.manager.get_provisional_chat(key) is not None
-
-    @staticmethod
-    def _is_chat_known(subagent_key: InstanceKey, known_chat_ids: set[ChatId]) -> bool:
-        parsed = parse_subagent_key(subagent_key)
-        return parsed is not None and parsed.chat_id in known_chat_ids
 
     def _require_ready(self) -> None:
         if not self.manager.is_agent_list_known():
