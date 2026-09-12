@@ -3,7 +3,7 @@
  * agent is mid-turn, under a subtle header row.
  *
  * The frontend is dumb here -- it renders a full snapshot the backend pushes on
- * the agents WebSocket (``ChatSnapshot.queued_messages``) and holds no queued state
+ * the chats WebSocket (``ChatSnapshot.active_agent.queued_messages``) and holds no queued state
  * of its own. The only action on the group is [Shoulder tap]: it fires ONE
  * harness-agnostic intent (`POST /shoulder-tap-atomic`, which the backend dispatches
  * per harness) and paints nothing locally -- the next backend queue snapshot and the
