@@ -25,7 +25,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
   let startError: string | null = null;
 
   async function ensureAgentStarted(chatId: string): Promise<void> {
-    // Defensive: if the panel was constructed without an chatId (e.g. a
+    // Defensive: if the panel was constructed without a chatId (e.g. a
     // legacy or corrupt PanelParams entry from a restored layout), there is
     // no agent to start. POSTing to `/api/chats//start` would just 404;
     // skip straight to mounting the iframe with no error banner.

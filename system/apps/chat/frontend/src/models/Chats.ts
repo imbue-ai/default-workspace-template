@@ -112,7 +112,7 @@ let chats: ChatSnapshot[] = [];
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
-// is in flight: from the socket opening to the agent list that ends it. Null otherwise.
+// is in flight: from the socket opening to the chat list that ends it. Null otherwise.
 let replayedProvisionalIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
