@@ -1350,8 +1350,9 @@ def test_interrupt_agent_success(client: FlaskClient) -> None:
 def test_interrupt_agent_rejects_is_primary_agent(client: FlaskClient) -> None:
     """POST /api/agents/<id>/interrupt returns 400 for the services agent.
 
-    Restarting the is_primary agent would stop the workspace services. The
-    frontend hides such agents; this server-side guard protects direct callers.
+    Restarting the is_primary agent would stop the workspace services. The chat
+    list the app pushes omits such agents; this server-side guard protects direct
+    callers.
     """
     services_agent = AgentInfo(
         id="services-1",
@@ -2377,7 +2378,7 @@ def test_stream_filtered_events_forwards_only_matching_events() -> None:
 def test_destroy_rejects_is_primary_agent(client: FlaskClient, app: Flask) -> None:
     """POST /api/agents/<id>/destroy returns 400 for the services agent.
 
-    The frontend already hides agents carrying ``is_primary=true``; this
+    The chat list the app pushes omits agents carrying ``is_primary=true``; this
     server-side guard prevents direct callers (curl, scripted use, etc.)
     from accidentally tearing down the workspace.
     """
