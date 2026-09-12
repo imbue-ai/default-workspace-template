@@ -133,10 +133,10 @@ distinctive moments (a key decision, a tool output that drove a step).
 after. Describe the contract; do not prescribe subcommands or surfaces.>
 
 ## What to do
-Use the installed `harden-worker` sub-skill. It reads `operation` and `type`
-from this frontmatter and follows the matching references. When you reach a gate
-or terminal status, push a report to the lead per its reporting protocol; the
-destination is `finish_report_path`.
+Read and follow `.agents/shared/worker/SKILL.md` from your own checkout. It
+reads `operation` and `type` from this frontmatter and follows the matching
+references. When you reach a gate or terminal status, push a report to the lead
+per its reporting protocol; the destination is `finish_report_path`.
 
 ## Milestones
 Do not save everything for the end. As soon as the creation is genuinely usable
@@ -179,7 +179,6 @@ uv run .agents/skills/launch-task/scripts/create_worker.py launch \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md
 ```
 
-The `worker` template installs the generic `harden-worker` sub-skill.
 If the frontmatter sets `source_artifacts_dir`, `launch` pushes it too -- no
 extra flag.
 
@@ -206,8 +205,10 @@ Flow-specific substitutions:
 - Worker name: `crystallize-$NAME`; branch: `mngr/crystallize-$NAME`
 - Task file / poll path: `data/.tasks/harden/crystallize-$NAME/task.md` /
   `data/.tasks/harden/crystallize-$NAME/reports/report.md`
-- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`;
-  consumed: `data/.tasks/harden/crystallize-$NAME/reports/consumed/`
+- Reports dir: `data/.tasks/harden/crystallize-$NAME/reports/`; `await`
+  archives each report it prints under
+  `data/.tasks/harden/crystallize-$NAME/reports/consumed/` (a milestone keeps
+  its own file name there, so a deferred one can still be merged later)
 - Milestones dir: `data/.tasks/harden/crystallize-$NAME/reports/milestones/`
 - Gates: **skill** → `outline-approval` (Gate 1) and `final-creation` (Gate 2);
   **app** → none (the worker merges straight to `done`).
@@ -216,15 +217,17 @@ Flow-specific substitutions:
   that makes the creation usable: **skill** → it is on disk at
   `.agents/skills/$NAME/` and invocable; **app** → refresh the tab. Step 6
   still runs only on `done`.
-- Terminal statuses: `done` (merge, then Step 6); `stuck` (failure flow per
-  `launch-task/references/worker-failure.md`).
+- Terminal statuses: `done` (merge, destroy the worker per `lead-proxy.md`,
+  then Step 6); `stuck` (failure flow per
+  `launch-task/references/worker-failure.md`, which stops the worker).
 
 ## Step 6: Go live
 
 A provisional milestone merge does not change this step: it runs only on `done`,
 and the `done` merge brings the remainder of the branch.
 
-On `done`, after merging the worker's branch:
+On `done`, after merging the worker's branch and destroying the worker (the
+sub-workers it split its pass across are already gone with it):
 
 - **skill**: read and follow `references/post-crystallize-migration.md` before
   declaring crystallize done -- point consumers at the installed skill path,

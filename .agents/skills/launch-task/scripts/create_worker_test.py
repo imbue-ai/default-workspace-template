@@ -21,7 +21,8 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
+from uuid import uuid4
 
 import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
@@ -61,11 +62,73 @@ class _RecordingRunner(create_worker_mod.Runner):
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
-        key = tuple(argv_list[:2])
-        canned = self._responses.get(key, _StubResult())
+        canned = next(
+            (
+                self._responses[prefix]
+                for prefix in sorted(self._responses, key=len, reverse=True)
+                if tuple(argv_list[: len(prefix)]) == prefix
+            ),
+            _StubResult(),
+        )
         if isinstance(canned, BaseException):
             raise canned
         return canned
+
+
+# A fixed archive stamp for tests that pin the ``consumed/`` filename, so the
+# assertions do not depend on the wall clock. Deliberately far from any real run.
+_PINNED_STAMP = "20260102T030405Z"
+
+
+def _unique(prefix: str) -> str:
+    """A globally unique agent name, so no two tests can collide on one."""
+    return f"{prefix}-{uuid4().hex[:12]}"
+
+
+def _agent_record(
+    name: str,
+    state: str,
+    lead_agent: str | None = None,
+    work_dir: str | None = None,
+    runtime_dir: str | None = None,
+    archived: bool = False,
+) -> dict[str, object]:
+    """One ``mngr list --format jsonl`` agent record, in mngr's own shape.
+
+    Mirrors ``AgentDetails``: ``resource_type``/``name``/``state``, the optional
+    ``labels`` map, and ``work_dir``.
+    """
+    record: dict[str, object] = {
+        "resource_type": "agent",
+        "name": name,
+        "state": state,
+    }
+    labels: dict[str, str] = {}
+    if lead_agent is not None:
+        labels["lead_agent"] = lead_agent
+    if runtime_dir is not None:
+        labels["runtime_dir"] = runtime_dir
+    if archived:
+        labels["archived_at"] = "2026-01-02T03:04:05Z"
+    if labels:
+        record["labels"] = labels
+    if work_dir is not None:
+        record["work_dir"] = work_dir
+    return record
+
+
+def _labels(create_argv: Sequence[str]) -> dict[str, str]:
+    """The ``--label key=value`` pairs of a ``mngr create`` argv, as a map."""
+    return dict(
+        create_argv[i + 1].split("=", 1)
+        for i in range(len(create_argv) - 1)
+        if create_argv[i] == "--label"
+    )
+
+
+def _listing(*records: Mapping[str, object]) -> _StubResult:
+    """What ``mngr list --format jsonl`` prints for ``records``."""
+    return _StubResult(stdout="".join(json.dumps(r) + "\n" for r in records))
 
 
 def _make_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -92,8 +155,13 @@ def _write_task(task: Path, source_artifacts_dir: str | None) -> None:
     task.write_text(f"---\n{fm}---\n\nbody\n")
 
 
-def test_happy_path_no_artifacts(tmp_path: Path) -> None:
+def test_happy_path_no_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runtime, task, _ = _make_layout(tmp_path)
+    # Outside an mngr agent the file's own `lead_agent: lead` is the resolved
+    # lead, and that is what the label must carry.
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -108,6 +176,8 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
+        ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
             "create",
@@ -116,13 +186,17 @@ def test_happy_path_no_artifacts(tmp_path: Path) -> None:
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ],
         [
             "mngr",
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         ["mngr", "message", "demo-worker", "--message-file", str(task)],
     ]
@@ -150,19 +224,21 @@ def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         [
             "mngr",
             "rsync",
             f"{artifacts}/",
             f"demo-worker:{artifacts}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
 
-def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
+def test_emitted_mngr_argv_accepted_by_live_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Every ``mngr ...`` argv launch actually emits must be accepted by the
     live mngr CLI surface.
 
@@ -174,6 +250,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     """
     runtime, task, artifacts = _make_layout(tmp_path)
     _write_task(task, str(artifacts))
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -192,7 +269,13 @@ def test_emitted_mngr_argv_accepted_by_live_cli(tmp_path: Path) -> None:
     # the subcommand names (that would re-introduce the hand-mirrored
     # expectation this test exists to replace) -- assert_mngr_argv_valid is what
     # confronts each argv with the live CLI.
-    assert len(mngr_calls) == 4
+    assert len(mngr_calls) == 5
+    # Vacuity guard for the two argv details this launch newly depends on: the
+    # lead label and the clobber sync mode have to be *in* what we validate,
+    # or the loop below would prove nothing about either.
+    flat = [word for argv in mngr_calls for word in argv]
+    assert "lead_agent=real-lead" in flat
+    assert "--uncommitted-changes=clobber" in flat
     for argv in mngr_calls:
         assert_mngr_argv_valid(argv)
 
@@ -231,7 +314,7 @@ def test_relative_runtime_dir_is_prefixed_for_local_source(
             "rsync",
             f"./{rel_runtime}/",
             f"demo-worker:{rel_runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
@@ -330,6 +413,8 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
     assert rc == 0
     assert [c.argv[:2] for c in runner.calls] == [
         ["git", "status"],
+        ["mngr", "list"],
+        ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
         ["mngr", "message"],
@@ -435,7 +520,7 @@ def test_malformed_frontmatter_does_not_abort_launch(tmp_path: Path) -> None:
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
     ]
 
@@ -470,6 +555,10 @@ def test_lead_agent_stamped_from_env_over_literal(
         "worker",
         "--label",
         "agent_created=true",
+        "--label",
+        "lead_agent=real-lead",
+        "--label",
+        f"runtime_dir={runtime}",
     ] in [c.argv for c in runner.calls]
 
 
@@ -539,8 +628,9 @@ def test_unresolved_lead_agent_without_env_is_fatal(
     )
 
     assert rc == 2
-    # Only the preflight cleanliness probe ran -- no worker was provisioned.
-    assert [c.argv for c in runner.calls] == [["git", "status", "--porcelain"]]
+    # Only the preflight probes ran (cleanliness, name free) -- no worker was
+    # provisioned.
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
     assert "lead_agent is unresolved" in capsys.readouterr().err
 
 
@@ -563,6 +653,216 @@ def test_resolved_lead_agent_used_as_fallback_without_env(
 
     assert rc == 0
     assert "lead_agent: lead" in task.read_text()
+
+
+# --- task_file stamping -----------------------------------------------------
+
+
+def _toplevel_result(path: Path) -> _StubResult:
+    """What ``git rev-parse --show-toplevel`` prints for a repo at ``path``."""
+    return _StubResult(stdout=f"{path}\n")
+
+
+def test_repo_relative_task_path_resolves_against_the_real_git_toplevel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Against a real git repo and the real ``Runner``: the stamped path is
+    relative to the repo root even when launch runs from a subdirectory.
+
+    A lead may launch from anywhere in its checkout, and the worker resolves the
+    stamped path against *its own* worktree root -- so anything cwd-relative
+    would point at nothing on the other side.
+    """
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    task = tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "task.md"
+    task.parent.mkdir(parents=True)
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    monkeypatch.chdir(tmp_path / "data" / ".tasks")
+
+    relative = create_worker_mod._repo_relative_path(
+        Path("launch-task/demo/task.md"),
+        create_worker_mod._repo_toplevel(create_worker_mod.Runner()),
+    )
+
+    assert relative == "data/.tasks/launch-task/demo/task.md"
+
+
+def test_repo_relative_task_path_falls_back_for_a_file_outside_the_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task file that is not under the repo root has no repo-relative form, so
+    the path is stamped as given rather than mangled into a wrong one."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+    outside = tmp_path / "elsewhere" / "task.md"
+    outside.parent.mkdir()
+    outside.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    monkeypatch.chdir(repo)
+
+    relative = create_worker_mod._repo_relative_path(
+        outside, create_worker_mod._repo_toplevel(create_worker_mod.Runner())
+    )
+
+    assert relative == outside.as_posix()
+
+
+def test_launch_stamps_the_task_file_path_relative_to_the_repo_root(
+    tmp_path: Path,
+) -> None:
+    """launch writes the task file's own repo-relative path into its
+    frontmatter, so the worker reads where its task file is instead of
+    searching for it."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert "task_file: data/.tasks/launch-task/demo/task.md" in task.read_text(), (
+        task.read_text()
+    )
+    # The stamp lands before the worker is created, so the file the worker is
+    # messaged already names itself.
+    stamp_position = next(
+        i for i, c in enumerate(runner.calls) if c.argv[:2] == ["git", "rev-parse"]
+    )
+    create_position = next(
+        i for i, c in enumerate(runner.calls) if c.argv[:2] == ["mngr", "create"]
+    )
+    assert stamp_position < create_position
+
+
+def test_launch_from_a_subdirectory_stamps_the_same_repo_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stamped path does not depend on where the lead ran launch from: a
+    relative --task-file resolved from a subdirectory yields the same
+    repo-relative path as an absolute one from the root."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.chdir(runtime.parent)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=Path("demo"),
+        task_file=Path("demo/task.md"),
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert "task_file: data/.tasks/launch-task/demo/task.md" in task.read_text()
+
+
+def test_launch_leaves_a_task_file_without_frontmatter_unstamped(
+    tmp_path: Path,
+) -> None:
+    """No frontmatter block means nowhere to stamp: the file is passed through
+    byte for byte (schema validation is the worker's job, not launch's)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    body = "no frontmatter here, just a body\n"
+    task.write_text(body)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert task.read_text() == body
+
+
+def test_launch_stamps_the_path_as_given_when_git_cannot_answer(
+    tmp_path: Path,
+) -> None:
+    """Outside a git repo (or with git unavailable) there is no root to
+    relativize against, so the path is stamped exactly as the caller gave it
+    rather than launch guessing."""
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("git", "rev-parse"),
+        _StubResult(returncode=128, stderr="fatal: not a git repository"),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert f"task_file: {task.as_posix()}" in task.read_text()
+
+
+# --- the lead_agent label ---------------------------------------------------
+
+
+def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label names the agent that will actually poll for the report: when
+    the launcher can name itself, its identity beats whatever the task file
+    said -- the same precedence the stamped `lead_agent` follows, resolved once
+    and used for both."""
+    runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
+    monkeypatch.setenv("MNGR_AGENT_NAME", "outer-worker")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="inner-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
+    assert _labels(create_argv)["lead_agent"] == "outer-worker"
+    # The label and the stamp agree, so a worker's own record and its task file
+    # never name different leads.
+    assert "lead_agent: outer-worker" in task.read_text()
+
+
+def test_no_lead_label_when_the_task_file_has_no_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no frontmatter there is no lead to resolve and nothing was stamped,
+    so the create carries no lead label rather than an invented one."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("no frontmatter here, just a body\n")
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
+    assert not any(arg.startswith("lead_agent=") for arg in create_argv)
+    assert "--label" in create_argv  # the agent_created label still rides along
 
 
 def test_set_frontmatter_field_replaces_inserts_and_ignores_bodyless() -> None:
@@ -632,8 +932,15 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
         runner=runner,
     )
     assert rc == 2
-    # Nothing past the create runs: no sync, no task message.
-    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "create"]]
+    # Nothing past the create runs but the listing that looks for a record the
+    # failed create left behind: no sync, no task message.
+    assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "status"],
+        ["mngr", "list"],
+        ["git", "rev-parse"],
+        ["mngr", "create"],
+        ["mngr", "list"],
+    ]
 
 
 def _launch_argv(runtime: Path, task: Path) -> list[str]:
@@ -675,10 +982,13 @@ def _make_state_dir_with_converter(tmp_path: Path) -> Path:
     return state_dir
 
 
-def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
+def test_common_transcript_flushed_before_message_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When state_dir has the converter, launch flushes it right before the message."""
     runtime, task, _ = _make_layout(tmp_path)
     state_dir = _make_state_dir_with_converter(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -695,6 +1005,8 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
         ["git", "status", "--porcelain"],
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
+        ["git", "rev-parse", "--show-toplevel"],
         [
             "mngr",
             "create",
@@ -703,13 +1015,17 @@ def test_common_transcript_flushed_before_message_send(tmp_path: Path) -> None:
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ],
         [
             "mngr",
             "rsync",
             f"{runtime}/",
             f"demo-worker:{runtime}/",
-            "--uncommitted-changes=merge",
+            "--uncommitted-changes=clobber",
         ],
         [expected_script, "--single-pass"],
         ["mngr", "message", "demo-worker", "--message-file", str(task)],
@@ -1057,207 +1373,311 @@ def test_await_report_wins_over_pending_shed(tmp_path: Path) -> None:
     assert "finished first" in out.getvalue()
 
 
-# --- await: milestone reports --------------------------------------------
+# --- await: consuming the report it printed ---------------------------------
 
 
-def _write_milestone(report_path: Path, filename: str, body: str) -> Path:
-    """Drop a milestone file into ``milestones/`` beside the report path.
-
-    The layout is spelled out rather than taken from the module under test so
-    the on-disk contract is asserted independently.
-    """
-    milestones_dir = report_path.parent / "milestones"
-    milestones_dir.mkdir(parents=True, exist_ok=True)
-    path = milestones_dir / filename
-    path.write_text(f"---\ntype: milestone\nname: usable\n---\n\n{body}\n")
-    return path
-
-
-def _mark_consumed(report_path: Path, filename: str) -> Path:
-    """Record a milestone basename as already handled by the lead."""
-    consumed_dir = report_path.parent / "consumed"
-    consumed_dir.mkdir(parents=True, exist_ok=True)
-    path = consumed_dir / filename
-    path.write_text("handled\n")
-    return path
-
-
-def test_await_returns_a_milestone_when_no_report_exists(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """An unconsumed milestone ends the poll like a report: contents out, path on stderr."""
+def _report_in(tmp_path: Path) -> Path:
+    """An empty reports dir with the report path await polls for inside it."""
     report = (
         tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
     )
     report.parent.mkdir(parents=True)
-    milestone = _write_milestone(report, "abc1234-skill-runs.md", "invoke it now")
-    out = io.StringIO()
+    return report
 
+
+def _await_once(report: Path, text: str, stamp: str = _PINNED_STAMP) -> str:
+    """Run one await whose worker writes ``text`` during the first poll sleep,
+    and return what await printed."""
+    out = io.StringIO()
     rc = create_worker_mod.await_report(
         report_path=report,
-        timeout_seconds=30,
+        timeout_seconds=1800,
         poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=_FakeClock(step=20),
+        sleeper=_write_report_on_sleep(report, text),
+        clock=lambda: 0.0,
         out=out,
+        archive_timestamp=lambda: stamp,
     )
-
     assert rc == 0
-    assert "type: milestone" in out.getvalue()
-    assert "invoke it now" in out.getvalue()
-    err = capsys.readouterr().err
-    assert str(milestone) in err
-    assert str(report.parent / "consumed") in err
+    return out.getvalue()
 
 
-def test_await_prefers_the_report_over_an_unconsumed_milestone(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """report.md wins when both are present; the milestone waits for the next poll."""
-    report = (
-        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
-    )
-    report.parent.mkdir(parents=True)
-    report.write_text("---\ntype: status\nname: done\n---\n\nterminal\n")
-    milestone = _write_milestone(report, "abc1234-skill-runs.md", "in flight")
-    out = io.StringIO()
+def test_await_archives_the_report_it_printed_under_its_kind(tmp_path: Path) -> None:
+    """await consumes the report: it prints the contents verbatim and moves the
+    file into consumed/ under a timestamped name carrying the report's own
+    type and name, so a lead reading the archive sees what each report was."""
+    report = _report_in(tmp_path)
+    text = "---\ntype: gate\nname: question\n---\n\nwhich database?\n"
 
-    rc = create_worker_mod.await_report(
-        report_path=report,
-        timeout_seconds=30,
-        poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=_FakeClock(step=20),
-        out=out,
-    )
+    printed = _await_once(report, text)
 
-    assert rc == 0
-    assert "terminal" in out.getvalue()
-    assert "in flight" not in out.getvalue()
-    # The milestone was neither emitted nor announced, and survives on disk for
-    # the next poll.
-    assert str(milestone) not in capsys.readouterr().err
-    assert milestone.is_file()
+    assert printed == text
+    assert not report.exists()
+    consumed = report.parent / "consumed"
+    archived = consumed / f"{_PINNED_STAMP}-gate-question.md"
+    assert [p.name for p in consumed.iterdir()] == [archived.name]
+    assert archived.read_text() == text
 
 
-def test_await_skips_a_milestone_whose_basename_is_already_consumed(
+def test_await_archives_an_unparseable_report_without_losing_it(
     tmp_path: Path,
 ) -> None:
-    """A re-delivered milestone whose basename is in consumed/ is inert."""
-    report = (
-        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
-    )
-    report.parent.mkdir(parents=True)
-    _write_milestone(report, "abc1234-skill-runs.md", "already handled")
-    _mark_consumed(report, "abc1234-skill-runs.md")
-    out = io.StringIO()
+    """A report with no frontmatter still archives (nothing is discarded); the
+    missing type/name read as `unparsed` rather than crashing the consume."""
+    report = _report_in(tmp_path)
 
-    rc = create_worker_mod.await_report(
-        report_path=report,
-        timeout_seconds=30,
-        poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=_FakeClock(step=20),
-        out=out,
-    )
+    printed = _await_once(report, "the worker just wrote prose\n")
 
-    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
-    assert out.getvalue() == ""
+    assert "just wrote prose" in printed
+    consumed = report.parent / "consumed"
+    archived = consumed / f"{_PINNED_STAMP}-unparsed-unparsed.md"
+    assert archived.read_text() == "the worker just wrote prose\n"
 
 
-def test_await_returns_the_oldest_unconsumed_milestone_first(tmp_path: Path) -> None:
-    """Oldest mtime first; the filenames are chosen so name order would disagree."""
-    report = (
-        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
-    )
-    report.parent.mkdir(parents=True)
-    older = _write_milestone(report, "zzz9999-scenarios-pass.md", "declared first")
-    newer = _write_milestone(report, "aaa1111-skill-runs.md", "declared second")
-    os.utime(older, (1_700_000_000, 1_700_000_000))
-    os.utime(newer, (1_700_000_600, 1_700_000_600))
-    out = io.StringIO()
+def test_two_reports_in_the_same_second_are_both_kept(tmp_path: Path) -> None:
+    """A gate cycle can archive two reports inside one timestamp tick; the
+    second is disambiguated rather than overwriting the first."""
+    report = _report_in(tmp_path)
+    first_text = "---\ntype: gate\nname: question\n---\n\nfirst\n"
+    second_text = "---\ntype: gate\nname: question\n---\n\nsecond\n"
 
-    rc = create_worker_mod.await_report(
-        report_path=report,
-        timeout_seconds=30,
-        poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=_FakeClock(step=20),
-        out=out,
-    )
+    assert _await_once(report, first_text) == first_text
+    assert _await_once(report, second_text) == second_text
 
-    assert rc == 0
-    assert "declared first" in out.getvalue()
-    assert "declared second" not in out.getvalue()
+    consumed = report.parent / "consumed"
+    assert sorted(p.name for p in consumed.iterdir()) == [
+        f"{_PINNED_STAMP}-gate-question.1.md",
+        f"{_PINNED_STAMP}-gate-question.md",
+    ]
+    archived = {p.read_text() for p in consumed.iterdir()}
+    assert archived == {first_text, second_text}
 
 
-def test_await_ignores_milestones_when_the_watch_is_disabled(tmp_path: Path) -> None:
-    """watch_milestones=False (the launch_sync contract) lets the wait run to timeout."""
-    report = (
-        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
-    )
-    report.parent.mkdir(parents=True)
-    _write_milestone(report, "abc1234-skill-runs.md", "in flight")
-    out = io.StringIO()
-
-    rc = create_worker_mod.await_report(
-        report_path=report,
-        timeout_seconds=30,
-        poll_interval_seconds=5,
-        sleeper=_no_sleep,
-        clock=_FakeClock(step=20),
-        out=out,
-        watch_milestones=False,
-    )
-
-    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
-    assert out.getvalue() == ""
-
-
-def test_launch_refuses_on_an_unconsumed_milestone_until_it_is_moved_aside(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_a_relaunch_after_an_awaited_gate_is_not_blocked_by_that_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A leftover milestone blocks a relaunch like a leftover report; consuming it clears the guard."""
+    """The point of the archive: after a gate report is awaited, relaunching the
+    worker on the same task file succeeds instead of tripping launch's
+    stale-report guard (which would exit 2 without creating anything)."""
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
-    milestone = _write_milestone(report, "abc1234-skill-runs.md", "from the last run")
-    task.write_text(
-        f"---\nlead_agent: lead\nfinish_report_path: {report}\n---\n\nbody\n"
-    )
-    blocked_runner = _RecordingRunner()
+    _write_await_task(task, report)
 
-    blocked_rc = create_worker_mod.launch(
+    _await_once(report, "---\ntype: gate\nname: question\n---\n\nwhich one?\n")
+
+    runner = _RecordingRunner()
+    rc = create_worker_mod.launch(
         name="demo-worker",
         template="worker",
         runtime_dir=runtime,
         task_file=task,
-        runner=blocked_runner,
+        runner=runner,
     )
 
-    assert blocked_rc == 2
-    assert blocked_runner.calls == []
-    err = capsys.readouterr().err
-    assert "milestone" in err
-    assert str(milestone) in err
+    assert rc == 0
+    assert any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
 
-    # Consume it the way the message tells the caller to, and the same launch
-    # goes through.
-    consumed_dir = report.parent / "consumed"
-    consumed_dir.mkdir(parents=True, exist_ok=True)
-    milestone.replace(consumed_dir / milestone.name)
-    cleared_runner = _RecordingRunner()
 
-    cleared_rc = create_worker_mod.launch(
-        name="demo-worker",
-        template="worker",
-        runtime_dir=runtime,
-        task_file=task,
-        runner=cleared_runner,
+# --- idle detection with sub-workers ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "child_state,expected_idle",
+    [("RUNNING", False), ("WAITING", False), ("STOPPED", True), ("DONE", True)],
+)
+def test_a_worker_is_idle_only_once_its_own_children_are_finished(
+    child_state: str, expected_idle: bool
+) -> None:
+    """A worker that has ended its turn is idle only if no agent labelled with
+    it as lead is still live. RUNNING is obviously live; WAITING is too -- a
+    sub-worker sitting on its own gate report is exactly what an intermediate
+    lead is waiting to answer -- while STOPPED and DONE are finished."""
+    worker = _unique("worker")
+    child = _unique("child")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(child, child_state, lead_agent=worker),
+        ),
     )
 
-    assert cleared_rc == 0
-    assert any(c.argv[:2] == ["mngr", "create"] for c in cleared_runner.calls)
+    is_idle = create_worker_mod._worker_is_idle(
+        worker, runner, pending_shed_check=lambda _name: False
+    )
+
+    assert is_idle is expected_idle
+
+
+def test_a_shed_child_does_not_hold_its_parent_open() -> None:
+    """A child shed by the OOM daemon keeps a live-looking state forever without
+    doing any work, so it must not keep its parent counted as busy -- otherwise
+    the lead waits out the full timeout on a dispatch that will never move."""
+    worker = _unique("worker")
+    child = _unique("child")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(child, "RUNNING", lead_agent=worker),
+        ),
+    )
+
+    shed_checks: list[str] = []
+
+    def _child_was_shed(name: str) -> bool:
+        shed_checks.append(name)
+        return True
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=_child_was_shed
+        )
+        is True
+    )
+    # The shed question is asked about the *child*, not the worker being polled.
+    assert shed_checks == [child]
+
+
+def test_the_default_shed_check_reads_the_real_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an injected check, the child scan consults the real OOM ledger --
+    so the shed tolerance is wired to the same records the kill hook writes, not
+    only to what a test hands it."""
+    monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(tmp_path))
+    worker = _unique("worker")
+    child = _unique("child")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(child, "RUNNING", lead_agent=worker),
+        ),
+    )
+
+    # Nothing in the ledger yet: the live child keeps its parent busy.
+    assert create_worker_mod._worker_is_idle(worker, runner) is False
+
+    src = create_worker_mod._oom_priority_src()
+    if str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    from oom_priority.ledger import append_shed_record
+
+    append_shed_record(pid=8271, comm="claude", agent_name=child, is_worker=True)
+
+    assert create_worker_mod._worker_is_idle(worker, runner) is True
+
+
+def test_a_child_of_another_lead_does_not_keep_this_worker_busy() -> None:
+    """Only agents labelled with *this* worker as their lead count: a sibling
+    dispatch running under someone else is irrelevant to this poll."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(
+                _unique("stranger"), "RUNNING", lead_agent=_unique("other-lead")
+            ),
+        ),
+    )
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+        is True
+    )
+
+
+def test_a_running_worker_is_never_idle_even_with_no_children() -> None:
+    """The worker's own state is still the first question: mid-turn is not idle."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(_agent_record(worker, "RUNNING")))
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+        is False
+    )
+
+
+def test_the_idle_check_costs_exactly_one_mngr_list() -> None:
+    """Both questions -- the worker's own state and its children's -- are
+    answered from a single listing, so poll cost does not grow with depth."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(_unique("child"), "STOPPED", lead_agent=worker),
+        ),
+    )
+
+    create_worker_mod._worker_is_idle(
+        worker, runner, pending_shed_check=lambda _name: False
+    )
+
+    assert [c.argv for c in runner.calls] == [
+        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"]
+    ]
+
+
+def test_an_unreadable_listing_answers_not_idle() -> None:
+    """A failed ``mngr list`` must never end a healthy await: a non-zero exit is
+    no evidence at all, even when partial output happens to look conclusive, so
+    the worker stays counted as busy and the timeout remains the backstop."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    # Partial output that *would* read as idle if the exit code were ignored.
+    failed = _listing(_agent_record(worker, "STOPPED"))
+    runner.respond(
+        ("mngr", "list"),
+        _StubResult(returncode=1, stdout=failed.stdout, stderr="mngr exploded"),
+    )
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+        is False
+    )
+
+
+def test_a_non_agent_row_with_the_same_name_is_not_mistaken_for_the_worker() -> None:
+    """``mngr list`` emits more than agents (hosts, and whatever it grows next);
+    only ``resource_type: agent`` rows are agent state, so a same-named row of
+    another kind must not answer the poll's question."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _StubResult(
+            stdout=json.dumps(
+                {"resource_type": "host", "name": worker, "state": "STOPPED"}
+            )
+            + "\n"
+            + json.dumps({"resource_type": "agent", "name": worker, "state": "RUNNING"})
+            + "\n"
+        ),
+    )
+
+    assert (
+        create_worker_mod._worker_is_idle(
+            worker, runner, pending_shed_check=lambda _name: False
+        )
+        is False
+    )
 
 
 def test_read_finish_report_path_returns_field(tmp_path: Path) -> None:
@@ -1385,10 +1805,6 @@ def _write_launch_sync_task(task_file: Path, report_path: Path) -> None:
     )
 
 
-def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
-    return [c.argv for c in runner.calls if c.argv[:2] == ["mngr", "destroy"]]
-
-
 def test_parse_report_extracts_type_name_and_body() -> None:
     result = create_worker_mod.parse_report(
         "---\ntype: status\nname: done\n---\n\nall finished\n"
@@ -1417,18 +1833,626 @@ def test_parse_report_tolerates_malformed_yaml() -> None:
     assert result.raw == text
 
 
-def test_destroy_invokes_mngr_destroy_force() -> None:
-    runner = _RecordingRunner()
-    create_worker_mod.destroy("demo-worker", runner)
-    assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+# --- teardown: destroy and stop ---------------------------------------------
 
 
-def test_destroy_argv_accepted_by_live_cli() -> None:
-    # Guard against drift in the mngr CLI: the destroy argv we emit must stay valid.
+def _mngr_argvs(runner: _RecordingRunner, *subcommands: str) -> list[list[str]]:
+    """Every recorded ``mngr <subcommand>`` argv, in call order."""
+    wanted = [["mngr", sub] for sub in subcommands]
+    return [c.argv for c in runner.calls if c.argv[:2] in wanted]
+
+
+def _destroy_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "destroy")
+
+
+def _stop_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "stop")
+
+
+def _rsync_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    return _mngr_argvs(runner, "rsync")
+
+
+def _lifecycle_argvs(runner: _RecordingRunner) -> list[list[str]]:
+    """The mngr calls that move or remove agents, in order."""
+    return _mngr_argvs(runner, "rsync", "destroy", "stop")
+
+
+def _pull_argv(agent: str, own_runtime_dir: str | None) -> list[str]:
+    """The relocation pull ``destroy`` runs before destroying ``agent``: its
+    workers' runtime dirs (all of ``data/.tasks/``), minus its own."""
+    argv = [
+        "mngr",
+        "rsync",
+        f"{agent}:data/.tasks/",
+        "./data/.tasks/",
+        "--uncommitted-changes=clobber",
+        "--",
+        "--update",
+    ]
+    if own_runtime_dir is not None:
+        argv.append(f"--exclude=/{own_runtime_dir.removeprefix('data/.tasks/')}")
+    return argv
+
+
+def _three_level_tree(root: str) -> tuple[list[dict[str, object]], str, str, str]:
+    """``root`` -> ``child`` -> ``grandchild``, plus a stopped second child, each
+    labelled with its lead and runtime dir. Returns the listing and the names."""
+    child = f"{root}-child"
+    stuck = f"{root}-stuck"
+    grandchild = f"{child}-inner"
+    records = [
+        _agent_record(
+            root,
+            "WAITING",
+            work_dir=f"/wt/{root}",
+            runtime_dir=f"data/.tasks/harden/{root}",
+        ),
+        _agent_record(
+            child,
+            "WAITING",
+            lead_agent=root,
+            work_dir=f"/wt/{child}",
+            runtime_dir=f"data/.tasks/launch-task/{child}",
+        ),
+        _agent_record(
+            stuck,
+            "STOPPED",
+            lead_agent=root,
+            work_dir=f"/wt/{stuck}",
+            runtime_dir=f"data/.tasks/launch-task/{stuck}",
+            archived=True,
+        ),
+        _agent_record(
+            grandchild,
+            "RUNNING",
+            lead_agent=child,
+            work_dir=f"/wt/{grandchild}",
+            runtime_dir=f"data/.tasks/launch-task/{grandchild}",
+        ),
+    ]
+    return records, child, stuck, grandchild
+
+
+def test_dispatch_subtree_is_post_order_and_excludes_the_root() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    unrelated = _agent_record(f"{root}-lookalike", "RUNNING", lead_agent="someone-else")
+
+    names = [
+        r["name"]
+        for r in create_worker_mod._dispatch_subtree(root, [*records, unrelated])
+    ]
+
+    # A shared name prefix without the lead chain does not make an agent kin.
+    assert names == [grandchild, child, stuck]
+
+
+def test_dispatch_subtree_survives_a_cycle_and_a_nameless_record() -> None:
+    root = _unique("root")
+    a = f"{root}-a"
+    b = f"{root}-b"
+    records = [
+        _agent_record(a, "RUNNING", lead_agent=root),
+        _agent_record(b, "RUNNING", lead_agent=a),
+        # A mislabelled listing that points back up the chain must not loop.
+        _agent_record(root, "RUNNING", lead_agent=b),
+        {"resource_type": "agent", "state": "RUNNING", "labels": {"lead_agent": a}},
+    ]
+
+    names = [r["name"] for r in create_worker_mod._dispatch_subtree(root, records)]
+
+    assert names == [b, a]
+
+
+def test_destroy_pulls_each_descendant_out_of_its_lead_then_destroys_deepest_first(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
     runner = _RecordingRunner()
-    create_worker_mod.destroy("demo-worker", runner)
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        # Deepest first, so each lead's worktree still exists when its workers'
+        # dirs are pulled; the stopped, archived sibling is part of the subtree
+        # too.
+        _pull_argv(grandchild, f"data/.tasks/launch-task/{grandchild}"),
+        ["mngr", "destroy", grandchild, "--force"],
+        _pull_argv(child, f"data/.tasks/launch-task/{child}"),
+        ["mngr", "destroy", child, "--force"],
+        _pull_argv(stuck, f"data/.tasks/launch-task/{stuck}"),
+        ["mngr", "destroy", stuck, "--force"],
+        _pull_argv(root, f"data/.tasks/harden/{root}"),
+        ["mngr", "destroy", root, "--force"],
+    ]
     for call in runner.calls:
-        assert_mngr_argv_valid(call.argv)
+        if call.argv[0] == "mngr":
+            assert_mngr_argv_valid(call.argv)
+    err = capsys.readouterr().err
+    for name in (grandchild, child, stuck, root):
+        assert f"create_worker: {name}: destroyed" in err
+
+
+def test_destroy_delete_branches_adds_b_to_every_destroy() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner, delete_branches=True)
+
+    assert rc == 0
+    assert _destroy_argvs(runner) == [
+        ["mngr", "destroy", name, "--force", "-b"]
+        for name in (grandchild, child, stuck, root)
+    ]
+    for argv in _destroy_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_destroy_no_recursive_destroys_one_agent_and_names_the_orphans(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.destroy(root, runner, recursive=False)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        _pull_argv(root, f"data/.tasks/harden/{root}"),
+        ["mngr", "destroy", root, "--force"],
+    ]
+    err = capsys.readouterr().err
+    assert f"{grandchild} (RUNNING)" in err
+    assert f"{child} (WAITING)" in err
+    assert f"{stuck} (STOPPED)" in err
+
+
+def test_destroy_continues_past_a_failed_relocation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    child = f"{root}-child"
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING"),
+            _agent_record(
+                child, "WAITING", lead_agent=root, runtime_dir=f"data/.tasks/x/{child}"
+            ),
+        ),
+    )
+    runner.respond(("mngr", "rsync"), _StubResult(returncode=23))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _destroy_argvs(runner) == [
+        ["mngr", "destroy", child, "--force"],
+        ["mngr", "destroy", root, "--force"],
+    ]
+    assert (
+        f"could not relocate the runtime dirs of {child}'s workers"
+        in capsys.readouterr().err
+    )
+
+
+def test_destroy_skips_the_pull_for_an_agent_without_a_runtime_dir_label(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without the label the agent's own runtime dir cannot be excluded from
+    the pull,
+    so an agent launched by an older launcher is destroyed without one; the
+    reason is named."""
+    root = _unique("root")
+    child = f"{root}-child"
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING", runtime_dir=f"data/.tasks/harden/{root}"),
+            _agent_record(child, "STOPPED", lead_agent=root),
+        ),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [_pull_argv(root, f"data/.tasks/harden/{root}")]
+    assert [argv[2] for argv in _destroy_argvs(runner)] == [child, root]
+    assert "no `runtime_dir` label" in capsys.readouterr().err
+
+
+def test_destroy_pulls_without_an_exclude_when_the_runtime_dir_is_elsewhere() -> None:
+    """A runtime dir outside ``data/.tasks/`` is not in the pulled tree, so
+    there is nothing to exclude."""
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(_agent_record(root, "WAITING", runtime_dir=f"data/.apps/x/{root}")),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [_pull_argv(root, None)]
+    for argv in _rsync_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_destroy_reports_a_failed_agent_and_still_destroys_the_rest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "destroy", child), _StubResult(returncode=1))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 1
+    assert [argv[2] for argv in _destroy_argvs(runner)] == [
+        grandchild,
+        child,
+        stuck,
+        root,
+    ]
+    err = capsys.readouterr().err
+    assert f"create_worker: {child}: NOT destroyed" in err
+    assert f"create_worker: {root}: destroyed" in err
+
+
+def test_destroy_prints_unmerged_commits_and_a_dirty_worktree(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(_agent_record(root, "STOPPED", work_dir=f"/wt/{root}")),
+    )
+    runner.respond(("git", "-C"), _StubResult(stdout=" M file.py\n"))
+    runner.respond(("git", "rev-list"), _StubResult(stdout="3\n"))
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert ["git", "-C", f"/wt/{root}", "status", "--porcelain"] in [
+        c.argv for c in runner.calls
+    ]
+    assert ["git", "rev-list", "--count", f"HEAD..mngr/{root}"] in [
+        c.argv for c in runner.calls
+    ]
+    err = capsys.readouterr().err
+    assert "UNCOMMITTED changes" in err
+    assert f"3 commit(s) on mngr/{root} not in HEAD" in err
+    # The warning never blocks.
+    assert _destroy_argvs(runner) == [["mngr", "destroy", root, "--force"]]
+
+
+def test_destroy_with_no_listing_still_destroys_the_named_agent() -> None:
+    """A listing that cannot be read is no reason to leave the worker running:
+    the root is destroyed on its own and the exit code says so."""
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.destroy("demo-worker", runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+
+
+def test_destroy_pulls_into_the_repo_root_from_a_subdirectory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pull's destination is the repo's ``data/.tasks/``, not the cwd's,
+    so a destroy run from a subdirectory lands the runtime dirs where every
+    lead's own runtime dirs are."""
+    root = _unique("root")
+    monkeypatch.chdir(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path.parent))
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(root, "WAITING", runtime_dir=f"data/.tasks/harden/{root}")
+        ),
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [
+        [
+            "mngr",
+            "rsync",
+            f"{root}:data/.tasks/",
+            f"{tmp_path.parent}/data/.tasks/",
+            "--uncommitted-changes=clobber",
+            "--",
+            "--update",
+            f"--exclude=/harden/{root}",
+        ]
+    ]
+
+
+def test_a_timed_out_teardown_command_is_a_reported_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "destroy"), subprocess.TimeoutExpired(cmd=["mngr"], timeout=1)
+    )
+
+    rc = create_worker_mod.destroy(root, runner)
+
+    assert rc == 1
+    assert f"create_worker: {root}: NOT destroyed" in capsys.readouterr().err
+    assert runner.calls[-1].kwargs["timeout"] > 0
+
+
+def test_stop_with_no_listing_still_stops_the_named_agent() -> None:
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _StubResult(returncode=1))
+
+    rc = create_worker_mod.stop("demo-worker", runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "stop", "demo-worker", "--archive"]]
+
+
+def test_stop_archives_children_first_then_the_root() -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.stop(root, runner)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [
+        ["mngr", "stop", name, "--archive"] for name in (grandchild, child, stuck, root)
+    ]
+    for argv in _stop_argvs(runner):
+        assert_mngr_argv_valid(argv)
+
+
+def test_stop_no_recursive_stops_one_agent_and_names_the_orphans(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+
+    rc = create_worker_mod.stop(root, runner, recursive=False)
+
+    assert rc == 0
+    assert _lifecycle_argvs(runner) == [["mngr", "stop", root, "--archive"]]
+    assert f"{grandchild} (RUNNING)" in capsys.readouterr().err
+
+
+def test_stop_reports_a_failed_agent_and_still_stops_the_rest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _unique("root")
+    records, child, stuck, grandchild = _three_level_tree(root)
+
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), _listing(*records))
+    runner.respond(("mngr", "stop", grandchild), _StubResult(returncode=1))
+
+    rc = create_worker_mod.stop(root, runner)
+
+    assert rc == 1
+    assert [argv[2] for argv in _stop_argvs(runner)] == [grandchild, child, stuck, root]
+    assert f"create_worker: {grandchild}: NOT stopped" in capsys.readouterr().err
+
+
+def test_main_destroy_and_stop_flags_reach_the_functions() -> None:
+    runner = _RecordingRunner()
+    assert (
+        create_worker_mod.main(
+            ["destroy", "--name", "x", "--no-recursive", "--delete-branches"],
+            runner=runner,
+        )
+        == 0
+    )
+    assert _destroy_argvs(runner) == [["mngr", "destroy", "x", "--force", "-b"]]
+    runner = _RecordingRunner()
+    assert create_worker_mod.main(["stop", "--name", "x"], runner=runner) == 0
+    assert _stop_argvs(runner) == [["mngr", "stop", "x", "--archive"]]
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
+    assert create_worker_mod.main(["destroy", "--name", "x"], runner=runner) == 1
+
+
+# --- the stuck-worker edge case ----------------------------------------------
+
+
+def test_an_archived_stopped_child_does_not_hold_its_parent_busy() -> None:
+    """A lead that stopped its stuck sibling (``stop`` leaves it STOPPED with
+    ``archived_at``) reads as idle once its own turn ends -- exactly like a
+    child that crashed -- so its own lead's await ends promptly."""
+    worker = _unique("worker")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "WAITING"),
+            _agent_record(
+                _unique("stuck"), "STOPPED", lead_agent=worker, archived=True
+            ),
+        ),
+    )
+
+    assert create_worker_mod._worker_is_idle(
+        worker, runner, pending_shed_check=lambda _name: False
+    )
+
+
+# --- the runtime_dir label ---------------------------------------------------
+
+
+def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The label is repo-relative like the stamped task path, whether launch
+    runs from the root or a subdirectory, so ``destroy`` running from any
+    lead's root pulls the same path."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    for cwd, given in (
+        (tmp_path, Path("data/.tasks/launch-task/demo")),
+        (tmp_path / "data", Path(".tasks/launch-task/demo")),
+    ):
+        monkeypatch.chdir(cwd)
+        runner = _RecordingRunner()
+        runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+
+        rc = create_worker_mod.launch(
+            name="demo-worker",
+            template="worker",
+            runtime_dir=given,
+            task_file=task,
+            runner=runner,
+        )
+
+        assert rc == 0
+        create_argv = next(
+            c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"]
+        )
+        assert _labels(create_argv)["runtime_dir"] == "data/.tasks/launch-task/demo"
+        assert_mngr_argv_valid(create_argv)
+        # The sync agrees with the label: the worker gets the dir at the same
+        # repo-relative path, pushed from the repo root rather than the cwd.
+        assert _rsync_argvs(runner) == [
+            [
+                "mngr",
+                "rsync",
+                f"{tmp_path}/data/.tasks/launch-task/demo/",
+                "demo-worker:data/.tasks/launch-task/demo/",
+                "--uncommitted-changes=clobber",
+            ]
+        ]
+        assert [c.argv for c in runner.calls].count(
+            ["git", "rev-parse", "--show-toplevel"]
+        ) == 1
+
+
+def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A stopped failure keeps its name, so a relaunch of that name is an
+    expected event: refused up front with the holder's state and lead and the
+    remedy, before the task file is stamped and before mngr is asked."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record("demo-worker", "STOPPED", lead_agent="lead", archived=True)
+        ),
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
+    assert "task_file:" not in task.read_text()
+    assert "lead_agent: lead" in task.read_text()
+    err = capsys.readouterr().err
+    assert "STOPPED" in err
+    assert "a worker of lead" in err
+    assert "create_worker.py destroy --name demo-worker" in err
+
+
+def test_a_create_that_leaves_a_record_behind_names_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """mngr registers the agent before provisioning it, so a create that fails
+    in a provisioning command leaves a STOPPED record the next launch would
+    trip on; the failure names that leftover and the destroy that clears it,
+    without calling it a pre-existing worker."""
+    runtime, task, _ = _make_layout(tmp_path)
+    listings = iter(
+        [
+            _listing(),  # before the create: the name is free
+            _listing(_agent_record("demo-worker", "STOPPED", lead_agent="lead")),
+        ]
+    )
+
+    class _ListingChanges(_RecordingRunner):
+        def run(self, argv: Sequence[str], **kwargs):
+            if list(argv)[:2] == ["mngr", "list"]:
+                self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
+                return next(listings)
+            return super().run(argv, **kwargs)
+
+    runner = _ListingChanges()
+    runner.respond(
+        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
+    )
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no worker was created" in err
+    assert "already exists" not in err
+    assert "STOPPED" in err
+    assert "create_worker.py destroy --name demo-worker" in err
+
+
+def test_an_unrelated_create_failure_gets_no_leftover_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "create"), subprocess.CalledProcessError(returncode=1, cmd=["mngr"])
+    )
+    runner.respond(("mngr", "list"), _listing(_agent_record("other", "RUNNING")))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no worker was created" in err
+    assert "already exists" not in err
+    assert "left an agent" not in err
 
 
 def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
@@ -1468,81 +2492,15 @@ def test_launch_sync_collects_report_and_destroys(tmp_path: Path) -> None:
         "body": "shipped it",
         "branch": "mngr/demo-worker",
         "raw_report": "---\ntype: status\nname: done\n---\n\nshipped it\n",
+        "destroy_failed": False,
     }
     assert json.loads(result_json.read_text()) == expected
     # Stdout carries the same JSON object for shell/human callers.
     assert json.loads(out.getvalue()) == expected
 
 
-def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
-    tmp_path: Path,
-) -> None:
-    """A mid-run milestone neither ends the wait nor blocks the next launch_sync.
-
-    The milestone lands on the first poll sleep (a pre-existing one would be
-    refused at launch) and the terminal report on the second.
-    """
-    runtime, task, _ = _make_layout(tmp_path)
-    report = runtime / "reports" / "report.md"
-    report.parent.mkdir(parents=True)
-    _write_launch_sync_task(task, report)
-    result_json = tmp_path / "result.json"
-    runner = _RecordingRunner()
-    sleeps: list[float] = []
-    milestone_path = report.parent / "milestones" / "abc1234-skill-runs.md"
-
-    def _worker_declares_then_finishes(seconds: float) -> None:
-        sleeps.append(seconds)
-        if len(sleeps) == 1:
-            _write_milestone(report, milestone_path.name, "usable already")
-        elif len(sleeps) == 2:
-            report.write_text("---\ntype: status\nname: done\n---\n\nhardened\n")
-
-    rc = create_worker_mod.launch_sync(
-        name="demo-worker",
-        template="worker",
-        runtime_dir=runtime,
-        task_file=task,
-        timeout_seconds=1800,
-        poll_interval_seconds=5,
-        runner=runner,
-        sleeper=_worker_declares_then_finishes,
-        clock=lambda: 0.0,
-        out=io.StringIO(),
-        result_path=result_json,
-    )
-
-    assert rc == 0
-    payload = json.loads(result_json.read_text())
-    assert payload["type"] == "status"
-    assert payload["name"] == "done"
-    assert payload["body"] == "hardened"
-    # The milestone did not end the wait, and is archived (not deleted) once the
-    # terminal report is collected.
-    assert not milestone_path.exists()
-    archived = report.parent / "consumed" / milestone_path.name
-    assert "usable already" in archived.read_text()
-
-    # A second identical call is not refused by launch's milestone guard.
-    second_rc = create_worker_mod.launch_sync(
-        name="demo-worker",
-        template="worker",
-        runtime_dir=runtime,
-        task_file=task,
-        timeout_seconds=1800,
-        poll_interval_seconds=5,
-        runner=_RecordingRunner(),
-        sleeper=_write_report_on_sleep(
-            report, "---\ntype: status\nname: done\n---\n\nagain\n"
-        ),
-        clock=lambda: 0.0,
-        out=io.StringIO(),
-    )
-    assert second_rc == 0
-
-
 def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Regression: launch_sync calls launch(), whose stale-report guard refuses to
     # launch when anything sits at finish_report_path. destroy() removes the
@@ -1552,6 +2510,7 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     # repeatedly with the same task file -- hence the same report path -- must not
     # be blocked by its own previous report. So launch_sync moves the collected
     # report aside into consumed/ (archived, not deleted) once it is collected.
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
@@ -1572,14 +2531,16 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
             ),
             clock=lambda: 0.0,
             out=io.StringIO(),
+            archive_timestamp=lambda: _PINNED_STAMP,
         )
 
     first = _RecordingRunner()
     assert _run_once(first) == 0
     # The collected report is cleared from the report path but preserved in
-    # consumed/, not deleted.
+    # consumed/, not deleted -- under the timestamped, kind-naming archive name
+    # every collected report now gets.
     assert not report.exists()
-    assert (consumed / "report.md").read_text() == (
+    assert (consumed / f"{_PINNED_STAMP}-status-done.md").read_text() == (
         "---\ntype: status\nname: done\n---\n\nround\n"
     )
 
@@ -1597,12 +2558,19 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
             "worker",
             "--label",
             "agent_created=true",
+            "--label",
+            "lead_agent=lead",
+            "--label",
+            f"runtime_dir={runtime}",
         ]
     ]
     # The second run's report is archived under a disambiguated name -- the first
     # archive is not overwritten, so both are retained.
     assert not report.exists()
-    assert sorted(p.name for p in consumed.iterdir()) == ["report.1.md", "report.md"]
+    assert sorted(p.name for p in consumed.iterdir()) == [
+        f"{_PINNED_STAMP}-status-done.1.md",
+        f"{_PINNED_STAMP}-status-done.md",
+    ]
 
 
 def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
@@ -1630,6 +2598,42 @@ def test_launch_sync_keep_agent_skips_destroy(tmp_path: Path) -> None:
 
     assert rc == 0
     assert _destroy_argvs(runner) == []
+    assert _stop_argvs(runner) == []
+
+
+def test_launch_sync_reports_a_destroy_that_left_something_behind(
+    tmp_path: Path,
+) -> None:
+    """The report is still emitted -- the caller has the result either way --
+    but the JSON and the exit code both say the worker is still there."""
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "destroy"), _StubResult(returncode=1))
+    out = io.StringIO()
+
+    rc = create_worker_mod.launch_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        runner=runner,
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nok\n"
+        ),
+        clock=lambda: 0.0,
+        out=out,
+    )
+
+    assert rc == 1
+    assert _destroy_argvs(runner) == [["mngr", "destroy", "demo-worker", "--force"]]
+    result = json.loads(out.getvalue())
+    assert result["destroy_failed"] is True
+    assert result["name"] == "done"
 
 
 def test_launch_sync_timeout_keeps_worker_alive(tmp_path: Path) -> None:
@@ -1804,6 +2808,700 @@ def test_a_refused_mngr_create_is_reported_not_raised(
     assert not any(argv[:2] == ["mngr", "rsync"] for argv in argvs)
     assert not any(argv[:2] == ["mngr", "message"] for argv in argvs)
     assert "`mngr create demo-worker` failed" in capsys.readouterr().err
+
+
+# --- report subcommand: the worker's side of the contract -------------------
+
+
+def _write_worker_task(task: Path, report_path: str, lead_agent: str | None) -> None:
+    """Write the task file a worker holds: where its report goes, and (usually)
+    who to send it to."""
+    lead_line = "" if lead_agent is None else f"lead_agent: {lead_agent}\n"
+    task.write_text(
+        f"---\n{lead_line}finish_report_path: {report_path}\n"
+        f"task_file: {task.name}\n---\n\ndo the thing\n"
+    )
+
+
+def _worker_tree(tmp_path: Path) -> tuple[Path, str, Path]:
+    """A worker's checkout: its task file, the repo-relative report path its
+    frontmatter names, and a body file to report with."""
+    runtime = tmp_path / "data" / ".tasks" / "launch-task" / "demo"
+    runtime.mkdir(parents=True)
+    task = runtime / "task.md"
+    body = tmp_path / "body.md"
+    body.write_text("Committed on branch `mngr/demo`. Ready to merge.\n")
+    return task, "data/.tasks/launch-task/demo/reports/report.md", body
+
+
+def _report_argv(task: Path, body: Path, extra: Sequence[str] = ()) -> list[str]:
+    return [
+        "report",
+        "--task-file",
+        str(task),
+        "--type",
+        "status",
+        "--name",
+        "done",
+        "--body-file",
+        str(body),
+        *extra,
+    ]
+
+
+def test_report_writes_the_report_and_pushes_its_directory_to_the_lead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The happy path: the report lands at the task file's own
+    finish_report_path inside the worker's tree, in the frontmatter shape the
+    lead parses, and its *parent directory* is pushed to the lead -- which is
+    what makes the file arrive at the lead's finish_report_path."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    lead = _unique("lead")
+    _write_worker_task(task, report_rel, lead)
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(_report_argv(task, body), runner=runner)
+
+    assert rc == 0
+    assert Path(report_rel).read_text() == (
+        "---\ntype: status\nname: done\n---\n\n"
+        "Committed on branch `mngr/demo`. Ready to merge.\n"
+    )
+    report_dir = "data/.tasks/launch-task/demo/reports/"
+    assert [c.argv for c in runner.calls] == [
+        [
+            "mngr",
+            "rsync",
+            f"./{report_dir}",
+            f"{lead}:{report_dir}",
+            "--uncommitted-changes=clobber",
+        ]
+    ]
+    # The destination actually used is printed, so a worker's transcript records
+    # where its report went.
+    assert capsys.readouterr().out == f"{lead}:{report_dir}\n"
+
+
+def test_the_written_report_is_what_the_lead_parses_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The two halves of the contract meet: what ``report`` writes is exactly
+    what ``parse_report`` (the lead's collection path) reads back."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    body.write_text("I could not build it because: the venv is broken.\n")
+    _write_worker_task(task, report_rel, _unique("lead"))
+
+    rc = create_worker_mod.report_to_lead(
+        task_file=task,
+        report_type="gate",
+        name="question",
+        body_file=body,
+        runner=_RecordingRunner(),
+        worker_name=_unique("worker"),
+    )
+
+    assert rc == 0
+    parsed = create_worker_mod.parse_report(Path(report_rel).read_text())
+    assert parsed.report_type == "gate"
+    assert parsed.name == "question"
+    assert parsed.body == "I could not build it because: the venv is broken."
+
+
+def test_report_push_argv_is_accepted_by_the_live_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The push the worker emits must stay valid against the real mngr CLI, the
+    same guard the launch-side argvs carry."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    _write_worker_task(task, report_rel, _unique("lead"))
+    runner = _RecordingRunner()
+
+    assert create_worker_mod.main(_report_argv(task, body), runner=runner) == 0
+
+    mngr_calls = [c.argv for c in runner.calls if c.argv[:1] == ["mngr"]]
+    assert len(mngr_calls) == 1  # vacuity guard: there is an argv to validate
+    for argv in mngr_calls:
+        assert_mngr_argv_valid(argv)
+
+
+def test_report_falls_back_to_the_leads_work_dir_when_the_push_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When the push fails, the worker resolves its own ``lead_agent`` label out
+    of ``mngr list``, then that lead's ``work_dir``, and writes the report
+    straight into the lead's checkout at the same relative path -- which is the
+    exact file the lead's await polls for."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    worker = _unique("worker")
+    lead = _unique("lead")
+    _write_worker_task(task, report_rel, lead)
+    lead_work_dir = tmp_path / "leads" / lead
+    monkeypatch.setenv("MNGR_AGENT_NAME", worker)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "rsync"),
+        subprocess.CalledProcessError(returncode=1, cmd=["mngr", "rsync"]),
+    )
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "RUNNING", lead_agent=lead),
+            _agent_record(lead, "WAITING", work_dir=str(lead_work_dir)),
+        ),
+    )
+
+    rc = create_worker_mod.main(_report_argv(task, body), runner=runner)
+
+    assert rc == 0
+    delivered = lead_work_dir / report_rel
+    assert delivered.read_text() == Path(report_rel).read_text()
+    captured = capsys.readouterr()
+    assert captured.out == f"{delivered}\n"
+    assert "pushing the report" in captured.err
+
+
+def test_report_skips_the_push_entirely_when_the_task_file_names_no_lead(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no ``lead_agent`` there is no address to rsync to, so no push is
+    even attempted -- the listing fallback runs directly, with a note saying
+    why."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    worker = _unique("worker")
+    lead = _unique("lead")
+    _write_worker_task(task, report_rel, None)
+    lead_work_dir = tmp_path / "leads" / lead
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "RUNNING", lead_agent=lead),
+            _agent_record(lead, "WAITING", work_dir=str(lead_work_dir)),
+        ),
+    )
+
+    rc = create_worker_mod.main(
+        _report_argv(task, body, ["--worker-name", worker]), runner=runner
+    )
+
+    assert rc == 0
+    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
+    assert (lead_work_dir / report_rel).is_file()
+    assert "no `lead_agent`" in capsys.readouterr().err
+
+
+def _fallback_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing: _StubResult,
+    worker_name: str | None,
+) -> tuple[int, Path]:
+    """Run ``report`` with no lead in the task file (so delivery goes straight
+    to the listing fallback) against ``listing``, and return the exit code and
+    the local report path."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, body = _worker_tree(tmp_path)
+    _write_worker_task(task, report_rel, None)
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "list"), listing)
+    extra = () if worker_name is None else ("--worker-name", worker_name)
+    rc = create_worker_mod.main(_report_argv(task, body, extra), runner=runner)
+    return rc, Path(report_rel)
+
+
+def test_report_fails_loudly_when_the_worker_cannot_name_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No MNGR_AGENT_NAME and no --worker-name: there is nothing to look the
+    lead up by, so the run fails instead of leaving the report where only the
+    worker can see it."""
+    rc, report = _fallback_failure(tmp_path, monkeypatch, _listing(), None)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "MNGR_AGENT_NAME is unset" in err
+    # The local copy is still named, so the report is recoverable by hand.
+    assert str(report) in err
+    assert report.is_file()
+
+
+def test_report_fails_loudly_when_the_listing_has_no_record_for_this_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worker = _unique("worker")
+
+    rc, _report = _fallback_failure(tmp_path, monkeypatch, _listing(), worker)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no agent record named" in err
+    assert worker in err
+
+
+def test_report_fails_loudly_when_this_worker_carries_no_lead_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worker = _unique("worker")
+
+    rc, _report = _fallback_failure(
+        tmp_path, monkeypatch, _listing(_agent_record(worker, "RUNNING")), worker
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no `lead_agent` label" in err
+    assert worker in err
+
+
+def test_report_fails_loudly_when_the_labelled_lead_has_no_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worker = _unique("worker")
+    lead = _unique("lead")
+
+    rc, _report = _fallback_failure(
+        tmp_path,
+        monkeypatch,
+        _listing(_agent_record(worker, "RUNNING", lead_agent=lead)),
+        worker,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no agent record named" in err
+    assert lead in err
+
+
+def test_report_fails_loudly_when_the_lead_record_has_no_work_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    worker = _unique("worker")
+    lead = _unique("lead")
+
+    rc, _report = _fallback_failure(
+        tmp_path,
+        monkeypatch,
+        _listing(
+            _agent_record(worker, "RUNNING", lead_agent=lead),
+            _agent_record(lead, "WAITING"),
+        ),
+        worker,
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "no `work_dir`" in err
+    assert lead in err
+
+
+def test_report_missing_body_file_is_fatal_before_anything_is_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A --body-file that isn't there is a caller mistake: fail with a clean
+    message rather than delivering an empty report."""
+    monkeypatch.chdir(tmp_path)
+    task, report_rel, _ = _worker_tree(tmp_path)
+    _write_worker_task(task, report_rel, _unique("lead"))
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.main(
+        _report_argv(task, tmp_path / "no-such-body.md"), runner=runner
+    )
+
+    assert rc == 2
+    assert runner.calls == []
+    assert not Path(report_rel).exists()
+    assert "body-file" in capsys.readouterr().err
+
+
+def test_report_missing_finish_report_path_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task file with no finish_report_path is an authoring bug on the lead's
+    side; it raises with a full traceback rather than a terse exit code."""
+    monkeypatch.chdir(tmp_path)
+    task, _, body = _worker_tree(tmp_path)
+    task.write_text(f"---\nlead_agent: {_unique('lead')}\n---\n\ndo the thing\n")
+
+    with pytest.raises(ValueError, match="finish_report_path"):
+        create_worker_mod.main(_report_argv(task, body), runner=_RecordingRunner())
+
+
+def test_report_fails_loudly_when_the_report_path_cannot_be_relativized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An absolute ``finish_report_path`` joins onto the lead's work dir as
+    itself, so the fallback would rewrite the worker's own copy and claim
+    success. That is the one outcome delivery must never produce, so it is a
+    loud failure instead."""
+    monkeypatch.chdir(tmp_path)
+    task, _, body = _worker_tree(tmp_path)
+    absolute_report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "report.md"
+    )
+    worker = _unique("worker")
+    lead = _unique("lead")
+    _write_worker_task(task, str(absolute_report), None)
+    runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "RUNNING", lead_agent=lead),
+            _agent_record(lead, "WAITING", work_dir=str(tmp_path / "leads" / lead)),
+        ),
+    )
+
+    rc = create_worker_mod.main(
+        _report_argv(task, body, ["--worker-name", worker]), runner=runner
+    )
+
+    assert rc == 2
+    assert "absolute" in capsys.readouterr().err
+    # The worker's own copy is intact and named in the message, so the report is
+    # still recoverable by hand.
+    assert "type: status" in absolute_report.read_text()
+
+
+# --- await: milestone reports --------------------------------------------
+#
+# A worker drops non-blocking milestone reports under ``milestones/`` beside
+# ``report.md``. ``await`` returns one like a report, and archives it under its
+# *own* name: the worker keeps its copy and re-delivers it with every later
+# push, and the basename in ``consumed/`` is what makes a re-delivered copy
+# inert while the same name at a new commit stays a new event.
+
+
+def _write_milestone(report_path: Path, filename: str, body: str) -> Path:
+    """Drop a milestone file into ``milestones/`` beside the report path.
+
+    The layout is spelled out rather than taken from the module under test so
+    the on-disk contract is asserted independently.
+    """
+    milestones_dir = report_path.parent / "milestones"
+    milestones_dir.mkdir(parents=True, exist_ok=True)
+    path = milestones_dir / filename
+    path.write_text(f"---\ntype: milestone\nname: usable\n---\n\n{body}\n")
+    return path
+
+
+def _mark_consumed(report_path: Path, filename: str) -> Path:
+    """Record a milestone basename as already handled by the lead."""
+    consumed_dir = report_path.parent / "consumed"
+    consumed_dir.mkdir(parents=True, exist_ok=True)
+    path = consumed_dir / filename
+    path.write_text("handled\n")
+    return path
+
+
+def test_await_returns_a_milestone_when_no_report_exists(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unconsumed milestone ends the poll like a report: contents out, path on
+    stderr, and the file archived under its own name."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    milestone = _write_milestone(report, "abc1234-skill-runs.md", "invoke it now")
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+    )
+
+    assert rc == 0
+    assert "type: milestone" in out.getvalue()
+    assert "invoke it now" in out.getvalue()
+    err = capsys.readouterr().err
+    assert str(milestone) in err
+    archived = report.parent / "consumed" / milestone.name
+    assert str(archived) in err
+    # Archived, not deleted, and under the basename that keys the dedupe -- the
+    # sha stays in the name so a deferred merge can still find its commit.
+    assert not milestone.exists()
+    assert "invoke it now" in archived.read_text()
+    assert not report.exists()
+
+
+def test_await_archived_milestone_makes_its_redelivery_inert(tmp_path: Path) -> None:
+    """The worker re-pushes every milestone it declared; once one has been
+    returned and archived, the same file arriving again does not end a poll."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    _write_milestone(report, "abc1234-skill-runs.md", "usable")
+    assert (
+        create_worker_mod.await_report(
+            report_path=report,
+            timeout_seconds=30,
+            poll_interval_seconds=5,
+            sleeper=_no_sleep,
+            clock=_FakeClock(step=20),
+            out=io.StringIO(),
+        )
+        == 0
+    )
+
+    # The worker's next push lands the same milestone file again.
+    _write_milestone(report, "abc1234-skill-runs.md", "usable")
+    out = io.StringIO()
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+    )
+
+    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
+    assert out.getvalue() == ""
+    # The archive is untouched by the re-delivery.
+    assert sorted(p.name for p in (report.parent / "consumed").iterdir()) == [
+        "abc1234-skill-runs.md"
+    ]
+
+
+def test_await_prefers_the_report_over_an_unconsumed_milestone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """report.md wins when both are present; the milestone waits for the next poll."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    report.write_text("---\ntype: status\nname: done\n---\n\nterminal\n")
+    milestone = _write_milestone(report, "abc1234-skill-runs.md", "in flight")
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+    )
+
+    assert rc == 0
+    assert "terminal" in out.getvalue()
+    assert "in flight" not in out.getvalue()
+    # The milestone was neither emitted nor announced, and survives on disk for
+    # the next poll.
+    assert str(milestone) not in capsys.readouterr().err
+    assert milestone.is_file()
+
+
+def test_await_skips_a_milestone_whose_basename_is_already_consumed(
+    tmp_path: Path,
+) -> None:
+    """A re-delivered milestone whose basename is in consumed/ is inert."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    _write_milestone(report, "abc1234-skill-runs.md", "already handled")
+    _mark_consumed(report, "abc1234-skill-runs.md")
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+    )
+
+    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
+    assert out.getvalue() == ""
+
+
+def test_await_returns_the_oldest_unconsumed_milestone_first(tmp_path: Path) -> None:
+    """Oldest mtime first; the filenames are chosen so name order would disagree.
+    Archiving the returned one is what advances the next poll to the newer."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    older = _write_milestone(report, "zzz9999-scenarios-pass.md", "declared first")
+    newer = _write_milestone(report, "aaa1111-skill-runs.md", "declared second")
+    os.utime(older, (1_700_000_000, 1_700_000_000))
+    os.utime(newer, (1_700_000_600, 1_700_000_600))
+
+    def _await_once() -> str:
+        out = io.StringIO()
+        rc = create_worker_mod.await_report(
+            report_path=report,
+            timeout_seconds=30,
+            poll_interval_seconds=5,
+            sleeper=_no_sleep,
+            clock=_FakeClock(step=20),
+            out=out,
+        )
+        assert rc == 0
+        return out.getvalue()
+
+    first = _await_once()
+    assert "declared first" in first
+    assert "declared second" not in first
+    assert "declared second" in _await_once()
+
+
+def test_await_ignores_milestones_when_the_watch_is_disabled(tmp_path: Path) -> None:
+    """watch_milestones=False (the launch_sync contract) lets the wait run to timeout."""
+    report = (
+        tmp_path / "data" / ".tasks" / "launch-task" / "demo" / "reports" / "report.md"
+    )
+    report.parent.mkdir(parents=True)
+    milestone = _write_milestone(report, "abc1234-skill-runs.md", "in flight")
+    out = io.StringIO()
+
+    rc = create_worker_mod.await_report(
+        report_path=report,
+        timeout_seconds=30,
+        poll_interval_seconds=5,
+        sleeper=_no_sleep,
+        clock=_FakeClock(step=20),
+        out=out,
+        watch_milestones=False,
+    )
+
+    assert rc == create_worker_mod._AWAIT_TIMEOUT_RC
+    assert out.getvalue() == ""
+    assert milestone.is_file()
+
+
+def test_launch_refuses_on_an_unconsumed_milestone_until_it_is_moved_aside(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A leftover milestone blocks a relaunch like a leftover report; consuming it clears the guard."""
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    milestone = _write_milestone(report, "abc1234-skill-runs.md", "from the last run")
+    task.write_text(
+        f"---\nlead_agent: lead\nfinish_report_path: {report}\n---\n\nbody\n"
+    )
+    blocked_runner = _RecordingRunner()
+
+    blocked_rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=blocked_runner,
+    )
+
+    assert blocked_rc == 2
+    assert blocked_runner.calls == []
+    err = capsys.readouterr().err
+    assert "milestone" in err
+    assert str(milestone) in err
+
+    # Consume it the way the message tells the caller to, and the same launch
+    # goes through.
+    consumed_dir = report.parent / "consumed"
+    consumed_dir.mkdir(parents=True, exist_ok=True)
+    milestone.replace(consumed_dir / milestone.name)
+    cleared_runner = _RecordingRunner()
+
+    cleared_rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=cleared_runner,
+    )
+
+    assert cleared_rc == 0
+    assert any(c.argv[:2] == ["mngr", "create"] for c in cleared_runner.calls)
+
+
+def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
+    tmp_path: Path,
+) -> None:
+    """A mid-run milestone neither ends the wait nor blocks the next launch_sync.
+
+    The milestone lands on the first poll sleep (a pre-existing one would be
+    refused at launch) and the terminal report on the second.
+    """
+    runtime, task, _ = _make_layout(tmp_path)
+    report = runtime / "reports" / "report.md"
+    report.parent.mkdir(parents=True)
+    _write_launch_sync_task(task, report)
+    result_json = tmp_path / "result.json"
+    runner = _RecordingRunner()
+    sleeps: list[float] = []
+    milestone_path = report.parent / "milestones" / "abc1234-skill-runs.md"
+
+    def _worker_declares_then_finishes(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            _write_milestone(report, milestone_path.name, "usable already")
+        elif len(sleeps) == 2:
+            report.write_text("---\ntype: status\nname: done\n---\n\nhardened\n")
+
+    rc = create_worker_mod.launch_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        runner=runner,
+        sleeper=_worker_declares_then_finishes,
+        clock=lambda: 0.0,
+        out=io.StringIO(),
+        result_path=result_json,
+        archive_timestamp=lambda: _PINNED_STAMP,
+    )
+
+    assert rc == 0
+    payload = json.loads(result_json.read_text())
+    assert payload["type"] == "status"
+    assert payload["name"] == "done"
+    assert payload["body"] == "hardened"
+    # The milestone did not end the wait, and is archived (not deleted) under
+    # its own name once the terminal report is collected -- beside the report's
+    # own timestamped archive.
+    assert not milestone_path.exists()
+    consumed = report.parent / "consumed"
+    assert "usable already" in (consumed / milestone_path.name).read_text()
+    assert sorted(p.name for p in consumed.iterdir()) == [
+        f"{_PINNED_STAMP}-status-done.md",
+        milestone_path.name,
+    ]
+
+    # A second identical call is not refused by launch's milestone guard.
+    second_rc = create_worker_mod.launch_sync(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        timeout_seconds=1800,
+        poll_interval_seconds=5,
+        runner=_RecordingRunner(),
+        sleeper=_write_report_on_sleep(
+            report, "---\ntype: status\nname: done\n---\n\nagain\n"
+        ),
+        clock=lambda: 0.0,
+        out=io.StringIO(),
+    )
+    assert second_rc == 0
 
 
 # --- the git bookkeeping a provisional milestone merge relies on ---------------

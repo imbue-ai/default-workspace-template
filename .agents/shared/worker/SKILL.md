@@ -16,18 +16,19 @@ just routes you to the right ones.
 
 ## Step 1: Read your task file and resolve inputs
 
-Your task file was synced to your worktree under `data/.tasks/harden/<slug>/task.md`.
-Extract the lead address, the report destination, and the scope file path
-(plus the `operation` and `type` fields the lead set in frontmatter):
+Your task file was synced to your worktree, and its frontmatter names its own
+path in `task_file`. Pass that exact path to the parser to extract the lead
+address, the report destination, and the scope file path (plus the `operation`
+and `type` fields the lead set in frontmatter):
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/harden/*/task.md')"
+eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
-This sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and `TYPE`, plus
-`SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint. Fail loudly
-if `OPERATION` or `TYPE` is unset -- the lead must supply both. When `TYPE` is
-`skill`, or `app` and the app has an `app.toml`, also fail loudly if
+This sets `TASK_FILE`, `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and
+`TYPE`, plus `SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint.
+Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both. When
+`TYPE` is `skill`, or `app` and the app has an `app.toml`, also fail loudly if
 `SCOPE_FILE` or `DIFF_BASE` is unset: `SCOPE_FILE` is where you write the
 creation's footprint, and `DIFF_BASE` is the commit that footprint's diff is
 taken from (`harden-creation.md` has the command). A pre-manifest app, a
@@ -76,17 +77,19 @@ the crystallize shape), it carries that itself, keyed by type.
 
 ## Step 3: Report back to the lead
 
-Follow `.agents/shared/references/worker-reporting.md` for the report-file
-procedure. The `eval` in Step 1 already set the variables it needs. Substitute:
-
-- `<TASK_FILE_GLOB>` -> `data/.tasks/harden/*/task.md`
-- `<RUNTIME_REPORTS_DIR>` -> the directory part of `FINISH_REPORT_PATH`
-  (i.e. `dirname "$FINISH_REPORT_PATH"`).
+Report with the launcher's `report` subcommand -- write the body to a file and
+hand that file over -- exactly as
+`.agents/shared/references/worker-reporting.md` describes. The `eval` in Step 1
+already set the variables it needs, and the subcommand derives the report
+destination and the lead's address from `TASK_FILE` itself, so there is nothing
+to substitute.
 
 The valid `name:` values for gates and terminal statuses come from your
 operation reference -- it is the authority on which gates fire for your
 operation × type combination (e.g. a crystallized app emits no gates; a
-crystallized skill emits `outline-approval` then `final-creation`).
+crystallized skill emits `outline-approval` then `final-creation`). On top of
+whatever it lists, `question` (`type: gate`) is valid on every run: any worker
+may stop mid-flight and ask its lead, whatever the operation.
 
 That is the entire worker. Everything else is in the references you loaded in
 Step 2.

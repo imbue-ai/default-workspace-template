@@ -15,10 +15,10 @@ is not where worker bugs get fixed.
   not implement what the task file asked for.
 - User rejected the worker's Gate 2 proposal and the worker stopped instead
   of iterating.
-- For harden workers (crystallize / update / heal): the pushed report at
-  `data/.tasks/harden/<slug>/reports/report.md` has frontmatter
-  `type: status, name: stuck`, or the 30m poll timeout tripped without
-  any report arriving. The first case is the worker explicitly giving
+- The worker's pushed report -- at its `finish_report_path`, e.g.
+  `data/.tasks/harden/<slug>/reports/report.md` for a harden worker -- has
+  frontmatter `type: status, name: stuck`, or the 30m poll timeout tripped
+  without any report arriving. The first case is the worker explicitly giving
   up (the report body names a reason); the second means the worker
   died without following its contract.
 
@@ -31,8 +31,18 @@ is not where worker bugs get fixed.
 2. **Tell the user** in plain language: what was supposed to happen, what
    happened instead, and where the evidence lives (branch name, transcript
    command). Keep it short -- the user decides the next step.
-3. **Leave the worker's branch and tmux session intact** unless the user
-   asks you to clean up. The evidence is more useful than the tidiness.
+3. **Stop the worker, keep its evidence.** Once the context is captured and
+   the user told, stop the worker and any sub-workers it launched:
+
+   ```bash
+   uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <worker>
+   ```
+
+   Its branch, worktree, and transcript remain for inspection; only the
+   processes go, and the `archived_at` label the stop leaves marks it as
+   stopped on purpose (so nobody restarts it as a crash). A stopped failure
+   is destroyed only when a later pass supersedes it
+   (`.agents/shared/references/harden-contention.md`) or the user asks.
 4. **Update any outstanding tickets** (e.g. `tk` lifecycle tickets) with a
    note describing the failure; do not close them -- leave them open so the
    user can resume.

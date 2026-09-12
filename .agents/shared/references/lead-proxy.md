@@ -33,9 +33,11 @@ liveness" below.
 
 `await` also returns **milestone** reports: any file under
 `<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
-It prints the file like `report.md`, exits 0, and names the file's path on
-stderr so you know what to consume. `report.md` wins when both are waiting; the
-milestone comes back on the next poll.
+It prints the file like `report.md`, exits 0, archives it under its own name in
+`consumed/` (the short sha in that name is what keys a deferred merge, and what
+makes the worker's re-delivery of the same file inert), and names both paths on
+stderr. `report.md` wins when both are waiting; the milestone comes back on the
+next poll.
 
 If await exits with code 75, the worker's own agent was **shed by the OOM
 daemon** to relieve memory pressure: it will not report until revived. This is
@@ -63,6 +65,14 @@ re-arm the poll with a longer timeout (e.g. `60m`) and continue. Only
 invoke the failure flow (`.agents/skills/launch-task/references/worker-failure.md`)
 if the session is dead, the agent is wedged on the same operation for an
 extended period, or output has been static.
+
+`await` makes the same call for you in the clearest case: exit code **76** means
+it watched the worker's agent end its turn on several consecutive polls with no
+report -- finished or wedged without reporting, worth surfacing immediately
+rather than waiting out the timeout. That check never fires while the worker has
+a live sub-worker of its own: an agent labelled `lead_agent=<worker>` in state
+RUNNING or WAITING with no pending shed counts as the worker being busy, so an
+intermediate lead waiting on its own child is never mistaken for a dead one.
 
 ## Do not interrupt more recent user work
 
@@ -111,15 +121,10 @@ mngr message <WORKER_NAME> -m "<reply, in the user's voice>"
 To escalate, ask the user, wait for
 the user's reply, then forward it via `mngr message`.
 
-After forwarding, consume the report so the next push can land a fresh
-`report.md`:
-
-```bash
-mkdir -p <REPORTS_DIR>/consumed
-mv <REPORTS_DIR>/report.md <REPORTS_DIR>/consumed/$(date +%s)-gate.md
-```
-
-Then re-arm the background poll.
+You never move a report by hand: the `await` that printed it already archived
+it into `<REPORTS_DIR>/consumed/` (timestamped, named by its `type` and `name`),
+so `finish_report_path` is clear for the worker's next push. After forwarding,
+re-arm the background poll.
 
 ## Milestone reports: provisional merge
 
@@ -156,15 +161,11 @@ Tell the user in one line and in non-technical language what's been updated:
   "Added a reusable skill."
   "Created an MVP app, using it now while it continues to be improved."
 
-Consume the file whether or not you merged (the sha stays in its name, so a
-deferred milestone can be merged later):
-
-```bash
-mkdir -p <REPORTS_DIR>/consumed
-mv <REPORTS_DIR>/milestones/<MILESTONE_FILE> <REPORTS_DIR>/consumed/
-```
-
-Then re-arm the poll; the worker's gates and terminal status are still coming.
+Whether or not you merged, the file is already in `<REPORTS_DIR>/consumed/`
+under its own name -- the `await` that printed it archived it, as with every
+report -- and the sha stays in that name, so a deferred milestone can be merged
+later from the archive. Re-arm the poll; the worker's gates and terminal status
+are still coming.
 
 ### Rolling back a provisional merge
 
@@ -205,8 +206,18 @@ On `type: status`:
   reports: provisional merge") are ancestors of HEAD, so this merge brings only
   the remainder and the freshness check covers exactly the window since that
   provisional merge.
-  On a clean merge, close any tracking ticket and optionally destroy the
-  worker. On a conflict, recovery depends on the calling skill: if it defines
+  On a clean merge, close any tracking ticket and destroy the worker before
+  the calling skill's go-live:
+  ```bash
+  uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
+  ```
+  Destroy takes the worker's sub-workers with it and keeps what you may
+  still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
+  `$MNGR_HOST_DIR/preserved/`), and every sub-worker's runtime dir,
+  relocated into your tree at the same paths. It prints one outcome line
+  per agent and exits non-zero if any could not be destroyed; report that
+  rather than retrying blindly.
+  On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
   `.agents/shared/references/harden-contention.md`), abort the merge and
   follow that rule rather than hand-resolving; otherwise resolve the conflict
@@ -214,24 +225,60 @@ On `type: status`:
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
-  body (or its absence) to the user, point at the branch and worker agent, and
-  leave both intact for manual inspection.
+  body (or its absence) to the user, point at the branch and worker agent, then
+  stop the worker (and its sub-workers) so no process stays behind:
+  ```bash
+  uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
+  ```
+  Its branch, worktree, and transcript stay for inspection. A timeout is
+  the same once the liveness diagnosis says the worker is dead or wedged.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
-  stop; do not merge, do not invoke the failure flow. Optionally surface the
-  one-sentence reason to the user.
+  destroy the worker exactly as on `done`, with nothing to merge; do not
+  invoke the failure flow. Optionally surface the one-sentence reason to the
+  user.
 
-In every status case, consume the report (move to `<REPORTS_DIR>/consumed/`) so
-the directory is clean for future runs.
+In every status case the report is already in `<REPORTS_DIR>/consumed/` -- the
+`await` that printed it archived it there -- so the reports dir is clean for the
+next run with nothing for you to move.
+
+## When you are a worker yourself
+
+Everything above holds unchanged when you are an intermediate lead: a worker
+that launched its own worker. Four rules are yours alone.
+
+- **A sub-worker's `question` is yours to answer first.** Answer it yourself
+  whenever your own task file and the repo settle it -- that is most of them.
+  Only when the answer is genuinely not available to you do you re-raise it as
+  your *own* `question` gate to your lead (`create_worker.py report --type gate
+  --name question`, per `.agents/shared/references/worker-reporting.md`), and
+  when the reply comes back you forward it to the sub-worker **verbatim** with
+  `mngr message`. Do not paraphrase a decision you did not make.
+- **Merge exactly one level.** A sub-worker's branch `mngr/<sub-worker-name>`
+  merges into *your* branch, with `--no-ff` and the sub-worker named in the
+  merge commit message. Your own lead then sees one merged branch and never
+  needs to know sub-workers existed.
+- **Destroy after merge, stop on failure.** Once a sub-worker's branch is
+  merged, destroy it (`create_worker.py destroy --name <sub-worker-name>`);
+  a stuck one is stopped (`create_worker.py stop --name <sub-worker-name>`)
+  after the failure flow. Never destroy yourself: your own lead does that
+  once it has merged you. This matters for your own lead too: a merged
+  sub-worker left in WAITING still reads as a live child, which keeps you
+  counted as busy after you have finished, while a STOPPED one does not.
+- **Await sub-workers with `--timeout 60m`**, which fits inside the window your
+  own lead is waiting out (90m for the harden flows).
 
 ## `mngr rsync` rationale
 
-When syncing reports (or the initial runtime dir to the worker):
+The launcher makes every transfer in this dispatch itself -- the runtime-dir
+push at `launch`, and the report push a worker's `report` performs -- and they
+all take this shape. Read this when you are debugging one, or writing a sync of
+your own:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
-    --uncommitted-changes=merge
+    --uncommitted-changes=clobber
 ```
 
 - `mngr rsync` takes `SOURCE DESTINATION` (positional): the local source dir
@@ -246,9 +293,10 @@ mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
   through to rsync verbatim, so the trailing slash is load-bearing: it makes
   rsync copy directory *contents* into the destination instead of nesting the
   dir under it. Syncing a single file fails -- rsync wants a directory.
-- `--uncommitted-changes=merge` is required. The worker's worktree has
-  uncommitted changes immediately after creation (the installed worker
-  sub-skills under `.agents/skills/`), so the default `fail` mode would refuse
-  the sync.
+- `--uncommitted-changes=clobber` is required. Both endpoints routinely carry
+  uncommitted local state, so the default `fail` mode would refuse the sync.
+  `clobber` is safe here because every destination sits under gitignored
+  `data/`: nothing tracked is overwritten, and nothing is pushed onto the git
+  stash that every worktree of the repo shares.
 - There is no `mngr file put` subcommand -- `mngr rsync` is the correct
   mechanism.
