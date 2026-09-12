@@ -474,7 +474,7 @@ _REPORTED_MODEL_BY_CATALOG_ID: Final[Mapping[str, str]] = {
     "haiku": "claude-haiku-4-5",
     "sonnet[1m]": "claude-sonnet-5",
     "opus[1m]": "claude-opus-5",
-    "fable[1m]": "claude-fable-5",
+    "fable[1m]": "claude-fable-5-1",
 }
 
 

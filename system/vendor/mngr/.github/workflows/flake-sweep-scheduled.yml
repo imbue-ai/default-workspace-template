@@ -75,7 +75,7 @@ jobs:
         run: uv sync --all-packages
 
       - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code@2.1.227
+        run: npm install -g @anthropic-ai/claude-code@2.1.269
 
       # Must equal LATCHKEY_VERSION in
       # libs/mngr_latchkey/imbue/mngr_latchkey/remote/provisioning.py;

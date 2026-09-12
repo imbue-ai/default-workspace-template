@@ -58,6 +58,8 @@
   },
   "model": "opus[1m]",
   "effortLevel": "high",
+  "feedbackSurveyRate": 0,
+  "feedbackDrafts": "off",
   "statusLine": {
     "type": "command",
     "command": "${MNGR_AGENT_WORK_DIR:-.}/scripts/claude_status_line.sh"

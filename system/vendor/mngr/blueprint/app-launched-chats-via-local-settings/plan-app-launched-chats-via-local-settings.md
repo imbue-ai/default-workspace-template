@@ -20,7 +20,7 @@ Paired change across this repo (`apps/minds`) and the default-workspace-template
 From the user's side:
 
 - Pressing "Update now" or "Ask an agent" on any workspace on the new template starts a chat on the same account and harness a New Tab chat would use. A codex-only user gets a codex update chat.
-- The chat's tab appears in every window that has the workspace open, focused, where the user is looking. A window that opens later still gets it once, as long as the chat app has not delivered it and the chat is under 12 hours old at chat-app startup.
+- The chat's tab appears in every window that has the workspace open, focused, where the user is looking. A window that opens later still gets it once, however long later, as long as the chat app has not delivered it. On a workspace that has no delivery ledger yet -- its chats predate the ledger, or the file was lost -- the chats it already has are recorded as shown instead, since nothing there can tell the one chat owed a tab from every chat the app ever labeled.
 - With no provider signed in, the app shows the workspace's own refusal, which reads "sign in to a provider first" rather than mngr's config-set hint. The update run slot is released so a retry after signing in works.
 - On a workspace whose claude binary no longer matches the template's pin, both app-launched chats still start. The workspace's own New Tab chat still fails there; that is accepted.
 - A worker launched from a chat, a caretaker run, and any automation run on the machine's default account and harness without their creators naming one. A caller that wants a specific harness can still say so.
@@ -62,14 +62,14 @@ From the system's side:
 `system/apps/chat/imbue/chat/auto_open.py` (new, the reactor)
 
 - `AUTO_OPEN_LABELS = ("auto_open", "assist")` and `is_auto_open_labeled(labels)`.
-- `AutoOpenLedger(path)`: delivered agent ids, JSON under `data/.apps/chat/auto_opened_chats.json`; `is_delivered`, `mark_delivered`, `forget`. A file of the wrong shape is logged and treated as empty.
+- `AutoOpenLedger(path)`: delivered agent ids, JSON under `data/.apps/chat/auto_opened_chats.json`; `is_delivered`, `mark_delivered`, `adopt_delivered`, `forget`, and `is_history_known` (false when there was a file to read and it did not read: absent, unreadable, or of the wrong shape, the last two logged).
 - `ShellLayoutClient`: `connected_client_ids()` from `GET /api/clients` (the `connected` flag), `open_chat(agent_id, client_id) -> bool` posting the open op; base URL from `MINDS_WORKSPACE_SERVER_URL` like `app_instances.nudge`. Unlike `post_to_shell`, it returns whether the shell accepted, since the reactor holds on refusal.
-- `AutoOpenReactor(ledger, shell, clock)`: `note_appeared(agent)` on a labeled agent not yet delivered; `seed_at_startup(agents)` keeps only labeled, undelivered agents whose `create_time` is under 12 hours old; `flush()` tries every pending id against every connected client, marks delivered on the first accepted open, and leaves the rest pending; `forget(agent_id)` on removal.
+- `AutoOpenReactor(ledger, shell)`: `note_appeared(agent)` on a labeled agent not yet delivered, held until delivered or the agent goes away; `seed_at_startup(agents)` notes every labeled, undelivered agent, or, when `is_history_known` is false, `adopt_delivered`s all of them and writes the ledger (whose existence is then what tells the next boot the set it reads is real); `flush()` tries every pending id against every connected client, marks delivered on the first accepted open, and leaves the rest pending; `forget(agent_id)` on removal.
 
 `system/apps/chat/imbue/chat/agent_manager.py`
 
 - `_handle_observe_event`: feeds `added_agent_ids` to the reactor (startup seed on the first full state, `note_appeared` afterwards), `removed_agent_ids` to `forget`, then `flush`.
-- A flush also runs when the shell nudges the chat app about a new client (`/api/apps/chat/changed` is the existing nudge path; the reactor hooks the client-activity report the chat pages already send, so an arriving window triggers delivery without polling).
+- A held open is retried on the reactor's own thread, every `FLUSH_INTERVAL_SECONDS` while anything is pending, so a window opened later is found by asking. The shell reports a client's arrival to nobody -- `/api/clients` is a read and `/api/client-activity` is a post the chat app makes *to* the shell -- so asking is the only signal there is.
 - `restart_agents_on_account`: unchanged code, wider effect noted in its docstring (workers and app-launched chats now carry the label).
 
 `system/scripts/require_create_account.py` (new)
@@ -127,7 +127,7 @@ Unit, dwt (chat app):
 
 - `create_defaults_test.py`: pinned default beats MRU beats oldest; a pinned account on a lane this build lacks is skipped; a claude account yields `type = "claude"` plus the env binding; codex, agy and pi yield the symlink command over `$MNGR_AGENT_STATE_DIR`; the account label rides every form; no usable account removes the managed keys; keys outside the managed block round-trip through a rewrite; the written file loads under the vendored mngr's strict parser with no narrowing violation against the committed `settings.toml`.
 - `accounts_test.py`: every index mutation regenerates the file (commit, delete, rename, set_mru, set_default_account, reconcile's prune of a folder that is gone).
-- `auto_open_test.py`: a labeled agent with one connected client is opened once and recorded; no client holds it and a later client arrival delivers it; two clients each get an open; a delivered id survives a ledger reload; a startup seed skips delivered ids and agents older than 12 hours; an unlabeled agent is ignored; a removed agent is forgotten; a wrong-shaped ledger starts empty with a log line.
+- `auto_open_test.py`: a labeled agent with one connected client is opened once and recorded; no client holds it and a later client arrival delivers it; two clients each get an open; a delivered id survives a ledger reload; a startup seed holds every id the ledger does not name; a seed with no ledger to read adopts what the workspace already has, opens nothing, and leaves a file the next boot reads (a chat appearing after that one is still opened); a seed that adopts nothing still leaves the file; an unlabeled agent is ignored; a removed agent is forgotten; a wrong-shaped ledger starts empty, says its history is gone, and logs.
 - `agent_manager_test.py`: the observe handler feeds the reactor for added and removed agents; the CLI-contract test for the chat create no longer relies on a config default type.
 
 Unit, dwt (scripts):
@@ -157,8 +157,8 @@ Manual verification before declaring done:
 
 ## Open questions
 
-- The shell nudge path for client arrival: the reactor needs a signal when a window connects. The chat pages report presence to the chat app already; if that report is not reliably the first thing a new window does, the reactor falls back to retrying on a short timer while anything is pending.
+- A client-arrival signal for the reactor, so a held open is delivered on the event rather than on the next tick of a timer. Nothing in the shell's contract offers one today, so the reactor polls; a shell-side notification to apps would let it stop.
 - `$MNGR_AGENT_STATE_DIR` in an `extra_provision_command` default: confirmed available through the sourced agent env at implementation time on the vendored mngr, but not yet exercised through a `commands.create` default specifically.
-- Whether `mngr create -t worker` from inside a bound claude chat should follow the file or its parent: today the claude plugin copies the spawning shell's `CLAUDE_CONFIG_DIR`, so the parent wins for claude and the file wins for every other harness. Left as is; the per-role preference follow-up decides it properly.
+- Whether `mngr create -t worker` from inside a bound claude chat should follow the file or its parent: today the claude plugin copies the spawning shell's `CLAUDE_CONFIG_DIR`, so the parent wins for claude and the file wins for every other harness -- while the file's `account=<default>` label rides the worker either way, so a re-auth of the account it runs on does not restart it and a re-auth of the default account does. Left as is; the per-role preference follow-up decides it properly.
 - The `CLEANUP` criterion phrasing: "the release that ships the writer has been the minimum updatable template for one release cycle", or a fleet check that no older machine exists. Either is acceptable; the marker names the first, and a fleet check can justify pulling it earlier.
 - Follow-ups, not in scope: per-role account preferences and a chat settings surface for them (also where the automation runner's `--type` override belongs); a `minds_app` create template carrying the app-launched settings, stacked when the workspace defines it.
