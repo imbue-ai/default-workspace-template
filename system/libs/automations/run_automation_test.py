@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 _SCRIPT = Path(__file__).parent / "run_automation.sh"
@@ -34,14 +33,17 @@ with open(os.environ["RECORDED_MESSAGES"], "a") as handle:
 """
 
 
-@dataclass(frozen=True)
-class _RunResult:
-    process: subprocess.CompletedProcess[str]
-    create_argv: list[str]
-    message_argvs: list[list[str]]
+def _create_record(tmp_path: Path) -> Path:
+    return tmp_path / "create.argv"
 
 
-def _run(tmp_path: Path, *args: str, listed_ids: tuple[str, ...] = ()) -> _RunResult:
+def _messages_record(tmp_path: Path) -> Path:
+    return tmp_path / "messages.jsonl"
+
+
+def _run(
+    tmp_path: Path, *args: str, listed_ids: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake_uv = bin_dir / "uv"
@@ -53,14 +55,12 @@ def _run(tmp_path: Path, *args: str, listed_ids: tuple[str, ...] = ()) -> _RunRe
     fake_messenger = tmp_path / "system" / "scripts" / "message_chat.py"
     fake_messenger.parent.mkdir(parents=True)
     fake_messenger.write_text(_FAKE_MESSAGE_CHAT)
-    recorded_create = tmp_path / "create.argv"
-    recorded_messages = tmp_path / "messages.jsonl"
-    process = subprocess.run(
+    return subprocess.run(
         ["bash", str(_SCRIPT), *args],
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
-            "RECORDED_CREATE": str(recorded_create),
-            "RECORDED_MESSAGES": str(recorded_messages),
+            "RECORDED_CREATE": str(_create_record(tmp_path)),
+            "RECORDED_MESSAGES": str(_messages_record(tmp_path)),
             "LISTED_IDS": "\n".join(listed_ids),
         },
         capture_output=True,
@@ -68,15 +68,20 @@ def _run(tmp_path: Path, *args: str, listed_ids: tuple[str, ...] = ()) -> _RunRe
         check=False,
         cwd=tmp_path,
     )
-    create_argv = (
-        recorded_create.read_text().splitlines() if recorded_create.exists() else []
-    )
-    message_argvs = (
-        [json.loads(line) for line in recorded_messages.read_text().splitlines()]
-        if recorded_messages.exists()
-        else []
-    )
-    return _RunResult(process, create_argv, message_argvs)
+
+
+def _recorded_create_argv(tmp_path: Path) -> list[str]:
+    """The argv the run handed `mngr create`, or `[]` when it created nothing."""
+    record = _create_record(tmp_path)
+    return record.read_text().splitlines() if record.exists() else []
+
+
+def _recorded_message_argvs(tmp_path: Path) -> list[list[str]]:
+    """The argvs the run invoked the messenger with, in order, or `[]` when it sent nothing."""
+    record = _messages_record(tmp_path)
+    if not record.exists():
+        return []
+    return [json.loads(line) for line in record.read_text().splitlines()]
 
 
 def _values_of(argv: list[str], flag: str) -> list[str]:
@@ -88,25 +93,27 @@ def test_the_create_names_the_role_template_alone_and_no_harness(
 ) -> None:
     """The harness and the account come from the workspace's create defaults, not from a template
     that stopped existing when harnesses moved to `--type`."""
-    run = _run(tmp_path, "news")
+    process = _run(tmp_path, "news")
 
-    assert run.process.returncode == 0, run.process.stderr
-    assert run.create_argv[:2] == ["create", "news"]
-    assert _values_of(run.create_argv, "--template") == ["automation"]
-    assert "--type" not in run.create_argv
-    assert _values_of(run.create_argv, "--label") == ["automation=news"]
-    assert _values_of(run.create_argv, "--message") == ["/news"]
-    assert run.message_argvs == []
+    assert process.returncode == 0, process.stderr
+    create_argv = _recorded_create_argv(tmp_path)
+    assert create_argv[:2] == ["create", "news"]
+    assert _values_of(create_argv, "--template") == ["automation"]
+    assert "--type" not in create_argv
+    assert _values_of(create_argv, "--label") == ["automation=news"]
+    assert _values_of(create_argv, "--message") == ["/news"]
+    assert _recorded_message_argvs(tmp_path) == []
 
 
 def test_a_type_override_rides_the_create_and_a_template_override_replaces_the_role(
     tmp_path: Path,
 ) -> None:
-    run = _run(tmp_path, "caretaker", "--template", "caretaker", "--type", "codex")
+    process = _run(tmp_path, "caretaker", "--template", "caretaker", "--type", "codex")
 
-    assert run.process.returncode == 0, run.process.stderr
-    assert _values_of(run.create_argv, "--template") == ["caretaker"]
-    assert _values_of(run.create_argv, "--type") == ["codex"]
+    assert process.returncode == 0, process.stderr
+    create_argv = _recorded_create_argv(tmp_path)
+    assert _values_of(create_argv, "--template") == ["caretaker"]
+    assert _values_of(create_argv, "--type") == ["codex"]
 
 
 def test_a_later_run_clears_and_retriggers_the_listed_agent_through_the_messenger(
@@ -115,7 +122,7 @@ def test_a_later_run_clears_and_retriggers_the_listed_agent_through_the_messenge
     """With an automation agent already listed, the run creates nothing and sends `/clear` then
     `/<skill>` to that agent's chat through `system/scripts/message_chat.py`, addressed by the
     id `mngr list` reported (the first one, should more than one exist)."""
-    run = _run(
+    process = _run(
         tmp_path,
         "news",
         listed_ids=(
@@ -124,9 +131,9 @@ def test_a_later_run_clears_and_retriggers_the_listed_agent_through_the_messenge
         ),
     )
 
-    assert run.process.returncode == 0, run.process.stderr
-    assert run.create_argv == []
-    assert run.message_argvs == [
+    assert process.returncode == 0, process.stderr
+    assert _recorded_create_argv(tmp_path) == []
+    assert _recorded_message_argvs(tmp_path) == [
         ["agent-0123456789abcdef0123456789abcdef", "--message", "/clear"],
         ["agent-0123456789abcdef0123456789abcdef", "--message", "/news"],
     ]
