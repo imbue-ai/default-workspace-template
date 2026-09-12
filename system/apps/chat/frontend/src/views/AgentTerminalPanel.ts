@@ -68,7 +68,7 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
       // against it (spawn `tmux attach`, exit, retry -- several times a second, each
       // attempt claiming the page's focus before the client was patched not to). Same
       // pattern as the shell's stopped-app placeholder: unmount the iframe while
-      // the agent is positively dead; the agents push after a start swaps it back in.
+      // the agent is positively dead; the chats push after a start swaps it back in.
       // An untracked id or UNKNOWN state keeps the iframe -- non-evidence is not death.
       const agent = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId)?.active_agent;
       if (agent !== undefined && isAgentProcessDead(agent.state)) {
