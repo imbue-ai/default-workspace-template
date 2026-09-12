@@ -8,7 +8,7 @@ import { claimSlot } from "./slots";
 import type { SlotRenderCallback } from "./slots";
 import type { RouteRenderCallback, PluginRouteHandler } from "./plugin-routes";
 import { registerPluginRoute } from "./plugin-routes";
-import { getPrimaryAgentId } from "./document-meta";
+import { getChatId } from "./document-meta";
 import { openSubagentTab } from "./shell";
 
 interface OpenTabOptions {
@@ -67,7 +67,8 @@ const llmApi: LlmApi = {
   },
 
   openTab(options: OpenTabOptions): void {
-    const chatId = getPrimaryAgentId();
+    // The page's own chat: a subagent tab is opened beside the chat whose transcript ran it.
+    const chatId = getChatId();
     if (!chatId) return;
 
     if (options.type === "subagent" && options.subagentSessionId) {
