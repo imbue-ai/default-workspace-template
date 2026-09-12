@@ -17,7 +17,12 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
+from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.auto_open import AutoOpenLedger
+from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
+from imbue.chat.auto_open import ShellLayoutClient
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -94,7 +99,15 @@ def build_production_state(
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
-    agent_manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH))
+    agent_manager = AgentManager.build(
+        broadcaster,
+        message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
+        # The tab of a chat the Minds app starts is opened through the shell, and which chats
+        # have had theirs is remembered beside the stamps so a restart never re-pops one.
+        auto_open=AutoOpenReactor(
+            ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
+        ),
+    )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)
     # because the manager is constructed before its event-queue collaborator.
@@ -150,6 +163,10 @@ def _reconcile_account_store() -> None:
     an account that LOOKS usable and silently is not, which is worse. `reconcile` logs
     both, so a dropped row is visible rather than a mystery.
 
+    The workspace's `mngr create` defaults are then rewritten from the index, whether or not
+    the sweep changed it: a workspace updated onto this build has accounts that no file yet
+    names, and this is the one write that reaches them.
+
     Never fatal. supervisord restarts this program a million times, so an unreadable index
     -- a truncated write from a hard host kill, a file from a newer build -- would be an
     unbounded crash loop with no UI and therefore no way to delete the offending account.
@@ -164,6 +181,7 @@ def _reconcile_account_store() -> None:
         if reaped:
             logger.warning("Reaped {} sign-in process(es) left by a previous run", reaped)
         reconcile()
+        regenerate_create_defaults()
     except (AccountError, OSError) as e:
         # OSError as well as AccountError: the sweep walks the accounts root, reads and writes
         # credential files and rewrites the index, and a full disk or a bad mount raises from
