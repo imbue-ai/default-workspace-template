@@ -97,13 +97,16 @@
   --dur-base: 120ms;
   --dur-slow: 200ms;
   /* Z-index scale — names the workspace's stacking layers.
-     Modal backdrops + the image lightbox sit at --z-overlay; the JS hover-tooltip
-     clears them at --z-tooltip. */
+     Modal backdrops + the image lightbox sit at --z-overlay. Menus and dropdowns
+     (components/menu.ts, components/dropdown.ts) sit at --z-popover, ABOVE the
+     overlays: a popover is always the most recently opened thing on screen, and
+     one opened from inside a modal has to paint over that modal. The JS
+     hover-tooltip clears them all at --z-tooltip. */
   --z-content: 1;
   --z-sticky: 100;
-  --z-dropdown: 1000;
   --z-overlay: 10000;
-  --z-tooltip: 10001;
+  --z-popover: 10001;
+  --z-tooltip: 10002;
   --width-message-column: 740px;
 }
 
