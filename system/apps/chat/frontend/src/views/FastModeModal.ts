@@ -18,13 +18,13 @@ import { BTN_SELECTED, Button } from "@imbue/workspace-ui/src/components/Button"
 
 const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 
-/** The name of the agent that raised the prompt, for the modal copy. */
-function promptingAgentName(): string | null {
+/** The name of the chat that raised the prompt, for the modal copy. */
+function promptingChatName(): string | null {
   const chatId = getFastModePromptChatId();
   if (chatId === null) {
     return null;
   }
-  return getChatById(chatId)?.title ?? null;
+  return getChatById(chatId)?.name ?? null;
 }
 
 export function FastModeModal(): m.Component {
@@ -70,7 +70,7 @@ export function FastModeModal(): m.Component {
         },
         [
           m("p", { class: MODAL_MESSAGE_CLASS }, [
-            promptingAgentName() !== null ? [m("strong", promptingAgentName()), " has Fast Mode on. "] : null,
+            promptingChatName() !== null ? [m("strong", promptingChatName()), " has Fast Mode on. "] : null,
             "Fast Mode is 2.5x faster and 2x more expensive (",
             m(
               "a",
