@@ -21,10 +21,10 @@ import { setFastMode } from "./ModelSettings";
 
 export const FAST_MODE_ANSWERED_LABEL = "fast_mode_prompt_answered";
 
-// The agent whose conversation raised the prompt, or null when none is showing.
-// Also the agent the answer is applied to live, since it is the one being used.
+// The chat whose conversation raised the prompt, or null when none is showing.
+// Also the chat the answer is applied to live, since it is the one being used.
 let promptingChatId: string | null = null;
-// Agents answered this session -- the immediate suppressor while the label write
+// Chats answered this session -- the immediate suppressor while the label write
 // propagates through the observe relist.
 const answeredChatIds = new Set<string>();
 

@@ -30,7 +30,7 @@ export interface OutgoingMessage {
 }
 
 const byChat: Record<string, OutgoingMessage[]> = {};
-// Arrival ids already accounted for, per agent -- so a re-streamed transcript
+// Arrival ids already accounted for, per chat -- so a re-streamed transcript
 // event or a re-pushed queued snapshot does not drop a bubble twice.
 const seenArrivalIds: Record<string, Set<string>> = {};
 let nextId = 0;
