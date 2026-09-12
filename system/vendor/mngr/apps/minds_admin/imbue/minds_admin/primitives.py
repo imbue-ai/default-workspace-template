@@ -12,6 +12,10 @@ from imbue.minds.errors import MindError
 # identifier limit.
 ANALYST_NAME_PATTERN: Final[str] = r"[a-z][a-z0-9_]{1,31}"
 
+# The provider instance the slice bake creates the workspace container under
+# (a ``[providers.*]`` section of the default-workspace-template's ``.mngr/settings.toml``).
+SLICE_PROVIDER_INSTANCE_NAME: Final[str] = "imbue_cloud_slice"
+
 
 class InvalidAnalystNameError(MindError):
     """Raised when an analytics analyst name fails validation."""

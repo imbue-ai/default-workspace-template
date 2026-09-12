@@ -1,0 +1,1 @@
+Slice-fleet gen-2 phase 4: the spec's telemetry section updated to the implemented on-box-signal design, and the OpenObserve telemetry spec's alerting section updated for the payload-free alert destinations that now exist.

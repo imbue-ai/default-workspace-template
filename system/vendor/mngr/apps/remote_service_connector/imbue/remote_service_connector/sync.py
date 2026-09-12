@@ -254,8 +254,8 @@ def user_id_prefix_sql(user_id_column: str) -> str:
 
 # Records for imbue_cloud workspaces carry the desktop's per-account provider
 # instance name, ``imbue_cloud_<slug(email)>``; the slug rule mirrors minds'
-# ``imbue_cloud_provider_name_for_account`` (duplicated, not imported -- the
-# shipped connector package must not depend on the monorepo). The bare backend
+# ``imbue_cloud_provider_name_for_account`` (duplicated, not imported -- minds
+# does not ship into the connector container). The bare backend
 # name is the fallback for an account with no email on record.
 _LEASE_RECORD_PROVIDER_BACKEND: Final[str] = "imbue_cloud"
 

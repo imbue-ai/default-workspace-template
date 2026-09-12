@@ -26,6 +26,7 @@ from imbue.remote_service_connector.http_api import handle_unexpected_exception
 from imbue.remote_service_connector.http_api import is_exception_detail_exposed
 from imbue.remote_service_connector.lease_records import router as lease_records_router
 from imbue.remote_service_connector.llm_keys import router as llm_keys_router
+from imbue.remote_service_connector.machines import router as machines_router
 from imbue.remote_service_connector.pool_gauges import router as pool_gauges_router
 from imbue.remote_service_connector.r2.buckets import router as r2_buckets_router
 from imbue.remote_service_connector.r2.grants import router as r2_grants_router
@@ -62,6 +63,7 @@ web_app.include_router(accounts_web_router)
 web_app.include_router(sync_router)
 web_app.include_router(hosts_router)
 web_app.include_router(workspaces_router)
+web_app.include_router(machines_router)
 web_app.include_router(r2_buckets_router)
 web_app.include_router(r2_grants_router)
 web_app.include_router(shares_router)

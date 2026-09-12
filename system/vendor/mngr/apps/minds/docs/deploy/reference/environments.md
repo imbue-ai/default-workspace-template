@@ -14,20 +14,22 @@ of per-developer dynamic envs on top of the dev tier:
 
 Each tier has its own Modal account, Neon account, Cloudflare account,
 SuperTokens account, OAuth clients, bare-metal box supplier account
-(currently OVH), Anthropic key, and pool-management SSH keypair. There
-is zero cross-tier reach.
+(currently OVH), Anthropic key, and management SSH authority (a Vault SSH
+CA per tier for gen-2 boxes, `minds-<tier>-ssh`; a static pool keypair per tier
+for the remaining gen-1 boxes). There is zero cross-tier reach.
 
 That extends to bare-metal boxes: a box belongs to exactly one tier.
 Sharing one *within* a tier is fine and routine (several `dev-<user>`
 envs on one dev box); sharing one *across* tiers is not, because each
-tier has its own pool keypair. A box serving two tiers is a box both
-tiers' keys can SSH, so each tier's operators and connector gain
-`limactl` -- and so root -- over the other's workspaces, and neither
-tier's reap will ever reclaim the other's slices. Baking a slice
-onto a box that carries another tier's slices -- or whose lima user
-authorizes more than that one tier's pool key -- is refused before
-anything is carved. `just server-audit` reports the same condition
-without needing a bake to fail.
+tier has its own SSH authority. A box serving two tiers is a box both
+tiers' credentials can SSH, so each tier's operators and connector gain
+the slice helper -- and so root -- over the other's workspaces, and
+neither tier's reap will ever reclaim the other's slices. Baking a slice
+onto a box that carries another tier's slices -- or whose service user
+authorizes a static key it should not (one on gen-1, none on gen-2), or
+whose pinned SSH CA is not the tier's -- is refused before anything is
+carved. `just server-audit` reports the same condition without needing a
+bake to fail.
 
 ## Per-env data root
 
@@ -319,6 +321,23 @@ For the packaged Electron app, see "Build embedding for the desktop
 client" below -- the runtime exports `MINDS_ROOT_NAME` and passes
 `--config-file` automatically from the embedded bundle.
 
+**One instance per env per machine.** Never run two minds instances (two
+`minds run` backends, or a backend plus a stale supervisor) against the same
+env on one machine. Each instance's detached `mngr latchkey forward`
+supervisor provisions the same remote machines: the last one to run
+overwrites the desktop-owned latchkey secrets on them, while only one of them
+can hold the tunnel those secrets are checked against, so agents in those
+workspaces lose their permission channel with "Unauthorized". Separate
+instances for different envs or tiers are fine. `just minds-stop` and killing
+`minds run` deliberately leave the supervisor running (so workspaces keep
+their gateway across desktop restarts), so a second env root used for a
+multi-device test has to be stopped as a whole:
+
+```bash
+uv run minds-admin env stop-local dev-<your-user>-b   # backend + supervisor
+uv run minds-admin env stop-local --list-only <env>    # just report what holds the root
+```
+
 ## Dynamic dev environments
 
 Each developer can stand up their own dev env on top of the shared
@@ -401,6 +420,15 @@ uv run minds-admin env destroy
 # `minds-admin env destroy` rmdir's ~/.minds-dev-<your-user> after success;
 # clear your shell with `eval "$(uv run minds-admin env deactivate)"`.
 ```
+
+The destroy first checks for local processes still holding the env root: the
+desktop backend (a packaged launch, or a `just minds-start` / `minds run` dev
+launch, matched by the config path in its environment) and the `mngr latchkey
+forward` supervisor. It refuses while any is running. `just minds-stop` is not
+enough, because the supervisor survives it by design; stop both with
+`minds-admin env stop-local <env>` first, or pass `--stop-local-processes` to
+have the destroy SIGTERM them itself. A dev env destroy asks no further
+confirmation once that check passes.
 
 See what envs exist on this machine (globs `~/.minds*/` directly):
 

@@ -76,8 +76,10 @@ share-relay healthcheck
 The same CLI drives the relay's operational lifecycle (the justfile recipes are
 thin wrappers over these): `provision` creates the instance on OVH Public
 Cloud, `deploy` renders the config and installs it -- plus the pinned frps and
-the healthcheck script -- over SSH, restarting the services, `dns` upserts the
-region's records, and `list` / `destroy` manage existing instances.
+the healthcheck script -- over SSH, restarting the services (it first waits up
+to five minutes for the host's sshd to answer, so it can run straight after
+`provision`: an instance reports ACTIVE before its sshd listens), `dns` upserts
+the region's records, and `list` / `destroy` manage existing instances.
 
 - `frps.toml` -- SNI-passthrough vhost + the connector-auth server plugin
   (`Login` / `NewProxy` / `Ping`; visitor connections never call the

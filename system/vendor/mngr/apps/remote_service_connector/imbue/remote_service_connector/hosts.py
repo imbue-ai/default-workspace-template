@@ -7,12 +7,12 @@ limactl. The connector makes no provider-API calls of its own.
 
 import base64
 import contextlib
-import io
 import json
 import logging
 import os
 import re
 import shlex
+import socket
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from typing import Any
@@ -36,6 +36,9 @@ import imbue.remote_service_connector.relays as relays_module
 import imbue.remote_service_connector.shares as shares_module
 import imbue.remote_service_connector.storage as storage_module
 import imbue.remote_service_connector.sync as sync_module
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_destroy_script
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_list_instances_command
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.modal_app_kit.metrics import emit_metric
 from imbue.remote_service_connector import db
 from imbue.remote_service_connector.auth import UserAuth
@@ -46,6 +49,9 @@ from imbue.remote_service_connector.errors import InvalidHostNameError
 from imbue.remote_service_connector.errors import InvalidShareCoordinateError
 from imbue.remote_service_connector.errors import PoolHostCleanupError
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
+from imbue.remote_service_connector.ssh_certs import ManagementSshCredentials
+from imbue.remote_service_connector.ssh_certs import SshCertificateBundleMissingError
+from imbue.remote_service_connector.ssh_certs import management_credentials_for_generation
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +59,8 @@ router = APIRouter()
 
 
 # Mirror of mngr's SafeName regex (libs/mngr/imbue/mngr/primitives.py:_SAFE_NAME_RE).
-# Duplicated here -- not imported -- because the shipped connector package
-# must not depend on the monorepo. Keep this in sync if the mngr-side rule
+# Duplicated here -- not imported -- because ``imbue.mngr`` does not ship into
+# the connector container. Keep this in sync if the mngr-side rule
 # changes (alphanumeric, dashes/underscores allowed in the middle only).
 _HOST_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
 
@@ -94,6 +100,20 @@ class LeaseHostRequest(BaseModel):
             "lease fails. Leave unset to be region-agnostic."
         ),
     )
+    # CLEANUP: default this to unrestricted (and drop the gen-1 confinement)
+    # once the pre-minds-v0.6 client population is dead -- this outlives phase 6
+    # of blueprint/slice-fleet-cutover (it gates on client age, not on gen-1
+    # code existing).
+    max_box_generation: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "The highest slice-fleet box generation this client can operate; rows on newer boxes "
+            "are excluded from the lease. Absent means 1: clients that predate the field cannot "
+            "run gen-2 workspaces (their slow-path rebuild would produce an unsandboxed runc "
+            "container), so they are confined to gen-1 rows."
+        ),
+    )
 
     _validate_host_name = field_validator("host_name")(_validate_host_name)
 
@@ -116,6 +136,11 @@ class LeaseHostResponse(BaseModel):
     container_host_public_key: str = Field(
         description="The docker container sshd host public key (port container_ssh_port), for strict host-key pinning"
     )
+    box_generation: int = Field(
+        description="Slice-fleet generation of the leased host's box (selects per-generation client behavior)"
+    )
+    memory_units: int = Field(description="The machine's current size in units (1 unit = 1GiB guest RAM)")
+    disk_gb: int = Field(description="The machine's data-disk size in GB (grow-only)")
 
 
 class ReleaseHostResponse(BaseModel):
@@ -181,13 +206,57 @@ def _count_by_statuses_sql(statuses: tuple[str, ...]) -> str:
 COUNT_RUNNING_WORKSPACES_SQL: Final = _count_by_statuses_sql(RUNNING_WORKSPACE_STATUSES)
 _COUNT_TOTAL_WORKSPACES_SQL: Final = _count_by_statuses_sql(TOTAL_WORKSPACE_STATUSES)
 
+# Machine-sizing quota sums (specs/slice-fleet). A machine counts at the
+# LARGER of its current and pending-target size: the resize request is the
+# grant point, and a not-yet-applied downsize must not free capacity its VM
+# still physically holds.
+_ACTIVE_STATUS_LITERALS: Final = ", ".join(f"'{status}'" for status in RUNNING_WORKSPACE_STATUSES)
+_TOTAL_STATUS_LITERALS: Final = ", ".join(f"'{status}'" for status in TOTAL_WORKSPACE_STATUSES)
+SUM_ACTIVE_MACHINE_UNITS_SQL: Final = (
+    "SELECT COALESCE(SUM(GREATEST(memory_units, COALESCE(target_memory_units, 0))), 0) "
+    f"FROM pool_hosts WHERE leased_to_user = %s AND status IN ({_ACTIVE_STATUS_LITERALS})"
+)
+SUM_TOTAL_MACHINE_DISK_GB_SQL: Final = (
+    "SELECT COALESCE(SUM(GREATEST(disk_gb, COALESCE(target_disk_gb, 0))), 0) "
+    f"FROM pool_hosts WHERE leased_to_user = %s AND status IN ({_TOTAL_STATUS_LITERALS})"
+)
+
+
+def sum_active_machine_units_with_cursor(cur: Any, user_id_prefix: str) -> int:
+    """The units counted against ``max_active_machine_units``, on the caller's open cursor."""
+    cur.execute(SUM_ACTIVE_MACHINE_UNITS_SQL, (user_id_prefix,))
+    row = cur.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def sum_total_machine_disk_gb_with_cursor(cur: Any, user_id_prefix: str) -> int:
+    """The data-disk GB counted against ``max_total_machine_disk_gb``, on the caller's open cursor."""
+    cur.execute(SUM_TOTAL_MACHINE_DISK_GB_SQL, (user_id_prefix,))
+    row = cur.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def sum_active_machine_units(user_id_prefix: str) -> int:
+    """The units counted against ``max_active_machine_units`` (its own pooled connection; see the cursor variant)."""
+    with db.pooled_db_connection() as conn:
+        with conn.cursor() as cur:
+            return sum_active_machine_units_with_cursor(cur, user_id_prefix)
+
+
+def sum_total_machine_disk_gb(user_id_prefix: str) -> int:
+    """The data-disk GB counted against ``max_total_machine_disk_gb`` (its own pooled connection)."""
+    with db.pooled_db_connection() as conn:
+        with conn.cursor() as cur:
+            return sum_total_machine_disk_gb_with_cursor(cur, user_id_prefix)
+
+
 # Quarantine status for a row whose host could not be reached at lease time
 # (SSH key injection failed). Inert everywhere else: every other query filters
 # on available/leased/removing, so a quarantined row simply sits out of
 # rotation until an operator destroys it (the admin destroy claims this status
 # too -- mirrors POOL_HOST_STATUS_UNREACHABLE in mngr_imbue_cloud's
-# ``bare_metal_db``, duplicated because the shipped connector package must not
-# depend on the monorepo).
+# ``bare_metal_db``, duplicated because that module does not ship into the
+# connector container).
 _POOL_HOST_STATUS_UNREACHABLE: Final = "unreachable"
 
 # How many candidate rows one lease request tries before giving up. Each
@@ -221,7 +290,9 @@ def _lease_metric_tag_value(value: object) -> str:
 
 def build_lease_request_metric_tags(
     is_leased: bool,
+    is_quota_refused: bool,
     is_pool_exhausted: bool,
+    is_update_required: bool,
     is_missing_host_keys: bool,
     requested_region: str | None,
     requested_branch: object,
@@ -229,14 +300,21 @@ def build_lease_request_metric_tags(
     """The ``host_lease_request`` metric's tags for one lease attempt (pure).
 
     The outcome precedence mirrors the response precedence in
-    ``_lease_pool_host``: a lease beats every failure, missing host keys beat
-    pool exhaustion, and the remaining case is an injection failure (every
-    candidate row was quarantined).
+    ``_lease_pool_host``: a lease beats every failure, a machine-sizing quota
+    refusal beats missing host keys, missing host keys beat pool exhaustion
+    (with the update-required sub-case of exhaustion its own outcome -- it
+    means old clients are still trying, not that capacity ran out), and the
+    remaining case is an injection failure (every candidate row was
+    quarantined).
     """
     if is_leased:
         outcome = "leased"
+    elif is_quota_refused:
+        outcome = "quota_refused"
     elif is_missing_host_keys:
         outcome = "no_host_keys"
+    elif is_update_required:
+        outcome = "update_required"
     elif is_pool_exhausted:
         outcome = "pool_exhausted"
     else:
@@ -248,13 +326,12 @@ def build_lease_request_metric_tags(
     }
 
 
-def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
-    """Pin ``expected_host_public_key`` for ``host:port`` and reject any other host key.
+def _parse_pinned_host_key(host: str, port: int, expected_host_public_key: str) -> tuple[str, paramiko.PKey]:
+    """Return the known-hosts name for ``host:port`` and the row's pinned key parsed as a paramiko key.
 
     paramiko keys non-default ports under the ``[host]:port`` known-hosts name, so
     a container/forwarded port must be pinned under that bracketed name to match
-    what ``connect`` looks up. Replaces trust-on-first-use: a mismatched or
-    unknown host key is rejected.
+    what ``connect`` looks up.
     """
     known_hosts_name = host if port == 22 else f"[{host}]:{port}"
     entry = HostKeyEntry.from_line(f"{known_hosts_name} {expected_host_public_key.strip()}")
@@ -266,8 +343,71 @@ def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, exp
         raise paramiko.SSHException(
             f"could not parse expected host key for {known_hosts_name}: {expected_host_public_key!r}"
         )
-    client.get_host_keys().add(known_hosts_name, entry.key.get_name(), entry.key)
+    return known_hosts_name, entry.key
+
+
+def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
+    """Pin ``expected_host_public_key`` for ``host:port`` and reject any other host key.
+
+    Replaces trust-on-first-use: a mismatched or unknown host key is rejected.
+    """
+    known_hosts_name, pinned_key = _parse_pinned_host_key(host, port, expected_host_public_key)
+    client.get_host_keys().add(known_hosts_name, pinned_key.get_name(), pinned_key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
+
+
+# Unauthenticated handshake budget for the pre-share host-key probe.
+_HOST_KEY_PROBE_TIMEOUT_SECONDS: Final[float] = 15.0
+
+
+def _assert_container_serves_pinned_host_key(host: str, port: int, expected_host_public_key: str) -> None:
+    """Handshake with the container sshd and raise ``paramiko.BadHostKeyException`` unless it serves the pinned key.
+
+    Runs before a share is activated and its relay token rotated: a workspace
+    the connector cannot reach (the minds desktop app adopted it and rotated the
+    key) must keep the share its desktop established, not be left holding a
+    token the rotation just invalidated.
+    """
+    known_hosts_name, pinned_key = _parse_pinned_host_key(host, port, expected_host_public_key)
+    with socket.create_connection((host, port), timeout=_HOST_KEY_PROBE_TIMEOUT_SECONDS) as sock:
+        transport = paramiko.Transport(sock)
+        # Ask for the pinned key's type first (as SSHClient.connect does for a
+        # known host), so an sshd serving several host keys presents the one
+        # the row recorded rather than paramiko's default preference.
+        security_options = transport.get_security_options()
+        security_options.key_types = [pinned_key.get_name()] + [
+            key_type for key_type in security_options.key_types if key_type != pinned_key.get_name()
+        ]
+        try:
+            transport.start_client(timeout=_HOST_KEY_PROBE_TIMEOUT_SECONDS)
+            served_key = transport.get_remote_server_key()
+        finally:
+            transport.close()
+    if served_key.get_name() != pinned_key.get_name() or served_key.asbytes() != pinned_key.asbytes():
+        raise paramiko.BadHostKeyException(known_hosts_name, served_key, pinned_key)
+
+
+def _desktop_managed_workspace_conflict(host_db_id: UUID) -> HTTPException:
+    """The 409 for a workspace whose container serves a host key the row never learned.
+
+    The minds desktop app adopted it and rotated its host keys client-side (the
+    connector never learns them by design), so a server-side share bring-up
+    cannot reach the container; the desktop app enables sharing over the user's
+    own SSH instead.
+    """
+    logger.info(
+        "Host %s serves a rotated container host key; sharing must be enabled from the desktop app", host_db_id
+    )
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "workspace_managed_by_desktop",
+            "message": (
+                "This workspace is managed by the minds desktop app, which rotated its SSH host key; "
+                "enable sharing from the desktop app."
+            ),
+        },
+    )
 
 
 @contextlib.contextmanager
@@ -275,16 +415,18 @@ def management_ssh_client(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     timeout_seconds: float,
     expected_host_public_key: str,
 ) -> Iterator[paramiko.SSHClient]:
-    """Yield an SSHClient connected to ``host`` with the pool management key, closed on exit.
+    """Yield an SSHClient connected to ``host`` with the management credentials, closed on exit.
 
-    The host is authenticated against ``expected_host_public_key`` (strict pinning,
-    no trust-on-first-use); callers fail closed when no pinned key is available.
+    Gen-2 credentials are a short-lived certificate (presented in place of the raw
+    key); gen-1 ones the static pool key. The host is authenticated against
+    ``expected_host_public_key`` (strict pinning, no trust-on-first-use); callers
+    fail closed when no pinned key is available.
     """
-    private_key = paramiko.Ed25519Key.from_private_key(io.StringIO(management_key_pem))
+    private_key = credentials.to_paramiko_key()
     client = paramiko.SSHClient()
     _pin_expected_host_key(client, host, port, expected_host_public_key)
     try:
@@ -298,13 +440,13 @@ def _append_authorized_key(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     public_key_to_add: str,
     expected_host_public_key: str,
 ) -> None:
-    """SSH into a host using the management key and append a public key to authorized_keys."""
+    """SSH into a host with the management credentials and append a public key to authorized_keys."""
     with management_ssh_client(
-        host, port, user, management_key_pem, timeout_seconds=15, expected_host_public_key=expected_host_public_key
+        host, port, user, credentials, timeout_seconds=15, expected_host_public_key=expected_host_public_key
     ) as client:
         key_line = public_key_to_add.strip()
         commands = (
@@ -333,12 +475,21 @@ def _delete_pool_host_row(host_db_id: Any) -> None:
                 cur.execute("DELETE FROM pool_hosts WHERE id = %s", (str(host_db_id),))
 
 
-def build_slice_teardown_commands(lima_instance_name: str, lima_disk_name: str | None) -> tuple[str, ...]:
-    """Commands to run on the bare-metal box to destroy a slice's lima VM + data disk."""
-    commands = [f"limactl delete --force {shlex.quote(lima_instance_name)}"]
-    if lima_disk_name:
-        commands.append(f"limactl disk delete --force {shlex.quote(lima_disk_name)}")
+def build_slice_teardown_commands(slice_instance_name: str, slice_disk_name: str | None) -> tuple[str, ...]:
+    """Commands to run on the bare-metal box to destroy a gen-1 slice's lima VM + data disk."""
+    commands = [f"limactl delete --force {shlex.quote(slice_instance_name)}"]
+    if slice_disk_name:
+        commands.append(f"limactl disk delete --force {shlex.quote(slice_disk_name)}")
     return tuple(commands)
+
+
+def build_slice_teardown_commands_for_generation(
+    box_generation: int, slice_instance_name: str, slice_disk_name: str | None
+) -> tuple[str, ...]:
+    """The box-side teardown command set for a slice, selected by the row's stamped generation."""
+    if box_generation >= FIRST_QEMU_BOX_GENERATION:
+        return (build_qemu_destroy_script(slice_instance_name),)
+    return build_slice_teardown_commands(slice_instance_name, slice_disk_name)
 
 
 # What ``limactl delete`` / ``limactl disk delete`` print when the target is
@@ -364,14 +515,14 @@ def run_ssh_commands_on_box(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     commands: tuple[str, ...],
     box_host_public_key: str,
     is_absent_target_tolerated: bool,
 ) -> None:
-    """SSH into the box with the pool management key and run each command, raising on failure."""
+    """SSH into the box with the management credentials and run each command, raising on failure."""
     with management_ssh_client(
-        host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=box_host_public_key
+        host, port, user, credentials, timeout_seconds=30, expected_host_public_key=box_host_public_key
     ) as client:
         for command in commands:
             _stdin, stdout, stderr = client.exec_command(command)
@@ -390,28 +541,35 @@ def run_ssh_commands_on_box(
 def clean_up_slice_on_box(
     host_db_id: Any,
     bare_metal_server_id: Any,
-    lima_instance_name: str | None,
-    lima_disk_name: str | None,
+    slice_instance_name: str | None,
+    slice_disk_name: str | None,
+    box_generation: int,
 ) -> None:
-    """Destroy a slice's lima VM (and data disk) on its owning bare-metal box.
+    """Destroy a slice's VM (and data disk) on its owning bare-metal box.
 
-    Looks up the box's address + lima service user from ``bare_metal_servers``
+    Looks up the box's address + slice service user from ``bare_metal_servers``
     (on a short pooled checkout -- no connection is held across the SSH work),
-    then SSHes in with the pool management key and runs limactl. An instance
-    or disk that is already absent counts as torn down. Raises
-    ``PoolHostCleanupError`` if the slice's bookkeeping is incomplete or the
-    box can't be reached, so the row stays ``removing`` and a retry (the
-    client's, or the lease-record sweep's) finishes the job -- the slot is
-    only freed once the VM is really gone.
+    then SSHes in with the pool management key and runs the teardown for the
+    row's stamped generation (limactl for gen-1, the systemd unit + instance-dir
+    removal for gen-2). An instance or disk that is already absent counts as
+    torn down. Raises ``PoolHostCleanupError`` if the slice's bookkeeping is
+    incomplete or the box can't be reached, so the row stays ``removing`` and a
+    retry (the client's, or the lease-record sweep's) finishes the job -- the
+    slot is only freed once the VM is really gone.
     """
-    if not (bare_metal_server_id and lima_instance_name):
+    if not (bare_metal_server_id and slice_instance_name):
         raise PoolHostCleanupError(
-            f"slice pool host {host_db_id} is missing bare_metal_server_id or lima_instance_name; cannot tear down its VM"
+            f"slice pool host {host_db_id} is missing bare_metal_server_id or slice_instance_name; cannot tear down its VM"
         )
     with db.pooled_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT public_address, lima_service_user, box_host_public_key FROM bare_metal_servers WHERE id = %s",
+                # CLEANUP: drop the COALESCE fallbacks to the legacy lima_* columns
+                # (here and in the other bare_metal_servers / pool_hosts reads of this
+                # module) once every tier's pool DB has applied migration 041 and no
+                # pre-rename checkout writes them anymore.
+                "SELECT public_address, COALESCE(slice_service_user, lima_service_user), box_host_public_key "
+                "FROM bare_metal_servers WHERE id = %s",
                 (str(bare_metal_server_id),),
             )
             server_row = cur.fetchone()
@@ -419,7 +577,7 @@ def clean_up_slice_on_box(
         raise PoolHostCleanupError(
             f"slice pool host {host_db_id}: bare_metal_servers row {bare_metal_server_id} is missing or has no public_address"
         )
-    box_address, lima_service_user, box_host_public_key = server_row[0], server_row[1] or "root", server_row[2]
+    box_address, slice_service_user, box_host_public_key = server_row[0], server_row[1] or "root", server_row[2]
     # Fail closed: without the box's pinned host key we cannot reach it without
     # trust-on-first-use. The row stays ``removing`` and the sweep retries once
     # the one-time keyscan backfill has populated the column.
@@ -428,13 +586,18 @@ def clean_up_slice_on_box(
             f"slice pool host {host_db_id}: bare_metal_servers row {bare_metal_server_id} has no box_host_public_key "
             "(run the one-time `minds-admin pool backfill-host-keys`)"
         )
-    management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
-    commands = build_slice_teardown_commands(lima_instance_name, lima_disk_name)
+    commands = build_slice_teardown_commands_for_generation(box_generation, slice_instance_name, slice_disk_name)
+    try:
+        credentials = management_credentials_for_generation(box_generation)
+    except SshCertificateBundleMissingError as exc:
+        raise PoolHostCleanupError(
+            f"slice pool host {host_db_id}: no management SSH credentials available for box {box_address}: {exc}"
+        ) from exc
     run_ssh_commands_on_box(
         box_address,
         22,
-        lima_service_user,
-        management_key_pem,
+        slice_service_user,
+        credentials,
         commands,
         box_host_public_key,
         is_absent_target_tolerated=True,
@@ -449,29 +612,48 @@ def clean_up_slice_on_box(
 # env that happens to end in ``-<16 hex>`` still parses as the 32-hex shape.
 # Mirrors ``mngr_imbue_cloud.slices.bare_metal`` (the connector has no dependency
 # on it).
-_SLICE_LIMA_PREFIX = "mngr-slice-"
-_SLICE_LIMA_DISK_SUFFIX = "-data"
+_SLICE_INSTANCE_PREFIX = "mngr-slice-"
+_SLICE_DISK_SUFFIX = "-data"
 _STAMPED_SLICE_CORE_RES = (
     re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{32})$"),
     re.compile(r"^(?P<env>.+)-(?P<host>[0-9a-f]{16})$"),
 )
-# Non-login SSH may not source the lima user's profile, so set PATH explicitly
+# Non-login SSH may not source the service user's profile, so set PATH explicitly
 # (limactl is extracted to /usr/local/bin by box prep).
 _BOX_LIMACTL_PATH_PREFIX = "PATH=/usr/local/bin:$HOME/.local/bin:$PATH"
 
 
 def slice_name_env_owner(name: str) -> str | None:
     """The env a slice instance/disk name is stamped for, or None if legacy/foreign/not-a-slice."""
-    if not name.startswith(_SLICE_LIMA_PREFIX):
+    if not name.startswith(_SLICE_INSTANCE_PREFIX):
         return None
-    core = name[len(_SLICE_LIMA_PREFIX) :]
-    if core.endswith(_SLICE_LIMA_DISK_SUFFIX):
-        core = core[: -len(_SLICE_LIMA_DISK_SUFFIX)]
+    core = name[len(_SLICE_INSTANCE_PREFIX) :]
+    if core.endswith(_SLICE_DISK_SUFFIX):
+        core = core[: -len(_SLICE_DISK_SUFFIX)]
     for pattern in _STAMPED_SLICE_CORE_RES:
         match = pattern.match(core)
         if match is not None:
             return match.group("env")
     return None
+
+
+def _list_box_gen2_instance_names(client: paramiko.SSHClient, host: str) -> set[str]:
+    """Return the name of every gen-2 slice instance dir on the box.
+
+    Runs over the caller's already-connected management SSH ``client`` (``host``
+    is for error messages only). Raises ``PoolHostCleanupError`` on a non-zero
+    exit so the caller treats the box as not reconciled rather than mistaking
+    an SSH failure for "no VMs".
+    """
+    command = build_qemu_list_instances_command()
+    _stdin, stdout, stderr = client.exec_command(command)
+    exit_status = stdout.channel.recv_exit_status()
+    output = stdout.read().decode()
+    if exit_status != 0:
+        raise PoolHostCleanupError(
+            f"gen-2 slice listing on {host} failed (exit {exit_status}): {stderr.read().decode()}"
+        )
+    return {line.strip() for line in output.splitlines() if line.strip()}
 
 
 def _list_box_lima_names(client: paramiko.SSHClient, host: str, json_subcommand: str) -> set[str]:
@@ -528,7 +710,7 @@ _BOX_HEALTH_COMMAND: Final = (
 # /proc/mdstat structure: an array header line (``md3 : active raid1 ...``)
 # followed by a status line whose ``[expected/active]`` bracket reports member
 # counts. Mirrors ``mngr_imbue_cloud.slices.bare_metal`` (duplicated, not
-# imported -- the shipped connector package must not depend on the monorepo).
+# imported -- that module does not ship into the connector container).
 _MD_ARRAY_HEADER_RE = re.compile(r"^(md\d+)\s*:")
 _MD_MEMBER_COUNTS_RE = re.compile(r"\[(\d+)/(\d+)\]")
 
@@ -618,16 +800,15 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
         logger.info("Slice reconcile skipped: connector has no MINDS_ENV_NAME to scope to")
         return 0
     with conn.cursor() as cur:
-        cur.execute("SELECT id, public_address, lima_service_user, box_host_public_key FROM bare_metal_servers")
+        cur.execute(
+            "SELECT id, public_address, COALESCE(slice_service_user, lima_service_user), box_host_public_key, "
+            "box_generation FROM bare_metal_servers"
+        )
         servers = cur.fetchall()
-    # Read the pool key only once we know there are boxes to inspect: a deployment
-    # with no slice infrastructure (no boxes, no POOL_SSH_PRIVATE_KEY) must not fail
-    # here.
     if not servers:
         return 0
-    management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
     divergence_count = 0
-    for server_id, public_address, lima_service_user, box_host_public_key in servers:
+    for server_id, public_address, slice_service_user, box_host_public_key, raw_box_generation in servers:
         if not public_address:
             continue
         # Fail closed on a box with no pinned host key: skipping it would look like
@@ -640,7 +821,7 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
             )
             divergence_count += 1
             continue
-        user = lima_service_user or "root"
+        user = slice_service_user or "root"
         # One management SSH connection per box serves both reads. Box hardware
         # health is read and logged first, before the lima listing is attempted: a
         # degraded RAID array or unmirrored raw-partition swap is exactly the
@@ -654,7 +835,7 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
             public_address,
             22,
             user,
-            management_key_pem,
+            management_credentials_for_generation(int(raw_box_generation or 1)),
             timeout_seconds=30,
             expected_host_public_key=box_host_public_key,
         ) as box_client:
@@ -683,10 +864,14 @@ def reconcile_slice_boxes(conn: Any, env_name: str) -> int:
                     public_address,
                     ", ".join(missing_binaries),
                 )
-            box_instances = _list_box_lima_names(box_client, public_address, "list --json")
+            if int(raw_box_generation or 1) >= FIRST_QEMU_BOX_GENERATION:
+                box_instances = _list_box_gen2_instance_names(box_client, public_address)
+            else:
+                box_instances = _list_box_lima_names(box_client, public_address, "list --json")
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT lima_instance_name FROM pool_hosts WHERE bare_metal_server_id = %s",
+                "SELECT COALESCE(slice_instance_name, lima_instance_name) FROM pool_hosts "
+                "WHERE bare_metal_server_id = %s",
                 (str(server_id),),
             )
             tracked_instances = {row[0] for row in cur.fetchall() if row[0]}
@@ -764,7 +949,15 @@ def _lease_pool_host(
     quarantined_host_db_ids: list[Any] = []
     leased: LeaseHostResponse | None = None
     is_pool_exhausted = False
+    is_update_required = False
     no_host_keys_detail: str | None = None
+    # A machine-sizing quota refusal found mid-loop: (entitlement, limit,
+    # current, noun). Raised only after the transaction commits so any
+    # quarantines this request already flipped are never rolled back.
+    machine_quota_refusal: tuple[str, int, int, str] | None = None
+    # A gen-2 row selected while no management certificate is stored; likewise
+    # carried out of the loop and raised (as the 503) only after the commit.
+    missing_certificate_error: SshCertificateBundleMissingError | None = None
     with db.pooled_db_connection() as conn:
         with conn:
             with conn.cursor() as cur:
@@ -794,19 +987,21 @@ def _lease_pool_host(
                         total_count,
                         "total workspaces (running + stopped)",
                     )
-                # Build the lease selection dynamically. A hard ``region``
-                # adds an equality filter; when unset the lease is
-                # region-agnostic. The selection stays a single round-trip
+                # Build the lease selection dynamically. The hard ``region``
+                # requirement adds an equality filter; unset leaves the lease
+                # unconstrained on it. The selection stays a single round-trip
                 # (the fast path must not pay an extra query).
                 where_clauses = ["status = 'available'", "attributes @> %s::jsonb"]
                 query_params: list[object] = [json.dumps(body.attributes)]
                 if body.region is not None:
                     where_clauses.append("region = %s")
                     query_params.append(body.region)
+                where_clauses.append("box_generation <= %s")
+                query_params.append(body.max_box_generation)
                 order_by = "created_at ASC"
                 lease_select_sql = (
                     "SELECT id, vps_address, ssh_port, ssh_user, container_ssh_port, agent_id, host_id, attributes, "
-                    "outer_host_public_key, container_host_public_key "
+                    "outer_host_public_key, container_host_public_key, box_generation, memory_units, disk_gb "
                     "FROM pool_hosts "
                     f"WHERE {' AND '.join(where_clauses)} "
                     f"ORDER BY {order_by} LIMIT 1 FOR UPDATE SKIP LOCKED"
@@ -819,6 +1014,20 @@ def _lease_pool_host(
                     row = cur.fetchone()
                     if row is None:
                         is_pool_exhausted = True
+                        # An exhaustion under a generation cap is permanent when
+                        # the tier holds NO row at or below the client's
+                        # generation (any status) while newer-generation rows
+                        # exist: the fleet has moved past this client, and the
+                        # remedy is an app update, not a retry. An entirely
+                        # empty pool stays the ordinary no-capacity refusal.
+                        if body.max_box_generation < FIRST_QEMU_BOX_GENERATION:
+                            cur.execute(
+                                "SELECT EXISTS(SELECT 1 FROM pool_hosts WHERE box_generation <= %s), "
+                                "EXISTS(SELECT 1 FROM pool_hosts WHERE box_generation > %s)",
+                                (body.max_box_generation, body.max_box_generation),
+                            )
+                            probe = cur.fetchone()
+                            is_update_required = probe is not None and not probe[0] and bool(probe[1])
                         break
                     (
                         host_db_id,
@@ -831,7 +1040,36 @@ def _lease_pool_host(
                         attributes,
                         outer_host_public_key,
                         container_host_public_key,
+                        lease_box_generation,
+                        lease_memory_units,
+                        lease_disk_gb,
                     ) = row
+
+                    # Machine-sizing quotas (specs/slice-fleet), checked against
+                    # the SELECTED row's actual size (a dev bake can carve
+                    # odd-sized machines). Break rather than raise so the
+                    # already-committed-on-exit quarantines survive; the 403 is
+                    # raised after the commit.
+                    row_units = int(lease_memory_units)
+                    row_disk_gb = int(lease_disk_gb)
+                    active_units = sum_active_machine_units_with_cursor(cur, user.user_id_prefix)
+                    if active_units + row_units > entitlements.max_active_machine_units:
+                        machine_quota_refusal = (
+                            "max_active_machine_units",
+                            entitlements.max_active_machine_units,
+                            active_units,
+                            "active machine units",
+                        )
+                        break
+                    total_disk_gb = sum_total_machine_disk_gb_with_cursor(cur, user.user_id_prefix)
+                    if total_disk_gb + row_disk_gb > entitlements.max_total_machine_disk_gb:
+                        machine_quota_refusal = (
+                            "max_total_machine_disk_gb",
+                            entitlements.max_total_machine_disk_gb,
+                            total_disk_gb,
+                            "machine disk GB",
+                        )
+                        break
 
                     # Fail closed: a row without both pinned host keys cannot be
                     # leased without trust-on-first-use. This only happens for rows
@@ -851,15 +1089,23 @@ def _lease_pool_host(
                         )
                         break
 
+                    # The row is not at fault when the connector holds no
+                    # certificate for its generation, so it stays available;
+                    # break so the quarantines above outlive the 503.
+                    try:
+                        management_credentials = management_credentials_for_generation(int(lease_box_generation or 1))
+                    except SshCertificateBundleMissingError as exc:
+                        missing_certificate_error = exc
+                        break
+
                     # Inject the user's SSH public key on VPS and container, pinning
                     # each sshd's recorded host key (strict, no trust-on-first-use).
-                    management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
                     try:
                         _append_authorized_key(
                             vps_address,
                             ssh_port,
                             ssh_user,
-                            management_key_pem,
+                            management_credentials,
                             body.ssh_public_key,
                             outer_host_public_key,
                         )
@@ -867,7 +1113,7 @@ def _lease_pool_host(
                             vps_address,
                             container_ssh_port,
                             ssh_user,
-                            management_key_pem,
+                            management_credentials,
                             body.ssh_public_key,
                             container_host_public_key,
                         )
@@ -915,18 +1161,24 @@ def _lease_pool_host(
                         attributes=attributes if isinstance(attributes, dict) else {},
                         outer_host_public_key=outer_host_public_key,
                         container_host_public_key=container_host_public_key,
+                        box_generation=int(lease_box_generation or 1),
+                        memory_units=row_units,
+                        disk_gb=row_disk_gb,
                     )
                     break
     # One metric record per attempt that reached host selection: create demand
-    # (and its failures) charted per requested region/branch. Quota and auth
-    # refusals raise before this point and stay visible via the access log's
-    # status codes instead.
+    # (and its failures) charted per requested region/branch. Workspace-count
+    # quota and auth refusals raise before this point and stay visible via the
+    # access log's status codes instead; the machine-sizing refusal is carried
+    # out of the loop, so it is recorded here.
     emit_metric(
         "host_lease_request",
         1,
         build_lease_request_metric_tags(
             is_leased=leased is not None,
+            is_quota_refused=machine_quota_refusal is not None,
             is_pool_exhausted=is_pool_exhausted,
+            is_update_required=is_update_required,
             is_missing_host_keys=no_host_keys_detail is not None,
             requested_region=body.region,
             requested_branch=body.attributes.get("repo_branch_or_tag"),
@@ -936,8 +1188,24 @@ def _lease_pool_host(
         return leased
     # Nothing leased. The quarantines above are already committed (the
     # transaction exited normally), so these raises never roll them back.
+    if machine_quota_refusal is not None:
+        entitlement, limit, current, noun = machine_quota_refusal
+        raise_quota_exceeded(entitlement, limit, current, noun)
+    if missing_certificate_error is not None:
+        # ``handle_endpoint_errors`` answers this as the 503 ``management_certificate_unavailable``.
+        raise missing_certificate_error
     if no_host_keys_detail is not None:
         raise HTTPException(status_code=503, detail=no_host_keys_detail)
+    if is_update_required:
+        # A plain string detail: the only clients that can reach this branch
+        # predate the capability field, and they render the 503 detail verbatim.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "This version of the app is too old for the current workspace fleet: no compatible "
+                "hosts remain. Update the minds app and try again."
+            ),
+        )
     if is_pool_exhausted:
         raise HTTPException(
             status_code=503,
@@ -961,11 +1229,12 @@ class _PoolRowForRelease(BaseModel):
     host_db_id: str
     leased_to_user: str | None
     status: str
-    lima_instance_name: str | None
-    lima_disk_name: str | None
+    slice_instance_name: str | None
+    slice_disk_name: str | None
     bare_metal_server_id: Any
     mngr_host_id: str | None
     agent_id: str | None
+    box_generation: int
 
 
 def _read_pool_row_for_release(cur: Any, host_db_id: Any) -> _PoolRowForRelease | None:
@@ -973,8 +1242,9 @@ def _read_pool_row_for_release(cur: Any, host_db_id: Any) -> _PoolRowForRelease 
     # ``str(host_db_id)`` because psycopg2 can't adapt the Python ``UUID``
     # type that FastAPI parses from the path (it raises "can't adapt type 'UUID'").
     cur.execute(
-        "SELECT leased_to_user, status, lima_instance_name, lima_disk_name, bare_metal_server_id, host_id, agent_id "
-        "FROM pool_hosts WHERE id = %s",
+        "SELECT leased_to_user, status, COALESCE(slice_instance_name, lima_instance_name), "
+        "COALESCE(slice_disk_name, lima_disk_name), bare_metal_server_id, host_id, agent_id, "
+        "box_generation FROM pool_hosts WHERE id = %s",
         (str(host_db_id),),
     )
     row = cur.fetchone()
@@ -984,11 +1254,12 @@ def _read_pool_row_for_release(cur: Any, host_db_id: Any) -> _PoolRowForRelease 
         host_db_id=str(host_db_id),
         leased_to_user=row[0],
         status=row[1],
-        lima_instance_name=row[2],
-        lima_disk_name=row[3],
+        slice_instance_name=row[2],
+        slice_disk_name=row[3],
         bare_metal_server_id=row[4],
         mngr_host_id=row[5],
         agent_id=row[6],
+        box_generation=int(row[7] or 1),
     )
 
 
@@ -1091,7 +1362,9 @@ def release_pool_host_row(host_db_id: Any) -> str:
         # any VM this leaves behind is exactly what the box-reconcile sweep
         # surfaces.
         try:
-            clean_up_slice_on_box(host_db_id, row.bare_metal_server_id, row.lima_instance_name, row.lima_disk_name)
+            clean_up_slice_on_box(
+                host_db_id, row.bare_metal_server_id, row.slice_instance_name, row.slice_disk_name, row.box_generation
+            )
         except (PoolHostCleanupError, paramiko.SSHException, OSError) as e:
             logger.warning(
                 "Releasing crashed workspace %s: teardown against box %s failed (%s); deleting the row anyway",
@@ -1100,7 +1373,9 @@ def release_pool_host_row(host_db_id: Any) -> str:
                 e,
             )
     elif is_vm_expected:
-        clean_up_slice_on_box(host_db_id, row.bare_metal_server_id, row.lima_instance_name, row.lima_disk_name)
+        clean_up_slice_on_box(
+            host_db_id, row.bare_metal_server_id, row.slice_instance_name, row.slice_disk_name, row.box_generation
+        )
     else:
         pass
     _delete_pool_host_row(host_db_id)
@@ -1357,7 +1632,7 @@ def _write_files_on_container(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     files_by_remote_path: dict[str, str],
     expected_host_public_key: str,
     # Paths whose write is skipped when the file already exists on the
@@ -1371,7 +1646,7 @@ def _write_files_on_container(
     transport, temp-file-and-rename atomicity, seed-if-absent skipping).
     """
     with management_ssh_client(
-        host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
+        host, port, user, credentials, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         for remote_path, content in files_by_remote_path.items():
             command = build_container_file_write_command(
@@ -1421,7 +1696,7 @@ def _enable_sharing_core(
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT leased_to_user, status, vps_address, container_ssh_port, ssh_user, host_id, "
-                "container_host_public_key, agent_id FROM pool_hosts WHERE id = %s",
+                "container_host_public_key, agent_id, box_generation FROM pool_hosts WHERE id = %s",
                 (str(host_db_id),),
             )
             row = cur.fetchone()
@@ -1436,6 +1711,7 @@ def _enable_sharing_core(
         host_id,
         container_host_public_key,
         workspace_id,
+        share_box_generation,
     ) = row
     if leased_to_user != user.user_id_prefix:
         raise HTTPException(status_code=403, detail="You do not own this host lease")
@@ -1447,7 +1723,7 @@ def _enable_sharing_core(
             detail=f"Host {host_db_id} has no pinned container host key yet; run the host-key backfill.",
         )
 
-    management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
+    management_credentials = management_credentials_for_generation(int(share_box_generation or 1))
     store = shares_module.get_share_store()
     # The workspace id (the pool row's pre-provisioned agent id) is the
     # share's durable key; the host-keyed fallback inside only covers rows old
@@ -1485,6 +1761,16 @@ def _enable_sharing_core(
             region=region,
             content_domain=shares_module.share_content_domain(),
         )
+    # Reach the container BEFORE touching the share: activating the share
+    # rotates its relay token, and a rotation the container never receives
+    # kills the tunnel a desktop-established share is already running on.
+    try:
+        _assert_container_serves_pinned_host_key(vps_address, container_ssh_port, container_host_public_key)
+    except paramiko.BadHostKeyException as exc:
+        raise _desktop_managed_workspace_conflict(host_db_id) from exc
+    except (paramiko.SSHException, OSError) as exc:
+        logger.warning("Could not reach host %s to enable sharing: %s", host_db_id, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc
     relay_token = shares_module.generate_relay_token()
     # No entry label is supplied here: the frps NewProxy callback records it
     # once the workspace's tunnel claims its service labels, so the connector
@@ -1511,7 +1797,7 @@ def _enable_sharing_core(
             vps_address,
             container_ssh_port,
             ssh_user,
-            management_key_pem,
+            management_credentials,
             {_SHARE_GRANTS_REMOTE_PATH: grants_text, _SHARE_ENV_REMOTE_PATH: share_env_text},
             container_host_public_key,
             # share.env must be replaced (each enable rotates the relay token),
@@ -1520,6 +1806,10 @@ def _enable_sharing_core(
             # would silently revoke every grant the user added since.
             seed_only_remote_paths=frozenset({_SHARE_GRANTS_REMOTE_PATH}),
         )
+    except paramiko.BadHostKeyException as exc:
+        # The key changed between the probe above and this write (an adoption
+        # racing the enable); same answer, the desktop app owns the share now.
+        raise _desktop_managed_workspace_conflict(host_db_id) from exc
     except (paramiko.SSHException, OSError) as exc:
         logger.warning("Failed to inject share materials on host %s: %s", host_db_id, exc)
         raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc
@@ -1541,8 +1831,8 @@ def _enable_sharing_core(
 
 # The in-container host_dir layouts pool hosts have been baked with, newest
 # first. Mirrors mngr's ``KNOWN_WORKSPACE_HOST_DIRS`` (libs/mngr/imbue/mngr/
-# providers/host_dir_layouts.py) -- duplicated, not imported, because the
-# shipped connector package must not depend on the monorepo.
+# providers/host_dir_layouts.py) -- duplicated, not imported, because
+# ``imbue.mngr`` does not ship into the connector container.
 _KNOWN_WORKSPACE_HOST_DIRS: Final = ("/home/user/.mngr", "/mngr")
 
 # Env vars carrying the tier's pinned web-create template + blessed compute
@@ -1629,6 +1919,29 @@ def _web_claim_pinned_attributes() -> dict[str, Any] | None:
     return attributes
 
 
+# The first default-workspace-template release line that runs on gen-2 boxes:
+# minds-v0.6.x+ releases bake onto gen-2, minds-v0.5.x and older onto gen-1
+# (the bake-time guard in minds-admin keeps the pools disjoint).
+_FIRST_GEN2_RELEASE: Final[tuple[int, int]] = (0, 6)
+
+_RELEASE_TAG_RE: Final = re.compile(r"^minds-v(\d+)\.(\d+)\.")
+
+
+def _web_claim_max_box_generation(template_ref: str) -> int:
+    """The generation cap a web create carries, derived from the tier's pinned template ref.
+
+    A ``minds-v*`` tag below the first gen-2 release line pins the claim to
+    gen-1 rows (the pre-0.6 template pairs with gen-1 boxes); 0.6+ tags and
+    non-tag refs (dev branches, always current code) are gen-2-capable.
+    CLEANUP: collapse to unrestricted with the request field (see
+    ``LeaseHostRequest.max_box_generation``).
+    """
+    match = _RELEASE_TAG_RE.match(template_ref)
+    if match is not None and (int(match.group(1)), int(match.group(2))) < _FIRST_GEN2_RELEASE:
+        return 1
+    return FIRST_QEMU_BOX_GENERATION
+
+
 def _replace_env_file_line(existing_content: str, key: str, value: str) -> str:
     """Replace-or-append one ``KEY=VALUE`` line, preserving every other line verbatim."""
     kept_lines = [line for line in existing_content.splitlines() if not line.startswith(f"{key}=")]
@@ -1640,7 +1953,7 @@ def _adopt_workspace_on_container(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     expected_host_public_key: str,
     agent_id: str,
     host_name: str,
@@ -1661,7 +1974,7 @@ def _adopt_workspace_on_container(
     releases the lease and surfaces the error.
     """
     with management_ssh_client(
-        host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
+        host, port, user, credentials, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         sftp = client.open_sftp()
         try:
@@ -1741,7 +2054,7 @@ def _start_workspace_agent_on_container(
     host: str,
     port: int,
     user: str,
-    management_key_pem: str,
+    credentials: ManagementSshCredentials,
     expected_host_public_key: str,
 ) -> None:
     """Start the claimed workspace's pre-baked services agent over SSH.
@@ -1753,7 +2066,7 @@ def _start_workspace_agent_on_container(
     a dead lease.
     """
     with management_ssh_client(
-        host, port, user, management_key_pem, timeout_seconds=30, expected_host_public_key=expected_host_public_key
+        host, port, user, credentials, timeout_seconds=30, expected_host_public_key=expected_host_public_key
     ) as client:
         command = f"bash -lc 'exec {_START_SERVICES_AGENT_SCRIPT}'"
         _stdin, stdout, stderr = client.exec_command(command)
@@ -1817,6 +2130,7 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
                 host_name=body.host_name,
                 attributes=pinned_attributes,
                 region=body.region,
+                max_box_generation=_web_claim_max_box_generation(str(pinned_attributes.get("repo_branch_or_tag", ""))),
             ),
             record_display_name=display_name,
         )
@@ -1826,14 +2140,14 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
         # so the error never leaves the user holding a half-configured lease.
         is_claim_complete = False
         try:
-            management_key_pem = os.environ["POOL_SSH_PRIVATE_KEY"]
+            management_credentials = management_credentials_for_generation(lease.box_generation)
             base_url = accounts_web_module.accounts_public_base_url(request)
             try:
                 _adopt_workspace_on_container(
                     lease.vps_address,
                     lease.container_ssh_port,
                     lease.ssh_user,
-                    management_key_pem,
+                    management_credentials,
                     lease.container_host_public_key,
                     lease.agent_id,
                     body.host_name,
@@ -1852,7 +2166,7 @@ def claim_host(request: Request, body: ClaimHostRequest) -> dict[str, object]:
                     lease.vps_address,
                     lease.container_ssh_port,
                     lease.ssh_user,
-                    management_key_pem,
+                    management_credentials,
                     lease.container_host_public_key,
                 )
             except (paramiko.SSHException, OSError) as exc:

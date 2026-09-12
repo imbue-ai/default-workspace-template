@@ -29,8 +29,8 @@ def _seed_leased_workspace(
     row.status = status
     row.leased_to_user = leased_to_user or _USER_STUB_USER_ID_PREFIX
     row.leased_at = "2026-01-01T00:00:00+00:00"
-    row.lima_instance_name = f"mngr-slice-test-{host_id.hex}"
-    row.lima_disk_name = f"mngr-slice-test-{host_id.hex}-data"
+    row.slice_instance_name = f"mngr-slice-test-{host_id.hex}"
+    row.slice_disk_name = f"mngr-slice-test-{host_id.hex}-data"
     return row
 
 
@@ -131,6 +131,31 @@ def test_start_workspace_from_stopped_checks_running_quota(monkeypatch: pytest.M
     assert resp.status_code == 403
     assert resp.json()["detail"]["entitlement"] == "max_remote_workspaces"
     assert _row_status(backend, _WS_ID_2) == "stopped"
+
+
+def test_start_workspace_counts_the_pending_resize_target_against_the_units_quota(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, plan_name="ally", max_active_machine_units=64)
+    backend.storage_config = make_storage_config()
+    # A running 8-unit machine plus this stopped machine's pending 64-unit
+    # target overflows the 64-unit cap: the start (the units re-check for a
+    # resize granted while stopped) refuses, and the machine -- targets
+    # included -- stays stopped and intact.
+    running = _seed_leased_workspace(backend, _WS_ID, status="leased")
+    running.memory_units = 8
+    stopped = _seed_leased_workspace(backend, _WS_ID_2, status="stopped")
+    stopped.stopped_at = stopped.leased_at
+    stopped.memory_units = 8
+    stopped.target_memory_units = 64
+
+    resp = client.post(f"/workspaces/{_WS_ID_2}/start", headers=_user_headers())
+
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["entitlement"] == "max_active_machine_units"
+    assert _row_status(backend, _WS_ID_2) == "stopped"
+    assert stopped.target_memory_units == 64
 
 
 def test_start_workspace_from_stopped_flips_row_and_spawns(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,3 +273,117 @@ def test_admin_stop_workspace_is_idempotent_and_404s_on_unknown(monkeypatch: pyt
 
     missing = client.post(f"/admin/workspaces/{_WS_ID_2}/stop", headers=_admin_key_headers())
     assert missing.status_code == 404
+
+
+def _seed_parked_gen1_workspace(backend: Any, host_id: UUID = _WS_ID) -> Any:
+    """A gen-1 row the cutover parked: stopped, placement and box link cleared, no artifact manifest."""
+    row = _seed_leased_workspace(backend, host_id, status="stopped")
+    row.box_generation = 1
+    row.vps_address = None
+    row.ssh_port = None
+    row.container_ssh_port = None
+    row.bare_metal_server_id = None
+    row.artifact_manifest = None
+    row.wrapped_dek = None
+    return row
+
+
+def test_start_workspace_refuses_a_parked_gen1_row_as_migrating(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, plan_name="explorer", max_remote_workspaces=2)
+    _seed_parked_gen1_workspace(backend, _WS_ID)
+    backend.storage_config = make_storage_config()
+
+    resp = client.post(f"/workspaces/{_WS_ID}/start", headers=_user_headers())
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "workspace_migrating"
+    assert _row_status(backend, _WS_ID) == "stopped"
+    assert backend.spawned_supervisors == []
+
+
+def test_start_workspace_still_starts_a_finalized_stopped_gen1_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A finalized stop (placement cleared by the retention finalize) keeps its
+    # manifest, which is what tells it apart from a parked row.
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, plan_name="explorer", max_remote_workspaces=2)
+    row = _seed_parked_gen1_workspace(backend, _WS_ID)
+    row.artifact_manifest = {"generation": 1, "key_prefix": f"{row.host_id_str}/gen-1", "age_recipient": "age1x"}
+    backend.storage_config = make_storage_config()
+
+    resp = client.post(f"/workspaces/{_WS_ID}/start", headers=_user_headers())
+
+    assert resp.status_code == 202
+    assert _row_status(backend, _WS_ID) == "starting"
+
+
+def test_start_workspace_ignores_the_migrating_guard_for_gen2_and_placed_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, plan_name="explorer", max_remote_workspaces=5)
+    gen2_row = _seed_parked_gen1_workspace(backend, _WS_ID)
+    gen2_row.box_generation = 2
+    placed_row = _seed_leased_workspace(backend, _WS_ID_2, status="stopped")
+    placed_row.artifact_manifest = None
+    backend.storage_config = make_storage_config()
+
+    assert client.post(f"/workspaces/{_WS_ID}/start", headers=_user_headers()).status_code == 202
+    assert client.post(f"/workspaces/{_WS_ID_2}/start", headers=_user_headers()).status_code == 202
+    assert _row_status(backend, _WS_ID) == "starting"
+    assert _row_status(backend, _WS_ID_2) == "starting"
+
+
+def test_admin_start_workspace_flips_a_stopped_row_and_spawns_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    # Another user's row, stopped with its manifest: no ownership or quota check applies.
+    row = _seed_leased_workspace(backend, _WS_ID, status="stopped", leased_to_user="deadbeefdeadbeef")
+    row.artifact_manifest = {"generation": 1, "key_prefix": f"{row.host_id_str}/gen-1", "age_recipient": "age1x"}
+    backend.storage_config = make_storage_config()
+
+    resp = client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_admin_key_headers())
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "starting"
+    row = backend.find_pool_row(_WS_ID)
+    assert row is not None
+    assert row.status == "starting"
+    assert row.transition_id is not None
+    assert backend.spawned_supervisor_tokens == [(str(_WS_ID), row.transition_id)]
+
+
+def test_admin_start_workspace_requires_admin_key_and_refuses_non_stopped_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    _seed_leased_workspace(backend, _WS_ID, status="stopped")
+    _seed_leased_workspace(backend, _WS_ID_2, status="stopping")
+    backend.storage_config = make_storage_config()
+
+    assert client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_user_headers()).status_code == 401
+    assert _row_status(backend, _WS_ID) == "stopped"
+
+    mid_stop = client.post(f"/admin/workspaces/{_WS_ID_2}/start", headers=_admin_key_headers())
+    assert mid_stop.status_code == 409
+    assert "wait for it to reach stopped" in mid_stop.json()["detail"]
+    assert client.post(f"/admin/workspaces/{UUID(int=99)}/start", headers=_admin_key_headers()).status_code == 404
+
+
+def test_admin_start_workspace_is_idempotent_on_running_rows_and_refuses_parked_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, backend = _make_pool_test_client(monkeypatch)
+    monkeypatch.setenv("MINDS_ADMIN_KEY", _ADMIN_KEY_TEST_VALUE)
+    _seed_leased_workspace(backend, _WS_ID, status="leased")
+    _seed_parked_gen1_workspace(backend, _WS_ID_2)
+    backend.storage_config = make_storage_config()
+
+    running = client.post(f"/admin/workspaces/{_WS_ID}/start", headers=_admin_key_headers())
+    assert running.status_code == 202
+    assert running.json()["status"] == "running"
+    assert backend.spawned_supervisors == []
+
+    parked = client.post(f"/admin/workspaces/{_WS_ID_2}/start", headers=_admin_key_headers())
+    assert parked.status_code == 409
+    assert parked.json()["detail"]["code"] == "workspace_migrating"
+    assert _row_status(backend, _WS_ID_2) == "stopped"

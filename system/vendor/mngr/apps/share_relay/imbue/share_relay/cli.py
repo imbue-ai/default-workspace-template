@@ -13,6 +13,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Final
 
 import click
 from loguru import logger
@@ -25,6 +26,7 @@ from imbue.share_relay.config_render import render_all_artifacts
 from imbue.share_relay.connector_registration import deregister_relay
 from imbue.share_relay.connector_registration import register_relay
 from imbue.share_relay.data_types import RelayConfiguration
+from imbue.share_relay.data_types import SshdWaitPolicy
 from imbue.share_relay.dns_records import reconcile_relay_dns_records
 from imbue.share_relay.healthcheck import serve_healthcheck
 from imbue.share_relay.primitives import ContentDomain
@@ -42,6 +44,10 @@ from imbue.share_relay.provisioning import cloud_project_id_from_env
 from imbue.share_relay.provisioning import make_ovh_client_from_env
 from imbue.share_relay.provisioning import pick_public_ipv4
 from imbue.share_relay.remote_install import deploy_relay
+
+# How `deploy` waits for a just-provisioned instance's sshd (OVH reports ACTIVE
+# before the guest's sshd listens).
+_DEPLOY_SSHD_WAIT: Final[SshdWaitPolicy] = SshdWaitPolicy(wait_seconds=300.0, poll_interval_seconds=5.0)
 
 
 @click.group()
@@ -226,7 +232,12 @@ def deploy(
     config = _relay_configuration(relay_id, region, content_domain, plugin_auth_url, _plugin_auth_secret_from_env())
     with ConcurrencyGroup(name="share-relay-deploy") as concurrency_group:
         deploy_relay(
-            concurrency_group=concurrency_group, host=host, ssh_user=ssh_user, config=config, work_dir=work_dir
+            concurrency_group=concurrency_group,
+            host=host,
+            ssh_user=ssh_user,
+            config=config,
+            work_dir=work_dir,
+            sshd_wait=_DEPLOY_SSHD_WAIT,
         )
     logger.info("Deployed relay config for {} ({}) to {}", config.region_domain, config.relay_id, host)
 

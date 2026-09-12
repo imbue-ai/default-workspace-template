@@ -84,6 +84,42 @@ class OpenObserveApiInterface(MutableModel, ABC):
         """Set one stream's data retention in days; False when the stream does not exist yet."""
 
     @abstractmethod
+    def list_template_names(self) -> list[str]:
+        """Return the name of every alert template in the organization."""
+
+    @abstractmethod
+    def create_template(self, template_payload: Mapping[str, object]) -> None:
+        """Create one alert template from its API payload."""
+
+    @abstractmethod
+    def update_template(self, name: str, template_payload: Mapping[str, object]) -> None:
+        """Update the named alert template in place."""
+
+    @abstractmethod
+    def list_destination_names(self) -> list[str]:
+        """Return the name of every alert destination in the organization."""
+
+    @abstractmethod
+    def create_destination(self, destination_payload: Mapping[str, object]) -> None:
+        """Create one alert destination from its API payload."""
+
+    @abstractmethod
+    def update_destination(self, name: str, destination_payload: Mapping[str, object]) -> None:
+        """Update the named alert destination in place."""
+
+    @abstractmethod
+    def list_alert_ids_by_name(self) -> dict[str, str]:
+        """Return every alert's server-side id keyed by its alert name."""
+
+    @abstractmethod
+    def create_alert(self, alert_payload: Mapping[str, object]) -> None:
+        """Create one alert from its v2 API payload."""
+
+    @abstractmethod
+    def update_alert(self, alert_id: str, alert_payload: Mapping[str, object]) -> None:
+        """Update the alert with the given server-side id in place."""
+
+    @abstractmethod
     def list_dashboard_summaries(self) -> list[DashboardSummary]:
         """Return every dashboard's id and title in the organization's default folder."""
 
@@ -152,6 +188,92 @@ class OpenObserveHttpApi(OpenObserveApiInterface):
                 f"Setting retention on stream {stream_name} failed ({response.status_code}): {response.text}"
             )
         return True
+
+    def _request_expecting_ok(self, method: str, path: str, json_body: dict[str, object] | None, action: str) -> None:
+        response = self._request(method, path, json_body)
+        if response.status_code != 200:
+            raise OpenObserveApiError(f"{action} failed ({response.status_code}): {response.text}")
+
+    def _list_names(self, path: str, what: str) -> list[str]:
+        """Return the ``name`` of every entry in a listing endpoint's plain-array payload."""
+        response = self._request("GET", path, None)
+        if response.status_code != 200:
+            raise OpenObserveApiError(f"Listing {what} failed ({response.status_code}): {response.text}")
+        payload = response.json()
+        if not isinstance(payload, list):
+            # A shape drift must fail loudly: an empty result would make the
+            # idempotent apply try to re-create everything (and fail on the
+            # create calls with a confusing "already exists").
+            raise OpenObserveApiError(f"Unexpected {what} listing payload shape (not a list): {payload!r}")
+        return [str(entry["name"]) for entry in payload if isinstance(entry, dict) and "name" in entry]
+
+    def list_template_names(self) -> list[str]:
+        return self._list_names(f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/templates", "alert templates")
+
+    def create_template(self, template_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "POST",
+            f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/templates",
+            dict(template_payload),
+            f"Creating template {template_payload.get('name')}",
+        )
+
+    def update_template(self, name: str, template_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "PUT",
+            f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/templates/{name}",
+            dict(template_payload),
+            f"Updating template {name}",
+        )
+
+    def list_destination_names(self) -> list[str]:
+        return self._list_names(f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/destinations", "alert destinations")
+
+    def create_destination(self, destination_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "POST",
+            f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/destinations",
+            dict(destination_payload),
+            f"Creating destination {destination_payload.get('name')}",
+        )
+
+    def update_destination(self, name: str, destination_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "PUT",
+            f"/api/{OPENOBSERVE_ORGANIZATION}/alerts/destinations/{name}",
+            dict(destination_payload),
+            f"Updating destination {name}",
+        )
+
+    def list_alert_ids_by_name(self) -> dict[str, str]:
+        response = self._request("GET", f"/api/v2/{OPENOBSERVE_ORGANIZATION}/alerts", None)
+        if response.status_code != 200:
+            raise OpenObserveApiError(f"Listing alerts failed ({response.status_code}): {response.text}")
+        payload = response.json()
+        entries = payload.get("list") if isinstance(payload, dict) else None
+        if not isinstance(entries, list):
+            raise OpenObserveApiError(f"Unexpected alerts listing payload shape (no 'list' array): {payload!r}")
+        return {
+            str(entry["name"]): str(entry["alert_id"])
+            for entry in entries
+            if isinstance(entry, dict) and "name" in entry and "alert_id" in entry
+        }
+
+    def create_alert(self, alert_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "POST",
+            f"/api/v2/{OPENOBSERVE_ORGANIZATION}/alerts",
+            dict(alert_payload),
+            f"Creating alert {alert_payload.get('name')}",
+        )
+
+    def update_alert(self, alert_id: str, alert_payload: Mapping[str, object]) -> None:
+        self._request_expecting_ok(
+            "PUT",
+            f"/api/v2/{OPENOBSERVE_ORGANIZATION}/alerts/{alert_id}",
+            dict(alert_payload),
+            f"Updating alert {alert_payload.get('name')} ({alert_id})",
+        )
 
     def list_dashboard_summaries(self) -> list[DashboardSummary]:
         response = self._request("GET", f"/api/{OPENOBSERVE_ORGANIZATION}/dashboards", None)

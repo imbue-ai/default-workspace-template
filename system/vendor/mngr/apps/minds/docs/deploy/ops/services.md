@@ -20,7 +20,8 @@ against infrastructure that already exists. It never provisions any of this.
 | **Neon** | Postgres, incl. the `pool_hosts` table the lease path reads | `neon` |
 | **Cloudflare** | R2 buckets and DNS | `cloudflare` |
 | **OVH object storage** | workspace stop/start artifacts | `storage` |
-| **the pool SSH key** | injected into a slice at lease time | `pool-ssh` |
+| **the tier's SSH CA** | the AppRole the connector signs its management SSH certificates with (gen-2 boxes, VMs, containers) | `ssh-ca` |
+| **the pool SSH key** | the gen-1 fleet's static management key, injected into a gen-1 slice at lease time | `pool-ssh` |
 | **sharing** | share coordinates, relay list, frps plugin auth, ACME issuance | `sharing` |
 | **Sentry DSNs** | point at this tier's self-hosted Bugsink | `sentry` |
 | **LiteLLM** | the proxy's own credentials | `litellm` |

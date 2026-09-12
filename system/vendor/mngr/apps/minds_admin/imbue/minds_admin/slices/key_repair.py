@@ -27,7 +27,7 @@ from pydantic import Field
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
-from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_LIMA_INSTANCE_PREFIX
+from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_INSTANCE_PREFIX
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.lima_yaml import patch_root_authorized_keys_block_in_lima_yaml
 
@@ -170,9 +170,7 @@ def repair_slice_keys_on_box(
     missing the owner's key until the client's next connect heals it.
     """
     outcomes: list[SliceKeyRepairOutcome] = []
-    slice_vm_names = sorted(
-        name for name in client.list_instance_names() if name.startswith(SLICE_LIMA_INSTANCE_PREFIX)
-    )
+    slice_vm_names = sorted(name for name in client.list_instance_names() if name.startswith(SLICE_INSTANCE_PREFIX))
     if only_vm_names is not None:
         slice_vm_names = [name for name in slice_vm_names if name in only_vm_names]
     for vm_name in slice_vm_names:

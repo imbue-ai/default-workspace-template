@@ -83,9 +83,10 @@ def _start_fake_outer_helper(
     exit_code: int = 0,
     error_message: str = "",
     fail_after_requests: int | None = None,
+    requests_seen: list[dict[str, object]] | None = None,
     # Where the helper materializes each snapshot it reports success for; None
-    # keeps it reporting success without creating anything (the keep-N cleanup
-    # tests, which populate the read dir themselves).
+    # keeps it reporting success without creating anything (the cleanup tests,
+    # which populate the read dir themselves).
     read_dir: Path | None = None,
     # Entries created inside each snapshot it materializes.
     snapshot_entries: tuple[str, ...] = ("home",),
@@ -95,7 +96,8 @@ def _start_fake_outer_helper(
 
     If `fail_after_requests` is set, the first N requests succeed (per
     `exit_code`) and every request after that returns exit_code 2, to exercise
-    partial-failure handling in keep-N cleanup.
+    partial-failure handling in the snapshot cleanup. Every request payload is
+    appended to `requests_seen` when one is given.
     """
     trigger_dir.mkdir(parents=True, exist_ok=True)
     request_path = trigger_dir / "request.json"
@@ -116,6 +118,8 @@ def _start_fake_outer_helper(
                 except (OSError, ValueError):
                     continue
                 handled += 1
+                if requests_seen is not None:
+                    requests_seen.append(payload)
                 effective_exit = exit_code
                 effective_error = error_message
                 if fail_after_requests is not None and handled > fail_after_requests:
@@ -322,10 +326,10 @@ def test_list_snapshot_names_returns_empty_when_dir_missing(tmp_path: Path) -> N
     assert _list_snapshot_names(tmp_path / "does-not-exist") == []
 
 
-# --- OuterTriggerSnapshotTaker.cleanup_after_backup (keep-N GC) ---
+# --- OuterTriggerSnapshotTaker.cleanup_after_backup (delete every snapshot) ---
 
 
-def _gc_capabilities(tmp_path: Path, *, max_local_snapshots: int) -> BackupCapabilities:
+def _gc_capabilities(tmp_path: Path) -> BackupCapabilities:
     # snapshot_read_path's parent is the real, populated read dir we enumerate.
     return BackupCapabilities(
         method=SnapshotMethod.OUTER_TRIGGER,
@@ -335,7 +339,6 @@ def _gc_capabilities(tmp_path: Path, *, max_local_snapshots: int) -> BackupCapab
         snapshot_read_path=tmp_path / "snapshots" / "current",
         trigger_dir=tmp_path / "trigger",
         outer_helper_timeout_seconds=10.0,
-        max_local_snapshots=max_local_snapshots,
     )
 
 
@@ -345,13 +348,14 @@ def _make_snapshot_dirs(read_dir: Path, names: tuple[str, ...]) -> None:
         (read_dir / name).mkdir()
 
 
-def test_cleanup_after_backup_deletes_oldest_beyond_cap(tmp_path: Path) -> None:
-    capabilities = _gc_capabilities(tmp_path, max_local_snapshots=2)
+def test_cleanup_after_backup_deletes_every_snapshot_oldest_first(
+    tmp_path: Path,
+) -> None:
+    capabilities = _gc_capabilities(tmp_path)
     names = (
-        "2026-06-12T00:00:00.000000Z",
         "2026-06-12T01:00:00.000000Z",
+        "2026-06-12T00:00:00.000000Z",
         "2026-06-12T02:00:00.000000Z",
-        "2026-06-12T03:00:00.000000Z",
     )
     _make_snapshot_dirs(tmp_path / "snapshots", names)
     stop = threading.Event()
@@ -359,29 +363,52 @@ def test_cleanup_after_backup_deletes_oldest_beyond_cap(tmp_path: Path) -> None:
     try:
         taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
         deleted = taker.cleanup_after_backup()
-        # The two oldest are deleted; the newest two are kept.
+        # Nothing is retained between ticks; the newest goes too.
         assert deleted == (
             "/mngr-btrfs/snapshots/2026-06-12T00:00:00.000000Z",
             "/mngr-btrfs/snapshots/2026-06-12T01:00:00.000000Z",
+            "/mngr-btrfs/snapshots/2026-06-12T02:00:00.000000Z",
         )
     finally:
         stop.set()
         helper.join(timeout=2.0)
 
 
-def test_cleanup_after_backup_is_noop_when_at_or_under_cap(tmp_path: Path) -> None:
-    capabilities = _gc_capabilities(tmp_path, max_local_snapshots=5)
-    _make_snapshot_dirs(
-        tmp_path / "snapshots",
-        ("2026-06-12T00:00:00.000000Z", "2026-06-12T01:00:00.000000Z"),
-    )
+def test_cleanup_after_backup_is_noop_when_no_snapshot_exists(tmp_path: Path) -> None:
+    capabilities = _gc_capabilities(tmp_path)
+    _make_snapshot_dirs(tmp_path / "snapshots", ("not-a-snapshot-name",))
     taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
-    # No helper needed: under the cap, no cleanup requests are sent.
+    # No helper needed: with nothing timestamped to delete, no cleanup request is sent.
     assert taker.cleanup_after_backup() == ()
 
 
+def test_take_snapshot_sweeps_leftover_snapshots_before_taking_a_new_one(
+    tmp_path: Path,
+) -> None:
+    capabilities = _gc_capabilities(tmp_path)
+    _make_snapshot_dirs(tmp_path / "snapshots", ("2026-06-12T00:00:00.000000Z",))
+    stop = threading.Event()
+    requests_seen: list[dict[str, object]] = []
+    helper = _start_fake_outer_helper(
+        tmp_path / "trigger",
+        requests_seen=requests_seen,
+        read_dir=tmp_path / "snapshots",
+        stop_event=stop,
+    )
+    try:
+        taker = OuterTriggerSnapshotTaker(capabilities=capabilities)
+        result = taker.take_snapshot()
+        # The leftover's cleanup request went out before this tick's snapshot request.
+        assert [r["operation"] for r in requests_seen] == ["cleanup", "snapshot"]
+        assert requests_seen[0]["target"] == "2026-06-12T00:00:00.000000Z"
+        assert result.method == SnapshotMethod.OUTER_TRIGGER
+    finally:
+        stop.set()
+        helper.join(timeout=2.0)
+
+
 def test_cleanup_after_backup_raises_when_helper_fails(tmp_path: Path) -> None:
-    capabilities = _gc_capabilities(tmp_path, max_local_snapshots=1)
+    capabilities = _gc_capabilities(tmp_path)
     _make_snapshot_dirs(
         tmp_path / "snapshots",
         ("2026-06-12T00:00:00.000000Z", "2026-06-12T01:00:00.000000Z"),
@@ -404,7 +431,7 @@ def test_cleanup_after_backup_partial_failure_reports_deleted_and_failed(
     tmp_path: Path,
 ) -> None:
     """A mid-way cleanup failure surfaces what was deleted and which target failed."""
-    capabilities = _gc_capabilities(tmp_path, max_local_snapshots=1)
+    capabilities = _gc_capabilities(tmp_path)
     names = (
         "2026-06-12T00:00:00.000000Z",
         "2026-06-12T01:00:00.000000Z",

@@ -187,6 +187,47 @@ def test_lease_host_keeps_quarantine_when_a_keyless_row_stops_the_request(monkey
     assert backend.pool_rows[1].status == "available"
 
 
+def test_lease_host_keeps_quarantine_when_a_gen2_row_has_no_management_certificate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gen-2 row selected while no certificate is stored 503s after the commit, so an earlier quarantine sticks.
+
+    The row itself is not at fault (the connector's refresh cron has simply not
+    stored a bundle yet), so it stays available rather than being quarantined.
+    """
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.is_ssh_cert_bundle_missing = True
+    backend.append_key_failure_addresses = {"10.0.0.1"}
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"),
+        version="v0.1.0",
+        vps_address="10.0.0.1",
+    )
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"),
+        version="v0.1.0",
+        vps_address="10.0.0.2",
+        box_generation=2,
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+            "max_box_generation": 2,
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "management_certificate_unavailable"
+    # The dead gen-1 row's quarantine survives; the gen-2 row was neither leased
+    # nor quarantined, and no key was injected on it with a static key.
+    assert backend.pool_rows[0].status == "unreachable"
+    assert backend.pool_rows[1].status == "available"
+    assert all(call[0] != "10.0.0.2" for call in backend.append_key_calls)
+
+
 def test_lease_host_bounds_quarantine_attempts_and_returns_502(monkeypatch: pytest.MonkeyPatch) -> None:
     """A request quarantines at most three rows, then returns a retryable 502.
 
@@ -313,6 +354,106 @@ def test_lease_host_rejects_invalid_host_name(monkeypatch: pytest.MonkeyPatch) -
     assert backend.pool_rows[0].status == "available"
 
 
+def test_lease_host_without_capability_field_never_receives_a_gen2_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request without max_box_generation (an old client) is confined to gen-1 rows."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0", box_generation=2
+    )
+    gen1_row = backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000002"), version="v0.1.0", box_generation=1
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["host_db_id"] == "00000000-0000-0000-0000-000000000002"
+    assert gen1_row.status == "leased"
+    assert backend.pool_rows[0].status == "available"
+
+
+def test_lease_host_capability_field_admits_gen2_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client declaring max_box_generation=2 leases a gen-2 row."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0", box_generation=2
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+            "max_box_generation": 2,
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["box_generation"] == 2
+    assert backend.pool_rows[0].status == "leased"
+
+
+def test_lease_host_capped_exhaustion_with_no_gen1_rows_says_update_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the tier holds no gen-1 rows at all, a capability-less (old-client) lease says to update the app."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0", box_generation=2
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "too old" in resp.json()["detail"]
+    assert backend.pool_rows[0].status == "available"
+
+
+def test_lease_host_capped_exhaustion_with_gen1_rows_stays_plain_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """While gen-1 rows exist anywhere in the tier, a capped exhaustion is ordinary no-capacity, not update-required."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    # A gen-1 row that does NOT match the requested attributes: the lease is
+    # exhausted, but the tier still has gen-1 stock, so retrying makes sense.
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v9.9.9", box_generation=1
+    )
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 503
+    assert "No pre-created agents match" in resp.json()["detail"]
+
+
+def test_web_claim_max_box_generation_derivation() -> None:
+    """Pre-0.6 tags pin the claim to gen-1; 0.6+ tags and non-tag refs are gen-2-capable."""
+    assert hosts_mod._web_claim_max_box_generation("minds-v0.5.0") == 1
+    assert hosts_mod._web_claim_max_box_generation("minds-v0.5.99") == 1
+    assert hosts_mod._web_claim_max_box_generation("minds-v0.6.0") == 2
+    assert hosts_mod._web_claim_max_box_generation("minds-v1.0.0") == 2
+    assert hosts_mod._web_claim_max_box_generation("main") == 2
+    assert hosts_mod._web_claim_max_box_generation("") == 2
+
+
 def test_rename_host_succeeds_for_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     """POST /hosts/{id}/rename updates the mutable host_name for the owning user."""
     client, backend = _make_pool_test_client(monkeypatch)
@@ -405,9 +546,37 @@ def test_release_host_succeeds_for_owner(monkeypatch: pytest.MonkeyPatch) -> Non
     resp = client.post("/hosts/00000000-0000-0000-0000-000000000042/release", headers=_user_headers())
     assert resp.status_code == 200
     assert resp.json()["status"] == "released"
-    # Row fully cleaned up (deleted) after the slice VM teardown ran.
+    # Row fully cleaned up (deleted) after the slice VM teardown ran, with
+    # the teardown dispatched on the row's stamped generation.
     assert backend.pool_rows == []
     assert len(backend.slice_teardowns) == 1
+    assert backend.slice_teardown_generations == [1]
+
+
+def test_release_host_dispatches_teardown_on_the_rows_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gen-2 row's release tears down through the gen-2 script set."""
+    client, backend = _make_pool_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000043"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    backend.pool_rows[0].box_generation = 2
+    resp = client.post("/hosts/00000000-0000-0000-0000-000000000043/release", headers=_user_headers())
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
+    assert backend.pool_rows == []
+    assert backend.slice_teardown_generations == [2]
+
+
+def test_build_slice_teardown_commands_for_generation_selects_the_script_set() -> None:
+    instance_name = "mngr-slice-test-" + "c" * 32
+    gen1_commands = hosts_mod.build_slice_teardown_commands_for_generation(1, instance_name, f"{instance_name}-data")
+    assert any("limactl delete --force" in command for command in gen1_commands)
+    gen2_commands = hosts_mod.build_slice_teardown_commands_for_generation(2, instance_name, f"{instance_name}-data")
+    assert len(gen2_commands) == 1
+    assert "systemctl stop" in gen2_commands[0]
+    assert "limactl" not in gen2_commands[0]
 
 
 def test_release_host_idempotent_when_already_removing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -540,8 +709,8 @@ def test_release_host_of_mid_restore_starting_row_skips_teardown_and_deletes_row
     row.vps_address = None
     row.ssh_port = None
     row.container_ssh_port = None
-    row.lima_instance_name = "mngr-slice-test-" + "ab" * 16
-    row.lima_disk_name = "mngr-slice-test-" + "ab" * 16 + "-data"
+    row.slice_instance_name = "mngr-slice-test-" + "ab" * 16
+    row.slice_disk_name = "mngr-slice-test-" + "ab" * 16 + "-data"
     assert row.bare_metal_server_id is None
     resp = client.post("/hosts/00000000-0000-0000-0000-0000000000ab/release", headers=_user_headers())
     assert resp.status_code == 200
@@ -652,6 +821,78 @@ def test_route_lease_host_returns_quota_403_at_workspace_cap(
     assert detail["limit"] == 1
     assert detail["current"] == 1
     # No side effects: the available host stays available, no SSH key injection.
+    available = [row for row in backend.pool_rows if row.status == "available"]
+    assert len(available) == 1
+    assert backend.append_key_calls == []
+
+
+def test_route_lease_host_returns_quota_403_at_machine_units_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lease past max_active_machine_units is refused."""
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, "explorer", max_active_machine_units=8)
+    # One running 8-unit machine fills the cap; the new (also 8-unit) lease
+    # cannot fit.
+    backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000042"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    backend.add_available_host(host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0")
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert detail["code"] == "quota_exceeded"
+    assert detail["entitlement"] == "max_active_machine_units"
+    assert detail["limit"] == 8
+    assert detail["current"] == 8
+    # No side effects: the available host stays available, no SSH key injection.
+    available = [row for row in backend.pool_rows if row.status == "available"]
+    assert len(available) == 1
+    assert backend.append_key_calls == []
+
+
+def test_route_lease_host_returns_quota_403_at_machine_disk_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lease past max_total_machine_disk_gb is refused; a STOPPED machine's disk still counts."""
+    client, backend, entitlements_store, _litellm = _make_pool_quota_test_client(monkeypatch)
+    _seed_entitlements_row(entitlements_store, "explorer", max_total_machine_disk_gb=30)
+    # A stopped machine holds 28GB of the 30GB disk quota (disk counts running
+    # + stopped) without occupying the running-workspace cap; the new lease's
+    # default 28GB data disk cannot fit.
+    stopped = backend.add_leased_host(
+        host_id=UUID("00000000-0000-0000-0000-000000000042"),
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+    )
+    stopped.status = "stopped"
+    stopped.disk_gb = 28
+    backend.add_available_host(host_id=UUID("00000000-0000-0000-0000-000000000001"), version="v0.1.0")
+    resp = client.post(
+        "/hosts/lease",
+        json={
+            "ssh_public_key": "ssh-ed25519 AAAA testkey",
+            "host_name": "my-workspace",
+            "attributes": {"version": "v0.1.0"},
+        },
+        headers=_user_headers(),
+    )
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert detail["code"] == "quota_exceeded"
+    assert detail["entitlement"] == "max_total_machine_disk_gb"
+    assert detail["limit"] == 30
+    assert detail["current"] == 28
     available = [row for row in backend.pool_rows if row.status == "available"]
     assert len(available) == 1
     assert backend.append_key_calls == []
@@ -1094,23 +1335,41 @@ def test_admin_release_workspace_of_a_missing_row_is_already_released(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("is_leased", "is_pool_exhausted", "is_missing_host_keys", "expected_outcome"),
+    (
+        "is_leased",
+        "is_quota_refused",
+        "is_pool_exhausted",
+        "is_update_required",
+        "is_missing_host_keys",
+        "expected_outcome",
+    ),
     [
-        (True, False, False, "leased"),
+        (True, False, False, False, False, "leased"),
         # A lease beats every failure flag (the flags describe earlier attempts).
-        (True, True, True, "leased"),
-        (False, False, True, "no_host_keys"),
-        (False, True, True, "no_host_keys"),
-        (False, True, False, "pool_exhausted"),
-        (False, False, False, "injection_failed"),
+        (True, True, True, True, True, "leased"),
+        (False, True, True, False, True, "quota_refused"),
+        (False, True, False, False, False, "quota_refused"),
+        (False, False, False, False, True, "no_host_keys"),
+        (False, False, True, False, True, "no_host_keys"),
+        (False, False, True, False, False, "pool_exhausted"),
+        # The update-required sub-case of exhaustion is its own outcome.
+        (False, False, True, True, False, "update_required"),
+        (False, False, False, False, False, "injection_failed"),
     ],
 )
 def test_build_lease_request_metric_tags_outcome_precedence(
-    is_leased: bool, is_pool_exhausted: bool, is_missing_host_keys: bool, expected_outcome: str
+    is_leased: bool,
+    is_quota_refused: bool,
+    is_pool_exhausted: bool,
+    is_update_required: bool,
+    is_missing_host_keys: bool,
+    expected_outcome: str,
 ) -> None:
     tags = hosts_mod.build_lease_request_metric_tags(
         is_leased=is_leased,
+        is_quota_refused=is_quota_refused,
         is_pool_exhausted=is_pool_exhausted,
+        is_update_required=is_update_required,
         is_missing_host_keys=is_missing_host_keys,
         requested_region="US-EAST-VA",
         requested_branch="minds-v0.4.3",
@@ -1140,7 +1399,9 @@ def test_build_lease_request_metric_tags_outcome_precedence(
 def test_build_lease_request_metric_tags_clamps_client_supplied_values(raw_value: object, expected_tag: str) -> None:
     tags = hosts_mod.build_lease_request_metric_tags(
         is_leased=True,
+        is_quota_refused=False,
         is_pool_exhausted=False,
+        is_update_required=False,
         is_missing_host_keys=False,
         requested_region=None,
         requested_branch=raw_value,

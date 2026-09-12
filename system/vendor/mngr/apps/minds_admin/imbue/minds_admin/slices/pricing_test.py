@@ -326,8 +326,9 @@ def test_compute_slice_pricing_rows_filters_by_region() -> None:
 
 
 def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_is_too_small() -> None:
-    # 128GB -> 16 slots. The cheapest storage (2x512 = 512GB) gives (512-20)/16 = 30 GiB/slice, below the
-    # 32 GiB boot disk, so it can't host a slice -- but 2x1920 can. The row must survive on the bigger storage.
+    # 128GB -> 14 slots. The cheapest storage (2x240 = 240GB) gives (240 - 24 reserve) // 14 = 15 GiB/slice,
+    # below the 32 GiB boot disk (SLICE_BOOT_DISK_GIB), so it can't host a slice -- but 2x1920 can. The row
+    # must survive on the bigger storage.
     catalog = {
         "products": [
             {
@@ -346,7 +347,7 @@ def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_i
                     {"name": "memory", "addons": ["ram-128g-ecc-3200-plan-128-us"]},
                     {
                         "name": "storage",
-                        "addons": ["softraid-2x512nvme-plan-128-us", "softraid-2x1920nvme-plan-128-us"],
+                        "addons": ["softraid-2x240nvme-plan-128-us", "softraid-2x1920nvme-plan-128-us"],
                     },
                 ],
             }
@@ -358,8 +359,8 @@ def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_i
                 "pricings": [_install(0), _renew(0, 0, 1)],
             },
             {
-                "planCode": "softraid-2x512nvme-plan-128-us",
-                "invoiceName": "2x512",
+                "planCode": "softraid-2x240nvme-plan-128-us",
+                "invoiceName": "2x240",
                 "pricings": [_install(0), _renew(0, 0, 1)],
             },
             {
@@ -376,7 +377,7 @@ def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_i
             "storage": storage,
             "datacenters": [{"datacenter": "vin", "availability": "1H-high"}],
         }
-        for storage in ("softraid-2x512nvme", "softraid-2x1920nvme")
+        for storage in ("softraid-2x240nvme", "softraid-2x1920nvme")
     ]
     rows = compute_slice_pricing_rows(
         catalog, availabilities, {"vin"}, memory_per_slice_gb=8, cpu_overcommit_ratio=2.0
@@ -385,7 +386,7 @@ def test_compute_slice_pricing_rows_uses_cheapest_viable_storage_when_smallest_i
     row = rows[0]
     # 128GB box, 8GB slices: (128-8)*1024 // (8*1024 + 512) = 14 slots after host reserve.
     assert row.slot_count == 14
-    # The too-small 2x512 is skipped; the base is the cheapest storage that can actually host a slice.
+    # The too-small 2x240 is skipped; the base is the cheapest storage that can actually host a slice.
     assert row.base_storage_label == "softraid-2x1920nvme"
     # reserve = max(20, ceil(1920*0.10)) = 192; (1920 - 192) // 14 budget per slice.
     assert row.disk_gb_per_slice == (1920 - 192) // 14

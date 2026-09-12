@@ -182,6 +182,11 @@ uv run apt-mirror verify
 Only after the cut succeeds, commit the new timestamp to
 `.mngr/apt-snapshot-timestamp` on the DEFAULT_WORKSPACE_TEMPLATE branch --
 it must match the freshly committed `apps/apt_mirror/current-timestamp`.
+The cut also freezes the `docker` archive (the pinned engine the gen-2 slice
+guest images install), and `warm` is what pins its package files, so never
+skip the warm; the gen-2 prep reads the committed `current-timestamp` to
+pick the docker archive it installs from, and re-stages every gen-2 box's
+guest image on its next prep after a bump.
 Setting `APT_MIRROR_BASE_URL` empty in a workspace build falls back to
 snapshot.debian.org at the same timestamp (correct but throttled), so a
 not-yet-warmed mirror degrades to slow, never to wrong; warming only
@@ -200,6 +205,10 @@ Also maintain the connector's wire-compat snapshot corpus (`apps/remote_service_
 - **Append** a snapshot module for the release being cut (`wire_models_minds_<version>.py`, registered in `wire_compat_test.py`'s `_SNAPSHOTS`): a self-contained copy of the release's strict-parsed connector response models, stamped with `RELEASE_DATE` and a `SUPPORT_ENDS` of release date + the support window (~1 month today). While every client model is a tolerant `WireModel`, consecutive releases usually share a snapshot — only add a new module when the strictly-parsed surface actually changed; otherwise extend the newest snapshot's `SUPPORT_ENDS` to cover the new release.
 
 - **Prune** any snapshot whose `SUPPORT_ENDS` has passed (the compat test fails loudly until you do), after confirming via the connector access log's `imbue_client` field that no in-window clients of that release remain. Pruning is what un-freezes the response shapes that snapshot pins; also remove any server-side compat shims whose `CLEANUP` note keys off that release.
+
+Also check the two Debian-trixie guest-image pins still agree: DEFAULT_WORKSPACE_TEMPLATE's `[providers.lima]` `default_image_url_*` (desktop Lima VMs) and the `debian-cloud-image` entries of the artifact manifest in `apps/minds_admin/imbue/minds_admin/slices/mirror_artifacts.py` (gen-2 cloud slice guests, specs/slice-fleet-gen2). Both point at imbue's artifact mirror and pin the same cloud-image release so desktop and cloud workspaces run the identical guest OS — bump them together, never one alone.
+
+**Upload before you bump any mirrored pin.** Every artifact the fleet pins (the cloud images, gVisor, age, s5cmd, uv, onetun, the otel collector; see `apps/apt_mirror/README.md`, "Artifacts") is served from the mirror with no upstream fallback, so a pin that names an artifact the mirror lacks fails every prep with a 404. To bump one: add the new release to the manifest with its digest, run `uv run minds-admin artifacts upload` (credentials from the `secrets/minds/production/apt-mirror` Vault entry), confirm with `uv run minds-admin artifacts verify`, and only then land the bump (and, for the cloud image, the matching DEFAULT_WORKSPACE_TEMPLATE `[providers.lima]` URLs).
 
 ### 2. Traditional CI on both branches (parallel, not a serial gate)
 

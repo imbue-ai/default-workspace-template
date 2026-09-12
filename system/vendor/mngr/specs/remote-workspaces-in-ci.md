@@ -40,7 +40,7 @@ Normal pushes and PRs never touch the boxes, never bake, and never run these ste
    Runs in parallel with `build-minds-ci-env`, so the cold image build overlaps env deploy instead of following it.
 2. **Deploy the per-run ci env** (existing `build-minds-ci-env` job, unchanged in essence).
 3. **Import the CI boxes into the per-run env** (new step in `build-minds-ci-env`, after the env deploy): a new `minds-admin server import-boxes` command copies the `ready` `bare_metal_servers` rows (same UUIDs, same pinned host keys) from the infra DB into the per-run env's `host_pool` DB, so the env's connector can SSH the boxes at lease/release time.
-4. **Sweep stale CI slices** (new step, same job): destroy any `ci-*`-owned lima instance on the boxes whose env no longer exists or that is older than a staleness threshold (see "Sweeps" below).
+4. **Sweep stale CI slices** (new step, same job): destroy any `ci-*`-owned slice instance on the boxes whose env no longer exists or that is older than a staleness threshold (see "Sweeps" below).
    Running the sweep *before* baking guarantees a wedged prior run cannot eat slots and cause spurious capacity failures.
 5. **Bake the run's slices** (new step, same job): one `minds-admin pool create` invocation with `--workspace-dir` pointing at the run's default-workspace-template checkout, `--mngr-source` pointing at the run's mngr checkout, `--content-addressed-cache`, and `--count` = the number of remote-workspace tests selected for the run plus two spares.
    The existing seed/fill fan-out applies: with the tar already published by the warm job (or by this invocation's own seed phase, in the phase 1 world), every slice is carve + `docker load` + finalize.
@@ -97,9 +97,11 @@ This is the same tradeoff production `--from-tag` caching already accepts.
 
 A new `minds-admin server sweep-ci-slices` command (run against the infra DB's box rows, with the CI pool key):
 
-- Enumerates the lima instances + disks on each `ready` CI box, parses the owning env from the slice resource name (the connector's `slice_name_env_owner` logic).
+- Enumerates the slice instances + disks on each `ready` CI box through the box generation's slice client (gen-1 lima or gen-2 raw qemu), parses the owning env from the slice resource name (the connector's `slice_name_env_owner` logic).
 - Destroys any `ci-*`-owned slice whose on-box age exceeds a staleness threshold (default 4 hours, matching the ci env sweep), including warm-verb throwaway slices.
   Phase 1 deliberately implements only the age criterion (no Modal-env-existence check): a slice whose env died young is torn down by the normal `minds-admin env destroy` path, and anything that survives it ages into this sweep; release runs are serialized, so nothing younger than the threshold can be another run's live slice.
+  A stale VM is destroyed whether or not it is running: a crashed run leaves its VMs running.
+- After the VM sweep, reclaims any `ci-*`-owned data disk whose VM is no longer on the box (leaked by an earlier failed carve or teardown), regardless of the disk's age; a disk whose VM is still on the box -- young, foreign, or a destroy that just failed -- is held by it and never touched.
 - Never touches slices owned by non-`ci` envs (there should be none on a CI-tier box; if found they are reported loudly as tier contamination, mirroring `audit-boxes`).
 - Invoked in the bake-stage prologue and in `destroy-minds-ci-env`; existing nets (the ci Modal-env sweep, `minds-admin env destroy`'s unleased-slice teardown, the connector's box reconcile) are unchanged.
 

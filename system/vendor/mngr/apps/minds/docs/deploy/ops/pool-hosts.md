@@ -89,8 +89,8 @@ was deleted — reads emptier than it is, and the bake refuses mid-run with
 `MNGR_SLICE_BOX_FULL`. `server-audit` SSHes each box and counts the lima **data
 disks** present across every env; a disk outlives its VM, so a carve that died
 before registering still holds its slot. It also flags a box a bake would now
-refuse: one carrying another tier's slices, or one whose lima user authorizes
-more than the single pool key `prep` writes.
+refuse: one carrying another tier's slices, one whose service user authorizes a
+static key it should not, or a gen-2 box whose pinned SSH CA is not the tier's.
 
 Per box, require:
 
@@ -98,8 +98,9 @@ Per box, require:
 |---|---|---|
 | `status` | `ready` | anything else and the bake refuses |
 | `slot_count - box_used_slots` | ≥ your count | genuinely free capacity |
-| `authorized_key_count` | exactly `1` | prep writes one key; a second means someone added one by hand, and that holder has `limactl`, hence root, over every workspace on the box |
-| `foreign_tier_slices` | `[]` | a box carrying two tiers' slices is a box both tiers' pool keys can SSH |
+| `authorized_key_count` | equals `expected_authorized_key_count` (`1` on gen-1, `0` on gen-2) | gen-1 prep writes the one pool key; gen-2 prep writes none (management SSH is by certificate). Any extra key was added by hand, and its holder has the slice helper, hence root, over every workspace on the box |
+| `is_trusted_ca_correct` | `true` | gen-2: the box's `TrustedUserCAKeys` is exactly the tier's committed `[ssh_ca] public_key`; another tier's (or an unknown) CA can mint certificates the box accepts. Always `true` on gen-1, which has no CA |
+| `foreign_tier_slices` | `[]` | a box carrying two tiers' slices is a box both tiers' management credentials can SSH |
 | `is_foreign_tier_checked` | `true` | `false` means an empty `foreign_tier_slices` is NOT CHECKED, not clean |
 | `degraded_md_arrays` | `[]` | not a blocker, but a degraded array is one disk failure from losing every workspace on the box |
 
@@ -144,8 +145,8 @@ just pool-bake <LEASE_REGION> "$VERSION" <count> --server-id <BOX_ID> --dry-run
 ```
 
 `--dry-run` is a full rehearsal, not a stub: by the time it prints JSON it has
-verified the tag on the remote, cloned it, read the pool key from Vault, SSHed
-the box, listed its lima disks, and run the tier-exclusivity assertion. Check
+verified the tag on the remote, cloned it, signed your operator certificate
+(gen-2; read the pool key from Vault on gen-1), SSHed the box, listed its lima disks, and run the tier-exclusivity assertion. Check
 `env_name`, `free_slots >= count`, and that `attributes.repo_branch_or_tag`
 equals `$VERSION` — that is the exact string a client of this release sends at
 lease time, derived from `--from-tag` and never typed.
@@ -188,6 +189,13 @@ activated**, which is how an un-activated bake leaks a box slot.
 `succeeded` means the row was written. It does **not** mean the container is
 healthy: sshd hardening, the git-identity clear, and the deferred-install wait
 are all best-effort in the bake — logged, never raised.
+
+On a **gen-2** box the containers trust the tier's SSH CA, so the key to hop
+with is your operator identity: `~/.mindsadmin/<tier>/ssh_id`, whose
+certificate any preceding `minds-admin` box command (the bake itself) signed
+into `ssh_id-cert.pub` beside it; `ssh -i` picks the certificate up on its
+own. Point `POOL_KEY` at that path and skip the Vault read below. On a
+**gen-1** box the containers authorize the tier's pool key:
 
 ```bash
 umask 077
@@ -252,7 +260,9 @@ sequenced by the `release-minds` skill.
 `rm -P /tmp/pool-<tier>.key` when done -- and use a per-tier filename as above, so a staging key can never linger at the path a production run reuses.
 
 A blank result or `SSH_FAILED` on **every** check is not a failing slice: it is
-the wrong tier's pool key, or a box you cannot reach. `SSH_FAILED` on *some*
+the wrong tier's credentials (a pool key or an operator certificate signed by
+another tier's CA), an operator certificate that has expired since the bake
+(re-run any `minds-admin` box command to re-sign), or a box you cannot reach. `SSH_FAILED` on *some*
 ports, with the log showing the key was accepted, is a stale host key — which the
 throwaway `known_hosts` above exists to prevent. Either way, re-read the Vault
 path before concluding anything about the bake.
@@ -275,14 +285,15 @@ cd "$MNGR"                                    # the mngr checkout; every recipe 
 export VERSION=minds-v<version>               # the tag to bake
 export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200 VAULT_NAMESPACE=admin
 vault login -method=oidc role=minds_production
-vault kv get -mount=secrets -field=value minds/production/pool-ssh/POOL_SSH_PRIVATE_KEY >/dev/null && echo "pool key readable"
+vault read -field=public_key minds-production-ssh/config/ca >/dev/null && echo "ssh ca readable"   # gen-2 boxes
+vault kv get -mount=secrets -field=value minds/production/pool-ssh/POOL_SSH_PRIVATE_KEY >/dev/null && echo "pool key readable"   # gen-1 boxes
 ls .minds-deploy-recover-target-*.json 2>/dev/null && echo "resolve this before continuing"
 eval "$(uv run minds-admin env activate production)"
 ```
 
 Prove the Vault scope now -- a token on the wrong role fails at the
-bake, several minutes later, with an error about the pool key rather than about
-your login.
+bake, several minutes later, with an error about signing your certificate (or
+reading the pool key) rather than about your login.
 
 A leftover recover-target file from an interrupted deploy — staging's included —
 blocks every `minds-admin env` command until resolved.

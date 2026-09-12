@@ -1,0 +1,3 @@
+New committed credential-expiry registry (`.github/credential-expiries.toml`) plus a weekly GitHub Actions cron (`credential-expiry-reminder.yml`, backed by `scripts/credential_expiry_reminder.py`): any registered credential within 30 days of its recorded expiry gets one GitHub issue filed, deduplicated by exact title. First entry: the shared `mngr-openobserve-alerts` token (expires 2027-08-24), whose OpenObserve webhook would otherwise start 401ing silently.
+
+The slice-fleet spec's phase-3 section is updated: the generation lease filter now exists (landed with these canary follow-ups, ahead of the CI split fleet), so the migration release test no longer needs a lease retry loop.

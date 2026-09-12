@@ -26,3 +26,7 @@ class UpstreamFetcherInterface(MutableModel, ABC):
     @abstractmethod
     def fetch(self, url: str) -> bytes | None:
         """Return the response body, or None on a definitive 404."""
+
+    @abstractmethod
+    def is_served(self, url: str) -> bool:
+        """Return whether a HEAD of the URL succeeds, without downloading the body."""

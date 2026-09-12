@@ -8,6 +8,17 @@ import pytest
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.local_process import RunningProcess
 from imbue.concurrency_group.test_utils import poll_until
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DATADISK_OBJECT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DISK_OBJECT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DOWNLOAD_LOCK_RELPATH
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import DOWNLOAD_LOCK_WAIT_SECONDS
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_NO_PORTS_MARKER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import RESTORE_RESERVED_MARKER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import TRANSFER_DIR_ROOT
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import TransferEnv
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import build_launch_detached_command
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import parse_status_text
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import render_transfer_env
 from imbue.remote_service_connector import box_scripts
 
 _INSTANCE = "mngr-slice-test-" + "a" * 32
@@ -18,41 +29,10 @@ _DISK = _INSTANCE + "-data"
 _linux_only = pytest.mark.skipif(sys.platform != "linux", reason="needs flock, setsid, and /proc")
 
 
-def test_render_transfer_env_quotes_values_and_omits_empty_identity() -> None:
-    env_text = box_scripts.render_transfer_env(
-        box_scripts.TransferEnv(
-            s3_endpoint="https://s3.example",
-            s3_region="us-east-va",
-            access_key_id="AKIA",
-            secret_access_key="se'cret",
-            bucket="bkt",
-            key_prefix="host-aa/gen-1",
-            instance_name=_INSTANCE,
-            age_recipient="age1xyz",
-        )
-    )
-    assert "export AWS_SECRET_ACCESS_KEY='se'\"'\"'cret'" in env_text
-    assert "WS_AGE_IDENTITY" not in env_text
-
-    with_identity = box_scripts.render_transfer_env(
-        box_scripts.TransferEnv(
-            s3_endpoint="https://s3.example",
-            s3_region="us-east-va",
-            access_key_id="AKIA",
-            secret_access_key="secret",
-            bucket="bkt",
-            key_prefix="host-aa/gen-1",
-            instance_name=_INSTANCE,
-            age_identity="AGE-SECRET-KEY-1XYZ",
-        )
-    )
-    assert "export WS_AGE_IDENTITY=AGE-SECRET-KEY-1XYZ" in with_identity
-
-
 def test_upload_script_streams_both_disks_and_meta() -> None:
     script = box_scripts.render_upload_script(_INSTANCE, _DISK)
-    assert f'"$HOME/.lima/$WS_INSTANCE/disk" "{box_scripts.DISK_OBJECT}" DISK' in script
-    assert f'"$HOME/.lima/_disks/{_DISK}/datadisk" "{box_scripts.DATADISK_OBJECT}" DATADISK' in script
+    assert f'"$HOME/.lima/$WS_INSTANCE/disk" "{DISK_OBJECT}" DISK' in script
+    assert f'"$HOME/.lima/_disks/{_DISK}/datadisk" "{DATADISK_OBJECT}" DATADISK' in script
     assert 'age -e -r "$WS_AGE_RECIPIENT"' in script
     assert "s5cmd --endpoint-url" in script
     assert "STAGE uploaded" in script
@@ -79,7 +59,7 @@ def test_download_script_verifies_shas_and_waits_for_sshd() -> None:
     assert box_scripts.STOP_MARKER_FILENAME in script
     # A stuck lock fails the restore in minutes with a real error instead of
     # parking it behind the transfer timeout.
-    assert f"flock -w {box_scripts.DOWNLOAD_LOCK_WAIT_SECONDS} 8 || fail" in script
+    assert f"flock -w {DOWNLOAD_LOCK_WAIT_SECONDS} 8 || fail" in script
 
 
 def test_restore_reserve_script_claims_slot_and_rewrites_ports() -> None:
@@ -92,8 +72,8 @@ def test_restore_reserve_script_claims_slot_and_rewrites_ports() -> None:
         expected_meta_sha="cc33",
     )
     assert box_scripts.RESTORE_BOX_FULL_MARKER in script
-    assert box_scripts.RESTORE_NO_PORTS_MARKER in script
-    assert box_scripts.RESTORE_RESERVED_MARKER in script
+    assert RESTORE_NO_PORTS_MARKER in script
+    assert RESTORE_RESERVED_MARKER in script
     # The port rewrite goes old port -> unique placeholder -> new port in two
     # sed passes: a chosen port may equal the OTHER forward's old port, and a
     # single sequential pass would then re-match the just-rewritten line.
@@ -112,22 +92,6 @@ def test_stop_and_finalize_commands_cover_marker_and_teardown() -> None:
     finalize_commands = box_scripts.build_finalize_stop_commands(_INSTANCE, _DISK)
     assert any("limactl delete --force" in command for command in finalize_commands)
     assert any("limactl disk delete --force" in command for command in finalize_commands)
-
-
-def test_launch_detached_command_clears_stale_status_synchronously() -> None:
-    command = box_scripts.build_launch_detached_command(_INSTANCE, "upload.sh")
-    # A stale status file (failed earlier attempt, leftover download status)
-    # must be gone before the launch returns, so pollers never misread it.
-    assert "rm -f status" in command
-    assert command.index("rm -f status") < command.index("setsid nohup bash upload.sh")
-
-
-def test_parse_status_text_handles_blank_and_malformed_lines() -> None:
-    parsed = box_scripts.parse_status_text("STAGE=uploaded\n\nnot a pair\nFINISHED=1\nERROR=a=b\n")
-    assert parsed["STAGE"] == "uploaded"
-    assert parsed["FINISHED"] == "1"
-    assert parsed["ERROR"] == "a=b"
-    assert "not a pair" not in parsed
 
 
 def test_parse_reserved_ports_line_extracts_ports_or_none() -> None:
@@ -175,11 +139,11 @@ def _make_fake_box_home(home: Path) -> dict[str, str]:
         (stub_bin / name).chmod(0o755)
     (home / ".lima" / _INSTANCE).mkdir(parents=True)
     (home / ".lima" / "_disks" / _DISK).mkdir(parents=True)
-    transfer = home / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE
+    transfer = home / TRANSFER_DIR_ROOT / _INSTANCE
     transfer.mkdir(parents=True)
     (transfer / "env").write_text(
-        box_scripts.render_transfer_env(
-            box_scripts.TransferEnv(
+        render_transfer_env(
+            TransferEnv(
                 s3_endpoint="https://s3.example",
                 s3_region="r",
                 access_key_id="a",
@@ -205,19 +169,19 @@ def _make_fake_box_home(home: Path) -> dict[str, str]:
 
 
 def _transfer_status(home: Path) -> dict[str, str]:
-    status_file = home / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE / "status"
-    return box_scripts.parse_status_text(status_file.read_text()) if status_file.exists() else {}
+    status_file = home / TRANSFER_DIR_ROOT / _INSTANCE / "status"
+    return parse_status_text(status_file.read_text()) if status_file.exists() else {}
 
 
 def _is_lock_free(cg: ConcurrencyGroup, env: dict[str, str]) -> bool:
-    lock = f"{env['HOME']}/{box_scripts.DOWNLOAD_LOCK_RELPATH}"
+    lock = f"{env['HOME']}/{DOWNLOAD_LOCK_RELPATH}"
     return cg.run_process_to_completion(["flock", "-n", lock, "true"], env=env, is_checked_after=False).returncode == 0
 
 
 def _hold_lock(cg: ConcurrencyGroup, env: dict[str, str]) -> RunningProcess:
     """Take the box download lock from a single long-lived process (terminate() releases it)."""
     holder = cg.run_process_in_background(
-        ["bash", "-c", f'exec 8> "$HOME/{box_scripts.DOWNLOAD_LOCK_RELPATH}"; flock 8; exec sleep 60'],
+        ["bash", "-c", f'exec 8> "$HOME/{DOWNLOAD_LOCK_RELPATH}"; flock 8; exec sleep 60'],
         env=env,
         is_checked_by_group=False,
     )
@@ -244,7 +208,7 @@ def test_download_script_releases_the_box_lock_before_booting_the_vm(tmp_path: P
     every open descriptor and would hold the box's download lock for the life
     of the VM, stalling every later restore on the box."""
     env = _make_fake_box_home(tmp_path)
-    transfer = tmp_path / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE
+    transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
     with ConcurrencyGroup(name="restore") as cg:
         finished = cg.run_process_to_completion(["bash", "download.sh"], cwd=transfer, env=env, is_checked_after=False)
         assert finished.returncode == 0, finished.stderr
@@ -264,7 +228,7 @@ def test_download_script_queues_behind_the_box_lock_and_reports_it(tmp_path: Pat
     ``waiting-for-lock`` (so a queued transfer is distinguishable from one that
     never started) and proceeds once the lock is released."""
     env = _make_fake_box_home(tmp_path)
-    transfer = tmp_path / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE
+    transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
     with ConcurrencyGroup(name="restore") as cg:
         holder = _hold_lock(cg, env)
         script = cg.run_process_in_background(["bash", "download.sh"], cwd=transfer, env=env)
@@ -287,10 +251,10 @@ def test_cleanup_commands_kill_the_queued_transfer_and_roll_back_the_slot(tmp_pa
     instance, disk, and transfer dirs."""
     env = _make_fake_box_home(tmp_path)
     (tmp_path / ".lima" / _INSTANCE / "lima.yaml").write_text("vmType: qemu\n")
-    transfer = tmp_path / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE
+    transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
     with ConcurrencyGroup(name="rollback") as cg:
         holder = _hold_lock(cg, env)
-        launch = box_scripts.build_launch_detached_command(_INSTANCE, "download.sh")
+        launch = build_launch_detached_command(_INSTANCE, "download.sh")
         cg.run_process_to_completion(["bash", "-c", launch], env=env)
         transfer_pid = int((transfer / "pid").read_text())
         assert poll_until(lambda: _transfer_status(tmp_path).get("STAGE") == "waiting-for-lock"), (
@@ -323,7 +287,7 @@ def test_cleanup_commands_keep_the_dirs_when_the_vm_survives_limactl_delete(tmp_
     assert box_scripts.CLEANUP_DELETE_FAILED_MARKER in stderr
     assert (tmp_path / ".lima" / _INSTANCE / "lima.yaml").exists()
     assert (tmp_path / ".lima" / "_disks" / _DISK).exists()
-    assert not (tmp_path / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE).exists()
+    assert not (tmp_path / TRANSFER_DIR_ROOT / _INSTANCE).exists()
 
 
 @_linux_only
@@ -331,7 +295,7 @@ def test_cleanup_commands_never_group_kill_a_reused_pid(tmp_path: Path) -> None:
     """A stale pid file may name an unrelated process on the shared box; the
     rollback only signals a pid whose cwd is this instance's transfer dir."""
     env = _make_fake_box_home(tmp_path)
-    transfer = tmp_path / box_scripts.TRANSFER_DIR_ROOT / _INSTANCE
+    transfer = tmp_path / TRANSFER_DIR_ROOT / _INSTANCE
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     with ConcurrencyGroup(name="rollback") as cg:

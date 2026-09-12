@@ -1,0 +1,1 @@
+- `uv.lock`: `apt_mirror` gains the `python-debian` dependency (dpkg version ordering when a bare package-list name resolves to the newest version in a frozen index), and `minds_admin` now depends on the `apt-mirror` workspace package (the artifact manifest, upload, and gen-2 prep reuse its URL/key helpers and R2 storage).

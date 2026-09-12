@@ -184,3 +184,27 @@ order by bucket_at
     yFmt=num0
     title="Network throughput (KB/s, 5-minute average)"
 />
+
+## Per-slice taps (gen-2)
+
+Each gen-2 slice VM's routed tap is an ordinary `msliceN` interface, so its
+traffic charts straight from the hostmetrics network stream. Empty until a
+gen-2 box carries slices.
+
+```sql tap_throughput
+select
+    bucket_at,
+    host_name || ' ' || device || ' ' || direction as series_label,
+    bytes_per_second / 1e3 as kb_per_second
+from boxes.tap_throughput
+order by bucket_at
+```
+
+<LineChart
+    data={tap_throughput}
+    x=bucket_at
+    y=kb_per_second
+    series=series_label
+    yFmt=num0
+    title="Per-slice tap throughput (KB/s, 5-minute average)"
+/>

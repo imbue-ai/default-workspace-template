@@ -1,0 +1,22 @@
+# Docker's apt repo (the `docker` archive, https://download.docker.com/linux/debian):
+# the pinned engine the gen-2 slice guest images are customized with. Docker
+# publishes no snapshot service, so warming at cut time is what keeps these
+# exact versions downloadable forever.
+#
+# The engine and containerd pins are the ones libs/mngr_vps/.../host_setup.py
+# installs (PINNED_DOCKER_APT_VERSION_CORE / PINNED_CONTAINERD_APT_VERSION_CORE
+# with the trixie distro suffix); a test in minds_admin keeps them in step.
+# The client-side plugins are unpinned there, so an unversioned entry here
+# resolves to the newest version in the frozen index -- exactly what
+# `apt-get install docker-buildx-plugin` picks against that index. The same
+# goes for docker-ce-rootless-extras: docker-ce Recommends it (installed by
+# default), and it carries no version tie to the engine, so apt takes the
+# newest one in the index.
+#
+# Format: one entry per line, `name` or `name=version`; `#` starts a comment.
+docker-ce=5:29.6.2-1~debian.13~trixie
+docker-ce-cli=5:29.6.2-1~debian.13~trixie
+containerd.io=2.2.6-1~debian.13~trixie
+docker-buildx-plugin
+docker-compose-plugin
+docker-ce-rootless-extras

@@ -14,6 +14,8 @@ from imbue.minds.utils.logging import console_level_from_verbose_and_quiet
 from imbue.minds.utils.logging import setup_logging
 from imbue.minds_admin.cli.accounts_admin import account_admin
 from imbue.minds_admin.cli.analytics_admin import analytics_admin
+from imbue.minds_admin.cli.artifacts_admin import artifacts_admin
+from imbue.minds_admin.cli.cutover import cutover
 from imbue.minds_admin.cli.env import env
 from imbue.minds_admin.cli.home_layout_admin import repair_home_layout
 from imbue.minds_admin.cli.paid import paid
@@ -22,6 +24,8 @@ from imbue.minds_admin.cli.relays_admin import relays_admin
 from imbue.minds_admin.cli.repair_keys_admin import repair_keys
 from imbue.minds_admin.cli.server import server
 from imbue.minds_admin.cli.sweep_admin import sweep_admin
+from imbue.minds_admin.cli.wireguard_admin import wireguard
+from imbue.minds_admin.cli.wireguard_admin import wireguard_alias
 from imbue.minds_admin.cli.workspaces_admin import workspaces_admin
 
 
@@ -59,8 +63,12 @@ cli.add_command(server)
 cli.add_command(paid)
 cli.add_command(account_admin)
 cli.add_command(analytics_admin)
+cli.add_command(artifacts_admin)
 cli.add_command(workspaces_admin)
 cli.add_command(sweep_admin)
 cli.add_command(relays_admin)
 cli.add_command(repair_keys)
+cli.add_command(wireguard)
+cli.add_command(wireguard_alias)
+cli.add_command(cutover)
 cli.add_command(repair_home_layout)

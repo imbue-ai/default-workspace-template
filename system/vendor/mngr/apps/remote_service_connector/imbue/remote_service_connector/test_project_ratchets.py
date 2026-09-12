@@ -1,11 +1,11 @@
 """Project-specific guardrails for the connector's Modal deployment model.
 
 The container only receives the packages listed in ``deploy_constants`` plus
-the source mounts for ``imbue.remote_service_connector`` and
-``imbue.modal_app_kit`` -- nothing else from the monorepo exists at runtime.
-An import that violates these rules passes every local test and then crashes
-the deployed container at import time, so the boundary is enforced here.
-See libs/modal_app_kit/README.md for the full deployment model.
+the source mounts app.py names (``_SHIPPED_IMBUE_PACKAGES`` below) -- nothing
+else from the monorepo exists at runtime. An import that violates these rules
+passes every local test and then crashes the deployed container at import
+time, so the boundary is enforced here. See libs/modal_app_kit/README.md for
+the full deployment model.
 """
 
 import ast
@@ -16,6 +16,7 @@ from imbue.modal_app_kit.testing import imported_module_names
 from imbue.modal_app_kit.testing import is_module_within_package
 from imbue.modal_app_kit.testing import modal_functions_missing_logging_bootstrap
 from imbue.modal_app_kit.testing import shipped_module_files
+from imbue.modal_app_kit.testing import transitive_shipped_imports
 from imbue.modal_app_kit.testing import uses_dunder_name_logger
 from imbue.remote_service_connector.deploy_constants import THIRD_PARTY_IMPORT_ROOTS
 
@@ -24,7 +25,17 @@ _PACKAGE_DIR = Path(__file__).parent
 # Import roots every shipped module may use, beyond the stdlib. "imbue" is
 # constrained to the shipped subpackages by _SHIPPED_IMBUE_PACKAGES below.
 _ALLOWED_ROOTS = THIRD_PARTY_IMPORT_ROOTS | {"imbue"}
-_SHIPPED_IMBUE_PACKAGES = ("imbue.remote_service_connector", "imbue.modal_app_kit")
+# The packages app.py mounts into the container (and nothing else from the
+# monorepo exists there). ``imbue.imbue_common`` ships whole, but only its
+# stdlib/pydantic-only modules may be reached: the transitive walk below
+# follows every import INTO a shipped package, so a shipped module pulling
+# ``imbue.imbue_common.logging`` (loguru) fails here instead of in the container.
+_SHIPPED_IMBUE_PACKAGES = (
+    "imbue.remote_service_connector",
+    "imbue.modal_app_kit",
+    "imbue.mngr_imbue_cloud.slices.gen2_scripts",
+    "imbue.imbue_common",
+)
 
 # Runtime seams that tests replace via monkeypatch on the owning module. A
 # cross-module ``from x import seam`` binds the function object at import time
@@ -69,23 +80,52 @@ def test_shipping_rule_actually_selects_the_production_modules() -> None:
 
 
 def test_shipped_modules_import_only_shipped_dependencies() -> None:
-    """Every shipped module imports only stdlib, the pip-installed set, or shipped packages."""
+    """Every module reachable from the shipped code imports only stdlib, the pip-installed set, or shipped files."""
     violations: list[str] = []
-    for path in shipped_module_files(_PACKAGE_DIR):
-        for module_name in imported_module_names(path):
-            root = module_name.split(".")[0]
-            if root in sys.stdlib_module_names:
-                continue
-            if root == "imbue":
-                if not any(is_module_within_package(module_name, pkg) for pkg in _SHIPPED_IMBUE_PACKAGES):
-                    violations.append(f"{path.name}: {module_name}")
-                continue
-            if root not in _ALLOWED_ROOTS:
-                violations.append(f"{path.name}: {module_name}")
+    for shipped_import in transitive_shipped_imports(_PACKAGE_DIR, _SHIPPED_IMBUE_PACKAGES):
+        root = shipped_import.module_name.split(".")[0]
+        if root in sys.stdlib_module_names:
+            continue
+        # modal_app_kit's own modules may import the modal SDK (Modal injects it
+        # into every container; the library is stdlib+modal by contract). The
+        # connector's own modules still may not -- test_only_the_entrypoint_imports_modal.
+        if root == "modal" and is_module_within_package(shipped_import.importer, "imbue.modal_app_kit"):
+            continue
+        if root == "imbue":
+            is_shipped_package = any(
+                is_module_within_package(shipped_import.module_name, pkg) for pkg in _SHIPPED_IMBUE_PACKAGES
+            )
+            if not is_shipped_package or shipped_import.is_target_mount_excluded:
+                violations.append(f"{shipped_import.importer}: {shipped_import.module_name}")
+            continue
+        if root not in _ALLOWED_ROOTS:
+            violations.append(f"{shipped_import.importer}: {shipped_import.module_name}")
     assert not violations, (
-        "Shipped modules import packages that do not exist in the deployed container "
-        f"(fix the import, or add the dependency to deploy_constants + the image): {violations}"
+        "Shipped modules (or the shipped modules they import) use packages that do not exist in the deployed "
+        f"container (fix the import, or add the dependency to deploy_constants + the image): {violations}"
     )
+
+
+def _entrypoint_mounted_package_names() -> set[str]:
+    """The dotted names app.py passes to ``add_local_python_source``."""
+    tree = ast.parse((_PACKAGE_DIR / "app.py").read_text())
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_local_python_source"
+        ):
+            return {
+                argument.value
+                for argument in node.args
+                if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+            }
+    raise AssertionError("app.py has no add_local_python_source call")
+
+
+def test_entrypoint_mounts_exactly_the_shipped_packages() -> None:
+    """The import boundary and the mount must name the same packages, or one of them is lying."""
+    assert _entrypoint_mounted_package_names() == set(_SHIPPED_IMBUE_PACKAGES)
 
 
 def test_shipped_modules_never_import_the_entrypoint() -> None:

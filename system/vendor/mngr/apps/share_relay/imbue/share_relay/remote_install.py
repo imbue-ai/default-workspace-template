@@ -10,11 +10,17 @@ import shlex
 from pathlib import Path
 from typing import Final
 
+from tenacity import Retrying
+from tenacity import retry_if_exception_type
+from tenacity import stop_after_delay
+from tenacity import wait_fixed
+
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ProcessError
 from imbue.imbue_common.pure import pure
 from imbue.share_relay.config_render import render_all_artifacts
 from imbue.share_relay.data_types import RelayConfiguration
+from imbue.share_relay.data_types import SshdWaitPolicy
 from imbue.share_relay.errors import ShareRelayError
 
 # Pinned frp release installed on every relay (bump deliberately; the sha256s
@@ -34,6 +40,10 @@ def pinned_frp_release(goarch: str) -> tuple[str, str]:
 
 
 _SSH_TIMEOUT_SECONDS: Final[float] = 300.0
+# ssh's own exit status when no session was established -- connection refused,
+# host-key rejection and authentication failure alike -- as opposed to the
+# remote command's exit status once one was.
+_SSH_SESSION_FAILURE_EXIT_CODE: Final[int] = 255
 _SSH_BASE_OPTIONS: Final[tuple[str, ...]] = ("-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes")
 
 # Where each rendered artifact lands on the relay host (staged via /tmp; the
@@ -49,6 +59,13 @@ REMOTE_ARTIFACT_PATHS: Final[dict[str, str]] = {
 
 class RelayDeployError(ShareRelayError):
     """Raised when installing software or config on a relay host fails."""
+
+
+class RelaySshUnreachableError(RelayDeployError):
+    """Raised when ssh established no session with the relay host (exit 255: refused, host key or auth).
+
+    As opposed to a remote command that ran and failed.
+    """
 
 
 @pure
@@ -104,7 +121,30 @@ def _run_ssh(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, remo
             name=f"relay-ssh-{host}",
         )
     except ProcessError as exc:
+        if exc.returncode == _SSH_SESSION_FAILURE_EXIT_CODE:
+            raise RelaySshUnreachableError(f"ssh to {host} failed: {exc}") from exc
         raise RelayDeployError(f"ssh to {host} failed: {exc}") from exc
+
+
+def _wait_for_sshd(concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, policy: SshdWaitPolicy) -> None:
+    """Probe the host with a no-op session until its sshd answers.
+
+    A freshly provisioned instance reports ACTIVE before its sshd is listening,
+    so a deploy issued straight after `provision` would otherwise fail with
+    "Connection refused". Every ssh exit 255 is retried -- an authentication failure
+    included, since cloud-init may install the login key after sshd starts and
+    ssh's status cannot tell the two apart; a wrong user or key therefore fails
+    only once the policy's window is spent. A failing remote command surfaces
+    at once.
+    """
+    for attempt in Retrying(
+        retry=retry_if_exception_type(RelaySshUnreachableError),
+        stop=stop_after_delay(policy.wait_seconds),
+        wait=wait_fixed(policy.poll_interval_seconds),
+        reraise=True,
+    ):
+        with attempt:
+            _run_ssh(concurrency_group, host, ssh_user, "true")
 
 
 def _scp_file(
@@ -121,7 +161,12 @@ def _scp_file(
 
 
 def deploy_relay(
-    concurrency_group: ConcurrencyGroup, host: str, ssh_user: str, config: RelayConfiguration, work_dir: Path
+    concurrency_group: ConcurrencyGroup,
+    host: str,
+    ssh_user: str,
+    config: RelayConfiguration,
+    work_dir: Path,
+    sshd_wait: SshdWaitPolicy,
 ) -> None:
     """Render config locally, stage everything onto the host, and sudo-install + (re)start the services."""
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -140,6 +185,7 @@ def deploy_relay(
         artifact_path.write_text(content)
         artifact_path.chmod(0o600)
 
+    _wait_for_sshd(concurrency_group, host, ssh_user, sshd_wait)
     # Stage into /tmp (the SSH user cannot write /etc directly), then run the
     # install script under sudo to move files into place and restart services.
     # The staging dir is owner-only for the same secret-bearing reason as the

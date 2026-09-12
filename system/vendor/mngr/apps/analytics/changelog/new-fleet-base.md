@@ -1,0 +1,3 @@
+`new-fleet-base` is the integration base for the in-progress slice-fleet generation-2 program (specs/slice-fleet-gen2 and specs/slice-fleet): the squash of the formerly stacked PRs #571, #573, #574, #581, #609, and #614. It is deployed only to dev canaries and must not be deployed or merged as-is; follow-up PRs stack on it and the whole program lands on `main` as one change.
+
+For this project it carries the gen-2 phase-4 dashboard work: the Evidence box dashboard gains a per-slice tap throughput chart over the hostmetrics network stream's `msliceN` interfaces (a new `tap_throughput` extract table). The detailed per-phase history is in this directory's `mngr-slice-fleet-gen2-phase-*`, `mngr-variable-sizing`, and `mngr-new-fleet-testing` entries.

@@ -18,6 +18,7 @@ from imbue.analytics.collection import SshCollectionResult
 from imbue.analytics.collection import _build_run_command
 from imbue.analytics.collection import _due_workspaces
 from imbue.analytics.collection import compute_script_version
+from imbue.analytics.collection import credentials_for_workspace
 from imbue.analytics.collection import load_injected_script_files
 from imbue.analytics.collection import process_collection_result
 from imbue.analytics.collection import run_collection_poll_with_connections
@@ -27,12 +28,13 @@ from imbue.analytics.mock_ops_db_test import FailingOpsConnection
 from imbue.analytics.mock_ops_db_test import RoutingFakeConnection
 from imbue.analytics.protocol import parse_collection_output
 from imbue.analytics.settings import CollectionSettings
+from imbue.analytics.settings import ManagementSshCredentials
 from imbue.analytics.testing import build_fixture_analytics_session
 
 _NOW = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
 
 
-def _workspace(host_id: str = "host-abc") -> CollectableWorkspace:
+def _workspace(host_id: str = "host-abc", box_generation: int = 1) -> CollectableWorkspace:
     return CollectableWorkspace(
         host_db_id="11111111-2222-3333-4444-555555555555",
         host_id=host_id,
@@ -43,12 +45,14 @@ def _workspace(host_id: str = "host-abc") -> CollectableWorkspace:
         ssh_user="user",
         container_host_public_key="ssh-ed25519 BAKEKEY",
         outer_host_public_key=None,
+        box_generation=box_generation,
     )
 
 
-def _collection_settings() -> CollectionSettings:
+def _collection_settings(gen2_credentials: ManagementSshCredentials | None = None) -> CollectionSettings:
     return CollectionSettings(
         pool_ssh_private_key=SecretStr("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n"),
+        gen2_credentials=gen2_credentials,
         interval_seconds=3600,
         parallelism=2,
         workspace_timeout_seconds=600,
@@ -240,6 +244,7 @@ def test_run_collection_poll_collects_due_workspaces_and_skips_recent_ones() -> 
                     "user",
                     None,
                     None,
+                    1,
                 ),
                 (
                     "11111111-2222-3333-4444-666666666666",
@@ -251,6 +256,7 @@ def test_run_collection_poll_collects_due_workspaces_and_skips_recent_ones() -> 
                     "user",
                     None,
                     None,
+                    1,
                 ),
             ],
         }
@@ -295,6 +301,7 @@ def test_run_collection_poll_records_failed_workspaces_in_the_audit_only() -> No
                     "user",
                     None,
                     None,
+                    1,
                 )
             ],
         }
@@ -354,6 +361,7 @@ def test_run_collection_poll_survives_an_unparsable_stored_cursor() -> None:
                     "user",
                     None,
                     None,
+                    1,
                 )
             ],
         }
@@ -430,6 +438,7 @@ def test_run_collection_poll_returns_despite_a_collect_hop_that_never_finishes()
                     "user",
                     None,
                     None,
+                    1,
                 )
             ],
         }
@@ -442,6 +451,7 @@ def test_run_collection_poll_returns_despite_a_collect_hop_that_never_finishes()
 
     settings = CollectionSettings(
         pool_ssh_private_key=SecretStr("-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n"),
+        gen2_credentials=None,
         interval_seconds=3600,
         parallelism=2,
         workspace_timeout_seconds=1,
@@ -512,3 +522,16 @@ def test_due_workspaces_filters_on_the_last_attempt() -> None:
     due = _due_workspaces(workspaces, last_attempts, interval_seconds=3600, now=now)
 
     assert [workspace.host_id for workspace in due] == ["host-old", "host-never"]
+
+
+def test_credentials_for_workspace_select_the_certificate_on_gen2_and_the_pool_key_on_gen1() -> None:
+    certificate = ManagementSshCredentials(private_key_pem=SecretStr("gen2-pem"), certificate="ssh-ed25519-cert CERT")
+    settings = _collection_settings(gen2_credentials=certificate)
+    assert credentials_for_workspace(settings, _workspace(box_generation=2)) == certificate
+    gen1 = credentials_for_workspace(settings, _workspace(box_generation=1))
+    assert gen1 is not None
+    assert gen1.certificate is None
+    assert gen1.private_key_pem == settings.pool_ssh_private_key
+    # Without a stored certificate a gen-2 workspace has no credentials at all: the
+    # pool key is never tried against a CA-only host.
+    assert credentials_for_workspace(_collection_settings(), _workspace(box_generation=2)) is None

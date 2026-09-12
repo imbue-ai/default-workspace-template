@@ -14,13 +14,15 @@ from loguru import logger
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_private_key_pem
-from imbue.minds_admin.cli.server import pool_private_key_path
 from imbue.minds_admin.slices.bare_metal_db import fetch_server_capacities
+from imbue.minds_admin.slices.box_access import resolve_server_management_dial
 from imbue.minds_admin.slices.key_repair import SliceKeyRepairOutcome
 from imbue.minds_admin.slices.key_repair import build_key_repair_report
 from imbue.minds_admin.slices.key_repair import repair_slice_keys_on_box
+from imbue.minds_admin.slices.operator_identity import pool_private_key_path
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
+from imbue.mngr_imbue_cloud.slices.bare_metal import box_service_user
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.errors import LimaCommandError
 
@@ -78,9 +80,11 @@ def repair_keys(
                 logger.warning("Box {} has no public_address; skipping (state unknown)", box_server.id)
                 unreadable_boxes.append(str(box_server.id))
                 continue
+            repair_dial = resolve_server_management_dial(box_server)
             client = LimaSliceVpsClient(
-                box_address=str(box_server.public_address),
-                box_ssh_user=box_server.lima_service_user or "limahost",
+                box_address=repair_dial.host,
+                box_ssh_port=repair_dial.port,
+                box_ssh_user=box_service_user(box_server),
                 private_key_path=str(private_key_path),
                 box_host_public_key=box_server.box_host_public_key,
             )

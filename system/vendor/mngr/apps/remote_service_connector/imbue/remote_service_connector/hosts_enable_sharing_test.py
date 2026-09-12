@@ -2,12 +2,21 @@
 
 import hashlib
 import re
+import socket
+import threading
+from collections.abc import Iterator
+from collections.abc import Sequence
+from contextlib import contextmanager
+from typing import Final
 from uuid import UUID
 
+import paramiko
 import pytest
 
+from imbue.remote_service_connector.hosts import _assert_container_serves_pinned_host_key
 from imbue.remote_service_connector.hosts import build_owner_grants_toml
 from imbue.remote_service_connector.hosts import build_share_env_text
+from imbue.remote_service_connector.shares import derive_share_user_label
 from imbue.remote_service_connector.testing import _CONTENT_DOMAIN
 from imbue.remote_service_connector.testing import _USER_STUB_EMAIL
 from imbue.remote_service_connector.testing import _USER_STUB_USER_ID
@@ -256,3 +265,139 @@ def test_enable_sharing_fails_closed_when_container_key_is_not_pinned(monkeypatc
 
     assert resp.status_code == 503
     assert backend.written_container_files == []
+
+
+def test_enable_sharing_conflicts_when_the_desktop_app_rotated_the_container_host_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A desktop-adopted workspace serves a host key the row never learns (the
+    # rotation is client-side by design); the mismatch is the signal that
+    # sharing must be enabled from the desktop app.
+    _install_share_env(monkeypatch)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        host_id_str=_HOST_ID_STR,
+    )
+    backend.is_container_host_key_mismatched = True
+
+    resp = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "workspace_managed_by_desktop"
+    assert "desktop app" in detail["message"]
+    assert backend.written_container_files == []
+
+
+def test_enable_sharing_conflict_leaves_the_desktop_established_share_and_its_token_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The desktop app already shares this workspace (its own share row and
+    # relay token). The server-side enable must refuse BEFORE rotating the
+    # token: a rotation the container never receives would sever the tunnel
+    # the desktop's share is running on.
+    _install_share_env(monkeypatch)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        host_id_str=_HOST_ID_STR,
+    )
+    user_label = derive_share_user_label(_USER_STUB_USER_ID)
+    backend.add_share(_HOST_ID_STR, user_label, "us1", f"desktop-share.us1.{_CONTENT_DOMAIN}")
+    desktop_token = {"token_hash": "desktop-token-hash", "host_id": _HOST_ID_STR, "user_id": user_label}
+    backend.relay_token_rows.append(dict(desktop_token))
+    backend.is_container_host_key_mismatched = True
+
+    resp = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
+
+    assert resp.status_code == 409
+    assert backend.relay_token_rows == [desktop_token]
+    share = backend.find_share(_HOST_ID_STR, user_label)
+    assert share is not None
+    assert share["workspace_domain"] == f"desktop-share.us1.{_CONTENT_DOMAIN}"
+    assert backend.written_container_files == []
+
+
+# How long the loopback sshd's accept loop waits before re-checking for shutdown.
+_SSHD_ACCEPT_POLL_SECONDS: Final[float] = 0.2
+
+
+def _public_key_line(key: paramiko.PKey) -> str:
+    return f"{key.get_name()} {key.get_base64()}"
+
+
+@contextmanager
+def _loopback_sshd(host_keys: Sequence[paramiko.PKey]) -> Iterator[int]:
+    """Run an sshd on loopback that serves ``host_keys``; yield its port.
+
+    Only the key exchange matters here (the probe never authenticates), so the
+    server interface is paramiko's default, which admits nothing.
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    listener.settimeout(_SSHD_ACCEPT_POLL_SECONDS)
+    port = listener.getsockname()[1]
+
+    served: list[paramiko.Transport] = []
+    stop_event = threading.Event()
+
+    def accept_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            transport = paramiko.Transport(connection)
+            for host_key in host_keys:
+                transport.add_server_key(host_key)
+            # Handed an event so the negotiation runs on the transport's own
+            # thread and a client that hangs up right after reading the host
+            # key (the probe does) cannot fail this loop.
+            transport.start_server(event=threading.Event(), server=paramiko.ServerInterface())
+            served.append(transport)
+
+    thread = threading.Thread(target=accept_loop, daemon=True, name="test-loopback-sshd")
+    thread.start()
+    try:
+        yield port
+    finally:
+        stop_event.set()
+        thread.join(timeout=5.0)
+        for transport in served:
+            transport.close()
+        listener.close()
+
+
+def test_container_host_key_probe_accepts_the_pinned_key() -> None:
+    host_key = paramiko.ECDSAKey.generate()
+    with _loopback_sshd([host_key]) as port:
+        _assert_container_serves_pinned_host_key("127.0.0.1", port, _public_key_line(host_key))
+
+
+def test_container_host_key_probe_rejects_a_key_other_than_the_pinned_one() -> None:
+    served_key = paramiko.ECDSAKey.generate()
+    pinned_key = paramiko.ECDSAKey.generate()
+    with _loopback_sshd([served_key]) as port:
+        with pytest.raises(paramiko.BadHostKeyException) as exc_info:
+            _assert_container_serves_pinned_host_key("127.0.0.1", port, _public_key_line(pinned_key))
+    assert exc_info.value.key.asbytes() == served_key.asbytes()
+    assert exc_info.value.expected_key.asbytes() == pinned_key.asbytes()
+
+
+def test_container_host_key_probe_negotiates_the_pinned_key_type() -> None:
+    # An sshd serving several host keys presents the type the client prefers;
+    # the probe must ask for the pinned one (as SSHClient.connect does for a
+    # known host), not paramiko's default preference, or a healthy container
+    # whose pin is a less-preferred type would read as rotated.
+    preferred_key = paramiko.ECDSAKey.generate(bits=256)
+    pinned_key = paramiko.ECDSAKey.generate(bits=384)
+    with _loopback_sshd([preferred_key, pinned_key]) as port:
+        _assert_container_serves_pinned_host_key("127.0.0.1", port, _public_key_line(pinned_key))

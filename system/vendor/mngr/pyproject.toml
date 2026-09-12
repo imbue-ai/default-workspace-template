@@ -411,6 +411,15 @@ layers = [
     "imbue.mngr_imbue_cloud.errors",
     "imbue.mngr_imbue_cloud.primitives",
 ]
+# ``slices.gen2_scripts`` is the package's leaf (it ships into the connector
+# container and imports nothing from the package outside itself -- its own
+# ratchet in test_project_ratchets.py keeps it on the stdlib, pydantic, yaml,
+# and imbue_common), but import-linter cannot express a layer nested inside
+# another, so the lower-layer uses of it are listed here instead.
+ignore_imports = [
+    "imbue.mngr_imbue_cloud.interfaces -> imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands",
+    "imbue.mngr_imbue_cloud.primitives -> imbue.mngr_imbue_cloud.slices.gen2_scripts.regions",
+]
 
 [[tool.importlinter.contracts]]
 name = "minds_admin layers contract"

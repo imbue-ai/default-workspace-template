@@ -16,6 +16,8 @@ deployment model.
 """
 
 import os
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import modal
@@ -23,6 +25,9 @@ import modal
 from imbue.analytics.jobs import run_aggregation_job
 from imbue.analytics.jobs import run_collection_poll_job
 from imbue.analytics.jobs import run_lake_maintenance_job
+from imbue.analytics.settings import SSH_CERT_DICT_KEY_ANALYTICS
+from imbue.analytics.settings import SSH_CERT_DICT_NAME
+from imbue.analytics.settings import gen2_credentials_from_dict_entry
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
@@ -96,9 +101,11 @@ _COLLECTION_POLL_CRON = os.environ.get("ANALYTICS_COLLECTION_POLL_CRON", "*/15 *
     name="collection_poll",
     secrets=[
         *_analytics_secrets(),
-        # The pool management key the connector leases with authorizes the
-        # workspace hops; attaching the same secret avoids duplicating the
-        # key into the analytics Vault entry.
+        # CLEANUP: drop with the pool-ssh secret once the gen-1 -> gen-2 cutover
+        # has run on every tier (phase 6 of blueprint/slice-fleet-cutover). The
+        # pool key opens gen-1 workspaces only; gen-2 ones are hopped with the
+        # certificate read from the connector's Dict below. Attaching the same
+        # secret avoids duplicating the key into the analytics Vault entry.
         stamped_secret("pool-ssh", _DEPLOY_ENV, _MINDS_DEPLOY_ID),
     ],
     schedule=modal.Cron(_COLLECTION_POLL_CRON),
@@ -110,4 +117,9 @@ _COLLECTION_POLL_CRON = os.environ.get("ANALYTICS_COLLECTION_POLL_CRON", "*/15 *
 )
 def collection_poll() -> dict[str, int]:
     configure_logging()
-    return run_collection_poll_job()
+    # The connector's ssh_cert_refresh cron stores the analytics certificate in
+    # this Modal-environment-scoped Dict; gen-2 workspaces are hopped with it.
+    certificate_entry = modal.Dict.from_name(SSH_CERT_DICT_NAME, create_if_missing=True).get(
+        SSH_CERT_DICT_KEY_ANALYTICS
+    )
+    return run_collection_poll_job(gen2_credentials_from_dict_entry(certificate_entry, datetime.now(timezone.utc)))

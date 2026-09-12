@@ -215,9 +215,9 @@ During the swap window (which includes the OVH provisioning time), box/relay col
 
 ### Alerting
 
-None, deliberately, matching the Bugsink spec: no SMTP and no webhook integrations, because alert payloads would leak log content into third-party surfaces.
-The health sweep plus the future dashboards/inspector work cover operational awareness.
-Revisit only with a payload-free alert design (an alert may say which rule fired on which stream, and nothing more).
+Originally none, deliberately, matching the Bugsink spec: no SMTP and no webhook integrations, because alert payloads would leak log content into third-party surfaces.
+The revisit condition -- a payload-free alert design where an alert may say which rule fired on which stream, and nothing more -- was met by the slice-fleet-gen2 phase-4 telemetry work (specs/slice-fleet-gen2): `observability provision-alerts` provisions alert rules whose templates carry only the alert name, stream name, tier, and trigger time (never `{rows}` or any log content), delivered to a direct GitHub-issue webhook (plus an optional SMTP fallback).
+The health sweep plus the dashboards/inspector work still cover general operational awareness; any future alert template must preserve the payload-free constraint.
 
 ### Cost
 

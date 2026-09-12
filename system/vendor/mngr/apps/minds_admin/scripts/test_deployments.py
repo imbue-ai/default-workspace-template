@@ -99,6 +99,7 @@ from imbue.minds_admin.slices.bare_metal_db import fetch_servers
 from imbue.mngr.utils.testing import get_short_random_string
 from imbue.mngr_imbue_cloud.primitives import OVH_DATACENTER_CODE_BY_US_REGION
 from imbue.mngr_imbue_cloud.repo_identity import canonicalize_repo_source
+from imbue.mngr_imbue_cloud.slices.bare_metal import CI_SLICE_MAX_AGE_SECONDS
 from imbue.mngr_imbue_cloud.slices.bare_metal import find_first_ready_server_in_datacenter
 
 # ---------------------------------------------------------------------------
@@ -113,7 +114,9 @@ _DEFAULT_WORKSPACE_TEMPLATE_REMOTE_URL: Final[str] = "git@github.com:imbue-ai/de
 _LEDGER_PATH: Final[Path] = _REPO_ROOT / ".minds" / "ci-test-deploys.jsonl"
 _DEPLOYMENT_ENVS_JSON_PATH: Final[Path] = _REPO_ROOT / "test-results" / "deployment_envs.json"
 _ITERATE_STATE_DIR: Final[Path] = _REPO_ROOT / ".minds"
-_DEFAULT_MAX_RESOURCE_AGE_HOURS: Final[int] = 4
+# The ci Modal-env sweep ages envs out on the same threshold as the boxes' CI slice
+# sweep, so a leaked env and its slices disappear together.
+_DEFAULT_MAX_RESOURCE_AGE_HOURS: Final[int] = int(CI_SLICE_MAX_AGE_SECONDS // 3600)
 
 _MAILTM_API_BASE: Final[str] = "https://api.mail.tm"
 
@@ -667,11 +670,12 @@ def _write_deployment_envs_json(
     shared_envs: dict[SharedEnvRole, SharedEnvUrls],
     default_workspace_template: DefaultWorkspaceTemplateRef,
     run_id: RunId,
+    pool: PoolProvisionInfo | None,
     target_path: Path = _DEPLOYMENT_ENVS_JSON_PATH,
 ) -> Path:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     config = DeploymentEnvsConfig(
-        shared_envs=shared_envs, default_workspace_template=default_workspace_template, run_id=run_id
+        shared_envs=shared_envs, default_workspace_template=default_workspace_template, run_id=run_id, pool=pool
     )
     target_path.write_text(config.model_dump_json(indent=2))
     return target_path
@@ -784,6 +788,7 @@ def run(keep_on_failure: bool) -> None:
         logger.error("Shared env deploy failed: {}", exc)
 
     pytest_envs_path = _write_deployment_envs_json(
+        pool=None,
         shared_envs=shared_env_urls,
         default_workspace_template=DefaultWorkspaceTemplateRef(
             worktree_path=_DEFAULT_WORKSPACE_TEMPLATE_WORKTREE_PATH,
@@ -947,6 +952,7 @@ def deployment_only(tests: tuple[str, ...]) -> None:
     run_id = _mint_run_id()
 
     pytest_envs_path = _write_deployment_envs_json(
+        pool=None,
         shared_envs={},
         default_workspace_template=DefaultWorkspaceTemplateRef(
             worktree_path=_DEFAULT_WORKSPACE_TEMPLATE_WORKTREE_PATH
@@ -986,6 +992,7 @@ def up(role: str) -> None:
     urls = _deploy_shared_env(name=env_name, role=role_key)
     state_path = _ITERATE_STATE_DIR / f"iterate-{role}.json"
     _write_deployment_envs_json(
+        pool=None,
         shared_envs={role_key: urls},
         default_workspace_template=DefaultWorkspaceTemplateRef(
             worktree_path=_DEFAULT_WORKSPACE_TEMPLATE_WORKTREE_PATH
@@ -1317,6 +1324,45 @@ def _read_ci_infra_pool_dsn() -> str:
     return dsn
 
 
+def _read_available_pool_info_or_none(dsn: str, *, region: str | None) -> PoolProvisionInfo | None:
+    """The env's largest group of available pool rows sharing one (repo, ref, region), as the run's pool info.
+
+    ``services-against`` never bakes, so the tests that lease from the pool
+    (the fast-path create above all, which pins the rows' stamped template
+    identity) learn what the env already holds. ``region`` narrows the choice
+    when several regions have rows.
+    """
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT attributes->>'repo_url', attributes->>'repo_branch_or_tag', region, COUNT(*)
+                FROM pool_hosts
+                WHERE status = 'available'
+                  AND attributes->>'repo_url' IS NOT NULL
+                  AND attributes->>'repo_branch_or_tag' IS NOT NULL
+                  AND (%s::text IS NULL OR region = %s)
+                GROUP BY 1, 2, 3
+                ORDER BY 4 DESC, 3, 2
+                LIMIT 1
+                """,
+                (region, region),
+            )
+            row = cursor.fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    repo_url, repo_branch_or_tag, row_region, slice_count = row
+    return PoolProvisionInfo(
+        repo_url=NonEmptyStr(repo_url),
+        repo_branch_or_tag=NonEmptyStr(repo_branch_or_tag),
+        region=NonEmptyStr(row_region),
+        slice_count=int(slice_count),
+    )
+
+
 def _read_env_host_pool_dsn(env_name: DevEnvName) -> str:
     """The up'd env's own host_pool DSN, from the secrets.toml its deploy wrote."""
     _reconstruct_env_secrets_file(env_name)
@@ -1484,7 +1530,17 @@ def down(role: str) -> None:
     default=False,
     help="Skip the DEFAULT_WORKSPACE_TEMPLATE branch push (purely backend tests).",
 )
-def services_against(env_name: str, tests: tuple[str, ...], no_default_workspace_template_push: bool) -> None:
+@click.option(
+    "--pool-region",
+    default=None,
+    help=(
+        "Lease-region label whose available pool rows the pool-backed tests should use (default: the "
+        "region holding the most available rows). The rows' template ref is read from the env's DB."
+    ),
+)
+def services_against(
+    env_name: str, tests: tuple[str, ...], no_default_workspace_template_push: bool, pool_region: str | None
+) -> None:
     """Point minds_services tests at an already-deployed dev env (e.g. dev-josh).
 
     Loads ``~/.minds-<env>/client.toml`` for the URLs + ``~/.minds-<env>/secrets.toml``
@@ -1533,8 +1589,24 @@ def services_against(env_name: str, tests: tuple[str, ...], no_default_workspace
     }
 
     mailtm = _create_mailtm_account(run_id=run_id)
+    pool = _read_available_pool_info_or_none(_read_env_host_pool_dsn(dev_env_name), region=pool_region)
+    if pool is None:
+        logger.warning(
+            "Env {!r} has no available pool rows{}; the pool-backed tests will report no capacity.",
+            env_name,
+            f" in region {pool_region!r}" if pool_region else "",
+        )
+    else:
+        logger.info(
+            "Pool-backed tests will lease env {!r}'s {} available slice(s) baked at {} in region {}",
+            env_name,
+            pool.slice_count,
+            str(pool.repo_branch_or_tag),
+            str(pool.region),
+        )
 
     pytest_envs_path = _write_deployment_envs_json(
+        pool=pool,
         shared_envs={default_role: shared_env_urls},
         default_workspace_template=DefaultWorkspaceTemplateRef(
             worktree_path=_DEFAULT_WORKSPACE_TEMPLATE_WORKTREE_PATH

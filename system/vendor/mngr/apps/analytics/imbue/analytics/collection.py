@@ -64,6 +64,7 @@ from imbue.analytics.protocol import TRANSCRIPTS_SOURCE
 from imbue.analytics.protocol import parse_collection_output
 from imbue.analytics.settings import AnalyticsSettings
 from imbue.analytics.settings import CollectionSettings
+from imbue.analytics.settings import ManagementSshCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,10 @@ logger = logging.getLogger(__name__)
 WORKSPACE_ROOT: Final[str] = "/home/user/workspace"
 WORKSPACE_HOST_DIR: Final[str] = "/home/user/.mngr"
 WORKSPACE_ANALYTICS_DIR: Final[str] = f"{WORKSPACE_ROOT}/data/.imbue/analytics"
+
+# The first slice-fleet generation whose hosts trust the tier's SSH CA (mirrors
+# ``gen2_scripts.layout.FIRST_QEMU_BOX_GENERATION``, which this container does not ship).
+FIRST_QEMU_BOX_GENERATION: Final[int] = 2
 
 # Remote path (under the analytics dir) -> local file under this package's
 # injected/ directory. The package skeleton makes ``imbue.analytics.injected``
@@ -178,11 +183,28 @@ def compute_script_version(script_files: dict[str, str]) -> str:
     return digest.hexdigest()
 
 
+def _paramiko_key_for(credentials: ManagementSshCredentials) -> paramiko.PKey:
+    """The paramiko key, with the gen-2 certificate attached so the workspace sees a certificate login."""
+    private_key = paramiko.Ed25519Key.from_private_key(io.StringIO(credentials.private_key_pem.get_secret_value()))
+    if credentials.certificate is not None:
+        private_key.load_certificate(credentials.certificate)
+    return private_key
+
+
+def credentials_for_workspace(
+    collection_settings: CollectionSettings, workspace: CollectableWorkspace
+) -> ManagementSshCredentials | None:
+    """The credentials that open ``workspace``: the certificate on gen-2 (None when none is stored), the pool key on gen-1."""
+    if workspace.box_generation >= FIRST_QEMU_BOX_GENERATION:
+        return collection_settings.gen2_credentials
+    return ManagementSshCredentials(private_key_pem=collection_settings.pool_ssh_private_key, certificate=None)
+
+
 def _open_ssh_client(
-    address: str, port: int, user: str, key_pem: str, timeout_seconds: float
+    address: str, port: int, user: str, credentials: ManagementSshCredentials, timeout_seconds: float
 ) -> tuple[Any, str | None]:
-    """Connect with the pool key, accepting and recording the presented host key."""
-    private_key = paramiko.Ed25519Key.from_private_key(io.StringIO(key_pem))
+    """Connect with the management credentials, accepting and recording the presented host key."""
+    private_key = _paramiko_key_for(credentials)
     client = paramiko.SSHClient()
     policy = _RecordPresentedKeyPolicy()
     client.set_missing_host_key_policy(policy)
@@ -282,7 +304,7 @@ def _read_stderr_tail(stderr_file: Any) -> str:
 
 
 def _probe_vm_latchkey_state(
-    workspace: CollectableWorkspace, key_pem: str, run_id: str, collected_at: datetime
+    workspace: CollectableWorkspace, credentials: ManagementSshCredentials, run_id: str, collected_at: datetime
 ) -> tuple[dict[str, Any] | None, str | None, str]:
     """The optional VM hop: presence-level latchkey signals, only where a gateway exists.
 
@@ -303,7 +325,7 @@ def _probe_vm_latchkey_state(
             workspace.vps_address,
             workspace.ssh_port,
             workspace.ssh_user,
-            key_pem,
+            credentials,
             _VM_PROBE_TIMEOUT_SECONDS,
         )
     except (paramiko.SSHException, OSError) as e:
@@ -339,7 +361,7 @@ def _probe_vm_latchkey_state(
 
 def collect_over_ssh(
     workspace: CollectableWorkspace,
-    key_pem: str,
+    credentials: ManagementSshCredentials,
     script_files: dict[str, str],
     script_version: str,
     cursors_json_text: str,
@@ -354,7 +376,7 @@ def collect_over_ssh(
             workspace.vps_address,
             workspace.container_ssh_port,
             workspace.ssh_user,
-            key_pem,
+            credentials,
             _SSH_CONNECT_TIMEOUT_SECONDS,
         )
     except (paramiko.SSHException, OSError) as e:
@@ -387,7 +409,9 @@ def collect_over_ssh(
     finally:
         client.close()
 
-    latchkey_record, presented_vm_key, vm_detail = _probe_vm_latchkey_state(workspace, key_pem, run_id, collected_at)
+    latchkey_record, presented_vm_key, vm_detail = _probe_vm_latchkey_state(
+        workspace, credentials, run_id, collected_at
+    )
 
     if exit_status == _TIMEOUT_EXIT_STATUS:
         outcome = OUTCOME_TIMEOUT
@@ -681,10 +705,9 @@ def _run_locked_collection_poll(
 
     script_files = load_injected_script_files()
     script_version = compute_script_version(script_files)
-    key_pem = collection_settings.pool_ssh_private_key.get_secret_value()
-
     counters = {
         "workspaces_due": len(due),
+        "workspaces_skipped_no_certificate": 0,
         "workspaces_collected": 0,
         "workspaces_failed": 0,
         "metrics_rows": 0,
@@ -704,13 +727,23 @@ def _run_locked_collection_poll(
     try:
         future_by_workspace: dict[Any, tuple[CollectableWorkspace, str, datetime]] = {}
         for workspace in due:
+            credentials = credentials_for_workspace(collection_settings, workspace)
+            if credentials is None:
+                # A gen-2 workspace with no stored certificate is skipped, never
+                # hopped with the pool key: it re-collects once the connector's
+                # refresh cron has stored a fresh bundle.
+                logger.warning(
+                    "Skipping workspace %s: no fresh gen-2 management certificate is available", workspace.host_id
+                )
+                counters["workspaces_skipped_no_certificate"] += 1
+                continue
             run_id = uuid.uuid4().hex
             started_at = datetime.now(timezone.utc)
             cursors_json_text = _cursors_json_for_host(ops_connection, workspace.host_id)
             future = executor.submit(
                 collect_fn,
                 workspace,
-                key_pem,
+                credentials,
                 script_files,
                 script_version,
                 cursors_json_text,

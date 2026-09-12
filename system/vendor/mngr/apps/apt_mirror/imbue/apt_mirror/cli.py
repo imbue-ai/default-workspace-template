@@ -18,8 +18,9 @@ from pydantic import Field
 from imbue.apt_mirror.data_types import AptMirrorCompletenessResult
 from imbue.apt_mirror.data_types import AptMirrorCutRequest
 from imbue.apt_mirror.data_types import DEFAULT_ARCHITECTURES
-from imbue.apt_mirror.data_types import DEFAULT_SUITES_BY_ARCHIVE
+from imbue.apt_mirror.data_types import DEFAULT_ARCHIVES
 from imbue.apt_mirror.data_types import PackageListResolution
+from imbue.apt_mirror.data_types import PackageSpec
 from imbue.apt_mirror.errors import AptMirrorError
 from imbue.apt_mirror.errors import AptMirrorTimestampFileError
 from imbue.apt_mirror.fetcher import HttpUpstreamFetcher
@@ -60,7 +61,7 @@ def _add_warm_verify_options(command: TCommand) -> TCommand:
                 "list_paths",
                 type=click.Path(path_type=Path),
                 multiple=True,
-                help="Package list file(s) (default: every package_lists/*.txt)",
+                help="Package list file(s), one `name` or `name=version` per line (default: every package_lists/*.txt)",
             ),
             click.option(
                 "--timestamp-file",
@@ -84,7 +85,7 @@ class WarmInvocation(FrozenModel):
     """Parsed arguments shared by the warm and verify commands."""
 
     timestamp: str = Field(description="The snapshot timestamp to operate on")
-    package_names: tuple[str, ...] = Field(description="Deduplicated package names from the lists")
+    package_specs: tuple[PackageSpec, ...] = Field(description="Deduplicated package specs from the lists")
     max_workers: int = Field(description="Parallel R2/upstream operations")
 
 
@@ -124,10 +125,10 @@ def _resolve_warm_invocation(
 ) -> WarmInvocation:
     resolved_timestamp = timestamp if timestamp is not None else read_current_timestamp(timestamp_file)
     resolved_list_paths = list_paths if list_paths else tuple(sorted(PACKAGE_LISTS_DIR.glob("*.txt")))
-    package_names = read_package_lists(resolved_list_paths)
+    package_specs = read_package_lists(resolved_list_paths)
     return WarmInvocation(
         timestamp=validate_snapshot_timestamp(resolved_timestamp),
-        package_names=tuple(package_names),
+        package_specs=tuple(package_specs),
         max_workers=max_workers,
     )
 
@@ -143,10 +144,10 @@ def _fail_cleanly_on_mirror_errors(ctx: click.Context) -> Iterator[None]:
 
 
 def _report_completeness_gaps(result: AptMirrorCompletenessResult) -> None:
-    for name in result.unknown_package_names:
-        write_human_line(f"UNKNOWN PACKAGE (in no index): {name}")
-    for pool_path in result.missing_pool_paths:
-        write_human_line(f"MISSING: {pool_path}")
+    for spec_text in result.unresolved_specs:
+        write_human_line(f"UNKNOWN PACKAGE (in no index): {spec_text}")
+    for path in result.missing_paths:
+        write_human_line(f"MISSING: {path}")
 
 
 @click.group()
@@ -171,7 +172,13 @@ def main() -> None:
 )
 @click.pass_context
 def cut(ctx: click.Context, timestamp: str, timestamp_file: Path, skip_timestamp_file: bool) -> None:
-    """Freeze the index set for a new timestamp into the bucket (idempotent, minutes)."""
+    """Freeze the index set for a new timestamp into the bucket (idempotent, minutes).
+
+    The Debian archives are frozen from snapshot.debian.org at the timestamp;
+    archives without a snapshot service (Docker's repo) are frozen from their
+    live indexes as of now, so run ``warm`` right after to pin their listed
+    package files under the same cut.
+    """
     with _fail_cleanly_on_mirror_errors(ctx):
         service = _get_service(ctx)
         result = service.cut(AptMirrorCutRequest(timestamp=timestamp))
@@ -195,14 +202,14 @@ def warm(
     timestamp_file: Path,
     max_workers: int,
 ) -> None:
-    """Fetch every listed package's pool files into the cache; exits nonzero on any gap."""
+    """Fetch every listed package's files into the bucket; exits nonzero on any gap."""
     with _fail_cleanly_on_mirror_errors(ctx):
         invocation = _resolve_warm_invocation(timestamp, list_paths, timestamp_file, max_workers)
         service = _get_service(ctx)
         resolution = _resolve_packages(service, invocation)
-        result = service.warm(invocation.timestamp, resolution, invocation.max_workers)
+        result = service.warm(invocation.timestamp, resolution, DEFAULT_ARCHIVES, invocation.max_workers)
         write_human_line(
-            f"Warmed {result.timestamp}: examined {result.examined_count} pool files, "
+            f"Warmed {result.timestamp}: examined {result.examined_count} package files, "
             f"fetched {result.fetched_count}, {result.already_cached_count} already cached"
         )
         _report_completeness_gaps(result)
@@ -220,25 +227,25 @@ def verify(
     timestamp_file: Path,
     max_workers: int,
 ) -> None:
-    """Read-only check that a cut timestamp's listed pool files are all cached; exits nonzero on any gap."""
+    """Read-only check that a cut timestamp's listed package files are all stored; exits nonzero on any gap."""
     with _fail_cleanly_on_mirror_errors(ctx):
         invocation = _resolve_warm_invocation(timestamp, list_paths, timestamp_file, max_workers)
         service = _get_service(ctx)
         resolution = _resolve_packages(service, invocation)
         result = service.verify(invocation.timestamp, resolution, invocation.max_workers)
-        write_human_line(f"Verified {result.timestamp}: {result.cached_count} listed pool files cached")
+        write_human_line(f"Verified {result.timestamp}: {result.cached_count} listed package files stored")
         _report_completeness_gaps(result)
         if not result.is_complete:
             ctx.exit(1)
 
 
 def _resolve_packages(service: AptMirrorService, invocation: WarmInvocation) -> PackageListResolution:
-    """Resolve the invocation's package names against the cut indexes for the default suites/arches."""
-    return service.resolve_package_names(
+    """Resolve the invocation's package specs against the cut indexes for the default archives/arches."""
+    return service.resolve_package_specs(
         timestamp=invocation.timestamp,
-        package_names=invocation.package_names,
+        package_specs=invocation.package_specs,
         architectures=DEFAULT_ARCHITECTURES,
-        suites_by_archive=dict(DEFAULT_SUITES_BY_ARCHIVE),
+        archives=DEFAULT_ARCHIVES,
     )
 
 

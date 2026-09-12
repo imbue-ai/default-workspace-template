@@ -2,14 +2,18 @@
 // read-through pool cache from R2.
 //
 // Routes (public, unauthenticated, GET/HEAD only):
-//   GET /snap/<T>/<archive>/dists/<subpath>  frozen index files, R2 only
-//   GET /snap/<T>/<archive>/pool/<subpath>   shared pool cache, read-through
+//   GET /snap/<T>/<archive>/dists/<subpath>    frozen index set (plus package files an
+//                                              archive keeps under dists/, e.g. Docker's), R2 only
+//   GET /snap/<T>/<archive>/pool/<subpath>     shared pool cache, read-through
+//   GET /artifacts/<name>/<version>/<subpath>  pinned non-apt artifacts, R2 only
 //
 // Pool files are version-unique and immutable, so one cache is correct for
 // every T; on a miss the Worker streams the file from the live archive (then
 // snapshot.debian.org at T for superseded files) to the client while storing
 // it in R2 in the background. Cache writes are strictly best-effort: a failed
-// write only means the next request re-fetches. The cut/warm/verify admin
+// write only means the next request re-fetches. Artifacts (cloud images,
+// gVisor, age, ...) are an explicit set uploaded by the operator tooling: a
+// missing one is a 404, never an upstream fetch. The cut/warm/verify admin
 // side is the Python CLI in the parent directory, writing to the same bucket.
 
 export interface Env {
@@ -28,6 +32,8 @@ const POOL_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 const TIMESTAMP_RE = /^\d{8}T\d{6}Z$/;
 const ARCHIVE_RE = /^[a-z][a-z0-9-]*$/;
+// Artifact names and versions: single segments of release-name characters.
+const ARTIFACT_SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 // Every character that legitimately appears in Debian dists/pool paths
 // (package names, versions incl. "+"/"~", by-hash hex, index filenames).
 const SUBPATH_CHARSET_RE = /^[A-Za-z0-9._+~/-]+$/;
@@ -40,6 +46,32 @@ interface MirrorPath {
   archive: string;
   tree: "dists" | "pool";
   subpath: string;
+}
+
+interface ArtifactPath {
+  name: string;
+  version: string;
+  subpath: string;
+}
+
+// Decode one percent-encoded subpath and validate it as a safe relative path
+// of archive-path characters; null means 400. Keys on the DECODED form so no
+// two surviving requests alias different R2 keys.
+function decodeSafeSubpath(rawSubpath: string): string | null {
+  let subpath: string;
+  try {
+    subpath = decodeURIComponent(rawSubpath);
+  } catch {
+    return null;
+  }
+  if (!SUBPATH_CHARSET_RE.test(subpath)) {
+    return null;
+  }
+  const segments = subpath.split("/");
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return null;
+  }
+  return subpath;
 }
 
 // Parse and validate /snap/<T>/<archive>/<dists|pool>/<subpath>; null means 400.
@@ -56,23 +88,28 @@ function parseMirrorPath(pathname: string): MirrorPath | null {
   // apt percent-encodes "+" in pool paths (libjq1_1.7.1-6%2bdeb13u2_amd64.deb)
   // while the cut/warm CLI stores R2 keys with the literal "+" from the
   // Packages Filename field, so both spellings must canonicalize to one key.
-  let subpath: string;
-  try {
-    subpath = decodeURIComponent(rawSubpath);
-  } catch {
-    return null;
-  }
-  // After decoding, only Debian archive path characters may remain -- this
-  // rejects backslashes, spaces, control characters, and any leftover "%"
-  // ambiguity, so no two surviving requests alias different R2 keys.
-  if (!SUBPATH_CHARSET_RE.test(subpath)) {
-    return null;
-  }
-  const segments = subpath.split("/");
-  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+  const subpath = decodeSafeSubpath(rawSubpath);
+  if (subpath === null) {
     return null;
   }
   return { timestamp, archive, tree: tree as "dists" | "pool", subpath };
+}
+
+// Parse and validate /artifacts/<name>/<version>/<subpath>; null means 400.
+function parseArtifactPath(pathname: string): ArtifactPath | null {
+  const match = pathname.match(/^\/artifacts\/([^/]+)\/([^/]+)\/(.+)$/);
+  if (match === null) {
+    return null;
+  }
+  const [, name, version, rawSubpath] = match;
+  if (!ARTIFACT_SEGMENT_RE.test(name) || !ARTIFACT_SEGMENT_RE.test(version)) {
+    return null;
+  }
+  const subpath = decodeSafeSubpath(rawSubpath);
+  if (subpath === null) {
+    return null;
+  }
+  return { name, version, subpath };
 }
 
 function headersForPool(): Record<string, string> {
@@ -80,12 +117,7 @@ function headersForPool(): Record<string, string> {
 }
 
 // Build a 200/206 response from an R2 object, honoring a parsed range.
-function r2ObjectResponse(
-  object: R2ObjectBody,
-  extraHeaders: Record<string, string>,
-  isHead: boolean,
-  isRanged: boolean,
-): Response {
+function r2ObjectResponse(object: R2ObjectBody, extraHeaders: Record<string, string>, isRanged: boolean): Response {
   const headers = new Headers(extraHeaders);
   headers.set("Accept-Ranges", "bytes");
   headers.set("ETag", object.httpEtag);
@@ -98,10 +130,10 @@ function r2ObjectResponse(
     const offset = isSuffix ? object.size - length : (range.offset ?? 0);
     headers.set("Content-Range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
     headers.set("Content-Length", String(length));
-    return new Response(isHead ? null : object.body, { status: 206, headers });
+    return new Response(object.body, { status: 206, headers });
   }
   headers.set("Content-Length", String(object.size));
-  return new Response(isHead ? null : object.body, { status: 200, headers });
+  return new Response(object.body, { status: 200, headers });
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -197,33 +229,67 @@ async function storePoolBody(env: Env, key: string, body: ReadableStream, conten
   }
 }
 
-async function servePool(request: Request, env: Env, ctx: ExecutionContext, path: MirrorPath): Promise<Response> {
-  const isHead = request.method === "HEAD";
-  const key = `pool/${path.archive}/pool/${path.subpath}`;
-
-  // Edge cache first: pool files are immutable, so a cached response is
-  // always correct (the Cache API serves ranges from cached full bodies).
+// Serve an immutable R2 object: edge cache first, then R2 honoring Range
+// (apt and curl resume interrupted downloads). Returns null when the key is
+// absent so the caller decides between read-through and 404. HEAD goes
+// through a metadata-only head() so no body stream is opened and dropped.
+// The range option is only passed when the client actually sent a Range
+// header -- passing headers without one makes some runtimes treat the get as
+// ranged.
+async function serveImmutableObject(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  key: string,
+): Promise<Response | null> {
+  if (request.method === "HEAD") {
+    const head = await env.MIRROR_BUCKET.head(key);
+    if (head === null) {
+      return null;
+    }
+    const headers = new Headers(headersForPool());
+    headers.set("Accept-Ranges", "bytes");
+    headers.set("ETag", head.httpEtag);
+    headers.set("Content-Length", String(head.size));
+    return new Response(null, { status: 200, headers });
+  }
   const cache = caches.default;
   const cached = await cache.match(request);
   if (cached !== undefined) {
     return cached;
   }
-
-  // R2 next, honoring Range (apt resumes interrupted downloads). The range
-  // option is only passed when the client actually sent a Range header --
-  // passing headers without one makes some runtimes treat the get as ranged.
   const isRanged = request.headers.has("range");
   const object = await env.MIRROR_BUCKET.get(key, isRanged ? { range: request.headers } : undefined);
-  if (object !== null) {
-    const response = r2ObjectResponse(object, headersForPool(), isHead, isRanged);
-    if (!isHead && response.status === 200) {
-      ctx.waitUntil(
-        cache.put(request, response.clone()).catch((error) => {
-          console.warn(`Best-effort edge cache write failed for ${key}: ${String(error)}`);
-        }),
-      );
-    }
-    return response;
+  if (object === null) {
+    return null;
+  }
+  const response = r2ObjectResponse(object, headersForPool(), isRanged);
+  if (response.status === 200) {
+    ctx.waitUntil(
+      cache.put(request, response.clone()).catch((error) => {
+        console.warn(`Best-effort edge cache write failed for ${key}: ${String(error)}`);
+      }),
+    );
+  }
+  return response;
+}
+
+async function serveArtifact(request: Request, env: Env, ctx: ExecutionContext, path: ArtifactPath): Promise<Response> {
+  const key = `artifacts/${path.name}/${path.version}/${path.subpath}`;
+  const response = await serveImmutableObject(request, env, ctx, key);
+  if (response === null) {
+    return new Response(`Artifact not uploaded to the mirror: ${key}`, { status: 404 });
+  }
+  return response;
+}
+
+async function servePool(request: Request, env: Env, ctx: ExecutionContext, path: MirrorPath): Promise<Response> {
+  const isHead = request.method === "HEAD";
+  const key = `pool/${path.archive}/pool/${path.subpath}`;
+
+  const stored = await serveImmutableObject(request, env, ctx, key);
+  if (stored !== null) {
+    return stored;
   }
 
   // Cold miss: read through the upstreams, streaming to the client while the
@@ -274,7 +340,7 @@ async function serveDists(request: Request, env: Env, path: MirrorPath): Promise
   if (object === null) {
     return new Response(`Not cut: ${key}`, { status: 404 });
   }
-  return r2ObjectResponse(object, { "Content-Type": MEDIA_TYPE }, false, isRanged);
+  return r2ObjectResponse(object, { "Content-Type": MEDIA_TYPE }, isRanged);
 }
 
 export default {
@@ -282,7 +348,15 @@ export default {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
     }
-    const path = parseMirrorPath(new URL(request.url).pathname);
+    const pathname = new URL(request.url).pathname;
+    if (pathname.startsWith("/artifacts/")) {
+      const artifactPath = parseArtifactPath(pathname);
+      if (artifactPath === null) {
+        return new Response("Bad artifact path", { status: 400 });
+      }
+      return serveArtifact(request, env, ctx, artifactPath);
+    }
+    const path = parseMirrorPath(pathname);
     if (path === null) {
       return new Response("Bad mirror path", { status: 400 });
     }

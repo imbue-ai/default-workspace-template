@@ -56,6 +56,7 @@ def test_list_online_explorer_workspaces_maps_rows_and_skips_when_no_accounts() 
                     "user",
                     "ssh-ed25519 CONTAINERKEY",
                     None,
+                    1,
                 )
             ]
         }

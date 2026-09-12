@@ -56,6 +56,7 @@ from imbue.minds_admin.envs.provisioning import list_dev_envs
 from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
 from imbue.minds_admin.envs.provisioning import resolve_web_template_pin
 from imbue.minds_admin.envs.provisioning import with_analytics_enablement
+from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
 from imbue.minds_admin.envs.recover import RecoverTargetAlreadyExistsError
 from imbue.minds_admin.envs.testing import make_workspace_storage_vault_values
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
@@ -444,6 +445,12 @@ def _build_fake_providers(
         ensure_generation_id=ensure_generation_id,
         delete_generation_id=delete_generation_id,
     )
+
+
+def test_workspace_storage_key_prefix_follows_the_tier_modal_env_strategy() -> None:
+    # Per-env tiers share their tier's bucket under an <env>/ prefix; shared tiers own the whole keyspace.
+    assert workspace_storage_key_prefix(DevEnvName("dev-josh"), _DEV_LIFECYCLE) == "dev-josh/"
+    assert workspace_storage_key_prefix(DevEnvName("production"), _SHARED_TIER_LIFECYCLE) == ""
 
 
 def test_deploy_dev_env_writes_split_files(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -1159,6 +1166,8 @@ def _explorer_plan_quotas() -> PlanQuotasConfig:
         max_total_bucket_gb=NonNegativeInt(50),
         monthly_llm_spend_usd=NonNegativeFloat(0.0),
         max_active_synced_workspaces=NonNegativeInt(200),
+        max_active_machine_units=NonNegativeInt(16),
+        max_total_machine_disk_gb=NonNegativeInt(280),
     )
 
 
@@ -1186,6 +1195,8 @@ def test_deploy_env_writes_plan_definitions(_isolated_home: Path, _root_cg: Conc
     assert sorted(rows_by_name) == ["explorer"]
     assert rows_by_name["explorer"]["max_total_bucket_bytes"] == 50 * 1024**3
     assert rows_by_name["explorer"]["monthly_llm_spend_usd"] == 0.0
+    assert rows_by_name["explorer"]["max_active_machine_units"] == 16
+    assert rows_by_name["explorer"]["max_total_machine_disk_gb"] == 280
     assert _step_position(call_log, "write_plan_defaults") > _step_position(call_log, "apply_pool_hosts_migrations")
 
 

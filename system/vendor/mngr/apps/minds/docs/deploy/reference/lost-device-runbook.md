@@ -50,11 +50,13 @@ uv run mngr imbue_cloud hosts rotate <host-id|host-db-id|name>   # once per clou
 `hosts rotate` rotates everything for the slice: the per-host SSH client key
 (the old key is de-authorized on both endpoints only after the new one
 provably authenticates) and both endpoints' sshd host keys, pinned
-user-origin in the local host-key store. minds' next sync pass detects the
-changed material and re-pushes the workspace record; your other devices
-converge on the rotated keys on their next pull. The lost device's copies of
-the old client key stop opening the workspace the moment the rotation
-completes.
+user-origin in the local host-key store, replacing the previous host keys
+at those endpoints. minds' next sync pass detects the changed material and
+re-pushes the workspace record; your other devices converge on the rotated
+keys on their next pull (the synced pins replace theirs endpoint by
+endpoint, so the previous host keys are retired there too). The lost
+device's copies of the old client key stop opening the workspace the moment
+the rotation completes.
 
 ## 4. Local workspaces on the lost device
 

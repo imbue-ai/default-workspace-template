@@ -409,9 +409,10 @@ def _take_snapshot(*, state: _LoopState) -> SnapshotResult | None:
 def _cleanup_snapshot(*, state: _LoopState, snapshot: SnapshotResult | None) -> None:
     """Reclaim snapshots after the backup; emit one SNAPSHOT_DELETED per deletion.
 
-    For outer_trigger this prunes old snapshots down to max_local_snapshots; for
-    btrfs_local it deletes the single `current` snapshot; for direct it is a
-    no-op (and emits nothing).
+    For outer_trigger this deletes every snapshot (restic is done reading, and
+    a retained snapshot would pin the workspace's deleted data under its disk
+    quota); for btrfs_local it deletes the single `current` snapshot; for
+    direct it is a no-op (and emits nothing).
 
     `snapshot` is None when the tick aborted at the snapshot step, which leaves
     nothing to name as the target of a cleanup that then fails itself.
@@ -420,8 +421,8 @@ def _cleanup_snapshot(*, state: _LoopState, snapshot: SnapshotResult | None) -> 
         taker = make_snapshot_taker(state.capabilities)
         deleted_paths = taker.cleanup_after_backup()
     except SnapshotCleanupError as e:
-        # A keep-N cleanup failed partway: log the deletions that did succeed,
-        # then a failure event naming the exact snapshot whose deletion failed.
+        # The cleanup failed partway: log the deletions that did succeed, then
+        # a failure event naming the exact snapshot whose deletion failed.
         logger.warning("Snapshot cleanup failed: {}", e)
         for deleted_path in e.deleted:
             _emit_snapshot_deleted(state, deleted_path, success=True)
