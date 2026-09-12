@@ -291,14 +291,10 @@ export function isConnected(): boolean {
   return connected;
 }
 
-/** Whether the chat runs on the workspace's services-only "primary" agent, which is hidden
- *  from the user-facing chat list because destroying it would tear down the whole workspace. */
-export function isPrimaryChat(chat: ChatSnapshot): boolean {
-  return chat.labels?.is_primary === "true";
-}
-
+/** Every chat the app lists: the backend keeps the workspace's services-only "primary" agent
+ *  out of the snapshots it pushes, so nothing here needs filtering. */
 export function getChats(): ChatSnapshot[] {
-  return chats.filter((c) => !isPrimaryChat(c));
+  return chats;
 }
 
 export function getChatById(chatId: string): ChatSnapshot | undefined {
