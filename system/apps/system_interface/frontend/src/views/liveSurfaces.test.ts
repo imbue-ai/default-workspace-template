@@ -16,14 +16,14 @@ import {
 
 describe("liveKeyForPanel", () => {
   it("files an instance panel under its address", () => {
-    expect(
-      liveKeyForPanel({ kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 }),
-    ).toBe("app:files");
+    expect(liveKeyForPanel({ kind: "instance", address: "app:files", tabId: "tab-0000000000000001" })).toBe(
+      "app:files",
+    );
   });
 
   it("gives a launcher no key: it is a question about a pane, not an instance", () => {
     expect(liveKeyForPanel({ kind: "launcher" })).toBeNull();
-    expect(liveKeyForPanel(null)).toBeNull();
+    expect(liveKeyForPanel(undefined)).toBeNull();
   });
 });
 
@@ -55,16 +55,22 @@ describe("rekeyLiveSurface", () => {
     document.body.appendChild(host);
     initializeLiveLayer(host, () => {});
     const noMount = (): void => {};
-    const moving = ensureLiveSurface("app:terminal?instance=terminal-1", "tab-0000000000000001", noMount);
-    const displaced = ensureLiveSurface("app:terminal?instance=terminal-2", "tab-0000000000000002", noMount);
+    const moving = ensureLiveSurface(
+      "app:terminal?instance=terminal-1",
+      { kind: "instance", address: "app:terminal?instance=terminal-1", tabId: "tab-0000000000000001" },
+      noMount,
+    );
+    const displaced = ensureLiveSurface(
+      "app:terminal?instance=terminal-2",
+      { kind: "instance", address: "app:terminal?instance=terminal-2", tabId: "tab-0000000000000002" },
+      noMount,
+    );
 
     rekeyLiveSurface("app:terminal?instance=terminal-1", "app:terminal?instance=terminal-2");
 
     expect(liveSurfaceKeys()).toEqual(["app:terminal?instance=terminal-2"]);
     expect(liveSurfaceElement("app:terminal?instance=terminal-2")).toBe(moving.element);
     expect(moving.key).toBe("app:terminal?instance=terminal-2");
-    // The page keeps the id it was opened under: the rebind changes what it shows, not which page it is.
-    expect(moving.tabId).toBe("tab-0000000000000001");
     expect(displaced.element.isConnected).toBe(false);
     expect(Array.from(host.children)).toEqual([moving.element]);
   });

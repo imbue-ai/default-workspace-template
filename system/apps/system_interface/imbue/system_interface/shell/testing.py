@@ -23,8 +23,7 @@ from pydantic import Field
 
 from imbue.system_interface.server import create_application
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
-from imbue.system_interface.shell.data_types import instance_panel_params_json
+from imbue.system_interface.shell.data_types import TabRecord
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.inventory import FetchOutcomeKind
 from imbue.system_interface.shell.inventory import InstanceFetchOutcome
@@ -198,24 +197,16 @@ def drain_messages(client_queue: "queue.Queue[str | None]") -> list[dict[str, An
     return messages
 
 
-def addresses_by_panel_id(dockview: dict[str, Any] | None) -> dict[str, Address]:
-    """Each instance panel's address, keyed by dockview panel id: how the layout assertions read a document."""
-    return {panel_id: params.address for panel_id, params in instance_panel_params_by_id(dockview).items()}
-
-
 def layout_showing(*addresses: Address) -> LayoutRecord:
-    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each panel's params carrying a fixed tab id."""
-    panels = {
-        f"p{index}": {"id": f"p{index}", "params": instance_panel_params_json(address, TabId(f"tab-{index:016x}"), 0)}
-        for index, address in enumerate(addresses)
-    }
+    """A desktop arrangement with one panel per address (``p0``, ``p1``, ...), each under a fixed tab id."""
+    panel_ids = [f"p{index}" for index in range(len(addresses))]
     return LayoutRecord(
         dockview={
             "grid": {
                 "root": {
                     "type": "branch",
                     "data": [
-                        {"type": "leaf", "data": {"views": list(panels), "activeView": "p0", "id": "g0"}, "size": 1200}
+                        {"type": "leaf", "data": {"views": panel_ids, "activeView": "p0", "id": "g0"}, "size": 1200}
                     ],
                     "size": 800,
                 },
@@ -223,11 +214,15 @@ def layout_showing(*addresses: Address) -> LayoutRecord:
                 "height": 800,
                 "orientation": "HORIZONTAL",
             },
-            "panels": panels,
+            "panels": {panel_id: {"id": panel_id} for panel_id in panel_ids},
             "activeGroup": "g0",
         }
         if addresses
         else None,
+        tabs={
+            f"p{index}": TabRecord(address=address, tab_id=TabId(f"tab-{index:016x}"), last_focused_ms=0)
+            for index, address in enumerate(addresses)
+        },
         device_kind=DeviceKind.DESKTOP,
         updated_at=None,
     )

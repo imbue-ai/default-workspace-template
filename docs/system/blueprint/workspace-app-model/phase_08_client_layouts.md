@@ -24,7 +24,7 @@ Only the four verbs with nothing to store (`maximize`, `restore`, `refresh`, the
 
 Backend (`system/apps/system_interface/imbue/system_interface/shell/`):
 
-- `dockview_document.py` (new): pure functions over a `LayoutRecord`'s dockview JSON (each panel's identity read from its `params`): find a panel by address, add a panel into a group or beside one in a direction (tree-based neighbours, sizes taken as a ratio of the anchor's own extent, a nominal 1200 by 800 root for a never-arranged view), remove a panel, focus a panel, move a panel, and the launcher-panel rules.
+- `dockview_document.py` (new): pure functions over a `LayoutRecord`'s dockview JSON and tab records: find a panel by address, add a panel into a group or beside one in a direction (tree-based neighbours, sizes taken as a ratio of the anchor's own extent, a nominal 1200 by 800 root for a never-arranged view), remove a panel, focus a panel, move a panel, and the launcher-panel rules.
 - `layouts.py`: `write_client_layout` (the shell's own writes, no seed), `save_browser_layout` (a browser's save: the client file and the seed, the stale check, the equal-content no-op), `read_client_layout`, seed-level strip and rebind.
 - `layout_ops.py`: the op tables become `DOCUMENT_OPS`, `TRANSIENT_OPS`, and the read ops, with `DocumentOpArguments` (what a document op posts); the mutex is gone.
 - `clients.py`: `set_active_view`; `record_report` reports whether the view changed; `client_wire_json` carries `is_connected`.
