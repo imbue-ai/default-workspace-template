@@ -85,9 +85,8 @@ import {
   SHELL_LOCATION,
   SHELL_NEW_TAB,
   SHELL_OPEN,
-  isApplePlatform,
-  isNewTabChord,
 } from "@imbue/workspace-ui/src/app_contract";
+import { isApplePlatform, isNewTabChord } from "@imbue/workspace-ui/src/chords";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";

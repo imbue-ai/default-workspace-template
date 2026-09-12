@@ -265,7 +265,8 @@ The arrangement ops `open`, `focus`, `split`, `close`, and `move` never travel o
 
 Served by the shell at `/_static/app_contract.js` with `Access-Control-Allow-Origin: *`, as an ES module.
 Source: `system/libs/workspace_ui/src/app_contract.ts`, built by the shell's frontend as a separate library entry so the served file has no other imports.
-Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest})` returning `{focused(), location(path), open(address)}`, plus `isNewTabChord(keys, isApple)` and `isApplePlatform()` for the one chord the module listens for itself.
+Exports: `connectToShell({onHandshake, onShown, onHidden, onCloseRequest})` returning `{focused(), location(path), open(address)}`.
+The module also listens for the new-tab chord itself, to post `shell:new-tab`. That chord is a keybinding rather than part of this protocol, so it is not exported: `workspace_ui/src/chords.ts` is its home and the shell reads it from there, while this module carries a private copy (it may import nothing) that `app_contract.test.ts` pins to the shared one.
 
 Trust: the shell accepts a message only when `event.source` is the `contentWindow` of an iframe it created and `event.origin` is in the workspace origin family (the same regex the minds chrome uses); the module accepts a message only when `event.source === window.parent`.
 Unknown types are ignored; shipped types never change meaning.

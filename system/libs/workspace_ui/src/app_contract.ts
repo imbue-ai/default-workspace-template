@@ -32,36 +32,19 @@ export const SHELL_OPEN = "shell:open";
 /** App to shell: the new-tab chord fired while this page had focus; open a New Tab. */
 export const SHELL_NEW_TAB = "shell:new-tab";
 
-/** The keydown fields the new-tab chord is decided from. */
-export interface ChordKeys {
-  key: string;
-  metaKey: boolean;
-  ctrlKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-}
-
-/**
- * Whether this browser reports an Apple platform, whose accelerator key is Cmd rather than Ctrl.
- *
- * Prefers `userAgentData` over the deprecated `navigator.platform`, with the UA string as the
- * fallback -- the shape `models/ClientIdentity` uses for the device kind.
- */
-export function isApplePlatform(): boolean {
+// The new-tab chord, duplicated from `chords.ts` because this module is served standalone to every
+// app origin and so may import nothing. Private: the chord is a keybinding, not part of the
+// protocol this module defines. `app_contract.test.ts` pins this copy to the shared one.
+function isApplePlatform(): boolean {
   const uaData = (navigator as { userAgentData?: { platform?: string } }).userAgentData;
   return /mac|iphone|ipad|ipod/i.test(uaData?.platform ?? navigator.userAgent);
 }
 
-/**
- * Whether a keydown is the workspace's new-tab chord: Cmd+T on Apple platforms, Ctrl+T elsewhere.
- *
- * Only the desktop client delivers it to a page at all; every browser keeps Cmd/Ctrl+T for a
- * browser tab of its own.
- */
-export function isNewTabChord(keys: ChordKeys, isApple: boolean): boolean {
-  if (keys.key !== "t" && keys.key !== "T") return false;
-  if (keys.altKey || keys.shiftKey) return false;
-  return isApple ? keys.metaKey && !keys.ctrlKey : keys.ctrlKey && !keys.metaKey;
+function isNewTabChord(event: KeyboardEvent): boolean {
+  if (event.key !== "t" && event.key !== "T") return false;
+  if (event.altKey || event.shiftKey) return false;
+  const isApple = isApplePlatform();
+  return isApple ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
 export interface ShellHandshake {
@@ -141,7 +124,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   // carried up from wherever focus actually is. Only while framed: a page visited directly has no
   // shell to open a tab in, and would swallow the browser's own chord for nothing.
   function onKeyDown(event: KeyboardEvent): void {
-    if (!isFramed || !isNewTabChord(event, isApplePlatform())) return;
+    if (!isFramed || !isNewTabChord(event)) return;
     event.preventDefault();
     send(SHELL_NEW_TAB, {});
   }
