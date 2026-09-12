@@ -23,11 +23,17 @@ _spec.loader.exec_module(migration)
 
 @pytest.fixture
 def host_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A workspace whose host env file and accounts store are both throwaway."""
+    """A workspace whose host env file, accounts store and create defaults are all throwaway.
+
+    The migration mints an account, and every index write rewrites the create defaults beside
+    mngr's project config; without the third variable they land in the repo's own ``.mngr``,
+    where the create gate then reads them.
+    """
     host = tmp_path / "host"
     host.mkdir()
     monkeypatch.setenv("MNGR_HOST_DIR", str(host))
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(tmp_path / "accounts"))
+    monkeypatch.setenv("MNGR_PROJECT_CONFIG_DIR", str(tmp_path / "project-config"))
     return host
 
 
