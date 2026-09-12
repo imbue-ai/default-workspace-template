@@ -239,7 +239,7 @@ A wrapped server that carries no beacon still works, with every instance opening
 All shell state lives under `data/.state/system_interface/`:
 
 - `projects.json`: `{version, last_active_view, projects: [{id, name, color, glyph, tabs: [address], shortcuts: [{app, action, mode}]}]}`.
-- `layouts/<view-id>/<client-id>.json`: `{dockview, tabs: {panel_id: {address, tab_id, last_focused_ms}}, device_kind, updated_at}`.
+- `layouts/<view-id>/<client-id>.json`: `{dockview, device_kind, updated_at}`, each panel's `params` in the dockview document naming what it shows (`kind`, `address`, `tabId`, `lastFocusedMs`).
 - `layouts/<view-id>/seed.<device-kind>.json`: the seed a new client of that device kind starts from; rewritten from the most recently saved layout of that kind.
 - `clients.json`: `{client_id: {device_kind, active_view, last_seen}}`; layouts of clients unseen for ninety days are pruned.
 - `migrated.json`: the migration's marker (section 9).
@@ -393,7 +393,7 @@ The exact rules are in [phase_09_migration.md](phase_09_migration.md):
 | the registry's last-active project id | dropped; the active view lives on each client's record, and a first-visiting client lands on the first project |
 | `unpinned_shortcuts` and `shortcut_overrides` | the project's `shortcuts` list |
 | `projects/<id>.json` and `<id>.mobile.json` | `layouts/<id>/seed.desktop.json` and `seed.mobile.json` |
-| `member_last_used.json` | `last_focused_ms` on the matching seed-layout tabs |
+| `member_last_used.json` | `lastFocusedMs` in the matching seed panels' params |
 | every terminal found | a record in the terminal app's store, so the terminal is listed before its tmux session exists again and its tabs survive the first observation |
 | `member_titles.json` | terminal titles become the terminal record's title; the rest are dropped, since chats already carry theirs |
 | `member_locations.json` | imported into the files app's store |

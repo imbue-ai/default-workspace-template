@@ -11,14 +11,18 @@
 # this script. See the manage-scheduled-tasks skill.
 #
 # Usage:
-#   run_automation.sh <skill> [--template <template>] [--agent-name <name>]
+#   run_automation.sh <skill> [--template <template>] [--type <harness>] [--agent-name <name>]
 #
 #   <skill>          Required. Names the skill to run: the agent is messaged
 #                    `/<skill>` on every run and found as a singleton by the
 #                    `automation=<skill>` label.
-#   --template <t>   Create template for the agent (default: `automation`, a plain
-#                    claude agent oriented to run the named skill). The Caretaker
+#   --template <t>   Create template for the agent (default: `automation`, an
+#                    agent oriented to run the named skill). The Caretaker
 #                    passes its own tailored template (`caretaker`).
+#   --type <h>       Agent type (harness) to run on. Without it the agent runs on
+#                    the workspace's default provider account and its harness,
+#                    from .mngr/settings.local.toml; naming one here gets that
+#                    harness but no account unless the default account is on it.
 #   --agent-name <n> Agent name shown in the UI (default: the skill name).
 #
 # Invoked by the weekly caretaker job (the entry the enable-caretaker skill
@@ -44,11 +48,12 @@ set -euo pipefail
 # ---- Arguments --------------------------------------------------------------
 SKILL=""
 TEMPLATE="automation"
-HARNESS="claude"
+TYPE=""
 AGENT_NAME=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --template) TEMPLATE="$2"; shift 2 ;;
+    --type) TYPE="$2"; shift 2 ;;
     --agent-name) AGENT_NAME="$2"; shift 2 ;;
     --*) echo "run_automation: unknown option: $1" >&2; exit 2 ;;
     *)
@@ -58,7 +63,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$SKILL" ]; then
-  echo "usage: run_automation.sh <skill> [--template <template>] [--agent-name <name>]" >&2
+  echo "usage: run_automation.sh <skill> [--template <template>] [--type <harness>] [--agent-name <name>]" >&2
   exit 2
 fi
 AGENT_NAME="${AGENT_NAME:-$SKILL}"
@@ -113,24 +118,27 @@ automation_agent_ids() {
 # agent starts from an empty chat, so a self-detecting skill delivers its
 # first-run behavior (e.g. the caretaker's welcome) on this first run.
 create_automation_agent() {
-  local workspace label_args=() account_args=()
+  # The empty-array expansions below are the form bash 3 accepts under `set -u`.
+  local workspace label_args=() type_args=()
   workspace="$(resolve_workspace)"
   if [ -n "$workspace" ]; then
     label_args=(--label "workspace=${workspace}")
   fi
-  # Bind the default provider account. Cron has no agent to inherit a credential from, so
-  # without this the automation launches against a config dir holding no credential and
-  # cannot take a turn. Empty when nothing is signed in, which launches exactly as before.
-  mapfile -t account_args < <(uv run python system/scripts/default_account_args.py "$HARNESS" || true)
+  if [ -n "$TYPE" ]; then
+    type_args=(--type "$TYPE")
+  fi
+  # The harness and the provider account are the workspace's defaults, from
+  # .mngr/settings.local.toml (cron has no agent to inherit a credential from, and
+  # this runs from the repo root, where mngr reads that file); a create with no
+  # account signed in is refused there with a message that says to sign in.
   log "creating the persistent automation agent (template: ${TEMPLATE}, first message: ${RUN_MESSAGE})"
   uv run mngr create "$AGENT_NAME" \
-    --template "$HARNESS" \
     --template "$TEMPLATE" \
     --no-connect \
     --format json \
     --label "automation=${SKILL}" \
-    "${label_args[@]}" \
-    "${account_args[@]}" \
+    ${label_args[@]+"${label_args[@]}"} \
+    ${type_args[@]+"${type_args[@]}"} \
     --message "$RUN_MESSAGE"
 }
 

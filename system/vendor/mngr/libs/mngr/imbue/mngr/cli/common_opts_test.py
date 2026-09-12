@@ -1201,43 +1201,36 @@ def test_apply_settings_to_config_sets_command_defaults(mngr_test_prefix: str) -
     assert result.commands["create"].defaults["connect"] is False
 
 
-def test_apply_settings_to_config_replaces_existing_command_defaults(mngr_test_prefix: str) -> None:
-    """Assign-by-default: --setting on a command param replaces the whole defaults map.
-
-    To preserve other keys, the user would explicitly write ``defaults__extend``
-    or repeat each key in the --setting list. The narrowing guard is opted out
-    of via ``allow_settings_key_assignment_narrowing=True`` so the test exercises
-    the assign-by-default behavior directly; without the opt-in this would raise
-    a ConfigParseError (see ``test_apply_settings_to_config_narrowing_raises``).
+def test_apply_settings_to_config_adds_to_existing_command_defaults(mngr_test_prefix: str) -> None:
+    """A --setting on a command param joins the defaults map: the other parameters a lower
+    layer set stay, and no narrowing is reported, because ``CommandDefaults.defaults`` is a
+    settings patch rather than a map one layer replaces wholesale.
     """
     config = MngrConfig(
         prefix=mngr_test_prefix,
         commands={"create": CommandDefaults(defaults={"branch": "main:agent/*"})},
-        allow_settings_key_assignment_narrowing=True,
     )
     result = apply_settings_to_config(
         config,
         ("commands.create.connect=false",),
         frozenset(),
     )
-    # Only the new setting's key is present; the prior "branch" entry was wiped.
-    assert result.commands["create"].defaults == {"connect": False}
+    assert result.commands["create"].defaults == {"branch": "main:agent/*", "connect": False}
 
 
 def test_apply_settings_to_config_narrowing_raises_by_default(mngr_test_prefix: str) -> None:
-    """Without the opt-in, a --setting that would drop earlier entries raises ConfigParseError.
-
-    Mirrors the test above but uses the default ``allow_settings_key_assignment_narrowing=False``,
-    which is the safety net for users who haven't migrated to the new assign-by-default behavior.
+    """Without the opt-in, a --setting that assigns a list bare over a non-empty one a lower
+    layer set raises ConfigParseError: the map accumulates keys, but a same-key aggregate
+    replaced wholesale still loses the earlier entries.
     """
     config = MngrConfig(
         prefix=mngr_test_prefix,
-        commands={"create": CommandDefaults(defaults={"branch": "main:agent/*"})},
+        commands={"create": CommandDefaults(defaults={"env": ["X=5"]})},
     )
     with pytest.raises(ConfigParseError, match="narrowing"):
         apply_settings_to_config(
             config,
-            ("commands.create.connect=false",),
+            ('commands.create.env=["Y=1"]',),
             frozenset(),
         )
 
