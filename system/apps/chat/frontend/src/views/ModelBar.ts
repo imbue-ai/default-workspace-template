@@ -127,7 +127,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       offeredModels = response.models == null ? null : new Set(response.models);
       dynamicOptions = response.options ?? null;
     } catch (error) {
-      console.warn(`Failed to load offered models for agent ${chatId}`, error);
+      console.warn(`Failed to load offered models for chat ${chatId}`, error);
       offeredModels = null;
       dynamicOptions = null;
     } finally {

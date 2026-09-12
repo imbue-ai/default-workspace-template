@@ -422,7 +422,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       // Still logged, as the paging and reconnect paths do -- an attempt that a
       // newer one has superseded is recorded nowhere at all, so the log is the
       // only trace of one that keeps losing the race.
-      console.warn(`Failed to load the transcript for agent ${chatId}`, error);
+      console.warn(`Failed to load the transcript for chat ${chatId}`, error);
     }
   }
 

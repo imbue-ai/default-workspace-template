@@ -157,7 +157,7 @@ async function postModelChoice(chatId: string, identity: ModelIdentity, axes: st
     });
   } catch (error) {
     // The pushed live choice (or the timeout) reconciles the display back to truth.
-    console.warn(`Failed to set model for agent ${chatId}`, error);
+    console.warn(`Failed to set model for chat ${chatId}`, error);
   }
 }
 

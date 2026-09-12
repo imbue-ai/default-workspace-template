@@ -712,7 +712,7 @@ export async function fetchWindowAtOffset(chatId: string, offset: number, limit:
     });
     placeWindow(chatId, result);
   } catch (error) {
-    console.warn(`Failed to load events at offset ${offset} for agent ${chatId}`, error);
+    console.warn(`Failed to load events at offset ${offset} for chat ${chatId}`, error);
   }
 }
 
@@ -738,7 +738,7 @@ export async function fetchBackfillEvents(chatId: string, limit: number): Promis
     // the window arithmetic. Discard; the next scroll retries with a
     // current cursor.
     if (getFirstEventId(chatId) !== firstEventId) {
-      console.warn(`[si-transcript] discarding stale backfill page for agent ${chatId} (window changed)`);
+      console.warn(`[si-transcript] discarding stale backfill page for chat ${chatId} (window changed)`);
       return;
     }
     if (result.events.length > 0) {
@@ -751,7 +751,7 @@ export async function fetchBackfillEvents(chatId: string, limit: number): Promis
     // Backfill failure is non-fatal: the older history just isn't loaded, and
     // the window start is unchanged so the next scroll retries. Log it so a
     // persistent failure is diagnosable instead of vanishing silently.
-    console.warn(`Failed to backfill older events for agent ${chatId}`, error);
+    console.warn(`Failed to backfill older events for chat ${chatId}`, error);
   }
 }
 
@@ -775,7 +775,7 @@ export async function fetchForwardEvents(chatId: string, limit: number): Promise
     // window's tail moved while it was in flight (live append or a snapshot
     // reset) -- the next maybePage refires against the current cursor.
     if (getLastEventId(chatId) !== lastEventId) {
-      console.warn(`[si-transcript] discarding stale forward page for agent ${chatId} (window changed)`);
+      console.warn(`[si-transcript] discarding stale forward page for chat ${chatId} (window changed)`);
       return;
     }
     if (result.events.length > 0) {
@@ -785,7 +785,7 @@ export async function fetchForwardEvents(chatId: string, limit: number): Promise
       storeFor(chatId).reconcileTotalAtTail(result.total);
     }
   } catch (error) {
-    console.warn(`Failed to load newer events for agent ${chatId}`, error);
+    console.warn(`Failed to load newer events for chat ${chatId}`, error);
   }
 }
 
