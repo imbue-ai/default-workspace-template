@@ -239,9 +239,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   // --- fill -----------------------------------------------------------------
   let fillInFlight = false;
-  // Bumped by setChat so a fill still in flight for the previous agent cannot
+  // Bumped by setChat so a fill still in flight for the previous chat cannot
   // apply its completion (clearing the single-flight guard out from under the
-  // new agent's fill, or landing the old agent's jump) after the switch.
+  // new chat's fill, or landing the old chat's jump) after the switch.
   let fillEpoch = 0;
   // A landed fill that changed nothing (a page fully deduped away, a failed
   // fetch, a stale cursor) must not be refired verbatim: the planner would loop
@@ -735,7 +735,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       })
       .then(() => {
         if (fillEpoch !== epochAtDispatch) {
-          return; // setChat reset everything; this completion is the old agent's
+          return; // setChat reset everything; this completion is the old chat's
         }
         fillInFlight = false;
         if (dataSource.getRenderVersion() === renderVersionAtDispatch) {

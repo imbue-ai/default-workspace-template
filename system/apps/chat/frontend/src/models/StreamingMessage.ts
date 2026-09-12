@@ -3,7 +3,7 @@
  * Connects to the backend's SSE stream and appends new events.
  *
  * Streams are keyed by chatId so multiple chat panels can subscribe
- * independently; each agent gets its own EventSource.
+ * independently; each chat gets its own EventSource.
  */
 
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
