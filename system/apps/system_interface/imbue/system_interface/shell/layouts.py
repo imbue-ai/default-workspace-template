@@ -22,11 +22,8 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
-from imbue.system_interface.shell.data_types import InstancePanelParams
 from imbue.system_interface.shell.data_types import LayoutEditOutcome
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
-from imbue.system_interface.shell.data_types import with_panel_params_address
 from imbue.system_interface.shell.errors import StaleLayoutSaveError
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -50,17 +47,9 @@ class StoredLayout(FrozenModel):
     layout: LayoutRecord = Field(description="The arrangement")
 
 
-class FoundTab(FrozenModel):
-    """One panel showing a tab, with the layout file that holds it and the params that named the tab."""
-
-    stored: StoredLayout = Field(description="The layout file the panel is in")
-    panel_id: str = Field(description="The dockview panel id")
-    params: InstancePanelParams = Field(description="The panel's params, as read from the file")
-
-
 @pure
 def empty_layout(device_kind: DeviceKind) -> LayoutRecord:
-    return LayoutRecord(dockview=None, device_kind=device_kind, updated_at=None)
+    return LayoutRecord(dockview=None, tabs={}, device_kind=device_kind, updated_at=None)
 
 
 @pure
@@ -71,7 +60,7 @@ def layout_wire_json(layout: LayoutRecord) -> dict[str, Any]:
 @pure
 def is_same_arrangement(first: LayoutRecord, second: LayoutRecord) -> bool:
     """Whether two layouts arrange the same panels the same way (the stamp and device kind aside)."""
-    return first.dockview == second.dockview
+    return first.dockview == second.dockview and first.tabs == second.tabs
 
 
 @pure
@@ -129,18 +118,18 @@ def strip_panel_from_dockview(dockview: dict[str, Any], panel_id: str) -> dict[s
 @pure
 def strip_address_from_layout(layout: LayoutRecord, address: Address) -> LayoutRecord:
     """The layout without every panel showing ``address``; a grid that empties out leaves ``dockview`` None."""
-    doomed_panel_ids = [
-        panel_id
-        for panel_id, params in instance_panel_params_by_id(layout.dockview).items()
-        if params.address == address
-    ]
+    doomed_panel_ids = [panel_id for panel_id, tab in layout.tabs.items() if tab.address == address]
     if not doomed_panel_ids:
         return layout
     dockview = layout.dockview
     for panel_id in doomed_panel_ids:
         if dockview is not None:
             dockview = strip_panel_from_dockview(dockview, panel_id)
-    return layout.model_copy_update(to_update(layout.field_ref().dockview, dockview))
+    tabs = {panel_id: tab for panel_id, tab in layout.tabs.items() if panel_id not in doomed_panel_ids}
+    return layout.model_copy_update(
+        to_update(layout.field_ref().dockview, dockview),
+        to_update(layout.field_ref().tabs, tabs),
+    )
 
 
 @pure
@@ -154,16 +143,14 @@ def strip_addresses_from_layout(layout: LayoutRecord, addresses: Sequence[Addres
 
 @pure
 def rebind_tab_in_layout(layout: LayoutRecord, tab_id: TabId, address: Address) -> LayoutRecord:
-    """The layout with every panel whose params carry ``tab_id`` pointed at ``address``; the same object when none does."""
-    if layout.dockview is None:
+    """The layout with every tab record carrying ``tab_id`` pointed at ``address``; unchanged when none does."""
+    tabs = {
+        panel_id: (tab.model_copy_update(to_update(tab.field_ref().address, address)) if tab.tab_id == tab_id else tab)
+        for panel_id, tab in layout.tabs.items()
+    }
+    if tabs == layout.tabs:
         return layout
-    dockview = layout.dockview
-    for panel_id, params in instance_panel_params_by_id(layout.dockview).items():
-        if params.tab_id == tab_id and params.address != address:
-            dockview = with_panel_params_address(dockview, panel_id, address)
-    if dockview is layout.dockview:
-        return layout
-    return layout.model_copy_update(to_update(layout.field_ref().dockview, dockview))
+    return layout.model_copy_update(to_update(layout.field_ref().tabs, tabs))
 
 
 @pure
@@ -302,19 +289,15 @@ class LayoutStore(MutableModel):
         return stored
 
     def referenced_addresses(self) -> set[Address]:
-        return {
-            params.address
-            for stored in self.all_client_layouts()
-            for params in instance_panel_params_by_id(stored.layout.dockview).values()
-        }
+        return {tab.address for stored in self.all_client_layouts() for tab in stored.layout.tabs.values()}
 
-    def find_tab(self, tab_id: TabId) -> list[FoundTab]:
-        """Every panel whose params carry ``tab_id``, with the params as read so a caller need not parse again."""
-        found: list[FoundTab] = []
+    def find_tab(self, tab_id: TabId) -> list[tuple[StoredLayout, str]]:
+        """Every (layout, panel id) whose tab record carries ``tab_id``."""
+        found: list[tuple[StoredLayout, str]] = []
         for stored in self.all_client_layouts():
-            for panel_id, params in instance_panel_params_by_id(stored.layout.dockview).items():
-                if params.tab_id == tab_id:
-                    found.append(FoundTab(stored=stored, panel_id=panel_id, params=params))
+            for panel_id, tab in stored.layout.tabs.items():
+                if tab.tab_id == tab_id:
+                    found.append((stored, panel_id))
         return found
 
     def _rewrite_seeds(self, transform: Callable[[LayoutRecord], LayoutRecord], now: datetime) -> None:
@@ -356,7 +339,7 @@ class LayoutStore(MutableModel):
         return rewritten
 
     def rebind_tab(self, tab_id: TabId, address: Address, now: datetime) -> list[StoredLayout]:
-        """Point every panel whose params carry ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
+        """Point every tab record carrying ``tab_id`` at ``address``, in the seeds too; returns the client layouts rewritten."""
         return self._rewrite_layouts_everywhere(lambda layout: rebind_tab_in_layout(layout, tab_id, address), now)
 
     def remove_addresses_everywhere(self, addresses: Sequence[Address], now: datetime) -> list[StoredLayout]:

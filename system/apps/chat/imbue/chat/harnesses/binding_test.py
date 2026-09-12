@@ -11,17 +11,16 @@ import pytest
 
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import commit_account
-from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
-from imbue.chat.harnesses.account_scope import ScopeError
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
-from imbue.chat.harnesses.account_scope import agent_credential_path
 from imbue.chat.harnesses.binding import BindingError
+from imbue.chat.harnesses.binding import account_credential_path
+from imbue.chat.harnesses.binding import account_env
+from imbue.chat.harnesses.binding import agent_credential_path
 from imbue.chat.harnesses.binding import create_args
+from imbue.chat.harnesses.binding import harness_for
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -45,7 +44,7 @@ def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> Non
 
 
 def test_a_harness_with_no_scoping_raises_rather_than_binding_nothing(tmp_path: Path) -> None:
-    with pytest.raises(ScopeError):
+    with pytest.raises(BindingError):
         account_env(HarnessType.OPENCODE, tmp_path)
 
 
