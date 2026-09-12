@@ -36,7 +36,7 @@ import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-displa
 const SHOULDER_TAP_TOOLTIP = "Gently interrupt your agent to send queued messages early";
 const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a breather mid-work or finishes a turn.";
 
-// Agents with the shoulder-tap request in flight. While it runs the button is greyed and
+// Chats with the shoulder-tap request in flight. While it runs the button is greyed and
 // the click gate refuses, so it cannot double-fire; cleared when the request settles. This is the ONLY thing the
 // frontend tracks here -- whether the tap is otherwise available is the backend's flag.
 const inFlightChatIds = new Set<string>();

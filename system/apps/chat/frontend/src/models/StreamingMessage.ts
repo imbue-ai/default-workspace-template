@@ -15,7 +15,7 @@ const activeStreams = new Map<string, EventSource>();
 // Set so an error-triggered reconnect timeout can tell an intentional close
 // from a transient error.
 const explicitlyDisconnectedChats = new Set<string>();
-// Per-agent reconnect backoff, so a healthy stream's success does not reset an
+// Per-chat reconnect backoff, so a healthy stream's success does not reset an
 // unhealthy stream's growing delay.
 const backoffByChat = new Map<string, ReconnectBackoff>();
 
@@ -31,7 +31,7 @@ function getBackoff(chatId: string): ReconnectBackoff {
 // the initial mount or a reconnect), so fetchEvents replacing the chat's
 // transcript store (storeByChat[chatId]) does not drop them.
 const inFlightSnapshotBuffersByChat = new Map<string, TranscriptEvent[]>();
-// Pending reconnect timers, ONE per agent. Both failure paths (a stream error
+// Pending reconnect timers, ONE per chat. Both failure paths (a stream error
 // and a failed snapshot refetch) schedule through scheduleReconnectWithSnapshot,
 // which no-ops while a timer is already pending. Without this dedup each failed
 // cycle would spawn two future loops (the new stream's error handler plus the

@@ -230,8 +230,8 @@ function applyEventsRequestTimeout(xhr: XMLHttpRequest): XMLHttpRequest {
 // its physical cap and issues explicit evictions beyond it; the store itself
 // imposes no cap.
 
-// All per-agent transcript state is owned by one TranscriptStore instance per
-// agent (see storeByChat below). The held events are a single contiguous window
+// All per-chat transcript state is owned by one TranscriptStore instance per
+// chat (see storeByChat below). The held events are a single contiguous window
 // of the full transcript: `firstOffset` is the global index of events[0] and
 // `total` the full length; whether more history exists above/below and the
 // scrollbar size are derived from those two. The window can sit anywhere (the live
@@ -803,11 +803,11 @@ export type EventDetailState =
   // "payload no longer available" placeholder.
   | { state: "unavailable" };
 
-// Frontend-only payload cache, per agent, for the page session: the backend serves detail
+// Frontend-only payload cache, per chat, for the page session: the backend serves detail
 // reads statelessly and never caches them, so whatever the user expanded is remembered
 // here (alongside expansion-state) and survives virtualization remounts without refetching.
 const detailByChat = new Map<string, Map<string, EventDetailState>>();
-// Bumped on every detail-state change, per agent, so memoized message wrappers know to
+// Bumped on every detail-state change, per chat, so memoized message wrappers know to
 // repaint an expanded block whose payload just arrived.
 const detailVersionByChat = new Map<string, number>();
 // How long a transiently-failed detail fetch blocks its retry (the failed entry stays in

@@ -463,7 +463,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     }
 
     currentChatId = chatId;
-    // Resets all scroll state and loads this agent's persisted position (which
+    // Resets all scroll state and loads this chat's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
     engine.setChat(chatId);
     loadChat(chatId);

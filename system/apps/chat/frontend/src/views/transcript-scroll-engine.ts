@@ -150,7 +150,7 @@ export interface TranscriptScrollEngine {
   afterRender(element: HTMLElement): void;
   /** Tear down listeners/observers/timers. Call from onremove. */
   detach(): void;
-  /** Reset all state for a different agent, loading its persisted scroll state. */
+  /** Reset all state for a different chat, loading its persisted scroll state. */
   setChat(chatKey: string | null): void;
   /** The user submitted a message: snap back to following the tail. */
   noteMessageSent(): void;

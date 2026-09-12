@@ -36,7 +36,7 @@ interface PendingPick {
   option: CatalogModelOption;
 }
 
-// The optimistic overlay per agent, and the tail of each agent's apply chain.
+// The optimistic overlay per chat, and the tail of each chat's apply chain.
 const pendingByChat = new Map<string, PendingPick>();
 const applyChainByChat = new Map<string, Promise<void>>();
 

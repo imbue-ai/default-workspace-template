@@ -2,9 +2,9 @@
  * The static, per-harness model catalog -- the model bar's compile-time half.
  *
  * Fetched once from `GET /api/harnesses` and cached by harness. Holds everything
- * the bar needs that does not vary per agent: the selectable models (and which
- * efforts each declares, which are shown) and the switch mode. The per-agent live
- * selection arrives separately, on the agents WebSocket as each agent's
+ * the bar needs that does not vary per chat: the selectable models (and which
+ * efforts each declares, which are shown) and the switch mode. The per-chat live
+ * selection arrives separately, on the chats WebSocket as each chat's active agent's
  * `model_choice` (see Chats.ts). The backend already computes which catalog
  * option a live choice matched, so the frontend never re-matches. The provider a chat runs on
  * is not here either -- the combo card reads it from the chat's own account label.
