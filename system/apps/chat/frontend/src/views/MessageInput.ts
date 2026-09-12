@@ -32,12 +32,9 @@ const MAX_TEXTAREA_HEIGHT_PX = 200;
  * by them). Attachment status looks are resolved in code, one utility per
  * property. */
 
-/** The composer card: a border and nothing else. It carried a two-layer
- *  upward-cast shadow, and an accent-tinted one on focus, and neither is here
- *  any more -- the card sits at the foot of its own pane rather than floating
- *  over the transcript, so the elevation it was claiming is elevation it does
- *  not have. Focus is the accent border alone, which is why the transition now
- *  names one property. */
+/** The composer card: a border and nothing else. No shadow, since the card
+ *  sits at the foot of its own pane rather than floating over the transcript.
+ *  Focus is the accent border alone. */
 const INPUT_BOX_CLASS =
   "message-input-box flex flex-col rounded-xl border bg-composer " +
   "[transition:border-color_150ms] focus-within:border-accent";

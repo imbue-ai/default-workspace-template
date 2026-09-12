@@ -65,12 +65,7 @@ function capitalizeEffort(level: string): string {
 const MODEL_SEARCH_CAP = 100;
 
 /** The slider's filled portion, deepening with effort: 70% lightness at the bottom of the
- *  scale, 40% at the top.
- *
- *  It used to end at 30%, which reads as near-black rather than as a deep green -- the top of
- *  the scale looked switched off rather than turned up. 40% is exactly what the stop below the
- *  top rendered on a five-level scale, which is the brightest the ramp ever looked while still
- *  climbing. */
+ *  scale, 40% at the top. Darker than 40% reads as near-black rather than as a deep green. */
 function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }

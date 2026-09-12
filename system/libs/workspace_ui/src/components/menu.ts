@@ -45,13 +45,14 @@ import {
 } from "../menu-position";
 import { Portal } from "../portal";
 
-// --- chrome --------------------------------------------------------------------------------
+// Chrome
 
-/** The floating card: the primary surface with a hairline border, 8px radius and the overlay
- *  elevation shadow. Positioning is the caller's -- `fixed` here, `absolute` for a card that
- *  lives in its parent -- along with min-width and text size. */
+/** The floating card: the primary surface with a hairline border, the 16px radius of the
+ *  workspace's largest surfaces, and the overlay elevation shadow. Positioning is the caller's
+ *  -- `fixed` here, `absolute` for a card that lives in its parent -- along with min-width and
+ *  text size. */
 export function menuCardClass(extra = ""): string {
-  const parts = ["z-(--z-popover) rounded-lg border border-default bg-surface py-1 shadow-overlay"];
+  const parts = ["z-(--z-popover) rounded-xl border border-default bg-surface py-1 shadow-overlay"];
   if (extra !== "") parts.push(extra);
   return parts.join(" ");
 }
@@ -70,19 +71,13 @@ export interface MenuRowOptions {
  *  so it rides the base. */
 const MENU_ROW_FOCUS = "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 
-/** The row's highlight is a slab inset 4px from the card's edges, with the 4px radius that the
- *  card's own 8px corner leaves once you step 4px inward -- so the highlight looks concentric
- *  with the card rather than pasted into it.
- *
- *  The width is spelled `calc(100% - 0.5rem)` rather than left to `w-full` or to `auto`,
- *  because neither is right once the row has margins. `w-full` measures 100% PLUS the 8px and
- *  overflows the card (invisibly -- the card clips). And `auto` does not fill: a <button>
- *  shrink-to-fits even at `display: flex`, which pulls the highlight in behind a trailing tick
- *  and leaves it outside the band. An explicit width is the only form that holds for a
- *  <button>, a <label> and a <div> alike.
- *
- *  `px-2` completes the 12px the text gets from the card's edge. */
-const MENU_ROW_SLAB = "mx-1 w-[calc(100%-0.5rem)] rounded px-2";
+/** The row's highlight: a slab inset 4px from the card's edges, with the 12px radius the
+ *  card's own 16px corner leaves 4px in, so the highlight looks concentric with the card.
+ *  The width is explicit rather than `w-full` (which adds the 8px of margin and overflows the
+ *  card) or `auto` (a <button> shrink-to-fits even at `display: flex`, and the highlight
+ *  stops short of a trailing tick). `px-2` completes the 12px the text gets from the card's
+ *  edge. */
+const MENU_ROW_SLAB = "mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2";
 
 export function menuRowClass(options: MenuRowOptions = {}): string {
   const parts = [
@@ -119,7 +114,7 @@ export function startTruncated(text: string, extra = ""): m.Vnode {
   );
 }
 
-// --- the rows ------------------------------------------------------------------------------
+// The rows
 
 /** A row's leading glyph: one of the shared icons by name, or ready-made SVG markup for a
  *  glyph the shared set does not carry (a project's squiggle, an app's icon). */
@@ -224,7 +219,7 @@ export interface CustomRow {
 export type SubmenuChildRow = ActionRow | ValueRow | CheckRow | DividerRow | CustomRow;
 export type MenuRow = SubmenuChildRow | SubmenuRow;
 
-// --- the menu ------------------------------------------------------------------------------
+// The menu
 
 /** Marks the trigger, the sheet, the menu and the submenu, so a test can find each by what it
  *  is: `[data-menu-part="menu"]`. */
@@ -232,22 +227,14 @@ export const MENU_PART_ATTR = "data-menu-part";
 /** Marks a row by its `key`: `[data-menu-row="providers"]`. */
 export const MENU_ROW_ATTR = "data-menu-row";
 
-/** How long the pointer rests on a row before that row's submenu opens.
- *
- *  Near enough to instant to feel like none: a submenu IS what the pointer came across the
- *  menu for, and every millisecond of it reads as the menu being slow to answer. Nothing like
- *  the tooltip's 250ms, which is an aside nobody asked for and so waits to be clearly wanted.
- *
- *  Not actually zero, and what the remainder buys is one thing: a flick that crosses two or
- *  three rows on its way somewhere else does not flash their submenus up in turn. */
+/** How long the pointer rests on a row before that row's submenu opens. Near-instant, unlike
+ *  the tooltip's 250ms: a submenu is what the pointer came for. Not zero, so a flick across
+ *  two or three rows does not flash their submenus up in turn. */
 const SUBMENU_HOVER_DELAY_MS = 40;
 
-/** How long the safe triangle survives once the pointer is inside it.
- *
- *  Crossing the menu is a flick and is over well inside this. A pointer still in the wedge
- *  after it has stopped to read the row it is parked on, so the wedge lets go and that row
- *  gets to open its own submenu -- otherwise a row reached diagonally could never be opened by
- *  hover at all. */
+/** How long the safe triangle survives once the pointer is inside it. Crossing to the submenu
+ *  takes well under this; a pointer still in the wedge after it has stopped on a row, and the
+ *  wedge lets go so that row can open its own submenu. */
 const SAFE_TRIANGLE_GRACE_MS = 400;
 
 /** How long an open submenu survives the pointer leaving the menu-and-submenu pair.
@@ -257,10 +244,9 @@ const SAFE_TRIANGLE_GRACE_MS = 400;
  *  somewhere else entirely. */
 const SUBMENU_LEAVE_DELAY_MS = 220;
 
-/** macOS submenu geometry: the submenu tucks UNDER the menu's edge rather than sitting beside
- *  it. 5px, because that is where the opening ROW ends -- the card's 1px border plus the 4px
- *  its row highlight is inset by -- and the submenu meeting that highlight is what reads as the
- *  row continuing sideways. */
+/** The submenu tucks 5px under the menu's edge -- the card's 1px border plus the 4px the row
+ *  highlight is inset by -- so it meets the opening row's highlight and reads as that row
+ *  continuing sideways. */
 const SUBMENU_OVERLAP = 5;
 
 /** The distance from a submenu's outer top edge to the top of its first row: the card's 1px
@@ -441,14 +427,9 @@ export function createMenu(options: MenuOptions): Menu {
     redraw();
   }
 
-  /** The pointer has left the menu or the submenu. Two things follow.
-   *
-   *  Nothing it was about to open still opens: a hover that the pointer did not stay for is
-   *  not an intent to open. And an open submenu follows the pointer out, because a menu opened
-   *  by hover has to be dismissed by hover, or it hangs over the page until something is
-   *  clicked -- which is exactly what a hover menu is supposed to spare the user. The MENU is a
-   *  different matter: it was opened by a click, so it takes a click to dismiss, and drifting
-   *  off does not count. */
+  /** The pointer has left the menu or the submenu: a pending hover no longer opens, and an
+   *  open submenu closes once its grace runs out, since what hover opened hover dismisses.
+   *  The menu itself stays: a click opened it, and only a click or Escape closes it. */
   function handleStackLeave(): void {
     cancelHoverIntent();
     if (openSubmenu === null) return;
