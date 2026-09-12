@@ -61,8 +61,6 @@ def test_bare_names_expand_and_addresses_pass_through(
 def test_self_is_the_callers_chat_when_the_agent_id_is_known(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The chat app names an agent's chat in MINDS_CHAT_ID; this test is about the agent's own id.
-    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
     monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
     assert layout._resolve_address("self") == "app:chat?instance=agent-42"
     # Without an agent id the frontend is the only side that can still make sense of it.
@@ -286,7 +284,6 @@ def test_split_and_move_pass_the_anchor_and_direction_through(
 ) -> None:
     posted: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(layout, "_post_layout", _make_fake_post(posted))
-    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
     monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
     assert (
         layout.main(
@@ -619,7 +616,6 @@ def test_post_layout_sends_the_requester_address_in_the_body(
         seen["headers"] = dict(request.header_items())
         return _Response()
 
-    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
     monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
     monkeypatch.setenv(layout.ENV_WORKSPACE_URL, "http://127.0.0.1:1/")
     monkeypatch.setattr(layout.urllib.request, "urlopen", fake_urlopen)

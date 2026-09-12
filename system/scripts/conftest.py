@@ -65,6 +65,13 @@ def _write_apps_toml(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
     path.write_text(tomlkit.dumps(doc))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_own_chat_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the chat id the chat app stamps on its agents, so a test that asserts on the
+    address layout.py derives from MNGR_AGENT_ID is not steered by the developer's own."""
+    monkeypatch.delenv(layout.ENV_MINDS_CHAT_ID, raising=False)
+
+
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "apps.toml"
