@@ -60,8 +60,8 @@ cat << 'BODY_EOF'
 ## Reporting back
 Follow `.agents/shared/references/worker-reporting.md` for the full
 report procedure: it has you parse this task's frontmatter to get
-`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
-its parent directory back to the lead. Substitutions for this task:
+`LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH`, then write the report
+file into the lead's checkout. Substitutions for this task:
 
 - `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
