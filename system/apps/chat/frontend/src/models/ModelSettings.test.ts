@@ -11,6 +11,8 @@ vi.mock("./Chats", () => ({ getChatById: mockGetChatById }));
 import { changedAxes, effectiveChoice, getChatFastMode, setFastMode, setModelChoice } from "./ModelSettings";
 import type { ModelChoice } from "./ModelSettings";
 import type { CatalogModelOption } from "./HarnessCatalog";
+import { chatSnapshotFixture } from "./chatSnapshotFixture";
+import type { ChatSnapshot } from "./Chats";
 
 const OPUS: CatalogModelOption = {
   id: "opus[1m]",
@@ -42,6 +44,11 @@ function live(
   matched: CatalogModelOption | null,
 ): ModelChoice {
   return { identity: { model_id: reportedId, effort, fast }, matched };
+}
+
+/** The chat the model reads a live choice from. */
+function liveChat(chatId: string, choice: ModelChoice): ChatSnapshot {
+  return chatSnapshotFixture(chatId, { active_agent: { model_choice: choice } });
 }
 
 interface RequestOptions {
@@ -182,12 +189,12 @@ describe("effectiveChoice", () => {
 
 describe("fast mode helpers", () => {
   it("reads the agent's fast state from the live choice", () => {
-    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("opus[1m]", "medium", true, OPUS) } });
+    mockGetChatById.mockReturnValue(liveChat("a6", live("opus[1m]", "medium", true, OPUS)));
     expect(getChatFastMode("a6")).toBe(true);
   });
 
   it("setFastMode applies fast to the current model, keeping the effort", async () => {
-    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("opus[1m]", "high", false, OPUS) } });
+    mockGetChatById.mockReturnValue(liveChat("a7", live("opus[1m]", "high", false, OPUS)));
     setFastMode("a7", true);
     await flush();
     const call = mockRequest.mock.calls.find((args) => (args[0] as RequestOptions).method === "POST");
@@ -200,7 +207,7 @@ describe("fast mode helpers", () => {
   });
 
   it("setFastMode is a no-op for a model that does not support fast", async () => {
-    mockGetChatById.mockReturnValue({ active_agent: { model_choice: live("sonnet", "medium", false, SONNET) } });
+    mockGetChatById.mockReturnValue(liveChat("a8", live("sonnet", "medium", false, SONNET)));
     setFastMode("a8", true);
     await flush();
     expect(mockRequest).not.toHaveBeenCalled();
