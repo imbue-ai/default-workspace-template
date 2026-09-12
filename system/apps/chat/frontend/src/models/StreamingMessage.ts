@@ -28,8 +28,8 @@ function getBackoff(chatId: string): ReconnectBackoff {
   return backoff;
 }
 // Holds SSE deltas that arrive while a snapshot fetch is in flight (on either
-// the initial mount or a reconnect), so fetchEvents replacing the chat's
-// transcript store (storeByChat[chatId]) does not drop them.
+// the initial mount or a reconnect), so fetchEvents resetting the chat's held
+// window (TranscriptStore.reset) to the snapshot does not drop them.
 const inFlightSnapshotBuffersByChat = new Map<string, TranscriptEvent[]>();
 // Pending reconnect timers, ONE per chat. Both failure paths (a stream error
 // and a failed snapshot refetch) schedule through scheduleReconnectWithSnapshot,
@@ -119,7 +119,7 @@ function scheduleReconnectWithSnapshot(chatId: string): void {
  * Open the live SSE stream and fetch the snapshot together, buffering any SSE
  * deltas that arrive while the snapshot fetch is in flight.
  *
- * `fetchEvents` replaces the chat's transcript store (`storeByChat[chatId]`) wholesale with the snapshot,
+ * `fetchEvents` resets the chat's held window (`TranscriptStore.reset`) to the snapshot,
  * so a delta that arrives between the stream opening and the snapshot landing
  * would otherwise be overwritten and lost. Both the initial mount and the
  * reconnect path go through here so neither can drop events. Re-throws fetch
