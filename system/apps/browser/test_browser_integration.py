@@ -19,9 +19,9 @@ import contextlib
 import json
 import os
 import socket
-import urllib.request
 import threading
 import time
+import urllib.request
 from typing import Any
 
 import pytest
@@ -70,7 +70,7 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent``: skip the real ``mngr message`` subprocess in tests."""
+    """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
 
 def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: str = "alex-smith") -> bsession.LiveBrowser:
