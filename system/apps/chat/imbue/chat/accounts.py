@@ -38,12 +38,6 @@ from typing import Final
 from loguru import logger as _loguru_logger
 from pydantic import ValidationError
 
-from imbue.chat.create_defaults import CreateDefaults
-from imbue.chat.create_defaults import create_defaults_path
-from imbue.chat.create_defaults import write_create_defaults
-from imbue.chat.harnesses.harness_type import HarnessType
-from imbue.chat.harnesses.lanes import LaneNotFoundError
-from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 
@@ -220,7 +214,7 @@ def read_index(home: Path | None = None) -> AccountIndex:
 
 
 def _write_index(index: AccountIndex, home: Path | None = None) -> None:
-    """Serialize the index through a temp file and rename it into place, then rewrite what derives from it.
+    """Serialize the index through a temp file and rename it into place.
 
     Callers must already hold `_index_lock`; the rename only buys atomicity of the file's
     contents, not of the read-modify-write around it.
@@ -233,69 +227,6 @@ def _write_index(index: AccountIndex, home: Path | None = None) -> None:
     current = index.model_copy_update(to_update(index.field_ref().version, INDEX_VERSION))
     tmp.write_text(json.dumps(current.model_dump(), indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)
-    # The workspace's create defaults are derived from the index and nothing else, so every
-    # write of the index -- from the server or a script -- is what keeps them current.
-    write_create_defaults(create_defaults_path(), create_defaults_for(current, home))
-
-
-def harness_for(account: Account) -> HarnessType | None:
-    """The harness an account's lane runs on, or None if this build no longer has that lane."""
-    try:
-        return get_lane(account.lane).harness
-    except LaneNotFoundError:
-        logger.warning("Account {} names unknown lane {}", account.id, account.lane)
-        return None
-
-
-def choose_default_account(index: AccountIndex) -> Account | None:
-    """The account a launch that names none runs on, or None when no usable account exists.
-
-    The pinned default, else the most recently used account, else the oldest -- which is the
-    same rule the picker shows (`Providers.ts`, `getSelectedAccount`). It matters that the two
-    agree: every launch without an explicit account lands here, and a disagreement means two
-    chats started seconds apart run on different providers with nothing saying so. A pin on a
-    lane this build lacks is skipped rather than refused: the user can still chat, and the
-    picker shows the same fallback.
-    """
-    usable = [a for a in index.accounts if harness_for(a) is not None]
-    if not usable:
-        return None
-    pinned = next((a for a in usable if a.id == index.default_account), None)
-    if pinned is not None:
-        return pinned
-    return next((a for a in usable if a.id == index.mru), usable[0])
-
-
-def create_defaults_for(index: AccountIndex, home: Path | None = None) -> CreateDefaults | None:
-    """What the workspace's `mngr create` defaults should name for `index`: the default account, or nothing.
-
-    An account whose folder is gone yields nothing rather than the next account: a binding to
-    a directory that is not there fails every call without saying signed-out, and the boot
-    sweep drops such a row anyway.
-    """
-    chosen = choose_default_account(index)
-    if chosen is None:
-        return None
-    harness = harness_for(chosen)
-    assert harness is not None, "choose_default_account only returns accounts on a lane this build has"
-    folder = account_dir(chosen.id, home)
-    if not folder.is_dir():
-        logger.warning(
-            "Account {} has no folder on disk; writing no create defaults for it",
-            chosen.id,
-        )
-        return None
-    return CreateDefaults(harness=harness, account_id=chosen.id, account_dir=folder)
-
-
-def regenerate_create_defaults(home: Path | None = None) -> None:
-    """Rewrite the workspace's create defaults from the index as it stands.
-
-    For boot: a workspace updated onto this build has accounts but no file yet, and a file
-    deleted by hand comes back the same way.
-    """
-    with _index_lock(home):
-        write_create_defaults(create_defaults_path(), create_defaults_for(read_index(home), home))
 
 
 def _next_seq(index: AccountIndex, lane: str) -> int:

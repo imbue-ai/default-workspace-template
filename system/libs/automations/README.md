@@ -19,12 +19,7 @@ The pieces, each invoked from cron by absolute path:
 - `run_automation.sh` -- wakes a singleton "automation agent" for one run:
   creates it on the first run (labelled `automation=<skill>`, default create
   template `automation`), and on later runs clears its chat and re-sends
-  `/<skill>` so each run starts fresh. The agent runs on the workspace's default
-  provider account and its harness, which the chat app keeps in
-  `.mngr/settings.local.toml` for every unqualified `mngr create`; `--type
-  <harness>` names a harness explicitly (and gets no account unless the default
-  account is on that harness). With no account signed in the create is refused
-  with a message that says to sign in.
+  `/<skill>` so each run starts fresh.
 
 For the full recipe (adding, changing, or removing a scheduled job, with
 copy-paste cron lines), see the `manage-scheduled-tasks` skill -- it is the
