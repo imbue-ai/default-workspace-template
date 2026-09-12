@@ -217,15 +217,28 @@ def _holds_only_launchers(leaf: dict[str, Any]) -> bool:
     return all(is_launcher_panel_id(view) for view in leaf["data"].get("views") or [])
 
 
-def _drop_launchers_from_leaf(document: dict[str, Any], leaf: dict[str, Any]) -> None:
-    """A New Tab launcher is a question about an empty pane; docking into the pane answers it."""
-    data = leaf["data"]
-    launchers = [view for view in data.get("views", []) if is_launcher_panel_id(view)]
-    if not launchers:
+def _drop_placeholder_launcher(document: dict[str, Any], leaf: dict[str, Any], docked_panel_id: str) -> None:
+    """Drop the launcher that stood in for an empty dock, now that a panel fills it.
+
+    A New Tab is an ordinary tab and survives an op docking beside it -- with one exception: the
+    launcher the browser mints so an emptied dock never shows nothing (its ``ensureDockIsNotEmpty``).
+    That stand-in needs no flag to recognize, because it is minted only at zero panels and with no
+    group there is no "+" to press: a launcher that is the document's only *other* panel is
+    necessarily it. The browser applies the same rule in ``retirePlaceholderLauncher``.
+
+    The caller has already named ``docked_panel_id`` in ``panels``, hence counting around it.
+    """
+    others = [panel_id for panel_id in document.get("panels", {}) if panel_id != docked_panel_id]
+    if len(others) != 1 or not is_launcher_panel_id(others[0]):
         return
-    data["views"] = [view for view in data["views"] if view not in launchers]
-    for launcher in launchers:
-        document.get("panels", {}).pop(launcher, None)
+    placeholder = others[0]
+    data = leaf["data"]
+    # It is docked elsewhere than the leaf being filled: popping its entry alone would leave the
+    # grid naming a panel the document no longer has.
+    if placeholder not in (data.get("views") or []):
+        return
+    data["views"] = [view for view in data["views"] if view != placeholder]
+    document.get("panels", {}).pop(placeholder, None)
 
 
 def _flatten(node: dict[str, Any]) -> dict[str, Any]:
@@ -333,7 +346,7 @@ def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict
     else:
         target_path = _split_beside(grid, root_orientation, anchor_path, direction, placement)
     target = _node_at(root, target_path)
-    _drop_launchers_from_leaf(document, target)
+    _drop_placeholder_launcher(document, target, panel_id)
     if panel_id not in target["data"]["views"]:
         target["data"]["views"].append(panel_id)
     target["data"]["activeView"] = panel_id

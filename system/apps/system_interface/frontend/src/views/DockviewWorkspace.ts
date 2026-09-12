@@ -16,7 +16,10 @@
  *     saved layouts and tab sets; this dock drops the live panel when the list arrives).
  *
  * The dock is never empty. A view with no panels gets a New Tab launcher, which is also what
- * the "+" opens (and where a freshly-created project lands).
+ * the "+" opens (and where a freshly-created project lands). A New Tab is otherwise an ordinary
+ * tab: as many can be open as the user asks for, in one pane or across panes, and one stays put
+ * until it is closed or answered. The two things that answer one are opening something from
+ * inside it, and docking into the pane it was standing in for while it was the dock's only panel.
  */
 
 import m from "mithril";
@@ -76,7 +79,15 @@ import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
-import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
+import {
+  SHELL_CLOSE_REQUEST,
+  SHELL_FOCUSED,
+  SHELL_LOCATION,
+  SHELL_NEW_TAB,
+  SHELL_OPEN,
+  isApplePlatform,
+  isNewTabChord,
+} from "@imbue/workspace-ui/src/app_contract";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
@@ -232,11 +243,6 @@ function showsLauncher(panel: IDockviewPanel): boolean {
   return parsePanelParams(panel.params)?.kind === "launcher";
 }
 
-function isLauncherPanel(panelId: string): boolean {
-  const panel = panelById(panelId);
-  return panel !== undefined && showsLauncher(panel);
-}
-
 /** Every open panel showing an instance, with what it shows. */
 function instancePanels(): { panel: IDockviewPanel; params: InstancePanelParams }[] {
   if (!dockview) return [];
@@ -323,9 +329,21 @@ export function isTitleTruncated(scrollWidth: number, clientWidth: number): bool
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
-// The launcher tab's plus, and the kebab, on the same 24x24 Feather grid as `icons.ts`.
+// The launcher tab's dashed squircle, and the kebab, on the same 24x24 Feather grid as `icons.ts`.
 const TAB_PATHS = {
-  launcher: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  // An unfilled outline, for the one tab that is not showing anything yet. Three details are
+  // load-bearing at the 14px this renders at (`TAB_GLYPH_SIZE`), and all three were picked by
+  // looking at it rather than by arithmetic:
+  //   - `rx` stays well under half the side. A rounded rect drawn in dashes loses its corners
+  //     first, and anything from about 6 up reads as a plain circle at this size.
+  //   - `pathLength` restates the perimeter as 64 so the dash pattern is in eighths, whatever the
+  //     real perimeter (72 - r*(8 - 2*pi)) works out to. The path therefore closes on a dash
+  //     instead of a ragged part-gap, without tuning fractional dash lengths against `rx`.
+  //   - `butt`, because this file's `<svg>` sets `round` for every other glyph: a round cap adds
+  //     half a stroke width to each end of every dash, which at this weight swallows the gaps.
+  launcher:
+    '<rect x="3" y="3" width="18" height="18" rx="4" pathLength="64" ' +
+    'stroke-dasharray="4 4" stroke-linecap="butt"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
   // Filled rather than stroked: at 14px a 1px-radius ring reads as fuzz.
   kebab:
@@ -937,15 +955,6 @@ function groupForPanel(panelId: string): DockviewGroupPanel | null {
   return dockview?.panels.find((panel) => panel.id === panelId)?.api.group ?? null;
 }
 
-function launcherPanelIdInGroup(group: DockviewGroupPanel | null): string | null {
-  if (!dockview || group === null) return null;
-  for (const panel of dockview.panels) {
-    if (!showsLauncher(panel)) continue;
-    if (panel.api.group.id === group.id) return panel.id;
-  }
-  return null;
-}
-
 /** Launchers whose "Open new" tile is waiting on a create, by panel id. */
 const launchersAwaitingCreate = new Set<string>();
 
@@ -965,17 +974,10 @@ function flashPanelTab(panelId: string): void {
   tab.addEventListener("animationend", () => tab.classList.remove(TAB_FLASH_CLASS), { once: true });
 }
 
-/** Open a New Tab launcher in ``targetGroup``, focusing and flashing the one already there
- *  instead of stacking a second. */
+/** Open a New Tab launcher in ``targetGroup``. A New Tab is an ordinary tab, so this always
+ *  adds one: a group can hold as many as the user asks for, and so can the dock. */
 function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
-  const existingPanelId = launcherPanelIdInGroup(targetGroup);
-  if (existingPanelId !== null) {
-    const existing = dockview.panels.find((panel) => panel.id === existingPanelId);
-    if (existing) dockview.setActivePanel(existing);
-    flashPanelTab(existingPanelId);
-    return existingPanelId;
-  }
   const panelId = `${LAUNCHER_PANEL_ID_PREFIX}${mintTabId()}`;
   const params: PanelParams = { kind: "launcher" };
   dockview.addPanel({
@@ -988,7 +990,8 @@ function openLauncherPanel(targetGroup: DockviewGroupPanel | null): string | nul
   return panelId;
 }
 
-/** Retire the launcher a just-opened tab was asked for from. */
+/** Retire the launcher a just-opened tab was asked for from: opening something from inside a
+ *  New Tab navigates that tab, rather than leaving it behind beside what it opened. */
 function retireLauncher(panelId: string | null): void {
   if (panelId === null || !dockview) return;
   const panel = panelById(panelId);
@@ -996,23 +999,34 @@ function retireLauncher(panelId: string | null): void {
   dockview.removePanel(panel);
 }
 
-// The one focus change that must NOT fold launchers away: revealing an instance the view
-// already had open. One-shot: cleared on the very next focus change.
-let revealedOpenPanelId: string | null = null;
+/**
+ * The launcher a dock of ``dockedPanelId`` spends, or null when it spends none.
+ *
+ * A New Tab is an ordinary tab and survives a dock beside it -- with one exception: the launcher
+ * ``ensureDockIsNotEmpty`` mints so an emptied dock never shows nothing. That stand-in needs no
+ * flag to recognize, because it is minted only at zero panels and with no group there is no "+"
+ * to press: a launcher that is the dock's only *other* panel is necessarily it. The shell applies
+ * the same rule to an agent's ops (``_drop_placeholder_launcher``).
+ */
+export function placeholderLauncherToRetire(
+  panels: readonly { id: string; isLauncher: boolean }[],
+  dockedPanelId: string,
+): string | null {
+  const others = panels.filter((panel) => panel.id !== dockedPanelId);
+  if (others.length !== 1 || !others[0].isLauncher) return null;
+  return others[0].id;
+}
 
-/** A launcher is a question and clicking off to some other tab is an answer: every launcher
- *  folds up the moment a real panel takes focus. */
-function retireLaunchersOnFocusLeaving(activePanelId: string): void {
+/** Retire the launcher that stood in for an empty dock, now that ``dockedPanelId`` fills it. */
+function retirePlaceholderLauncher(dockedPanelId: string): void {
   if (!dockview) return;
-  const revealedPanelId = revealedOpenPanelId;
-  revealedOpenPanelId = null;
-  if (revealedPanelId === activePanelId) return;
-  if (isLauncherPanel(activePanelId)) return;
-  for (const panel of [...dockview.panels]) {
-    if (panel.id !== activePanelId && showsLauncher(panel)) {
-      dockview.removePanel(panel);
-    }
-  }
+  const spent = placeholderLauncherToRetire(
+    dockview.panels.map((panel) => ({ id: panel.id, isLauncher: showsLauncher(panel) })),
+    dockedPanelId,
+  );
+  if (spent === null) return;
+  const panel = panelById(spent);
+  if (panel !== undefined) dockview.removePanel(panel);
 }
 
 /** Grant a just-activated pane's page focus: clicking a tab is the user navigating to it, and
@@ -1023,11 +1037,41 @@ function focusFrameOfActivatedPanel(activePanelId: string): void {
   requestFrameFocus(liveSurfaceElement(key));
 }
 
+/** The group a chord-opened New Tab lands in: the one the user is looking at. */
+function openLauncherInActiveGroup(): void {
+  openLauncherPanel(dockview?.activeGroup ?? null);
+  m.redraw();
+}
+
+/**
+ * Open a New Tab for the new-tab chord pressed in the shell's own chrome (the rail, a tab strip,
+ * the New Tab page itself). A press inside an app's frame never reaches this document and arrives
+ * as ``SHELL_NEW_TAB`` instead.
+ */
+function onNewTabChord(event: KeyboardEvent): void {
+  if (!isNewTabChord(event, isApplePlatform())) return;
+  event.preventDefault();
+  openLauncherInActiveGroup();
+}
+
 /** Keep the dock from ever being empty. Suppressed while a layout is being mounted. */
 function ensureDockIsNotEmpty(): void {
   if (isApplyingLayout || !dockview) return;
   if (dockview.panels.length > 0) return;
   openLauncherPanel(null);
+}
+
+/**
+ * What the "+" tooltip says, naming the chord only where pressing it will do anything.
+ *
+ * Every browser keeps Cmd/Ctrl+T for a browser tab of its own and never hands it to the page, so
+ * naming it there would be a promise the workspace cannot keep. The desktop client registers no
+ * accelerator for it and the chord arrives normally, and it identifies itself in the UA. A UA that
+ * says neither gets the bare label: a missing hint costs less than a wrong one.
+ */
+export function addTabTooltipText(userAgent: string, isApple: boolean): string {
+  if (!/Electron/i.test(userAgent)) return LAUNCHER_PANEL_TITLE;
+  return `${LAUNCHER_PANEL_TITLE}  ${isApple ? "⌘T" : "Ctrl+T"}`;
 }
 
 function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
@@ -1039,7 +1083,7 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
   button.setAttribute("aria-label", LAUNCHER_PANEL_TITLE);
   button.textContent = "+";
   const tooltip = attachHoverTooltip(button);
-  tooltip.setText(LAUNCHER_PANEL_TITLE);
+  tooltip.setText(addTabTooltipText(navigator.userAgent, isApplePlatform()));
   element.appendChild(button);
 
   button.addEventListener("click", (event) => {
@@ -1047,32 +1091,12 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
     openLauncherPanel(group);
   });
 
-  const refreshVisibility = (): void => {
-    requestAnimationFrame(() => {
-      element.style.display = launcherPanelIdInGroup(group) === null ? "" : "none";
-    });
-  };
-
-  const subscriptions: { dispose: () => void }[] = [];
-
+  // Always shown: a group already holding a New Tab can hold another.
   return {
     element,
-    init() {
-      refreshVisibility();
-      if (dockview) {
-        subscriptions.push(
-          dockview.api.onDidAddPanel(refreshVisibility),
-          dockview.api.onDidRemovePanel(refreshVisibility),
-          dockview.api.onDidLayoutChange(refreshVisibility),
-        );
-      }
-    },
+    init() {},
     dispose() {
       tooltip.dispose();
-      for (const subscription of subscriptions) {
-        subscription.dispose();
-      }
-      subscriptions.length = 0;
     },
   };
 }
@@ -1204,15 +1228,15 @@ export function getSidebarRows(): SidebarTabRow[] {
 function openAddressInGroup(address: string, targetGroup: DockviewGroupPanel | null): string | null {
   if (!dockview) return null;
   const openPanelId = panelIdForAddress(address);
-  revealedOpenPanelId = null;
   if (openPanelId !== null) {
-    revealedOpenPanelId = openPanelId;
     const panel = panelById(openPanelId);
     if (panel) dockview.setActivePanel(panel);
     flashPanelTab(openPanelId);
     return openPanelId;
   }
-  return addPanelForAddress(address, placementForGroup(targetGroup));
+  const dockedPanelId = addPanelForAddress(address, placementForGroup(targetGroup));
+  if (dockedPanelId !== null) retirePlaceholderLauncher(dockedPanelId);
+  return dockedPanelId;
 }
 
 /** Rail row / launcher row click: focus the instance's tab, or open it into the active pane. */
@@ -1877,6 +1901,12 @@ function panelForChildFrame(frame: HTMLIFrameElement): IDockviewPanel | null {
   return dockview?.panels.find((panel) => panel.id === panelId) ?? null;
 }
 
+/** ``shell:new-tab`` from a page: the chord was pressed in a frame, so open one in its pane. */
+function openLauncherForChildFrame(frame: HTMLIFrameElement): void {
+  openLauncherPanel(panelForChildFrame(frame)?.api.group ?? dockview?.activeGroup ?? null);
+  m.redraw();
+}
+
 /** ``shell:focused`` from a page: the pane showing it becomes the active one. */
 function activatePanelForChildFrame(frame: HTMLIFrameElement): void {
   const panel = panelForChildFrame(frame);
@@ -2215,10 +2245,13 @@ function initializeDockview(parentElement: HTMLElement): void {
 
   setEmbedderMessageHandler(CLOSE_ACTIVE_TAB, closeActiveTabFromEmbedder);
 
+  document.addEventListener("keydown", onNewTabChord);
+
   // The shell side of the app contract (contracts.md section 10).
   setChildFrameMessageHandler(SHELL_FOCUSED, activatePanelForChildFrame);
   setChildFrameMessageHandler(SHELL_OPEN, openInstanceForChildFrame);
   setChildFrameMessageHandler(SHELL_LOCATION, relayLocationForChildFrame);
+  setChildFrameMessageHandler(SHELL_NEW_TAB, openLauncherForChildFrame);
 
   dv.api.onDidLayoutChange(() => {
     scheduleSave();
@@ -2252,7 +2285,6 @@ function initializeDockview(parentElement: HTMLElement): void {
       panel.api.updateParameters({ lastFocusedMs: Date.now() });
       scheduleSave();
     }
-    retireLaunchersOnFocusLeaving(panel.id);
     focusFrameOfActivatedPanel(panel.id);
   });
 

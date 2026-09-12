@@ -11,11 +11,13 @@ import {
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
   SHELL_LOCATION,
+  SHELL_NEW_TAB,
   SHELL_OPEN,
   SHELL_SHOWN,
   connectToShell,
+  isNewTabChord,
 } from "./app_contract";
-import type { ShellConnection } from "./app_contract";
+import type { ChordKeys, ShellConnection } from "./app_contract";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -118,5 +120,72 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("isNewTabChord", () => {
+  const keys = (over: Partial<ChordKeys>): ChordKeys => ({
+    key: "t",
+    metaKey: false,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    ...over,
+  });
+
+  it("takes Cmd+T on an Apple platform and Ctrl+T elsewhere", () => {
+    expect(isNewTabChord(keys({ metaKey: true }), true)).toBe(true);
+    expect(isNewTabChord(keys({ ctrlKey: true }), false)).toBe(true);
+  });
+
+  it("ignores the other platform's chord, so Ctrl+T stays text editing on a Mac", () => {
+    expect(isNewTabChord(keys({ ctrlKey: true }), true)).toBe(false);
+    expect(isNewTabChord(keys({ metaKey: true }), false)).toBe(false);
+  });
+
+  it("takes the shifted key a caps-lock or Shift press reports", () => {
+    expect(isNewTabChord(keys({ key: "T", metaKey: true }), true)).toBe(true);
+  });
+
+  it("leaves every neighbouring chord alone", () => {
+    expect(isNewTabChord(keys({}), true)).toBe(false);
+    expect(isNewTabChord(keys({ key: "n", metaKey: true }), true)).toBe(false);
+    expect(isNewTabChord(keys({ metaKey: true, shiftKey: true }), true)).toBe(false);
+    expect(isNewTabChord(keys({ metaKey: true, altKey: true }), true)).toBe(false);
+    expect(isNewTabChord(keys({ metaKey: true, ctrlKey: true }), true)).toBe(false);
+  });
+});
+
+describe("the new-tab chord from a framed page", () => {
+  it("carries the chord up to the shell and keeps the browser out of it", () => {
+    const parent = framed();
+    connection = connectToShell({});
+
+    const event = new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true });
+    Object.defineProperty(navigator, "userAgent", { value: "Mac OS X", configurable: true });
+    window.dispatchEvent(event);
+
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: SHELL_NEW_TAB }, "*");
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("stays out of the way on a page visited directly, which has no shell to open a tab in", () => {
+    connection = connectToShell({});
+
+    const event = new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("stops listening once disconnected", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    connection.disconnect();
+    connection = null;
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "t", metaKey: true, cancelable: true }));
+
+    expect(parent.postMessage).not.toHaveBeenCalled();
   });
 });

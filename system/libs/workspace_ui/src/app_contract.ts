@@ -29,6 +29,44 @@ export const SHELL_FOCUSED = "shell:focused";
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: dock an instance of this app beside this tab. */
 export const SHELL_OPEN = "shell:open";
+/** App to shell: the new-tab chord fired while this page had focus; open a New Tab. */
+export const SHELL_NEW_TAB = "shell:new-tab";
+
+/** The keydown fields the new-tab chord is decided from. */
+export interface ChordKeys {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}
+
+/**
+ * Whether this browser reports an Apple platform, whose accelerator key is Cmd rather than Ctrl.
+ *
+ * `navigator.platform` is deprecated, so this prefers `userAgentData` and keeps the UA string as
+ * the fallback, the same shape `models/ClientIdentity` uses for the device kind.
+ */
+export function isApplePlatform(): boolean {
+  const uaData = (navigator as { userAgentData?: { platform?: string } }).userAgentData;
+  return /mac|iphone|ipad|ipod/i.test(uaData?.platform ?? navigator.userAgent);
+}
+
+/**
+ * Whether a keydown is the workspace's new-tab chord: Cmd+T on Apple platforms, Ctrl+T elsewhere.
+ *
+ * A page only ever sees this chord in the workspace's desktop client. Every browser keeps
+ * Cmd/Ctrl+T for a browser tab of its own and never delivers it to the document, which is also
+ * why the shell offers the chord in the "+" tooltip only where it can work.
+ *
+ * Every tab is a frame, so a keydown while an app page has focus never reaches the shell's own
+ * document; a page carries this chord up as `SHELL_NEW_TAB` instead (see `connectToShell`).
+ */
+export function isNewTabChord(keys: ChordKeys, isApple: boolean): boolean {
+  if (keys.key !== "t" && keys.key !== "T") return false;
+  if (keys.altKey || keys.shiftKey) return false;
+  return isApple ? keys.metaKey && !keys.ctrlKey : keys.ctrlKey && !keys.metaKey;
+}
 
 export interface ShellHandshake {
   clientId: string;
@@ -103,12 +141,25 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     boundWindow.parent.postMessage({ type, ...payload }, "*");
   }
 
+  // The shell's own document never sees a keydown that lands in one of its frames, so the chord
+  // is carried up from wherever focus actually is. Only while framed: a page visited directly has
+  // no shell to open a tab in, and would swallow the browser's own chord for nothing.
+  function onKeyDown(event: KeyboardEvent): void {
+    if (!isFramed || !isNewTabChord(event, isApplePlatform())) return;
+    event.preventDefault();
+    send(SHELL_NEW_TAB, {});
+  }
+
   boundWindow.addEventListener("message", onMessage);
+  boundWindow.addEventListener("keydown", onKeyDown);
   return {
     isFramed,
     focused: () => send(SHELL_FOCUSED, {}),
     location: (path: string) => send(SHELL_LOCATION, { path }),
     open: (address: string) => send(SHELL_OPEN, { address }),
-    disconnect: () => boundWindow.removeEventListener("message", onMessage),
+    disconnect: () => {
+      boundWindow.removeEventListener("message", onMessage);
+      boundWindow.removeEventListener("keydown", onKeyDown);
+    },
   };
 }
