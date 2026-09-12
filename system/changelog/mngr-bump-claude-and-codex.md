@@ -1,5 +1,0 @@
-Bump the pinned Claude Code version from 2.1.227 to 2.1.269 (the `latest` release channel at the time; `stable` still sat at 2.1.236) in both places that carry it -- the `CLAUDE_CODE_VERSION` default in `system/scripts/setup_system.sh` and the `[agent_types.claude].version` pin in `.mngr/settings.toml` -- and the pinned Codex CLI from 0.147.0 to 0.154.0 (`CODEX_VERSION` in `setup_system.sh`).
-
-2.1.269 is the first Claude Code whose binary carries `claude-fable-5-1`, and its `fable[1m]` alias now resolves to Claude Fable 5.1, so the workspace's first chat and the `/model` picker can reach Fable 5.1. Codex 0.154.0 is the first release that knows GPT-6 Astra (`gpt-6-astra`), so a codex chat whose account is entitled to it sees it in the model bar; codex has no static catalog, so nothing else had to change for it.
-
-Drop the vestigial `CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1` host env entry, which its own comment scheduled for removal on the next version bump: fast mode for Opus 4.7 was removed upstream in July, so the flag gated nothing on the old pin and gates nothing on the new one.

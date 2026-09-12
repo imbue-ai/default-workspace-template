@@ -64,12 +64,10 @@ def test_statusline_writes_state_the_shared_reader_matches(tmp_path: Path) -> No
     assert identity == ModelIdentity(model_id="claude-fable-5", effort="high", fast=False)
 
     # The conformance this test proves is that the writer and reader agree on the file.
-    # It also lands on a real catalog option: the capture predates the Fable 5.1 pin, so
-    # its Fable 5 now resolves to the hidden option kept for chats created on the older
-    # pin, and this captured payload is the evidence the statusline reports the
-    # SUFFIX-FREE id (claude-fable-5, not claude-fable-5[1m]) even though the entry
-    # switches with fable[1m] -- which is exactly why harness_reported_model_id is the
-    # suffix-free key.
+    # It now also lands on a real catalog option: Fable is offered, and this captured
+    # payload is the evidence the statusline reports the SUFFIX-FREE id (claude-fable-5,
+    # not claude-fable-5[1m]) even though the entry switches with fable[1m] -- which is
+    # exactly why harness_reported_model_id is the suffix-free key.
     matched = match_option(identity, CLAUDE_CATALOG.options)
     assert matched is not None
     assert matched.label == "Fable 5"

@@ -42,8 +42,8 @@ import pexpect
 from loguru import logger as _loguru_logger
 
 from imbue.chat import accounts
-from imbue.chat.harnesses.account_scope import account_credential_path
-from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.binding import account_credential_path
+from imbue.chat.harnesses.binding import account_env
 from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR

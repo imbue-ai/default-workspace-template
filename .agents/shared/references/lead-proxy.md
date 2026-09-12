@@ -31,6 +31,12 @@ plus a body. If await exits non-zero (timeout) without printing a report, do
 *not* immediately treat it as a terminal failure -- see "Diagnose worker
 liveness" below.
 
+`await` also returns **milestone** reports: any file under
+`<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
+It prints the file like `report.md`, exits 0, and names the file's path on
+stderr so you know what to consume. `report.md` wins when both are waiting; the
+milestone comes back on the next poll.
+
 If await exits with code 75, the worker's own agent was **shed by the OOM
 daemon** to relieve memory pressure: it will not report until revived. This is
 not a worker bug -- revive it with `mngr start <WORKER_NAME> --restart` (a plain
@@ -66,8 +72,9 @@ user's current request is complete.
 
 ## Parsing the report
 
-Parse the YAML frontmatter: `type` (`gate` or `status`) and `name`
-(skill-specific). The body is the message the user needs to see.
+Parse the YAML frontmatter: `type` (`gate`, `milestone`, or `status`) and `name`
+(skill-specific). The body is the message the user needs to see. A `milestone`
+report also carries `commit:` and `branch:`.
 
 If the file does not parse (no frontmatter, unknown type, truncated), treat it
 as a terminal failure.
@@ -114,6 +121,74 @@ mv <REPORTS_DIR>/report.md <REPORTS_DIR>/consumed/$(date +%s)-gate.md
 
 Then re-arm the background poll.
 
+## Milestone reports: provisional merge
+
+On `type: milestone` the worker is not asking for anything: it committed
+something usable and carried on. The frontmatter pins the commit; the body says
+what is usable, what `## Tested` covers at that commit, and what is
+`## Still pending`.
+
+**Default to merging** -- earlier use is the point. Do not merge when:
+
+- the body says the creation is not yet runnable (a design-only milestone),
+- one of the pre-merge checks below fails, or
+- the user's more recent request is still in progress (the "do not interrupt
+  more recent user work" rule above applies -- handle the milestone once their
+  request is finished).
+
+Before merging, run the three pre-merge checks in
+`.agents/shared/references/harden-contention.md` ("Before merge: lease,
+freshness, conflicts"), exactly as for `done`. Do not re-run a check
+`## Tested` names as passing at this commit; you may run ones it does not name.
+
+Merge the **pinned sha, never the branch tip** (the tip keeps moving):
+
+```bash
+git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <name>"
+```
+
+Then the **provisional go-live**, the minimum needed to use the thing: a skill
+is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
+its tab refreshed. The calling skill's end-of-pass work (post-crystallize
+migration, closing the ticket) still waits for `done`.
+
+Tell the user in one line and in non-technical language what's been updated: 
+  "Added a reusable skill."
+  "Created an MVP app, using it now while it continues to be improved."
+
+Consume the file whether or not you merged (the sha stays in its name, so a
+deferred milestone can be merged later):
+
+```bash
+mkdir -p <REPORTS_DIR>/consumed
+mv <REPORTS_DIR>/milestones/<MILESTONE_FILE> <REPORTS_DIR>/consumed/
+```
+
+Then re-arm the poll; the worker's gates and terminal status are still coming.
+
+### Rolling back a provisional merge
+
+```bash
+git revert -m 1 <provisional-merge-commit>
+```
+
+A revert is a **rejection of that milestone**: message the worker with why, as a
+de facto "no with notes" (the merge commit's subject names the worker and
+milestone, so the target is easy to find).
+
+```bash
+mngr message <WORKER_NAME> -m "<why the milestone was reverted, in the user's voice>"
+```
+
+The reverted commits remain ancestors of HEAD, so any later merge from that
+branch -- `done` included -- would **silently omit** them. First reinstate:
+
+```bash
+git revert <revert-commit>
+```
+
+or supersede the pass per `.agents/shared/references/harden-contention.md`.
+
 ## Terminal status: act and stop polling
 
 On `type: status`:
@@ -126,6 +201,10 @@ On `type: status`:
   repository, so its branch already exists in the shared ref store (and a
   `git fetch . <WORKER_BRANCH>:<WORKER_BRANCH>` would be refused anyway while
   the worker's worktree has the branch checked out).
+  Any commits you already provisionally merged from this branch (see "Milestone
+  reports: provisional merge") are ancestors of HEAD, so this merge brings only
+  the remainder and the freshness check covers exactly the window since that
+  provisional merge.
   On a clean merge, close any tracking ticket and optionally destroy the
   worker. On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see

@@ -24,7 +24,6 @@ dependencies = [
     "pyte>=0.8",
     "simple-websocket>=1.0",
     "tk-command-parsing",
-    "tomlkit>=0.12",
     "watchdog>=4.0",
     "werkzeug>=3.0",
 ]

@@ -13,7 +13,6 @@ import pytest
 from app_instances.data_types import InstanceLifetime
 from conftest import migrate_workspace_layouts as migrate
 from files_app.main import build_files_source
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import (
     Direction,
     Placement,
@@ -350,29 +349,24 @@ def test_run_writes_seeds_the_shell_reads_and_the_editor_can_edit(
     seed = store.read_layout("project-1", "never-seen-client", DeviceKind.DESKTOP)
     assert seed.dockview is not None
     assert seed.updated_at is not None and seed.updated_at.isoformat() == _NOW
-    params_by_panel_id = instance_panel_params_by_id(seed.dockview)
-    assert {params.address for params in params_by_panel_id.values()} == {
+    assert {tab.address for tab in seed.tabs.values()} == {
         _CHAT_AAA,
         _TERMINAL_1,
         _BROWSER_1,
         _FILES_2,
         _DOCS,
     }
-    # Panel ids are fresh tab ids, used consistently in the grid and the panel entries, whose
-    # params carry the frontend's current shape; the file carries no ``tabs`` block.
-    assert "tabs" not in json.loads(
-        (state_dir / "layouts" / "project-1" / "seed.desktop.json").read_text()
-    )
-    for panel_id, params in params_by_panel_id.items():
-        assert _TAB_ID.fullmatch(panel_id) and params.tab_id == panel_id
+    # Panel ids are fresh tab ids, used consistently in the grid, the panel entries, and the
+    # tab records; the entries carry the frontend's current shape.
+    for panel_id, tab in seed.tabs.items():
+        assert _TAB_ID.fullmatch(panel_id) and tab.tab_id == panel_id
         entry = seed.dockview["panels"][panel_id]
         assert entry["contentComponent"] == "instance"
         assert entry["tabComponent"] == "custom"
         assert entry["params"] == {
             "kind": "instance",
-            "address": str(params.address),
+            "address": str(tab.address),
             "tabId": panel_id,
-            "lastFocusedMs": params.last_focused_ms,
         }
     groups = seed.dockview["grid"]["root"]["data"]
     assert [len(group["data"]["views"]) for group in groups] == [2, 3]
@@ -387,9 +381,9 @@ def test_run_writes_seeds_the_shell_reads_and_the_editor_can_edit(
     chat_panel = panel_id_for_address(seed, Address(_CHAT_AAA))
     assert (
         chat_panel is not None
-        and params_by_panel_id[chat_panel].last_focused_ms == 1700000000000
+        and seed.tabs[chat_panel].last_focused_ms == 1700000000000
     )
-    assert params_by_panel_id[files_panel].last_focused_ms == 1700000001000
+    assert seed.tabs[files_panel].last_focused_ms == 1700000001000
     # The seed is a document the shell's editor accepts: a split beside the chat lands in a new group.
     edited = add_panel(
         seed,
@@ -415,10 +409,7 @@ def test_run_writes_seeds_the_shell_reads_and_the_editor_can_edit(
     assert not (state_dir / "layouts" / "everything").exists()
     # A client of the other device kind starts from its own seed, not the desktop's.
     mobile = store.read_layout("project-1", "never-seen-client", DeviceKind.MOBILE)
-    assert [
-        str(params.address)
-        for params in instance_panel_params_by_id(mobile.dockview).values()
-    ] == [_CHAT_AAA]
+    assert [str(tab.address) for tab in mobile.tabs.values()] == [_CHAT_AAA]
 
 
 def test_run_writes_projects_the_shell_reads(
@@ -576,7 +567,7 @@ def test_force_rewrites_the_projects_and_seeds(
     (state_dir / "projects.json").write_text('{"version": 1, "projects": []}')
     seed_path = state_dir / "layouts" / "project-1" / "seed.desktop.json"
     seed_path.write_text(
-        '{"dockview": null, "device_kind": "desktop", "updated_at": null}'
+        '{"dockview": null, "tabs": {}, "device_kind": "desktop", "updated_at": null}'
     )
 
     _run(legacy_layout_dir, tmp_path, migration_registry, "--force")
@@ -604,7 +595,9 @@ def test_existing_new_model_state_is_kept_without_force(
         ],
     }
     (state_dir / "projects.json").write_text(json.dumps(kept_projects))
-    kept_seed = '{"dockview": null, "device_kind": "desktop", "updated_at": null}'
+    kept_seed = (
+        '{"dockview": null, "tabs": {}, "device_kind": "desktop", "updated_at": null}'
+    )
     (state_dir / "layouts" / "project-1" / "seed.desktop.json").write_text(kept_seed)
 
     plan = _plan(legacy_layout_dir, tmp_path, migration_registry)
