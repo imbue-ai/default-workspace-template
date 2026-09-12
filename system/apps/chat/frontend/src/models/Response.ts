@@ -485,7 +485,7 @@ class TranscriptStore {
 const storeByChat: Record<string, TranscriptStore> = {};
 const notFoundChatIds = new Set<string>();
 
-/** Where an agent's transcript snapshot stands: in flight, failed, or settled. */
+/** Where a chat's transcript snapshot stands: in flight, failed, or settled. */
 export interface TranscriptLoadState {
   readonly phase: "idle" | "loading" | "error";
   /** Why it failed. Set when `phase` is "error", null otherwise. */
@@ -494,7 +494,7 @@ export interface TranscriptLoadState {
 
 const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 
-// Where each agent's snapshot load stands. It lives here rather than in the
+// Where each chat's snapshot load stands. It lives here rather than in the
 // panel because every path that reloads a transcript -- the panel's own load,
 // the tab's Refresh, and the stream's background reconnect -- goes through
 // `fetchEvents`, and only one of those is the panel. A panel holding its own
@@ -504,17 +504,17 @@ const IDLE_LOAD_STATE: TranscriptLoadState = { phase: "idle", error: null };
 // same three paths, so a reload nobody started still reads as loading.
 const loadStateByChat = new Map<string, TranscriptLoadState>();
 
-// Which snapshot attempt an agent's state belongs to. Those same three paths can
+// Which snapshot attempt a chat's state belongs to. Those same three paths can
 // have two fetches outstanding at once, and they settle in whatever order the
 // network allows: a request hung on a dead tunnel settles up to
 // EVENTS_REQUEST_TIMEOUT_MS after a later one has already landed. Only the newest
-// attempt speaks for the agent, so an older one's failure cannot put the panel
+// attempt speaks for the chat, so an older one's failure cannot put the panel
 // back on an error screen for a transcript that has since loaded. Same staleness
 // fence the paging fetches below apply to their window.
 let loadAttemptCounter = 0;
 const newestLoadAttemptByChat = new Map<string, number>();
 
-/** Whether this attempt is still the agent's newest, i.e. whether its outcome still counts. */
+/** Whether this attempt is still the chat's newest, i.e. whether its outcome still counts. */
 function isNewestLoadAttempt(chatId: string, attempt: number): boolean {
   return newestLoadAttemptByChat.get(chatId) === attempt;
 }
@@ -528,7 +528,7 @@ function storeFor(chatId: string): TranscriptStore {
   return store;
 }
 
-// Read accessors. These never create a store, so an unknown agent reads as empty
+// Read accessors. These never create a store, so an unknown chat reads as empty
 // defaults rather than allocating one on a mere read.
 export function getRenderVersion(chatId: string): number {
   return storeByChat[chatId]?.renderVersion ?? 0;
@@ -554,7 +554,7 @@ export function isConversationNotFound(chatId: string): boolean {
   return notFoundChatIds.has(chatId);
 }
 
-/** Where this agent's transcript snapshot load stands; "idle" for one never attempted. */
+/** Where this chat's transcript snapshot load stands; "idle" for one never attempted. */
 export function getConversationLoadState(chatId: string): TranscriptLoadState {
   return loadStateByChat.get(chatId) ?? IDLE_LOAD_STATE;
 }
