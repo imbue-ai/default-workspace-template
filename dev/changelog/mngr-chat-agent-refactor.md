@@ -2,3 +2,6 @@ Added the chat-agent-split plan (`docs/system/blueprint/chat-agent-split/plan-ch
 
 The plan settles the vocabulary (chat versus agent, handoff versus rebind), the chat record store, chat-id addressing through the chat app, the multi-segment transcript, the durable handoff sequence with its summary contract, and the seven phases the work lands in.
 No behavior changes in this entry; it is documentation only.
+
+Revised the plan for the ground the app-launched-chats work (`gabriel/polar-toad`) changed: creates that name no account now bind the workspace's default through `.mngr/settings.local.toml`, the credential tables live in `harnesses/account_scope.py`, the re-auth restart reaches every account-labeled agent, and the auto-open reactor keys by agent id.
+Corrected phase 1 to what the template does today (a worker's report is a file the lead polls for, never a message), stamped the lead's address by id, listed the real in-workspace message senders, and pinned the messaging script's contract: registry lookup, `mngr message` exit codes including 7 for a blocked send, 503 until the chat app knows its agents, a caller-minted message id with a delivered-id ledger for at-least-once replays, and backoff only on a failed connection or 404.
