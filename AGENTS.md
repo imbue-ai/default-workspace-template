@@ -61,25 +61,15 @@ When you delegate via the `launch-task` skill, the whole delegation is **one ste
 
 Run `tk help` if you forget a command. Avoid `deps`, `links`, `types`, and `priorities` — they're backlog features the chat progress view doesn't use.
 
-# How to get started on any task:
+# Orienting before you change something
 
-Always begin your session by reading the relevant READMEs and any other related documentation in the docs/ directory of the project(s) you are working on.
-These represent *user-facing* documentation and are the most important to understand.
+The docs under `docs/` are user-facing and are the most reliable description of how this
+workspace works; read the ones covering whatever you are about to touch, and
+`docs/system/style_guide.md` before writing code in `system/`. A project's own README and the
+modules at the root of its package carry its core abstractions.
 
-Once you've read these once during a session, there's no need to re-read them unless explicitly instructed to do so.
-
-If you will be writing code, be sure to read the base style_guide.md, as well as any specific style_guide.md for the project.
-Then read all README.md files in the relevant project directories, as well as all `.py` files at the root of the project you are working on (ex: `primitives.py`, etc.).
-Also read everything in data_types, interfaces, and utils to ensure you understand the core abstractions.
-
-Then take a look at the other code directories, and based on the task, determine which files are most relevant to read in depth.
-Be sure to read the full contents from those files.
-
-Do NOT read files that end with "_test.py" during this first pass as they contain unit tests (unless you are explicitly instructed to read the unit tests).
-
-Do NOT read files that start with "test_" either, as they contain integration, acceptance, and release tests (again, unless you are explicitly instructed to read the existing tests).
-
-Only after doing all of the above should you begin writing code.
+Read as much as the change needs and no more. A request that is answered by building something
+for the user does not need a survey of the workspace's internals first.
 
 # Important commands and conventions:
 
@@ -114,66 +104,62 @@ Only after doing all of the above should you begin writing code.
 - Avoid using the `TYPE_CHECKING` guard. Do not add it to files that do not already contain it, and never put imports inside of it yourself--you MUST ask for explicit permission to do this (it's generally a sign of bad architecture that should be fixed some other way).
 - Do NOT write code in `__init__.py`--leave them completely blank (the only exception is for a line like "hookimpl = pluggy.HookimplMarker("mngr")", which should go at the very root __init__.py of a library).
 - Do NOT make constructs like module-level usage of `__all__`
-- Before finishing your response, if you have made any changes, then you must ensure that you have run ALL tests in the project(s) you modified, and that they all pass. DO NOT just run a subset of the tests! However, while iterating (e.g. fixing a failing test, developing a feature), run only the relevant tests for rapid feedback -- save the full suite for the final check.
-- To run tests for a single project: "cd system/vendor/mngr && uv run pytest", "cd system/apps/system_interface && uv run pytest", or "cd system/apps/chat && uv run pytest". Each project has its own pytest and coverage configuration in its pyproject.toml.
-- While you're iterating, you can pass "--no-cov --cov-fail-under=0" to disable coverge (slightly faster), but during your final check, you *MUST NOT* pass those flags (it will fail in CI anyway)
-- For faster iteration, add "-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'" to skip slow infrastructure tests (~30s instead of ~95s). These still run in CI. Note that you *MUST* also pass "--no-cov --cov-fail-under=0" when doing this, otherwise it will complain about a lack of coverage.
-- When running pytest with a tool or Bash tool timeout, always set `PYTEST_MAX_DURATION_SECONDS` to match the timeout (in seconds). For example, if using a 2-minute timeout: `PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`. This ensures the pytest global lock file records a deadline, allowing other pytest processes to break a stale lock if this one gets killed by the timeout.
-- Running pytest will produce files in .test_output/ (relative to the directory you ran from) for things like slow tests and coverage reports.
-- Note that "uv run pytest" defaults to running all "unit" and "integration" tests, but the "acceptance" tests also run in CI when a PR exists. Do *not* run *all* the acceptance tests locally to validate changes--let CI run them once a PR is opened (it's faster than running them locally).
-- If you need to run a specific acceptance or release test to write or fix it, iterate on that specific test locally by calling "just test <full_path>::<test_name>" from the root of the git checkout. Do this rather than re-running all tests in CI.
-- Tasks are not allowed to finish without all tests passing (in CI, if a PR exists).
-- Do NOT create a PR yourself--if a PR is needed, the user will create it.
-- To help verify that you ran the tests, report the exact command you used to run the tests, as well as the total number of tests that passed and failed (and the number that failed had better be 0).
-- If tests fail because of a lack of coverage, you should add tests for the new code that you wrote.
-- When adding tests, consider whether it should be a unit test (in a _test.py file) or an integration/acceptance/release test (in a test_*.py file, and marked with @pytest.mark.acceptance or @pytest.mark.release, no marks needed for integration).  See the style_guide.md for exact details on the types of tests. In general, most slow tests of all functionality should be release tests, and only important / core functionality should be acceptance tests.
-- Do NOT create tests for test utilities (e.g. never create `testing_test.py`). Code in `testing.py` and `conftest.py` is exercised by the tests that use it and does not need its own test file.
-- Do NOT create tests that code raises NotImplementedError.
-- If you see a flaky test, YOU MUST HIGHLIGHT THIS IN YOUR RESPONSE. Flaky tests must be fixed as soon as possible. Ideally you should finish your task, then if you are allowed to commit, commit, and try to fix the flaky test in a separate commit.
 - Do not add TODO or FIXME unless explicitly asked to do so
 - Code must work on both macOS and Linux. It's ok if it doesn't work on Windows.
-- To reiterate: code correctness and quality is the most important concern when writing code.
 
-# Ratchets
+## Tests in the vendored system projects
 
-Each project has a `test_ratchets.py` file containing automated code quality checks ("ratchets"). 
-Each ratchet tracks a count of violations for a specific anti-pattern (e.g. raising built-in exceptions, using monkeypatch.setattr). 
-The count can only stay the same or decrease -- increasing it fails the test.
+This applies to `system/vendor/mngr`, `system/apps/system_interface` and `system/apps/chat`, the
+three projects that ship with their own pytest suites. Apps and skills the user builds are covered
+by the harden pass instead.
 
-Ratchets are guidance and reminders about good code, not rules to be blindly obeyed. When a ratchet fires on your code:
+- Each project carries its own pytest and coverage configuration, so run its suite from its own
+  directory: `cd system/apps/chat && uv run pytest`.
+- Run the whole suite for a project you changed before you report it done; while iterating, run
+  only the tests you are working on.
+- `--no-cov --cov-fail-under=0` turns coverage off for a faster iteration loop. Add
+  `-m 'not tmux and not modal and not docker and not docker_sdk and not acceptance and not release'`
+  to skip the slow infrastructure tests (~30s instead of ~95s); that marker expression needs the
+  coverage flags too, or pytest reports the missing coverage as a failure. Drop both for the
+  final run.
+- Set `PYTEST_MAX_DURATION_SECONDS` to match your Bash tool timeout in seconds
+  (`PYTEST_MAX_DURATION_SECONDS=120 uv run pytest ...`). It records a deadline in pytest's global
+  lock file, so another pytest process can break the lock if this one is killed at the timeout.
+- pytest writes slow-test and coverage reports to `.test_output/`, relative to where you ran it.
+- A unit test lives in a `_test.py` file; an integration, acceptance or release test lives in a
+  `test_*.py` file and carries `@pytest.mark.acceptance` or `@pytest.mark.release`.
+  `testing.py` and `conftest.py` are exercised by the tests that use them and get no test file of
+  their own.
+- Report the command you ran and the pass/fail counts, so the run is checkable.
+- A flaky test is worth saying out loud: finish the task, commit, then fix the flakiness in its
+  own commit.
 
-1. Understand *why* the ratchet exists by reading its `rule_description`. It explains the principle behind the check.
-2. Fix the code in the spirit of the ratchet. For example, if `PREVENT_MONKEYPATCH_SETATTR` fires, a valid fix could be to use dependency injection -- not to manually save/restore the attribute with `try/finally`, which evades the regex while violating the same principle.
-3. Never evade a ratchet. Restructuring code to dodge the regex pattern while still doing the same bad thing is worse than the original violation, because it hides the problem. Common evasion patterns include splitting a statement across lines, assigning to a temporary variable before the flagged operation, or using a synonym that the regex doesn't catch.
-4. If you cannot find a fix that honors the spirit of the ratchet, **flag this to the user** rather than silently working around it. Do not use type-system escape hatches (e.g. assigning through `Any`, intermediate variables, or synonyms) to bypass a ratchet -- these are evasions even if they dodge the regex.
-5. If the ratchet is a **true misfire** -- the regex pattern matched something that is genuinely not the anti-pattern it was designed to catch (e.g. a variable name that happens to contain a flagged substring, or a string literal / comment that matches the pattern) -- then first try to update the ratchet's regex to be more specific so it no longer misfires (be extra careful not to exclude any real violations in the process). If that's not feasible, bump the ratchet count and explain the misfire to the user. This is distinct from a case where there *is* a real violation but you believe it's "justified"; justified violations are still violations and should be handled per steps 1-4 above.
+## Ratchets
 
-## Test fixture discovery
+Those same three projects carry a `test_ratchets.py` holding automated code-quality checks. Each
+ratchet counts violations of one anti-pattern, and the count may only stay the same or fall, so
+adding one fails the test.
 
-Before writing new tests, read the relevant `conftest.py` and `testing.py` files to avoid reimplementing things that already exist. 
-Test infrastructure lives in these files:
+A ratchet is a reminder of a principle, not a regex to satisfy. Its `rule_description` says what
+the principle is; fix the code in that spirit. Restructuring code to dodge the pattern while still
+doing the same thing hides the problem rather than fixing it, and that includes type-system escape
+hatches. If no fix honours the principle, say so to the user rather than working around it. If the
+pattern genuinely matched something that is not the anti-pattern, tighten the regex if you can, or
+bump the count and explain the misfire.
 
-| File pattern | Purpose |
-|---|---|
-| `conftest.py` | Pytest fixtures and hooks, scoped to the directory they're in (auto-discovered by pytest) |
-| `testing.py` | Non-fixture test utilities: factory functions, helpers, context managers (explicitly imported) |
-| `mock_*_test.py` | Concrete mock implementations of interfaces (explicitly imported) |
+## Test fixtures
 
-All fixtures must be in conftest.py, not in individual test files.
-
-# Manual verification and testing
-
-Before declaring any feature complete, manually verify it: exercise the feature exactly as a real user would, with real inputs, and critically evaluate whether it *actually does the right thing*. 
-Do not confuse "no errors" with "correct behavior" -- a command that exits 0 but produces wrong output is not working.
-
-Then crystallize the verified behavior into formal tests. 
-Assert on things that are true if and only if the feature worked correctly -- this ensures tests are both reliable and meaningful.
+Fixtures and hooks live in `conftest.py`, scoped to their directory and auto-discovered; non-fixture
+helpers and factories live in `testing.py`; mock implementations of interfaces live in
+`mock_*_test.py`. Read the relevant ones before writing a test, so you reuse what is there. All
+fixtures belong in `conftest.py` rather than in individual test files.
 
 ## Verifying interactive components with tmux
 
-For interactive components (TUIs, interactive prompts, etc.), use `tmux send-keys` and `tmux capture-pane` to manually verify them. 
-This is a special case: do NOT crystallize these into pytest tests. 
-They are inherently flaky due to timing and useless in CI, but valuable for agents to verify that interactive behavior looks right during development.
+For interactive components (TUIs, interactive prompts, and the like), drive them with `tmux
+send-keys` and read them back with `tmux capture-pane`. Keep these checks ad-hoc rather than
+committing them as pytest tests: they depend on timing, so as tests they are flaky and carry no
+signal.
 
 # Communication
 
