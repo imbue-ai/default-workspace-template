@@ -245,8 +245,8 @@ parent_type = "command"
 command = "sleep infinity"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
-# its own base type (registered by the vendored imbue-mngr-codex plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. Auto-approve
+# its own base type (registered by the vendored imbue-mngr-codex plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
 # approval_policy="never"). The codex binary is baked into the image
@@ -385,8 +385,8 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
-# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
@@ -417,7 +417,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
-# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
