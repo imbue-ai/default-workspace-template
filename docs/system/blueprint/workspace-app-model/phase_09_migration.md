@@ -44,7 +44,7 @@ The registry (`data/.state/apps.toml`) is read for the pins of apps with instanc
 ## Outputs
 
 - `data/.state/system_interface/projects.json`: `{"version": 1, "projects": [...]}`, one project per registry entry, in order, with `tabs` from the member list mapped by the table below plus every address the project's seeds dock, `shortcuts` derived as below, `name`, `color`, and `glyph` (a hand-edited entry falls back to the display defaults).
-- `data/.state/system_interface/layouts/<view>/seed.desktop.json` and `seed.mobile.json`: a layout record (`dockview`, `device_kind`, `updated_at` = the migration time) whose `dockview` is the old grid kept as dockview saved it, with each panel that maps to an address renamed to a fresh tab id (in the grid and the panel entry), its panel entry rebuilt in the frontend's current shape (`instance` content component, `custom` tab component, params `kind`, `address`, `tabId`, `lastFocusedMs` from `member_last_used.json`, the old title or custom title kept), and every other panel pruned with the shell's collapse rule.
+- `data/.state/system_interface/layouts/<view>/seed.desktop.json` and `seed.mobile.json`: a layout record (`dockview`, `tabs`, `device_kind`, `updated_at` = the migration time) whose `dockview` is the old grid kept as dockview saved it, with each panel that maps to an address renamed to a fresh tab id (in the grid, the panel entry, and the tab record), its panel entry rebuilt in the frontend's current shape (`instance` content component, `custom` tab component, params `kind`, `address`, `tabId`, the old title or custom title kept), `last_focused_ms` from `member_last_used.json`, and every other panel pruned with the shell's collapse rule.
   A view whose panels all map to nothing gets no seed.
   Everything gets seeds only.
   No per-client file is written: a first-visiting client materializes its own from the seed.
@@ -67,7 +67,7 @@ The registry (`data/.state/apps.toml`) is read for the pins of apps with instanc
 | the built-in rail rows | `(chat, new, new)`, `(terminal, new, focus)`, `(files, new, focus)`, `(browser, new, focus)`, minus the unpinned ones (`is_pinned: false` or the legacy list), each in its mode override if any |
 | `member_titles.json` terminal entries | the terminal record's `title` |
 | `member_titles.json` other entries | dropped (chats carry theirs on the agent) |
-| `member_last_used.json` | `lastFocusedMs` in the matching seed panels' params; `last_active` of the files records |
+| `member_last_used.json` | `last_focused_ms` on the matching seed tabs; `last_active` of the files records |
 | `member_locations.json` | the files records' `url` |
 | the registry's `last_active_id` | dropped; a first-visiting client lands on the first project |
 

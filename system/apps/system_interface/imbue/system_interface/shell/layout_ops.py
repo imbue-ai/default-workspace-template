@@ -17,7 +17,6 @@ from pydantic import Field
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.shell.data_types import LayoutRecord
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.dockview_document import DEFAULT_SPLIT_RATIO
 from imbue.system_interface.shell.dockview_document import Direction
 
@@ -122,11 +121,11 @@ def layout_inspect(layout: LayoutRecord | None, title_by_address: Mapping[str, s
         return {"active_panel": None, "panels": [], "tree": None}
     panel_by_id = {
         panel_id: {
-            "address": str(params.address),
-            "tab_id": str(params.tab_id),
-            "title": title_by_address.get(str(params.address)),
+            "address": str(tab.address),
+            "tab_id": str(tab.tab_id),
+            "title": title_by_address.get(str(tab.address)),
         }
-        for panel_id, params in instance_panel_params_by_id(layout.dockview).items()
+        for panel_id, tab in layout.tabs.items()
     }
     dockview = layout.dockview
     grid = dockview.get("grid", {}) or {}

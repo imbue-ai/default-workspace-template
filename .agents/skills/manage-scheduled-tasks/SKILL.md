@@ -176,10 +176,7 @@ keeps it alive across runs, and on each run clears its chat and re-sends
 `/<skill>`, so the skill runs fresh; the agent surfaces its own chat tab
 right after its first message via `system/scripts/layout.py open "app:chat?instance=$MNGR_AGENT_ID"`
 (the same way web apps are surfaced). Pass `--template <t>` only when you want a custom agent
-template; otherwise the generic `automation` template is used. The agent runs on the
-workspace's default provider account and its harness (from `.mngr/settings.local.toml`, which
-the chat app maintains); `--type <harness>` names a harness explicitly, and gets no account
-unless the default account is on that harness.
+template; otherwise the generic `automation` template is used.
 
 ## How the Caretaker is wired (the built-in example)
 

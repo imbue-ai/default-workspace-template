@@ -130,7 +130,9 @@ class ShellState(MutableModel):
         """A browser's save (contracts.md section 6): written and announced with the window's own save id, then the
         referenced-instance cleanup runs. None when the save changed nothing; raises StaleLayoutSaveError for a save
         based on an older arrangement."""
-        layout = LayoutRecord(dockview=request.dockview, device_kind=request.device_kind, updated_at=None)
+        layout = LayoutRecord(
+            dockview=request.dockview, tabs=request.tabs, device_kind=request.device_kind, updated_at=None
+        )
         saved = self.layouts.save_browser_layout(
             view_id, request.client_id, layout, request.base_updated_at, datetime.now(timezone.utc)
         )
