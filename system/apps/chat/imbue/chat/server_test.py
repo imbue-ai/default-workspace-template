@@ -57,6 +57,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import open_ws
+from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
@@ -153,13 +154,8 @@ def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: Flask
     assert create_application(build_test_state()).test_client().get("/api/chats").status_code == 503
 
     agent_manager: AgentManager = state_of(app).agent_manager
-    with agent_manager._lock:
-        agent_manager._agents["agent-primary"] = AgentStateItem(
-            id="agent-primary", name="system-services", state="RUNNING", labels={"is_primary": "true"}, work_dir=None
-        )
-        agent_manager._agents["agent-1"] = AgentStateItem(
-            id="agent-1", name="Chat-1", state="RUNNING", labels={"display_name": "Chat 1"}, work_dir=None
-        )
+    seed_agent_state(agent_manager, "agent-primary", name="system-services", labels={"is_primary": "true"})
+    seed_agent_state(agent_manager, "agent-1", name="Chat-1", labels={"display_name": "Chat 1"})
 
     response = client.get("/api/chats")
 
