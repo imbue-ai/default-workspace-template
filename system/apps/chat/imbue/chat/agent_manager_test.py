@@ -214,7 +214,7 @@ def test_resolve_agent_work_dir_returns_none_for_unknown(agent_manager: AgentMan
     assert result is None
 
 
-def test_create_chat_agent_broadcasts_proto_created(
+def test_create_chat_broadcasts_provisional_chat_created(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """The provisional_chat_created broadcast fires before the creation thread runs."""
@@ -237,7 +237,7 @@ def test_create_chat_agent_broadcasts_proto_created(
     assert proto_msg["phase"] == "creating"
 
 
-def test_create_codex_agent_broadcasts_proto_created_with_its_account(
+def test_create_codex_chat_broadcasts_provisional_chat_created_with_its_account(
     agent_manager: AgentManager,
     broadcaster: WebSocketBroadcaster,
     git_work_dir: Path,
@@ -287,7 +287,7 @@ def test_reserve_chat_mints_a_chat_awaiting_an_account(
     assert json.loads(raw) == {"type": "provisional_chat_created", **proto.model_dump(mode="json")}
 
 
-def test_create_chat_agent_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
+def test_create_chat_launches_a_reserved_chat_under_its_id_and_name(agent_manager: AgentManager) -> None:
     reserved = agent_manager.reserve_chat()
     _tracked_chat(agent_manager, "agent-2", "Chat-2", display_name="Chat 2")
 
@@ -298,7 +298,7 @@ def test_create_chat_agent_launches_a_reserved_chat_under_its_id_and_name(agent_
     assert created.display_name == reserved.display_name
 
 
-def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
             chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
@@ -310,7 +310,7 @@ def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_mana
     agent_manager.stop()
 
 
-def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_a_name_or_project_beside_a_reserved_id(agent_manager: AgentManager) -> None:
     """A chat minted earlier keeps the name and project it was minted with: a launch that names either
     is refused rather than answered with a different name than it asked for."""
     reserved = agent_manager.reserve_chat()
@@ -324,7 +324,7 @@ def test_create_chat_agent_refuses_a_name_or_project_beside_a_reserved_id(agent_
     agent_manager.stop()
 
 
-def test_create_chat_agent_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_a_message_beside_a_reserved_id(agent_manager: AgentManager) -> None:
     """A reserved chat keeps the first message it was minted with; a launch cannot reseed it."""
     reserved = agent_manager.reserve_chat(message="/welcome-tour")
     with pytest.raises(AgentCreationError, match="first message"):
@@ -371,7 +371,7 @@ def _seed_failed_chat(
     return proto
 
 
-def test_create_chat_agent_relaunches_a_failed_chat_under_its_id_and_name(
+def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
     """The page's "Try again": the failed record is launched again on its account, keeping the id
@@ -1063,7 +1063,7 @@ def _tracked_chat(manager: AgentManager, agent_id: str, name: str, display_name:
         )
 
 
-def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
+def test_rename_chat_refuses_a_chat_that_is_still_being_created(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
     """A create in flight already carries a name; renaming to another would race it.
@@ -1085,7 +1085,7 @@ def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
         manager.stop()
 
 
-def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
+def test_rename_chat_leaves_mngr_alone_for_an_untracked_id(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1101,7 +1101,7 @@ def test_rename_chat_agent_leaves_mngr_alone_for_an_untracked_id(
         manager.stop()
 
 
-def test_rename_chat_agent_raises_when_mngr_refuses(
+def test_rename_chat_raises_when_mngr_refuses(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1122,7 +1122,7 @@ def test_rename_chat_agent_raises_when_mngr_refuses(
         manager.stop()
 
 
-def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
+def test_rename_chat_rejects_a_name_already_held_by_another_chat(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1142,7 +1142,7 @@ def test_rename_chat_agent_rejects_a_name_already_held_by_another_chat(
         manager.stop()
 
 
-def test_rename_chat_agent_refuses_the_primary_agent(
+def test_rename_chat_refuses_the_primary_agent(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1159,7 +1159,7 @@ def test_rename_chat_agent_refuses_the_primary_agent(
         manager.stop()
 
 
-def test_rename_chat_agent_rejects_a_name_with_no_usable_characters(
+def test_rename_chat_rejects_a_name_with_no_usable_characters(
     broadcaster: WebSocketBroadcaster,
     false_binary: str,
 ) -> None:
@@ -1231,7 +1231,7 @@ def test_rename_failure_detail_names_a_signal_we_did_not_send() -> None:
     )
 
 
-def test_create_chat_agent_mints_the_first_free_numbered_name(
+def test_create_chat_mints_the_first_free_numbered_name(
     agent_manager: AgentManager,
 ) -> None:
     """An empty requested name allocates "Chat N" server-side, filling gaps.
@@ -1248,7 +1248,7 @@ def test_create_chat_agent_mints_the_first_free_numbered_name(
     assert created.name == "Chat-2"
 
 
-def test_create_chat_agent_counts_in_flight_creates_as_taken(
+def test_create_chat_counts_in_flight_creates_as_taken(
     agent_manager: AgentManager,
 ) -> None:
     """Two concurrent creates cannot both mint "Chat 1": an in-flight create's
@@ -1264,7 +1264,7 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
     assert created.display_name == "Chat 2"
 
 
-def test_create_chat_agent_numbers_each_harness_under_its_own_word(
+def test_create_chat_numbers_each_harness_under_its_own_word(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
@@ -1288,7 +1288,7 @@ def test_create_chat_agent_numbers_each_harness_under_its_own_word(
     assert codex.display_name == "Codex 1"
 
 
-def test_create_chat_agent_rejects_an_explicit_name_that_collides(
+def test_create_chat_rejects_an_explicit_name_that_collides(
     agent_manager: AgentManager,
 ) -> None:
     """An explicitly requested name that canonicalizes onto an existing agent's
@@ -1300,7 +1300,7 @@ def test_create_chat_agent_rejects_an_explicit_name_that_collides(
     agent_manager.stop()
 
 
-def test_create_chat_agent_registers_the_pre_observe_state_under_the_name_pair(
+def test_create_chat_registers_the_pre_observe_state_under_the_name_pair(
     broadcaster: WebSocketBroadcaster,
     git_work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
