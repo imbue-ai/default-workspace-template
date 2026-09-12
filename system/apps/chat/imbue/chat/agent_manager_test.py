@@ -868,6 +868,21 @@ def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None
     assert templates == ["chat"]
 
 
+def test_chat_create_argv_names_the_chat_in_the_agents_environment() -> None:
+    """Every agent the app creates carries its chat's id as ``MINDS_CHAT_ID``, which is how a
+    skill or script inside the workspace addresses the chat rather than the agent."""
+    argv = _build_chat_create_command(
+        mngr_binary="mngr",
+        name="demo",
+        chat_id=ChatId("agent-123"),
+        agent_id="agent-123",
+        primary_labels={},
+        harness=HarnessType.CLAUDE,
+    )
+    env_values = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--env"]
+    assert "MINDS_CHAT_ID=agent-123" in env_values
+
+
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
     """The codex harness reuses the chat role verbatim; only the `--type` differs."""
     argv = _build_chat_create_command(
