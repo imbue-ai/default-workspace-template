@@ -27,6 +27,7 @@ from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
+from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_HOME_RELATIVE_PATH
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
@@ -833,6 +834,32 @@ def test_set_model_switch_sends_claude_commands(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert messenger.sent == [(agent_id, "/model sonnet[1m]"), (agent_id, "/effort high")]
+
+
+def test_set_model_switches_antigravity_through_per_agent_settings(tmp_path: Path) -> None:
+    agent_id = "agent-00000000000000000000000000000014"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.ANTIGRAVITY)
+    manager, _messenger = _manager_with_resolver(agent_info)
+    settings_path = (
+        agent_info.agent_state_dir / ANTIGRAVITY_HOME_RELATIVE_PATH / ".gemini" / "antigravity-cli" / "settings.json"
+    )
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"colorScheme": "dark"}))
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    with patch("imbue.chat.server._find_agent", return_value=agent_info):
+        response = client.post(
+            f"/api/agents/{agent_id}/model",
+            json={
+                "model_id": "gemini-3.7-flash",
+                "effort": "high",
+                "fast": False,
+                "axes": ["model", "effort"],
+            },
+        )
+
+    assert response.status_code == 200
+    assert json.loads(settings_path.read_text()) == {"colorScheme": "dark", "model": "Gemini 3.7 Flash (High)"}
 
 
 def test_set_model_rejects_unknown_model(tmp_path: Path) -> None:
