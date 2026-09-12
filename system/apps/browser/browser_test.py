@@ -25,7 +25,7 @@ from mock_cdp_client_test import NavigatingCdpClient
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent`` in tests: skip the real ``mngr message`` subprocess."""
+    """Stand-in for ``_wake_agent`` in tests: skip the real ``message_chat.py`` subprocess."""
 
 
 def _running_browser(browser_id: str) -> bsession.LiveBrowser:
