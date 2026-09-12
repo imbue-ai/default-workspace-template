@@ -1580,8 +1580,6 @@ def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
         (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
     )
 
-    # A dash-initial reply must reach the messenger as one bound token: given as a
-    # separate `-m` value, its argparse would read it as an option and refuse it.
     rc = create_worker_mod.reply(
         task_file=task, message="-continue", message_file=None, name=None, runner=runner
     )
