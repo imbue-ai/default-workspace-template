@@ -36,7 +36,8 @@ Five subcommands cover the lead-side lifecycle:
     Sends the lead's answer to a worker's gate (or any nudge) to the worker's
     chat, through the chat app (``system/scripts/message_chat.py``), addressed
     by the ``worker_agent_id`` that ``launch`` stamped into the task file. A
-    task file from before that stamp falls back to ``mngr message --name``.
+    task file from before that stamp is reached by ``mngr message <name>``
+    instead, with the worker's name given through ``reply --name``.
 
 ``destroy``
     Destroys the worker agent (``mngr destroy <name> --force``). The git branch
