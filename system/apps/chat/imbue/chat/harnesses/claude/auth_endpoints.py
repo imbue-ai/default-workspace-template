@@ -6,7 +6,7 @@ the modal-specific logic. The status route reads the `ClaudeAuthService`
 submit route hands the pasted credential to the `AuthFlowService`, which
 adopts it as an account. Both are created once in
 `main.build_production_state` (or by the test state builder) and stored
-on the app's `ChatState`, which each handler reads via `get_state()`.
+on the app's `ChatAppState`, which each handler reads via `get_state()`.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ def register_routes(application: Flask) -> None:
     """Wire `/api/claude-auth/*` endpoints onto the Flask application.
 
     The handlers read the `ClaudeAuthService` from the
-    app's `ChatState`; `main.build_production_state` (or the test state
+    app's `ChatAppState`; `main.build_production_state` (or the test state
     builder) places them there before the app serves requests.
     """
     application.add_url_rule("/api/claude-auth/status", view_func=get_status, methods=["GET"])

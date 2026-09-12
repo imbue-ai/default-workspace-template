@@ -6,10 +6,10 @@ thread finishes. Every endpoint the freshly opened panel calls resolves the
 agent through that registry, so the panel's first ``/events`` fetch 404s and
 latches into the "No conversation data" view.
 
-The ``proto_agent_created`` broadcast normally covers that window with the
+The ``provisional_chat_created`` broadcast normally covers that window with the
 "Starting the chat" page, but it is a transient edge event: the frontend holds
-the provisional chat only between ``proto_agent_created`` and
-``proto_agent_completed``, so any delivery lag longer than the creation itself
+the provisional chat only between ``provisional_chat_created`` and
+``provisional_chat_completed``, so any delivery lag longer than the creation itself
 leaves no render in which the cover is up. These tests pin the two ways that
 happens -- the event missing the window entirely, and the pair arriving
 back-to-back -- and assert the panel recovers on its own once the agent
@@ -38,6 +38,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChat
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
@@ -83,14 +84,14 @@ _RECOVERY_TIMEOUT_MS = 20000
 
 
 class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
-    """Withholds ``proto_agent_created`` so the "Starting the chat" cover never engages.
+    """Withholds ``provisional_chat_created`` so the "Starting the chat" cover never engages.
 
     ``release_on_completion`` chooses which delivery pathology is modelled: when
     False the event is dropped outright (the socket was down for the whole
     creation window), and when True it is flushed immediately ahead of
-    ``proto_agent_completed`` (a handler thread that fell more than one creation
+    ``provisional_chat_completed`` (a handler thread that fell more than one creation
     window behind). Both leave the frontend without a render in which the proto
-    agent is present. Every other broadcast, including ``agents_updated``, goes
+    agent is present. Every other broadcast, including ``chats_updated``, goes
     out untouched.
     """
 
@@ -100,17 +101,17 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
     _withheld: list[Callable[[], None]] = []
     _release_on_completion: bool = False
 
-    def broadcast_proto_agent_created(self, proto: ProvisionalChat) -> None:
+    def broadcast_provisional_chat_created(self, proto: ProvisionalChat) -> None:
         def send() -> None:
-            WebSocketBroadcaster.broadcast_proto_agent_created(self, proto)
+            WebSocketBroadcaster.broadcast_provisional_chat_created(self, proto)
 
         if type(self)._release_on_completion:
             type(self)._withheld.append(send)
 
-    def broadcast_proto_agent_completed(self, agent_id: str, success: bool, error: str | None) -> None:
+    def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
         while type(self)._withheld:
             type(self)._withheld.pop(0)()
-        WebSocketBroadcaster.broadcast_proto_agent_completed(self, agent_id=agent_id, success=success, error=error)
+        WebSocketBroadcaster.broadcast_provisional_chat_completed(self, chat_id=chat_id, success=success, error=error)
 
 
 class _ReplayHidingAgentManager(AgentManager):
@@ -123,7 +124,7 @@ class _ReplayHidingAgentManager(AgentManager):
     finished, or that fell a whole creation window behind -- so the replay is what they hide.
     """
 
-    def get_proto_agents(self) -> list[ProvisionalChat]:
+    def get_provisional_chats(self) -> list[ProvisionalChat]:
         return []
 
 
@@ -243,10 +244,10 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
 ) -> None:
     """A panel that 404s its first events fetch reloads itself once the agent registers.
 
-    With ``proto_agent_created`` dropped, nothing covers the creation window: the
+    With ``provisional_chat_created`` dropped, nothing covers the creation window: the
     panel 404s, shows "No conversation data", and is the state the user is stuck
     in today. It must leave that state on its own -- no reload, no tab switch --
-    once ``agents_updated`` names the agent.
+    once ``chats_updated`` names the agent.
     """
     with _serving_workspace(tmp_path, monkeypatch, port=free_port(), release_on_completion=False) as base_url:
         # The create minted the first free "Chat N" display name the moment it returned; the
@@ -267,7 +268,7 @@ def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
 ) -> None:
     """Recovery does not depend on the proto-agent events being observed separately.
 
-    ``proto_agent_created`` and ``proto_agent_completed`` are delivered
+    ``provisional_chat_created`` and ``provisional_chat_completed`` are delivered
     back-to-back here, which is what a client draining a backlog sees. The
     frontend adds and drops the proto agent inside a single redraw, so the build
     log never renders and the panel is left on the 404 -- the panel must still

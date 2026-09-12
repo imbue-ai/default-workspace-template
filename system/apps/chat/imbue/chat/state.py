@@ -21,20 +21,20 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
 
-# Key under which the single ChatState is stored on ``app.config`` so handlers can fetch it
+# Key under which the single ChatAppState is stored on ``app.config`` so handlers can fetch it
 # via ``get_state()``.
-_STATE_CONFIG_KEY = "CHAT_STATE"
+_STATE_CONFIG_KEY = "CHAT_APP_STATE"
 
 
-class ChatStateError(RuntimeError):
-    """Raised when the ChatState is not attached to a Flask app."""
+class ChatAppStateError(RuntimeError):
+    """Raised when the ChatAppState is not attached to a Flask app."""
 
 
 # The frontend build's output, inside the package: what the chat routes serve in production.
 DEFAULT_STATIC_DIRECTORY = Path(__file__).parent / "static"
 
 
-class ChatState(MutableModel):
+class ChatAppState(MutableModel):
     """Holds every shared service handle and config for one chat app.
 
     Built once in ``main.build_production_state`` (or by a test) and stored on the Flask
@@ -183,21 +183,21 @@ class ChatState(MutableModel):
             logger.debug("Skipped closing latchkey http client during shutdown: {}", e)
 
 
-def attach_state(app: Flask, state: ChatState) -> None:
+def attach_state(app: Flask, state: ChatAppState) -> None:
     app.config[_STATE_CONFIG_KEY] = state
 
 
-def get_state() -> ChatState:
-    """Return the ChatState for the current Flask app."""
+def get_state() -> ChatAppState:
+    """Return the ChatAppState for the current Flask app."""
     state = current_app.config.get(_STATE_CONFIG_KEY)
-    if not isinstance(state, ChatState):
-        raise ChatStateError("ChatState is not attached to the current app")
+    if not isinstance(state, ChatAppState):
+        raise ChatAppStateError("ChatAppState is not attached to the current app")
     return state
 
 
-def state_of(app: Flask) -> ChatState:
-    """Return the ChatState attached to ``app`` without needing an app context."""
+def state_of(app: Flask) -> ChatAppState:
+    """Return the ChatAppState attached to ``app`` without needing an app context."""
     state = app.config.get(_STATE_CONFIG_KEY)
-    if not isinstance(state, ChatState):
-        raise ChatStateError("ChatState is not attached to the app")
+    if not isinstance(state, ChatAppState):
+        raise ChatAppStateError("ChatAppState is not attached to the app")
     return state

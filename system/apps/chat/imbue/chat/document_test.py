@@ -11,18 +11,19 @@ from app_instances.testing import free_port
 from app_instances.testing import wait_until
 from flask.testing import FlaskClient
 
-from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.documents import CHAT_AGENT_ID_META_NAME
+from imbue.chat.documents import CHAT_ID_META_NAME
 from imbue.chat.documents import CHAT_SESSION_ID_META_NAME
 from imbue.chat.documents import FRONTEND_BUILT_HEADER
 from imbue.chat.documents import TERMINAL_LABEL_META_NAME
 from imbue.chat.models import SendMessageRequest
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import _record_client_message_activity
 from imbue.chat.server import client_activity_report
 from imbue.chat.server import create_application
 from imbue.chat.server import is_client_activity_reportable
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.testing import RecordingClientActivityShell
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import seed_agent_state
@@ -33,7 +34,7 @@ def _agent_id() -> str:
     return f"agent-{uuid4().hex}"
 
 
-def _state_with_chat(static_directory: Path, chat_id: str) -> tuple[ChatState, AgentManager]:
+def _state_with_chat(static_directory: Path, chat_id: str) -> tuple[ChatAppState, AgentManager]:
     manager = AgentManager.build(WebSocketBroadcaster())
     seed_agent_state(manager, chat_id, name="Chat-1", labels={"display_name": "Chat 1"})
     manager.note_agent_list_known()
@@ -62,21 +63,31 @@ def test_the_chat_page_carries_the_chats_identity(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "true"
     assert response.headers["Cache-Control"] == "no-store"
-    assert f'<meta name="{CHAT_AGENT_ID_META_NAME}" content="{chat_id}">' in response.text
+    assert f'<meta name="{CHAT_ID_META_NAME}" content="{chat_id}">' in response.text
+    assert f'<meta name="{CHAT_AGENT_ID_META_NAME}" content="">' in response.text
     assert f'<meta name="{CHAT_SESSION_ID_META_NAME}" content="">' in response.text
     assert "chat</body>" in response.text
 
 
-def test_a_subagent_page_names_its_session(tmp_path: Path) -> None:
+def test_a_subagent_page_names_its_chat_agent_and_session(tmp_path: Path) -> None:
     chat_id = _agent_id()
     client, _ = _client(tmp_path, chat_id)
     session_id = uuid4().hex
 
-    response = client.get(f"/{chat_id}.{session_id}")
+    response = client.get(f"/{chat_id}.{chat_id}.{session_id}")
 
     assert response.status_code == 200
+    assert f'<meta name="{CHAT_ID_META_NAME}" content="{chat_id}">' in response.text
     assert f'<meta name="{CHAT_AGENT_ID_META_NAME}" content="{chat_id}">' in response.text
     assert f'<meta name="{CHAT_SESSION_ID_META_NAME}" content="{session_id}">' in response.text
+
+
+def test_a_two_part_key_is_not_a_page(tmp_path: Path) -> None:
+    """The pre-split subagent key shape (``<chat>.<session>``) names nothing now."""
+    chat_id = _agent_id()
+    client, _ = _client(tmp_path, chat_id)
+
+    assert client.get(f"/{chat_id}.{uuid4().hex}").status_code == 404
 
 
 def test_the_chat_page_carries_the_terminal_apps_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,11 +167,11 @@ def test_a_subagent_create_answers_the_record_and_nudges(tmp_path: Path) -> None
     )
 
     assert response.status_code == 201
-    assert response.get_json()["instance"]["key"] == f"{chat_id}.{session_id}"
+    assert response.get_json()["instance"]["key"] == f"{chat_id}.{chat_id}.{session_id}"
     assert response.get_json()["instance"]["title"] == "Subagent: Docs"
     assert nudger.nudge_count == 1
     listed = client.get("/_instances").get_json()["instances"]
-    assert [record["key"] for record in listed] == [chat_id, f"{chat_id}.{session_id}"]
+    assert [record["key"] for record in listed] == [chat_id, f"{chat_id}.{chat_id}.{session_id}"]
 
 
 def test_a_location_report_is_refused_for_the_chat(tmp_path: Path) -> None:
@@ -170,10 +181,8 @@ def test_a_location_report_is_refused_for_the_chat(tmp_path: Path) -> None:
     assert response.status_code == 400
 
 
-def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path: Path) -> None:
-    agent_info = AgentInfo(
-        id="agent-1", name="alice", state="RUNNING", agent_state_dir=tmp_path, claude_config_dir=tmp_path
-    )
+def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view() -> None:
+    chat_id = ChatId("agent-1")
     framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
     assert is_client_activity_reportable(framed)
     assert not is_client_activity_reportable(SendMessageRequest(message="hello", client_id="c1"))
@@ -182,7 +191,7 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path:
     assert not is_client_activity_reportable(
         SendMessageRequest(message="hello", client_id="c1", active_layout="alpha")
     )
-    assert client_activity_report(agent_info, framed) == {
+    assert client_activity_report(chat_id, framed) == {
         "client_id": "c1",
         "device_kind": "desktop",
         "view_id": "alpha",
@@ -193,17 +202,13 @@ def test_a_send_is_reported_to_the_shell_only_with_a_client_and_a_view(tmp_path:
     }
 
 
-def test_a_framed_send_is_posted_to_the_shells_client_activity_route(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    agent_info = AgentInfo(
-        id="agent-1", name="alice", state="RUNNING", agent_state_dir=tmp_path, claude_config_dir=tmp_path
-    )
+def test_a_framed_send_is_posted_to_the_shells_client_activity_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    chat_id = ChatId("agent-1")
     framed = SendMessageRequest(message="hello", client_id="c1", active_layout="alpha", device_kind="desktop")
     shell = RecordingClientActivityShell()
     port = free_port()
     with serve_in_background(LOOPBACK_HOST, port, shell.application):
         monkeypatch.setenv("MINDS_WORKSPACE_SERVER_URL", f"http://{LOOPBACK_HOST}:{port}")
-        _record_client_message_activity(agent_info, SendMessageRequest(message="unframed"))
-        _record_client_message_activity(agent_info, framed)
-        assert wait_until(lambda: shell.received == [client_activity_report(agent_info, framed)], timeout_seconds=5.0)
+        _record_client_message_activity(chat_id, SendMessageRequest(message="unframed"))
+        _record_client_message_activity(chat_id, framed)
+        assert wait_until(lambda: shell.received == [client_activity_report(chat_id, framed)], timeout_seconds=5.0)

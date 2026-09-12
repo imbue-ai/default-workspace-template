@@ -48,7 +48,7 @@ _ENV_GATEWAY_PERMISSIONS_OVERRIDE = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
 _HEADER_PASSWORD = "X-Latchkey-Gateway-Password"
 _HEADER_PERMISSIONS_OVERRIDE = "X-Latchkey-Gateway-Permissions-Override"
 
-# Per-service catalog responses are cached (on the app's ``ChatState``)
+# Per-service catalog responses are cached (on the app's ``ChatAppState``)
 # keyed by service name; ``None`` records a 404 so a non-service scope-prefix
 # isn't re-requested.
 ServiceCatalog = tuple[dict[str, Any], ...]

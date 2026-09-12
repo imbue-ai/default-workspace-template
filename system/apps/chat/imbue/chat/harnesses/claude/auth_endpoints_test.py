@@ -2,7 +2,7 @@
 
 Each test builds a `ClaudeAuthService` with
 deterministic fakes and passes them to `create_application`, which stores
-them on the app's `ChatState` for the handlers to read. This
+them on the app's `ChatAppState` for the handlers to read. This
 exercises the auth-success chokepoint end-to-end through the Flask test
 client without touching real Claude binaries or session transcripts -- and
 without `unittest.mock` or runtime attribute patching.

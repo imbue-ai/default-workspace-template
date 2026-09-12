@@ -33,7 +33,7 @@ from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.message_stamps import DEFAULT_STAMPS_PATH
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
@@ -89,13 +89,13 @@ def build_production_state(
     provider_names: tuple[str, ...] | None = None,
     include_filters: tuple[str, ...] = (),
     exclude_filters: tuple[str, ...] = (),
-) -> ChatState:
+) -> ChatAppState:
     """Construct the real object graph -- the composition root.
 
     This is the single place the production collaborators are wired together.
     It builds but does not start the agent manager (``main`` starts it once the
     app is assembled), so it spawns no ``mngr observe`` pipeline by itself.
-    Tests do not use this; they build a ``ChatState`` with fakes via
+    Tests do not use this; they build a ``ChatAppState`` with fakes via
     ``testing.build_test_state``.
     """
     broadcaster = WebSocketBroadcaster()
@@ -113,7 +113,7 @@ def build_production_state(
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         config=config,
         provider_names=provider_names,
         include_filters=include_filters,
