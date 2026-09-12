@@ -298,7 +298,6 @@ def _read_message(
     if args.message_file is not None:
         return Path(args.message_file).read_text(encoding="utf-8")
     if stdin.isatty():
-        # A usage error like any other argparse rejection: usage line, reason, exit 2.
         parser.error(
             "no message given (use -m, --message-file, or pipe the text on stdin)"
         )
