@@ -326,21 +326,20 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     if frontmatter is None:
         return None
     current = frontmatter.get(_LEAD_AGENT_FIELD)
+    stamped = text
     lead_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
     if lead_work_dir and frontmatter.get(_LEAD_WORK_DIR_FIELD) != lead_work_dir:
-        text = _set_frontmatter_field(text, _LEAD_WORK_DIR_FIELD, lead_work_dir)
-        task_file.write_text(text, encoding="utf-8")
+        stamped = _set_frontmatter_field(stamped, _LEAD_WORK_DIR_FIELD, lead_work_dir)
     lead_id = os.environ.get("MNGR_AGENT_ID")
-    if lead_id:
-        if current == lead_id:
-            return None
-        task_file.write_text(
-            _set_frontmatter_field(text, _LEAD_AGENT_FIELD, lead_id), encoding="utf-8"
-        )
+    if lead_id and current != lead_id:
+        stamped = _set_frontmatter_field(stamped, _LEAD_AGENT_FIELD, lead_id)
         print(
             f"create_worker: set {_LEAD_AGENT_FIELD} to {lead_id!r} (was {current!r})",
             file=sys.stderr,
         )
+    if stamped != text:
+        task_file.write_text(stamped, encoding="utf-8")
+    if lead_id:
         return None
     # No launcher identity in the environment: fall back to the file's own value.
     resolved = isinstance(current, str) and current.strip() and "$" not in current
