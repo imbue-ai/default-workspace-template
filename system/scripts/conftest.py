@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import socket
 import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -426,6 +427,11 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
         body_length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(body_length) or b"{}")
         server.posted.append((self.path, body))
+        if server.drop_connections:
+            # The request was taken; the socket closes with no answer at all.
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
         # The last scripted answer repeats, so a test scripts only the transitions it is about.
         status, answer_body = (
             server.answers.pop(0) if len(server.answers) > 1 else server.answers[0]
@@ -443,11 +449,13 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
 
     ``server.answers`` is the sequence of ``(status, body)`` the send route gives, the last one
-    repeating; ``server.posted`` is every ``(path, body)`` it received.
+    repeating; ``server.posted`` is every ``(path, body)`` it received; ``server.drop_connections``
+    makes it read each request and then close the connection without answering.
     """
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
     server.posted = []
+    server.drop_connections = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     registry = tmp_path / "apps.toml"
