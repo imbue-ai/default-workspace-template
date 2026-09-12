@@ -629,8 +629,8 @@ class AgentManager:
         )
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
-        # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
-        # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
+        # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
+        # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
             resolve_pid=lambda chat_id: lookup_pid_by_agent_id(first_agent_id_of_chat(chat_id)),
