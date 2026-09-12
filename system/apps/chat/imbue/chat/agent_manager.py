@@ -1314,8 +1314,8 @@ class AgentManager:
                 "a launch cannot rename, refile, or reseed it"
             )
 
-        # Name resolution and proto registration happen under one lock hold, so a
-        # concurrent create sees this one's name as taken (and vice versa).
+        # Name resolution and the provisional record's registration happen under one lock
+        # hold, so a concurrent create sees this one's name as taken (and vice versa).
         with self._lock:
             work_dir = self._resolve_agent_work_dir(self._own_agent_id)
             if work_dir is None:
@@ -1365,11 +1365,11 @@ class AgentManager:
         # rail's shortcut counts the same.
         #
         # Best-effort, and deliberately so: the mru is a convenience, not an input to
-        # correctness. It runs AFTER the proto agent is registered and outside the try that
-        # converts AccountError above, so an account deleted in this window would otherwise
-        # escape as a 500 before the creation thread starts -- leaving a proto entry nothing
-        # ever pops, its name burned forever and every new socket replaying a chat stuck at
-        # "creating".
+        # correctness. It runs AFTER the provisional chat is registered and outside the try
+        # that converts AccountError above, so an account deleted in this window would
+        # otherwise escape as a 500 before the creation thread starts -- leaving a provisional
+        # record nothing ever pops, its name burned forever and every new socket replaying a
+        # chat stuck at "creating".
         try:
             set_mru(account.id)
         except AccountError as e:

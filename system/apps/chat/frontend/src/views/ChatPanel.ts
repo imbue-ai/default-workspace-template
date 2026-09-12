@@ -85,12 +85,12 @@ function getChatTerminalUrl(chatId: string): string {
 }
 
 /** The provisional record of a chat that is not an agent yet, or null once the app lists it
- *  as one. The proto list is rebuilt from pushes and can still name an agent that has since
+ *  as one. The provisional list is rebuilt from pushes and can still name an agent that has since
  *  registered (a `provisional_chat_created` for a finished creation, delivered late), so the
  *  chat list wins: every branch asks this, so none can show a registered chat as provisional. */
 function provisionalRecord(chatId: string): ProvisionalChat | null {
-  const proto = getProvisionalChat(chatId);
-  return proto !== undefined && getChatById(chatId) === undefined ? proto : null;
+  const provisional = getProvisionalChat(chatId);
+  return provisional !== undefined && getChatById(chatId) === undefined ? provisional : null;
 }
 
 /** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
@@ -98,8 +98,8 @@ function provisionalRecord(chatId: string): ProvisionalChat | null {
  *  returned to the composer with the reason, and a send there is refused with it). Only a chat
  *  still waiting for an account has nothing to type into. */
 function hasComposer(chatId: string): boolean {
-  const proto = provisionalRecord(chatId);
-  return proto === null || proto.phase !== "awaiting_account";
+  const provisional = provisionalRecord(chatId);
+  return provisional === null || provisional.phase !== "awaiting_account";
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
@@ -311,15 +311,15 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
-  function renderProvisional(chatId: string, proto: ProvisionalChat): m.Vnode {
-    if (proto.phase === "creating") {
+  function renderProvisional(chatId: string, provisional: ProvisionalChat): m.Vnode {
+    if (provisional.phase === "creating") {
       // The create is running, whoever started it: a refusal this page recorded while the
       // chat waited (another page's launch won the race) is over, and must not be shown
       // under a later failure's own reason.
       launchError = null;
       return renderStarting(chatId);
     }
-    if (proto.phase === "awaiting_account") {
+    if (provisional.phase === "awaiting_account") {
       // The account list decides between launching and offering the chooser, so neither
       // happens before it has loaded: a record replayed ahead of the accounts response would
       // otherwise open the chooser only to close it a redraw later.
@@ -390,16 +390,16 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
-        m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, proto.error ?? "mngr create failed"),
+        m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, provisional.error ?? "mngr create failed"),
         launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
-        proto.account_id !== ""
+        provisional.account_id !== ""
           ? m(
               Button,
               {
                 variant: "primary",
                 extra: "message-list-create-retry",
                 readonly: launchInFlight,
-                onclick: () => launch(chatId, proto.account_id),
+                onclick: () => launch(chatId, provisional.account_id),
               },
               launchInFlight ? "Starting…" : "Try again",
             )
@@ -510,9 +510,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
     // not-found until the agent registers, which retries it (retryAfterChatResolved).
-    const proto = provisionalRecord(chatId);
-    if (proto !== null) {
-      return renderProvisional(chatId, proto);
+    const provisional = provisionalRecord(chatId);
+    if (provisional !== null) {
+      return renderProvisional(chatId, provisional);
     }
 
     ensureChatLoaded(chatId);

@@ -113,7 +113,7 @@ let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
 // The ids of the provisional chats a (re)connect's replay has carried so far, while the replay
 // is in flight: from the socket opening to the agent list that ends it. Null otherwise.
-let replayedProtoIds: Set<string> | null = null;
+let replayedProvisionalIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
@@ -137,7 +137,7 @@ function connect(): void {
     reconnectBackoff.reset();
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
-    replayedProtoIds = new Set();
+    replayedProvisionalIds = new Set();
     lastChatsSerialized = "";
     m.redraw();
   };
@@ -191,12 +191,12 @@ function handleEvent(event: WsEvent): void {
       const registeredIds = new Set(chats.map((c) => c.chat_id));
       provisionalChats = provisionalChats.filter((p) => !registeredIds.has(p.chat_id));
       for (const chatId of registeredIds) settleRegistration(chatId, null);
-      if (replayedProtoIds !== null) {
+      if (replayedProvisionalIds !== null) {
         // The list ends a (re)connect's replay. A record the app did not replay is one it no
         // longer holds (it restarted while the create ran), so no push is coming for it: the
         // record goes, and a send held for it proceeds to report the backend's refusal.
-        const replayed = replayedProtoIds;
-        replayedProtoIds = null;
+        const replayed = replayedProvisionalIds;
+        replayedProvisionalIds = null;
         provisionalChats = provisionalChats.filter((p) => replayed.has(p.chat_id));
         for (const chatId of [...registrationWaiters.keys()]) {
           if (getProvisionalChat(chatId) === undefined) settleRegistration(chatId, null);
@@ -221,11 +221,11 @@ function handleEvent(event: WsEvent): void {
       // the backend pushes the whole record again. A reconnect replays every provisional chat
       // this way too, so a failed record seen here settles a send held for it as the
       // completion message would have.
-      const { type: _type, ...proto } = event;
-      provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== proto.chat_id), proto];
-      replayedProtoIds?.add(proto.chat_id);
-      if (proto.phase === "failed") {
-        settleRegistration(proto.chat_id, new Error(proto.error ?? "The chat could not be started"));
+      const { type: _type, ...provisional } = event;
+      provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== provisional.chat_id), provisional];
+      replayedProvisionalIds?.add(provisional.chat_id);
+      if (provisional.phase === "failed") {
+        settleRegistration(provisional.chat_id, new Error(provisional.error ?? "The chat could not be started"));
       }
       break;
     }
@@ -271,9 +271,11 @@ function settleRegistration(chatId: string, error: Error | null): void {
  * reconnect's replay turns out not to carry the chat's record any more.
  */
 export function whenChatRegistered(chatId: string): Promise<void> {
-  const proto = getProvisionalChat(chatId);
-  if (getChatById(chatId) !== undefined || proto === undefined) return Promise.resolve();
-  if (proto.phase === "failed") return Promise.reject(new Error(proto.error ?? "The chat could not be started"));
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
+  if (provisional.phase === "failed") {
+    return Promise.reject(new Error(provisional.error ?? "The chat could not be started"));
+  }
   return new Promise((resolve, reject) => {
     const waiters = registrationWaiters.get(chatId) ?? [];
     waiters.push({ resolve, reject });
