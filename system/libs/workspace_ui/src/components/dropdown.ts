@@ -18,7 +18,7 @@
 import m from "mithril";
 
 import { icon } from "./icons";
-import { menuCardClass } from "./menu";
+import { MENU_ROW_FOCUS, MENU_ROW_SLAB, menuCardClass } from "./menu";
 import { placeMenu, type MenuAnchor } from "../menu-position";
 import { Portal } from "../portal";
 
@@ -63,11 +63,9 @@ const CARET_OPEN_CLASS = "rotate-180";
 const SHEET_CLASS = "dropdown-sheet fixed inset-0 z-(--z-popover) cursor-default";
 /** The list wears the shared floating-card chrome and scrolls past eight or so rows. */
 const LIST_CLASS = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
-/** The shared menu row shape, minus its hover: the picked row keeps its steady accent fill, so
- *  only the idle variant hovers. */
-const OPTION_CLASS =
-  "flex h-8 cursor-pointer items-center justify-between gap-3 mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2 text-left " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+/** The shared menu row shape -- the menu's own slab and focus ring -- minus its hover: the
+ *  picked row keeps its steady accent fill, so only the idle variant hovers. */
+const OPTION_CLASS = `flex h-8 cursor-pointer items-center justify-between gap-3 ${MENU_ROW_SLAB} text-left ${MENU_ROW_FOCUS}`;
 const OPTION_IDLE_CLASS = "hover:bg-fill-hover";
 const OPTION_PICKED_CLASS = "bg-accent-light";
 const OPTION_LABEL_CLASS = "truncate type-body";

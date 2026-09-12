@@ -395,7 +395,11 @@ function closeTabMenu(): void {
  * Open a tab's kebab menu against ``anchor``. Pressing the kebab again while the menu is up
  * lands on the menu's own sheet, which is what closes it.
  */
-function openTabMenuAt(anchor: MenuAnchor, entries: readonly TabMenuEntry[], onClosed: () => void): void {
+function openTabMenuAt(
+  anchor: MenuAnchor | HTMLElement,
+  entries: readonly TabMenuEntry[],
+  onClosed: () => void,
+): void {
   closeTabMenu();
   tabMenuRows = entries.map((entry) =>
     entry === TAB_MENU_DIVIDER
@@ -738,7 +742,7 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 
       // A launcher tab is a question about this pane, not an instance: it carries only the hide.
       if (!isLauncher) {
-        const openMenu = (anchor: MenuAnchor): void => {
+        const openMenu = (anchor: MenuAnchor | HTMLElement): void => {
           if (isMenuOpen) {
             closeTabMenu();
             return;
@@ -750,8 +754,10 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
             updateActionsVisibility();
           });
         };
+        // The element rather than its box, so a window resize re-measures the kebab and the
+        // menu follows the tab.
         const menuButton = createTabActionButton("Tab options", "kebab", disposables, () => {
-          openMenu(menuButton.getBoundingClientRect());
+          openMenu(menuButton);
         });
         actions.appendChild(menuButton);
         element.addEventListener("contextmenu", (event: MouseEvent) => {

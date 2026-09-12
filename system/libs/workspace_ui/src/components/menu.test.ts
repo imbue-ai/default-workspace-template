@@ -10,6 +10,20 @@ import { createMenu, MENU_PART_ATTR, MENU_ROW_ATTR, type Menu, type MenuRow } fr
 
 const ANCHOR = { left: 100, right: 140, top: 100, bottom: 120, width: 40 };
 
+function fakeRect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
 function part(name: string): HTMLElement | null {
   return document.body.querySelector<HTMLElement>(`[${MENU_PART_ATTR}="${name}"]`);
 }
@@ -131,6 +145,54 @@ describe("a menu", () => {
     m.render(host, null);
   });
 
+  it("wears a scroll of its own, for a row list taller than the window", () => {
+    menu.open(ANCHOR);
+    expect(part("menu")!.className).toContain("overflow-y-auto");
+    expect(part("menu")!.className).toContain("max-h-");
+  });
+
+  it("seats trailing content beside the row's button, never inside it", () => {
+    const picked = vi.fn();
+    const edited = vi.fn();
+    rows = [
+      {
+        kind: "action",
+        key: "go",
+        label: "Go",
+        onSelect: picked,
+        trailing: m("button", { type: "button", class: "probe-edit", onclick: edited }),
+      },
+    ];
+    menu.open(ANCHOR);
+    const rowButton = row("go").querySelector<HTMLElement>('[role="menuitem"]')!;
+    expect(rowButton.querySelector("button")).toBeNull();
+    expect(rowButton.textContent).toBe("Go");
+    // The trailing button acts alone: no row pick, and the menu stays up.
+    row("go").querySelector<HTMLElement>(".probe-edit")!.click();
+    expect(edited).toHaveBeenCalledTimes(1);
+    expect(picked).not.toHaveBeenCalled();
+    expect(menu.isOpen()).toBe(true);
+    rowButton.click();
+    expect(picked).toHaveBeenCalledTimes(1);
+    expect(menu.isOpen()).toBe(false);
+  });
+
+  it("follows its anchor element when the window resizes", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    let rect = fakeRect(50, 40, 40, 20);
+    trigger.getBoundingClientRect = () => rect;
+    menu.open(trigger);
+    expect(part("menu")!.style.left).toBe("50px");
+    expect(part("menu")!.style.top).toBe("64px");
+    rect = fakeRect(200, 80, 40, 20);
+    window.dispatchEvent(new Event("resize"));
+    expect(menu.isOpen()).toBe(true);
+    expect(part("menu")!.style.left).toBe("200px");
+    expect(part("menu")!.style.top).toBe("104px");
+    trigger.remove();
+  });
+
   it("tells the caller when it opens and closes", () => {
     const opened = vi.fn();
     const closed = vi.fn();
@@ -225,6 +287,59 @@ describe("a submenu", () => {
     expect(part("submenu")).toBeNull();
   });
 
+  it("does not open for a row the pointer has already moved on from", () => {
+    menu.open(ANCHOR);
+    row("colour").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 110 }));
+    // The pointer settles on a plain row before the intent delay has run out: the count the
+    // first row started must die with the move, not open a submenu under the wrong row.
+    vi.advanceTimersByTime(20);
+    row("other").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 150 }));
+    vi.advanceTimersByTime(100);
+    expect(part("submenu")).toBeNull();
+  });
+
+  it("opens from keyboard focus and paints at once", () => {
+    menu.open(ANCHOR);
+    const owner = row("colour");
+    // jsdom never reports `:focus-visible`, so stand in for what a Tab landing on the row
+    // would report.
+    owner.matches = (selector: string): boolean => selector === ":focus-visible";
+    owner.dispatchEvent(new FocusEvent("focusin"));
+    expect(part("submenu")).not.toBeNull();
+    expect(menu.isSubmenuOpen("colour")).toBe(true);
+  });
+
+  it("stays up past every hover while the caller reports unfinished work in it", () => {
+    menu = createMenu({ placement: "below", redraw: render, holdsSubmenuOpen: () => true });
+    menu.open(ANCHOR);
+    row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(part("submenu")).not.toBeNull();
+    // Neither the pointer leaving the pair nor another row taking the hover closes it.
+    part("submenu")!.dispatchEvent(new MouseEvent("mouseleave"));
+    vi.advanceTimersByTime(1000);
+    expect(part("submenu")).not.toBeNull();
+    row("other").dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: 110, clientY: 150 }));
+    vi.advanceTimersByTime(100);
+    expect(part("submenu")).not.toBeNull();
+    // A deliberate click still takes it down, work or no work.
+    row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(part("submenu")).toBeNull();
+  });
+
+  it("closes on a drift again once the caller's work is done", () => {
+    let held = true;
+    menu = createMenu({ placement: "below", redraw: render, holdsSubmenuOpen: () => held });
+    menu.open(ANCHOR);
+    row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    part("submenu")!.dispatchEvent(new MouseEvent("mouseleave"));
+    vi.advanceTimersByTime(1000);
+    expect(part("submenu")).not.toBeNull();
+    held = false;
+    part("submenu")!.dispatchEvent(new MouseEvent("mouseleave"));
+    vi.advanceTimersByTime(220);
+    expect(part("submenu")).toBeNull();
+  });
+
   it("toggles on a click, for a touch screen with no hover to intend anything with", () => {
     menu.open(ANCHOR);
     row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -258,5 +373,49 @@ describe("a submenu", () => {
     menu.open(ANCHOR);
     row("custom").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(part("submenu")!.querySelector(".probe")?.textContent).toBe("hello");
+  });
+
+  describe("measured for real", () => {
+    // jsdom lays nothing out, so these tests measure for it: the opening row sits at y=600
+    // near the window's bottom, and the submenu's content height is the test's to move.
+    const originalRect = HTMLElement.prototype.getBoundingClientRect;
+
+    function measureSubmenusAt(contentHeight: () => number): void {
+      HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement): DOMRect {
+        if (this.getAttribute(MENU_ROW_ATTR) === "colour") return fakeRect(0, 600, 200, 32);
+        if (this.getAttribute(MENU_PART_ATTR) !== "submenu") return originalRect.call(this);
+        const styled = this.style.height;
+        return fakeRect(0, 0, 200, styled === "" ? contentHeight() : parseFloat(styled));
+      };
+    }
+
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = originalRect;
+    });
+
+    it("keeps the height it filled while its list is filtered shorter", () => {
+      let contentHeight = 500;
+      measureSubmenusAt(() => contentHeight);
+      menu.open(ANCHOR);
+      row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const box = part("submenu")!;
+      expect(box.style.height).toBe("330px");
+      expect(box.style.top).toBe("432px");
+      // The list is filtered down to a few rows: the box and its place both hold, rather
+      // than shrinking and sliding down under the pointer.
+      contentHeight = 100;
+      render();
+      expect(box.style.height).toBe("330px");
+      expect(box.style.top).toBe("432px");
+    });
+
+    it("stays content-sized while it has never filled its cap", () => {
+      measureSubmenusAt(() => 100);
+      menu.open(ANCHOR);
+      row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const box = part("submenu")!;
+      expect(box.style.height).toBe("");
+      expect(box.style.top).toBe("595px");
+    });
   });
 });

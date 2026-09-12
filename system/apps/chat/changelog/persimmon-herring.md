@@ -17,3 +17,5 @@ The chat's other face is called "Source view", and it sits in the pane rather th
 The OpenRouter sign-in panel's key address is a link. It was prose in the lane's description ("From openrouter.ai/keys."), which leaves the reader retyping it; the URL moves into `signup_url`, the field the lane model already has for where to get a key, and the panel renders it as "Get one at openrouter.ai/keys." the way the Opencode Go lane does.
 
 The effort slider's level dots take the colour of what they are drawn on: the surface colour where the fill has passed them, the text colour on the bare track ahead of the thumb. One colour throughout left the dots below the thumb sinking into the green.
+
+The card no longer throws work away when the pointer drifts off it: a rename mid-type, an armed "Remove?", an open launch prompt and a typed model search each hold their submenu open (the shared menu's `holdsSubmenuOpen`), so while one is live only a click or Escape takes the submenu down. And the model list keeps the height it filled while it is being filtered: the matches shrink inside the box, rather than the box chasing them down the screen with every keystroke.

@@ -142,6 +142,16 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
       resetSubmenuState();
       modelQuery = "";
     },
+    // What hover opened, hover normally dismisses -- but not over unfinished work. A rename
+    // mid-type, an armed "Remove?" or an open launch prompt (providers), and a typed search
+    // (model), must all survive the pointer wandering off the card; while one is live, only
+    // a click or Escape takes the submenu down.
+    holdsSubmenuOpen: (key) => {
+      if (key === "providers") {
+        return rowState.renamingId !== null || rowState.confirmingRemoval !== null || launchPromptAccountId !== null;
+      }
+      return modelQuery !== "";
+    },
   });
 
   // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
