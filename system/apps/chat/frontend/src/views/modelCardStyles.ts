@@ -248,8 +248,7 @@ export const FLYOUT_ROW_SUB = "type-helper text-faint";
  *  duly stopped at the inside edge of that reserve: a tick floating 56px short of the row's
  *  end, which is what it looked like. A flex tick reads the row's padding, so the padding has
  *  to be the truth about what else is in the row. */
-export const FLYOUT_CHECK =
-  "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent";
+export const FLYOUT_CHECK = "ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center text-accent";
 /* Both ticks stand in the same 20x20 box the row's control buttons do, centred in it.
  *
  * A bare 13px glyph and a 13px glyph centred in a 20px button do not share a centre line even
