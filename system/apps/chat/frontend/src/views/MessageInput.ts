@@ -389,7 +389,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           // optimistic bubble and handle failure the original way: restore the
           // text/attachments to the composer, then surface a popup.
           const detail = describeRequestError(err);
-          console.error(`Failed to send message to agent ${chatId}: ${detail}`);
+          console.error(`Failed to send message to chat ${chatId}: ${detail}`);
           dropOutgoing(chatId, outgoingId);
           // Back in the composer immediately: the recovery record is closure state, so a reload
           // would take the message with it (contract A1a). A repeat send removes that copy once
@@ -451,7 +451,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           }
         } catch (err) {
           const detail = describeRequestError(err);
-          console.error(`Failed to interrupt agent ${chatId}: ${detail}`);
+          console.error(`Failed to interrupt chat ${chatId}: ${detail}`);
           // Surface the failure: they deliberately clicked Stop, and on failure
           // the agent is still running. Same notice as a failed send -- leaving this one as a
           // system alert while its neighbour is a styled notice is worse than either.

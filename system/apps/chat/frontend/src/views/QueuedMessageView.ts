@@ -60,7 +60,7 @@ async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
     prependToComposer(chatId, block);
   } catch (err) {
     const detail = describeRequestError(err);
-    console.error(`Failed to send queued messages for agent ${chatId}: ${detail}`);
+    console.error(`Failed to send queued messages for chat ${chatId}: ${detail}`);
     // Hand the failure to the composer's notice rather than putting up a system alert. One shape
     // of failure gets one shape of answer, whichever button started it -- and Retry here means
     // "flush the queue again", which is exactly what the user clicked in the first place.
