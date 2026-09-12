@@ -125,42 +125,53 @@ _UPSERT_BARE_METAL_SERVER_SQL: Final[str] = (
     "wg_public_key = EXCLUDED.wg_public_key, updated_at = NOW()"
 )
 
-# Column order is what _server_from_row indexes into.
-_SERVER_COLUMNS: Final[tuple[str, ...]] = (
-    "id",
-    "ovh_order_id",
-    "ovh_service_name",
-    "plan_code",
-    "region",
-    "public_address",
-    "cpu_cores",
-    "cpu_threads",
-    "ram_gb",
-    "disk_gb",
-    "memory_per_slice_gb",
-    "cpu_overcommit_ratio",
-    "slot_count",
-    "raid_level",
-    "lima_service_user",
-    "status",
-    "created_at",
-    "updated_at",
-    "box_host_public_key",
+# Column order is what _server_from_row indexes into. An entry with several
+# names reads the first non-NULL of them, newest name first: the legacy
+# lima_* / wg_* columns still hold the value on a pool DB that predates the
+# renaming migrations.
+# CLEANUP: collapse the multi-name entries to their first name once every
+# tier's pool DB has applied migrations 037 and 041 and no pre-rename checkout
+# writes the legacy columns anymore.
+_SERVER_COLUMNS: Final[tuple[tuple[str, ...], ...]] = (
+    ("id",),
+    ("ovh_order_id",),
+    ("ovh_service_name",),
+    ("plan_code",),
+    ("region",),
+    ("public_address",),
+    ("cpu_cores",),
+    ("cpu_threads",),
+    ("ram_gb",),
+    ("disk_gb",),
+    ("memory_per_slice_gb",),
+    ("cpu_overcommit_ratio",),
+    ("slot_count",),
+    ("raid_level",),
+    ("slice_service_user", "lima_service_user"),
+    ("status",),
+    ("created_at",),
+    ("updated_at",),
+    ("box_host_public_key",),
+    ("box_generation",),
+    ("uplink_mbps",),
+    ("wireguard_address", "wg_address"),
+    ("wireguard_public_key", "wg_public_key"),
 )
+
+
+@pure
+def _render_server_columns(table_alias: str | None) -> str:
+    """The SELECT list reading :data:`_SERVER_COLUMNS`, each name qualified by ``table_alias`` when given."""
+    prefix = f"{table_alias}." if table_alias else ""
+    rendered = []
+    for names in _SERVER_COLUMNS:
+        qualified = [f"{prefix}{name}" for name in names]
+        rendered.append(qualified[0] if len(qualified) == 1 else f"COALESCE({', '.join(qualified)})")
+    return ", ".join(rendered)
+
+
 _SELECT_SERVERS_SQL: Final[str] = (
-<<<<<<< HEAD
-    "SELECT id, ovh_order_id, ovh_service_name, plan_code, region, public_address, "
-    "cpu_cores, cpu_threads, ram_gb, disk_gb, memory_per_slice_gb, cpu_overcommit_ratio, "
-    "slot_count, raid_level, COALESCE(slice_service_user, lima_service_user), status, "
-    # CLEANUP: drop the COALESCE fallbacks to the legacy wg_address /
-    # wg_public_key columns once every tier's pool DB has applied migration 037
-    # and no pre-rename checkout writes them anymore.
-    "created_at, updated_at, box_host_public_key, box_generation, uplink_mbps, "
-    "COALESCE(wireguard_address, wg_address), COALESCE(wireguard_public_key, wg_public_key) "
-    "FROM bare_metal_servers ORDER BY created_at ASC"
-=======
-    f"SELECT {', '.join(_SERVER_COLUMNS)} FROM bare_metal_servers ORDER BY created_at ASC"
->>>>>>> origin/main
+    f"SELECT {_render_server_columns(None)} FROM bare_metal_servers ORDER BY created_at ASC"
 )
 
 # Count the baked slices currently on a server. Every row -- including 'removing'
@@ -380,23 +391,24 @@ class SlicePoolHostRow(FrozenModel):
     host_id: str = Field(description="pool_hosts.host_id")
     host_name: str = Field(description="pool_hosts.host_name")
     status: str = Field(description="pool_hosts.status")
-    lima_instance_name: str = Field(description="The slice's lima instance name on its box")
+    slice_instance_name: str = Field(description="The slice's VM instance name on its box")
     server: BareMetalServer = Field(description="The bare_metal_servers row of the slice's box")
 
 
 # The projection _slice_pool_host_row indexes into: the four pool_hosts columns,
 # then the box's _SERVER_COLUMNS.
 _SELECT_SLICE_HOSTS_SQL_PREFIX: Final[str] = (
-    "SELECT p.host_id, p.host_name, p.status, p.lima_instance_name, "
-    + ", ".join(f"s.{column}" for column in _SERVER_COLUMNS)
+    "SELECT p.host_id, p.host_name, p.status, COALESCE(p.slice_instance_name, p.lima_instance_name), "
+    + _render_server_columns("s")
     + " FROM pool_hosts p JOIN bare_metal_servers s ON p.bare_metal_server_id = s.id"
 )
 _SELECT_SLICE_HOSTS_BY_HOST_ID_SQL: Final[str] = (
-    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.host_id = ANY(%s) AND p.lima_instance_name IS NOT NULL"
+    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.host_id = ANY(%s) "
+    "AND COALESCE(p.slice_instance_name, p.lima_instance_name) IS NOT NULL"
 )
 _SELECT_LEASED_SLICE_HOSTS_SQL: Final[str] = (
-    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.status = %s AND p.lima_instance_name IS NOT NULL "
-    "ORDER BY p.leased_at ASC"
+    f"{_SELECT_SLICE_HOSTS_SQL_PREFIX} WHERE p.status = %s "
+    "AND COALESCE(p.slice_instance_name, p.lima_instance_name) IS NOT NULL ORDER BY p.leased_at ASC"
 )
 
 
@@ -406,7 +418,7 @@ def _slice_pool_host_row(row: tuple[Any, ...]) -> SlicePoolHostRow:
         host_id=str(row[0]),
         host_name=str(row[1]),
         status=str(row[2]),
-        lima_instance_name=str(row[3]),
+        slice_instance_name=str(row[3]),
         server=_server_from_row(tuple(row[4:])),
     )
 
@@ -601,7 +613,7 @@ _SELECT_POOL_HOST_DESTROY_TARGET_SQL: Final[str] = (
     "SELECT COALESCE(p.slice_instance_name, p.lima_instance_name), s.public_address, "
     "COALESCE(s.slice_service_user, s.lima_service_user), s.box_host_public_key, p.box_generation, "
     # CLEANUP: drop the COALESCE fallbacks to the legacy wg_* columns once
-    # every tier's pool DB has applied migration 037 (see _SELECT_SERVERS_SQL).
+    # every tier's pool DB has applied migration 037 (see _SERVER_COLUMNS).
     "COALESCE(s.wireguard_address, s.wg_address), COALESCE(s.wireguard_public_key, s.wg_public_key) "
     "FROM pool_hosts p LEFT JOIN bare_metal_servers s ON p.bare_metal_server_id = s.id "
     "WHERE p.id = %s"

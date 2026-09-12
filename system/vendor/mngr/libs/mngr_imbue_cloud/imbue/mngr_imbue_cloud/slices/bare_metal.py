@@ -11,6 +11,7 @@ from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
 from imbue.mngr_imbue_cloud.data_types import Gen2BoxDefaultMachineFit
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
@@ -32,6 +33,8 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.errors import InvalidMachineSize
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_IMAGE_TAR_CACHE_DIR
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SLICE_SERVICE_USER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_LUKS_MAPPER_PATH
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_ROOT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DEFAULT_MACHINE_UNITS
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DISK_RESERVE_FRACTION
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DISK_RESERVE_GB
@@ -617,6 +620,21 @@ def expected_static_authorized_key_count(box_generation: int) -> int:
     return GEN1_EXPECTED_AUTHORIZED_KEY_COUNT
 
 
+@pure
+def _split_on_marker_line(stdout: str, marker: str, *, read_description: str) -> tuple[str, str]:
+    """Split ``stdout`` on a marker line the box printed with ``echo <marker>``.
+
+    Tries the exact ``<marker>\\n`` form first; a run whose marker was the very
+    last thing printed (no trailing newline) falls back to a bare-marker split.
+    """
+    before, marker_found, after = stdout.partition(f"{marker}\n")
+    if not marker_found:
+        before, marker_found, after = stdout.partition(marker)
+    if not marker_found:
+        raise BareMetalConfigError(f"the {read_description} read printed no split marker; the box output is malformed")
+    return before, after
+
+
 # Separates the two files the management-trust read prints in one round trip.
 _MANAGEMENT_TRUST_SPLIT_MARKER: Final[str] = "MNGR_MANAGEMENT_TRUST_SPLIT"
 
@@ -643,15 +661,53 @@ def build_read_management_trust_command() -> str:
 @pure
 def parse_management_trust_output(stdout: str) -> BoxManagementTrust:
     """Split :func:`build_read_management_trust_command`'s output into the key count and the trusted CA."""
-    authorized_keys_text, marker, ca_text = stdout.partition(f"{_MANAGEMENT_TRUST_SPLIT_MARKER}\n")
-    if not marker:
-        authorized_keys_text, marker, ca_text = stdout.partition(_MANAGEMENT_TRUST_SPLIT_MARKER)
-    if not marker:
-        raise BareMetalConfigError("the management-trust read printed no split marker; the box output is malformed")
+    authorized_keys_text, ca_text = _split_on_marker_line(
+        stdout, _MANAGEMENT_TRUST_SPLIT_MARKER, read_description="management-trust"
+    )
     trusted_ca = ca_text.strip()
     return BoxManagementTrust(
         authorized_key_count=count_authorized_key_lines(authorized_keys_text),
         trusted_ca_public_key=trusted_ca if trusted_ca else None,
+    )
+
+
+# What the storage-volume probe prints: one line naming the block device
+# mounted at the gen-2 storage root (empty when nothing is mounted there),
+# then the marker, then that device's ``lsblk`` type (``crypt`` for an opened
+# LUKS mapper; empty when nothing is mounted).
+_STORAGE_VOLUME_SPLIT_MARKER: Final[str] = "MNGR_STORAGE_VOLUME_SPLIT"
+
+
+@pure
+def build_read_storage_volume_command() -> str:
+    """Print the device mounted at the gen-2 storage root and its block-device type, tolerating an unmounted root.
+
+    Both reads are unprivileged (mount tables and sysfs are world-readable),
+    so the audit and the prep preflight can run them as the service user.
+    ``findmnt`` exits non-zero when the path is not a mount point, which is
+    the legitimate "locked box" answer, so that step's status is swallowed;
+    a real read failure surfaces as an empty device line, which the parser
+    reports as an unmounted (and therefore unencrypted) volume.
+    """
+    return (
+        f"storage_source=$(findmnt -no SOURCE {GEN2_STORAGE_ROOT} 2>/dev/null || true); "
+        'printf "%s\\n" "$storage_source"; '
+        f"echo {_STORAGE_VOLUME_SPLIT_MARKER}; "
+        'if [ -n "$storage_source" ]; then lsblk -no TYPE "$storage_source" 2>/dev/null | head -n 1; fi'
+    )
+
+
+@pure
+def parse_storage_volume_output(stdout: str) -> StorageVolumeState:
+    """Parse :func:`build_read_storage_volume_command`'s output into the mounted device and its encryption state."""
+    source_text, type_text = _split_on_marker_line(
+        stdout, _STORAGE_VOLUME_SPLIT_MARKER, read_description="storage-volume"
+    )
+    mounted_source = source_text.strip() or None
+    device_type = type_text.strip()
+    return StorageVolumeState(
+        mounted_source=mounted_source,
+        is_encrypted=mounted_source == GEN2_STORAGE_LUKS_MAPPER_PATH and device_type == "crypt",
     )
 
 

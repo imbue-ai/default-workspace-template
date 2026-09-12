@@ -414,17 +414,6 @@ def _format_arm_cell(trial: TrialCheck) -> str:
         trial.requested_model,
         "confirmed" if trial.is_model_confirmed else "unconfirmed",
     )
-<<<<<<< HEAD
-
-
-@pure
-def _as_table_cell(text: str) -> str:
-    """Free text in a markdown cell. A pipe or a newline in it would end the cell, and every cell
-    here carries free text: exception messages carry anything, and case ids, trial names, entry ids
-    and judge criterion names are authored strings held to no vocabulary."""
-    return text.replace("|", "\\|").replace("\n", " ")
-=======
->>>>>>> origin/main
 
 
 @pure
@@ -438,17 +427,10 @@ def render_summary_markdown(run_check: RunCheck) -> str:
     ]
     trial_lines = [
         "| {} | {} | {} | {} | {} | {} | {} | {} | `{}` | `{}` | `{}` |".format(
-<<<<<<< HEAD
-            _as_table_cell(trial.trial_name),
-            _as_table_cell(trial.case_id) or "-",
-            _as_table_cell(_format_arm_cell(trial)),
-            _format_marker(True) if trial.is_completed else _as_table_cell(trial.incompletion_reason),
-=======
             as_table_cell(trial.trial_name),
             as_table_cell(trial.case_id) or "-",
             as_table_cell(_format_arm_cell(trial)),
             _format_marker(True) if trial.is_completed else as_table_cell(trial.incompletion_reason),
->>>>>>> origin/main
             _format_marker(trial.is_gates_passed),
             as_table_cell(", ".join(trial.error_entry_ids)) or "none",
             "-" if trial.reward is None else "{:.4f}".format(trial.reward),

@@ -38,6 +38,21 @@ GEN2_BASE_IMAGE_PATH: Final[str] = f"{GEN2_STORAGE_ROOT}/base/debian-13-base.qco
 # the storage partition (the root partition is sized for the OS alone); the
 # gen-2 reserve in ``sizing`` names their budgets.
 GEN2_SWAPFILE_PATH: Final[str] = f"{GEN2_STORAGE_ROOT}/swapfile"
+# The storage partition is a LUKS2 volume: the gen-2 prep formats the box's
+# md-mirrored storage partition as LUKS (unlocked at boot by the box's TPM,
+# with a per-box recovery passphrase in the tier's Vault) and mounts the
+# opened mapper device at the storage root, so every slice disk, the base
+# image, the tar cache and the swapfile are ciphertext at rest. The mapper
+# name is fixed so crypttab, fstab, the unlock command and the audit all
+# agree on it.
+GEN2_STORAGE_LUKS_MAPPER_NAME: Final[str] = "mngr-storage"
+GEN2_STORAGE_LUKS_MAPPER_PATH: Final[str] = f"/dev/mapper/{GEN2_STORAGE_LUKS_MAPPER_NAME}"
+# The tree on the encrypted volume that takes over the root partition's
+# user-adjacent state: the box journal (which carries the guest consoles), the
+# slice service user's home (where transfers stage credentials and decrypted
+# cidata), and the two temp directories. Each is bind-mounted over its usual
+# path by a prep-installed mount unit, so nothing else on the box changes.
+GEN2_STORAGE_SYSTEM_DIR: Final[str] = f"{GEN2_STORAGE_ROOT}/system"
 GEN2_IMAGE_TAR_CACHE_DIR: Final[str] = f"{GEN2_STORAGE_ROOT}/image-cache"
 # The gen-2 prep echoes the mounted storage partition's size (whole GiB) on
 # this marker line; the operator tooling records it as the box row's

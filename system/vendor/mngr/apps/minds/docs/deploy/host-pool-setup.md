@@ -297,13 +297,89 @@ policy's drop counter (`nft list table inet mngr_slice_dhcp`).
 
 ### Disk layout on a gen-2 box
 
-The gen-2 reinstall carves a 1 GiB `/boot` and a 20 GiB `/` (the OS,
-journald, apt and the prep artifacts only) and hands the rest of the mirrored
-disk to the XFS storage partition at `/srv/mngr-slices`, which holds every
-slice's disks, the staged base image, the box swapfile
-(`/srv/mngr-slices/swapfile`) and the per-tag image tar cache
-(`/srv/mngr-slices/image-cache`). Gen-1 boxes keep their `/swapfile` and their
-home-dir tar cache.
+The gen-2 reinstall carves a 1 GiB `/boot` and a 20 GiB `/` (the OS, apt and
+the prep artifacts only) and hands the rest of the mirrored disk to the
+storage partition at `/srv/mngr-slices`. (OVH's installer adds its own
+mirrored EFI system partition in front, which is why a gen-2 box shows four
+md arrays for our three layout entries, plus a tiny unmirrored `config-2`
+cloud-init partition.) The storage partition holds every slice's disks, the
+staged base image, the box swapfile (`/srv/mngr-slices/swapfile`) and the
+per-tag image tar cache (`/srv/mngr-slices/image-cache`). Gen-1 boxes keep
+their `/swapfile` and their home-dir tar cache.
+
+### Storage encryption on a gen-2 box
+
+The gen-2 prep formats the storage partition as a **LUKS2 volume**
+(`aes-xts-plain64`, 4 KiB sectors, discards allowed) and mounts the opened
+mapper `/dev/mapper/mngr-storage` at `/srv/mngr-slices`, so everything on it
+-- the slice disks, the base image, the tar cache, the swapfile -- is
+ciphertext at rest. It covers a pulled or replaced NVMe (a RAID rebuild
+copies ciphertext), OVH rescue mode without our key, and hardware
+decommissioning. It does not cover us: we hold the recovery passphrase, the
+box unlocks itself, and box root reads the mapper. Live slices are not
+private from the operator (see the addendum in
+[security-boundaries-audit.md](../security-boundaries-audit.md)).
+
+Two keyslots open the volume:
+
+- **The box's TPM 2.0** (`systemd-cryptenroll --tpm2-device=auto`, sealed with
+  no PCR policy), which `systemd-cryptsetup` uses at boot through the
+  crypttab entry (`tpm2-device=auto,headless=true,nofail`). No PCR policy means
+  kernel and firmware updates never lock the box; the price is that any OS
+  booted on that exact TPM -- rescue mode included -- can open it, which is
+  inside the operator trust boundary anyway.
+- **A per-box recovery passphrase**, minted by `minds-admin server prep` /
+  `setup` and stored in the tier's Vault at
+  `secrets/minds/<tier>/box-storage/<ovh-service-name>` **before** the
+  partition is formatted (a prep that dies mid-format never leaves an
+  unrecoverable box). The passphrase never rides inside the prep script: the
+  CLI stages it on the box's tmpfs over its own SSH round trip and the prep
+  consumes and deletes it. Every re-prep verifies the Vault passphrase still
+  opens a keyslot and re-seals the volume to the box's current TPM (a cleared
+  or replaced TPM leaves its stale token in the LUKS header, so the
+  enrollment is redone rather than trusted).
+
+A LUKS header backup is staged by every prep and uploaded by the CLI to the
+tier's workspace-storage bucket at
+`<env-prefix>boxes/<ovh-service-name>/luks-header-<luks-uuid>.img`
+(`cryptsetup luksHeaderRestore` is the way back from a corrupt header; the
+RAID mirror does not protect against a bad write). A tier without a usable
+storage bucket logs a warning and skips the upload.
+
+**Encryption is a precondition, not an option.** The prep formats only an
+*empty* storage partition (the state OVH's reinstall leaves) and refuses one
+that already holds slices: there is no in-place conversion, so a box prepped
+before storage encryption existed is drained and repaved (`minds-admin
+server drain`, then `cutover repave` or `server setup`). Every bake refuses a
+gen-2 box whose storage root is not the mounted LUKS volume, and
+`server list --verify-occupancy` / `just audit-boxes` report
+`is_storage_encrypted` per box. The prep also converges three relocations so
+nothing user-adjacent stays on the plain root partition: the box journal
+(which carries the guest consoles), the slice service user's home (where
+transfers stage S3 credentials and decrypted cidata), and `/tmp` + `/var/tmp`
+are bind-mounted from `/srv/mngr-slices/system/` by prep-installed mount
+units. The journal and the home are carried over and their root-side
+directories left as empty stubs (the home root-owned, so a locked box has no
+writable home to stage plaintext in); the temp directories are only covered by
+their binds, mounted `nosuid,nodev` like the distro's tmpfs. Debian 13 mounts
+`/tmp` as a RAM-backed tmpfs by default; the prep's `tmp.mount` replaces it,
+so `/tmp` no longer competes with the slices for the box's memory.
+
+**When the TPM unlock fails at boot** (a cleared or replaced TPM, a firmware
+fault), the crypttab entry's `nofail` lets the box boot: sshd and WireGuard
+come up, the storage root stays unmounted, the slice units stay down (their
+`RequiresMountsFor` on the storage root is unmet), and the box telemetry
+collector raises the `STORAGE_VOLUME_LOCKED` signal. Open it by hand:
+
+```bash
+uv run minds-admin server unlock --server-id <bare-metal-server-id>
+```
+
+which feeds the Vault passphrase to the box on stdin, opens and mounts the
+volume, restores the bind mounts and the swapfile, flushes the journal, and
+starts every slice unit that is enabled for boot. Re-run `just prep-server
+<id>` afterwards to re-seal the volume to the TPM. A box whose passphrase is
+lost from Vault cannot be recovered: drain it and repave.
 
 ### Disk layout inside a gen-2 slice
 

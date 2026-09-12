@@ -8,7 +8,9 @@ from imbue.minds_admin.slices.bare_metal_db import _INSERT_BAKING_SLICE_POOL_HOS
 from imbue.minds_admin.slices.bare_metal_db import _INSERT_BARE_METAL_SERVER_SQL
 from imbue.minds_admin.slices.bare_metal_db import _INSERT_SLICE_POOL_HOST_SQL
 from imbue.minds_admin.slices.bare_metal_db import _SELECT_UNLEASED_SLICE_TEARDOWN_ROW_IDS_SQL
+from imbue.minds_admin.slices.bare_metal_db import _SERVER_COLUMNS
 from imbue.minds_admin.slices.bare_metal_db import _UPSERT_BARE_METAL_SERVER_SQL
+from imbue.minds_admin.slices.bare_metal_db import _render_server_columns
 from imbue.minds_admin.slices.bare_metal_db import _server_from_row
 from imbue.minds_admin.slices.bare_metal_db import build_baking_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import build_bare_metal_server_insert_values
@@ -19,11 +21,8 @@ from imbue.minds_admin.slices.bare_metal_db import delete_baking_slice_pool_host
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
 from imbue.minds_admin.slices.bare_metal_db import fetch_leased_slice_hosts
 from imbue.minds_admin.slices.bare_metal_db import fetch_pool_host_destroy_target
-<<<<<<< HEAD
 from imbue.minds_admin.slices.bare_metal_db import fetch_pool_host_ids_on_server_by_status
-=======
 from imbue.minds_admin.slices.bare_metal_db import fetch_slice_hosts_by_host_id
->>>>>>> origin/main
 from imbue.minds_admin.slices.bare_metal_db import fetch_unleased_slice_teardown_row_ids
 from imbue.minds_admin.slices.bare_metal_db import finish_baking_slice_pool_host
 from imbue.minds_admin.slices.testing import RecordingConnection
@@ -389,24 +388,43 @@ def _slice_host_row(host_id: str, status: str) -> tuple:
         None,
         None,
         "ssh-ed25519 AAAA box",
+        1,
+        1000,
+        None,
+        None,
     )
     return (host_id, "workspace-1", status, f"mngr-slice-production-{host_id[5:21]}", *server_columns)
 
 
 def test_fetch_slice_hosts_by_host_id_maps_the_row_and_its_box() -> None:
-    fake_conn = _FakeConn([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
+    fake_conn = RecordingConnection([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
     rows = fetch_slice_hosts_by_host_id(fake_conn, ["host-abcdef0123456789abcdef0123456789", "host-unknown"])
     assert [row.host_id for row in rows] == ["host-abcdef0123456789abcdef0123456789"]
-    assert rows[0].lima_instance_name == "mngr-slice-production-abcdef0123456789"
+    assert rows[0].slice_instance_name == "mngr-slice-production-abcdef0123456789"
     assert rows[0].server.public_address == "203.0.113.7"
-    assert rows[0].server.lima_service_user == "limahost"
+    assert rows[0].server.slice_service_user == "limahost"
     assert rows[0].server.box_host_public_key == "ssh-ed25519 AAAA box"
     # The ids go down as one array bind parameter; a missing id is simply absent from the result.
-    assert fake_conn._cursor.executed_params == (["host-abcdef0123456789abcdef0123456789", "host-unknown"],)
+    assert fake_conn.recording_cursor.executed_params == (["host-abcdef0123456789abcdef0123456789", "host-unknown"],)
 
 
 def test_fetch_leased_slice_hosts_binds_the_leased_status() -> None:
-    fake_conn = _FakeConn([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
+    fake_conn = RecordingConnection([_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")], rowcount=0)
     rows = fetch_leased_slice_hosts(fake_conn)
     assert [row.status for row in rows] == ["leased"]
-    assert fake_conn._cursor.executed_params == ("leased",)
+    assert fake_conn.recording_cursor.executed_params == ("leased",)
+
+
+def test_render_server_columns_qualifies_names_and_reads_legacy_columns_through_coalesce() -> None:
+    unqualified = _render_server_columns(None)
+    assert unqualified.startswith("id, ovh_order_id, ")
+    assert "COALESCE(slice_service_user, lima_service_user)" in unqualified
+    qualified = _render_server_columns("s")
+    assert qualified.startswith("s.id, s.ovh_order_id, ")
+    assert "COALESCE(s.wireguard_address, s.wg_address)" in qualified
+    # Every name is qualified, including the legacy fallbacks inside a COALESCE.
+    assert "COALESCE(wireguard" not in qualified
+    assert ", wg_" not in qualified
+    # The test rows above carry one value per column entry after the four
+    # pool_hosts columns, which is what _server_from_row indexes into.
+    assert len(_slice_host_row("host-abcdef0123456789abcdef0123456789", "leased")) - 4 == len(_SERVER_COLUMNS)

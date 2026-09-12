@@ -11,17 +11,12 @@ from imbue.mngr_imbue_cloud.primitives import ImbueCloudAccount
 from imbue.mngr_imbue_cloud.providers.rebuild import _DELEGATED_FIELDS
 from imbue.mngr_imbue_cloud.providers.rebuild import _SLICE_DELEGATED_FIELDS
 from imbue.mngr_imbue_cloud.providers.rebuild import _build_delegated_vps_config
-<<<<<<< HEAD
 from imbue.mngr_imbue_cloud.providers.rebuild import build_slice_rebuild_config
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GUEST_RAM_HOLDBACK_MIB
 from imbue.mngr_imbue_cloud.wire_types import LeaseResult
-=======
-from imbue.mngr_imbue_cloud.providers.rebuild import _build_slice_rebuild_config
-from imbue.mngr_imbue_cloud.providers.rebuild import _slice_memory_mib_from_lease_attributes
 from imbue.mngr_vps.primitives import IsolationMode
 
 _ACCOUNT = ImbueCloudAccount("a@b.com")
->>>>>>> origin/main
 
 
 def _account_config_with_non_default_knobs() -> ImbueCloudProviderConfig:
@@ -93,18 +88,23 @@ def test_delegated_vps_config_carries_every_vps_field_of_the_account_config() ->
     assert vps_config.docker_runtime == "runsc"
 
 
-def test_slice_rebuild_config_carries_every_vps_field_but_the_gvisor_knobs_and_layers_the_slice_coordinates() -> None:
+def test_slice_rebuild_config_carries_every_vps_field_but_the_runtime_knobs_and_layers_the_slice_coordinates() -> None:
+    """The slow-path slice rebuild must carve and run exactly as a provider under the account config would.
+
+    Checked over the whole VpsProviderConfig surface (minus the knobs that
+    follow the slice's generation) so a newly added field cannot be dropped
+    silently.
+    """
     config = _account_config_with_non_default_knobs()
-    slice_config = _build_slice_rebuild_config(config, box_public_address="203.0.113.7", slice_memory_mib=8192)
+    slice_config = build_slice_rebuild_config(config, _lease(box_generation=1))
     assert slice_config.backend == "imbue_cloud_slice"
     assert slice_config.model_dump(include=set(_SLICE_DELEGATED_FIELDS)) == config.model_dump(
         include=set(_SLICE_DELEGATED_FIELDS)
     )
-    # The slice VM's Docker is plain runc, so the account block's runsc settings must not reach the rebuilt container.
-    assert slice_config.docker_runtime is None
+    assert slice_config.volume_home_path == Path("/home/user")
+    # The runsc host setup never runs on a slice VM, whatever the generation.
     assert slice_config.install_gvisor_runtime is False
-    assert slice_config.box_public_address == "203.0.113.7"
-    assert slice_config.slice_memory_mib == 8192
+    assert slice_config.box_public_address == "51.81.208.81"
 
 
 def _lease(box_generation: int, memory_units: int | None = 8) -> LeaseResult:

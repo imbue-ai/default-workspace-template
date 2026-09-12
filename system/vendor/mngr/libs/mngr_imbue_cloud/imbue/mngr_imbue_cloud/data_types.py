@@ -30,6 +30,20 @@ class BoxManagementTrust(FrozenModel):
     )
 
 
+class StorageVolumeState(FrozenModel):
+    """What backs the gen-2 storage root right now, as the box reports it."""
+
+    mounted_source: str | None = Field(
+        description="The block device mounted at the storage root (None when unmounted)"
+    )
+    is_encrypted: bool = Field(
+        description=(
+            "Whether the mounted device is the opened LUKS mapper (an unmounted root is unencrypted: nothing "
+            "is protecting the slices on it, whatever the underlying partition holds)"
+        )
+    )
+
+
 class SliceProvisionResult(FrozenModel):
     """What a slice provision produced: the VM instance/disk identifiers and the two box host ports."""
 
@@ -185,6 +199,14 @@ class BoxTierAudit(FrozenModel):
         description=(
             "Swap devices that are raw (non-md) partitions, i.e. unmirrored -- a disk death loses "
             "their pages and SIGBUS-kills processes; fixed by a prep re-run (from /proc/swaps)"
+        )
+    )
+    is_storage_encrypted: bool = Field(
+        description=(
+            "Whether the gen-2 storage root is mounted from its opened LUKS mapper, so every slice disk on "
+            "the box is ciphertext at rest (always false for a gen-1 box, which has no storage volume; a "
+            "gen-2 box reading false is either locked -- its TPM unlock failed at boot -- or was prepped "
+            "before storage encryption existed and must be drained and repaved)"
         )
     )
 

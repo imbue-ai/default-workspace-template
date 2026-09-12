@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import json
 import shlex
 import tempfile
@@ -14,17 +13,21 @@ from pydantic import Field
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.mngr.primitives import HostId
-from imbue.mngr.providers.ssh_utils import add_host_to_known_hosts
 from imbue.mngr.utils.ssh import quote_ssh_option_value
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
 from imbue.mngr_imbue_cloud.data_types import SliceProvisionResult
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
 from imbue.mngr_imbue_cloud.interfaces import SliceVmClientInterface
 from imbue.mngr_imbue_cloud.slices.bare_metal import build_read_management_trust_command
+from imbue.mngr_imbue_cloud.slices.bare_metal import build_read_storage_volume_command
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_management_trust_output
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_storage_volume_output
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_instance_name
+from imbue.mngr_imbue_cloud.slices.box_known_hosts import remove_box_known_hosts_file
+from imbue.mngr_imbue_cloud.slices.box_known_hosts import write_box_known_hosts_file
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import SliceInstanceObservation
 from imbue.mngr_imbue_cloud.slices.lima_slice import CONTAINER_SSH_PORT_PLACEHOLDER
 from imbue.mngr_imbue_cloud.slices.lima_slice import SLICE_BOX_FULL_MARKER
@@ -112,22 +115,17 @@ class LimaSliceVpsClient(SliceVmClientInterface):
         description="Optional override of the lima guest image URL (defaults to mngr_lima's Debian image).",
     )
 
-    def _box_known_hosts_file(self) -> str:
-        """Write the box's pinned host key to a known_hosts file and return its path.
+    def _box_known_hosts_file(self) -> Path:
+        """Write the box's pinned host key to a throwaway known_hosts file for one command and return its path.
 
-        Fails closed when no pinned key is configured -- we never fall back to
-        trust-on-first-use. The file is idempotently (re)written next to the pool
-        key (or a temp dir) keyed by box address.
+        Fails closed when no pinned key is configured -- never trust-on-first-use.
         """
         if not self.box_host_public_key:
             raise LimaCommandError(
                 "ssh", 1, f"no pinned host key configured for box {self.box_address}; run the host-key backfill"
             )
         base_dir = Path(self.private_key_path).parent if self.private_key_path else Path(tempfile.gettempdir())
-        box_digest = hashlib.sha256(f"{self.box_address}:{self.box_ssh_port}".encode()).hexdigest()[:16]
-        known_hosts_path = base_dir / f".box_known_hosts_{box_digest}"
-        add_host_to_known_hosts(known_hosts_path, self.box_address, self.box_ssh_port, self.box_host_public_key)
-        return str(known_hosts_path)
+        return write_box_known_hosts_file(base_dir, self.box_address, self.box_ssh_port, self.box_host_public_key)
 
     def _unavailable(self, operation: str) -> NotImplementedError:
         return NotImplementedError(
@@ -136,7 +134,7 @@ class LimaSliceVpsClient(SliceVmClientInterface):
             "snapshot, or ssh-key API."
         )
 
-    def _box_ssh_command(self, remote_command: str) -> list[str]:
+    def _box_ssh_command(self, remote_command: str, known_hosts_path: Path) -> list[str]:
         """Build the argv that runs ``remote_command`` on the box as the lima user."""
         if not self.private_key_path:
             raise LimaCommandError("ssh", 1, "no pool private key configured for the slice box")
@@ -149,7 +147,7 @@ class LimaSliceVpsClient(SliceVmClientInterface):
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
-            f"UserKnownHostsFile={quote_ssh_option_value(self._box_known_hosts_file())}",
+            f"UserKnownHostsFile={quote_ssh_option_value(str(known_hosts_path))}",
             "-o",
             f"ConnectTimeout={_BOX_CONNECT_TIMEOUT_SECONDS}",
             "-o",
@@ -168,15 +166,19 @@ class LimaSliceVpsClient(SliceVmClientInterface):
         on_output = (lambda line, _is_stdout: logger.info("  [{}] {}", label, line.rstrip())) if is_streaming else None
         # Built outside the group so a precondition failure (no key, no pinned
         # host key) raises as itself rather than wrapped in the group's error.
-        command = self._box_ssh_command(remote_command)
-        cg = ConcurrencyGroup(name=f"slice-box-{label}")
-        with cg:
-            result = cg.run_process_to_completion(
-                command=command,
-                timeout=timeout,
-                is_checked_after=False,
-                on_output=on_output,
-            )
+        known_hosts_path = self._box_known_hosts_file()
+        try:
+            command = self._box_ssh_command(remote_command, known_hosts_path)
+            cg = ConcurrencyGroup(name=f"slice-box-{label}")
+            with cg:
+                result = cg.run_process_to_completion(
+                    command=command,
+                    timeout=timeout,
+                    is_checked_after=False,
+                    on_output=on_output,
+                )
+        finally:
+            remove_box_known_hosts_file(known_hosts_path)
         return result.returncode, result.stdout, result.stderr
 
     def run_in_vm_as_root(
@@ -471,6 +473,16 @@ class LimaSliceVpsClient(SliceVmClientInterface):
             )
         mdstat_text, _, proc_swaps_text = read_out.partition(f"{_BOX_HEALTH_SPLIT_MARKER}\n")
         return mdstat_text, proc_swaps_text
+
+    def read_storage_volume_state(self) -> StorageVolumeState:
+        read_rc, read_out, read_err = self.run_on_box(
+            build_read_storage_volume_command(), timeout=_LIMA_SHORT_TIMEOUT_SECONDS, label="read-storage-volume"
+        )
+        if read_rc != 0:
+            raise BareMetalProvisioningError(
+                f"could not read the storage volume state on {self.box_address} (exit {read_rc}): {read_err.strip()}"
+            )
+        return parse_storage_volume_output(read_out)
 
     def destroy_disk(self, disk_name: str) -> None:
         """Delete a lima data disk on the box, unlocking it first so a leaked locked disk still goes.

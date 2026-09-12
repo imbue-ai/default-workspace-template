@@ -250,26 +250,16 @@ just minds-evals-run $DS opus-standard 3 --ak model='opus[1m]' --ak effort=high
 # a cheap claude config
 just minds-evals-run $DS haiku 3 --ak model=haiku --ak effort=medium
 # pi-coding on an Anthropic key
-<<<<<<< HEAD
-just minds-evals-run $DS pi-anthropic 3 --ak lane=api-key --ak key_provider=anthropic \
-  --ak model=anthropic/claude-haiku-4-5 --ak effort=medium
-# pi-coding on OpenRouter
-OPENROUTER_API_KEY=... just minds-evals-run $DS pi-openrouter 3 --ak lane=openrouter \
-  --ak model='openrouter/<vendor>/<model>' --ak effort=medium
-=======
 just minds-evals-run $DS pi-haiku 3 --ak lane=api-key --ak key_provider=anthropic \
   --ak model=anthropic/claude-haiku-4-5 --ak effort=medium
 # pi-coding on OpenRouter
 OPENROUTER_API_KEY=... just minds-evals-run $DS pi-gpt-5-mini 3 --ak lane=openrouter \
   --ak model=openrouter/openai/gpt-5-mini --ak effort=medium
->>>>>>> origin/main
 ```
 
 One dataset serves every harness config, and each run needs its own job name, because harbor refuses
 to reuse one.
 
-<<<<<<< HEAD
-=======
 **The named harness configs** live in `configs/harness_configs.json`: `default`, `haiku`,
 `pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash` and `opus-standard`, each a name, an `is_nightly`
 flag and the kwargs above. It is the list the [scheduled CI](#scheduled-ci) composes its cells from,
@@ -277,7 +267,6 @@ and the place to look for a config that is known to work -- an entry's kwargs ar
 to append to a `just minds-evals-run` line to drive the same arm locally, and the entry's own name
 is a job name that says which arm the run was.
 
->>>>>>> origin/main
 ### The lane's key
 
 The driver reads the workspace's key from the variable `key_env` names. Left unset, it derives one:
@@ -1453,20 +1442,7 @@ and left out of the run, which also does not cost the other pair its answer. Dep
 installed from `apps/minds_evals/uv.lock` or the run fails: the only thing meant to move between two
 nights is the pair of SHAs.
 
-<<<<<<< HEAD
-Each pair runs two passes. The **oracle pass** replays the canned transcript: it exercises the box
-image build, generation, the verifier container and grading without booting Minds or paying for the
-agent, and it gates the expensive pass. Cheap is not free -- grading is the verifier's judge call, so
-an oracle-only run still costs one judge pass per case (which is why an oracle run asserts
-`reward >= 0.8` rather than exactly 1.0). The **live pass** is the real eval, at a concurrency equal to
-the config's case count so every case runs in one wave. `minds-evals check-run` decides both: it
-passes only when every trial completed, no trial carries a harness `error` status, the structural
-gates hold, and no trial that asked for a model is recorded as having answered on another.
-**Judge scores are reported, never gated** -- they are statistical, and one run's number is not a
-regression signal.
-=======
 ### Which harness configs a run evaluates
->>>>>>> origin/main
 
 `configs/harness_configs.json` is the checked-in list of named harness configs, and it is where the
 spend decision lives: every entry carries an `is_nightly` flag, and a schedule runs exactly the

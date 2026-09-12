@@ -6,6 +6,7 @@ from pydantic import Field
 from imbue.mngr.primitives import HostId
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
 from imbue.mngr_imbue_cloud.data_types import SliceProvisionResult
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.errors import SliceCommandError
 from imbue.mngr_imbue_cloud.interfaces import SliceVmClientInterface
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_DISK_SUFFIX
@@ -39,6 +40,9 @@ class MockSliceVmClient(SliceVmClientInterface):
     )
     management_trust: BoxManagementTrust | None = Field(
         default=None, description="What read_management_trust returns; None makes the read raise"
+    )
+    storage_volume_state: StorageVolumeState | None = Field(
+        default=None, description="What read_storage_volume_state returns; None makes the read raise"
     )
 
     def provision_slice_vm(
@@ -103,6 +107,11 @@ class MockSliceVmClient(SliceVmClientInterface):
 
     def read_box_health_texts(self) -> tuple[str, str]:
         raise NotImplementedError
+
+    def read_storage_volume_state(self) -> StorageVolumeState:
+        if self.storage_volume_state is None:
+            raise NotImplementedError
+        return self.storage_volume_state
 
     def create_instance(
         self,

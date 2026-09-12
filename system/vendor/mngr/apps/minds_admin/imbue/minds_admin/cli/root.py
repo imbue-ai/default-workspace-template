@@ -68,10 +68,7 @@ cli.add_command(workspaces_admin)
 cli.add_command(sweep_admin)
 cli.add_command(relays_admin)
 cli.add_command(repair_keys)
-<<<<<<< HEAD
 cli.add_command(wireguard)
 cli.add_command(wireguard_alias)
 cli.add_command(cutover)
-=======
 cli.add_command(repair_home_layout)
->>>>>>> origin/main

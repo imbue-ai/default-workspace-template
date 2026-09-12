@@ -77,9 +77,15 @@ _ROLLBACK_PARK_POOL_HOST_SQL: Final[str] = (
 
 # A rollback's second flip: write the saved product artifact pointers back so
 # the row becomes an ordinary finalized-stopped gen-1 row, which the product's
-# own gen-1 restore brings back on the next start.
+# own gen-1 restore brings back on the next start. The host-key columns are
+# re-stamped with the harvested keys when the migrate still holds them (a
+# mid-migration rollback; a completed migration stamped them at its finish
+# CAS): the restored VM serves those keys at fresh ports, where clients pin
+# the row's recorded values.
 _ROLLBACK_RESTORE_ARTIFACT_SQL: Final[str] = (
-    "UPDATE pool_hosts SET artifact_manifest = %s::jsonb, wrapped_dek = %s, artifact_generation = %s "
+    "UPDATE pool_hosts SET artifact_manifest = %s::jsonb, wrapped_dek = %s, artifact_generation = %s, "
+    "outer_host_public_key = COALESCE(%s, outer_host_public_key), "
+    "container_host_public_key = COALESCE(%s, container_host_public_key) "
     "WHERE id = %s AND status = 'stopped' AND bare_metal_server_id IS NULL "
     f"AND box_generation < {FIRST_QEMU_BOX_GENERATION}"
 )
@@ -216,11 +222,31 @@ def rollback_park_pool_host(conn: Any, row_id: str, *, memory_units: int) -> boo
 
 
 def rollback_restore_artifact(
-    conn: Any, row_id: str, *, artifact_manifest_json: str, wrapped_dek: str, artifact_generation: int
+    conn: Any,
+    row_id: str,
+    *,
+    artifact_manifest_json: str,
+    wrapped_dek: str,
+    artifact_generation: int,
+    outer_host_public_key: str | None,
+    container_host_public_key: str | None,
 ) -> bool:
-    """Write the saved artifact pointers back onto a rollback-parked gen-1 row (see ``_ROLLBACK_RESTORE_ARTIFACT_SQL``)."""
+    """Write the saved artifact pointers (and, when given, the harvested host keys) back onto a rollback-parked gen-1 row.
+
+    See ``_ROLLBACK_RESTORE_ARTIFACT_SQL``; a None key leaves that column as it is.
+    """
     with conn.cursor() as cur:
-        cur.execute(_ROLLBACK_RESTORE_ARTIFACT_SQL, (artifact_manifest_json, wrapped_dek, artifact_generation, row_id))
+        cur.execute(
+            _ROLLBACK_RESTORE_ARTIFACT_SQL,
+            (
+                artifact_manifest_json,
+                wrapped_dek,
+                artifact_generation,
+                outer_host_public_key,
+                container_host_public_key,
+                row_id,
+            ),
+        )
         is_restored = cur.rowcount == 1
     conn.commit()
     return is_restored

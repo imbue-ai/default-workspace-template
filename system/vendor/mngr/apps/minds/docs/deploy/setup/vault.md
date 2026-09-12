@@ -95,6 +95,14 @@ secrets/minds/<tier>/relay-ssh    # RELAY_SSH_PRIVATE_KEY, RELAY_SSH_PUBLIC_KEY 
                                   #   share-relay SSH keypair; sourced by the operator for
                                   #   `just provision-share-relay` / `just services-deploy-share-relay`
                                   #   so relays can be redeployed from any machine)
+secrets/minds/<tier>/box-storage/<ovh-service-name>
+                                  # LUKS_RECOVERY_PASSPHRASE: one leaf per gen-2 box, minted
+                                  #   and written by `minds-admin server prep` / `setup`
+                                  #   BEFORE the box's storage partition is formatted, read
+                                  #   by every re-prep and by `minds-admin server unlock`
+                                  #   (see "Storage encryption on a gen-2 box" in
+                                  #   host-pool-setup.md). Never written by hand; a lost
+                                  #   entry means the box is drained and repaved.
 ```
 
 The dev-tier `neon-admin` token must have *project-create* scope on

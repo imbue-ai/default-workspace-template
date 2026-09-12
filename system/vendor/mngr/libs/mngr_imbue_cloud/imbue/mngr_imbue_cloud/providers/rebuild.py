@@ -1,10 +1,6 @@
-<<<<<<< HEAD
-=======
-from collections.abc import Mapping
 from typing import Any
 from typing import Final
 
->>>>>>> origin/main
 from loguru import logger
 
 from imbue.imbue_common.pure import pure
@@ -51,12 +47,15 @@ def _slice_memory_mib_from_lease(lease_result: LeaseResult) -> int | None:
 # structurally rather than field by field (a hand-copied list silently drops
 # any knob it does not name).
 _DELEGATED_FIELDS: Final[frozenset[str]] = frozenset(VpsProviderConfig.model_fields) - {"backend"}
-# A slice VM is the isolation boundary and its Docker is plain runc (the lima
-# provision script installs no runsc, and the rebuild skips the runsc host
-# setup for slices), so the account block's gVisor knobs must stay off the
-# slice config: with them the rebuilt container's `docker run --runtime runsc`
-# fails on the VM.
-_SLICE_DELEGATED_FIELDS: Final[frozenset[str]] = _DELEGATED_FIELDS - {"docker_runtime", "install_gvisor_runtime"}
+# On a slice the container runtime and start args follow the slice's
+# generation (see build_slice_rebuild_config): a gen-1 lima guest has no runsc,
+# so the account block's gVisor knobs cannot be forwarded as-is, and the runsc
+# host setup is never run on a slice VM.
+_SLICE_DELEGATED_FIELDS: Final[frozenset[str]] = _DELEGATED_FIELDS - {
+    "docker_runtime",
+    "install_gvisor_runtime",
+    "default_start_args",
+}
 
 
 @pure
@@ -114,49 +113,31 @@ def build_delegated_vps_provider(
 
 
 @pure
-<<<<<<< HEAD
 def build_slice_rebuild_config(
     config: ImbueCloudProviderConfig, lease_result: LeaseResult
 ) -> SliceVpsDockerProviderConfig:
     """The slice provider config for rebuilding the container on a leased slice.
 
-    A gen-2 slice's guest ships the gVisor runtime in its image, so the
-    rebuilt container runs under the account config's ``docker_runtime``
-    (the per-account block sets ``runsc``) with its hardening ``default_start_args`` plus the
-    gen-2 tmpfs mounts -- exactly the shape the bake creates. A gen-1 (lima)
-    guest has no runsc, so its rebuild stays plain runc with no extra args.
+    Forwards every VpsProviderConfig field of the imbue_cloud config except the
+    generation-dependent runtime knobs (see ``_SLICE_DELEGATED_FIELDS``) and
+    layers the slice's coordinates on top. A gen-2 slice's guest ships the
+    gVisor runtime in its image, so the rebuilt container runs under the account
+    config's ``docker_runtime`` (the per-account block sets ``runsc``) with its
+    hardening ``default_start_args`` plus the gen-2 tmpfs mounts -- exactly the
+    shape the bake creates. A gen-1 (lima) guest has no runsc, so its rebuild
+    stays plain runc with no extra args.
     """
     # The guest's RAM (from the lease's sizing column) sizes the rebuilt
     # container's memory cap, exactly as the bake sizes the original container's.
     slice_memory_mib = _slice_memory_mib_from_lease(lease_result)
     is_gen2 = lease_result.box_generation >= FIRST_QEMU_BOX_GENERATION
     return SliceVpsDockerProviderConfig(
-        host_dir=config.host_dir,
-        container_ssh_port=config.container_ssh_port,
+        **_delegated_vps_fields(config, _SLICE_DELEGATED_FIELDS),
         box_public_address=lease_result.vps_address,
         box_generation=lease_result.box_generation,
         slice_memory_mib=slice_memory_mib,
         docker_runtime=config.docker_runtime if is_gen2 else None,
         default_start_args=(tuple(config.default_start_args) + GEN2_CONTAINER_TMPFS_START_ARGS if is_gen2 else ()),
-=======
-def _build_slice_rebuild_config(
-    config: ImbueCloudProviderConfig,
-    *,
-    box_public_address: str,
-    slice_memory_mib: int | None,
-) -> SliceVpsDockerProviderConfig:
-    """Build the slice provider config for the slow-path rebuild on a leased slice.
-
-    Forwards every VpsProviderConfig field of the imbue_cloud config except the
-    gVisor knobs (see ``_SLICE_DELEGATED_FIELDS``) and layers the slice-specific
-    coordinates on top; the slice class keeps its own backend name and
-    slice-only defaults.
-    """
-    return SliceVpsDockerProviderConfig(
-        **_delegated_vps_fields(config, _SLICE_DELEGATED_FIELDS),
-        box_public_address=box_public_address,
-        slice_memory_mib=slice_memory_mib,
->>>>>>> origin/main
     )
 
 
@@ -184,12 +165,6 @@ def build_slice_rebuild_provider(
             "Lease {} carries no machine size (an older connector); rebuilding the container without a memory cap",
             lease_result.host_db_id,
         )
-<<<<<<< HEAD
-=======
-    slice_config = _build_slice_rebuild_config(
-        config, box_public_address=lease_result.vps_address, slice_memory_mib=slice_memory_mib
-    )
->>>>>>> origin/main
     # The rebuild never carves/destroys a VM (it only tears down + rebuilds the
     # container on the already-leased slice via the forwarded ports below), so
     # the slice client's box-SSH coordinates are unused here regardless of the

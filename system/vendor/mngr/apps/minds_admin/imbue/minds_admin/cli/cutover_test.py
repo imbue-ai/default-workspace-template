@@ -1,9 +1,12 @@
+import signal
+
 import click
 import pytest
 from click.testing import CliRunner
 
 from imbue.minds_admin.cli.cutover import confirmation_tier_for_env_name
 from imbue.minds_admin.cli.cutover import cutover
+from imbue.minds_admin.cli.cutover import immediate_sigint_termination
 from imbue.minds_admin.cli.cutover import require_tier_confirmation
 from imbue.minds_admin.cli.root import cli
 
@@ -77,3 +80,16 @@ def test_require_tier_confirmation_accepts_only_the_activated_tiers_flag() -> No
     require_tier_confirmation(
         "ci-abc123", is_production_confirmed=False, is_staging_confirmed=False, is_dev_confirmed=True
     )
+
+
+def test_immediate_sigint_termination_uses_the_default_action_and_restores_the_handler() -> None:
+    def custom_handler(_signum: int, _frame: object) -> None:
+        pass
+
+    previous = signal.signal(signal.SIGINT, custom_handler)
+    try:
+        with immediate_sigint_termination():
+            assert signal.getsignal(signal.SIGINT) is signal.SIG_DFL
+        assert signal.getsignal(signal.SIGINT) is custom_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)

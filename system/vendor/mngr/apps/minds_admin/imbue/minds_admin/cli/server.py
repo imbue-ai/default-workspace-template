@@ -10,8 +10,10 @@ OVH-touching steps act on the real account and are validated against a delivered
 box; ``list`` / ``register`` are exercised without OVH.
 """
 
+import base64
 import json
 import os
+import secrets
 import shlex
 import signal
 import tempfile
@@ -36,14 +38,17 @@ import psutil
 import psycopg2
 from loguru import logger
 from pydantic import Field
+from pydantic import PrivateAttr
 from tabulate import tabulate
 
 from imbue.apt_mirror.cli import CURRENT_TIMESTAMP_PATH
 from imbue.apt_mirror.cli import read_current_timestamp
+from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import ObservableThread
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import log_span
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds.config.data_types import ManagementOverlayAllocation
 from imbue.minds.config.data_types import ManagementWireguardConfig
@@ -65,14 +70,19 @@ from imbue.minds_admin.bake.pool_bake import verify_only_primary_agents_baked
 from imbue.minds_admin.bake.pool_bake import wait_for_env_converge
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import make_admin_connector_client
+from imbue.minds_admin.cli._tier_secrets import make_workspace_storage_s3_client
+from imbue.minds_admin.cli._tier_secrets import read_box_storage_passphrase_or_none
 from imbue.minds_admin.cli._tier_secrets import resolve_boxes_collector_install_config_or_none
 from imbue.minds_admin.cli._tier_secrets import resolve_management_plane_config_or_none
 from imbue.minds_admin.cli._tier_secrets import resolve_ovh_config
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_private_key_pem
+from imbue.minds_admin.cli._tier_secrets import resolve_workspace_storage_config
+from imbue.minds_admin.cli._tier_secrets import write_box_storage_passphrase
 from imbue.minds_admin.cli.paid import paid_auth_options
 from imbue.minds_admin.cli.paid import resolve_admin_api_key
 from imbue.minds_admin.primitives import SLICE_PROVIDER_INSTANCE_NAME
+from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_BAKING
 from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
 from imbue.minds_admin.slices.bare_metal_db import build_baking_slice_pool_host_insert_values
 from imbue.minds_admin.slices.bare_metal_db import claim_pool_host_for_removal
@@ -100,7 +110,9 @@ from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_LIMA_VERSION
 from imbue.minds_admin.slices.bare_metal_prep import build_box_prep_script
 from imbue.minds_admin.slices.bare_metal_prep import build_gen2_box_prep_script
 from imbue.minds_admin.slices.bare_metal_prep import parse_storage_partition_gib_from_prep_output
+from imbue.minds_admin.slices.box_access import BoxManagementDial
 from imbue.minds_admin.slices.box_access import MANAGEMENT_SSH_PORT
+from imbue.minds_admin.slices.box_access import close_box_management_tunnels
 from imbue.minds_admin.slices.box_access import resolve_box_management_dial
 from imbue.minds_admin.slices.box_access import resolve_server_management_dial
 from imbue.minds_admin.slices.ci_slice_sweep import CiSliceSweepBoxReport
@@ -126,6 +138,14 @@ from imbue.minds_admin.slices.ordering import wait_for_dedicated_server_address
 from imbue.minds_admin.slices.ordering import wait_for_order_service_name
 from imbue.minds_admin.slices.ordering import wait_for_os_reinstall
 from imbue.minds_admin.slices.pricing import compute_slice_pricing_rows
+from imbue.minds_admin.slices.storage_encryption import STORAGE_UNLOCKED_MARKER
+from imbue.minds_admin.slices.storage_encryption import parse_storage_encryption_from_prep_output
+from imbue.minds_admin.slices.storage_encryption import render_storage_header_backup_fetch_script
+from imbue.minds_admin.slices.storage_encryption import render_storage_passphrase_cleanup_script
+from imbue.minds_admin.slices.storage_encryption import render_storage_passphrase_staging_script
+from imbue.minds_admin.slices.storage_encryption import render_storage_unlock_script
+from imbue.minds_admin.slices.storage_encryption import storage_header_backup_object_key
+from imbue.minds_admin.slices.storage_header_backup import upload_storage_header_backup
 from imbue.mngr.cli.output_helpers import write_human_line
 from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import HostId
@@ -146,6 +166,7 @@ from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyReport
 from imbue.mngr_imbue_cloud.data_types import SliceBakeOutcome
 from imbue.mngr_imbue_cloud.data_types import SliceBakeReport
 from imbue.mngr_imbue_cloud.data_types import SlicePricingRow
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.data_types import UnauditedBox
 from imbue.mngr_imbue_cloud.data_types import WarmCacheReport
 from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
@@ -173,10 +194,12 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_MEMORY_PER_SLICE_GB
 from imbue.mngr_imbue_cloud.slices.bare_metal import DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN2_CONTAINER_RUNTIME
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN2_CONTAINER_TMPFS_START_ARGS
+from imbue.mngr_imbue_cloud.slices.bare_metal import ORPHAN_SLICE_MIN_AGE_SECONDS
 from imbue.mngr_imbue_cloud.slices.bare_metal import assert_env_name_fits_slice_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import assert_gen2_box_disk_fits_default_machines
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_image_cache_dir_for_generation
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_service_user
+from imbue.mngr_imbue_cloud.slices.bare_metal import build_read_storage_volume_command
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_gen2_box_default_machine_fit
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_disk_names
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_orphan_slice_instance_names
@@ -195,6 +218,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import is_slice_owned_by_env
 from imbue.mngr_imbue_cloud.slices.bare_metal import is_trusted_ca_correct_for_tier
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_storage_volume_output
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_instance_name
 from imbue.mngr_imbue_cloud.slices.box_image_cache import BoxImageCacheInterface
@@ -202,6 +226,8 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import DEFAULT_SLICE_PORT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import DEFAULT_SLICE_PORT_RANGE_START
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SLICE_SERVICE_USER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_LUKS_MAPPER_NAME
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_LUKS_MAPPER_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_PARTITION_MARKER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import DEFAULT_MACHINE_UNITS
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GEN2_BOOT_DISK_GIB
@@ -361,6 +387,22 @@ def _box_ssh_host_key_options(server_address: str, port: int, box_host_public_ke
         Path(known_hosts_path).unlink(missing_ok=True)
 
 
+@pure
+def box_script_provisioning_error_or_none(group: ConcurrencyExceptionGroup) -> BareMetalProvisioningError | None:
+    """The provisioning error a box-script round trip raised inside its concurrency group, if that is all it holds.
+
+    The SSH runner opens a concurrency group per round trip, so a refused
+    connection at the copy step surfaces as a group wrapping the
+    ``BareMetalProvisioningError``; callers catch the plain error, so the
+    runner hands the wrapped one back.
+    """
+    if isinstance(group.main_exception, BareMetalProvisioningError):
+        return group.main_exception
+    if len(group.exceptions) == 1 and isinstance(group.exceptions[0], BareMetalProvisioningError):
+        return group.exceptions[0]
+    return None
+
+
 def run_root_script_over_ssh(
     server_address: str,
     port: int,
@@ -371,6 +413,13 @@ def run_root_script_over_ssh(
     *,
     # How long the script may run; the default is sized for the box prep.
     run_timeout_seconds: float = _BOX_PREP_SSH_TIMEOUT_SECONDS,
+    # Bytes handed to the script on its stdin (a secret that must never ride in
+    # argv or in the script file); None leaves stdin closed.
+    stdin_bytes: bytes | None = None,
+    # Whether every stdout line is echoed into the log as it arrives; off for
+    # runs whose output is a payload to parse (a base64 header backup) rather
+    # than progress to watch.
+    is_output_logged: bool = True,
 ) -> str:
     """Copy a bash script to the box over scp, then run it with ``sudo bash``.
 
@@ -379,10 +428,16 @@ def run_root_script_over_ssh(
     kernel's per-argument size limit (MAX_ARG_STRLEN, 128KiB), so embedding it
     in argv fails with "Argument list too long" on either endpoint.
 
+    The script is staged on the box's tmpfs (``/dev/shm``) rather than under
+    ``/tmp``: the gen-2 prep bind-mounts the encrypted volume's tmp directory
+    over ``/tmp`` partway through, which would shadow a script staged there so
+    the trailing removal misses it and leaves the file (it carries the
+    telemetry collector's ingest credential) on the plaintext root partition.
+
     Returns the run's full stdout, so callers can parse marker lines (e.g. the
     gen-2 prep's ``MNGR_WIREGUARD_PUBLIC_KEY`` echo).
     """
-    remote_script_path = f"/tmp/mngr-box-script-{uuid4().hex}.sh"
+    remote_script_path = f"/dev/shm/mngr-box-script-{uuid4().hex}.sh"
     # Removal always runs, and the exit status of the script itself is preserved.
     remote = f"sudo bash {remote_script_path}; status=$?; rm -f {remote_script_path}; exit $status"
     cg = ConcurrencyGroup(name="box-prep-ssh")
@@ -390,48 +445,57 @@ def run_root_script_over_ssh(
         with tempfile.NamedTemporaryFile("w", prefix="mngr_box_script_", suffix=".sh") as local_script:
             local_script.write(script)
             local_script.flush()
-            with cg:
-                copy_result = cg.run_process_to_completion(
-                    command=[
-                        "scp",
-                        "-P",
-                        str(port),
-                        "-i",
-                        str(private_key_path),
-                        *host_key_opts,
-                        "-o",
-                        "ConnectTimeout=30",
-                        local_script.name,
-                        f"{ssh_user}@{server_address}:{remote_script_path}",
-                    ],
-                    timeout=_BOX_PREP_SSH_TIMEOUT_SECONDS,
-                    is_checked_after=False,
-                )
-                if copy_result.returncode != 0:
-                    raise BareMetalProvisioningError(
-                        f"copying the prep script to {server_address} failed (exit {copy_result.returncode}): "
-                        f"{copy_result.stderr.strip()}"
+            try:
+                with cg:
+                    copy_result = cg.run_process_to_completion(
+                        command=[
+                            "scp",
+                            "-P",
+                            str(port),
+                            "-i",
+                            str(private_key_path),
+                            *host_key_opts,
+                            "-o",
+                            "ConnectTimeout=30",
+                            local_script.name,
+                            f"{ssh_user}@{server_address}:{remote_script_path}",
+                        ],
+                        timeout=_BOX_PREP_SSH_TIMEOUT_SECONDS,
+                        is_checked_after=False,
                     )
-                result = cg.run_process_to_completion(
-                    command=[
-                        "ssh",
-                        "-p",
-                        str(port),
-                        "-i",
-                        str(private_key_path),
-                        *host_key_opts,
-                        "-o",
-                        "ConnectTimeout=30",
-                        f"{ssh_user}@{server_address}",
-                        remote,
-                    ],
-                    timeout=run_timeout_seconds,
-                    is_checked_after=False,
-                    on_output=lambda line, _is_stdout: logger.info("  [box] {}", line.rstrip()),
-                )
+                    if copy_result.returncode != 0:
+                        raise BareMetalProvisioningError(
+                            f"copying the box script to {server_address} failed (exit {copy_result.returncode}): "
+                            f"{copy_result.stderr.strip()}"
+                        )
+                    result = cg.run_process_to_completion(
+                        command=[
+                            "ssh",
+                            "-p",
+                            str(port),
+                            "-i",
+                            str(private_key_path),
+                            *host_key_opts,
+                            "-o",
+                            "ConnectTimeout=30",
+                            f"{ssh_user}@{server_address}",
+                            remote,
+                        ],
+                        timeout=run_timeout_seconds,
+                        is_checked_after=False,
+                        on_output=(lambda line, _is_stdout: logger.info("  [box] {}", line.rstrip()))
+                        if is_output_logged
+                        else None,
+                        stdin_bytes=stdin_bytes,
+                    )
+            except ConcurrencyExceptionGroup as exc:
+                provisioning_error = box_script_provisioning_error_or_none(exc)
+                if provisioning_error is None:
+                    raise
+                raise provisioning_error from exc
     if result.returncode != 0:
         raise BareMetalProvisioningError(
-            f"box prep on {server_address} failed (exit {result.returncode}): {result.stderr.strip()}"
+            f"the box script on {server_address} failed (exit {result.returncode}): {result.stderr.strip()}"
         )
     return result.stdout
 
@@ -631,12 +695,6 @@ def _record_box_storage_partition_gib(dsn: str, server_id: str, prep_stdout: str
     _update_server_fields(dsn, server_id, disk_gb=storage_partition_gib)
 
 
-def _record_gen2_prep_results(dsn: str, server_id: str, prep_stdout: str) -> None:
-    """Record everything a gen-2 prep run reports about the box on its row."""
-    _record_box_wireguard_public_key(dsn, server_id, prep_stdout)
-    _record_box_storage_partition_gib(dsn, server_id, prep_stdout)
-
-
 def _record_box_wireguard_public_key(dsn: str, server_id: str, prep_stdout: str) -> None:
     """Stamp the box's WireGuard public key (echoed by the gen-2 prep) on its row."""
     wireguard_public_key = parse_wireguard_public_key_from_prep_output(prep_stdout)
@@ -690,6 +748,241 @@ def _stamp_server_service_user(dsn: str, server_id: str, service_user: str, **ex
     # pool DB has applied migration 041 and no pre-rename checkout is in use.
     _update_server_fields(
         dsn, server_id, slice_service_user=service_user, lima_service_user=service_user, **extra_fields
+    )
+
+
+# Bytes of entropy in a box's LUKS recovery passphrase (a keyslot's only
+# human-side secret; the TPM keyslot is the everyday unlock).
+_STORAGE_PASSPHRASE_ENTROPY_BYTES: Final[int] = 32
+# A single box command is a few round trips, never a prep.
+_STORAGE_BOX_COMMAND_TIMEOUT_SECONDS: Final[float] = 120.0
+
+
+class _BoxSshTarget(FrozenModel):
+    """Where and how the prep and the storage-encryption helpers dial one box's management sshd."""
+
+    host: str = Field(description="Address to dial (the resolved management dial, or the public address)")
+    port: int = Field(description="Port to dial")
+    ssh_user: str = Field(description="The box's management SSH user (the OS image's sudo user)")
+    private_key_path: Path = Field(description="The operator identity the session authenticates with")
+    box_host_public_key: str = Field(description="The box's recorded sshd host key, strictly pinned")
+
+
+def _run_box_root_script(
+    target: _BoxSshTarget,
+    script: str,
+    *,
+    # Sized for a short box command (a few round trips); the prep passes its own.
+    run_timeout_seconds: float = _STORAGE_BOX_COMMAND_TIMEOUT_SECONDS,
+    stdin_bytes: bytes | None = None,
+    is_output_logged: bool = True,
+) -> str:
+    """Run one root script on the box and return its stdout; a failed round trip raises ``BareMetalProvisioningError``."""
+    return run_root_script_over_ssh(
+        target.host,
+        target.port,
+        target.ssh_user,
+        target.private_key_path,
+        script,
+        target.box_host_public_key,
+        run_timeout_seconds=run_timeout_seconds,
+        stdin_bytes=stdin_bytes,
+        is_output_logged=is_output_logged,
+    )
+
+
+def _require_box_service_name_for_storage(server: BareMetalServer) -> str:
+    """The OVH service name keying the box's recovery passphrase in Vault; a row without one cannot be encrypted."""
+    if not server.ovh_service_name:
+        raise BareMetalProvisioningError(
+            f"server {server.id} has no ovh_service_name recorded, which keys its storage recovery passphrase in "
+            "Vault; record it (`minds-admin server register --ovh-service-name ...`) before prepping the box"
+        )
+    return server.ovh_service_name
+
+
+def _require_active_env_for_storage() -> str:
+    env_name = active_env_name_or_none()
+    if env_name is None:
+        raise BareMetalProvisioningError(
+            "no minds env is activated: `minds-admin env activate <env>` first (a gen-2 box's storage recovery "
+            "passphrase lives in the activated tier's Vault)"
+        )
+    return env_name
+
+
+@pure
+def choose_storage_passphrase(
+    *,
+    storage_state: StorageVolumeState,
+    vault_passphrase: str | None,
+    fresh_passphrase: str,
+    box_service_name: str,
+) -> str:
+    """Which recovery passphrase to stage for a prep: Vault's, or a fresh one that Vault must then record.
+
+    A fresh passphrase is minted under exactly the rule the prep formats under:
+    the storage root is mounted from a device other than the LUKS mapper (a
+    stale Vault entry from the box's previous life is overwritten). Every
+    other state -- the mapper mounted, or nothing mounted (an
+    opened-but-unmounted mapper, a locked volume, or no storage partition at
+    all) -- needs the passphrase that opens the existing header, which only
+    Vault can supply: the prep verifies the staged passphrase against a
+    keyslot, so a fresh one would fail there after being recorded in Vault as
+    if it opened the box. That is why the mapper being mounted decides on its
+    own, whatever the probe's block-device type read said: a mapper the audit
+    could not confirm as a crypt device must never cost the box its recorded
+    passphrase. A box in one of those states with no Vault entry is refused
+    instead.
+    """
+    if storage_state.mounted_source is not None and storage_state.mounted_source != GEN2_STORAGE_LUKS_MAPPER_PATH:
+        return fresh_passphrase
+    if vault_passphrase is None:
+        state = (
+            "already has an encrypted storage volume"
+            if storage_state.mounted_source is not None
+            else "has nothing mounted at its storage root (a locked volume, an opened-but-unmounted mapper, or no "
+            "storage partition)"
+        )
+        raise BareMetalProvisioningError(
+            f"box {box_service_name} {state} but the tier's Vault holds no recovery passphrase for it; only that "
+            "passphrase can open an existing volume, and a lost one cannot be recovered -- drain the box and repave it "
+            "(a box with no storage partition needs the gen-2 reinstall layout first)"
+        )
+    return vault_passphrase
+
+
+def _probe_storage_volume_state(target: _BoxSshTarget) -> StorageVolumeState:
+    return parse_storage_volume_output(_run_box_root_script(target, build_read_storage_volume_command() + "\n"))
+
+
+def _resolve_storage_passphrase_for_prep(server: BareMetalServer, target: _BoxSshTarget) -> str:
+    """The passphrase the prep stages, recorded in Vault BEFORE the prep can format anything.
+
+    A volume that is already encrypted must have its passphrase in Vault: the
+    prep verifies the staged passphrase opens a keyslot, so a wrong or missing
+    one is refused rather than papered over, and a lost passphrase means the
+    box is drained and repaved.
+    """
+    env_name = _require_active_env_for_storage()
+    service_name = _require_box_service_name_for_storage(server)
+    storage_state = _probe_storage_volume_state(target)
+    vault_passphrase = read_box_storage_passphrase_or_none(env_name, service_name)
+    passphrase = choose_storage_passphrase(
+        storage_state=storage_state,
+        vault_passphrase=vault_passphrase,
+        fresh_passphrase=secrets.token_urlsafe(_STORAGE_PASSPHRASE_ENTROPY_BYTES),
+        box_service_name=service_name,
+    )
+    if passphrase != vault_passphrase:
+        write_box_storage_passphrase(env_name, service_name, passphrase)
+        logger.info("Recorded a fresh storage recovery passphrase for box {} in the tier's Vault", service_name)
+    return passphrase
+
+
+def _fetch_and_upload_storage_header_backup(server: BareMetalServer, target: _BoxSshTarget, luks_uuid: str) -> None:
+    """Fetch the header backup staged on the box and upload it to the tier's storage bucket."""
+    header_bytes = base64.b64decode(
+        _run_box_root_script(target, render_storage_header_backup_fetch_script(), is_output_logged=False).strip()
+    )
+    storage = resolve_workspace_storage_config()
+    object_key = storage_header_backup_object_key(
+        storage.key_prefix, _require_box_service_name_for_storage(server), luks_uuid
+    )
+    upload_storage_header_backup(make_workspace_storage_s3_client(storage), storage.bucket, object_key, header_bytes)
+
+
+def _upload_storage_header_backup_or_warn(server: BareMetalServer, target: _BoxSshTarget, prep_stdout: str) -> None:
+    """Fetch the header backup the prep staged and park it in the tier bucket; any failure here only warns.
+
+    The volume is fine without the backup (it is the insurance against a
+    corrupt header), so neither a tier whose storage bucket is not configured
+    nor a transient failure fetching or uploading it may fail an otherwise
+    successful prep. Only a missing MNGR_STORAGE_ENCRYPTION marker -- which
+    means the encryption step itself did not behave as expected -- raises.
+    """
+    encryption = parse_storage_encryption_from_prep_output(prep_stdout)
+    if encryption is None:
+        raise BareMetalProvisioningError(
+            f"gen-2 prep on server {server.id} completed but printed no MNGR_STORAGE_ENCRYPTION marker; "
+            "the storage volume's state is unknown"
+        )
+    luks_uuid, _backing_device = encryption
+    try:
+        _fetch_and_upload_storage_header_backup(server, target, luks_uuid)
+    except (click.ClickException, BareMetalProvisioningError) as exc:
+        logger.warning("Not uploading the LUKS header backup of box {}: {}", server.public_address, exc)
+
+
+def _run_gen2_prep_with_storage_encryption(
+    server: BareMetalServer,
+    target: _BoxSshTarget,
+    script: str,
+    # Where the round trips after the prep script dial, given the script's stdout: the prep locks the box's public
+    # ``:22`` down, so a fresh install continues over the overlay the script just brought up.
+    resolve_post_script_target: Callable[[str], _BoxSshTarget],
+) -> str:
+    """Run a gen-2 prep with its recovery passphrase staged on the box's tmpfs, then bank the header backup.
+
+    The passphrase never rides inside the prep script (which lands as a file
+    on the box): it is written to tmpfs over its own SSH round trip, the prep
+    consumes and deletes it, and a best-effort cleanup removes both staging
+    files however the prep ended.
+    """
+    passphrase = _resolve_storage_passphrase_for_prep(server, target)
+    _run_box_root_script(target, render_storage_passphrase_staging_script(), stdin_bytes=passphrase.encode())
+    post_script_target = target
+    try:
+        prep_stdout = _run_box_root_script(target, script, run_timeout_seconds=_BOX_PREP_SSH_TIMEOUT_SECONDS)
+        post_script_target = resolve_post_script_target(prep_stdout)
+        _upload_storage_header_backup_or_warn(server, post_script_target, prep_stdout)
+    finally:
+        try:
+            _run_box_root_script(post_script_target, render_storage_passphrase_cleanup_script())
+        except BareMetalProvisioningError as exc:
+            logger.warning("Could not clean the storage staging files off {}: {}", post_script_target.host, exc)
+    return prep_stdout
+
+
+def _run_box_prep_script(
+    server: BareMetalServer,
+    target: _BoxSshTarget,
+    script: str,
+    resolve_post_script_target: Callable[[str], _BoxSshTarget],
+) -> str:
+    """Run the composed prep on the box: with the storage-encryption round trips on gen-2, plainly on gen-1."""
+    if server.box_generation >= FIRST_QEMU_BOX_GENERATION:
+        return _run_gen2_prep_with_storage_encryption(server, target, script, resolve_post_script_target)
+    return _run_box_root_script(target, script, run_timeout_seconds=_BOX_PREP_SSH_TIMEOUT_SECONDS)
+
+
+def _management_target_after_prep(
+    dsn: str, server_id: str, ssh_user: str, private_key_path: Path, box_host_public_key: str, prep_stdout: str
+) -> _BoxSshTarget:
+    """The dial for the round trips that follow a gen-2 prep script, wherever the prep itself dialed.
+
+    The box's WireGuard key is recorded first (so a run that dies after this
+    point resumes over the overlay instead of the now locked-down public
+    ``:22``), then the management resolver picks the dial, falling back to the
+    public address for a box that has no overlay yet.
+    """
+    _record_box_wireguard_public_key(dsn, server_id, prep_stdout)
+    dial = resolve_server_management_dial(_fetch_server_or_raise(dsn, server_id))
+    return _BoxSshTarget(
+        host=dial.host,
+        port=dial.port,
+        ssh_user=ssh_user,
+        private_key_path=private_key_path,
+        box_host_public_key=box_host_public_key,
+    )
+
+
+def _post_prep_target_resolver(
+    dsn: str, server_id: str, ssh_user: str, private_key_path: Path, box_host_public_key: str
+) -> Callable[[str], _BoxSshTarget]:
+    """The ``resolve_post_script_target`` for one prep run: ``_management_target_after_prep`` over the run's connection details."""
+    return lambda prep_stdout: _management_target_after_prep(
+        dsn, server_id, ssh_user, private_key_path, box_host_public_key, prep_stdout
     )
 
 
@@ -751,8 +1044,12 @@ def prep_box(
     nftables + genisoimage + dnsmasq + WireGuard, the 512 per-slice users and
     the ``mngr-dhcp`` DHCP service user, the plugin-rendered prep artifacts
     (template unit / root helper / sudoers / the slice DHCP server's config,
-    unit and udp/67 policy), the staged trixie guest image on the XFS
-    storage partition, the management WireGuard bring-up (overlay address
+    unit and udp/67 policy), the LUKS storage volume (an empty storage
+    partition is formatted, TPM-enrolled and keyed by a per-box recovery
+    passphrase this command mints into or reads from the tier's Vault and
+    stages on the box's tmpfs; a plain partition holding slices is refused;
+    the header backup lands in the tier bucket), the staged trixie guest
+    image on that volume, the management WireGuard bring-up (overlay address
     assigned + public key recorded on the row), and -- when the activated
     tier's ``[management_plane]`` table names a Modal Proxy -- the box ``:22``
     lockdown. Gen-1 authorizes the pool management key (POOL_SSH_PRIVATE_KEY)
@@ -775,13 +1072,7 @@ def prep_box(
     """
     dsn = resolve_pool_database_url(database_url)
     server = _fetch_server_or_raise(dsn, server_id)
-    if not server.public_address:
-        raise BareMetalProvisioningError(f"server {server_id} has no public_address; cannot reach the box to prep it")
-    if not server.box_host_public_key:
-        raise BareMetalProvisioningError(
-            f"server {server_id} has no recorded box host key to pin; run `minds-admin server setup` (reinstalls the OS "
-            "with our injected key) or the one-time `minds-admin pool backfill-host-keys` before prepping"
-        )
+    box_host_public_key = _require_box_reachable_with_pinned_host_key(server, action="prepping")
     dial = resolve_server_management_dial(server)
     is_gen2 = server.box_generation >= FIRST_QEMU_BOX_GENERATION
     service_user = _resolve_service_user_for_generation(
@@ -820,16 +1111,27 @@ def prep_box(
                 lima_version,
             )
         private_key_path = identities.private_key_path_for(server.box_generation)
-        prep_stdout = run_root_script_over_ssh(
-            dial.host, dial.port, ssh_user, private_key_path, script, server.box_host_public_key
+        prep_stdout = _run_box_prep_script(
+            server,
+            _BoxSshTarget(
+                host=dial.host,
+                port=dial.port,
+                ssh_user=ssh_user,
+                private_key_path=private_key_path,
+                box_host_public_key=box_host_public_key,
+            ),
+            script,
+            _post_prep_target_resolver(dsn, server_id, ssh_user, private_key_path, box_host_public_key),
         )
     # The prep created (or converged) this user on the box; the row must say so
     # before the connector's next box command, which SSHes as the recorded user.
     _stamp_server_service_user(dsn, server_id, service_user)
     if is_gen2:
-        _record_gen2_prep_results(dsn, server_id, prep_stdout)
+        # The WireGuard key was recorded by the post-script resolver, before the storage round trips.
+        _record_box_storage_partition_gib(dsn, server_id, prep_stdout)
         logger.info(
-            "Gen-2 box {} prepped: qemu stack installed, {} ready, trixie image staged, WireGuard up",
+            "Gen-2 box {} prepped: qemu stack installed, {} ready, storage volume encrypted, trixie image staged, "
+            "WireGuard up",
             server.public_address,
             service_user,
         )
@@ -883,18 +1185,12 @@ def ssh_into_box(server_id: str, ssh_user: str, database_url: str | None, remote
     """
     dsn = resolve_pool_database_url(database_url)
     server_row = _fetch_server_or_raise(dsn, server_id)
-    if not server_row.public_address:
-        raise BareMetalProvisioningError(f"server {server_id} has no public_address; cannot reach the box")
-    if not server_row.box_host_public_key:
-        raise BareMetalProvisioningError(
-            f"server {server_id} has no recorded box host key to pin; run `minds-admin server setup` or the "
-            "one-time `minds-admin pool backfill-host-keys` before opening a session"
-        )
+    box_host_public_key = _require_box_reachable_with_pinned_host_key(server_row, action="opening a session")
     dial = resolve_server_management_dial(server_row)
     logger.debug("Opening management SSH to box {} via {}:{}", server_row.public_address, dial.host, dial.port)
     with box_management_identities() as identities:
         private_key_path = identities.private_key_path_for(server_row.box_generation)
-        with _box_ssh_host_key_options(dial.host, dial.port, server_row.box_host_public_key) as host_key_options:
+        with _box_ssh_host_key_options(dial.host, dial.port, box_host_public_key) as host_key_options:
             argv = build_box_ssh_argv(
                 dial_host=dial.host,
                 dial_port=dial.port,
@@ -908,6 +1204,58 @@ def ssh_into_box(server_id: str, ssh_user: str, database_url: str | None, remote
             # tunnel group at exit.
             completed = run_interactive_subprocess(argv)
     raise SystemExit(completed.returncode)
+
+
+@server.command(name="unlock")
+@click.option("--server-id", required=True, help="bare_metal_servers row id (from `list`) of the gen-2 box to unlock.")
+@click.option("--ssh-user", default="debian", help="Management SSH user on the box (the OS image's sudo user).")
+@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
+def unlock_storage_volume(server_id: str, ssh_user: str, database_url: str | None) -> None:
+    """Open a gen-2 box's locked LUKS storage volume with its Vault recovery passphrase and bring its slices back.
+
+    The everyday unlock is the box's TPM at boot; this is the recovery path
+    for a box whose TPM unlock failed (the telemetry collector's
+    STORAGE_VOLUME_LOCKED signal, or every slice on the box down after a
+    reboot). Reads the passphrase from the tier's Vault, hands it to the box
+    on stdin (never argv), opens and mounts the volume, restores the bind
+    mounts and the swapfile, flushes the journal, and starts every slice unit
+    enabled for boot. Re-running `server prep` afterwards re-seals the volume
+    to the box's current TPM.
+    """
+    dsn = resolve_pool_database_url(database_url)
+    server_row = _fetch_server_or_raise(dsn, server_id)
+    if server_row.box_generation < FIRST_QEMU_BOX_GENERATION:
+        raise click.UsageError(f"server {server_id} is a gen-1 box, which has no encrypted storage volume to unlock")
+    box_host_public_key = _require_box_reachable_with_pinned_host_key(
+        server_row, action="unlocking its storage volume"
+    )
+    env_name = _require_active_env_for_storage()
+    service_name = _require_box_service_name_for_storage(server_row)
+    passphrase = read_box_storage_passphrase_or_none(env_name, service_name)
+    if passphrase is None:
+        raise BareMetalProvisioningError(
+            f"the tier's Vault holds no storage recovery passphrase for {service_name}; the volume cannot be "
+            "opened -- drain the box and repave it"
+        )
+    dial = resolve_server_management_dial(server_row)
+    with box_management_identities() as identities:
+        target = _BoxSshTarget(
+            host=dial.host,
+            port=dial.port,
+            ssh_user=ssh_user,
+            private_key_path=identities.private_key_path_for(server_row.box_generation),
+            box_host_public_key=box_host_public_key,
+        )
+        # The trailing newline terminates the script's `read`; the passphrase
+        # bytes themselves carry none (the keyslot was formatted without one).
+        unlock_stdout = _run_box_root_script(
+            target, render_storage_unlock_script(), stdin_bytes=f"{passphrase}\n".encode()
+        )
+    if STORAGE_UNLOCKED_MARKER not in unlock_stdout:
+        raise BareMetalProvisioningError(
+            f"the unlock script on {server_row.public_address} finished without its {STORAGE_UNLOCKED_MARKER} marker"
+        )
+    write_human_line(f"Server {server_id} ({server_row.public_address}): storage volume unlocked, slices started.")
 
 
 def audit_box_against_tier(
@@ -939,6 +1287,13 @@ def audit_box_against_tier(
     disk_names = client.list_disk_names()
     mdstat_text, proc_swaps_text = client.read_box_health_texts()
     trust = client.read_management_trust()
+    # A gen-1 box has no storage volume, so the probe (one more round trip) is
+    # skipped for it rather than made and read as "nothing mounted".
+    is_storage_encrypted = (
+        client.read_storage_volume_state().is_encrypted
+        if server_to_audit.box_generation >= FIRST_QEMU_BOX_GENERATION
+        else False
+    )
     return BoxTierAudit(
         server_id=str(server_to_audit.id),
         public_address=str(server_to_audit.public_address),
@@ -955,6 +1310,7 @@ def audit_box_against_tier(
         else (),
         degraded_md_arrays=tuple(parse_degraded_md_arrays(mdstat_text)),
         raw_swap_devices=tuple(parse_raw_swap_devices(proc_swaps_text)),
+        is_storage_encrypted=is_storage_encrypted,
     )
 
 
@@ -1039,7 +1395,8 @@ def build_box_tier_audit_report(
     default=False,
     help=(
         "SSH each box and report its REAL occupancy plus any cross-tier contamination "
-        "(foreign-tier slices, extra authorized SSH keys, a gen-2 box pinning another SSH CA). "
+        "(foreign-tier slices, extra authorized SSH keys, a gen-2 box pinning another SSH CA) and "
+        "whether a gen-2 box's storage root is the mounted LUKS volume (is_storage_encrypted). "
         "The plain table counts only this env's own DB rows, so it undercounts a shared box. "
         "Each box is reached with its generation's management key: the operator certificate "
         "on gen-2, the pool key from the activated tier's Vault entry (or $POOL_SSH_PRIVATE_KEY) "
@@ -1093,6 +1450,30 @@ def list_servers(database_url: str | None, is_occupancy_verified: bool) -> None:
             "See unaudited_boxes in the JSON above.",
             report.unaudited,
         )
+    plaintext_gen2_boxes = plaintext_gen2_box_ids(report, capacities)
+    if plaintext_gen2_boxes:
+        logger.warning(
+            "{} gen-2 box(es) do NOT have their storage root mounted from the LUKS volume, so their slices are in "
+            "plaintext (or the box is locked): {}. A locked box needs `minds-admin server unlock`; a never-encrypted "
+            "box must be drained and repaved.",
+            len(plaintext_gen2_boxes),
+            ", ".join(plaintext_gen2_boxes),
+        )
+
+
+@pure
+def plaintext_gen2_box_ids(report: BoxTierAuditReport, capacities: Sequence[BareMetalServerCapacity]) -> list[str]:
+    """The audited gen-2 boxes whose storage root is not the mounted LUKS volume, in report order.
+
+    Gen-1 boxes have no storage volume (their audits always read unencrypted)
+    and unaudited boxes have no verdict, so neither is listed.
+    """
+    box_generation_by_server_id = {str(capacity.server.id): capacity.server.box_generation for capacity in capacities}
+    return [
+        audit.server_id
+        for audit in report.boxes
+        if box_generation_by_server_id[audit.server_id] >= FIRST_QEMU_BOX_GENERATION and not audit.is_storage_encrypted
+    ]
 
 
 @server.command(name="register")
@@ -1341,8 +1722,7 @@ def import_boxes(source_database_url: str, database_url: str | None) -> None:
         )
     target_conn = psycopg2.connect(resolve_pool_database_url(database_url))
     try:
-        for server_row in ready_servers:
-            upsert_bare_metal_server(target_conn, server_row)
+        imported, skipped = _import_ready_servers(target_conn, ready_servers)
     finally:
         target_conn.close()
     emit_json(
@@ -1354,10 +1734,38 @@ def import_boxes(source_database_url: str, database_url: str | None) -> None:
                     "public_address": server_row.public_address,
                     "slot_count": server_row.slot_count,
                 }
-                for server_row in ready_servers
-            ]
+                for server_row in imported
+            ],
+            "skipped": [
+                {"id": str(server_row.id), "public_address": server_row.public_address, "reason": reason}
+                for server_row, reason in skipped
+            ],
         }
     )
+
+
+def _import_ready_servers(
+    target_conn: Any, ready_servers: Sequence[BareMetalServer]
+) -> tuple[list[BareMetalServer], list[tuple[BareMetalServer, str]]]:
+    """Upsert each box into the target; a box the target already registers under another row id is skipped, not fatal."""
+    imported: list[BareMetalServer] = []
+    skipped: list[tuple[BareMetalServer, str]] = []
+    for server_row in ready_servers:
+        try:
+            upsert_bare_metal_server(target_conn, server_row)
+        except psycopg2.errors.UniqueViolation as exc:
+            target_conn.rollback()
+            reason = (exc.diag.message_detail or str(exc)).strip()
+            logger.warning(
+                "Skipping box {} ({}): the target already registers it under another row ({})",
+                server_row.id,
+                server_row.public_address,
+                reason,
+            )
+            skipped.append((server_row, reason))
+            continue
+        imported.append(server_row)
+    return imported, skipped
 
 
 def build_registered_server(
@@ -1700,6 +2108,47 @@ def _build_slice_create_args(
     return args
 
 
+class BakeRowLedger(MutableModel):
+    """The ``baking`` rows a bake has inserted and not yet finished or deleted.
+
+    A worker records its row right after the insert and forgets it once the row
+    is finished or deleted; whatever is left when the bake ends belongs to a
+    worker that never reached its own cleanup (a kill mid-create), and the
+    bake's final sweep deletes it.
+    """
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _host_name_by_row_id: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    def record(self, row_id: str, host_name: str) -> None:
+        with self._lock:
+            self._host_name_by_row_id[row_id] = host_name
+
+    def forget(self, row_id: str) -> None:
+        with self._lock:
+            self._host_name_by_row_id.pop(row_id, None)
+
+    def drain(self) -> list[tuple[str, str]]:
+        """Return and clear every recorded ``(row_id, host_name)``."""
+        with self._lock:
+            leftovers = list(self._host_name_by_row_id.items())
+            self._host_name_by_row_id.clear()
+        return leftovers
+
+
+def _delete_leftover_baking_rows(database_url: str, row_ledger: BakeRowLedger) -> None:
+    """Drop the ``baking`` rows of workers that never reached their own cleanup."""
+    for row_id, host_name in row_ledger.drain():
+        logger.warning("Deleting the baking row {} of slice {} left behind by an interrupted bake", row_id, host_name)
+        _delete_baking_row(database_url, row_id, host_name)
+
+
+def _delete_baking_row_and_forget(database_url: str, row_ledger: BakeRowLedger, row_id: str, host_name: str) -> None:
+    """Drop a failed bake's ``baking`` row and take it off the ledger: its worker reached its own cleanup."""
+    _delete_baking_row(database_url, row_id, host_name)
+    row_ledger.forget(row_id)
+
+
 def _delete_baking_row(database_url: str, row_id: str, host_name: str) -> None:
     """Best-effort: drop a failed bake's ``baking`` row so it neither holds a slot nor looks like a live bake."""
     try:
@@ -1813,6 +2262,7 @@ def _bake_one_slice(
     # The invocation's ephemeral bake namespace overrides (MNGR_HOST_DIR / MNGR_PREFIX),
     # so the inner ``mngr create`` never touches the operator's own mngr data root.
     extra_create_env: Mapping[str, str],
+    row_ledger: BakeRowLedger,
 ) -> SliceBakeOutcome:
     """Bake one slice (laptop-driven ``mngr create`` against the slice provider) + insert its pool row.
 
@@ -1857,6 +2307,7 @@ def _bake_one_slice(
             )
         finally:
             conn.close()
+        row_ledger.record(row_id, host_name)
         try:
             baked = bake_pool_host(
                 provider_instance=SLICE_PROVIDER_INSTANCE_NAME,
@@ -1882,7 +2333,7 @@ def _bake_one_slice(
             )
         except (PoolBakeError, BareMetalProvisioningError, MngrError, OSError):
             # The provider rolled its VM back; only the pre-carve row is left.
-            _delete_baking_row(database_url, row_id, host_name)
+            _delete_baking_row_and_forget(database_url, row_ledger, row_id, host_name)
             raise
         if baked.host_id != str(host_id_obj):
             # The provider ignored the requested id: the row names a slice that does not exist.
@@ -1893,7 +2344,7 @@ def _bake_one_slice(
                 host_id=baked.host_id,
                 env_name=env_name,
             )
-            _delete_baking_row(database_url, row_id, host_name)
+            _delete_baking_row_and_forget(database_url, row_ledger, row_id, host_name)
             raise BareMetalProvisioningError(
                 f"slice {host_name} was carved as {baked.host_id}, not the requested {host_id_obj}"
             )
@@ -1976,8 +2427,9 @@ def _bake_one_slice(
                 host_id=baked.host_id,
                 env_name=env_name,
             )
-            _delete_baking_row(database_url, row_id, host_name)
+            _delete_baking_row_and_forget(database_url, row_ledger, row_id, host_name)
             raise
+        row_ledger.forget(row_id)
         logger.info(
             "Slice {} ready on {} (host_id={}, ports vm={}/container={})",
             host_name,
@@ -2196,6 +2648,9 @@ def _handle_bake_join_interruption(is_main_thread: bool, termination_event: thre
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     logger.warning("Slice bake terminated by signal; killing in-flight workers before reap")
     _kill_bake_worker_processes()
+    # The recursive kill took the WireGuard tunnel processes with it; dropping
+    # the memoized dial makes the reap open a fresh one.
+    close_box_management_tunnels()
 
 
 def _raise_on_bake_termination_signal(signum: int, _frame: object) -> None:
@@ -2485,6 +2940,16 @@ def _run_pool_host_destroy_steps(
                     pool_host_id=pool_host_id,
                     status=PoolHostDestroyOutcomeStatus.SKIPPED_LEASED,
                     detail="row is 'leased'; pass --force to destroy leased rows",
+                )
+            if current_status == POOL_HOST_STATUS_BAKING:
+                logger.warning("Cannot claim pool host {}: its bake may still be running", pool_host_id)
+                return PoolHostDestroyOutcome(
+                    pool_host_id=pool_host_id,
+                    status=PoolHostDestroyOutcomeStatus.FAILED,
+                    detail=(
+                        f"row is 'baking' and younger than {int(ORPHAN_SLICE_MIN_AGE_SECONDS)}s, so its bake may "
+                        "still be running; retry once it is older (a killed bake leaves its row behind)"
+                    ),
                 )
             # A miss on an existing, non-leased row means a status outside the known
             # vocabulary -- report it precisely rather than guessing at a cause.
@@ -2784,6 +3249,49 @@ def assert_box_is_exclusive_to_tier(
     )
 
 
+def assert_bake_box_storage_is_encrypted(server: BareMetalServer, client: SliceVmClientInterface) -> None:
+    """Probe a gen-2 box's storage volume before a bake and refuse one that is not the mounted LUKS volume.
+
+    Gen-1 boxes have no storage volume, so the probe (a management-SSH round
+    trip) is skipped for them rather than made and ignored.
+    """
+    if server.box_generation < FIRST_QEMU_BOX_GENERATION:
+        return
+    assert_gen2_box_storage_is_encrypted(server, client.read_storage_volume_state())
+
+
+@pure
+def assert_gen2_box_storage_is_encrypted(server: BareMetalServer, storage_state: StorageVolumeState) -> None:
+    """Refuse to carve on a gen-2 box whose storage root is not the mounted LUKS volume.
+
+    A slice carved onto a plain partition would sit in plaintext for its whole
+    life (the prep refuses to encrypt a partition that holds slices), and one
+    carved while the volume is locked would land on the bare mountpoint of the
+    root partition. A mounted mapper the probe could not confirm as a crypt
+    device is refused too, but without the repave instruction: the volume is
+    there, only the probe's type read is in doubt.
+    """
+    if storage_state.is_encrypted:
+        return
+    if storage_state.mounted_source is None:
+        raise click.UsageError(
+            f"server {server.id} ({server.public_address}) has nothing mounted at its storage root: its LUKS "
+            "volume is locked (the TPM unlock failed at boot). Run `minds-admin server unlock --server-id "
+            f"{server.id}` before baking on it."
+        )
+    if storage_state.mounted_source == GEN2_STORAGE_LUKS_MAPPER_PATH:
+        raise click.UsageError(
+            f"server {server.id} ({server.public_address}) has its storage root mounted from "
+            f"{GEN2_STORAGE_LUKS_MAPPER_PATH}, but the probe could not confirm that mapper as a crypt device. Check "
+            f"`cryptsetup status {GEN2_STORAGE_LUKS_MAPPER_NAME}` and `lsblk` on the box before baking on it."
+        )
+    raise click.UsageError(
+        f"server {server.id} ({server.public_address}) has its storage root mounted from the unencrypted "
+        f"{storage_state.mounted_source}; every gen-2 box's slices must live on the LUKS storage volume. Drain the "
+        "box and repave it (`minds-admin server drain`, then `minds-admin cutover repave` or `server setup`)."
+    )
+
+
 def _is_seed_phase_needed(cache: BoxImageCacheInterface, cache_tag: str | None) -> bool:
     """Whether the bake must run its own seed phase (one slice baked alone) before the fan-out.
 
@@ -2930,6 +3438,7 @@ def allocate_slices(
         trust=occupancy_client.read_management_trust(),
         expected_ca_public_key=management_trust.trusted_user_ca_public_key,
     )
+    assert_bake_box_storage_is_encrypted(server, occupancy_client)
     box_used_slots = count_slice_resource_names(box_disk_names)
     if "units" in sizing:
         # Gen-2 two-budget estimate (specs/slice-fleet): how many machines
@@ -3026,6 +3535,7 @@ def allocate_slices(
         # (which would push each create past its timeout). Every bake is handed the
         # FULL box port range: the on-box reservation lock makes concurrent carves
         # (this env's and other envs') pick distinct free ports from it.
+        row_ledger = BakeRowLedger()
         bake_worker_kwargs = dict(
             server=server,
             sizing=sizing,
@@ -3042,6 +3552,7 @@ def allocate_slices(
             default_workspace_template_cache_tag=default_workspace_template_cache_tag,
             container_runtime=container_runtime,
             extra_create_env=bake_namespace.to_subprocess_env(),
+            row_ledger=row_ledger,
         )
         logger.info("Baking {} slice(s) on {} ({} at a time)", count, server.public_address, max_concurrency)
 
@@ -3108,6 +3619,7 @@ def allocate_slices(
             # join -- an individual-create timeout (already a 'failed' outcome by now)
             # is cleaned here; the except above handles a top-level kill. Restore the
             # signal handlers last so the reap itself isn't interrupted.
+            _delete_leftover_baking_rows(database_url, row_ledger)
             _reap_orphan_slice_resources(
                 server=server, private_key_path=private_key_path, database_url=database_url, env_name=env_name
             )
@@ -3283,6 +3795,7 @@ def warm_box_image_cache(
         trust=client.read_management_trust(),
         expected_ca_public_key=management_trust.trusted_user_ca_public_key,
     )
+    assert_bake_box_storage_is_encrypted(server, client)
     box_used_slots = count_slice_resource_names(box_disk_names)
     if server.slot_count - box_used_slots < 1:
         raise click.UsageError(
@@ -3620,17 +4133,19 @@ def pricing(regions: tuple[str, ...], memory_per_slice_gb: int, cpu_overcommit: 
 
 
 def _probe_ssh_ready(
-    server_address: str, ssh_user: str, private_key_path: Path, box_host_public_key: str
+    server_address: str, port: int, ssh_user: str, private_key_path: Path, box_host_public_key: str
 ) -> bool | None:
     """One SSH-readiness probe: True once a login succeeds, else None (for poll_for_value)."""
     cg = ConcurrencyGroup(name="ssh-ready")
-    with _box_ssh_host_key_options(server_address, MANAGEMENT_SSH_PORT, box_host_public_key) as host_key_opts:
+    with _box_ssh_host_key_options(server_address, port, box_host_public_key) as host_key_opts:
         with cg:
             result = cg.run_process_to_completion(
                 command=[
                     "ssh",
                     "-i",
                     str(private_key_path),
+                    "-p",
+                    str(port),
                     *host_key_opts,
                     "-o",
                     "ConnectTimeout=15",
@@ -3644,16 +4159,17 @@ def _probe_ssh_ready(
 
 
 def _wait_for_ssh_ready(
-    server_address: str,
+    dial: BoxManagementDial,
     ssh_user: str,
     private_key_path: Path,
     timeout_seconds: float,
     box_host_public_key: str,
 ) -> None:
     """Poll until the box accepts an SSH login (it reboots into the freshly-installed OS). Raises on timeout."""
-    with log_span("Waiting for SSH on {} as {}", server_address, ssh_user):
+    server_address = dial.host
+    with log_span("Waiting for SSH on {}:{} as {}", server_address, dial.port, ssh_user):
         is_ready, _polls, _elapsed = poll_for_value(
-            lambda: _probe_ssh_ready(server_address, ssh_user, private_key_path, box_host_public_key),
+            lambda: _probe_ssh_ready(server_address, dial.port, ssh_user, private_key_path, box_host_public_key),
             timeout=timeout_seconds,
             poll_interval=10.0,
         )
@@ -3855,6 +4371,25 @@ def _fetch_server_or_raise(dsn: str, server_id: str) -> BareMetalServer:
     if server is None:
         raise BareMetalProvisioningError(f"no bare_metal_servers row with id {server_id}")
     return server
+
+
+def _require_box_reachable_with_pinned_host_key(server: BareMetalServer, *, action: str) -> str:
+    """The box's recorded sshd host key, refusing a row with no address to dial or no host key to pin.
+
+    Fails closed: every box SSH strictly pins the recorded host key (no
+    trust-on-first-use), which ``server setup`` injects at the OS reinstall or
+    the one-time ``pool backfill-host-keys`` captures.
+    """
+    if not server.public_address:
+        raise BareMetalProvisioningError(
+            f"server {server.id} has no public_address; the box cannot be reached for {action}"
+        )
+    if not server.box_host_public_key:
+        raise BareMetalProvisioningError(
+            f"server {server.id} has no recorded box host key to pin; run `minds-admin server setup` (reinstalls the "
+            f"OS with our injected key) or the one-time `minds-admin pool backfill-host-keys` before {action}"
+        )
+    return server.box_host_public_key
 
 
 def _update_server_fields(dsn: str, server_id: str, **fields: Any) -> None:
@@ -4099,23 +4634,40 @@ def setup_server_to_ready(
         # The reinstall always records it alongside the status flip, so a missing key
         # here means the row was tampered with -- fail closed rather than SSH without
         # strict host-key checking.
-        box_host_public_key = _fetch_server_or_raise(dsn, server_id).box_host_public_key
+        installed_server = _fetch_server_or_raise(dsn, server_id)
+        box_host_public_key = installed_server.box_host_public_key
         if not box_host_public_key:
             raise BareMetalProvisioningError(
                 f"server {server_id} reached '{SERVER_STATUS_INSTALLING}' without a recorded box host key; "
                 "cannot SSH the box with strict host-key checking"
             )
-        # Deliberately the public address, not the management resolver: the
-        # reinstall wiped the overlay and the lockdown, so the fresh OS only
-        # answers on the public address.
-        _wait_for_ssh_ready(address, ssh_user, private_key_path, ssh_ready_timeout, box_host_public_key)
-        logger.info("Prepping delivered box {} ({})", server_id, address)
-        prep_stdout = run_root_script_over_ssh(
-            address, MANAGEMENT_SSH_PORT, ssh_user, private_key_path, script, box_host_public_key
+        # Right after the reinstall the fresh OS answers only on the public
+        # address (the reinstall wiped the overlay and the lockdown); a resume
+        # from 'installing' may instead find the prep's lockdown already in
+        # place, so it goes through the management resolver, which falls back
+        # to the public address when the box has no overlay yet.
+        if str(server.status) == SERVER_STATUS_DELIVERED:
+            dial = BoxManagementDial(host=address, port=MANAGEMENT_SSH_PORT)
+        else:
+            dial = resolve_server_management_dial(installed_server)
+        _wait_for_ssh_ready(dial, ssh_user, private_key_path, ssh_ready_timeout, box_host_public_key)
+        logger.info("Prepping delivered box {} ({}:{})", server_id, dial.host, dial.port)
+        prep_stdout = _run_box_prep_script(
+            server,
+            _BoxSshTarget(
+                host=dial.host,
+                port=dial.port,
+                ssh_user=ssh_user,
+                private_key_path=private_key_path,
+                box_host_public_key=box_host_public_key,
+            ),
+            script,
+            _post_prep_target_resolver(dsn, server_id, ssh_user, private_key_path, box_host_public_key),
         )
 
     if is_gen2:
-        _record_gen2_prep_results(dsn, server_id, prep_stdout)
+        # The WireGuard key was recorded by the post-script resolver, before the storage round trips.
+        _record_box_storage_partition_gib(dsn, server_id, prep_stdout)
     _stamp_server_service_user(dsn, server_id, service_user, status=SERVER_STATUS_READY)
     write_human_line(
         f"Server {server_id} is READY: {service_name} ({address}), "

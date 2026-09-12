@@ -1,6 +1,7 @@
 import click
 import pytest
 
+from imbue.minds_admin.cli._tier_secrets import box_storage_passphrase_vault_path
 from imbue.minds_admin.cli._tier_secrets import boxes_collector_install_config_from_secret
 from imbue.minds_admin.cli._tier_secrets import observability_tier_for_env_name
 from imbue.minds_admin.cli._tier_secrets import ovh_config_from_vault_secret
@@ -131,3 +132,11 @@ def test_workspace_storage_config_from_secret_requires_every_field_and_keeps_the
     assert config.secret_access_key.get_secret_value() == "secret"
     with pytest.raises(click.ClickException, match="WORKSPACE_STORAGE_KEK"):
         workspace_storage_config_from_secret({**secret, "WORKSPACE_STORAGE_KEK": ""}, "secrets/minds/dev", "")
+
+
+def test_box_storage_passphrase_vault_path_is_one_leaf_per_box_under_the_tier_prefix() -> None:
+    assert box_storage_passphrase_vault_path("staging", "ns1006991.ip-135-148-34.us") == (
+        "secrets/minds/staging/box-storage/ns1006991.ip-135-148-34.us"
+    )
+    # Every dev env shares the box (and so its passphrase) under the dev tier's prefix.
+    assert box_storage_passphrase_vault_path("dev-josh", "ns1") == "secrets/minds/dev/box-storage/ns1"

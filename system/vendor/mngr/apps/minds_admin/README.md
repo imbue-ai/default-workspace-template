@@ -10,7 +10,7 @@ All commands are env-aware: with an activated env (`eval "$(uv run minds-admin e
 
 - `minds-admin env {activate, deactivate, list, deploy, destroy, recover}` -- minds environment lifecycle (dev / staging / production tiers).
 - `minds-admin pool {create, list, destroy, teardown-slices, backfill-host-keys}` -- bare-metal slice pool provisioning (bakes leasable pool hosts onto registered boxes).
-- `minds-admin server {pricing, order, await-delivery, setup, prep, ssh, list, register, set-status, drain}` -- bare-metal box fleet management (``prep`` / ``setup`` dispatch on the box's recorded slice-fleet generation; ``ssh`` opens a management session over the same automatically resolved dial as every other box command).
+- `minds-admin server {pricing, order, await-delivery, setup, prep, ssh, unlock, list, register, set-status, drain}` -- bare-metal box fleet management (``prep`` / ``setup`` dispatch on the box's recorded slice-fleet generation; ``ssh`` opens a management session over the same automatically resolved dial as every other box command; ``unlock`` opens a gen-2 box's locked LUKS storage volume with its Vault recovery passphrase and brings its slices back).
 - `minds-admin wireguard {config, sync-peers, install-onetun}` -- the gen-2 management WireGuard overlay (operator client configs; fleet peer sync from the `[management_plane]` table of the tier's committed `deploy.toml`; the pinned onetun install from the artifact mirror).
 - `minds-admin artifacts {list, upload, verify}` -- the pinned upstream artifacts the fleet downloads from imbue's mirror (`slices/mirror_artifacts.py` is the manifest; `upload` fetches, digest-verifies, and stores each one; see `apps/apt_mirror/README.md`, "Artifacts").
 - `minds-admin paid {domain, email} {add, remove, list}` -- the connector's paid lists (ally-plan eligibility).
@@ -19,11 +19,8 @@ All commands are env-aware: with an activated env (`eval "$(uv run minds-admin e
 - `minds-admin sweep {r2, lease-records}` -- on-demand connector sweeps (`lease-records --dry-run` is the audit view of pool-lease vs workspace-record drift).
 - `minds-admin relays {list, add, remove}` -- the sharing relay fleet inventory.
 - `minds-admin repair-keys` -- fleet sweep for the historical slice authorized_keys wipe.
-<<<<<<< HEAD
 - `minds-admin cutover {preflight, drain, repave, restore}` -- the one-time gen-1 -> gen-2 slice-fleet cutover (runbook: `apps/minds/docs/deploy/gen2-cutover.md`; deleted after the last tier is cut over).
-=======
-- `minds-admin repair-home-layout` -- probe (`--all-leased` for the whole pool), migrate, or roll back the home-tree layout of slice workspaces the slow path rebuilt on the legacy volume layout.
->>>>>>> origin/main
+- `minds-admin repair-home-layout` -- probe (`--all-leased` for the whole pool), migrate, or roll back the home-tree layout of slice workspaces the slow path rebuilt on the legacy volume layout (gen-1 boxes only: a slice on a gen-2 box is skipped, since the repair runs through the lima client).
 
 Run any command with `--help` for details; the deployment runbooks live in `apps/minds/docs/deploy/` (private).
 

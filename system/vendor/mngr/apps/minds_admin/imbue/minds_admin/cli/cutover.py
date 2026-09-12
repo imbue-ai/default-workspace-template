@@ -9,6 +9,8 @@ design: blueprint/slice-fleet-cutover/phase-5.5-incremental-rollout.md. Deleted
 wholesale in phase 6.
 """
 
+import signal
+import threading
 from collections.abc import Callable
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -103,6 +105,25 @@ def require_tier_confirmation(
 
 
 @contextmanager
+def immediate_sigint_termination() -> Iterator[None]:
+    """Let SIGINT end the process at once (the default action, as SIGTERM already does) for the block.
+
+    The cutover stages are resumable from their state files and their locks die
+    with the process, so an immediate exit is safe -- while Python's
+    KeyboardInterrupt only lands between bytecodes and was observed to leave a
+    migrate polling for minutes after a Ctrl-C.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.signal(signal.SIGINT, signal.SIG_DFL)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+@contextmanager
 def _cutover_context(database_url: str | None, *, is_connector_needed: bool = False) -> Iterator[CutoverContext]:
     env_name = require_activated_env_name()
     dsn = resolve_pool_database_url(database_url)
@@ -121,6 +142,7 @@ def _cutover_context(database_url: str | None, *, is_connector_needed: bool = Fa
     with pool_private_key_path(pem) as key_path:
         pool_public_key = derive_ssh_public_key(key_path)
     with (
+        immediate_sigint_termination(),
         box_management_identities(resolve_gen1_pool_private_key_pem=lambda: pem) as identities,
         minimal_mngr_context(state_root / "mngr-profile") as mngr_ctx,
     ):

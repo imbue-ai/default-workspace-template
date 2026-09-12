@@ -24,6 +24,8 @@ from imbue.minds_admin.slices.mirror_artifacts import S5CMD_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import S5CMD_VERSION
 from imbue.minds_admin.slices.mirror_artifacts import UV_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import UV_VERSION
+from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_encryption_section
+from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_relocation_section
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN1_SLICE_SERVICE_USER
 from imbue.mngr_imbue_cloud.slices.bare_metal import SLICE_INSTANCE_PREFIX
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_default_workspace_template_cache_dir
@@ -127,9 +129,12 @@ _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
 # bare binary, not the ``dnsmasq`` package, whose distro service would start
 # serving DNS on every interface with the package defaults; the prep runs it
 # under mngr's own unit on the rendered config), wireguard-tools for the
-# operator overlay, xfsprogs for the storage partition, ethtool for the
-# telemetry collector's link-speed audit, plus the same bake/transfer tooling
-# as gen-1. No lima; gen-2 data disks are formatted inside the guest, and
+# operator overlay, xfsprogs for the storage partition, cryptsetup +
+# systemd-cryptsetup (the LUKS storage volume and its TPM enrollment; the
+# latter is trixie's split package carrying systemd-cryptenroll and the TPM2
+# unlock path) + tpm2-tools (operator diagnostics), ethtool for the telemetry
+# collector's link-speed audit, plus the same bake/transfer tooling as gen-1.
+# No lima; gen-2 data disks are formatted inside the guest, and
 # btrfs-progs is here only for the cutover's box-side transplant of gen-1 home
 # subvolumes into fresh gen-2 data disks (mounted through qemu-nbd).
 # CLEANUP: drop btrfs-progs and the nbd module-load below once the gen-1 ->
@@ -144,6 +149,9 @@ _GEN2_BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "dnsmasq-base",
     "wireguard-tools",
     "xfsprogs",
+    "cryptsetup",
+    "systemd-cryptsetup",
+    "tpm2-tools",
     "ethtool",
     "rsync",
     "git",
@@ -797,8 +805,11 @@ def build_gen2_box_prep_script(
     is authorized) plus the pre-created per-slice unix users and the
     ``GEN2_DHCP_USER`` DHCP service user, the plugin-rendered prep artifacts
     (template unit / root helper / sudoers / the slice DHCP server's config,
-    unit and udp/67 policy, content-converged), the staged trixie guest image
-    on the XFS storage partition (pinned docker + the pinned gVisor runtime
+    unit and udp/67 policy, content-converged), the LUKS storage volume (the
+    storage partition formatted on first prep, TPM-enrolled, its passphrase
+    verified and its header backup staged; the journal, the service user's
+    home and both temp directories bind-mounted onto it), the staged trixie
+    guest image on that volume (pinned docker + the pinned gVisor runtime
     baked in), the kvm nested-virtualization module pin, the shared swapfile /
     no-auto-reboot / transfer-tooling hardening, the management WireGuard
     bring-up (echoing the box's public key for the caller to stamp on the row),
@@ -832,6 +843,8 @@ def build_gen2_box_prep_script(
         management_proxy_static_ips=management_proxy_static_ips,
     )
     ssh_ca_trust_section = render_gen2_ssh_ca_trust_section(ssh_ca_public_key, service_user)
+    storage_encryption_section = render_gen2_storage_encryption_section()
+    storage_relocation_section = render_gen2_storage_relocation_section()
     return f"""\
 #!/bin/bash
 set -euo pipefail
@@ -869,19 +882,16 @@ for ordinal in $(seq 0 {GEN2_MAX_SLICE_COUNT - 1}); do
     usermod -aG kvm "$slice_user"
 done
 
-# The XFS storage partition: everything gen-2 lives under it (base image,
-# per-instance dirs, ordinal links). It comes from the box's custom partition
-# layout at OS install; refuse to prep without it rather than silently filling
-# the root filesystem (hand-provision an XFS mount there for a canary box).
-if ! mountpoint -q {GEN2_STORAGE_ROOT}; then
-    echo "ERROR: {GEN2_STORAGE_ROOT} is not a mounted filesystem; provision the XFS storage partition first" >&2
-    exit 1
-fi
+{storage_encryption_section}
+# The storage volume (the mounted LUKS mapper) must be XFS: everything
+# gen-2 lives under it (base image, per-instance dirs, ordinal links) and the
+# carves depend on reflink copies.
 storage_fstype=$(findmnt -no FSTYPE --target {GEN2_STORAGE_ROOT})
 if [ "$storage_fstype" != "xfs" ]; then
     echo "ERROR: {GEN2_STORAGE_ROOT} is $storage_fstype, expected xfs (reflink-instant slice carves)" >&2
     exit 1
 fi
+{storage_relocation_section}
 chown {service_user}:{service_user} {GEN2_STORAGE_ROOT}
 chmod 751 {GEN2_STORAGE_ROOT}
 install -d -o {service_user} -g {service_user} -m 751 {GEN2_INSTANCES_DIR} {GEN2_BY_ORDINAL_DIR} {gen2_base_image_dir}

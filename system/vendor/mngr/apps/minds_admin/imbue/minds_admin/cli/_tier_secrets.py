@@ -2,7 +2,8 @@
 
 Every ``minds-admin`` command resolves its per-tier inputs (host_pool DSN, pool
 SSH private key, connector URL, admin API key, OVH supplier credentials, the
-box observability ingest credential) from the activated minds env -- Vault for
+box observability ingest credential, the workspace-storage bucket, a gen-2
+box's storage recovery passphrase) from the activated minds env -- Vault for
 the shared tiers (staging / production), the per-env local state
 (``secrets.toml`` / ``client.toml``) for dev / ci envs -- so operators never
 hand-export them. Explicit flags and env vars (``--database-url`` /
@@ -10,16 +11,21 @@ hand-export them. Explicit flags and env vars (``--database-url`` /
 ``MNGR__PROVIDERS__IMBUE_CLOUD__CONNECTOR_URL``, ``--api-key`` /
 ``MINDS_ADMIN_KEY``, ``OVH_*``) always win, which keeps non-activated one-off
 use working. (One deliberate asymmetry: the pool SSH key's Vault value wins
-over its env var -- see :func:`resolve_pool_private_key_pem`.)
+over its env var -- see :func:`resolve_pool_private_key_pem`.) The storage
+recovery passphrase is the one entry this module also writes: the box prep
+mints it into the tier's Vault before the volume it opens is formatted.
 """
 
 import os
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from typing import Final
 
+import boto3
 import click
+from botocore.config import Config as BotoConfig
 from loguru import logger
 from pydantic import AnyHttpUrl
 from pydantic import AnyUrl
@@ -39,6 +45,7 @@ from imbue.minds.envs.primitives import VaultSecretNotFoundError
 from imbue.minds.envs.vault_reader import VaultPath
 from imbue.minds.envs.vault_reader import admin_key_from_supertokens_secret
 from imbue.minds.envs.vault_reader import read_vault_kv
+from imbue.minds.envs.vault_reader import write_vault_kv
 from imbue.minds_admin.cli._activated_env import PRODUCTION_ENV_NAME
 from imbue.minds_admin.cli._activated_env import STAGING_ENV_NAME
 from imbue.minds_admin.cli._activated_env import tier_for_env_name
@@ -327,6 +334,23 @@ class WorkspaceStorageConfig(FrozenModel):
     key_prefix: str = Field(description="The env's key prefix inside the bucket ('' for a dedicated tier bucket)")
 
 
+def make_workspace_storage_s3_client(storage: WorkspaceStorageConfig) -> Any:
+    """A boto3 S3 client on the tier's workspace-storage bucket endpoint.
+
+    A session per client: callers such as the cutover drain build clients from
+    worker threads concurrently, and boto3's process-global default session
+    is not thread-safe.
+    """
+    return boto3.Session().client(
+        "s3",
+        endpoint_url=storage.s3_endpoint,
+        region_name=storage.s3_region,
+        aws_access_key_id=storage.access_key_id.get_secret_value(),
+        aws_secret_access_key=storage.secret_access_key.get_secret_value(),
+        config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
+    )
+
+
 @pure
 def workspace_storage_config_from_secret(
     secret: Mapping[str, str], vault_prefix: str, key_prefix: str
@@ -372,6 +396,43 @@ def resolve_workspace_storage_config() -> WorkspaceStorageConfig:
     return workspace_storage_config_from_secret(
         secret, vault_prefix, workspace_storage_key_prefix(DevEnvName(env_name), deploy_config.lifecycle)
     )
+
+
+# The Vault entry holding a gen-2 box's LUKS recovery passphrase: one leaf per
+# physical box under the tier's ``box-storage`` directory, keyed by the box's
+# OVH service name (stable across the dev envs that share a box and across
+# the box's rows in their databases, unlike a row id). Written before the
+# volume is formatted, so a prep that dies mid-format never strands a keyed
+# volume without its passphrase.
+_BOX_STORAGE_VAULT_DIRECTORY: Final[str] = "box-storage"
+BOX_STORAGE_PASSPHRASE_VAULT_FIELD: Final[str] = "LUKS_RECOVERY_PASSPHRASE"
+
+
+def box_storage_passphrase_vault_path(env_name: str, ovh_service_name: str) -> VaultPath:
+    """``secrets/minds/<tier>/box-storage/<ovh-service-name>``: the box's recovery-passphrase entry."""
+    vault_prefix = str(load_deploy_config(tier_for_env_name(env_name)).vault_path_prefix).rstrip("/")
+    return VaultPath(f"{vault_prefix}/{_BOX_STORAGE_VAULT_DIRECTORY}/{ovh_service_name}")
+
+
+def read_box_storage_passphrase_or_none(env_name: str, ovh_service_name: str) -> str | None:
+    """The box's LUKS recovery passphrase from the tier's Vault, or None when no entry exists yet."""
+    path = box_storage_passphrase_vault_path(env_name, ovh_service_name)
+    try:
+        secret = read_vault_kv(path)
+    except VaultSecretNotFoundError:
+        return None
+    except VaultReadError as exc:
+        raise click.ClickException(f"Could not read the storage recovery passphrase at {path}: {exc}") from exc
+    return secret.get(BOX_STORAGE_PASSPHRASE_VAULT_FIELD) or None
+
+
+def write_box_storage_passphrase(env_name: str, ovh_service_name: str, passphrase: str) -> None:
+    """Record the box's LUKS recovery passphrase in the tier's Vault (overwriting any previous entry)."""
+    path = box_storage_passphrase_vault_path(env_name, ovh_service_name)
+    try:
+        write_vault_kv(path, {BOX_STORAGE_PASSPHRASE_VAULT_FIELD: passphrase})
+    except VaultReadError as exc:
+        raise click.ClickException(f"Could not write the storage recovery passphrase to {path}: {exc}") from exc
 
 
 # The Vault fields of a tier's ``<vault_prefix>/ovh`` entry that the bare-metal

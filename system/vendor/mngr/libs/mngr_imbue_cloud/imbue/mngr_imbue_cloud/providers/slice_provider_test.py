@@ -25,6 +25,7 @@ from imbue.mngr_imbue_cloud.providers.slice_provider import _IMAGE_CACHE_WAIT_RO
 from imbue.mngr_imbue_cloud.providers.slice_provider import _PLAYWRIGHT_CTX_DIR
 from imbue.mngr_imbue_cloud.providers.slice_provider import container_ca_trust_files
 from imbue.mngr_imbue_cloud.providers.slice_provider import read_container_ca_trust_files_from_vm
+from imbue.mngr_imbue_cloud.providers.slice_provider import render_remove_authorized_key_command
 from imbue.mngr_imbue_cloud.providers.slice_provider import resolve_slice_ssh_authority
 from imbue.mngr_imbue_cloud.providers.slice_provider import wait_for_guest_cloud_init_to_finish
 from imbue.mngr_imbue_cloud.slices.box_image_cache import BoxImageCacheInterface
@@ -204,6 +205,41 @@ def test_transfer_key_authorize_and_deauthorize_render_expected_commands() -> No
     assert public_key in authorize_command
     assert "grep -vF" in deauthorize_command
     assert public_key in deauthorize_command
+
+
+def test_remove_authorized_key_command_empties_a_file_that_held_only_that_key(tmp_path: Path) -> None:
+    # The gen-2 case: VM root authorizes nothing but the bake's transfer key,
+    # so removing it leaves grep with nothing to print (exit 1).
+    authorized_keys = tmp_path / "authorized_keys"
+    transfer_key = "ssh-ed25519 AAAAONLYKEY transfer@box"
+    authorized_keys.write_text(f"{transfer_key}\n")
+
+    result = subprocess.run(
+        ["bash", "-c", render_remove_authorized_key_command(transfer_key, str(authorized_keys))],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert authorized_keys.read_text() == ""
+    assert not (tmp_path / "authorized_keys.tmp").exists()
+
+
+def test_remove_authorized_key_command_keeps_the_other_authorized_keys(tmp_path: Path) -> None:
+    authorized_keys = tmp_path / "authorized_keys"
+    transfer_key = "ssh-ed25519 AAAATRANSFER transfer@box"
+    kept_key = "ssh-ed25519 AAAAKEPT owner@device"
+    authorized_keys.write_text(f"{kept_key}\n{transfer_key}\n")
+
+    result = subprocess.run(
+        ["bash", "-c", render_remove_authorized_key_command(transfer_key, str(authorized_keys))],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert authorized_keys.read_text() == f"{kept_key}\n"
+    assert not (tmp_path / "authorized_keys.tmp").exists()
 
 
 def test_extra_start_args_cap_container_memory_from_the_slice_size() -> None:

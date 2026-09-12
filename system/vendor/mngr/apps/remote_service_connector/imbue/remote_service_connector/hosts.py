@@ -1733,6 +1733,25 @@ def _enable_sharing_core(
             # would silently revoke every grant the user added since.
             seed_only_remote_paths=frozenset({_SHARE_GRANTS_REMOTE_PATH}),
         )
+    except paramiko.BadHostKeyException as exc:
+        # The container no longer serves the key the row recorded at bake: the
+        # minds desktop app adopted the workspace and rotated its host keys
+        # client-side (the connector never learns them by design), so this
+        # server-side bring-up cannot reach the container -- the desktop app
+        # enables sharing over the user's own SSH instead.
+        logger.info(
+            "Host %s serves a rotated container host key; sharing must be enabled from the desktop app", host_db_id
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "workspace_managed_by_desktop",
+                "message": (
+                    "This workspace is managed by the minds desktop app, which rotated its SSH host key; "
+                    "enable sharing from the desktop app."
+                ),
+            },
+        ) from exc
     except (paramiko.SSHException, OSError) as exc:
         logger.warning("Failed to inject share materials on host %s: %s", host_db_id, exc)
         raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc

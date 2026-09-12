@@ -87,6 +87,10 @@ _BOX_SIGNAL_DESCRIPTION_BY_SIGNAL: Final[dict[BoxTelemetrySignal, str]] = {
     BoxTelemetrySignal.SLICE_UNIT_OOM_KILLED: (
         "systemd OOM-killed a slice VM's unit: the hardened unit's MemoryMax backstop fired, which must never happen."
     ),
+    BoxTelemetrySignal.STORAGE_VOLUME_LOCKED: (
+        "The box's storage root is not mounted from its LUKS mapper: the TPM unlock failed at boot (its slices are "
+        "down until `minds-admin server unlock`), or the box was never encrypted."
+    ),
 }
 
 

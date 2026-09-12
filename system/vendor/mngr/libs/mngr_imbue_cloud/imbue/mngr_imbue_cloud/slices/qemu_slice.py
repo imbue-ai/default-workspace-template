@@ -168,6 +168,10 @@ def render_slice_unit_file() -> str:
     ``run/`` subdir the setup step creates for it; the systemd sandbox
     (:data:`GEN2_UNIT_SANDBOX_DIRECTIVES`) makes everything else read-only to
     it except the two disk images, and the guest console lands in journald.
+    ``RequiresMountsFor`` on the storage root keeps a VM from ever starting
+    against an absent (locked) storage volume: its disks live on the LUKS
+    mapper mounted there, and a box whose TPM unlock failed at boot must
+    leave its slices down rather than boot them off the bare mountpoint.
     """
     qemu_command = " \\\n    ".join(
         [
@@ -219,6 +223,7 @@ def render_slice_unit_file() -> str:
 Description=mngr gen-2 slice VM (ordinal %i)
 After=network-online.target {GEN2_DHCP_UNIT_NAME}
 Wants=network-online.target {GEN2_DHCP_UNIT_NAME}
+RequiresMountsFor={GEN2_STORAGE_ROOT}
 
 [Service]
 Type=simple

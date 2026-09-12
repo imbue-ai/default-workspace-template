@@ -108,6 +108,7 @@ def test_unit_file_matches_the_prototype_verified_shape() -> None:
 Description=mngr gen-2 slice VM (ordinal %i)
 After=network-online.target mngr-slice-dhcp.service
 Wants=network-online.target mngr-slice-dhcp.service
+RequiresMountsFor=/srv/mngr-slices
 
 [Service]
 Type=simple

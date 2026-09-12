@@ -81,7 +81,12 @@ deploy was deliberately not done.
   the `lima_*` columns, which stay dual-written. A renamed checkout reads the
   new columns (`COALESCE(new, old)`), so it needs 041 applied before it can
   read a tier's pool DB -- including the standing CI infra DB, which
-  `import-boxes` reads (apply 041 there by hand with `psql -f`).
+  `import-boxes` reads (apply 041 there by hand with `psql -f`). Done for
+  the CI infra DB on 2026-09-10 (it was at 027; 028-041 applied with
+  `apply_pool_hosts_migrations`, release dispatch 34430115740 then built
+  the CI env). dev-josh-2 and the throwaway dev-gen2mig env (deployed
+  from minds-v0.5.2, then redeployed from this branch) applied 034-041
+  through `env deploy` in order.
 
 - [x] **Artifact mirror serving** (imbue-ai/mngr-internal#856, #851). Done
   2026-09-09 for production: `minds-admin artifacts upload` (14 artifacts),
@@ -183,6 +188,9 @@ deploy was deliberately not done.
 
 - [ ] From the release carrying the phase-5.5 stack on, gen-2 boxes bake only
   minds-v0.6.0+ tags and gen-1 boxes only older ones (the bake-time guard);
+  the `minds-v0.6.0` tags on mngr and default-workspace-template currently
+  point at the gen2-combined test commits (re-point them at the real
+  release when it is cut; no release build was made for them);
   cut 0.6.x releases for the gen-2 cohort and keep 0.5.x stocked on gen-1
   until its create rate reads ~zero.
 - [ ] Begin migrations per tier in the order dev -> staging -> production once

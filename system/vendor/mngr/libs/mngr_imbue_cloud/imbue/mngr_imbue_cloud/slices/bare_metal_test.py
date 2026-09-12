@@ -10,6 +10,7 @@ import pytest
 from imbue.mngr.primitives import HostId
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import SliceCapacityError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
@@ -30,6 +31,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import assert_env_name_fits_slice_
 from imbue.mngr_imbue_cloud.slices.bare_metal import assert_region_label_matches_box_datacenter
 from imbue.mngr_imbue_cloud.slices.bare_metal import box_service_user
 from imbue.mngr_imbue_cloud.slices.bare_metal import build_read_management_trust_command
+from imbue.mngr_imbue_cloud.slices.bare_metal import build_read_storage_volume_command
 from imbue.mngr_imbue_cloud.slices.bare_metal import build_slice_container_memory_start_args
 from imbue.mngr_imbue_cloud.slices.bare_metal import choose_raid_level
 from imbue.mngr_imbue_cloud.slices.bare_metal import compute_capacity
@@ -58,6 +60,7 @@ from imbue.mngr_imbue_cloud.slices.bare_metal import next_server_status
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_degraded_md_arrays
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_management_trust_output
 from imbue.mngr_imbue_cloud.slices.bare_metal import parse_raw_swap_devices
+from imbue.mngr_imbue_cloud.slices.bare_metal import parse_storage_volume_output
 from imbue.mngr_imbue_cloud.slices.bare_metal import partition_slice_names_by_tier_and_age
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_disk_name
 from imbue.mngr_imbue_cloud.slices.bare_metal import slice_instance_name
@@ -682,6 +685,31 @@ def test_parse_management_trust_output_splits_keys_from_the_trusted_ca() -> None
     assert (bare.authorized_key_count, bare.trusted_ca_public_key) == (0, None)
     with pytest.raises(BareMetalConfigError):
         parse_management_trust_output("no marker at all\n")
+
+
+def test_parse_storage_volume_output_reports_the_luks_mapper_as_encrypted_and_everything_else_as_not() -> None:
+    encrypted = parse_storage_volume_output("/dev/mapper/mngr-storage\nMNGR_STORAGE_VOLUME_SPLIT\ncrypt\n")
+    assert encrypted == StorageVolumeState(mounted_source="/dev/mapper/mngr-storage", is_encrypted=True)
+    # A plain partition mounted at the root: unencrypted, whatever its type says.
+    plain = parse_storage_volume_output("/dev/md4\nMNGR_STORAGE_VOLUME_SPLIT\nraid1\n")
+    assert plain == StorageVolumeState(mounted_source="/dev/md4", is_encrypted=False)
+    # Nothing mounted (a locked volume, or no storage partition at all).
+    locked = parse_storage_volume_output("\nMNGR_STORAGE_VOLUME_SPLIT\n")
+    assert locked == StorageVolumeState(mounted_source=None, is_encrypted=False)
+    # The mapper name alone is not enough: it must be a crypt device.
+    assert (
+        parse_storage_volume_output("/dev/mapper/mngr-storage\nMNGR_STORAGE_VOLUME_SPLIT\nlvm\n").is_encrypted is False
+    )
+    with pytest.raises(BareMetalConfigError):
+        parse_storage_volume_output("no marker\n")
+
+
+def test_read_storage_volume_command_reports_an_unmounted_root_without_failing() -> None:
+    # findmnt exits non-zero on a non-mount-point, which must read as "nothing
+    # mounted" rather than fail the probe (a locked box is exactly that state).
+    result = subprocess.run(["bash", "-c", build_read_storage_volume_command()], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert parse_storage_volume_output(result.stdout) == StorageVolumeState(mounted_source=None, is_encrypted=False)
 
 
 def test_is_trusted_ca_correct_for_tier_requires_the_committed_ca_on_gen2_only() -> None:

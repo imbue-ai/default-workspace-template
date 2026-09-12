@@ -6,11 +6,14 @@ from pathlib import Path
 from typing import Any
 
 import click
+import psycopg2
 import pytest
 from click.testing import CliRunner
 from inline_snapshot import snapshot
 
+from imbue.concurrency_group.concurrency_group import ConcurrencyExceptionGroup
 from imbue.imbue_common.model_update import to_update
+from imbue.minds_admin.cli.server import BakeRowLedger
 from imbue.minds_admin.cli.server import SliceManagementTrust
 from imbue.minds_admin.cli.server import _COLLECTOR_VERIFICATION_SCRIPT
 from imbue.minds_admin.cli.server import _bake_one_slice_with_retry
@@ -18,21 +21,27 @@ from imbue.minds_admin.cli.server import _box_ssh_host_key_options
 from imbue.minds_admin.cli.server import _build_slice_create_args
 from imbue.minds_admin.cli.server import _destroy_one_pool_host
 from imbue.minds_admin.cli.server import _format_capacity_table
+from imbue.minds_admin.cli.server import _import_ready_servers
 from imbue.minds_admin.cli.server import _is_seed_phase_needed
 from imbue.minds_admin.cli.server import _kill_bake_worker_processes
 from imbue.minds_admin.cli.server import _resolve_gen2_guest_image
 from imbue.minds_admin.cli.server import _resolve_service_user_for_generation
 from imbue.minds_admin.cli.server import _resolve_vendored_mngr_source
 from imbue.minds_admin.cli.server import _run_bake_attempts
+from imbue.minds_admin.cli.server import assert_bake_box_storage_is_encrypted
 from imbue.minds_admin.cli.server import assert_box_is_exclusive_to_tier
+from imbue.minds_admin.cli.server import assert_gen2_box_storage_is_encrypted
+from imbue.minds_admin.cli.server import box_script_provisioning_error_or_none
 from imbue.minds_admin.cli.server import build_box_ssh_argv
 from imbue.minds_admin.cli.server import build_box_tier_audit_report
 from imbue.minds_admin.cli.server import build_pool_host_destroy_report
 from imbue.minds_admin.cli.server import build_registered_server
+from imbue.minds_admin.cli.server import choose_storage_passphrase
 from imbue.minds_admin.cli.server import compose_box_prep_script
 from imbue.minds_admin.cli.server import compute_server_slice_sizing
 from imbue.minds_admin.cli.server import destroy_pool_hosts_in_parallel
 from imbue.minds_admin.cli.server import gen2_register_disk_shortfall_or_none
+from imbue.minds_admin.cli.server import plaintext_gen2_box_ids
 from imbue.minds_admin.cli.server import reap_orphan_slices
 from imbue.minds_admin.cli.server import resolve_bake_management_trust_and_key
 from imbue.minds_admin.cli.server import resolve_slice_container_runtime
@@ -43,14 +52,17 @@ from imbue.minds_admin.cli.server import sweep_ci_slices_across_boxes
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_SHA512
 from imbue.minds_admin.slices.bare_metal_prep import DEFAULT_GEN2_SLICE_GUEST_IMAGE_URL
 from imbue.minds_admin.slices.operator_identity import POOL_KEY_FILENAME
+from imbue.minds_admin.slices.testing import RecordingConnection
 from imbue.minds_admin.slices.testing import make_test_management_identities
 from imbue.mngr.primitives import HostId
 from imbue.mngr.providers.ssh_utils import generate_ed25519_host_keypair
 from imbue.mngr_imbue_cloud.data_types import BareMetalServer
+from imbue.mngr_imbue_cloud.data_types import BareMetalServerCapacity
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
 from imbue.mngr_imbue_cloud.data_types import BoxTierAudit
 from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
 from imbue.mngr_imbue_cloud.data_types import SliceBakeOutcome
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.data_types import UnauditedBox
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
@@ -66,6 +78,7 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SLICE_SERVICE
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import GEN2_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import SLICE_BOOT_DISK_GIB
 from imbue.mngr_imbue_cloud.slices.mock_box_image_cache_test import MockBoxImageCache
+from imbue.mngr_imbue_cloud.slices.mock_slice_vm_client_test import MockSliceVmClient
 
 
 def _server(
@@ -93,6 +106,34 @@ def _server(
         updated_at=now,
         uplink_mbps=1000,
     )
+
+
+def test_import_ready_servers_skips_a_box_the_target_already_registers() -> None:
+    # A source box the target DB already holds under another row id trips the
+    # ovh_service_name unique index; the import must roll that statement back,
+    # report the box as skipped, and still import the rest.
+    source = _server(slot_count=15, cpu_threads=32)
+    fresh = source.model_copy_update(to_update(source.field_ref().ovh_service_name, "ns-fresh"))
+    duplicate = fresh.model_copy_update(
+        to_update(fresh.field_ref().id, BareMetalServerDbId("22222222-2222-2222-2222-222222222222")),
+        to_update(fresh.field_ref().ovh_service_name, "ns-duplicate"),
+    )
+    conn = RecordingConnection(
+        [],
+        rowcount=1,
+        error_by_param={
+            "ns-duplicate": psycopg2.errors.UniqueViolation(
+                'duplicate key value violates unique constraint "bare_metal_servers_service_name_idx"'
+            )
+        },
+    )
+    imported, skipped = _import_ready_servers(conn, [duplicate, fresh])
+    assert [server.id for server in imported] == [fresh.id]
+    assert [(server.id, "bare_metal_servers_service_name_idx" in reason) for server, reason in skipped] == [
+        (duplicate.id, True)
+    ]
+    assert conn.rollback_count == 1
+    assert [params[0] for _sql, params in conn.recording_cursor.executed] == [str(fresh.id)]
 
 
 def test_build_registered_server_derives_slot_count_from_memory_per_slice() -> None:
@@ -359,6 +400,18 @@ def test_order_command_exposes_dry_run_flag() -> None:
     assert "No charge" in result.output or "no charge" in result.output
 
 
+def test_bake_row_ledger_drains_only_the_rows_workers_never_cleaned_up() -> None:
+    # A worker records its baking row after the insert and forgets it on its own
+    # cleanup; the bake's final sweep only ever sees the rows of killed workers.
+    ledger = BakeRowLedger()
+    ledger.record("row-a", "slice-a")
+    ledger.record("row-b", "slice-b")
+    ledger.forget("row-a")
+    ledger.forget("row-never-recorded")
+    assert ledger.drain() == [("row-b", "slice-b")]
+    assert ledger.drain() == []
+
+
 def test_kill_bake_worker_processes_terminates_a_child() -> None:
     # On a top-level kill the bake's in-flight `mngr create` workers must be reaped
     # so they don't keep carving VMs; this is the helper that does it. Spawn a child
@@ -608,6 +661,81 @@ def _gen2_trust(authorized_key_count: int = 0, trusted_ca_public_key: str | None
     return BoxManagementTrust(authorized_key_count=authorized_key_count, trusted_ca_public_key=trusted_ca_public_key)
 
 
+def test_choose_storage_passphrase_mints_fresh_only_for_a_plain_mounted_partition() -> None:
+    encrypted = StorageVolumeState(mounted_source="/dev/mapper/mngr-storage", is_encrypted=True)
+    # The mapper is mounted but the probe's block-device type read did not
+    # confirm it as a crypt device.
+    unconfirmed = StorageVolumeState(mounted_source="/dev/mapper/mngr-storage", is_encrypted=False)
+    plain = StorageVolumeState(mounted_source="/dev/md4", is_encrypted=False)
+    unmounted = StorageVolumeState(mounted_source=None, is_encrypted=False)
+
+    def choose(storage_state: StorageVolumeState, vault_passphrase: str | None) -> str:
+        return choose_storage_passphrase(
+            storage_state=storage_state,
+            vault_passphrase=vault_passphrase,
+            fresh_passphrase="new",
+            box_service_name="ns1",
+        )
+
+    # An encrypted volume and an unmounted (locked or empty) root keep Vault's
+    # passphrase: it is the only thing that opens an existing header.
+    assert choose(encrypted, "vault") == "vault"
+    assert choose(unmounted, "vault") == "vault"
+    # The prep formats only a non-mapper device, so a mounted mapper keeps
+    # Vault's passphrase even when it was not confirmed as a crypt device: a
+    # fresh one recorded there would replace the passphrase that really opens
+    # the volume with one that opens nothing.
+    assert choose(unconfirmed, "vault") == "vault"
+    # A plain partition is about to be formatted, so a stale entry is replaced,
+    # and a missing one is minted.
+    assert choose(plain, "vault") == "new"
+    assert choose(plain, None) == "new"
+    # Without a Vault entry, a fresh passphrase could never open an existing
+    # volume; refusing keeps Vault from recording one that opens nothing.
+    with pytest.raises(BareMetalProvisioningError, match="ns1 already has an encrypted storage volume"):
+        choose(encrypted, None)
+    with pytest.raises(BareMetalProvisioningError, match="ns1 already has an encrypted storage volume"):
+        choose(unconfirmed, None)
+    with pytest.raises(BareMetalProvisioningError, match="ns1 has nothing mounted at its storage root"):
+        choose(unmounted, None)
+
+
+def test_assert_gen2_box_storage_is_encrypted_refuses_plain_and_locked_storage_on_gen2_only() -> None:
+    base = _server(slot_count=6, cpu_threads=16)
+    gen2 = base.model_copy_update(to_update(base.field_ref().box_generation, 2))
+    assert_gen2_box_storage_is_encrypted(
+        gen2, StorageVolumeState(mounted_source="/dev/mapper/mngr-storage", is_encrypted=True)
+    )
+    with pytest.raises(click.UsageError, match="unencrypted /dev/md4"):
+        assert_gen2_box_storage_is_encrypted(gen2, StorageVolumeState(mounted_source="/dev/md4", is_encrypted=False))
+    # The mapper is mounted but the probe's type read did not say crypt: still
+    # refused, but the volume exists, so the operator is not told to repave.
+    with pytest.raises(click.UsageError, match="could not confirm that mapper as a crypt device") as unconfirmed:
+        assert_gen2_box_storage_is_encrypted(
+            gen2, StorageVolumeState(mounted_source="/dev/mapper/mngr-storage", is_encrypted=False)
+        )
+    assert "Drain" not in str(unconfirmed.value)
+    locked = StorageVolumeState(mounted_source=None, is_encrypted=False)
+    with pytest.raises(click.UsageError, match="server unlock"):
+        assert_gen2_box_storage_is_encrypted(gen2, locked)
+    with pytest.raises(click.UsageError, match="server unlock"):
+        assert_bake_box_storage_is_encrypted(
+            gen2,
+            MockSliceVmClient(box_address="15.204.140.221", box_ssh_user="slicehost", storage_volume_state=locked),
+        )
+    # A gen-1 box has no storage volume, so it is never probed (the mock's read
+    # raises when it is called).
+    assert_bake_box_storage_is_encrypted(base, MockSliceVmClient(box_address="15.204.140.221", box_ssh_user="lima"))
+
+
+def test_unlock_is_on_the_cli_surface_and_documents_its_scope() -> None:
+    result = CliRunner().invoke(server, ["unlock", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--server-id" in result.output
+    assert "passphrase" in result.output
+    assert "STORAGE_VOLUME_LOCKED" in result.output
+
+
 def test_assert_box_is_exclusive_to_tier_accepts_a_single_key_and_same_tier_slices() -> None:
     mine = slice_disk_name(HostId.generate(), "staging")
     assert_box_is_exclusive_to_tier(
@@ -752,33 +880,36 @@ def test_assert_box_is_exclusive_to_tier_still_checks_keys_for_an_unstamped_bake
         )
 
 
+def _audit(
+    server_id: str,
+    *,
+    public_address: str = "203.0.113.1",
+    box_used_slots: int = 0,
+    authorized_key_count: int = 0,
+    expected_authorized_key_count: int = 0,
+    is_storage_encrypted: bool = True,
+) -> BoxTierAudit:
+    return BoxTierAudit(
+        server_id=server_id,
+        public_address=public_address,
+        slot_count=6,
+        box_used_slots=box_used_slots,
+        authorized_key_count=authorized_key_count,
+        expected_authorized_key_count=expected_authorized_key_count,
+        trusted_ca_public_key=None,
+        is_trusted_ca_correct=True,
+        foreign_tier_slices=(),
+        degraded_md_arrays=(),
+        raw_swap_devices=(),
+        is_storage_encrypted=is_storage_encrypted,
+    )
+
+
 def test_build_box_tier_audit_report_counts_each_verdict_separately() -> None:
     # An unaudited box is NOT a clean one: it must never be folded into `exclusive`.
-    clean = BoxTierAudit(
-        server_id="a",
-        public_address="203.0.113.1",
-        slot_count=6,
-        box_used_slots=1,
-        authorized_key_count=1,
-        expected_authorized_key_count=1,
-        trusted_ca_public_key=None,
-        is_trusted_ca_correct=True,
-        foreign_tier_slices=(),
-        degraded_md_arrays=(),
-        raw_swap_devices=(),
-    )
-    contaminated = BoxTierAudit(
-        server_id="b",
-        public_address="203.0.113.2",
-        slot_count=6,
-        box_used_slots=2,
-        authorized_key_count=2,
-        expected_authorized_key_count=1,
-        trusted_ca_public_key=None,
-        is_trusted_ca_correct=True,
-        foreign_tier_slices=(),
-        degraded_md_arrays=(),
-        raw_swap_devices=(),
+    clean = _audit("a", box_used_slots=1, authorized_key_count=1, expected_authorized_key_count=1)
+    contaminated = _audit(
+        "b", public_address="203.0.113.2", box_used_slots=2, authorized_key_count=2, expected_authorized_key_count=1
     )
     report = build_box_tier_audit_report(
         env_name="staging",
@@ -788,6 +919,39 @@ def test_build_box_tier_audit_report_counts_each_verdict_separately() -> None:
     assert (report.exclusive, report.contaminated, report.unaudited) == (1, 1, 1)
     assert report.env_name == "staging"
     assert report.is_foreign_tier_checked
+
+
+def _capacity(server_id: str, box_generation: int) -> BareMetalServerCapacity:
+    base = _server(slot_count=6, cpu_threads=16)
+    box = base.model_copy_update(
+        to_update(base.field_ref().id, BareMetalServerDbId(server_id)),
+        to_update(base.field_ref().box_generation, box_generation),
+    )
+    return BareMetalServerCapacity(server=box, used_slots=0, free_slots=6)
+
+
+def test_plaintext_gen2_box_ids_lists_only_audited_gen2_boxes_reading_unencrypted() -> None:
+    gen1_plain = "11111111-1111-1111-1111-111111111111"
+    gen2_encrypted = "22222222-2222-2222-2222-222222222222"
+    gen2_plain = "33333333-3333-3333-3333-333333333333"
+    gen2_unaudited = "44444444-4444-4444-4444-444444444444"
+    report = build_box_tier_audit_report(
+        env_name="staging",
+        # A gen-1 audit always reads unencrypted (no storage volume) and must not be listed.
+        audits=[
+            _audit(gen1_plain, is_storage_encrypted=False),
+            _audit(gen2_encrypted),
+            _audit(gen2_plain, is_storage_encrypted=False),
+        ],
+        unaudited=[UnauditedBox(server_id=gen2_unaudited, public_address=None, reason="unreachable")],
+    )
+    capacities = [
+        _capacity(gen1_plain, 1),
+        _capacity(gen2_encrypted, 2),
+        _capacity(gen2_plain, 2),
+        _capacity(gen2_unaudited, 2),
+    ]
+    assert plaintext_gen2_box_ids(report, capacities) == [gen2_plain]
 
 
 def test_build_box_tier_audit_report_marks_the_foreign_tier_half_as_unchecked_without_an_env() -> None:
@@ -1043,3 +1207,17 @@ def test_resolve_gen2_guest_image_defaults_to_the_pinned_mirror_artifact_and_req
         _resolve_gen2_guest_image("https://example.test/img.qcow2", None)
     with pytest.raises(click.UsageError, match="must be given together"):
         _resolve_gen2_guest_image(None, "a" * 128)
+
+
+def test_box_script_provisioning_error_is_unwrapped_from_its_concurrency_group() -> None:
+    """A refused round trip surfaces as a group around the provisioning error; the best-effort
+    steps after a gen-2 prep catch the plain error, so the wrapper must give it back."""
+    refused = BareMetalProvisioningError("copying the box script to 203.0.113.9 failed (exit 255)")
+    with_main = ConcurrencyExceptionGroup("box script", [refused], main_exception=refused)
+    assert box_script_provisioning_error_or_none(with_main) is refused
+    only_child = ConcurrencyExceptionGroup("box script", [refused])
+    assert box_script_provisioning_error_or_none(only_child) is refused
+    unrelated = ConcurrencyExceptionGroup("box script", [RuntimeError("worker died")])
+    assert box_script_provisioning_error_or_none(unrelated) is None
+    mixed = ConcurrencyExceptionGroup("box script", [refused, RuntimeError("worker died")])
+    assert box_script_provisioning_error_or_none(mixed) is None

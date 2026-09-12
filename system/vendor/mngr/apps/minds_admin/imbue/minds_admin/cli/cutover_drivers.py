@@ -28,11 +28,9 @@ from typing import AbstractSet
 from typing import Any
 from typing import Final
 
-import boto3
 import click
 import pluggy
 import psycopg2
-from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError
 from botocore.exceptions import ClientError
 from loguru import logger
@@ -53,6 +51,7 @@ from imbue.minds_admin.bake.bake_source import merge_bake_identity_attributes
 from imbue.minds_admin.bake.bake_source import resolved_bake_source
 from imbue.minds_admin.bake.content_tag import DEFAULT_WORKSPACE_TEMPLATE_IMAGE_REPOSITORY
 from imbue.minds_admin.cli._tier_secrets import WorkspaceStorageConfig
+from imbue.minds_admin.cli._tier_secrets import make_workspace_storage_s3_client
 from imbue.minds_admin.cli.server import DEFAULT_SETUP_SSH_READY_TIMEOUT_SECONDS
 from imbue.minds_admin.cli.server import allocate_slices
 from imbue.minds_admin.cli.server import compute_server_slice_sizing
@@ -155,6 +154,7 @@ from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DELIVERED
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DRAINING
+from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.primitives import US_REGION_BY_OVH_DATACENTER_CODE
 from imbue.mngr_imbue_cloud.providers.slice_provider import wait_for_guest_cloud_init_to_finish
@@ -408,19 +408,6 @@ def _run_on_vm_checked(outer: OuterHostInterface, command: str, *, timeout: floa
     return result.stdout
 
 
-def _s3_client(storage: WorkspaceStorageConfig) -> Any:
-    # A session per client: the drain's worker threads build clients concurrently,
-    # and boto3's process-global default session is not thread-safe.
-    return boto3.Session().client(
-        "s3",
-        endpoint_url=storage.s3_endpoint,
-        region_name=storage.s3_region,
-        aws_access_key_id=storage.access_key_id.get_secret_value(),
-        aws_secret_access_key=storage.secret_access_key.get_secret_value(),
-        config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
-    )
-
-
 # The botocore error codes that mean "no such object" (a head answers 404 /
 # NotFound, a get NoSuchKey) rather than a failed request.
 _MISSING_OBJECT_ERROR_CODES: Final[frozenset[str]] = frozenset({"404", "NoSuchKey", "NotFound"})
@@ -433,7 +420,7 @@ def _is_missing_object_error(exc: ClientError) -> bool:
 
 def _s3_object_size_or_none(storage: WorkspaceStorageConfig, key: str) -> int | None:
     try:
-        response = _s3_client(storage).head_object(Bucket=storage.bucket, Key=key)
+        response = make_workspace_storage_s3_client(storage).head_object(Bucket=storage.bucket, Key=key)
     except ClientError as exc:
         if _is_missing_object_error(exc):
             return None
@@ -967,7 +954,7 @@ def _s3_copy_object(storage: WorkspaceStorageConfig, source_key: str, dest_key: 
     anyway: the restore verifies the artifact's recorded sha256, and the
     parked row blocks the only legitimate writer (the product's next stop).
     """
-    client = _s3_client(storage)
+    client = make_workspace_storage_s3_client(storage)
     try:
         size = int(client.head_object(Bucket=storage.bucket, Key=source_key)["ContentLength"])
         if size <= _S3_SINGLE_COPY_MAX_BYTES:
@@ -1158,8 +1145,10 @@ def repave_scope_refusal_or_none(server: BareMetalServer) -> str | None:
 
     A gen-1 box repaves only once it is EMPTY (the caller checks its pool rows
     and in-flight migrations separately); a gen-2 box that is already ready
-    needs nothing, and one that is not is a crashed repave the explicitly
-    named re-run resumes.
+    needs nothing, a drained one is reinstalled like a gen-1 box (the way a
+    box prepped before storage encryption existed gets its encrypted volume),
+    and any other status is a crashed repave the explicitly named re-run
+    resumes.
     """
     if server.box_generation < FIRST_QEMU_BOX_GENERATION and str(server.status) not in (
         SERVER_STATUS_READY,
@@ -1196,6 +1185,42 @@ def _in_flight_migration_ids_touching_box(ctx: CutoverContext, server_id: str) -
     )
 
 
+@pure
+def repave_pre_reinstall_server_fields(server: BareMetalServer) -> dict[str, Any]:
+    """The ``bare_metal_servers`` columns the repave sets so ``setup_server_to_ready`` reinstalls the box.
+
+    Setup reinstalls only from ``delivered`` (and resumes the prep from
+    ``installing``). A gen-1 box moves to generation 2 with the gen-2
+    overcommit; a drained gen-2 box only needs the status flip; a gen-2 box
+    already ``delivered`` or ``installing`` is a crashed repave that resumes
+    as it is.
+    """
+    if server.box_generation < FIRST_QEMU_BOX_GENERATION:
+        return {
+            "box_generation": FIRST_QEMU_BOX_GENERATION,
+            "status": SERVER_STATUS_DELIVERED,
+            "cpu_overcommit_ratio": DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO,
+        }
+    if str(server.status) == SERVER_STATUS_DRAINING:
+        return {"status": SERVER_STATUS_DELIVERED}
+    return {}
+
+
+@pure
+def repave_dry_run_detail(server: BareMetalServer) -> str:
+    """What a repave of this box would do, for the dry-run outcome: the row columns it sets, then the setup it hands off to."""
+    fields = repave_pre_reinstall_server_fields(server)
+    row_change = (
+        "would set " + ", ".join(f"{column}={value}" for column, value in fields.items())
+        if fields
+        else "no row change"
+    )
+    # Setup reinstalls only from ``delivered``; from ``installing`` it resumes at the SSH wait and the prep.
+    status_at_setup = fields.get("status", str(server.status))
+    setup_step = "resume the prep" if status_at_setup == SERVER_STATUS_INSTALLING else "reinstall + prep"
+    return f"dry run: {row_change}, {setup_step}, measure the partition"
+
+
 def _repave_box_unguarded(ctx: CutoverContext, server: BareMetalServer, *, is_dry_run: bool) -> BoxOutcome:
     if server.box_generation >= FIRST_QEMU_BOX_GENERATION and str(server.status) == SERVER_STATUS_READY:
         return BoxOutcome(server_id=str(server.id), stage=CutoverBoxStage.REPAVED, detail="already repaved")
@@ -1222,19 +1247,10 @@ def _repave_box_unguarded(ctx: CutoverContext, server: BareMetalServer, *, is_dr
         )
     if is_dry_run:
         return BoxOutcome(
-            server_id=str(server.id),
-            stage=CutoverBoxStage.REPAVED,
-            detail="dry run: would set box_generation=2 / delivered / overcommit 4.0, reinstall + prep, measure the partition",
+            server_id=str(server.id), stage=CutoverBoxStage.REPAVED, detail=repave_dry_run_detail(server)
         )
     with _pool_connection(ctx) as conn:
-        if server.box_generation < FIRST_QEMU_BOX_GENERATION:
-            update_server(
-                conn,
-                server.id,
-                box_generation=FIRST_QEMU_BOX_GENERATION,
-                status=SERVER_STATUS_DELIVERED,
-                cpu_overcommit_ratio=DEFAULT_SLICE_CPU_OVERCOMMIT_RATIO,
-            )
+        update_server(conn, server.id, **repave_pre_reinstall_server_fields(server))
     setup_server_to_ready(
         server_id=str(server.id),
         ssh_user=_MANAGEMENT_SSH_USER,
@@ -2420,6 +2436,9 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
             # recreates the instance under the same name.
             _destroy_gen2_slice_on_box(ctx, state.target_server_id, state.slice_instance_name)
             _destroy_gen1_instance_on_box(ctx, state.origin_server_id, state.slice_instance_name)
+            # Still held for a mid-migration failure; a completed migration
+            # shredded them after stamping the row at its finish CAS.
+            keys = ctx.state.read_keys(state.host_db_id)
             with _pool_connection(ctx) as conn:
                 is_artifact_restored = rollback_restore_artifact(
                     conn,
@@ -2427,6 +2446,8 @@ def _rollback_workspace(ctx: CutoverContext, state: CutoverWorkspaceState) -> Wo
                     artifact_manifest_json=json.dumps(saved.manifest_json),
                     wrapped_dek=saved.wrapped_dek,
                     artifact_generation=saved.generation,
+                    outer_host_public_key=keys.vm_host_public_key.strip() if keys is not None else None,
+                    container_host_public_key=keys.container_host_public_key.strip() if keys is not None else None,
                 )
             if not is_artifact_restored:
                 raise CutoverError(f"rollback artifact CAS matched no parked gen-1 row for {state.host_db_id}")

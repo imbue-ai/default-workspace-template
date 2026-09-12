@@ -71,6 +71,12 @@ class BoxTelemetrySignal(UpperCaseStrEnum):
     # cgroup limit), so a firing means a VM's real footprint outgrew its
     # budget -- the per-VM overhead constant, or the guest, is wrong.
     SLICE_UNIT_OOM_KILLED = auto()
+    # The gen-2 storage root is not mounted from its opened LUKS mapper: the
+    # box's TPM unlock failed at boot (every slice on it is down until
+    # `minds-admin server unlock` opens the volume by its recovery
+    # passphrase), or the box was never encrypted and its slices sit in
+    # plaintext.
+    STORAGE_VOLUME_LOCKED = auto()
 
 
 def box_signal_line_prefix(signal: BoxTelemetrySignal) -> str:

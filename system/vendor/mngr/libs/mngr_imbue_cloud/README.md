@@ -81,7 +81,7 @@ minds drives this automatically: it tries `fast_mode=require` first and, on `Fas
 
 - `mngr destroy <agent>` is **terminal**: it wipes the workspace and its data, then releases the lease back to the pool. The user's data is gone before the lease is released.
 - `mngr delete <agent>` (or `mngr imbue_cloud hosts release <host-db-id>`) runs the same flow; it's the path mngr's GC takes after the destroyed-host grace period. Safe to re-run on an already-released lease.
-- `mngr stop <agent>` is the "resume later" path: it gracefully stops the container, halts the slice VM, and uploads the VM's disks (encrypted) to the tier's storage bucket -- the workspace shows as stopping while the upload runs and reports stopped once it verifies; the halted local VM (and its bare-metal slot) is kept through the local-retention window for a fast restart in place, then reaped. `mngr start <agent>` brings the same workspace back: near-instantly on its origin box within the window, or restored onto any same-region box with a free slot after it (the client re-resolves the new coordinates automatically). Against a connector without the workspace-lifecycle endpoints, stop falls back to the old container-only behavior.
+- `mngr stop <agent> --stop-host` is the "resume later" path (plain `mngr stop <agent>` only stops the agent process inside the container and leaves the machine running): it gracefully stops the container, halts the slice VM, and uploads the VM's disks (encrypted) to the tier's storage bucket -- the workspace shows as stopping while the upload runs and reports stopped once it verifies; the halted local VM (and its bare-metal slot) is kept through the local-retention window for a fast restart in place, then reaped. `mngr start <agent>` brings the same workspace back: near-instantly on its origin box within the window, or restored onto any same-region box with a free slot after it (the client re-resolves the new coordinates automatically). Against a connector without the workspace-lifecycle endpoints, stop falls back to the old container-only behavior.
 
 ## Machine sizing
 
@@ -138,7 +138,19 @@ boot, after cloud-init's replay. That replay is a gen-1 (lima) behavior: a gen-2
 slice's cloud-init runs exactly once, at first boot -- its instance-id is
 stable and its network comes from the box's DHCP server, so a stop/start or a
 restore onto another box never reruns it, and the adopted host key and
-`authorized_keys` simply persist. Adoption is idempotent and marker-driven:
+`authorized_keys` simply persist. The pins are bound to an address and port,
+and a workspace comes back at fresh ports (possibly on another box) on every
+restore -- one driven by this client's own `mngr start`, by an operator, by a
+watchdog, by a rollback, or by another of your devices. So the client remembers
+the endpoints it last wrote the host's pins at (`bound_endpoints.json` in the
+per-host state dir) and, before every connection, compares them with the
+endpoints the connector currently reports: when they differ, the VM pin and
+the container pin are moved to the new endpoints, origins intact, with no
+network round trip. A device that has no such record yet (a second device that
+only synced the workspace record) seeds it from the synced pins, by port order
+when the record predates a relocation (the VM port is always the lower of the
+pair). The connector's bake-time keys are dropped once both endpoints are
+verified. Adoption is idempotent and marker-driven:
 later connects are a pure-local check, with one full re-verification per
 process (plus after start/restart/rebuild), which heals drift. A served key
 that matches neither the pins nor an in-flight rotation is refused, not

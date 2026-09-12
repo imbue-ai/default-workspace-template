@@ -2416,6 +2416,10 @@ class FakePoolBackend:
     # The seed-if-absent path set of each recorded injection, parallel to
     # ``written_container_files`` (paths whose write skips when the file exists).
     written_container_seed_only_paths: list[frozenset[str]]
+    # Set to make every share-materials injection fail the strict host-key
+    # check, modeling a container whose host key a desktop client rotated away
+    # from the row's recorded one.
+    is_container_host_key_mismatched: bool
     # Recorded web-claim adopts (SSH is faked): each entry is
     # ``(host, container_ssh_port, agent_id, host_name, display_name, connector_url)``.
     # Set ``adopt_should_fail`` to simulate an adopt that dies over SSH.
@@ -3155,6 +3159,8 @@ class FakePoolBackend:
         seed_only_remote_paths: frozenset[str],
     ) -> None:
         """Capture a server-side share-materials injection instead of SSHing."""
+        if self.is_container_host_key_mismatched:
+            raise paramiko.BadHostKeyException(host, paramiko.ECDSAKey.generate(), paramiko.ECDSAKey.generate())
         self.written_container_files.append((host, port, files_by_remote_path))
         self.written_container_seed_only_paths.append(frozenset(seed_only_remote_paths))
 
@@ -3302,6 +3308,7 @@ def make_fake_pool_backend() -> FakePoolBackend:
     backend.append_key_calls = []
     backend.append_key_failure_addresses = set()
     backend.written_container_files = []
+    backend.is_container_host_key_mismatched = False
     backend.written_container_seed_only_paths = []
     backend.adopted_containers = []
     backend.adopt_should_fail = False

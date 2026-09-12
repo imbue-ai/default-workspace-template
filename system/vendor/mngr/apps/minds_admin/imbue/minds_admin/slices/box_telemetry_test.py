@@ -40,6 +40,21 @@ def test_timer_unit_runs_on_a_short_interval_and_installs_at_boot() -> None:
     assert "WantedBy=timers.target" in timer
 
 
+def test_manifest_covers_the_storage_volume_artifacts() -> None:
+    # A change to the crypttab entry or to the bind-mount units would silently
+    # move the journal, the service user's home or the temp dirs back onto the
+    # plain root partition, so the integrity check must cover them.
+    assert "/etc/crypttab" in PREP_ARTIFACT_MANIFEST_TARGETS
+    for unit_path in (
+        "/etc/systemd/system/var-log-journal.mount",
+        "/etc/systemd/system/home-slicehost.mount",
+        "/etc/systemd/system/tmp.mount",
+        "/etc/systemd/system/var-tmp.mount",
+        "/etc/systemd/system/systemd-journal-flush.service.d/mngr-storage.conf",
+    ):
+        assert unit_path in PREP_ARTIFACT_MANIFEST_TARGETS
+
+
 def test_prep_section_converges_artifacts_and_records_the_hash_manifest() -> None:
     section = render_box_telemetry_prep_section(
         overlay_cidr="10.112.0.0/16", declared_uplink_mbps=500, management_proxy_static_ips=()
@@ -222,6 +237,8 @@ def test_collector_run_emits_counters_and_signals_against_stubbed_box_commands(t
     # Slower than the declared 1000: the under-delivering-link case that signals.
     _write_stub(bin_dir, "ethtool", "Settings for eth0:\n\tSpeed: 100Mb/s\n\tDuplex: Full")
     _write_stub(bin_dir, "journalctl", _journal_lines())
+    # The storage root mounted from the plain partition: the never-encrypted case.
+    _write_stub(bin_dir, "findmnt", "/dev/md4")
 
     # Seed the state so the run computes deltas over a known 60s interval,
     # with every previous counter at zero (a first-ever observation of a
@@ -248,6 +265,7 @@ def test_collector_run_emits_counters_and_signals_against_stubbed_box_commands(t
         "MANAGEMENT_SSH_ANOMALY",
         "SUDO_ANOMALY",
         "SLICE_UNIT_OOM_KILLED",
+        "STORAGE_VOLUME_LOCKED",
     }
 
     events = [json.loads(line) for line in lines if not line.startswith("MNGR_BOX_SIGNAL ")]
@@ -295,6 +313,32 @@ def test_collector_run_emits_counters_and_signals_against_stubbed_box_commands(t
     # The journal cursor advanced to the last stubbed entry.
     assert (state_dir / "journal.cursor").read_text() == "c9"
 
+    storage_signals = [json.loads(line.split(" ", 2)[2]) for line in signal_lines if " STORAGE_VOLUME_LOCKED " in line]
+    assert storage_signals == [
+        {
+            "mngr_event": "signal",
+            "signal": "STORAGE_VOLUME_LOCKED",
+            "mounted_source": "/dev/md4",
+            "is_encrypted": False,
+            "reason": "unencrypted",
+        }
+    ]
+
+
+def test_collector_signals_a_locked_storage_volume_with_nothing_mounted(tmp_path: Path) -> None:
+    bin_dir = _set_up_healthy_box(tmp_path)
+    # findmnt exits non-zero when the storage root is not a mount point.
+    (bin_dir / "findmnt").write_text("#!/bin/sh\nexit 1\n")
+
+    result = _run_rendered_collector(tmp_path, _collector_config_against(tmp_path))
+    assert result.returncode == 0, result.stderr
+    signal_lines = [line for line in result.stdout.splitlines() if line.startswith("MNGR_BOX_SIGNAL ")]
+    assert [line.split()[1] for line in signal_lines] == ["STORAGE_VOLUME_LOCKED"]
+    assert json.loads(signal_lines[0].split(" ", 2)[2])["reason"] == "locked"
+    events = [json.loads(line) for line in result.stdout.splitlines() if not line.startswith("MNGR_BOX_SIGNAL ")]
+    storage_event = next(event for event in events if event["mngr_event"] == "storage_volume")
+    assert storage_event == {"mngr_event": "storage_volume", "mounted_source": None, "is_encrypted": False}
+
 
 def _set_up_healthy_box(tmp_path: Path) -> Path:
     """Fabricate a box where nothing signals; returns the stub bin dir for per-test overrides."""
@@ -316,6 +360,8 @@ def _set_up_healthy_box(tmp_path: Path) -> Path:
     # never signal).
     _write_stub(bin_dir, "ethtool", "Settings for eth0:\n\tSpeed: 10000Mb/s")
     _write_stub(bin_dir, "journalctl", "")
+    # The storage root mounted from its LUKS mapper: the encrypted steady state.
+    _write_stub(bin_dir, "findmnt", "/dev/mapper/mngr-storage")
     return bin_dir
 
 

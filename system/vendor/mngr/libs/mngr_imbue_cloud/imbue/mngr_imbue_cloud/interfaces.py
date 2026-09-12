@@ -9,6 +9,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import HostId
 from imbue.mngr_imbue_cloud.data_types import BoxManagementTrust
 from imbue.mngr_imbue_cloud.data_types import SliceProvisionResult
+from imbue.mngr_imbue_cloud.data_types import StorageVolumeState
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import SliceInstanceObservation
 from imbue.mngr_vps.vps_client import VpsClientInterface
 
@@ -177,3 +178,7 @@ class SliceVmClientInterface(VpsClientInterface, ABC):
     @abstractmethod
     def read_box_health_texts(self) -> tuple[str, str]:
         """Return the box's ``/proc/mdstat`` and ``/proc/swaps`` contents in one round-trip."""
+
+    @abstractmethod
+    def read_storage_volume_state(self) -> StorageVolumeState:
+        """Read what backs the gen-2 storage root (the opened LUKS mapper, a plain device, or nothing) in one round-trip."""

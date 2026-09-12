@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import pytest
 from pydantic import Field
@@ -36,7 +37,7 @@ def test_get_instance_ip_is_the_box_address() -> None:
 
 def test_box_ssh_command_targets_the_slice_user_with_the_pool_key() -> None:
     client = _client()
-    command = client._box_ssh_command("systemctl is-active mngr-slice@1")
+    command = client._box_ssh_command("systemctl is-active mngr-slice@1", Path("/tmp/known_hosts"))
     assert command[0] == "ssh"
     assert "-i" in command and "/tmp/id" in command
     assert "slicehost@box.example" in command
@@ -50,10 +51,33 @@ def test_box_ssh_command_targets_the_slice_user_with_the_pool_key() -> None:
     assert "/usr/local/bin" in command[-1]
 
 
+def test_box_ssh_command_quotes_a_known_hosts_path_containing_a_space(tmp_path: Path) -> None:
+    """ssh splits UserKnownHostsFile on whitespace, so the pinned path needs its own quotes.
+
+    The known_hosts file is written beside the pool key, so a key directory whose
+    name contains a space produces a spaced path here without anyone choosing one.
+    """
+    key_dir = tmp_path / "pool keys"
+    key_dir.mkdir()
+    client = QemuSliceVpsClient(
+        box_address="box.example",
+        box_ssh_user="slicehost",
+        private_key_path=str(key_dir / "id"),
+        box_host_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "A" * 20,
+    )
+    known_hosts_path = client._box_known_hosts_file()
+    assert known_hosts_path.parent == key_dir
+    command = client._box_ssh_command("systemctl is-active mngr-slice@1", known_hosts_path)
+    option = next(arg for arg in command if arg.startswith("UserKnownHostsFile="))
+    value = option.removeprefix("UserKnownHostsFile=")
+    assert value.startswith('"') and value.endswith('"'), option
+    assert " " in value, option
+
+
 def test_box_ssh_command_requires_a_private_key() -> None:
     client = QemuSliceVpsClient(box_address="box.example", box_ssh_user="slicehost", private_key_path=None)
     with pytest.raises(SliceCommandError):
-        client._box_ssh_command("systemctl is-active mngr-slice@1")
+        client._box_ssh_command("systemctl is-active mngr-slice@1", Path("/tmp/known_hosts"))
 
 
 def test_box_ssh_remote_string_stays_valid_bash_for_compound_commands() -> None:
@@ -61,7 +85,7 @@ def test_box_ssh_remote_string_stays_valid_bash_for_compound_commands() -> None:
     # a compound statement, so the PATH must ride a standalone `export`.
     client = _client()
     compound = 'for d in /srv/x/*/datadisk.qcow2; do [ -e "$d" ] || continue; basename "$(dirname "$d")"; done'
-    remote_string = client._box_ssh_command(compound)[-1]
+    remote_string = client._box_ssh_command(compound, Path("/tmp/known_hosts"))[-1]
     parse_result = subprocess.run(["bash", "-n", "-c", remote_string], capture_output=True, text=True)
     assert parse_result.returncode == 0, parse_result.stderr
 

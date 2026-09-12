@@ -18,6 +18,8 @@ from imbue.minds_admin.slices.mirror_artifacts import AGE_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import S5CMD_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import UV_TARBALL
 from imbue.minds_admin.slices.mirror_artifacts import UV_VERSION
+from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_encryption_section
+from imbue.minds_admin.slices.storage_encryption import render_gen2_storage_relocation_section
 from imbue.mngr_imbue_cloud.slices.bare_metal import GEN1_SLICE_SERVICE_USER
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_CONFIG_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_LEASE_DIR
@@ -387,9 +389,36 @@ def test_gen2_prep_script_retires_the_pre_rename_service_user_after_re_owning_th
     assert retire_block_start < script.index(GEN2_SUDOERS_PATH)
 
 
+def test_gen2_prep_script_encrypts_the_storage_partition_before_using_it() -> None:
+    script = _gen2_script()
+    assert render_gen2_storage_encryption_section() in script
+    assert render_gen2_storage_relocation_section() in script
+    # The volume is made before the XFS check (which checks the mapper's
+    # filesystem), the storage tree, the transfer tooling (which downloads to
+    # the relocated /tmp) and every other consumer of the storage root.
+    encryption_idx = script.index("cryptsetup luksFormat")
+    assert encryption_idx < script.index('if [ "$storage_fstype" != "xfs" ]')
+    assert encryption_idx < script.index("install -d -o slicehost -g slicehost -m 751 /srv/mngr-slices/instances")
+    assert encryption_idx < script.index("transfer_tools_marker=")
+    assert encryption_idx < script.index("MNGR_GEN2_UNIT")
+    # ... but after the service user exists (its home moves onto the volume)
+    # and its certificate trust is installed.
+    assert script.index("useradd -m -s /bin/bash slicehost") < encryption_idx
+    assert script.index("TrustedUserCAKeys") < encryption_idx
+    # The relocation follows the mount and precedes everything that writes to
+    # the service user's home or /tmp.
+    relocation_idx = script.index("journalctl --relinquish-var")
+    assert encryption_idx < relocation_idx < script.index("transfer_tools_marker=")
+    for package in ("cryptsetup", "systemd-cryptsetup", "tpm2-tools"):
+        assert package in script
+
+
 def test_gen2_prep_script_refuses_without_the_xfs_storage_partition() -> None:
     script = _gen2_script()
-    assert "mountpoint -q /srv/mngr-slices" in script
+    # Nothing mounted at the storage root, no opened mapper and no locked
+    # volume to open: the box has no storage partition at all.
+    refusal_start = script.index('echo "ERROR: $STORAGE_ROOT is not a mounted filesystem; provision the XFS storage')
+    assert script[refusal_start : script.index("fi\n", refusal_start)].rstrip().endswith("exit 1")
     assert 'if [ "$storage_fstype" != "xfs" ]' in script
     # The storage tree is owned by the service user, traversable-not-listable.
     assert (

@@ -3,6 +3,7 @@
 import json
 import shlex
 import stat
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,11 +20,19 @@ from imbue.minds_admin.slices.operator_identity import ManagementIdentityResolve
 
 
 class RecordingCursor:
-    """A psycopg2 cursor stand-in: returns scripted rows, reports a scripted rowcount, records every statement."""
+    """A psycopg2 cursor stand-in: returns scripted rows, reports a scripted rowcount, records every statement.
 
-    def __init__(self, rows: list[tuple[Any, ...]], rowcount: int) -> None:
+    ``error_by_param`` scripts a failure: a statement whose bind parameters contain
+    one of its keys raises the mapped error instead of being recorded (e.g. a
+    unique-index violation for one row's service name).
+    """
+
+    def __init__(
+        self, rows: list[tuple[Any, ...]], rowcount: int, error_by_param: Mapping[Any, Exception] | None = None
+    ) -> None:
         self._rows = rows
         self.rowcount = rowcount
+        self._error_by_param = dict(error_by_param) if error_by_param else {}
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
 
     def __enter__(self) -> "RecordingCursor":
@@ -33,6 +42,9 @@ class RecordingCursor:
         return None
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        for param, error in self._error_by_param.items():
+            if param in params:
+                raise error
         self.executed.append((sql, params))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
@@ -48,17 +60,23 @@ class RecordingCursor:
 
 
 class RecordingConnection:
-    """A psycopg2 connection stand-in yielding one ``RecordingCursor`` and counting commits (no real DB)."""
+    """A psycopg2 connection stand-in yielding one ``RecordingCursor`` and counting commits and rollbacks (no real DB)."""
 
-    def __init__(self, rows: list[tuple[Any, ...]], rowcount: int) -> None:
-        self.recording_cursor = RecordingCursor(rows, rowcount)
+    def __init__(
+        self, rows: list[tuple[Any, ...]], rowcount: int, error_by_param: Mapping[Any, Exception] | None = None
+    ) -> None:
+        self.recording_cursor = RecordingCursor(rows, rowcount, error_by_param)
         self.commit_count = 0
+        self.rollback_count = 0
 
     def cursor(self) -> RecordingCursor:
         return self.recording_cursor
 
     def commit(self) -> None:
         self.commit_count += 1
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 def make_cutover_workspace_state(

@@ -44,7 +44,7 @@ def test_get_instance_ip_is_the_box_address() -> None:
 
 def test_box_ssh_command_targets_the_lima_user_with_the_pool_key() -> None:
     client = _client()
-    command = client._box_ssh_command("limactl list --json")
+    command = client._box_ssh_command("limactl list --json", Path("/tmp/known_hosts"))
     assert command[0] == "ssh"
     assert "-i" in command and "/tmp/id" in command
     assert "limahost@box.example" in command
@@ -72,7 +72,9 @@ def test_box_ssh_command_quotes_a_known_hosts_path_containing_a_space(tmp_path: 
         private_key_path=str(key_dir / "id"),
         box_host_public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI" + "A" * 20,
     )
-    command = client._box_ssh_command("limactl list --json")
+    known_hosts_path = client._box_known_hosts_file()
+    assert known_hosts_path.parent == key_dir
+    command = client._box_ssh_command("limactl list --json", known_hosts_path)
     option = next(arg for arg in command if arg.startswith("UserKnownHostsFile="))
     value = option.removeprefix("UserKnownHostsFile=")
     assert value.startswith('"') and value.endswith('"'), option
@@ -82,7 +84,7 @@ def test_box_ssh_command_quotes_a_known_hosts_path_containing_a_space(tmp_path: 
 def test_box_ssh_command_requires_a_private_key() -> None:
     client = LimaSliceVpsClient(box_address="box.example", box_ssh_user="limahost", private_key_path=None)
     with pytest.raises(LimaCommandError):
-        client._box_ssh_command("limactl list --json")
+        client._box_ssh_command("limactl list --json", Path("/tmp/known_hosts"))
 
 
 class _RecordingClient(LimaSliceVpsClient):
@@ -251,7 +253,7 @@ def test_box_ssh_command_exports_the_path_so_compound_commands_run() -> None:
     # The management-trust read is an `if` statement; an assignment prefix
     # (`PATH=... if ...`) is a bash syntax error, an export is not.
     client = _client()
-    remote_string = client._box_ssh_command(build_read_management_trust_command())[-1]
+    remote_string = client._box_ssh_command(build_read_management_trust_command(), Path("/tmp/known_hosts"))[-1]
     assert remote_string.startswith("export PATH=")
     assert "; if [ -e ~/.ssh/authorized_keys ]" in remote_string
     syntax_check = subprocess.run(["bash", "-n", "-c", remote_string], capture_output=True, text=True)

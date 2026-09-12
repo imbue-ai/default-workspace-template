@@ -15,3 +15,13 @@ Dev and ci tier bring-up (2026-09-09): `envs/dev/deploy.toml` and `envs/ci/deplo
 Fixed (found on the dev-tier test pass): the deployment tests that lease a pool host directly (`test_pool_lease`, `test_workspace_stop_start`, `test_machine_resize`, `test_quota_enforcement`) now send `max_box_generation` (the shared `LEASE_MAX_BOX_GENERATION` in `deployment_tests/helpers.py`); without it the connector treats the caller as a pre-gen-2 client and confines the lease to gen-1 rows, so against a gen-2-only pool every one of them reported "no capacity" and skipped.
 
 Docs (found during the gen-2 final test pass, 2026-09-10): the box-ordering runbook and the `server-order` recipe comment name the production box plan as `24sys03-v1-us` (Xeon-E 2288G, 128 GB, `softraid-2x960nvme`, 14 slices); OVH's eco catalog no longer lists the `24sys032-us` code they used to name, so a copy-pasted order failed with "plan not found". The option families (`bandwidth-1000-24sys-us`, `vrack-bandwidth-500-24sys-us`) and the $160 first-month price are unchanged.
+
+`next_deploy.md`: recorded that the CI infra DB and the dev envs have applied the gen-2 connector migrations (028-041 on CI infra, 034-041 via `env deploy` on dev-josh-2 / dev-gen2mig) and that the current `minds-v0.6.0` tags are test pointers to re-point at the real release.
+
+`gen2-cutover.md`: the rollback section now mentions that a mid-migration rollback re-stamps the harvested host keys onto the row.
+
+`gen2-cutover.md`: says that a running cutover stage can be killed with Ctrl-C or SIGTERM and re-run to resume, and corrects the `--keep-origin-vm` note: the kept origin VM is never collected by the orphan reap (it still carries the migrated row's instance name) and must be destroyed by hand.
+
+Docs: the glossary's "adoption" entry and the lost-device runbook's `hosts rotate` description now say that the client remembers the endpoints it last pinned an adopted workspace's host keys at and moves the pins to the connector's current endpoints before every connection, so the workspace stays reachable after a restore driven by an operator, a rollback, or another device, and that a rotation's synced pins retire the previous host keys on every device; the behavior itself is in the `mngr_imbue_cloud` entry.
+
+`test_create_workspace_and_sign_in_via_modal_then_chat_via_electron` (the snapshot-resume Electron sign-in test) is marked flaky: on 2026-09-10 it failed one PR run with a playwright `Frame.click` timeout and passed on re-run, with no change to the flow under test.

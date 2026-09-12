@@ -22,6 +22,9 @@ from typing import Final
 
 from imbue.imbue_common.pure import pure
 from imbue.minds_admin.slices.management_plane import WIREGUARD_CONFIG_PATH
+from imbue.minds_admin.slices.storage_encryption import JOURNAL_FLUSH_DROP_IN_PATH
+from imbue.minds_admin.slices.storage_encryption import STORAGE_BIND_MOUNT_UNIT_PATHS
+from imbue.minds_admin.slices.storage_encryption import STORAGE_CRYPTTAB_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_BY_ORDINAL_DIR
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_CONFIG_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_DHCP_NFT_POLICY_PATH
@@ -31,6 +34,8 @@ from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_MAX_NEW_CONNE
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_MAX_SLICE_COUNT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_NFT_TABLE
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SLICE_SERVICE_USER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_LUKS_MAPPER_PATH
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_STORAGE_ROOT
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_SUDOERS_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_UNIT_PATH
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import slice_unit_name
@@ -78,6 +83,12 @@ PREP_ARTIFACT_MANIFEST_TARGETS: Final[tuple[str, ...]] = (
     BOX_TELEMETRY_SCRIPT_PATH,
     BOX_TELEMETRY_SERVICE_PATH,
     BOX_TELEMETRY_TIMER_PATH,
+    # The storage volume's crypttab entry and the bind-mount units that keep
+    # the journal, the service user's home and the temp directories on it: a
+    # change here would silently move state back onto the plain root partition.
+    STORAGE_CRYPTTAB_PATH,
+    *STORAGE_BIND_MOUNT_UNIT_PATHS,
+    JOURNAL_FLUSH_DROP_IN_PATH,
 )
 
 # Collection cadence. Matches the otelcol hostmetrics interval so the counter
@@ -132,6 +143,8 @@ def _build_collector_config(
         "proxy_static_ips": [str(ip) for ip in management_proxy_static_ips],
         "wireguard_overlay_cidr": overlay_cidr,
         "slice_service_user": GEN2_SLICE_SERVICE_USER,
+        "storage_root": GEN2_STORAGE_ROOT,
+        "storage_mapper_path": GEN2_STORAGE_LUKS_MAPPER_PATH,
         "sudo_allowed_command_pattern": _SUDO_ALLOWED_COMMAND_PATTERN,
         "management_bootstrap_user": _MANAGEMENT_BOOTSTRAP_USER,
         "new_connections_per_second_threshold": NEW_CONNECTIONS_PER_SECOND_SIGNAL_THRESHOLD,
@@ -390,6 +403,20 @@ def collect_artifact_integrity():
         emit_signal("PREP_ARTIFACT_DRIFT", {"drifted_paths": drifted_paths})
 
 
+def collect_storage_volume():
+    # The storage root must be mounted from the opened LUKS mapper: anything
+    # else means the TPM unlock failed at boot (every slice on the box is
+    # down until `minds-admin server unlock` opens it) or the box was never
+    # encrypted, so its slices sit in plaintext.
+    result = run_command(["findmnt", "-no", "SOURCE", CONFIG["storage_root"]])
+    mounted_source = result.stdout.strip() if result.returncode == 0 else ""
+    is_encrypted = mounted_source == CONFIG["storage_mapper_path"]
+    event = {"mounted_source": mounted_source or None, "is_encrypted": is_encrypted}
+    emit("storage_volume", event)
+    if not is_encrypted:
+        emit_signal("STORAGE_VOLUME_LOCKED", dict(event, reason="locked" if not mounted_source else "unencrypted"))
+
+
 def read_process_table():
     processes = {}
     for entry in os.listdir(CONFIG["proc_root"]):
@@ -578,6 +605,7 @@ def main():
     guarded("conntrack", collect_conntrack)
     guarded("link_speed", collect_link_speed)
     guarded("prep_artifact_integrity", collect_artifact_integrity)
+    guarded("storage_volume", collect_storage_volume)
     guarded("qemu_children", collect_qemu_children)
     guarded("management_plane", collect_management_plane_signals)
     guarded("state_save", save_state, state)

@@ -7,3 +7,6 @@ Constituent entries: `new-fleet-base.md`, `new-fleet-runsc-prototype.md`, `new-f
 Gen-2 small follow-ups: the `ssh_cert_refresh` cron signs against the renamed Vault SSH CA mount `minds-<tier>-ssh` (was `ssh-<tier>`; imbue-ai/vault#11 after review). The name comes from the shared `ssh_ca_vault_mount(tier)`, so only the prose and the test fixtures changed here.
 
 Gen-2 small follow-ups: comment-only -- the Modal Proxy the connector's functions attach to at `modal deploy` comes from the `[management_plane]` table of the tier's `deploy.toml` (the separate `management_plane.toml` was merged into it).
+
+
+`POST /hosts/{host_db_id}/enable-sharing` answers `409 {"code": "workspace_managed_by_desktop", "message": ...}` when the container serves a host key other than the row's recorded one -- the reliable sign that the minds desktop app adopted the workspace and rotated its keys client-side -- instead of a 502 wrapping the SSH error; the message tells the user to enable sharing from the desktop app.

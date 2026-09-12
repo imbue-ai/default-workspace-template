@@ -53,16 +53,11 @@ _EMBEDDED_CONTAINER_SCRIPTS: tuple[str, ...] = ("slices/home_layout.py",)
 def test_prevent_bare_print() -> None:
     # Justified matches in ``main.py``: the bootstrap-failure path prints an
     # actionable one-liner to stderr before any logging is configured (the
-<<<<<<< HEAD
     # same pattern as ``imbue.minds.main``). The two extra matches are string
     # content, not code: ``slices/box_telemetry.py``'s rendered collector
     # script, a standalone box-side program whose stdout IS its interface
     # (journald ships every printed line to OpenObserve).
-    rc.check_bare_print(_DIR, snapshot(4))
-=======
-    # same pattern as ``imbue.minds.main``).
-    rc.check_bare_print(_DIR, snapshot(2), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
->>>>>>> origin/main
+    rc.check_bare_print(_DIR, snapshot(4), excluded_patterns=_EMBEDDED_CONTAINER_SCRIPTS)
 
 
 # --- Exception handling ---

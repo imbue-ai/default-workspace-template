@@ -144,9 +144,10 @@ infrastructure and will come back on its own").
      the autostart installer run, and the health probe polled;
    - the row is re-leased at the target's address and ports, and the origin
      VM is destroyed (skipped by `--keep-origin-vm`, an early-drill safety
-     net: finalize it by hand, and avoid baking or reaping on its box until
-     then -- a leftover origin VM is otherwise collected by the bake's orphan
-     reap).
+     net: the kept VM still carries the migrated row's instance name, so the
+     orphan reap treats it as tracked and never collects it -- destroy it by
+     hand on the origin box, e.g. `sudo -u limahost limactl delete -f <name>`,
+     once the migration is judged good).
    Run several invocations with disjoint `--target-server-id` values to
    parallelize; the per-target-box and per-workspace locks refuse overlaps.
 3. Verify (per migrated workspace, or a sample): the desktop opens it at the
@@ -157,6 +158,10 @@ infrastructure and will come back on its own").
    from a deliberately held-back 0.5.x desktop client.
 
 ## When a migration stays FAILED
+
+A running `migrate`, `rollback` or `repave` can be killed at any point
+(Ctrl-C and SIGTERM both end it immediately; nothing is cleaned up on the
+way out, which is what the state files and locks are for).
 
 Re-run the same `migrate` invocation: it resumes from the state file (a
 finished stop is not re-run; a transplanted disk is rescued from a half-built
@@ -172,8 +177,10 @@ passes or you roll back.
 works from both the parked-mid-migration and the completed-migration states:
 it parks the row back onto gen-1, destroys the gen-2 slice (and any kept
 origin VM -- the product restore recreates the instance under the same name),
-writes the saved artifact pointers back so the row is an ordinary
-finalized-stopped gen-1 row, admin-starts it, and waits for `leased`. The
+writes the saved artifact pointers back (re-stamping the harvested host
+keys on a mid-migration rollback, since the restored VM serves them at fresh
+ports) so the row is an ordinary finalized-stopped gen-1 row, admin-starts
+it, and waits for `leased`. The
 product's own gen-1 restore does all the work, onto whichever gen-1 box has
 room -- so keep at least one gen-1 box per region until the rollback horizon
 is declared closed. **Work done on gen-2 after the migration is lost**:

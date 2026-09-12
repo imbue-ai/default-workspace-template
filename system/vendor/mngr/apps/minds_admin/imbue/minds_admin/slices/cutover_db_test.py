@@ -195,13 +195,25 @@ def test_rollback_artifact_cas_writes_the_saved_pointers_onto_a_parked_gen1_row_
         "WHERE id = %s AND status = 'stopped' AND bare_metal_server_id IS NULL AND box_generation < 2"
         in _ROLLBACK_RESTORE_ARTIFACT_SQL
     )
+    # A None key leaves that column alone.
+    assert "outer_host_public_key = COALESCE(%s, outer_host_public_key)" in _ROLLBACK_RESTORE_ARTIFACT_SQL
+    assert "container_host_public_key = COALESCE(%s, container_host_public_key)" in _ROLLBACK_RESTORE_ARTIFACT_SQL
     conn = RecordingConnection([], rowcount=1)
     row_id = str(uuid4())
     assert (
         rollback_restore_artifact(
-            conn, row_id, artifact_manifest_json='{"generation": 2}', wrapped_dek="d2VkZWs=", artifact_generation=2
+            conn,
+            row_id,
+            artifact_manifest_json='{"generation": 2}',
+            wrapped_dek="d2VkZWs=",
+            artifact_generation=2,
+            outer_host_public_key="ssh-ed25519 AAAAvm",
+            container_host_public_key=None,
         )
         is True
     )
     (executed,) = conn.recording_cursor.executed
-    assert executed == (_ROLLBACK_RESTORE_ARTIFACT_SQL, ('{"generation": 2}', "d2VkZWs=", 2, row_id))
+    assert executed == (
+        _ROLLBACK_RESTORE_ARTIFACT_SQL,
+        ('{"generation": 2}', "d2VkZWs=", 2, "ssh-ed25519 AAAAvm", None, row_id),
+    )

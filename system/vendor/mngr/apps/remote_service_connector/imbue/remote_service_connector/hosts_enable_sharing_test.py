@@ -256,3 +256,28 @@ def test_enable_sharing_fails_closed_when_container_key_is_not_pinned(monkeypatc
 
     assert resp.status_code == 503
     assert backend.written_container_files == []
+
+
+def test_enable_sharing_conflicts_when_the_desktop_app_rotated_the_container_host_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A desktop-adopted workspace serves a host key the row never learns (the
+    # rotation is client-side by design); the mismatch is the signal that
+    # sharing must be enabled from the desktop app.
+    _install_share_env(monkeypatch)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_leased_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        leased_to_user=_USER_STUB_USER_ID_PREFIX,
+        host_id_str=_HOST_ID_STR,
+    )
+    backend.is_container_host_key_mismatched = True
+
+    resp = client.post(f"/hosts/{_HOST_DB_ID}/enable-sharing", headers=_user_headers())
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "workspace_managed_by_desktop"
+    assert "desktop app" in detail["message"]
+    assert backend.written_container_files == []

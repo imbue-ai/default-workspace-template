@@ -37,6 +37,8 @@ from imbue.minds_admin.cli.cutover_drivers import minimal_mngr_context
 from imbue.minds_admin.cli.cutover_drivers import partition_migration_rows
 from imbue.minds_admin.cli.cutover_drivers import render_preflight_table
 from imbue.minds_admin.cli.cutover_drivers import render_stage_table
+from imbue.minds_admin.cli.cutover_drivers import repave_dry_run_detail
+from imbue.minds_admin.cli.cutover_drivers import repave_pre_reinstall_server_fields
 from imbue.minds_admin.cli.cutover_drivers import repave_scope_refusal_or_none
 from imbue.minds_admin.cli.cutover_drivers import require_named_servers_selected
 from imbue.minds_admin.cli.cutover_drivers import rollback_would_clobber_newer_artifact
@@ -65,6 +67,8 @@ from imbue.mngr_imbue_cloud.data_types import PoolHostDestroyOutcome
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import BareMetalServerStatus
 from imbue.mngr_imbue_cloud.primitives import PoolHostDestroyOutcomeStatus
+from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DELIVERED
+from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_DRAINING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_INSTALLING
 from imbue.mngr_imbue_cloud.primitives import SERVER_STATUS_READY
 from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_slice_env_file
@@ -389,6 +393,11 @@ def _ready_gen2_server() -> BareMetalServer:
     )
 
 
+def _gen2_server_with_status(status: str) -> BareMetalServer:
+    gen2 = _ready_gen2_server()
+    return gen2.model_copy_update(to_update(gen2.field_ref().status, BareMetalServerStatus(status)))
+
+
 def test_require_named_servers_selected_refuses_named_boxes_the_scope_dropped() -> None:
     kept = _ready_gen1_server()
     dropped_id = str(uuid4())
@@ -452,6 +461,38 @@ def test_repave_scope_refuses_boxes_that_are_not_steady_gen1() -> None:
     # A gen-2 box passes scope: already-ready is skipped and mid-install is
     # resumed by the unguarded body, not refused here.
     assert repave_scope_refusal_or_none(_ready_gen2_server()) is None
+
+
+def test_repave_flips_a_drained_gen2_box_to_delivered_so_setup_reinstalls_it() -> None:
+    """A gen-2 box prepped before storage encryption is drained and repaved; setup only
+    reinstalls from ``delivered``, so the repave must move it off ``draining``."""
+    assert repave_pre_reinstall_server_fields(_gen2_server_with_status(SERVER_STATUS_DRAINING)) == {
+        "status": SERVER_STATUS_DELIVERED
+    }
+    # A crashed gen-2 repave resumes from where setup left it, untouched.
+    for resumable_status in (SERVER_STATUS_DELIVERED, SERVER_STATUS_INSTALLING):
+        assert repave_pre_reinstall_server_fields(_gen2_server_with_status(resumable_status)) == {}
+    assert repave_pre_reinstall_server_fields(_ready_gen1_server()) == {
+        "box_generation": 2,
+        "status": SERVER_STATUS_DELIVERED,
+        "cpu_overcommit_ratio": 4.0,
+    }
+
+
+def test_repave_dry_run_detail_names_the_columns_the_real_run_would_set() -> None:
+    assert repave_dry_run_detail(_ready_gen1_server()) == (
+        "dry run: would set box_generation=2, status=delivered, cpu_overcommit_ratio=4.0, "
+        "reinstall + prep, measure the partition"
+    )
+    assert repave_dry_run_detail(_gen2_server_with_status(SERVER_STATUS_DRAINING)) == (
+        "dry run: would set status=delivered, reinstall + prep, measure the partition"
+    )
+    assert repave_dry_run_detail(_gen2_server_with_status(SERVER_STATUS_DELIVERED)) == (
+        "dry run: no row change, reinstall + prep, measure the partition"
+    )
+    assert repave_dry_run_detail(_gen2_server_with_status(SERVER_STATUS_INSTALLING)) == (
+        "dry run: no row change, resume the prep, measure the partition"
+    )
 
 
 def test_repave_refuses_a_box_with_in_flight_migrations(tmp_path: Path) -> None:

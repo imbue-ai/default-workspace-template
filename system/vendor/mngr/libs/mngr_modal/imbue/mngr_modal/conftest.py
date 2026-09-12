@@ -22,13 +22,10 @@ from imbue.mngr.config.data_types import MngrConfig
 from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import ConfigStructureError
 from imbue.mngr.errors import MngrError
-from imbue.mngr.errors import ModalCliOutputError
 from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import UserId
 from imbue.mngr.utils.env_utils import TEST_ENV_PATTERN
 from imbue.mngr.utils.env_utils import TEST_ENV_PREFIX
-from imbue.mngr.utils.modal_cli import parse_modal_app_listings
-from imbue.mngr.utils.modal_cli import parse_modal_volume_listings
 from imbue.mngr.utils.polling import poll_for_value
 from imbue.mngr.utils.testing import ModalCleanupOutcome
 from imbue.mngr.utils.testing import ModalSubprocessTestEnv

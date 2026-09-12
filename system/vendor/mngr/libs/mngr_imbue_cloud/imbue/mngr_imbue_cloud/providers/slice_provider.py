@@ -358,6 +358,25 @@ class SliceVpsDockerProviderConfig(VpsProviderConfig):
     )
 
 
+_VM_ROOT_AUTHORIZED_KEYS_PATH: Final[str] = "/root/.ssh/authorized_keys"
+
+
+@pure
+def render_remove_authorized_key_command(public_key: str, authorized_keys_path: str) -> str:
+    """Shell that drops one key line from an authorized_keys file, emptying it when that was its only line.
+
+    ``grep -v`` exits 1 when nothing is left to print, which is the gen-2 norm
+    (VM root authorizes nothing but the bake's transfer key), so that status is
+    accepted; any other grep failure still aborts before the file is replaced.
+    """
+    quoted_path = shlex.quote(authorized_keys_path)
+    return (
+        f"if [ -f {quoted_path} ]; then "
+        f"{{ grep -vF {shlex.quote(public_key)} {quoted_path} || [ $? -eq 1 ]; }} > {quoted_path}.tmp "
+        f"&& mv {quoted_path}.tmp {quoted_path}; fi"
+    )
+
+
 class SliceVpsDockerProvider(VpsProvider):
     """A VpsProvider whose 'VPS' is a slice VM we run on a bare-metal box.
 
@@ -818,20 +837,14 @@ class SliceVpsDockerProvider(VpsProvider):
             self._deauthorize_transfer_key(outer, transfer_key.public_key)
 
     def _authorize_transfer_key(self, outer: OuterHostInterface, public_key: str) -> None:
-        command = (
-            f"install -d -m 700 /root/.ssh && printf '%s\\n' {shlex.quote(public_key)} >> /root/.ssh/authorized_keys"
-        )
+        command = f"install -d -m 700 /root/.ssh && printf '%s\\n' {shlex.quote(public_key)} >> {_VM_ROOT_AUTHORIZED_KEYS_PATH}"
         result = outer.execute_idempotent_command(command, timeout_seconds=30.0)
         if not result.success:
             raise BoxImageCacheError(f"failed to authorize the transfer key on the slice: {result.stderr.strip()}")
 
     def _deauthorize_transfer_key(self, outer: OuterHostInterface, public_key: str) -> None:
         # Best-effort: teardown runs in a finally and must not mask a prior error.
-        command = (
-            "if [ -f /root/.ssh/authorized_keys ]; then "
-            f"grep -vF {shlex.quote(public_key)} /root/.ssh/authorized_keys > /root/.ssh/authorized_keys.tmp "
-            "&& mv /root/.ssh/authorized_keys.tmp /root/.ssh/authorized_keys; fi"
-        )
+        command = render_remove_authorized_key_command(public_key, _VM_ROOT_AUTHORIZED_KEYS_PATH)
         result = outer.execute_idempotent_command(command, timeout_seconds=30.0)
         if not result.success:
             logger.warning(

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from imbue.mngr.utils.modal_cli import parse_modal_app_listings
 from imbue.mngr.utils.testing import generate_test_environment_name
 from imbue.mngr_modal.modal_cli import parse_modal_app_listings
 

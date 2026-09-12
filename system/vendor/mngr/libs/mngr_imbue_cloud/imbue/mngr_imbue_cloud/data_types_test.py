@@ -135,6 +135,7 @@ def _audit(
         foreign_tier_slices=foreign_tier_slices,
         degraded_md_arrays=(),
         raw_swap_devices=(),
+        is_storage_encrypted=True,
     )
 
 
