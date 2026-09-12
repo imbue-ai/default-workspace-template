@@ -101,9 +101,9 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
     _withheld: list[Callable[[], None]] = []
     _release_on_completion: bool = False
 
-    def broadcast_provisional_chat_created(self, proto: ProvisionalChat) -> None:
+    def broadcast_provisional_chat_created(self, provisional: ProvisionalChat) -> None:
         def send() -> None:
-            WebSocketBroadcaster.broadcast_provisional_chat_created(self, proto)
+            WebSocketBroadcaster.broadcast_provisional_chat_created(self, provisional)
 
         if type(self)._release_on_completion:
             type(self)._withheld.append(send)

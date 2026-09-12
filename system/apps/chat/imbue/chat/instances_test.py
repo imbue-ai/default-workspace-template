@@ -60,9 +60,9 @@ def _seed_agent(
 
 
 def _creating(
-    name: str, agent_id: str, phase: ProvisionalChatPhase = ProvisionalChatPhase.CREATING
+    name: str, chat_id: ChatId, phase: ProvisionalChatPhase = ProvisionalChatPhase.CREATING
 ) -> ProvisionalChat:
-    return ProvisionalChat(chat_id=agent_id, name=name, phase=phase)
+    return ProvisionalChat(chat_id=chat_id, name=name, phase=phase)
 
 
 class _RecordingStarter:
@@ -146,7 +146,7 @@ def test_a_pending_permission_shows_as_attention(agent_manager: AgentManager) ->
 
 
 def test_a_chat_being_created_is_a_provisional_instance(agent_manager: AgentManager) -> None:
-    provisional_id = _agent_id()
+    provisional_id = ChatId(_agent_id())
     with agent_manager._lock:
         agent_manager._provisional_chats[provisional_id] = _creating("Chat 2", provisional_id)
     source = _source(agent_manager)
@@ -170,7 +170,7 @@ def test_a_chat_being_created_is_a_provisional_instance(agent_manager: AgentMana
 def test_a_provisional_chats_status_follows_its_phase(
     agent_manager: AgentManager, phase: ProvisionalChatPhase, status: InstanceStatus
 ) -> None:
-    provisional_id = _agent_id()
+    provisional_id = ChatId(_agent_id())
     with agent_manager._lock:
         agent_manager._provisional_chats[provisional_id] = _creating("Chat 2", provisional_id, phase)
     (record,) = _source(agent_manager).list_instances()
@@ -178,7 +178,7 @@ def test_a_provisional_chats_status_follows_its_phase(
 
 
 def test_a_provisional_record_becomes_the_agents_record_once_observed(agent_manager: AgentManager) -> None:
-    chat_id = _agent_id()
+    chat_id = ChatId(_agent_id())
     with agent_manager._lock:
         agent_manager._provisional_chats[chat_id] = _creating("Chat 2", chat_id)
     source = _source(agent_manager)
@@ -310,7 +310,7 @@ class _LandingAgentManager(AgentManager):
     ) -> CreatedChat:
         landed_id = _agent_id()
         _seed_agent(self, landed_id, "Chat-1")
-        return CreatedChat(chat_id=landed_id, name="Chat-1", display_name="Chat 1")
+        return CreatedChat(chat_id=ChatId(landed_id), name="Chat-1", display_name="Chat 1")
 
 
 class _VanishingAgentManager(AgentManager):
@@ -367,7 +367,7 @@ def test_new_keeps_a_seeded_message_on_the_chat_it_reserves(agent_manager: Agent
 def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_manager: AgentManager) -> None:
     source = _source(agent_manager)
     reserved = source.create_instance(ActionId("new"), {})
-    creating_id = _agent_id()
+    creating_id = ChatId(_agent_id())
     with agent_manager._lock:
         agent_manager._provisional_chats[creating_id] = _creating("Chat 2", creating_id)
 
@@ -379,7 +379,7 @@ def test_delete_drops_a_reserved_chat_and_leaves_a_create_in_flight_alone(agent_
 
 def test_delete_drops_a_failed_chat(agent_manager: AgentManager) -> None:
     source = _source(agent_manager)
-    failed_id = _agent_id()
+    failed_id = ChatId(_agent_id())
     with agent_manager._lock:
         agent_manager._provisional_chats[failed_id] = _creating("Chat 3", failed_id, ProvisionalChatPhase.FAILED)
     assert [candidate.status for candidate in source.list_instances()] == [InstanceStatus.ERROR]
@@ -428,7 +428,7 @@ def test_delete_never_touches_the_primary_agent(agent_manager: AgentManager) -> 
 
 def test_rename_is_refused_for_provisional_and_subagent_keys(agent_manager: AgentManager) -> None:
     parent_id = _agent_id()
-    provisional_id = _agent_id()
+    provisional_id = ChatId(_agent_id())
     _seed_agent(agent_manager, parent_id, "Chat-1")
     with agent_manager._lock:
         agent_manager._provisional_chats[provisional_id] = _creating("Chat 2", provisional_id)
@@ -468,7 +468,7 @@ def test_the_manager_nudger_fires_whatever_nudger_the_manager_holds(agent_manage
 
 def test_agents_are_stoppable_and_provisional_and_subagent_records_are_not(agent_manager: AgentManager) -> None:
     agent_id = _agent_id()
-    reserved_id = _agent_id()
+    reserved_id = ChatId(_agent_id())
     _seed_agent(agent_manager, agent_id, "Chat-1")
     with agent_manager._lock:
         agent_manager._provisional_chats[reserved_id] = _creating(

@@ -1,4 +1,4 @@
-"""The shared full-residency transcript store and the watcher base built on it.
+"""The shared full-residency transcript store, the loader that reads it, and the watcher on top.
 
 Every harness watcher keeps ONE agent's parsed transcript fully resident: an ordered set
 of *lanes* (one per session file for claude; a single merged timeline for codex/pi), each
@@ -38,6 +38,7 @@ from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.path_watch import PathWatcher
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import TranscriptReader
 
 logger = _loguru_logger
 
@@ -393,34 +394,25 @@ class TranscriptStore:
         return sum(len(lanes[pos].events) for pos in range(lane_pos)) + index
 
 
-class StoreBackedWatcher(AgentSessionWatcher, ABC):
-    """Shared watcher scaffolding over a :class:`TranscriptStore`.
+class StoreBackedTranscriptLoader(TranscriptReader, ABC):
+    """One agent's transcript, fully resident in a :class:`TranscriptStore`, read on demand.
 
-    Owns the single lock, the store, and the :class:`PathWatcher` watch loop; subclasses
-    supply discovery + incremental consumption (:meth:`_refresh_locked`), the paths to
-    watch, the lane selection for a ``session_id``, and payload re-parsing for the detail
-    endpoint. ``start`` primes the backlog without broadcasting it (the initial transcript
-    is served over REST; flooding the bounded SSE queues with history would evict clients).
+    Owns the single lock and the store; subclasses supply discovery + incremental
+    consumption (:meth:`_refresh_locked`), the lane selection for a ``session_id``, and
+    payload re-parsing for the detail endpoint. Every read refreshes first, so a loader
+    that nothing watches still answers from an up-to-date store. This is the segment a
+    chat's transcript is made of (``chat_transcript.py``); the live half (watching the
+    files and emitting new events) is :class:`StoreBackedWatcher`.
     """
 
-    _agent_id: str
-    _on_events: Callable[[str, list[dict[str, Any]]], None]
     _lock: threading.Lock
     _store: TranscriptStore
-    _path_watcher: PathWatcher | None
 
-    def _init_store_watcher(self, agent_id: str, on_events: Callable[[str, list[dict[str, Any]]], None]) -> None:
-        self._agent_id = agent_id
-        self._on_events = on_events
+    def _init_loader(self) -> None:
         self._lock = threading.Lock()
         self._store = TranscriptStore.build()
-        self._path_watcher = None
 
     # -- per-harness hooks ----------------------------------------------------------------
-
-    @abstractmethod
-    def _watch_paths(self) -> tuple[Path, ...]:
-        """The paths whose changes should wake the emit cycle."""
 
     @abstractmethod
     def _refresh_locked(self) -> None:
@@ -429,14 +421,6 @@ class StoreBackedWatcher(AgentSessionWatcher, ABC):
     def _selected_lane_ids_locked(self, session_id: str | None) -> list[str]:
         """The ordered lanes a read for ``session_id`` covers. Default: every lane."""
         return self._store.lane_ids()
-
-    def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Drop events the live stream must not carry (codex's ledger-owned user turns)."""
-        return events
-
-    def _before_broadcast(self) -> None:
-        """Push side-channel state that must precede the event broadcast (queue snapshots:
-        the A3b depart-before-arrive ordering). Called outside the lock. No-op default."""
 
     def _parse_detail(
         self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
@@ -449,47 +433,6 @@ class StoreBackedWatcher(AgentSessionWatcher, ABC):
         """Scan for the event's source line when the recorded byte range went stale (the
         file was rewritten under us). Default: no fallback."""
         return None
-
-    # -- lifecycle ------------------------------------------------------------------------
-
-    def start(self) -> None:
-        """Prime the backlog (unemitted -> emitted, no broadcast) and begin watching."""
-        if self._path_watcher is not None:
-            return
-        self._prime()
-        self._path_watcher = PathWatcher.build(self._watch_paths(), self._emit_cycle)
-        self._path_watcher.start()
-
-    def _prime(self) -> None:
-        """Parse the existing backlog and mark it emitted, in one lock hold.
-
-        The initial transcript is delivered to clients via the REST tail/backfill path, so
-        it must not also be broadcast through ``on_events`` (that would flood the bounded
-        SSE queues for long histories). One lock hold so a concurrent read cannot slip
-        events in between the fill and the mark that then never reach SSE clients.
-        """
-        with self._lock:
-            self._refresh_locked()
-            self._store.mark_all_emitted()
-
-    def stop(self) -> None:
-        if self._path_watcher is not None:
-            self._path_watcher.stop()
-
-    def _emit_cycle(self) -> None:
-        """Refresh, then deliver every not-yet-emitted event exactly once.
-
-        Emission is driven by the store's high-water marks rather than by what this call
-        parsed, so events a concurrent HTTP read pulled in are still delivered. The
-        ``_before_broadcast`` hook (queue snapshots) runs before the events go out, and the
-        fan-out callback runs outside the lock.
-        """
-        with self._lock:
-            self._refresh_locked()
-            to_send = self._filter_broadcast(self._store.take_unemitted())
-        self._before_broadcast()
-        if to_send:
-            self._on_events(self._agent_id, to_send)
 
     # -- read API -------------------------------------------------------------------------
 
@@ -535,9 +478,6 @@ class StoreBackedWatcher(AgentSessionWatcher, ABC):
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         return None
 
-    def is_main_session_event(self, event: dict[str, Any]) -> bool:
-        return True
-
     # -- payload detail -------------------------------------------------------------------
 
     def get_event_detail(self, event_id: str) -> dict[str, Any] | None:
@@ -565,3 +505,81 @@ class StoreBackedWatcher(AgentSessionWatcher, ABC):
         if fallback_line is None:
             return None
         return self._parse_detail(event, fallback_line, thinking_line)
+
+
+class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
+    """The live half over a :class:`StoreBackedTranscriptLoader`: the :class:`PathWatcher`
+    watch loop and the emit cycle that hands newly parsed events to ``on_events``.
+
+    Subclasses supply the paths to watch on top of the loader's hooks. ``start`` primes
+    the backlog without broadcasting it (the initial transcript is served over REST;
+    flooding the bounded SSE queues with history would evict clients).
+    """
+
+    _agent_id: str
+    _on_events: Callable[[str, list[dict[str, Any]]], None]
+    _path_watcher: PathWatcher | None
+
+    def _init_store_watcher(self, agent_id: str, on_events: Callable[[str, list[dict[str, Any]]], None]) -> None:
+        self._init_loader()
+        self._agent_id = agent_id
+        self._on_events = on_events
+        self._path_watcher = None
+
+    # -- per-harness hooks ----------------------------------------------------------------
+
+    @abstractmethod
+    def _watch_paths(self) -> tuple[Path, ...]:
+        """The paths whose changes should wake the emit cycle."""
+
+    def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop events the live stream must not carry (codex's ledger-owned user turns)."""
+        return events
+
+    def _before_broadcast(self) -> None:
+        """Push side-channel state that must precede the event broadcast (queue snapshots:
+        the A3b depart-before-arrive ordering). Called outside the lock. No-op default."""
+
+    # -- lifecycle ------------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Prime the backlog (unemitted -> emitted, no broadcast) and begin watching."""
+        if self._path_watcher is not None:
+            return
+        self._prime()
+        self._path_watcher = PathWatcher.build(self._watch_paths(), self._emit_cycle)
+        self._path_watcher.start()
+
+    def _prime(self) -> None:
+        """Parse the existing backlog and mark it emitted, in one lock hold.
+
+        The initial transcript is delivered to clients via the REST tail/backfill path, so
+        it must not also be broadcast through ``on_events`` (that would flood the bounded
+        SSE queues for long histories). One lock hold so a concurrent read cannot slip
+        events in between the fill and the mark that then never reach SSE clients.
+        """
+        with self._lock:
+            self._refresh_locked()
+            self._store.mark_all_emitted()
+
+    def stop(self) -> None:
+        if self._path_watcher is not None:
+            self._path_watcher.stop()
+
+    def _emit_cycle(self) -> None:
+        """Refresh, then deliver every not-yet-emitted event exactly once.
+
+        Emission is driven by the store's high-water marks rather than by what this call
+        parsed, so events a concurrent HTTP read pulled in are still delivered. The
+        ``_before_broadcast`` hook (queue snapshots) runs before the events go out, and the
+        fan-out callback runs outside the lock.
+        """
+        with self._lock:
+            self._refresh_locked()
+            to_send = self._filter_broadcast(self._store.take_unemitted())
+        self._before_broadcast()
+        if to_send:
+            self._on_events(self._agent_id, to_send)
+
+    def is_main_session_event(self, event: dict[str, Any]) -> bool:
+        return True
