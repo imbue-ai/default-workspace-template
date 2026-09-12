@@ -1052,9 +1052,9 @@ class AgentManager:
             raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
 
         with self._lock:
-            agent_state = self._agents.get(chat_ref) or next(
-                (agent for agent in self._agents.values() if agent.name == chat_ref), None
-            )
+            agent_state = self._agents.get(first_agent_id_of_chat(ChatId(chat_ref))) if chat_ref else None
+            if agent_state is None:
+                agent_state = next((agent for agent in self._agents.values() if agent.name == chat_ref), None)
             provisional = self._provisional_chats.get(ChatId(chat_ref)) if chat_ref else None
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
@@ -1205,7 +1205,7 @@ class AgentManager:
             if display_label:
                 taken.append(display_label)
         for provisional_chat_id, provisional in self._provisional_chats.items():
-            if provisional_chat_id == exclude_agent_id:
+            if first_agent_id_of_chat(provisional_chat_id) == exclude_agent_id:
                 continue
             if provisional.name:
                 taken.append(provisional.name)
