@@ -235,7 +235,7 @@ short note to the worker:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file data/.tasks/launch-task/crystallize-$SLUG/task.md \
+    --task-file data/.tasks/harden/crystallize-$SLUG/task.md \
     -m "<short note about what changed>"
 ```
 
