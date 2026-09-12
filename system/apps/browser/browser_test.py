@@ -2,6 +2,7 @@ import asyncio
 import json
 import queue
 import shutil
+import sys
 import tempfile
 import time
 from collections import deque
@@ -1994,3 +1995,36 @@ def test_navigate_active_tab_reports_a_refused_navigation_and_a_tabless_browser_
     with pytest.raises(NavigationFailedError, match="no tab to navigate"):
         asyncio.run(tabless.navigate_active_tab("https://example.com/"))
     assert refusing._active_target() is None
+
+
+def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wake rides ``system/scripts/message_chat.py`` (the chat app, with ``mngr message`` as
+    its own backoff), addressed by the agent's id and marked ``--system`` so the transcript
+    renders it as a collapsed chip; the agent's name is never the address."""
+    spawned: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    class _Done:
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _Done:
+        spawned.append((argv, kwargs))
+        return _Done()
+
+    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    browser = bsession.LiveBrowser(browser_id="b1")
+
+    asyncio.run(browser._message_agent("agent-0123456789abcdef0123456789abcdef", "riley", "the browser is yours"))
+
+    [(argv, kwargs)] = spawned
+    assert argv == (
+        sys.executable,
+        str(Path("system") / "scripts" / "message_chat.py"),
+        "agent-0123456789abcdef0123456789abcdef",
+        "--system",
+        "--message",
+        "the browser is yours",
+    )
+    assert Path(str(kwargs["cwd"])).joinpath("system", "scripts", "message_chat.py").is_file()
