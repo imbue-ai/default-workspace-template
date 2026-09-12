@@ -64,6 +64,7 @@ import tomllib
 import urllib.parse
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import IO
@@ -108,12 +109,12 @@ class Outcome(Enum):
     UNKNOWN_CHAT = "unknown_chat"
 
 
+@dataclass(frozen=True)
 class ChatAppAnswer:
     """One HTTP answer from the send route."""
 
-    def __init__(self, status: int, body: object) -> None:
-        self.status = status
-        self.body = body
+    status: int
+    body: object
 
     @property
     def detail(self) -> str:
@@ -128,12 +129,12 @@ class ChatAppAnswer:
         return ""
 
 
+@dataclass(frozen=True)
 class SendResult:
     """The outcome of the chat-app attempt plus the text to tell the caller."""
 
-    def __init__(self, outcome: Outcome, detail: str) -> None:
-        self.outcome = outcome
-        self.detail = detail
+    outcome: Outcome
+    detail: str
 
 
 class ChatAppUnreachableError(Exception):
