@@ -81,7 +81,6 @@ SYSTEM_MESSAGE_TAG = "agentic-browser-fleet"
 EXIT_DELIVERED = 0
 EXIT_FAILED = 1
 EXIT_DELIVERED_BUT_BLOCKED = 7
-EXIT_USAGE = 2
 
 # The route's ``kind`` for a send that landed behind a dialog
 # (``SendFailureKind.INPUT_BLOCKED`` in mngr).
@@ -280,14 +279,17 @@ def send_through_mngr(chat_id: str, text: str) -> int:
     return completed.returncode
 
 
-def _read_message(args: argparse.Namespace, stdin: IO[str]) -> str:
+def _read_message(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, stdin: IO[str]
+) -> str:
     if args.message is not None:
         return args.message
     if args.message_file is not None:
         return Path(args.message_file).read_text(encoding="utf-8")
     if stdin.isatty():
-        raise SystemExit(
-            "error: no message given (use -m, --message-file, or pipe the text on stdin)"
+        # A usage error like any other argparse rejection: usage line, reason, exit 2.
+        parser.error(
+            "no message given (use -m, --message-file, or pipe the text on stdin)"
         )
     return stdin.read()
 
@@ -318,9 +320,10 @@ def main(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     resolved_environ = os.environ if environ is None else environ
-    text = _read_message(args, sys.stdin if stdin is None else stdin)
+    text = _read_message(parser, args, sys.stdin if stdin is None else stdin)
     if args.system:
         text = wrap_system_message(text)
     base_url = chat_app_url(resolved_environ, Path.cwd())

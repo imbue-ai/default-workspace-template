@@ -267,7 +267,9 @@ def test_the_chat_app_url_comes_from_the_registry_row_else_the_fixed_port(
     )
 
 
-def test_no_message_on_a_terminal_is_a_usage_error(fake_chat_app: Any) -> None:
+def test_no_message_on_a_terminal_is_a_usage_error(
+    fake_chat_app: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
     class _Tty(io.StringIO):
         def isatty(self) -> bool:
             return True
@@ -275,5 +277,7 @@ def test_no_message_on_a_terminal_is_a_usage_error(fake_chat_app: Any) -> None:
     with pytest.raises(SystemExit) as raised:
         message_chat.main([_CHAT_ID], stdin=_Tty())
 
-    assert "no message given" in str(raised.value)
+    # argparse's usage code, distinct from EXIT_FAILED ("the send failed").
+    assert raised.value.code == 2
+    assert "no message given" in capsys.readouterr().err
     assert fake_chat_app.posted == []
