@@ -29,6 +29,19 @@ class ChatId(NonEmptyStr):
 
 
 @pure
+def parse_chat_ref(chat_ref: str) -> ChatId | None:
+    """The chat id a caller's string names, or None for a blank one.
+
+    Routes and instance keys hand the manager whatever string they were given; a blank one
+    names no chat, and answering None lets the caller say "not found" instead of tripping over
+    the primitive's own validation.
+    """
+    if not chat_ref.strip():
+        return None
+    return ChatId(chat_ref)
+
+
+@pure
 def chat_id_of_first_agent(agent_id: str) -> ChatId:
     """The chat an agent belongs to under the own-chat rule: a chat's id is its first agent's id.
 

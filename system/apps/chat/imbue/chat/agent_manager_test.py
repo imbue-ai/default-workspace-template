@@ -168,6 +168,19 @@ def test_get_provisional_chats_initially_empty(agent_manager: AgentManager) -> N
     assert protos == []
 
 
+@pytest.mark.parametrize("chat_ref", ["", "   "])
+def test_a_blank_chat_ref_names_no_chat(agent_manager: AgentManager, chat_ref: str) -> None:
+    """A route or instance key can hand the manager a blank id; that names nothing rather than
+    tripping over the chat id primitive's own validation."""
+    seed_agent_state(agent_manager, "agent-1", name="Chat-1")
+
+    assert agent_manager.get_chat_snapshot(chat_ref) is None
+    assert agent_manager.get_active_agent_info(chat_ref) is None
+    assert agent_manager.get_provisional_chat(chat_ref) is None
+    assert agent_manager.has_pending_permission(chat_ref) is False
+    assert agent_manager.discard_provisional_chat(chat_ref) is False
+
+
 def test_get_chat_snapshots(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
         agent_manager._agents["a1"] = AgentStateItem(
