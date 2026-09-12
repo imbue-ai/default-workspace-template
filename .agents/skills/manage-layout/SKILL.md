@@ -29,7 +29,7 @@ Every tab is named by one **address**:
 
 | Form | Meaning | Example |
 |---|---|---|
-| `app:<name>?instance=<key>` | One instance of an app. | `app:chat?instance=agent-3f2a...` (a chat, keyed by its agent id), `app:terminal?instance=terminal-2` (a terminal, keyed by its tmux session name), `app:browser?instance=riley` (a browser, keyed by its name) |
+| `app:<name>?instance=<key>` | One instance of an app. | `app:chat?instance=agent-3f2a...` (a chat, keyed by its chat id: `$MINDS_CHAT_ID`, the id of its first agent), `app:terminal?instance=terminal-2` (a terminal, keyed by its tmux session name), `app:browser?instance=riley` (a browser, keyed by its name) |
 | `app:<name>` | A single-instance app's one tab (an app built without `instances = true`); or, as an `open` / `split` target for an app with instances, "a fresh instance of this app". | `app:docs` (a single-instance app you built), `open app:terminal` |
 
 A bare word is shorthand for `app:<word>` (`open files`). The literal `self`

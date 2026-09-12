@@ -203,11 +203,11 @@ def _retired_spelling_message(value: str) -> str:
     remainder = value[len(prefix) :]
     if prefix == "chat:":
         hint = (
-            f"a chat is addressed by its agent id, not its name: app:chat?instance=<agent-id> "
+            f"a chat is addressed by its chat id, not its name: app:chat?instance=<chat-id> "
             f"(the chat rows of 'layout.py list' carry the id of the one titled {remainder!r})"
         )
     elif prefix == "chat-terminal:":
-        hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<agent-id>"
+        hint = "an agent's terminal is the back face of its chat: address the chat as app:chat?instance=<chat-id>"
     elif prefix == "terminal:":
         hint = f"a terminal is addressed by its tmux session name: app:terminal?instance={remainder or '<session>'}"
     elif prefix == "service:":
@@ -221,7 +221,7 @@ def _retired_spelling_message(value: str) -> str:
     elif prefix == "url:":
         hint = "pass the URL itself: 'layout.py open https://...' opens it in a new browser"
     else:
-        hint = "a subagent is an instance of the chat app: app:chat?instance=<parent-agent-id>.<session>"
+        hint = "a subagent is an instance of the chat app: app:chat?instance=<chat-id>.<agent-id>.<session>"
     return (
         f"{value!r} is not an address any more; {hint}. Addresses are app:<name> or "
         f"app:<name>?instance=<key>; run 'layout.py list' to see every one on the machine"

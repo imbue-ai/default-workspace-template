@@ -90,7 +90,7 @@ def test_self_is_the_chat_the_chat_app_named_over_the_agents_own_id(
         ("service:files?instance=files-2", "use app:files?instance=files-2"),
         ("service:browser?session=riley", "app:browser?instance=riley"),
         ("url:abcd1234", "layout.py open https://"),
-        ("subagent:abcd", "app:chat?instance=<parent-agent-id>.<session>"),
+        ("subagent:abcd", "app:chat?instance=<chat-id>.<agent-id>.<session>"),
         ("https://example.com", "only 'open' takes one"),
     ],
 )
