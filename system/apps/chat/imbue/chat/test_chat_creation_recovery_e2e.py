@@ -90,8 +90,8 @@ class _WithholdProtoCreatedBroadcaster(WebSocketBroadcaster):
     False the event is dropped outright (the socket was down for the whole
     creation window), and when True it is flushed immediately ahead of
     ``provisional_chat_completed`` (a handler thread that fell more than one creation
-    window behind). Both leave the frontend without a render in which the proto
-    agent is present. Every other broadcast, including ``chats_updated``, goes
+    window behind). Both leave the frontend without a render in which the
+    provisional chat is present. Every other broadcast, including ``chats_updated``, goes
     out untouched.
     """
 
@@ -118,8 +118,8 @@ class _ReplayHidingAgentManager(AgentManager):
     """Hides in-flight creations from a fresh WebSocket client's connect-time replay.
 
     The chat page is its own document and connects to the agents WebSocket after its tab
-    opened, so the chat app's replay of in-flight proto
-    agents would cover the creation window with the starting page on its own. These tests model
+    opened, so the chat app's replay of in-flight provisional chats would cover the creation
+    window with the starting page on its own. These tests model
     the window the replay cannot cover -- a page whose socket only comes up after the create
     finished, or that fell a whole creation window behind -- so the replay is what they hide.
     """
@@ -266,11 +266,11 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
 def test_not_found_panel_recovers_when_both_proto_events_arrive_together(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, page: Page
 ) -> None:
-    """Recovery does not depend on the proto-agent events being observed separately.
+    """Recovery does not depend on the provisional-chat events being observed separately.
 
     ``provisional_chat_created`` and ``provisional_chat_completed`` are delivered
     back-to-back here, which is what a client draining a backlog sees. The
-    frontend adds and drops the proto agent inside a single redraw, so the build
+    frontend adds and drops the provisional chat inside a single redraw, so the build
     log never renders and the panel is left on the 404 -- the panel must still
     recover from the agent resolving.
     """

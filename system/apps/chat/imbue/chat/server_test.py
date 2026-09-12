@@ -837,7 +837,7 @@ def test_powered_by_resolves_the_text_per_harness(client: FlaskClient, tmp_path:
 
 
 def test_powered_by_unknown_agent_returns_404(client: FlaskClient) -> None:
-    """A proto-agent (not yet discoverable) 404s, so the frontend shows no credit."""
+    """A provisional chat (not an agent yet) 404s, so the frontend shows no credit."""
     with patch("imbue.chat.server._find_active_agent", return_value=None):
         response = client.get("/api/agents/nonexistent/powered-by")
     assert response.status_code == 404
