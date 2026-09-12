@@ -195,3 +195,5 @@ Flow-specific substitutions when reading `lead-proxy.md`:
 - If the task references gitignored files outside the runtime dir,
   declare them with `source_artifacts_dir: <dir>` in the task
   frontmatter -- `create_worker.py launch` pushes that directory automatically.
+- If you inform the user that a worker is done, ensure your message adheres to
+  your output style. Worker reports are not typically user-facing.
