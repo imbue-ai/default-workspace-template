@@ -25,7 +25,7 @@ class ChatTranscriptError(RuntimeError):
 class TranscriptSegment(FrozenModel):
     """One agent's part of a chat's transcript."""
 
-    model_config = {"arbitrary_types_allowed": True, "frozen": True, "extra": "forbid"}
+    model_config = {"arbitrary_types_allowed": True}
 
     agent_id: str = Field(description="The agent whose transcript this segment is")
     reader: TranscriptReader = Field(description="The read side of that agent's transcript")
@@ -34,7 +34,7 @@ class TranscriptSegment(FrozenModel):
 class ChatTranscript(FrozenModel):
     """The transcript of one chat, read segment by segment."""
 
-    model_config = {"arbitrary_types_allowed": True, "frozen": True, "extra": "forbid"}
+    model_config = {"arbitrary_types_allowed": True}
 
     chat_id: ChatId = Field(description="The chat whose transcript this is")
     segments: tuple[TranscriptSegment, ...] = Field(description="The chat's agents' transcripts, in order")
