@@ -5,3 +5,5 @@ Workers and leads address each other by agent id, and every in-workspace message
 - New `create_worker.py reply --task-file <task> -m "..."` sends a lead's gate answer or nudge to the worker's chat through the chat app; `lead-proxy.md`, `dead-worker-recovery.md`, and the update-self, migrate-workspace, fetch-process-show, and crystallize-creation skills use it instead of `mngr message <worker>`. A task file from before the stamp takes `--name`.
 
 - `worker-reporting.md` makes the write into the lead's workspace the primary report delivery, with the id-addressed `mngr rsync` kept for a lead in a worktree of its own; the lead's reply arrives as a message, never through `mngr message` by name.
+
+- The update-self task-file template authors `lead_agent` as `$MNGR_AGENT_ID` (the id an older, non-stamping launcher leaves in place), not `$MNGR_AGENT_NAME`.
