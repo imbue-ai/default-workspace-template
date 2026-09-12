@@ -42,21 +42,12 @@ IsAliveCallback = Callable[[], bool]
 QueueSnapshotCallback = Callable[[list[dict[str, Any]]], None]
 
 
-class AgentSessionWatcher(ABC):
-    """Watches one agent's transcript and emits parsed events."""
+class TranscriptReader(ABC):
+    """The read side of one agent's transcript: what a chat transcript's segments are made of.
 
-    @classmethod
-    @abstractmethod
-    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "AgentSessionWatcher":
-        """Construct a watcher for ``agent_info``, not yet started."""
-
-    @abstractmethod
-    def start(self) -> None:
-        """Begin watching. Idempotent."""
-
-    @abstractmethod
-    def stop(self) -> None:
-        """Stop watching and release the observer. Idempotent."""
+    A watcher is a reader that also tails the files live; a reader on its own is what a
+    chat's earlier segments become once a chat can span several agents.
+    """
 
     @abstractmethod
     def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
@@ -101,6 +92,23 @@ class AgentSessionWatcher(ABC):
     @abstractmethod
     def get_subagent_metadata(self, subagent_session_id: str) -> dict[str, str] | None:
         """Metadata for a subagent's session, or None when the harness has no subagents."""
+
+
+class AgentSessionWatcher(TranscriptReader, ABC):
+    """Watches one agent's transcript and emits parsed events."""
+
+    @classmethod
+    @abstractmethod
+    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "AgentSessionWatcher":
+        """Construct a watcher for ``agent_info``, not yet started."""
+
+    @abstractmethod
+    def start(self) -> None:
+        """Begin watching. Idempotent."""
+
+    @abstractmethod
+    def stop(self) -> None:
+        """Stop watching and release the observer. Idempotent."""
 
     @abstractmethod
     def is_main_session_event(self, event: dict[str, Any]) -> bool:

@@ -109,7 +109,7 @@ def test_the_startup_seed_holds_every_undelivered_chat_the_ledger_does_not_name(
     reactor = _reactor(shell, ledger)
 
     reactor.seed_at_startup(
-        {"waiting": _LABELED, "delivered": _LABELED, "plain": {"user_created": "true"}},
+        {ChatId("waiting"): _LABELED, ChatId("delivered"): _LABELED, ChatId("plain"): {"user_created": "true"}},
     )
 
     assert reactor.pending_chat_ids() == {ChatId("waiting")}
@@ -187,7 +187,7 @@ def test_a_ledger_of_the_wrong_shape_starts_empty_and_says_its_history_is_gone(
 def test_the_disconnected_shell_reaches_nobody() -> None:
     shell = DisconnectedShell()
     assert shell.connected_client_ids() == []
-    assert shell.open_chat("chat-1", "c1") is False
+    assert shell.open_chat(ChatId("chat-1"), "c1") is False
 
 
 @pytest.mark.parametrize(

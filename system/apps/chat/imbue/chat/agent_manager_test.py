@@ -300,8 +300,8 @@ def test_create_chat_agent_launches_a_reserved_chat_under_its_id_and_name(agent_
 
 def test_create_chat_agent_refuses_launching_an_id_it_did_not_reserve(agent_manager: AgentManager) -> None:
     with agent_manager._lock:
-        agent_manager._provisional_chats["proto-1"] = ProvisionalChat(
-            chat_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
     with pytest.raises(AgentCreationError):
         agent_manager.create_chat("", chat_id="never-reserved")
@@ -358,15 +358,16 @@ def test_a_seeded_chat_leaves_the_first_chat_claim_for_a_plain_one(
 def _seed_failed_chat(
     agent_manager: AgentManager, agent_id: str, name: str, account_id: str = "acct-1"
 ) -> ProvisionalChat:
+    chat_id = ChatId(agent_id)
     proto = ProvisionalChat(
-        chat_id=agent_id,
+        chat_id=chat_id,
         name=name,
         account_id=account_id,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
     with agent_manager._lock:
-        agent_manager._provisional_chats[agent_id] = proto
+        agent_manager._provisional_chats[chat_id] = proto
     return proto
 
 
@@ -426,8 +427,8 @@ def test_discard_provisional_chat_drops_a_reserved_chat_but_not_a_create_in_flig
 ) -> None:
     reserved = agent_manager.reserve_chat()
     with agent_manager._lock:
-        agent_manager._provisional_chats["proto-1"] = ProvisionalChat(
-            chat_id="proto-1", name="Chat 9", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 9", phase=ProvisionalChatPhase.CREATING
         )
     q = broadcaster.register()
 
@@ -674,8 +675,8 @@ def test_full_snapshot_replaces_agent_set(agent_manager: AgentManager, broadcast
 
 def _seed_creating_chat(agent_manager: AgentManager, agent_id: str, name: str) -> None:
     with agent_manager._lock:
-        agent_manager._provisional_chats[agent_id] = ProvisionalChat(
-            chat_id=agent_id, name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId(agent_id)] = ProvisionalChat(
+            chat_id=ChatId(agent_id), name=name, account_id="acct-1", phase=ProvisionalChatPhase.CREATING
         )
 
 
@@ -1059,8 +1060,8 @@ def test_rename_chat_agent_refuses_a_chat_that_is_still_being_created(
     manager = AgentManager.build(broadcaster)
     try:
         with manager._lock:
-            manager._provisional_chats["proto-1"] = ProvisionalChat(
-                chat_id="proto-1", name="Chat 2", phase=ProvisionalChatPhase.CREATING
+            manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+                chat_id=ChatId("proto-1"), name="Chat 2", phase=ProvisionalChatPhase.CREATING
             )
         manager.rename_chat("proto-1", "Chat 2")
         with pytest.raises(AgentRenameError):
@@ -1239,8 +1240,8 @@ def test_create_chat_agent_counts_in_flight_creates_as_taken(
     proto entry blocks the slot. The in-flight create is pinned as a proto
     entry directly, so the test cannot race its background completion."""
     with agent_manager._lock:
-        agent_manager._provisional_chats["proto-1"] = ProvisionalChat(
-            chat_id="proto-1", name="Chat 1", phase=ProvisionalChatPhase.CREATING
+        agent_manager._provisional_chats[ChatId("proto-1")] = ProvisionalChat(
+            chat_id=ChatId("proto-1"), name="Chat 1", phase=ProvisionalChatPhase.CREATING
         )
     created = agent_manager.create_chat("")
     agent_manager.stop()
@@ -1380,10 +1381,10 @@ def test_serialized_agents_expose_the_display_name_label(broadcaster: WebSocketB
                     id=agent_id, name=name, state="RUNNING", labels=labels, work_dir=None
                 )
         by_id = {snapshot.chat_id: snapshot for snapshot in manager.get_chat_snapshots()}
-        assert by_id["named"].title == "Chat 1"
-        assert by_id["unnamed"].title == "brave-otter"
-        assert by_id["named"].name == "Chat-1"
-        assert by_id["unnamed"].name == "brave-otter"
+        assert by_id[ChatId("named")].title == "Chat 1"
+        assert by_id[ChatId("unnamed")].title == "brave-otter"
+        assert by_id[ChatId("named")].name == "Chat-1"
+        assert by_id[ChatId("unnamed")].name == "brave-otter"
     finally:
         manager.stop()
 
@@ -2273,12 +2274,12 @@ def test_agent_removed_event_drops_pending_permissions_and_presence(
         agent_manager._pending_permission_ids_by_agent[str_id] = {"evt-1"}
     agent_manager.record_presence(ChatId(str_id), "client-1", PresenceState.VISIBLE)
     assert agent_manager.has_pending_permission(str_id)
-    assert agent_manager._oom_prioritizer._presence.is_open(str_id)
+    assert agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
     agent_manager._handle_observe_event(make_agent_removed_event(agent.id, agent.name, agent.host.id))
 
     assert not agent_manager.has_pending_permission(str_id)
-    assert not agent_manager._oom_prioritizer._presence.is_open(str_id)
+    assert not agent_manager._oom_prioritizer._presence.is_open(ChatId(str_id))
 
 
 def test_provider_snapshot_preserves_activity_state_for_tracked_agent(
@@ -2508,8 +2509,8 @@ def test_seeding_recovers_chat_message_recency_from_the_message_stamps(
     newer = _agent_details("newer-chat", labels={"user_created": "true"})
     now = time.time()
     previous_run = MessageStampStore(path=stamps_path)
-    previous_run.record(str(older.id), at=now - 60 * 60)
-    previous_run.record(str(newer.id), at=now - 30 * 60)
+    previous_run.record(ChatId(older.id), at=now - 60 * 60)
+    previous_run.record(ChatId(newer.id), at=now - 30 * 60)
 
     manager = AgentManager.build(broadcaster, message_stamps=MessageStampStore(path=stamps_path))
     try:
@@ -2766,13 +2767,13 @@ def test_observe_events_feed_the_auto_open_reactor(
     reactor.flush()
 
     assert shell.opens == [(str(at_start.id), "c1")]
-    assert not reactor.ledger.is_delivered(str(plain.id))
+    assert not reactor.ledger.is_delivered(ChatId(plain.id))
 
     appeared = _agent_details("assist-new", labels={"assist": "true", "auto_open": "true"})
     manager._handle_observe_event(make_agent_state_event(appeared))
     reactor.flush()
     assert shell.opens[-1] == (str(appeared.id), "c1")
-    assert reactor.ledger.is_delivered(str(appeared.id))
+    assert reactor.ledger.is_delivered(ChatId(appeared.id))
 
     manager._handle_observe_event(make_agent_removed_event(appeared.id, appeared.name, appeared.host.id))
-    assert not reactor.ledger.is_delivered(str(appeared.id))
+    assert not reactor.ledger.is_delivered(ChatId(appeared.id))

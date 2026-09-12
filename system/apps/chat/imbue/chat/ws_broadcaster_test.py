@@ -79,7 +79,7 @@ def test_broadcast_provisional_chat_created() -> None:
     q = broadcaster.register()
 
     broadcaster.broadcast_provisional_chat_created(
-        ProvisionalChat(chat_id="a1", name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
+        ProvisionalChat(chat_id=ChatId("a1"), name="test", phase=ProvisionalChatPhase.AWAITING_ACCOUNT)
     )
 
     msg = json.loads(_get_message(q))
