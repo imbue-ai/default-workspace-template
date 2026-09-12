@@ -233,6 +233,10 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
           // land on are guesswork. Every level EXCEPT the one the thumb is on -- there the ball
           // is the mark, and it is dropped from the list rather than hidden in place, because a
           // keyed list may not carry holes.
+          //
+          // A dot takes the colour of what it is drawn ON, which is the fill below the thumb
+          // and the bare track above it: one mark in two colours reads as a scale the fill is
+          // swallowing, where one colour throughout reads as dots disappearing under it.
           m(
             "span",
             { class: css.SLIDER_TICKS },
@@ -242,7 +246,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
               .map(({ effort, index }) =>
                 m("span", {
                   key: effort.level,
-                  class: css.SLIDER_TICK,
+                  class: index < position ? css.SLIDER_TICK_ON_FILL : css.SLIDER_TICK_ON_TRACK,
                   style: `left: ${(index / (shown.length - 1)) * 100}%`,
                 }),
               ),
