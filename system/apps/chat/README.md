@@ -46,6 +46,16 @@ The chat page talks to the shell only through the browser-side contract
 only over loopback (the instances API, the relay). Sends are reported to the
 shell's client-activity route so agents can attribute a request to a client.
 
+The send route is also how anything inside the workspace messages a chat:
+`system/scripts/message_chat.py` posts to it by chat id (the browser app's
+wake-ups, a lead's replies to a worker, the automation runner) and falls back
+to `mngr message` only when the chat app cannot be reached or does not know the
+chat. A send that names no client (no `client_id`, `device_kind`, or
+`active_layout`) posts no client-activity report. The route answers 503 until
+the agent list has been read from mngr once, like the instances API, so a send
+during the app's first seconds is retried rather than mistaken for an unknown
+chat. See `docs/system/blueprint/chat-agent-split/`.
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per

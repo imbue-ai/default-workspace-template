@@ -234,7 +234,9 @@ missing auth scope, the user changed their mind about which fields matter), send
 short note to the worker:
 
 ```bash
-mngr message crystallize-$SLUG -m "<short note about what changed>"
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file data/.tasks/launch-task/crystallize-$SLUG/task.md \
+    -m "<short note about what changed>"
 ```
 
 This keeps the crystallized skill up-to-date with the user's requirements. When

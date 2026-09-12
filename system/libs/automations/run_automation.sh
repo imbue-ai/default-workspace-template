@@ -37,7 +37,10 @@
 #     message is `/<skill>`. A brand-new agent starts from an empty chat, so a
 #     self-detecting skill (like caretaker) can deliver a first-run welcome.
 #   - Agent already exists -> send `/clear` to start a fresh session, then
-#     send `/<skill>` to run again with a clean context.
+#     send `/<skill>` to run again with a clean context. Both go through the
+#     chat app (system/scripts/message_chat.py), which addresses the agent's
+#     chat by id, revives a stopped agent on send, and falls back to
+#     `mngr message` itself when the chat app cannot take the message.
 #
 # `/clear` starts a new session, so the skill re-runs with no memory of the
 # previous run -- it re-detects first-run state, re-reads its own files, etc.
@@ -160,14 +163,14 @@ main() {
 
   # Clear the rendered chat so this run starts from an empty conversation.
   log "clearing automation agent ${id} for a fresh run"
-  uv run mngr message "$id" --start --message "/clear"
+  python3 system/scripts/message_chat.py "$id" --message "/clear"
 
   # Let the clear land (new session boundary recorded) before triggering the run.
   sleep "$CLEAR_SETTLE_SECONDS"
 
   # Re-trigger the skill in the now-empty chat.
   log "triggering automation agent ${id} run"
-  uv run mngr message "$id" --start --message "$RUN_MESSAGE"
+  python3 system/scripts/message_chat.py "$id" --message "$RUN_MESSAGE"
 }
 
 main

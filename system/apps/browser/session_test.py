@@ -1,24 +1,47 @@
+import asyncio
+import sys
+from pathlib import Path
+
+import pytest
 from browser import session
 
 
-def test_wrap_system_message_wraps_in_sentinel() -> None:
-    assert (
-        session._wrap_system_message("Browser foo-1 was handed back to you.")
-        == "<agentic-browser-fleet>Browser foo-1 was handed back to you.</agentic-browser-fleet>"
+def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wake rides ``system/scripts/message_chat.py`` (the chat app, with ``mngr message`` as
+    its own backoff), addressed by the agent's id and marked ``--system`` so the transcript
+    renders it as a collapsed chip; the agent's name is never the address."""
+    spawned: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    class _Done:
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_exec(*argv: str, **kwargs: object) -> _Done:
+        spawned.append((argv, kwargs))
+        return _Done()
+
+    monkeypatch.setattr(session.asyncio, "create_subprocess_exec", fake_exec)
+    browser = session.LiveBrowser(browser_id="b1")
+
+    asyncio.run(
+        browser._message_agent(
+            "agent-0123456789abcdef0123456789abcdef", "riley", "the browser is yours"
+        )
     )
 
-
-def test_wrap_system_message_adds_no_newlines() -> None:
-    # The wrapper must not introduce newlines: a wrapped message has to type into
-    # the agent's pane identically to the same text sent unwrapped.
-    text = "line one and line two on one line"
-    wrapped = session._wrap_system_message(text)
-    assert "\n" not in wrapped.replace(text, "")
-
-
-def test_system_message_tag_matches_frontend_contract() -> None:
-    # Cross-layer contract: the transcript UI recognises this exact tag
-    # (BROWSER_FLEET_TAG in system/apps/system_interface/frontend/src/views/message-kinds.ts).
-    # If this literal changes, the frontend constant must change with it, or fleet
-    # nudges silently revert to bare user bubbles.
-    assert session._SYSTEM_MESSAGE_TAG == "agentic-browser-fleet"
+    [(argv, kwargs)] = spawned
+    assert argv == (
+        sys.executable,
+        str(Path("system") / "scripts" / "message_chat.py"),
+        "agent-0123456789abcdef0123456789abcdef",
+        "--system",
+        "--message",
+        "the browser is yours",
+    )
+    assert (
+        Path(str(kwargs["cwd"]))
+        .joinpath("system", "scripts", "message_chat.py")
+        .is_file()
+    )

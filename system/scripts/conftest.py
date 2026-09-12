@@ -1,11 +1,13 @@
 """Fixtures for the scripts' tests: a registry file and a fake shell over loopback for
-layout.py, and an old-format ``workspace_layout`` directory and its registry for
-migrate_workspace_layouts.py."""
+layout.py, a fake chat app and a fake ``mngr`` for message_chat.py, and an old-format
+``workspace_layout`` directory and its registry for migrate_workspace_layouts.py."""
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +29,7 @@ def _load_script_module(module_name: str, filename: str) -> Any:
 
 
 layout = _load_script_module("layout_for_fixtures", "layout.py")
+message_chat = _load_script_module("message_chat_for_fixtures", "message_chat.py")
 migrate_workspace_layouts = _load_script_module(
     "migrate_workspace_layouts_for_fixtures", "migrate_workspace_layouts.py"
 )
@@ -410,3 +413,73 @@ def migration_registry(tmp_path: Path) -> Path:
     path = tmp_path / "migration-apps.toml"
     _write_apps_toml(path, {"docs": (), "notes": ("new",)})
     return path
+
+
+class _FakeChatAppHandler(BaseHTTPRequestHandler):
+    """The chat app's send route, answering a scripted sequence of verdicts."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+    def do_POST(self) -> None:
+        server: Any = self.server
+        body_length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(body_length) or b"{}")
+        server.posted.append((self.path, body))
+        # The last scripted answer repeats, so a test scripts only the transitions it is about.
+        status, answer_body = (
+            server.answers.pop(0) if len(server.answers) > 1 else server.answers[0]
+        )
+        payload = json.dumps(answer_body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@pytest.fixture
+def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
+
+    ``server.answers`` is the sequence of ``(status, body)`` the send route gives, the last one
+    repeating; ``server.posted`` is every ``(path, body)`` it received.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
+    server.answers = [(200, {"status": "ok"})]
+    server.posted = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    registry = tmp_path / "apps.toml"
+    registry.write_text(
+        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{server.server_address[1]}"\n'
+    )
+    monkeypatch.setenv(message_chat.ENV_APPS_FILE, str(registry))
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def fake_mngr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A ``mngr`` on PATH that records its argv and the message file's contents, then exits with
+    the code in ``$FAKE_MNGR_EXIT`` (default 0). Returns the file the record is written to."""
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    record = tmp_path / "mngr-calls.json"
+    fake = bin_dir / "mngr"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "argv = sys.argv[1:]\n"
+        "text = open(argv[argv.index('--message-file') + 1]).read() if '--message-file' in argv else None\n"
+        f"with open({str(record)!r}, 'a') as handle:\n"
+        "    handle.write(json.dumps({'argv': argv, 'text': text}) + '\\n')\n"
+        "raise SystemExit(int(os.environ.get('FAKE_MNGR_EXIT', '0')))\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    return record

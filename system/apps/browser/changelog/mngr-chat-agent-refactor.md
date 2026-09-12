@@ -1,0 +1,1 @@
+The wake-up the fleet sends to an agent whose browser is its again goes through `system/scripts/message_chat.py --system`, addressed by the agent's id, instead of `mngr message` by name. The script wraps the nudge in the system-message sentinel (the transcript still renders it as a collapsed chip) and falls back to `mngr message` itself when the chat app cannot take it.

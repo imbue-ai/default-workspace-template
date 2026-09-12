@@ -70,9 +70,9 @@ its parent directory back to the lead. Substitutions for this task:
 - Valid `name:` values: `question` (mid-flight gate), `done` / `stuck`
   (terminal).
 
-For a mid-flight `question` gate, stop your turn after pushing -- the
-lead replies via `mngr message` and you resume. For terminal statuses,
-the run ends.
+For a mid-flight `question` gate, stop your turn after delivering the
+report -- the lead's reply arrives as a message in your chat and you
+resume. For terminal statuses, the run ends.
 BODY_EOF
 } > data/.tasks/launch-task/$NAME/task.md
 ```
@@ -157,9 +157,10 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
 - If a worker is `STOPPED` with uncommitted work, default to `mngr start
-  <worker>` and message it to continue -- the worktree is preserved
-  across restart. See `references/dead-worker-recovery.md` for the
-  manual salvage fallback when restart isn't viable.
+  <worker>` and message it to continue with `create_worker.py reply` --
+  the worktree is preserved across restart. See
+  `references/dead-worker-recovery.md` for the manual salvage fallback
+  when restart isn't viable.
 - If the task references gitignored files outside the runtime dir,
   declare them with `source_artifacts_dir: <dir>` in the task
   frontmatter -- `create_worker.py launch` pushes that directory automatically.

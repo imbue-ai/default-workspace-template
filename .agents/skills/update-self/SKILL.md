@@ -294,7 +294,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. Either way: reply via `mngr message`, consume the
+the third reaches the user. Either way: reply via `create_worker.py reply
+--task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default

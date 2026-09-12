@@ -6,7 +6,9 @@ with verbatim quotes under `## Anchors`. Use those quotes to find the real
 turns.
 
 `$LEAD_AGENT` comes from the task frontmatter (parsed per
-`worker-reporting.md`). To explore:
+`worker-reporting.md`); it is the lead's agent id, which `mngr transcript`
+takes directly and which a rename of the lead's chat does not change. To
+explore:
 
 1. Run `mngr transcript $LEAD_AGENT --role user --role assistant` to read
    the conversation with tool-call noise stripped, and search it for the

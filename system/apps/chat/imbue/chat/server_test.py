@@ -90,7 +90,9 @@ def signed_in_account() -> str:
 
 @pytest.fixture
 def app(config: Config, signed_in_account: str) -> Flask:
-    return create_application(build_test_state(config=config))
+    state = build_test_state(config=config)
+    state.agent_manager.note_agent_list_known()
+    return create_application(state)
 
 
 @pytest.fixture
@@ -136,6 +138,19 @@ def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.chat.server.discover_agents", return_value=[]):
         response = client.post("/api/agents/nonexistent/message", json={"message": "hello"})
     assert response.status_code == 404
+
+
+def test_send_message_is_not_ready_until_the_agent_list_is_known() -> None:
+    """Before the first agent list has been read, a send answers 503, never 404: a 404 is what
+    makes an in-workspace sender deliver around the chat app, and an id that is merely not
+    loaded yet is not unknown."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post("/api/agents/agent-00000000000000000000000000000009/message", json={"message": "hello"})
+
+    assert response.status_code == 503
+    assert "agent list" in response.get_json()["detail"]
 
 
 def _upload_relative_path(stored_path: str) -> str:
@@ -465,6 +480,7 @@ def test_send_message_success() -> None:
     )
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     with patch("imbue.chat.server._find_agent", return_value=agent_info):
         response = client.post(f"/api/agents/{agent_id}/message", json={"message": "hello"})
@@ -516,6 +532,7 @@ class _FakeCodexLedger:
 
 def _codex_client(agent_info: AgentInfo) -> FlaskClient:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
     return create_application(build_test_state(agent_manager=manager)).test_client()
 
 
@@ -1209,6 +1226,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="chat", state="RUNNING", labels={"user_created": "true"}, work_dir=None
         )
+    manager.note_agent_list_known()
     client = create_application(build_test_state(agent_manager=manager)).test_client()
     agent_info = AgentInfo(
         id=agent_id,
