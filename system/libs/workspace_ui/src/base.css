@@ -171,8 +171,9 @@
   /* Radius scale. sm/md/lg equal Tailwind's own defaults, so overriding them
      leaves the rounded-* utilities in the views at their stock values (only xl
      differs from Tailwind's). md is the default control radius; lg carries
-     inputs, cards and modals; xl is reserved for the largest surfaces; pills
-     and circles are Tailwind's stock rounded-full. The 12px pane/chrome frame
+     inputs, cards and modals; xl is for the largest surfaces and for the
+     floating menus (components/menu.ts); pills and circles are Tailwind's
+     stock rounded-full. The 12px pane/chrome frame
      keeps its own --si-pane-radius (defined in the shell's stylesheet). */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -183,7 +184,7 @@
      shadow shared by everything above the page -- menus, pickers, modals,
      tooltips, the lightbox. */
   --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-overlay: 0 1px 1px 0 rgba(0, 0, 0, 0.08), 0 3px 12px 0 rgba(0, 0, 0, 0.08);
+  --shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* Font family comes from the preflight default (re-based onto --font-sans above). */

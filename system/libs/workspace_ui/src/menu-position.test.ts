@@ -72,8 +72,8 @@ describe("placeSubmenu", () => {
   });
 
   it("slides up rather than being squeezed by the space below the row", () => {
-    // The whole reason this file exists: the menu opens from the composer at the bottom of the
-    // panel, so a ten-row catalog opened from a low row has nothing below it to grow into.
+    // The menu opens from the composer at the bottom of the panel, so a ten-row catalog opened
+    // from a low row has nothing below it to grow into.
     const tall = placeSubmenu({ ...BASE, rowTop: 700, contentHeight: 368 });
     expect(tall.isSlid).toBe(true);
     // Slid up by exactly enough to stand on the bottom margin, and no shorter for it.

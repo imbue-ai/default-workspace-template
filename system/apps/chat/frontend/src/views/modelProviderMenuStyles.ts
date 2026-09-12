@@ -9,21 +9,20 @@
  * row's trailing controls.
  *
  * Every colour, size and elevation below comes from the semantic utility layer,
- * the `type-*` roles and the shadow tokens. That is not incidental -- Tailwind v4
- * emits NOTHING for an unknown utility, so a name this app does not define is a
- * silent no-op with no build error to catch it (`style-modules.test.ts` guards
- * this module and the chooser's against exactly that).
+ * the `type-*` roles and the shadow tokens. Tailwind v4 emits nothing for an
+ * unknown utility, so a name this app does not define is a silent no-op;
+ * `style-modules.test.ts` guards against that.
  */
 
-// --- the menu ------------------------------------------------------------------------------
+// The menu
 /** The menu and its submenus are one width: a submenu narrower than the menu it slides out of
  *  reads as a mistake at the seam where they meet. The effort slider is a fixed 128px and
  *  needs none of this. */
 export const MENU_WIDTH = 300;
 
 /** Show ten rows before the model list starts scrolling. Fewer and a long catalog reads as a
- *  keyhole -- pi's was showing three; many more and the submenu is a wall. Derived rather than
- *  guessed so it stays true if the row height changes. */
+ *  keyhole; many more and the submenu is a wall. Derived rather than guessed so it stays true
+ *  if the row height changes. */
 const SUBMENU_ROW_HEIGHT = 32;
 const SUBMENU_VISIBLE_ROWS = 10;
 /** The submenu card's border and vertical padding, above and below the rows. */
@@ -34,14 +33,14 @@ const SEARCH_FIELD_HEIGHT = 32 + 6;
 export const MODEL_SUBMENU_MAX_HEIGHT =
   SUBMENU_CHROME + SUBMENU_VISIBLE_ROWS * SUBMENU_ROW_HEIGHT + SEARCH_FIELD_HEIGHT;
 
-// --- the composer trigger ------------------------------------------------------------------
+// The composer trigger
 export const TRIGGER =
   "flex h-[30px] items-center gap-1 rounded-lg px-2 type-helper whitespace-nowrap " +
   "text-faint transition-colors hover:bg-fill-hover hover:text-secondary cursor-pointer";
 /** The separators between the chip's three parts, a step quieter than the values. */
 export const TRIGGER_DOT = "text-faint/60";
 
-// --- the rows that are not plain rows --------------------------------------------------------
+// The rows that are not plain rows
 /** A row that holds a control rather than a value: the same height and padding as the shared
  *  row, without its highlight -- a slider is not something one picks. */
 export const ROW_STATIC = "flex h-8 items-center gap-2 px-3";
@@ -51,10 +50,10 @@ export const ROW_VALUE_STATIC = "ml-auto flex items-center gap-2";
 /** Marks a row group as a tooltip host. */
 export const ROW_WRAP = "group/conn relative";
 
-// --- the effort slider ---------------------------------------------------------------------
+// The effort slider
 export const EFFORT_VALUE = "type-helper text-primary";
-/** Wraps the track so the level dots can be positioned over it -- a bare slider gives no clue
- *  where the levels are, which is exactly what makes it feel like guesswork. */
+/** Wraps the track so the level dots can be positioned over it; a bare slider gives no clue
+ *  where the levels are. */
 export const SLIDER_WRAP = "relative flex h-4 w-32 items-center";
 /** Inset by half the thumb's width on each side.
  *
@@ -84,25 +83,17 @@ export const SLIDER =
   "[&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-surface " +
   "[&::-webkit-slider-thumb]:shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_1px_2px_rgba(0,0,0,0.25)]";
 
-// --- the fast switch -----------------------------------------------------------------------
-/** The switch comes in two sizes, and a size is a TRACK PLUS ITS THROW -- never one without
- *  the other.
+// The fast switch
+/** The switch comes in two sizes, and a size is a track plus its throw, handed out together:
+ *  a track scaled on its own leaves the knob's `translate-x-[...]` throw sized for the old
+ *  track, and the knob lands outside it.
  *
- *  That is not a style preference, it is the bug this table exists to prevent. The
- *  source-view toggle once scaled the one switch down with its own CSS `transform`, against a
- *  knob whose offset already came from a Tailwind `translate-x-[...]` utility. The utility won,
- *  and a 22px throw inside a shrunken track put the knob outside it. Asking for a size by name
- *  is the only way to get one, so the two can no longer disagree.
+ *  Each row is arithmetic: the knob is the track's height less 2px of inset top and bottom,
+ *  the on-position is `width - inset - knob`, which leaves the knob the same 2px from either
+ *  end, and the tick is the fraction of the knob that leaves it a rim.
  *
- *  Each row is arithmetic, not taste: the knob is the track's height less 2px of inset top and
- *  bottom, the on-position is `width - inset - knob`, which leaves the knob the same 2px from
- *  either end, and the tick is the fraction of the knob that leaves it a rim.
- *
- *  Both switches in the chat are `sm` today -- the composer's under-bar one, which sits beside
- *  a line of helper text and has to read as its equal, and the menu's fast-mode row, which sits
- *  in a column of values and should not be the loudest thing in it. `md` is the full-size step,
- *  which nothing asks for at the moment; it stays because a size that is not in this table is a
- *  size that can disagree with itself, which is the whole reason the table exists. */
+ *  Both switches in the chat are `sm`: the composer's under-bar one, beside a line of helper
+ *  text, and the menu's fast-mode row, in a column of values. `md` is the full-size step. */
 const SWITCH_SIZES = {
   md: { track: "h-6 w-11", knob: "h-5 w-5", on: "translate-x-[22px]", check: 12 },
   sm: { track: "h-4 w-[30px]", knob: "h-3 w-3", on: "translate-x-[16px]", check: 8 },
@@ -129,9 +120,7 @@ export function switchKnobClass(size: SwitchSize, on: boolean): string {
 }
 
 /** The tick inside the knob, at the size that knob can hold: 12px in a 20px knob, 8px in a
- *  12px one, which is the same rim either way. Asked for by name with the track and the throw,
- *  for the same reason they are -- a tick sized by hand would be the one part of a switch free
- *  to disagree with the size it is drawn in. */
+ *  12px one, the same rim either way. */
 export function switchCheckSize(size: SwitchSize): number {
   return SWITCH_SIZES[size].check;
 }
@@ -142,7 +131,7 @@ export const SWITCH_OFF = "bg-fill-active";
 const SWITCH_KNOB_OFF = "translate-x-[2px]";
 export const SWITCH_CHECK = "text-accent";
 
-// --- the submenus' own content ----------------------------------------------------------------
+// The submenus' own content
 /** The search field at the head of the model list. The wrapper positions the magnifier over the
  *  field's own left padding; the field itself is the shared `inputClass`, so its frame, focus
  *  ring and placeholder match every other text field in the workspace. The margin is BELOW it,
@@ -159,19 +148,18 @@ export const SUBMENU_SCROLL = "model-submenu-scroll min-h-0 flex-1 overflow-y-au
 
 /** The shared row shape (`menuRowClass`), restated: every submenu row is the same 32px slab
  *  with the same inset highlight, and the selected one keeps a steady fill. Kept in step with
- *  `menuRowClass` -- `mx-1 w-[calc(100%-0.5rem)] rounded px-2` is its inset highlight slab, and
- *  the reasoning for each part lives there. */
+ *  `menuRowClass` -- `mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2` is its inset highlight
+ *  slab, and the reasoning for each part lives there. */
 const SUBMENU_ROW_SHAPE =
-  "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
+  "flex h-8 items-center gap-1.5 mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 /** An ACCOUNT row reserves its right edge for the star, the rename pencil and the bin, which are
  *  positioned against the row's WRAPPER rather than the row, so they stay put while the
  *  highlight insets around them, and the provider name never reflows when they appear. 80px is
  *  the outermost of the three at its far edge (`right-15` plus its own 20px), so the reserve
- *  says exactly what is in the row and not a pixel more. Its own base rather than a wider
- *  shared one: a MODEL row carries none of them -- only the tick, as a child -- and reserving
- *  this width on model rows too would truncate every model name to make room for controls that
- *  are never drawn on them. */
+ *  says exactly what is in the row and not a pixel more. Model rows do not reserve it: they
+ *  carry only the tick, and the reserve would truncate every model name for controls never
+ *  drawn on them. */
 const ACCOUNT_ROW_BASE = `${SUBMENU_ROW_SHAPE} pr-20`;
 export const SUBMENU_ROW = `${SUBMENU_ROW_SHAPE} text-primary hover:bg-fill-hover cursor-pointer`;
 export const SUBMENU_ROW_SELECTED = `${SUBMENU_ROW_SHAPE} bg-fill-active text-primary cursor-pointer`;
@@ -231,9 +219,8 @@ export const ROW_STAR =
  *  flush with the row's end can also keep its own order.
  *
  *  `fill-current` rather than the icon's own `filled`, which drops the stroke: a star painted
- *  by its fill alone is a stroke-width smaller all round than the outline beside it, so the
- *  marked row's star read as the smaller of the two. Filling the outlined glyph keeps one
- *  silhouette and changes only what is inside it. */
+ *  by its fill alone is a stroke-width smaller all round than the outline beside it. Filling
+ *  the outlined glyph keeps one silhouette and changes only what is inside it. */
 export function rowStarPinnedClass(hasTick: boolean): string {
   return (
     `absolute ${hasTick ? "right-9" : "right-3"} group-hover/conn:right-15 top-1/2 inline-flex ` +
@@ -248,14 +235,8 @@ export const ROW_RENAME_WRAP = `${ROW_WRAP} px-1.5`;
 export const ROW_RENAME_INPUT =
   "h-8 w-full rounded-md border border-default bg-surface px-2 text-primary outline-none";
 
-/* No tooltip classes live here on purpose.
- *
- * A CSS bubble inside the menu cannot work: the submenu is `overflow-hidden`, so it is cut
- * off mid-sentence, and the menu and the submenu are fixed boxes on the popover layer, so
- * each is its own stacking context and a chip inside the menu can never rise above the
- * submenu beside it.
- *
- * `hoverTooltip.ts` already solves exactly this -- a single fixed bubble on <body>, with
- * hover-intent, viewport clamping and flip -- and it exists BECAUSE this app clips CSS bubbles.
- * Rows spread `hoverTooltipAttrs(...)` instead.
+/* No tooltip classes here: a CSS bubble inside the menu is clipped by the submenu's
+ * `overflow-hidden`, and the menu and the submenu are fixed boxes that are each their own
+ * stacking context, so a bubble in one cannot rise above the other. Rows spread
+ * `hoverTooltipAttrs(...)` from `hoverTooltip.ts` instead: a single fixed bubble on <body>.
  */

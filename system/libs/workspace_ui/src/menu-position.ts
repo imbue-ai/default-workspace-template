@@ -8,14 +8,10 @@
  * `MENU_MARGIN` from the edges.
  *
  * A SUBMENU's first row lines up with the row that opened it, so the row you pointed at and
- * the list it produced read as one line continuing sideways. That alignment is the default and
- * the submenu keeps it whenever it can. When it cannot -- a menu opened from the composer at
- * the BOTTOM of the panel, so a long list starting level with a low row would run off the
- * screen -- the submenu SLIDES UP, by exactly as much as it takes to fit, and no further. It
- * never gives up height to hold the alignment: a list squeezed into the space below its own
- * row would have about three rows to work with, far too few for a thousand-model catalog, so
- * the slide is what buys it the whole window. Only a list too tall for the window at all is
- * capped, and then it scrolls.
+ * the list it produced read as one line continuing sideways. When a long list level with a
+ * low row would run off the screen, the submenu SLIDES UP by exactly as much as it takes to
+ * fit, keeping its height. Only a list too tall for the window at all is capped, and then it
+ * scrolls.
  *
  * Kept free of the DOM so it is unit-testable; the caller measures and feeds it in.
  */
@@ -146,19 +142,11 @@ export interface SafeTriangleBase {
 
 /**
  * The safe triangle: is `point` inside the wedge between `apex` and the open submenu's near
- * edge?
- *
- * A hover menu has one hard problem. The submenu opens beside the menu, so the pointer has to
- * travel diagonally to reach it -- and on the way it crosses the menu's OTHER rows, each of
- * which would otherwise take the hover and replace the submenu being aimed at. Waiting longer
- * before switching does not fix it: the pointer is genuinely resting on those rows.
- *
- * What tells travel apart from a change of mind is direction, and the triangle is direction
- * made testable. Its apex is the last point the pointer occupied on the row that opened the
- * submenu; its base is the submenu's near edge. Every path from that point to that edge stays
- * inside it, and a pointer heading anywhere else leaves it almost at once.
- *
- * Kept here beside `placeSubmenu`, and pure for the same reason: the caller measures.
+ * edge? A pointer travelling diagonally to the submenu crosses the menu's OTHER rows on the
+ * way; while it is inside the wedge those rows do not take the hover. The apex is the last
+ * point the pointer occupied on the row that opened the submenu, the base is the submenu's
+ * near edge: every path between the two stays inside, and a pointer heading anywhere else
+ * leaves it almost at once. Pure, like `placeSubmenu`: the caller measures.
  */
 export function isInSafeTriangle(point: MenuPoint, apex: MenuPoint, base: SafeTriangleBase): boolean {
   const vertices: readonly MenuPoint[] = [apex, { x: base.edgeX, y: base.top }, { x: base.edgeX, y: base.bottom }];

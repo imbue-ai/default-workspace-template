@@ -8,8 +8,8 @@
  *
  * It opens on a click and closes on a pick, a press outside, or Escape, behind an invisible
  * sheet like every menu -- so a press that closes it never also lands on the field underneath.
- * It portals to <body> on `--z-popover`, above the modal overlays, because the one place a
- * dropdown lives today is inside a modal.
+ * It portals to <body> on `--z-popover`, above the modal overlays, so one opened inside a
+ * modal paints over it.
  *
  * The Tailwind scanner reads utility names from the literals in this file: keep every utility
  * name a contiguous literal.
@@ -66,7 +66,7 @@ const LIST_CLASS = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll
 /** The shared menu row shape, minus its hover: the picked row keeps its steady accent fill, so
  *  only the idle variant hovers. */
 const OPTION_CLASS =
-  "flex h-8 cursor-pointer items-center justify-between gap-3 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
+  "flex h-8 cursor-pointer items-center justify-between gap-3 mx-1 w-[calc(100%-0.5rem)] rounded-[12px] px-2 text-left " +
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
 const OPTION_IDLE_CLASS = "hover:bg-fill-hover";
 const OPTION_PICKED_CLASS = "bg-accent-light";

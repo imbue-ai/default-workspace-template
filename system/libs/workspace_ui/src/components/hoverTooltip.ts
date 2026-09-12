@@ -105,11 +105,6 @@ function placeTooltipBelow(anchor: TooltipAnchor, bubble: TooltipSize, viewport:
  * Where the bubble goes for ``"above"`` placement: the mirror of the default --
  * centered OVER the trigger with the same gap, flipped below when it would
  * otherwise overflow the top (and there is room down there), then clamped.
- *
- * The flip is not symmetric with the below case by accident: each placement
- * prefers its own side and gives way only when that side has no room, so a
- * caller's choice holds wherever it can and the fallback is the other side
- * rather than a bubble half off-screen.
  */
 function placeTooltipAbove(anchor: TooltipAnchor, bubble: TooltipSize, viewport: TooltipSize): TooltipPosition {
   const centered = anchor.left + anchor.width / 2 - bubble.width / 2;
