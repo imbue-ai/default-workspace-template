@@ -692,6 +692,38 @@ def test_an_agent_open_spends_the_stand_in_new_tab_but_not_ones_the_user_opened(
         expect(page.locator(".new-tab-launcher")).to_have_count(2)
 
 
+@pytest.mark.timeout(120, func_only=False)
+def test_opening_from_a_new_tab_takes_that_tab_s_place_in_the_strip(tmp_path: Path, page: Page) -> None:
+    """Opening from the middle of three New Tabs leaves the result in the middle.
+
+    Opening answers the New Tab it was asked from, so what it opens belongs where that tab stood
+    rather than on the end of the strip.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 28) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (2, 3):
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # The middle one of the three, by tab position rather than by DOM order.
+        middle_tab = page.locator(".dv-tab").nth(1)
+        middle_tab.click()
+        page.locator(f'.new-tab-launcher:visible .new-tab-launcher-tile[data-launch="{_STUB_APP_NAME}:new"]').click()
+        expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
+
+        titles = page.locator(".dv-tab .dv-default-tab-content")
+        expect(titles).to_have_count(3, timeout=10000)
+        strip = [titles.nth(i).inner_text() for i in range(3)]
+        assert [strip[0], strip[2]] == ["New tab", "New tab"] and _STUB_TAB_TITLE_RE.match(strip[1]), (
+            f"the opened tab did not take the middle New Tab's slot: {strip}"
+        )
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_no_projects_lands_on_everything(tmp_path: Path, page: Page) -> None:
     """With no project on the machine, the client lands on Everything, whose table is the whole machine."""
