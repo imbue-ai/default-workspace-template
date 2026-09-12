@@ -35,9 +35,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 
-# Cross-layer contract: the sentinel the agentic browser fleet wraps its agent-facing
-# nudges in before sending them via ``mngr message``. The wrapping side is
-# ``system/apps/browser/src/browser/session.py`` (``_SYSTEM_MESSAGE_TAG``); keep in sync.
+# Cross-layer contract: the sentinel an automated in-workspace sender (today the agentic
+# browser fleet's wake-ups) wraps its agent-facing nudges in. The wrapping side is
+# ``system/scripts/message_chat.py --system`` (``SYSTEM_MESSAGE_TAG``), which posts through
+# this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
