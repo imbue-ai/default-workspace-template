@@ -517,7 +517,7 @@ Where the minds repo is touched, the paired branch is named.
   Nothing changes about how a send with no client fields is recorded.
 - Every in-workspace `mngr message` switches to the script: the browser app's wake (which hands its sentinel wrapping to the script), the lead-to-worker replies in `lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, and fetch-process-show, `create_worker.py`'s task message, and `run_automation.sh`.
 - The worker path (4.5): `create_worker.py` stamps `lead_agent` with the lead's agent id, `worker-reporting.md` makes the same-repo write the primary delivery (phase 2 replaces the id-addressed rsync for a lead in a worktree with the stamped `lead_work_dir`), and `transcript-exploration.md` reads the lead's transcript by that id.
-- Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, and 404); the route's 503 gate in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr rsync` and `mngr transcript` still resolve it by id.
+- Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, and 404); the route's 503 gate in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr transcript` still resolves it by id.
 - Exit check: a worker's report reaches a lead that was renamed mid-task, its `mngr transcript $LEAD_AGENT` still reads, and a lead's reply reaches the worker through the chat app.
 
 ### Phase 2: the rename
@@ -568,7 +568,7 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 7: cleanup
 
-- Drop the `/api/agents/*` aliases; retarget the minds_evals bridge, the minds deployment tests, and the e2e runner in the paired minds branch, which merges after this template is tagged, as the app-model arc did.
+- Drop the `/api/agents/*` aliases; retarget the in-workspace messaging script (`system/scripts/message_chat.py`, which posts to the aliased send route so that it still reaches a chat app from before the rename during an update), and, in the paired minds branch, the minds_evals bridge, the minds deployment tests, and the e2e runner, which merges after this template is tagged, as the app-model arc did.
 - The lane-neutral auto-name word.
 - Remove the phase 2 `CLEANUP` bridges, update the minds docs and glossary, and record the settled decisions.
 
