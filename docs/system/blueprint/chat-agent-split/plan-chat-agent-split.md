@@ -76,12 +76,14 @@ Nothing in this plan changes when the first agent starts.
 - The frontend uses `agentId` about four hundred times, keys its stores by it, and reads agent-level facts directly: the harness for the catalog lookup, the mngr name for the terminal back face, the model choice.
 - One watcher tails one agent's harness files, and paging offsets and totals are per agent.
 - Outside the chat app, the minds e2e runner finds the chat frame by the `/agent-<hex>/` URL, the minds_evals bridge calls `/api/agents/create-chat` and `/api/agents/<id>/message` and `/events`, the `automation` create template bakes `app:chat?instance=$MNGR_AGENT_ID` into its system prompt, and several skills speak agent ids.
-- Workers report to their lead by mngr name (`mngr rsync "$LEAD_AGENT:..."` and `mngr message <lead>`), and `tk` stamps step records with `MNGR_AGENT_NAME`.
+- Workers reach their lead by mngr name: `create_worker.py` stamps `lead_agent` from `MNGR_AGENT_NAME`, the worker pushes its report with `mngr rsync "$LEAD_AGENT:..."` and reads the lead's transcript with `mngr transcript $LEAD_AGENT`, and `tk` stamps step records with `MNGR_AGENT_NAME`.
+  A worker never messages its lead: the lead polls for the report file (`create_worker.py await`).
+- The in-workspace senders that do message a chat all use `mngr message`: the browser app's wake of the agent that owns a browser (`session.py`, `_message_agent`), the lead's replies to a worker's gate (`lead-proxy.md`, dead-worker-recovery, and the update-self, migrate-workspace, and fetch-process-show skills), and the automation runner's `/clear` and `/<skill>` sends (`run_automation.sh`).
 
 ### 2.3 What is already broken that this plan fixes on the way
 
-Anything that addresses a chat by its mngr agent name is wrong today, not only after this plan: a user rename changes the mngr name mid-task, so a worker that captured `LEAD_AGENT` at launch pushes its report to a name that no longer exists.
-Section 4.5 moves every in-workspace sender to chat-id addressing through the chat app.
+Anything that addresses a chat by its mngr agent name is wrong today, not only after this plan: a user rename changes the mngr name mid-task, so a worker that captured `LEAD_AGENT` at launch pushes its report to a name that no longer exists (the same-repo fallback write in `worker-reporting.md` is what saves the report) and its `mngr transcript $LEAD_AGENT` fails outright.
+Section 4.5 moves every in-workspace sender to chat-id addressing through the chat app, and every mngr-targeted reference to the lead to its id.
 
 ## 3. Principles and settled decisions
 
@@ -114,7 +116,9 @@ Each decision below was settled during design, with the rationale given at the t
 14. **Summarize-first, and reuse an existing fresh summary.**
 15. **Name-based addressing of chats is retired.**
     In-workspace senders message a chat through the chat app by chat id, with `mngr message` only as a backoff when the chat app cannot be reached.
+    The rule has no exceptions: a worker and an automation agent are chats under the own-chat rule, so a lead's reply to a worker goes through the chat app too.
     Worker skills need no instructions about the handoff window because the chat app holds sends during it.
+    Where mngr itself is the target (`mngr rsync`, `mngr transcript`), the lead is named by its agent id, which a rename does not change.
 16. **The new agent receives as much context as could be relevant**, through `mngr create --message`: the summary path or the note that none exists, the archived agent's identity and transcript locations, the closed steps, and the user's message.
 17. **The archival name sorts and reads correctly**: `archived-<seq>-<canonical>-<agent-id>`, and the archived agent carries the `archived_at` label (`mngr archive`).
 18. **A failed create after the old agent was archived leaves the chat in a failed-next-agent state** with retry on any lane, and every retry passes the same summary message.
@@ -131,6 +135,7 @@ Each decision below was settled during design, with the rationale given at the t
 26. **Testing uses several real accounts**; there is no same-lane "fresh agent" action for CI's sake.
 27. **No mngr code change is required.**
     The chat app edits an agent's env file directly for a rebind, which is what the file exists for.
+    The one mngr change the arc depends on landed separately before it started: mngr PR 908 made a local `[commands.create]` add to the project's defaults instead of replacing them, which is what lets `.mngr/settings.local.toml` carry the default account (section 4.5).
 
 ## 4. The model
 
@@ -231,28 +236,46 @@ The auto-name word stays per lane or harness until phase 7, when it becomes a la
   Nothing in the workspace runs `mngr cleanup` or `mngr gc`, so archived agents persist and their transcripts stay readable.
 - Rename is the active agent's rename (section 4.3).
 - The re-auth restart (`restart_agents_on_account`) is filtered to active agents so a stopped archived agent is never revived by a sign-in.
+  The filter is load-bearing, not defensive: since the workspace's create defaults landed, every agent bound to an account carries the `account` label (workers, automations, and the minds app's chats included, not only chats this app created), and an archived agent keeps the label it was created with.
 - Every verb but destroy answers 409 with the handoff phase while the chat is converging.
 
 ### 4.5 Addressing a chat from inside the workspace
 
 Every chat agent the chat app creates carries `MINDS_CHAT_ID=<chat id>` in its env file (`mngr create --env`), the first agent included.
 Agents created outside the chat app (a `mngr create --template chat` from a terminal, the minds app's assist and update-self chats, automations) carry no such variable and are their own chats, so consumers fall back to `MNGR_AGENT_ID`.
+Those creates are no longer unbound: a create that names no harness and no account resolves the workspace's default account through `.mngr/settings.local.toml` (written by the chat app's `create_defaults.py` from the account store), carries its `account=<id>` label, and is refused by `system/scripts/require_create_account.py` when no account is signed in.
+That changes what they run on, not what they are: they remain own chats with no `MINDS_CHAT_ID`.
 
 - `layout.py` builds the requester address from `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`.
   The shell resolves `self` and attributes ops to clients through that address, so an archived or successor agent's ops land on the chat's tab and client.
 - The chat app posts the chat id as the `key` of its client-activity reports, so the shell's attribution log is keyed by chat.
 - The `automation` create template's prompt, the caretaker, manage-layout, update-self, and every other skill that names its own chat use `$MINDS_CHAT_ID` with the same fallback.
 - Anything that identifies the chat for UI routing outside the workspace carries the chat id: permission requests filed with the latchkey gateway (the minds chrome routes a request to the chat frame whose URL is the chat id), `update_self.py --agent-id` and `surface-chat-tab`, and the file-sharing and workspace requests in the minds-api and migrate-workspace skills.
-  Agent ids remain only where mngr itself is the target (`mngr transcript`, `mngr list`, `mngr message` as a backoff).
+  Agent ids remain only where mngr itself is the target (`mngr transcript`, `mngr list`, `mngr rsync`, `mngr message` as a backoff).
+  The minds desktop client's latchkey handlers use a permission request's `agent_id` twice: to route the request to the chat frame, and to nudge the waiting agent with `mngr message <agent_id>` once it is resolved.
+  A request that carries only the chat id would nudge an archived agent after a handoff, so the request carries both (the chat id for routing, the active agent's id for the nudge) or the minds side resolves the chat to its active agent through the chat app; which one is decided in phase 2 (section 9).
 - Whether the latchkey gateway's per-agent registration follows a successor agent automatically on discovery is to be verified in phase 4; if not, the handoff registers it.
 
 Messaging a chat from inside the workspace goes through the chat app:
 
-- A script under `system/scripts/` takes a chat id and a message, posts to the chat app's loopback message route for that chat (the existing send route, addressed by chat id), and returns the route's verdict.
-- It falls back to `mngr message <name>` only when the chat app is unreachable or answers 404 for the route (an older chat app), never when the chat app answers a refusal, since a refusal during converging is the hold that makes the handoff safe.
+- A script under `system/scripts/` takes exactly one chat id (never a name) and a message, posts to the chat app's loopback message route for that chat (the existing send route, addressed by chat id), and returns the route's verdict.
+  It is a drop-in for `mngr message`: it takes the message as `-m`, `--message-file`, or stdin, and exits 0 for delivered or queued, 1 for a failure, and 7 for delivered but blocked on a dialog, which the route already reports as a 500 whose `kind` is `INPUT_BLOCKED`.
+  It is standard-library only (`urllib`, `tomllib`), like `require_create_account.py`, because skills run it as `python3 system/scripts/...` and cron runs before any venv; it finds the chat app through the `chat` row of `data/.state/apps.toml`, with `http://127.0.0.1:8010` as the fallback, the way the update-self probes do.
+- It falls back to `mngr message <chat id>` only when the connection to the chat app fails or the route answers 404 (an older chat app, or an agent the chat app does not know), never when the chat app answers a refusal, since a refusal during converging is the hold that makes the handoff safe.
+  A blocked send (exit 7) is a refusal for this purpose: the text is already in the pane.
+  Once the server has accepted the request, the outcome is whatever the route answers, however long it takes: the route blocks through mngr's locked paste-and-confirm for claude and pi, so the script uses a short connect timeout and no read timeout.
+- The route answers 503 until the chat app has read its agent list from mngr once, the same rule the instances API follows, so a send during the seconds after a chat-app boot is retried rather than mistaken for an unknown chat and delivered around the app.
+  The script retries 503 for a bounded window (the route's own revive budget also surfaces as 503) and then reports a failure.
+- The script mints one `message_id` per invocation and reuses it on every retry against the chat app, and the route keeps a bounded per-chat ledger of recently delivered ids beside the message stamps, answering 200 for a replay.
+  Delivery is at least once, not exactly once: a chat app that dies between the paste and the ledger write delivers twice on replay, which is accepted (an agent sorts out a repeated message), and the `mngr message` backoff has no id and is sent once.
+  The ledger is the same store phase 4's held sends are keyed by.
+- A send from a script carries no client fields, so the route records no client-activity report for it and it counts as engagement for the memory prioritizer like any other send; nothing on the route changes for that.
+  The script offers `--system`, which wraps the text in the system-message sentinel the browser app wraps its nudges in today (`_wrap_system_message`), so the transcript renders a collapsed chip; the wrapping moves into the script and the browser app calls the script.
+- Every in-workspace `mngr message` moves to the script, with no exceptions: the browser app's wake, the lead's replies to a worker (`lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, fetch-process-show), the task message `create_worker.py` sends after its syncs, and the automation runner's `/clear` and `/<skill>` sends (the route revives a stopped agent on send, which is what the runner's `--start` asked for).
+- Workers do not message their lead and gain no wake-up message: the report is a file and the lead polls for it, and a message would land as a user turn in the lead's chat.
+  What changes is the address: `create_worker.py` stamps `lead_agent` from `MNGR_AGENT_ID` instead of `MNGR_AGENT_NAME` (the key keeps its name so older task files and workers still parse), so `mngr rsync "$LEAD_AGENT:..."` and `mngr transcript $LEAD_AGENT` survive a rename.
+  The same-repo write becomes the primary report delivery for a lead whose work dir is the workspace root (every chat agent's is), with the id-addressed rsync kept for a lead in a worktree.
 - Sends that arrive while a chat is converging are held and delivered to the new agent (section 5.7).
-- The launch-task, worker-reporting, caretaker, automation, and manage-layout skills, and the dead-worker recovery reference, switch to the script.
-  Worker reports are written into the shared work dir (today's same-repo fallback becomes the primary delivery, since chat agents share the workspace work dir) and the wake-up message goes through the script.
 - This lands in phase 1, before the rename, addressing by `MNGR_AGENT_ID` (equal to the chat id today), and learns `MINDS_CHAT_ID` in phase 2.
 
 ### 4.6 The wire
@@ -313,8 +336,9 @@ A chat's transcript is its segments in agent order.
 
 ### 4.8 Per-chat state
 
-Presence reports, message stamps, pending permission ids, and the OOM prioritizer's entries are keyed by chat id.
+Presence reports, message stamps, the delivered-message-id ledger (4.5), pending permission ids, the auto-open ledger (`auto_open.py`, `data/.apps/chat/auto_opened_chats.json`), and the OOM prioritizer's entries are keyed by chat id.
 Where a process is needed (the prioritizer's pid lookup), the chat maps to its active agent.
+The auto-open reactor fires for an agent that appears carrying an `auto_open` or `assist` label; a successor agent carries neither, so a handoff never re-pops a tab.
 
 ## 5. The handoff
 
@@ -405,8 +429,10 @@ Cancel is refused with 409 in `switching` and later.
 ### 5.8 Creating the new agent
 
 - The new agent id is minted and recorded on the record's `handoff` entry before the create runs, and passed with `mngr create --id`, so a resume can tell whether the create landed.
-- The create is the existing chat create command: the reused mngr name, `--type <harness>`, `--template chat`, the account binding args from `binding.py`, `--label user_created=true`, `--label display_name=<title>`, `--label project=...`, `--label account=...`, plus `--label chat_id=<chat id>`, `--label chat_seq=<n>`, `--env MINDS_CHAT_ID=<chat id>`, and `--message <handoff prompt>`.
+- The create is the existing chat create command: the reused mngr name, `--type <harness>`, `--template chat`, the account binding args from `binding.create_args`, `--label user_created=true`, `--label display_name=<title>`, `--label project=...`, `--label account=...`, plus `--label chat_id=<chat id>`, `--label chat_seq=<n>`, `--env MINDS_CHAT_ID=<chat id>`, and `--message <handoff prompt>`.
   `--message` delivers after the harness signals readiness, the path `/welcome` already takes.
+  The `--type` and the binding args are always explicit, never left to config: `.mngr/settings.local.toml` supplies the workspace's *default* account to a create that names none, and the handoff's target is usually not the default; CLI list flags append after the file's, so an explicit `--type` and `--env` win for the same variable or path.
+  `require_create_account.py` gates every in-workspace create, this one included, on the local file naming a type: a handoff on a workspace whose last account was just removed is refused by the gate rather than by the chat app, and that verdict is what the failed-next-agent state shows (5.10).
 - The handoff prompt is built once, stored on the `handoff` entry, and resent verbatim on every retry, whatever lane the retry uses.
   It contains: the summary path, or the statement that the predecessor did not produce one; the predecessor's archived mngr name, agent id, and state dir, plus the same for every earlier member, so `mngr transcript` and the find-transcripts skill reach them; the titles of the steps closed at handoff; the lanes involved; and then the user's message.
   Its text is a reference document in this template that the chat app fills in, so it stays harness-neutral and editable.
@@ -427,7 +453,7 @@ Cancel is refused with 409 in `switching` and later.
 ### 5.10 Failure of the create
 
 The chat then has no running agent and one archived agent more.
-The record's `handoff` entry moves to `failed` with the reason (mngr's exit status and the last lines it printed, as today's failed provisional create records), the pre-minted id, and the stored prompt.
+The record's `handoff` entry moves to `failed` with the reason (mngr's exit status and the last lines it printed, as today's failed provisional create records, which is also how the create gate's "No provider account is signed in on this machine" reaches the page), the pre-minted id, and the stored prompt.
 The instance status is `error`, the page shows the reason over the composer with a retry that offers every signed-in account, and a retry on any lane runs step 3's create again with the same prompt.
 The archived transcript stays readable underneath.
 Destroy remains available.
@@ -454,7 +480,7 @@ A harness handoff resets model, effort, and fast mode to the new harness's defau
 
 A rebind is the same gesture applied to an account on the active agent's own harness.
 
-- Sequence: `mngr stop` the agent; rewrite the binding directly in the agent's state dir (the `CLAUDE_CONFIG_DIR` line of the env file for claude, the credential symlink for codex, pi, and antigravity, exactly what `binding.py` writes at create); `mngr label account=<new account id>`; `mngr start --no-resume`.
+- Sequence: `mngr stop` the agent; rewrite the binding directly in the agent's state dir (the `CLAUDE_CONFIG_DIR` line of the env file for claude, the credential symlink for codex, pi, and antigravity, exactly what `binding.create_args` writes at create, from the per-harness tables in `harnesses/account_scope.py`); `mngr label account=<new account id>`; `mngr start --no-resume`.
   The edit lands while the agent is down so the restart sources it, which is why `--restart` is not used.
   No mngr command is added for the edit; the env file is the interface.
 - The transcript, the tk steps, and the model settings carry over.
@@ -482,12 +508,14 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 1: chats are messaged through the chat app
 
-- The `system/scripts` messaging script (4.5): chat id, message, loopback route, backoff to `mngr message` only on unreachable or 404.
+- The `system/scripts` messaging script (4.5): one chat id, the message as `-m`, `--message-file`, or stdin, the `--system` wrap, the loopback route found through the registry, the caller-minted `message_id` reused across retries, `mngr message` exit codes, and the backoff to `mngr message` only on a failed connection or a 404.
   In this phase the chat id it takes is `$MNGR_AGENT_ID`.
-- The chat app's message route accepts loopback sends from scripts, recording them as sends from the workspace rather than a client.
-- The launch-task, worker-reporting, caretaker, automation, manage-layout, and dead-worker-recovery skills and references switch to the script; worker reports write into the shared work dir first.
-- Tests: the script against a stub chat app (delivered, refused, unreachable, 404); the worker-reporting flow in the launch-task test suite.
-- Exit check: a worker reports to a lead that was renamed mid-task, and the message lands.
+- The chat app's message route: 503 until the agent list is known, and the bounded per-chat ledger of delivered message ids that makes a replay a 200 (4.5).
+  Nothing changes about how a send with no client fields is recorded.
+- Every in-workspace `mngr message` switches to the script: the browser app's wake (which hands its sentinel wrapping to the script), the lead-to-worker replies in `lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, and fetch-process-show, `create_worker.py`'s task message, and `run_automation.sh`.
+- The worker path (4.5): `create_worker.py` stamps `lead_agent` with the lead's agent id, `worker-reporting.md` makes the same-repo write the primary delivery with the id-addressed rsync as the worktree case, and `transcript-exploration.md` reads the lead's transcript by that id.
+- Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, 404, and a replayed id); the route's 503 gate and its ledger in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr rsync` and `mngr transcript` still resolve it by id.
+- Exit check: a worker's report reaches a lead that was renamed mid-task, its `mngr transcript $LEAD_AGENT` still reads, and a lead's reply reaches the worker through the chat app.
 
 ### Phase 2: the rename
 
@@ -497,7 +525,9 @@ Where the minds repo is touched, the paired branch is named.
   `ChatState` renamed `ChatAppState`.
 - The `ChatSnapshot` wire shape with `active_agent` (4.6), the renamed WebSocket messages, the chat-keyed routes with the agent-keyed aliases.
 - The frontend: `agentId` becomes `chatId` in every model and view, `AgentManager.ts` becomes the chats model, `ProtoAgent` becomes a provisional chat, and every agent-level read comes from `active_agent`.
-- `MINDS_CHAT_ID` on every chat-app-created agent; `layout.py`, the phase 1 script, the automation prompt, and the skills prefer it with the `MNGR_AGENT_ID` fallback; the client-activity key becomes the chat id.
+- `MINDS_CHAT_ID` on every chat-app-created agent; `layout.py`, the phase 1 script, `create_worker.py`'s `lead_agent` stamp, the automation prompt, and the skills prefer it with the `MNGR_AGENT_ID` fallback; the client-activity key becomes the chat id.
+- The auto-open reactor's ledger and address (4.8) keyed by chat id.
+- The minds side's decision on the permission request's ids (4.5): both ids on the request, or a chat-to-active-agent lookup through the chat app, in the paired minds branch.
 - Subagent keys become `<chat_id>.<agent_id>.<session_id>`.
 - The transcript loader lifted out of each watcher, and the segment facade in front of it with exactly one segment.
 - The handoff phase enum declared and carried as `null`.
@@ -545,10 +575,11 @@ Where the minds repo is touched, the paired branch is named.
 | minds e2e runner (`e2e_workspace_runner.py`) | finds the chat frame by `/agent-<hex>/` | unchanged (chat ids keep the prefix) | unchanged |
 | minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events` | served by the aliases | retargeted to `/api/chats/...` |
 | minds deployment tests | `/api/agents/...` | aliases | retargeted |
-| minds assist and update-self chats | `mngr create --template chat` inside the workspace | own chats, no `MINDS_CHAT_ID` | unchanged |
+| minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID` | unchanged |
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |
+| the minds latchkey handlers' resolution nudge (`mngr message <agent_id>`) | the request's `agent_id` | the active agent's id, carried on the request beside the chat id or looked up through the chat app (4.5) | unchanged |
 
 ## 10. Open questions and things to verify
 
@@ -556,7 +587,7 @@ Where the minds repo is touched, the paired branch is named.
 - Whether latchkey's per-agent registration follows a successor automatically on discovery, or the handoff must register it (phase 4).
 - Whether the minds side treats a permission request's `agent_id` purely as a routing key (safe to carry the chat id) or also as an authorization key against the registered-agent set; if the latter, requests carry both the chat id and the agent id (phase 2).
 - Per-harness session resumption under a swapped credential for the rebind (phase 6).
-- Whether the same-repo worker report delivery is acceptable as the primary path for workers in worktrees, which today rsync to the lead's work dir (phase 1); the lead's work dir is the workspace root, which every chat agent shares, so the write is direct.
+- Settled for phase 1 (4.5): the same-repo write is the primary report delivery when the lead's work dir is the repo's main worktree, and a lead in a worktree of its own is reached by the id-addressed `mngr rsync`; whether that second path is ever exercised in practice is to be confirmed by the launch-task suite.
 - The exact wording and placement of the `AGENTS.md` section and the summary skill's content rules (phase 4, with the user).
 
 ## 11. Documents this plan revises
@@ -564,4 +595,5 @@ Where the minds repo is touched, the paired branch is named.
 - `docs/system/blueprint/workspace-app-model/contracts.md` section 4.3: the chat row's key, title, status, create, delete, stop, and start columns.
 - `docs/system/blueprint/workspace-app-model/plan-workspace-app-model.md` section 7.4.
 - `system/apps/chat/README.md`.
-- The minds repo's `apps/minds/docs/workspace/glossary.md` "chat agent" entry, and the mngr-side changes note in `docs/system/blueprint/workspace-app-model/mngr_side_changes.md`.
+- The minds repo's `apps/minds/docs/workspace/glossary.md` "chat agent" entry (rewritten for the local-settings account model since this plan was drafted, but still "one per chat tab"), and the mngr-side changes note in `docs/system/blueprint/workspace-app-model/mngr_side_changes.md`.
+- `system/apps/chat/README.md`'s provider-accounts section, which now also describes `.mngr/settings.local.toml` and the auto-open reactor; both paragraphs are agent-keyed today.
