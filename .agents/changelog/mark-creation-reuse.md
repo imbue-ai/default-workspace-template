@@ -10,3 +10,8 @@
   out the template's five when asserting what a shared manifest refreshes, so
   the file failed in any workspace where the user had built an app. The
   assertion now reads the same set it derives.
+
+- The milestone path in `lead-proxy.md` now says the lead does the tab refresh
+  itself, and that the worker's report body is written for the lead rather than
+  for the user. The same point already landed on the `done` path in
+  `launch-task`; the milestone message never got it.
