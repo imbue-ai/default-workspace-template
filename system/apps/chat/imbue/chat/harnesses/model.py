@@ -20,6 +20,7 @@ AgentManager owns one per tracked agent, built from the agent's harness, and cal
 it instead of branching on the harness name.
 """
 
+import re
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Callable
@@ -30,6 +31,8 @@ from typing import Any
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.utils.file_utils import read_json_dict
+
+_EMBEDDED_EFFORT_RE: re.Pattern[str] = re.compile(r" \((low|medium|high)\)$", re.IGNORECASE)
 
 
 def parse_effort_level(value: Any) -> str | None:
@@ -135,9 +138,7 @@ class SwitchMode(StrEnum):
     ON_CHANGE = "on_change"
     # Display-only: the bar REFLECTS the harness's model and cannot drive it. The frontend
     # renders the slots non-interactive (a readonly trigger + "use the agent terminal"
-    # tooltip) and never opens a picker. antigravity uses it: agy's `/model` is an
-    # interactive TUI picker with no scriptable one-shot form, and its `--model` flag applies
-    # only at launch, so there is no mid-session switch to offer.
+    # tooltip) and never opens a picker.
     READ_ONLY = "read_only"
 
 
@@ -217,11 +218,11 @@ def read_model_identity(state_path: Path) -> ModelIdentity | None:
     model = data.get("model")
     if not isinstance(model, str) or not model:
         return None
-    return ModelIdentity(
-        model_id=model,
-        effort=parse_effort_level(data.get("effort")),
-        fast=data.get("fast") is True,
-    )
+    effort = parse_effort_level(data.get("effort"))
+    if effort is None:
+        embedded_effort = _EMBEDDED_EFFORT_RE.search(model)
+        effort = embedded_effort.group(1).lower() if embedded_effort else None
+    return ModelIdentity(model_id=model, effort=effort, fast=data.get("fast") is True)
 
 
 def match_option(identity: ModelIdentity, options: tuple[ModelOption, ...]) -> ModelOption | None:
