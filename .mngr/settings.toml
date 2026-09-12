@@ -12,9 +12,19 @@ agent_ready_timeout = 45.0
 
 # --- Command defaults ---
 
-# Default create command settings -- apply to all mngr create from this repo
+# Default create command settings -- apply to all mngr create from this repo.
+#
+# No default `type` here, on purpose. The agent type a create resolves to when it
+# names none -- and the provider account it runs on -- come from the git-ignored
+# `.mngr/settings.local.toml`, which the chat app writes from the account store
+# (system/apps/chat/imbue/chat/create_defaults.py): the pinned default account,
+# else the most recently used one, as `type` plus its binding (`env__extend` for
+# claude, an `extra_provision_command__extend` credential link for the others)
+# plus an `account=<id>` label. That file is the one place a workspace's default
+# harness lives, so a create with no account fails rather than launching a claude
+# that cannot take a turn; see [pre_command_scripts] below for the message it fails
+# with. Every creator that wants a specific harness says so with `--type`.
 [commands.create]
-type = "claude"
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
@@ -85,6 +95,27 @@ worktree_base_folder = "/home/user/worktrees/"
 # safe even on installs that don't include the proxy plugin at all.
 disable_plugin__extend = ["recursive", "ttyd", "claude_subagent_proxy"]
 yes = true
+
+# Runs before every `mngr create` from this project root. Inside the workspace,
+# with no provider account signed in, there is no settings.local.toml naming a
+# default type, and mngr's own refusal ("No agent type provided", with a hint to
+# set one in config) sends the user after the wrong fix; the script refuses with
+# "sign in first" instead. It gates on the create's project root being the work
+# dir of the agent running it, so the create of the workspace itself -- run on the
+# user's machine from a clone of this template that is nobody's work dir -- is
+# never refused. The shell test in front spares a plain user shell the python3
+# (macOS's stub would prompt to install the Command Line Tools), but not an mngr
+# agent on that machine, which has MNGR_AGENT_ID like any other; see the script's
+# docstring for what that means when working on this repo from a Mac.
+[pre_command_scripts]
+create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_account.py"]
+
+# A worker's worktree carries no settings.local.toml of its own (the file is
+# git-ignored), so a create run from inside one -- a worker launching a worker --
+# would name no type and no account. Sharing the workspace's copy by symlink keeps
+# every checkout of the workspace on the same default account.
+[work_dir_extra_paths]
+".mngr/settings.local.toml" = "SHARE"
 
 # --- Agent types ---
 
@@ -175,13 +206,12 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
 version = "2.1.269"
-# Do not provision a per-agent Claude config dir: every claude in the workspace
-# shares one config dir so auth, plugins, marketplaces, and sessions are
-# configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
-# everywhere (no agent env, no host env), so every claude -- mngr-launched
-# agents and a bare `claude` in a workspace terminal alike -- resolves claude's
-# own default: ~/.claude for the config dir and ~/.claude.json for the global
-# config beside it.
+# Do not provision a per-agent Claude config dir. A claude is bound to a
+# provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
+# account's folder under ~/.minds/accounts (the chat app's own creates, and the
+# [commands.create] env default in .mngr/settings.local.toml for every other
+# create), so auth and sessions live per account; nothing sets the variable in
+# the host env, and ~/.claude holds no credential.
 isolate_local_config_dir = false
 # Claude-only instructions, appended to every claude agent's system prompt.
 append_system_prompt__extend = ["""# Claude-specific instructions
@@ -204,8 +234,9 @@ Use your built-in memory system. Your memory directory is `data/memories/` (conf
 # Because it is not a claude agent, mngr does no claude provisioning for it --
 # in particular it gets no per-agent CLAUDE_CONFIG_DIR in its env, so
 # supervisord services (and any `mngr create` they run) inherit an environment
-# with the var unset and every claude in the workspace lands on the shared
-# ~/.claude (see [agent_types.claude] above). Nothing from the invoking user's
+# with the var unset, and a create they run binds through the workspace's
+# create defaults in .mngr/settings.local.toml (see [commands.create] above)
+# rather than through anything inherited. Nothing from the invoking user's
 # ~/.claude/ or ~/.mngr/ leaks into the workspace: the repo at the requested
 # git ref is the canonical workspace definition, and command agents sync no
 # user-local claude state at all.
