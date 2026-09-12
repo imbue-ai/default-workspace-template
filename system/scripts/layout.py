@@ -29,8 +29,9 @@ Subcommands:
 
 Every instance is named by one *address* (contracts.md section 1):
 
-- ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its agent id
-  (``app:chat?instance=agent-...``), a terminal by its tmux session name
+- ``app:<name>?instance=<key>`` -- one instance of an app: a chat by its chat id
+  (``app:chat?instance=agent-...``, the id of its first agent), a terminal by its tmux
+  session name
   (``app:terminal?instance=terminal-3``), a browser by its name.
 - ``app:<name>`` -- a single-instance app's one tab (an app built without instances, say
   ``app:docs``), or, as an ``open`` / ``split`` target, "a fresh instance of this app" for an
