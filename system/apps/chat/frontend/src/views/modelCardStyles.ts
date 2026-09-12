@@ -16,9 +16,11 @@
 
 import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
 
-/** Wide enough to aim the effort thumb at: the slider needs the room, and the rows read as a
- *  spec sheet rather than a cramped list. */
-export const CARD_WIDTH = 340;
+/** The card and its flyouts are one width. The card was 40px wider, for the effort slider's
+ *  travel -- which turned out not to depend on it: the slider is a fixed 128px, so the extra
+ *  width went to the row values, and a flyout narrower than the card it slides out of reads as
+ *  a mistake at the seam where they meet. */
+export const CARD_WIDTH = 300;
 export const FLYOUT_WIDTH = 300;
 /** macOS submenu geometry: the flyout tucks UNDER the card's edge rather than sitting beside
  *  it. 5px, because that is where the opening ROW ends -- the card's 1px border plus the 4px
