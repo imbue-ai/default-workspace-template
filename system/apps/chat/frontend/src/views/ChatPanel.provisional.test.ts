@@ -68,7 +68,7 @@ vi.mock("./transcript-scroll-engine", () => ({
 // (a factory is hoisted, so it cannot share one constant).
 vi.mock("./TranscriptScrollbar", () => ({ TranscriptScrollbar: { view: () => null } }));
 vi.mock("./MessageInput", () => ({ MessageInput: { view: () => null } }));
-vi.mock("./ModelBar", () => ({ ModelBar: { view: () => null } }));
+vi.mock("./ModelProviderMenu", () => ({ ModelProviderMenu: { view: () => null } }));
 vi.mock("./AgentTerminalPanel", () => ({ AgentTerminalPanel: { view: () => null } }));
 vi.mock("./ActivityIndicator", () => ({ ActivityIndicator: { view: () => null } }));
 vi.mock("./TerminalViewToggle", () => ({ TerminalViewToggle: { view: () => null } }));

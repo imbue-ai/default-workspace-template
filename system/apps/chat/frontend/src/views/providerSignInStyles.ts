@@ -17,8 +17,6 @@
  * if it does not, add it there rather than here.
  */
 
-import { menuCardClass } from "@imbue/workspace-ui/src/components/menu";
-
 /** The workspace's modal-card chrome (see MODAL_CARD_CLASS in components/Modal.ts) minus its
  *  fixed width and padding -- the panel carries the width and pads its own regions. */
 export const MODAL =
@@ -160,36 +158,5 @@ export const STATUS_MARK = "mt-3 flex items-center justify-center gap-2 type-hel
 export const ACCOUNT_ROW =
   "flex w-full items-center gap-2 rounded-lg border border-default bg-surface p-3 text-left shadow-raised";
 
-// --- The API-key screen's provider dropdown ------------------------------------------------
-
-/** The field-shaped trigger. Sized and framed like the key input beside it (see
- *  `inputClass`), since the two read as one form. */
-export const PICKER_TRIGGER =
-  "flex w-full items-center justify-between gap-2 rounded-md border border-default bg-surface " +
-  "px-3 py-2 text-left type-body transition-[border-color] duration-(--dur-base) " +
-  "hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 " +
-  "focus-visible:outline-accent cursor-pointer";
-export const PICKER_TRIGGER_VALUE = "flex min-w-0 items-baseline gap-2";
-export const PICKER_TRIGGER_NAME = "truncate text-primary";
-export const PICKER_TRIGGER_ENV = "shrink-0 font-mono type-helper text-faint";
-export const PICKER_TRIGGER_EMPTY = "text-faint";
-export const PICKER_CARET = "shrink-0 text-faint transition-transform";
-export const PICKER_CARET_OPEN = "rotate-180";
-
-/** Swallows the outside click that closes the menu, so it never reaches the modal beneath.
- *  Both live inside the overlay's stacking context, so the dropdown layer only has to clear
- *  the panel; the menu paints over its own backdrop by DOM order. */
-export const PICKER_BACKDROP = "fixed inset-0 z-(--z-dropdown) cursor-default";
-/** Pinned under the trigger, wearing the shared floating-menu chrome. The panel is
- *  overflow-hidden, so an in-panel popover would be clipped -- hence the portal. */
-export const PICKER_MENU = menuCardClass("fixed max-h-[280px] overflow-y-auto overscroll-contain");
-/** The shared menu row shape (menuRowClass), minus its hover: the active row keeps its steady
- *  accent fill, so only the idle variant hovers. `mx-1 w-[calc(100%-0.5rem)] rounded px-2` is
- *  that recipe's inset highlight slab; the reasoning for each part lives with it. */
-export const PICKER_OPTION =
-  "flex h-8 cursor-pointer items-center justify-between gap-3 mx-1 w-[calc(100%-0.5rem)] rounded px-2 text-left " +
-  "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
-export const PICKER_OPTION_IDLE = "hover:bg-fill-hover";
-export const PICKER_OPTION_ACTIVE = "bg-accent-light";
-export const PICKER_OPTION_NAME = "truncate type-body";
-export const PICKER_OPTION_NAME_ACTIVE = "truncate type-body text-accent";
+// The API-key screen's provider picker is the workspace's `Dropdown` (components/dropdown):
+// its trigger, sheet, list and rows are the dropdown's own.

@@ -46,7 +46,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
@@ -819,7 +819,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
                   },
                   [
-                    m(ModelBar, { agentId }),
+                    m(ModelProviderMenu, { agentId }),
                     // The terminal back face attaches to the agent's own tmux session, which
                     // a chat still being created does not have: without a name the terminal
                     // dispatch attaches to whatever session it finds, so the flip waits for

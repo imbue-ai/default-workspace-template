@@ -155,6 +155,10 @@ export interface ActionRow extends MenuRowBase {
   extraClass?: string;
   /** The box the icon sits in, when the default 16px square is the wrong size for the glyph. */
   iconBoxClass?: string;
+  /** Leave the menu up after the pick, for an action that reports back into the menu -- one
+   *  whose failure is shown as a line under the rows. The default is to close: a pick is a
+   *  pick. */
+  keepsOpen?: boolean;
   onSelect: () => void;
 }
 
@@ -328,6 +332,9 @@ export interface Menu {
   open(anchor: MenuAnchor): void;
   close(): void;
   toggle(anchor: MenuAnchor): void;
+  /** Close the open submenu and leave the menu up: for a pick inside a submenu that is done
+   *  but leaves the menu with something still worth adjusting. */
+  closeSubmenu(): void;
   /** Close, and drop every listener and timer. Call from the owning component's `onremove`:
    *  a menu still open when its owner unmounts would otherwise keep its Escape listener on the
    *  window for good. */
@@ -580,7 +587,7 @@ export function createMenu(options: MenuOptions): Menu {
           event.stopPropagation();
           if (isDisabled) return;
           row.onSelect();
-          close();
+          if (row.keepsOpen !== true) close();
         },
       },
       [
@@ -826,6 +833,12 @@ export function createMenu(options: MenuOptions): Menu {
     open,
     close,
     toggle,
+    closeSubmenu(): void {
+      cancelHoverIntent();
+      cancelStackLeave();
+      setSubmenu(null);
+      redraw();
+    },
     dispose(): void {
       close();
       // A hover still counting down, or a submenu still on its way out, would otherwise fire

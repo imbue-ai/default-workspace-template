@@ -94,6 +94,15 @@ describe("a menu", () => {
     expect(menu.isOpen()).toBe(true);
   });
 
+  it("leaves the menu up after an action that asks it to", () => {
+    const picked = vi.fn();
+    rows = [{ kind: "action", key: "stay", label: "Stay", keepsOpen: true, onSelect: picked }];
+    menu.open(ANCHOR);
+    row("stay").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(picked).toHaveBeenCalledTimes(1);
+    expect(menu.isOpen()).toBe(true);
+  });
+
   it("toggles a check row without closing", () => {
     const toggled = vi.fn();
     rows = [{ kind: "check", key: "shown", label: "Shown", isChecked: false, onToggle: toggled }];
@@ -221,6 +230,15 @@ describe("a submenu", () => {
     row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(part("submenu")).not.toBeNull();
     row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(part("submenu")).toBeNull();
+    expect(menu.isOpen()).toBe(true);
+  });
+
+  it("can be closed on its own, leaving the menu up", () => {
+    menu.open(ANCHOR);
+    row("colour").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(part("submenu")).not.toBeNull();
+    menu.closeSubmenu();
     expect(part("submenu")).toBeNull();
     expect(menu.isOpen()).toBe(true);
   });
