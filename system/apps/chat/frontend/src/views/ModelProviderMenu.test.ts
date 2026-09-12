@@ -63,6 +63,7 @@ vi.mock("../shell", () => ({
 import m from "mithril";
 
 import { ModelProviderMenu } from "./ModelProviderMenu";
+import * as css from "./modelProviderMenuStyles";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
@@ -323,6 +324,35 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
+  });
+
+  it("colours each tick for the part of the track it is drawn on", () => {
+    // A dot below the thumb sits on the fill and a dot above it on the bare track, so one
+    // colour throughout would sink into one of the two.
+    const efforts = [
+      { level: "low", in_picker: true },
+      { level: "medium", in_picker: true },
+      { level: "high", in_picker: true },
+      { level: "xhigh", in_picker: true },
+    ];
+    const model = { ...OPUS, efforts };
+    catalogState.catalog = catalogOf({ options: [model] });
+    settingsState.choice = {
+      identity: { model_id: "opus", effort: "high", fast: false },
+      matched: model,
+      pending: null,
+    };
+    render();
+    click(".model-selector-trigger");
+    const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
+    if (slider === null) throw new Error("no slider");
+    // The wrap holds the tick layer and the input; the thumb's own stop (index 2) is not drawn.
+    const ticks = [...(slider.parentElement?.firstElementChild?.children ?? [])];
+    expect(ticks.map((tick) => tick.className)).toEqual([
+      css.SLIDER_TICK_ON_FILL,
+      css.SLIDER_TICK_ON_FILL,
+      css.SLIDER_TICK_ON_TRACK,
+    ]);
   });
 
   it("asks before launching a new chat on another provider, and launches only on Launch", () => {

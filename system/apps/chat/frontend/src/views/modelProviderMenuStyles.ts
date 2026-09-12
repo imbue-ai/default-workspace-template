@@ -72,8 +72,12 @@ export const SLIDER_TICKS = "pointer-events-none absolute inset-x-1.5 top-1/2 z-
  *
  *  The dot under the thumb is not drawn at all (see `effortRow`): the ball is the mark for the
  *  level it is parked on, and a dot showing through it reads as a second, smaller mark. */
-export const SLIDER_TICK =
-  "absolute top-0 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/75";
+const SLIDER_TICK_SHAPE = "absolute top-0 h-[2px] w-[2px] -translate-x-1/2 -translate-y-1/2 rounded-full";
+/** A dot below the thumb, over the filled part of the track: the surface colour, since what it
+ *  is drawn on is the green rather than the track. */
+export const SLIDER_TICK_ON_FILL = `${SLIDER_TICK_SHAPE} bg-surface/70`;
+/** A dot above the thumb, over the unfilled track. */
+export const SLIDER_TICK_ON_TRACK = `${SLIDER_TICK_SHAPE} bg-primary/70`;
 export const SLIDER =
   "relative h-[6px] w-full cursor-pointer appearance-none rounded-full " +
   "[&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full " +
