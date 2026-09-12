@@ -19,8 +19,8 @@ export interface RestoredScrollState {
 
 export const FOLLOW_RESTORED: RestoredScrollState = { state: FOLLOW_STATE, anchorEventIndex: null };
 
-export function scrollStateStorageKey(agentId: string): string {
-  return `transcript-scroll:${agentId}`;
+export function scrollStateStorageKey(chatId: string): string {
+  return `transcript-scroll:${chatId}`;
 }
 
 export function encodePersistedScrollState(state: ScrollPositionState, anchorEventIndex: EventIndex | null): string {

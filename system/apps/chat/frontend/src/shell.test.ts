@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
-const createChatAgent = vi.fn();
-vi.mock("./models/AgentManager", () => ({ createChatAgent }));
+const createChat = vi.fn();
+vi.mock("./models/Chats", () => ({ createChat }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -113,12 +113,12 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver(HANDSHAKE, parent);
-    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+    createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");
 
     // Started from Everything, the chat is filed in no project.
-    expect(createChatAgent).toHaveBeenCalledWith("", "account-1");
+    expect(createChat).toHaveBeenCalledWith("", "account-1");
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
   });
 
@@ -127,11 +127,11 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver({ ...HANDSHAKE, viewId: "project-7" }, parent);
-    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+    createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");
 
-    expect(createChatAgent).toHaveBeenCalledWith("project-7", "account-1");
+    expect(createChat).toHaveBeenCalledWith("project-7", "account-1");
   });
 
   it("tells the user when the create fails rather than opening nothing silently", async () => {
@@ -139,7 +139,7 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
-    createChatAgent.mockRejectedValueOnce(new Error("no usable account"));
+    createChat.mockRejectedValueOnce(new Error("no usable account"));
 
     await startChatOnAccount("account-1");
 

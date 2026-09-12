@@ -563,7 +563,7 @@ describe("expanded tool row payload states", () => {
   });
 
   it("renders the full fetched input and output once loaded", () => {
-    mockDetailState.mockImplementation((_agentId: string, eventId: string) =>
+    mockDetailState.mockImplementation((_chatId: string, eventId: string) =>
       eventId === "a-pc-1"
         ? {
             state: "loaded",

@@ -33,7 +33,7 @@ describe("the fast-mode prompt's owner", () => {
     fastModePrompt.openFastModePrompt("agent-a");
     fastModePrompt.openFastModePrompt("agent-b");
 
-    expect(fastModePrompt.getFastModePromptAgentId()).toBe("agent-a");
+    expect(fastModePrompt.getFastModePromptChatId()).toBe("agent-a");
   });
 });
 
@@ -50,7 +50,7 @@ describe("answering the fast-mode prompt", () => {
     expect(mockRequest).toHaveBeenCalledWith(
       expect.objectContaining({ method: "POST", url: "/api/agents/agent-a/fast-mode-answered" }),
     );
-    expect(fastModePrompt.getFastModePromptAgentId()).toBeNull();
+    expect(fastModePrompt.getFastModePromptChatId()).toBeNull();
     expect(fastModePrompt.isFastModePromptAnswered("agent-a", {})).toBe(true);
   });
 
@@ -76,7 +76,7 @@ describe("answering the fast-mode prompt", () => {
 
     // With the POST still in flight the agent already reads as answered, so no
     // render can raise the prompt again in the meantime.
-    expect(fastModePrompt.getFastModePromptAgentId()).toBeNull();
+    expect(fastModePrompt.getFastModePromptChatId()).toBeNull();
     expect(fastModePrompt.isFastModePromptAnswered("agent-a", {})).toBe(true);
   });
 

@@ -1,9 +1,9 @@
 /**
  * Agent discovery -- compatibility layer.
- * Delegates to AgentManager for state, kept for plugin/hook backward compatibility.
+ * Delegates to the chats model for state, kept for plugin/hook backward compatibility.
  */
 
-import { getAgents as getAgentManagerAgents, type AgentState } from "./AgentManager";
+import { getChats as getListedChats, type ChatSnapshot } from "./Chats";
 
 export interface Agent {
   id: string;
@@ -19,12 +19,12 @@ export interface Conversation {
   latest_response_datetime_utc: string | null;
 }
 
-function toAgent(a: AgentState): Agent {
+function toAgent(a: ChatSnapshot): Agent {
   return { id: a.id, name: a.name, state: a.state };
 }
 
 export function getAgents(): Agent[] {
-  return getAgentManagerAgents().map(toAgent);
+  return getListedChats().map(toAgent);
 }
 
 export function getAgentsLoaded(): boolean {
@@ -36,12 +36,12 @@ export function getLoadingError(): string | null {
 }
 
 export async function fetchAgents(): Promise<void> {
-  // No-op: agent state comes from the WebSocket via AgentManager
+  // No-op: agent state comes from the WebSocket via the chats model
 }
 
 // Compatibility shim for hooks/slots that expect conversations
 export function getConversations(): Conversation[] {
-  return getAgentManagerAgents().map((a) => ({
+  return getListedChats().map((a) => ({
     id: a.id,
     name: a.name,
     model: a.state,

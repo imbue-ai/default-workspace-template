@@ -11,8 +11,8 @@
 
 import m from "mithril";
 import { MODAL_MESSAGE_CLASS, MODAL_TITLE_CLASS, Modal } from "@imbue/workspace-ui/src/components/Modal";
-import { getAgentById } from "../models/AgentManager";
-import { getFastModePromptAgentId, resolveFastModePrompt } from "../models/FastModePrompt";
+import { getChatById } from "../models/Chats";
+import { getFastModePromptChatId, resolveFastModePrompt } from "../models/FastModePrompt";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { BTN_SELECTED, Button } from "@imbue/workspace-ui/src/components/Button";
 
@@ -20,11 +20,11 @@ const FAST_MODE_DOC_URL = "https://code.claude.com/docs/en/fast-mode";
 
 /** The name of the agent that raised the prompt, for the modal copy. */
 function promptingAgentName(): string | null {
-  const agentId = getFastModePromptAgentId();
-  if (agentId === null) {
+  const chatId = getFastModePromptChatId();
+  if (chatId === null) {
     return null;
   }
-  return getAgentById(agentId)?.name ?? null;
+  return getChatById(chatId)?.name ?? null;
 }
 
 export function FastModeModal(): m.Component {

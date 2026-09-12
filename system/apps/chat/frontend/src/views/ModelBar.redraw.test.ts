@@ -20,7 +20,7 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
@@ -127,7 +127,7 @@ beforeEach(() => {
   // MOUNTED, not rendered: this is what gives handlers in the main tree their auto-redraw,
   // and what the portal has to reproduce for the handlers inside it.
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(ModelBar as never, { agentId: "a1" }),
+    view: () => m(ModelBar as never, { chatId: "a1" }),
   });
 });
 

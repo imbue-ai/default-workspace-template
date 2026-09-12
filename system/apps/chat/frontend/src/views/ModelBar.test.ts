@@ -18,8 +18,8 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({
-  getAgentById: () => agentState.agent,
+vi.mock("../models/Chats", () => ({
+  getChatById: () => agentState.agent,
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -67,7 +67,7 @@ import { ModelBar } from "./ModelBar";
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
-  m.render(ROOT(), m(ModelBar as never, { agentId: "a1" }));
+  m.render(ROOT(), m(ModelBar as never, { chatId: "a1" }));
 }
 
 /** Everything on screen, card and flyout included -- both portal out of the component. */

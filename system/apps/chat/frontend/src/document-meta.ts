@@ -5,7 +5,7 @@
  */
 
 /** The chat the chat document shows. */
-export function getChatAgentId(): string {
+export function getChatId(): string {
   return document.querySelector('meta[name="system-interface-chat-agent-id"]')?.getAttribute("content") ?? "";
 }
 

@@ -3,7 +3,7 @@
  * agent is mid-turn, under a subtle header row.
  *
  * The frontend is dumb here -- it renders a full snapshot the backend pushes on
- * the agents WebSocket (``AgentState.queued_messages``) and holds no queued state
+ * the agents WebSocket (``ChatSnapshot.queued_messages``) and holds no queued state
  * of its own. The only action on the group is [Shoulder tap]: it fires ONE
  * harness-agnostic intent (`POST /shoulder-tap-atomic`, which the backend dispatches
  * per harness) and paints nothing locally -- the next backend queue snapshot and the
@@ -23,8 +23,8 @@
  */
 
 import m from "mithril";
-import { getQueuedMessagesForAgent, getShoulderTapAvailableForAgent } from "../models/AgentManager";
-import type { QueuedMessage } from "../models/AgentManager";
+import { getQueuedMessagesForChat, getShoulderTapAvailableForChat } from "../models/Chats";
+import type { QueuedMessage } from "../models/Chats";
 import { shoulderTap } from "../models/Response";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { prependToComposer, raiseFailureNotice } from "./MessageInput";
@@ -39,40 +39,40 @@ const QUEUED_INFO_TOOLTIP = "Messages below are sent when your agent takes a bre
 // Agents with the shoulder-tap request in flight. While it runs the button is greyed and
 // the click gate refuses, so it cannot double-fire; cleared when the request settles. This is the ONLY thing the
 // frontend tracks here -- whether the tap is otherwise available is the backend's flag.
-const inFlightAgentIds = new Set<string>();
+const inFlightChatIds = new Set<string>();
 
-async function shoulderTapQueuedMessages(agentId: string): Promise<void> {
+async function shoulderTapQueuedMessages(chatId: string): Promise<void> {
   // Never fire while our own tap is already running or the backend reports the tap
   // unavailable. The greyed button is aria-disabled (see the render site for why), so
   // clicks still arrive -- this synchronous check is the real gate, and it also
   // covers a click racing a redraw.
-  if (inFlightAgentIds.has(agentId) || !getShoulderTapAvailableForAgent(agentId)) {
+  if (inFlightChatIds.has(chatId) || !getShoulderTapAvailableForChat(chatId)) {
     return;
   }
-  inFlightAgentIds.add(agentId);
+  inFlightChatIds.add(chatId);
   m.redraw();
   try {
     // One harness-agnostic call; the backend dispatches per harness. The frontend paints nothing
     // local: the next backend queue snapshot and the committed turn reflect the result. The one
     // exception is a non-empty ``block`` -- a native tap whose combined resend failed to submit hands
     // the parked text back for the composer (like Stop), so it is never swallowed (contract A1a).
-    const { block } = await shoulderTap(agentId);
-    prependToComposer(agentId, block);
+    const { block } = await shoulderTap(chatId);
+    prependToComposer(chatId, block);
   } catch (err) {
     const detail = describeRequestError(err);
-    console.error(`Failed to send queued messages for agent ${agentId}: ${detail}`);
+    console.error(`Failed to send queued messages for agent ${chatId}: ${detail}`);
     // Hand the failure to the composer's notice rather than putting up a system alert. One shape
     // of failure gets one shape of answer, whichever button started it -- and Retry here means
     // "flush the queue again", which is exactly what the user clicked in the first place.
-    raiseFailureNotice(agentId, {
+    raiseFailureNotice(chatId, {
       title: "Couldn't send the queued messages",
       detail,
       kind: describeRequestErrorKind(err),
       // The finally below has already cleared the in-flight marker by the time this can run.
-      retry: () => shoulderTapQueuedMessages(agentId),
+      retry: () => shoulderTapQueuedMessages(chatId),
     });
   } finally {
-    inFlightAgentIds.delete(agentId);
+    inFlightChatIds.delete(chatId);
     m.redraw();
   }
 }
@@ -112,8 +112,8 @@ function renderQueuedBubble(queued: QueuedMessage): m.Vnode {
  * the queued bubbles follow below. The group is a live mirror of the backend
  * snapshot -- it is never held or reconstructed on the frontend.
  */
-export function renderQueuedMessages(agentId: string): m.Vnode[] {
-  const queued = getQueuedMessagesForAgent(agentId);
+export function renderQueuedMessages(chatId: string): m.Vnode[] {
+  const queued = getQueuedMessagesForChat(chatId);
   if (queued.length === 0) {
     return [];
   }
@@ -135,8 +135,8 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
   // and the tooltip matters most exactly while the button is greyed; the click
   // handler re-checks this condition synchronously, so it can never be pressed into
   // a refusal/error.
-  const isInFlight = inFlightAgentIds.has(agentId);
-  const isDisabled = isInFlight || !getShoulderTapAvailableForAgent(agentId);
+  const isInFlight = inFlightChatIds.has(chatId);
+  const isDisabled = isInFlight || !getShoulderTapAvailableForChat(chatId);
 
   // Header row spanning the message column's left..right bounds: the label (plus
   // its (i) info icon) left-aligned and allowed to shrink/ellipsize, the
@@ -173,7 +173,7 @@ export function renderQueuedMessages(agentId: string): m.Vnode[] {
         ...(isDisabled ? { "aria-disabled": "true" } : {}),
         ...hoverTooltipAttrs(SHOULDER_TAP_TOOLTIP),
         "aria-label": SHOULDER_TAP_TOOLTIP,
-        onclick: () => shoulderTapQueuedMessages(agentId),
+        onclick: () => shoulderTapQueuedMessages(chatId),
       },
       "Shoulder tap",
     ),

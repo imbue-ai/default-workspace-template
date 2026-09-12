@@ -19,7 +19,7 @@ import {
   fetchForwardEvents,
   fetchWindowAtOffset,
   getConversationLoadState,
-  getEventsForAgent,
+  getEventsForChat,
   getEventCount,
   getFirstOffset,
   getRenderVersion,
@@ -32,13 +32,13 @@ import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
 import {
-  addAgentsUpdatedListener,
-  getAgentById,
-  getProtoAgent,
+  addChatsUpdatedListener,
+  getChatById,
+  getProvisionalChat,
   launchChat,
-  removeAgentsUpdatedListener,
-} from "../models/AgentManager";
-import type { ProtoAgent } from "../models/AgentManager";
+  removeChatsUpdatedListener,
+} from "../models/Chats";
+import type { ProvisionalChat } from "../models/Chats";
 import { areAccountsLoaded, closeProviderChooser, getSelectedAccount, openProviderChooser } from "../models/Providers";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { maybePromptForFastMode } from "./fast-mode-prompt";
@@ -50,7 +50,7 @@ import { ModelBar } from "./ModelBar";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
-import { buildAgentTerminalUrl, getTerminalUrl } from "../models/AgentManager";
+import { buildAgentTerminalUrl, getTerminalUrl } from "../models/Chats";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
@@ -68,14 +68,14 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 const TERMINAL_OUTPUT_CLASS =
   "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
 
-function getAgentTerminalUrl(agentId: string): string {
+function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
   // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
   // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
   // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
   // When the agent isn't in the local cache yet, fall back to the bare
   // base URL and let agent.sh attach to the ambient session.
-  const agent = getAgentById(agentId);
+  const agent = getChatById(chatId);
   if (!agent?.name) {
     const baseUrl = getTerminalUrl();
     const separator = baseUrl.includes("?") ? "&" : "?";
@@ -88,22 +88,22 @@ function getAgentTerminalUrl(agentId: string): string {
  *  as one. The proto list is rebuilt from pushes and can still name an agent that has since
  *  registered (a `proto_agent_created` for a finished creation, delivered late), so the agent
  *  list wins: every branch asks this, so none can show a registered chat as provisional. */
-function provisionalRecord(agentId: string): ProtoAgent | null {
-  const proto = getProtoAgent(agentId);
-  return proto !== undefined && getAgentById(agentId) === undefined ? proto : null;
+function provisionalRecord(chatId: string): ProvisionalChat | null {
+  const proto = getProvisionalChat(chatId);
+  return proto !== undefined && getChatById(chatId) === undefined ? proto : null;
 }
 
 /** Whether the page has a composer: for a chat the app lists, one whose create is in flight (a
  *  message typed now is held until it lands), or one whose create failed (the held message is
  *  returned to the composer with the reason, and a send there is refused with it). Only a chat
  *  still waiting for an account has nothing to type into. */
-function hasComposer(agentId: string): boolean {
-  const proto = provisionalRecord(agentId);
+function hasComposer(chatId: string): boolean {
+  const proto = provisionalRecord(chatId);
   return proto === null || proto.phase !== "awaiting_account";
 }
 
-export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean }> {
-  let currentAgentId: string | null = null;
+export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }> {
+  let currentChatId: string | null = null;
 
   // Whether the page's frame is on screen. The shell keeps a hidden tab's frame mounted
   // and mithril redraws globally, so the component keeps running while hidden against an
@@ -128,32 +128,32 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     isVisible: () => panelVisible,
     dataSource: {
       getRows: () => cachedRows,
-      getWindowEventIds: () => getEventsForAgent(currentAgentId ?? "").map((event) => event.event_id),
-      getFirstOffset: () => getFirstOffset(currentAgentId ?? ""),
+      getWindowEventIds: () => getEventsForChat(currentChatId ?? "").map((event) => event.event_id),
+      getFirstOffset: () => getFirstOffset(currentChatId ?? ""),
       // Null until the first window has been placed (renderVersion bumps on
       // placement, including for an empty transcript), so the engine's fill
       // planner never races the initial snapshot+stream load.
       getTotalEvents: () => {
-        const agentId = currentAgentId ?? "";
-        return getRenderVersion(agentId) > 0 ? getTotalEventCount(agentId) : null;
+        const chatId = currentChatId ?? "";
+        return getRenderVersion(chatId) > 0 ? getTotalEventCount(chatId) : null;
       },
-      getRenderVersion: () => getRenderVersion(currentAgentId ?? ""),
+      getRenderVersion: () => getRenderVersion(currentChatId ?? ""),
       executeFill: (action: FillAction): Promise<void> => {
-        const agentId = currentAgentId;
-        if (agentId === null) {
+        const chatId = currentChatId;
+        if (chatId === null) {
           return Promise.resolve();
         }
         switch (action.kind) {
           case "fetch-tail":
-            return fetchEvents(agentId).then(() => {});
+            return fetchEvents(chatId).then(() => {});
           case "fetch-before":
-            return fetchBackfillEvents(agentId, action.limit);
+            return fetchBackfillEvents(chatId, action.limit);
           case "fetch-after":
-            return fetchForwardEvents(agentId, action.limit);
+            return fetchForwardEvents(chatId, action.limit);
           case "fetch-at-offset":
-            return fetchWindowAtOffset(agentId, action.offset, action.limit);
+            return fetchWindowAtOffset(chatId, action.offset, action.limit);
           case "evict":
-            evictEvents(agentId, action.side, action.count);
+            evictEvents(chatId, action.side, action.count);
             return Promise.resolve();
           case "idle":
             return Promise.resolve();
@@ -212,7 +212,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  function handleDrop(event: DragEvent, agentId: string): void {
+  function handleDrop(event: DragEvent, chatId: string): void {
     dragDepth = 0;
     const wasActive = isFileDragActive;
     isFileDragActive = false;
@@ -223,7 +223,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       return;
     }
     event.preventDefault();
-    uploadFilesToComposer(agentId, event.dataTransfer?.files);
+    uploadFilesToComposer(chatId, event.dataTransfer?.files);
     m.redraw();
   }
 
@@ -239,7 +239,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // the *result* -- as an unset `screenContent` was -- feeds itself: each empty
   // result triggers the redraw that issues the next request, which is an
   // unbounded request loop rather than the one-shot capture the view wants.
-  let screenAttemptedAgentId: string | null = null;
+  let screenAttemptedChatId: string | null = null;
 
   // A launch of this provisional chat (the chooser's sign-in, or Try again) in flight, and
   // how the last one was refused.
@@ -252,19 +252,19 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   // the page starts on its own initiative is never repeated for it.
   let launchedFor: string | null = null;
 
-  async function fetchScreenCapture(agentId: string): Promise<void> {
-    if (screenAttemptedAgentId === agentId) {
+  async function fetchScreenCapture(chatId: string): Promise<void> {
+    if (screenAttemptedChatId === chatId) {
       return;
     }
-    screenAttemptedAgentId = agentId;
+    screenAttemptedChatId = chatId;
     screenLoading = true;
     screenContent = null;
     screenError = null;
     try {
       const result = await m.request<{ screen: string | null; error?: string }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/screen"),
-        params: { agentId, scrollback: "true" },
+        url: apiUrl("/api/agents/:chatId/screen"),
+        params: { chatId, scrollback: "true" },
       });
       screenContent = result.screen;
       screenError = result.error ?? null;
@@ -276,12 +276,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     }
   }
 
-  function launch(agentId: string, accountId: string): void {
+  function launch(chatId: string, accountId: string): void {
     if (launchInFlight) return;
-    launchedFor = agentId;
+    launchedFor = chatId;
     launchInFlight = true;
     launchError = null;
-    launchChat(agentId, accountId)
+    launchChat(chatId, accountId)
       .catch((error: unknown) => {
         launchError = describeRequestError(error);
       })
@@ -291,15 +291,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       });
   }
 
-  function offerProviderChooser(agentId: string): void {
-    openProviderChooser({ onSignedIn: (accountId) => launch(agentId, accountId) });
+  function offerProviderChooser(chatId: string): void {
+    openProviderChooser({ onSignedIn: (accountId) => launch(chatId, accountId) });
   }
 
   /** The page of a chat whose create is running: an empty transcript with the composer's held
    *  "Sending" bubbles (a message typed now waits for the agent to land, see MessageInput), so
    *  the message is visibly waiting rather than gone. */
-  function renderStarting(agentId: string): m.Vnode {
-    const outgoing = renderOutgoingMessages(agentId);
+  function renderStarting(chatId: string): m.Vnode {
+    const outgoing = renderOutgoingMessages(chatId);
     return m("div", { class: "message-list-creating flex flex-col h-full" }, [
       m(
         "div",
@@ -311,13 +311,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
-  function renderProvisional(agentId: string, proto: ProtoAgent): m.Vnode {
+  function renderProvisional(chatId: string, proto: ProvisionalChat): m.Vnode {
     if (proto.phase === "creating") {
       // The create is running, whoever started it: a refusal this page recorded while the
       // chat waited (another page's launch won the race) is over, and must not be shown
       // under a later failure's own reason.
       launchError = null;
-      return renderStarting(agentId);
+      return renderStarting(chatId);
     }
     if (proto.phase === "awaiting_account") {
       // The account list decides between launching and offering the chooser, so neither
@@ -338,22 +338,22 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // A launch this page started (on the selected account, or through the chooser) that is
       // in flight or waiting for the push that moves the record to the creating phase: the
       // page is starting the chat, not asking for a sign-in.
-      const isLaunching = launchInFlight || (launchedFor === agentId && launchError === null);
+      const isLaunching = launchInFlight || (launchedFor === chatId && launchError === null);
       if (account !== null && !isLaunching && launchError === null) {
         closeProviderChooser();
-        launch(agentId, account.id);
-        return renderStarting(agentId);
+        launch(chatId, account.id);
+        return renderStarting(chatId);
       }
       if (isLaunching) {
-        return renderStarting(agentId);
+        return renderStarting(chatId);
       }
-      if (account === null && chooserOfferedFor !== agentId) {
+      if (account === null && chooserOfferedFor !== chatId) {
         // Offered once per chat, on the page's first render of this phase: the user may
         // dismiss it and come back through the button. With an account signed in the page
         // launched on it instead, and a refusal is shown here with a retry on that account
         // rather than a chooser over it.
-        chooserOfferedFor = agentId;
-        offerProviderChooser(agentId);
+        chooserOfferedFor = chatId;
+        offerProviderChooser(chatId);
       }
       return m(
         "div",
@@ -368,7 +368,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                   {
                     variant: "primary",
                     extra: "message-list-launch-retry",
-                    onclick: () => launch(agentId, account.id),
+                    onclick: () => launch(chatId, account.id),
                   },
                   "Try again",
                 )
@@ -377,7 +377,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               Button,
               {
                 variant: account !== null && launchError !== null ? "secondary" : "primary",
-                onclick: () => offerProviderChooser(agentId),
+                onclick: () => offerProviderChooser(chatId),
               },
               "Choose a provider",
             ),
@@ -399,7 +399,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                 variant: "primary",
                 extra: "message-list-create-retry",
                 readonly: launchInFlight,
-                onclick: () => launch(agentId, proto.account_id),
+                onclick: () => launch(chatId, proto.account_id),
               },
               launchInFlight ? "Starting…" : "Try again",
             )
@@ -408,11 +408,11 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     );
   }
 
-  async function loadAgent(agentId: string): Promise<void> {
+  async function loadChat(chatId: string): Promise<void> {
     try {
       // Buffer SSE deltas arriving during the snapshot fetch so the wholesale
       // snapshot replace in fetchEvents cannot drop a live event on first load.
-      await loadSnapshotWithStream(agentId);
+      await loadSnapshotWithStream(chatId);
     } catch (error) {
       // Where the load got to is recorded against the agent by `fetchEvents` and
       // read back in the view, so that a later attempt -- from any caller,
@@ -422,7 +422,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       // Still logged, as the paging and reconnect paths do -- an attempt that a
       // newer one has superseded is recorded nowhere at all, so the log is the
       // only trace of one that keeps losing the race.
-      console.warn(`Failed to load the transcript for agent ${agentId}`, error);
+      console.warn(`Failed to load the transcript for agent ${chatId}`, error);
     }
   }
 
@@ -438,35 +438,35 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * because a *failed* reload writes only the load state, which no redraw
    * follows on its own (a successful one repaints when it places the window).
    */
-  function reloadAfterFailure(agentId: string): void {
+  function reloadAfterFailure(chatId: string): void {
     if (reloadInFlight) {
       return;
     }
     reloadInFlight = true;
-    loadAgent(agentId).finally(() => {
+    loadChat(chatId).finally(() => {
       reloadInFlight = false;
       m.redraw();
     });
   }
 
-  function manageStreamConnection(agentId: string): void {
-    if (!isConversationNotFound(agentId)) {
-      connectToStream(agentId);
+  function manageStreamConnection(chatId: string): void {
+    if (!isConversationNotFound(chatId)) {
+      connectToStream(chatId);
     } else {
-      disconnectFromStream(agentId);
+      disconnectFromStream(chatId);
     }
   }
 
-  function ensureAgentLoaded(agentId: string): void {
-    if (agentId === currentAgentId) {
+  function ensureChatLoaded(chatId: string): void {
+    if (chatId === currentChatId) {
       return;
     }
 
-    currentAgentId = agentId;
+    currentChatId = chatId;
     // Resets all scroll state and loads this agent's persisted position (which
     // then steers the engine's fill toward it once the snapshot lands).
-    engine.setAgent(agentId);
-    loadAgent(agentId);
+    engine.setChat(chatId);
+    loadChat(chatId);
   }
 
   // A retry of the snapshot that 404'd is outstanding; only one at a time.
@@ -480,46 +480,46 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
    * returns 201 as soon as the background `mngr create` starts, and the agent is
    * only registered when that finishes, so the panel's first fetch races ahead
    * of it. `fetchEvents` latches the miss and only ever clears it on its own next
-   * call, which `ensureAgentLoaded` never makes for an agent it has already
+   * call, which `ensureChatLoaded` never makes for an agent it has already
    * loaded -- so without this the panel sits on "No conversation data" until the
    * page is reloaded.
    *
    * The trigger is the `agents_updated` snapshot rather than a retry timer, and
    * it cannot spin: `/events` resolves the agent through the same
-   * `AgentManager._agents` that feeds `agents_updated`, so the agent being named
+   * `AgentManager` list that feeds `agents_updated`, so the agent being named
    * here is exactly the condition under which the refetch stops 404ing.
    */
-  function retryAfterAgentResolved(): void {
-    const agentId = currentAgentId;
-    if (agentId === null || notFoundRetryInFlight || !isConversationNotFound(agentId)) {
+  function retryAfterChatResolved(): void {
+    const chatId = currentChatId;
+    if (chatId === null || notFoundRetryInFlight || !isConversationNotFound(chatId)) {
       return;
     }
     // Read the agent store rather than the broadcast payload, which is filtered
     // to the user-facing agents.
-    if (getAgentById(agentId) === undefined) {
+    if (getChatById(chatId) === undefined) {
       return;
     }
     notFoundRetryInFlight = true;
-    loadAgent(agentId).finally(() => {
+    loadChat(chatId).finally(() => {
       notFoundRetryInFlight = false;
       m.redraw();
     });
   }
 
-  function renderMessages(agentId: string): m.Vnode {
+  function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
-    // not-found until the agent registers, which retries it (retryAfterAgentResolved).
-    const proto = provisionalRecord(agentId);
+    // not-found until the agent registers, which retries it (retryAfterChatResolved).
+    const proto = provisionalRecord(chatId);
     if (proto !== null) {
-      return renderProvisional(agentId, proto);
+      return renderProvisional(chatId, proto);
     }
 
-    ensureAgentLoaded(agentId);
-    manageStreamConnection(agentId);
+    ensureChatLoaded(chatId);
+    manageStreamConnection(chatId);
 
-    if (isConversationNotFound(agentId)) {
-      fetchScreenCapture(agentId);
+    if (isConversationNotFound(chatId)) {
+      fetchScreenCapture(chatId);
       return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
         m("p", { class: "type-heading text-primary" }, "No conversation data"),
         m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
@@ -540,15 +540,15 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // reload firing under a fresh chat replaces that bubble with a spinner or an
     // error screen.
     const tailNodes =
-      getEventCount(agentId) === 0 ? [...renderQueuedMessages(agentId), ...renderOutgoingMessages(agentId)] : [];
-    const hasNothingToShow = getEventCount(agentId) === 0 && tailNodes.length === 0;
+      getEventCount(chatId) === 0 ? [...renderQueuedMessages(chatId), ...renderOutgoingMessages(chatId)] : [];
+    const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
     // error state as soon as any reload succeeds -- the tab's Refresh or the
-    // stream's background reconnect, neither of which goes through loadAgent.
+    // stream's background reconnect, neither of which goes through loadChat.
     // The phase, not just the error: a load that is in flight -- including a retry -- must not
     // fall through to "No events yet for this agent.", which claims an answer it does not have.
-    const load = getConversationLoadState(agentId);
+    const load = getConversationLoadState(chatId);
     if (hasNothingToShow && load.phase === "loading") {
       return m(
         "div",
@@ -560,7 +560,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     if (hasNothingToShow && load.error !== null) {
       return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
         m("p", { class: "text-danger" }, `Error: ${load.error}`),
-        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) }, "Refresh"),
+        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
       ]);
     }
 
@@ -580,13 +580,13 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
               m(
                 Button,
-                { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(agentId) },
+                { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) },
                 "Refresh",
               ),
             ],
           );
 
-    const events = getEventsForAgent(agentId);
+    const events = getEventsForChat(chatId);
 
     if (events.length === 0) {
       // No transcript yet -- but render any queued or in-flight message rather
@@ -604,7 +604,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
       ]);
     }
 
-    const agent = getAgentById(agentId);
+    const agent = getChatById(chatId);
     const agentIsIdle = agent?.activity_state === "IDLE";
 
     // The first chat starts on fast mode; once it has run its grace period, ask
@@ -626,12 +626,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
     // cached rows. The grouping (steps, decoration, skill expansions, auth-error
     // hiding) is produced by the same functions on the same inputs, so the
     // rendered structure is identical to recomputing.
-    const renderKey = `${agentId}|${getRenderVersion(agentId)}|${agentIsIdle ? 1 : 0}`;
+    const renderKey = `${chatId}|${getRenderVersion(chatId)}|${agentIsIdle ? 1 : 0}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
-      cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedRows = buildConversationRows(chatId, events, agentIsIdle);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -652,46 +652,46 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
-        ...renderQueuedMessages(agentId),
-        ...renderOutgoingMessages(agentId),
+        ...renderQueuedMessages(chatId),
+        ...renderOutgoingMessages(chatId),
       ]),
     ]);
   }
 
-  const handleAgentsUpdated = (): void => retryAfterAgentResolved();
+  const handleChatsUpdated = (): void => retryAfterChatResolved();
 
-  const handleMessageSent = (agentId: string): void => {
-    if (agentId === currentAgentId) {
+  const handleMessageSent = (chatId: string): void => {
+    if (chatId === currentChatId) {
       engine.noteMessageSent();
     }
   };
 
   return {
     oninit() {
-      addAgentsUpdatedListener(handleAgentsUpdated);
+      addChatsUpdatedListener(handleChatsUpdated);
       addMessageSentListener(handleMessageSent);
     },
 
     onremove() {
-      removeAgentsUpdatedListener(handleAgentsUpdated);
+      removeChatsUpdatedListener(handleChatsUpdated);
       removeMessageSentListener(handleMessageSent);
       engine.detach();
-      if (currentAgentId !== null) {
-        disconnectFromStream(currentAgentId);
+      if (currentChatId !== null) {
+        disconnectFromStream(currentChatId);
       }
     },
 
     view(vnode) {
-      const agentId = vnode.attrs.agentId;
+      const chatId = vnode.attrs.chatId;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
       // (which read this closure variable) see the current value. Undefined for a
       // mount without a panel api -- treat that as visible.
       panelVisible = vnode.attrs.isVisible ?? true;
 
-      const content = isSlotClaimed("conversation-content") ? null : renderMessages(agentId);
+      const content = isSlotClaimed("conversation-content") ? null : renderMessages(chatId);
 
-      const acceptsFileDrops = hasComposer(agentId) && !isConversationNotFound(agentId);
+      const acceptsFileDrops = hasComposer(chatId) && !isConversationNotFound(chatId);
 
       // The two renderings of one conversation. `hasEverFlipped` is STICKY and separate from
       // `isFlipped` on purpose: mithril destroys a vnode that becomes null, and destroying the
@@ -707,7 +707,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           ondragenter: acceptsFileDrops ? handleDragEnter : undefined,
           ondragover: acceptsFileDrops ? handleDragOver : undefined,
           ondragleave: acceptsFileDrops ? handleDragLeave : undefined,
-          ondrop: acceptsFileDrops ? (event: DragEvent) => handleDrop(event, agentId) : undefined,
+          ondrop: acceptsFileDrops ? (event: DragEvent) => handleDrop(event, chatId) : undefined,
         },
         [
           isFileDragActive && acceptsFileDrops
@@ -737,9 +737,9 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
             everFlipped: hasEverFlipped,
             back: () =>
               m(AgentTerminalPanel, {
-                agentId,
-                url: getAgentTerminalUrl(agentId),
-                title: `${getAgentById(agentId)?.name ?? "agent"} terminal`,
+                chatId,
+                url: getChatTerminalUrl(chatId),
+                title: `${getChatById(chatId)?.name ?? "agent"} terminal`,
               }),
             front: [
               // The transcript area: the scroll container (native scrolling, native
@@ -780,17 +780,17 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
               ]),
               // Present while there is an agent to reach, a create in flight included: a message
               // typed while the chat is being created is held and delivered when it lands.
-              !hasComposer(agentId)
+              !hasComposer(chatId)
                 ? null
                 : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
-                    isConversationNotFound(agentId)
+                    isConversationNotFound(chatId)
                       ? null
                       : m(ActivityIndicator, {
-                          agentId,
-                          events: getEventsForAgent(agentId),
+                          chatId,
+                          events: getEventsForChat(chatId),
                         }),
-                    m(MessageInput, { agentId }),
+                    m(MessageInput, { chatId }),
                     // The under-bar is a sibling of the whole flip card, not part of this face: on
                     // a face it would rotate away with the face its own switch turns, and the flip
                     // would be one-way.
@@ -802,7 +802,7 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // either rendering of it, which is the same reason it belongs to neither face.
           // Carries the bottom gutter the footer used to supply, so the 24px sits under the
           // under-bar rather than between the composer and it.
-          !hasComposer(agentId)
+          !hasComposer(chatId)
             ? null
             : m(
                 "div",
@@ -817,12 +817,12 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
                       "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
                   },
                   [
-                    m(ModelBar, { agentId }),
+                    m(ModelBar, { chatId }),
                     // The terminal back face attaches to the agent's own tmux session, which
                     // a chat still being created does not have: without a name the terminal
                     // dispatch attaches to whatever session it finds, so the flip waits for
                     // the agent to register.
-                    getAgentById(agentId) === undefined
+                    getChatById(chatId) === undefined
                       ? null
                       : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
                           m(TerminalViewToggle, {

@@ -20,8 +20,8 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import type { AgentState } from "../models/AgentManager";
-import { getAgentFastMode } from "../models/ModelSettings";
+import type { ChatSnapshot } from "../models/Chats";
+import { getChatFastMode } from "../models/ModelSettings";
 import { hasFastModePrompt } from "../models/HarnessCatalog";
 import { isFastModePromptAnswered, openFastModePrompt } from "../models/FastModePrompt";
 import { isNonBoundaryUserMessage, resolutionOf } from "./message-classification";
@@ -58,7 +58,7 @@ export function countUserTurns(events: TranscriptEvent[]): number {
  * its model state, so no prompt is owed for a speed nobody got).
  */
 export function isFastModePromptOwed(
-  agent: AgentState | undefined,
+  agent: ChatSnapshot | undefined,
   events: TranscriptEvent[],
   isAgentIdle: boolean,
 ): boolean {
@@ -74,7 +74,7 @@ export function isFastModePromptOwed(
   if (!isAgentIdle) {
     return false;
   }
-  if (!getAgentFastMode(agent.id)) {
+  if (!getChatFastMode(agent.id)) {
     return false;
   }
   return countUserTurns(events) >= FAST_MODE_GRACE_TURN_COUNT;
@@ -84,7 +84,7 @@ export function isFastModePromptOwed(
  *  render: opening is idempotent, and the gates that walk the transcript sit
  *  behind the cheap ones (see isFastModePromptOwed). */
 export function maybePromptForFastMode(
-  agent: AgentState | undefined,
+  agent: ChatSnapshot | undefined,
   events: TranscriptEvent[],
   isAgentIdle: boolean,
 ): void {

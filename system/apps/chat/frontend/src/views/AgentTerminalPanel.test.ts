@@ -15,7 +15,7 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 // The stub just marks where the terminal iframe would mount.
 vi.mock("./TerminalFrame", () => ({
@@ -28,7 +28,7 @@ import m from "mithril";
 
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 
-const ATTRS = { agentId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
+const ATTRS = { chatId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
 
 function mountPanel(): HTMLElement {
   const root = document.createElement("div");

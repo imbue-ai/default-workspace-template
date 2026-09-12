@@ -15,7 +15,7 @@ import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 
 interface SubagentViewAttrs {
-  agentId: string;
+  chatId: string;
   subagentSessionId: string;
 }
 
@@ -70,7 +70,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     return added;
   }
 
-  async function fetchSubagentEvents(agentId: string, subagentSessionId: string): Promise<void> {
+  async function fetchSubagentEvents(chatId: string, subagentSessionId: string): Promise<void> {
     loading = true;
     loadingError = null;
 
@@ -78,7 +78,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       const result = await m.request<SubagentEventsResponse>({
         method: "GET",
         url: apiUrl(
-          `/api/agents/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/events`,
+          `/api/agents/${encodeURIComponent(chatId)}/subagents/${encodeURIComponent(subagentSessionId)}/events`,
         ),
       });
       events = [];
@@ -92,13 +92,13 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     }
   }
 
-  function connectToStream(agentId: string, subagentSessionId: string): void {
+  function connectToStream(chatId: string, subagentSessionId: string): void {
     if (eventSource !== null) {
       return;
     }
 
     const url = apiUrl(
-      `/api/agents/${encodeURIComponent(agentId)}/subagents/${encodeURIComponent(subagentSessionId)}/stream`,
+      `/api/agents/${encodeURIComponent(chatId)}/subagents/${encodeURIComponent(subagentSessionId)}/stream`,
     );
     eventSource = new EventSource(url);
 
@@ -127,17 +127,17 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     }
   }
 
-  function renderWindowedList(agentId: string): m.Vnode {
+  function renderWindowedList(chatId: string): m.Vnode {
     // A subagent has no server-derived activity_state, so derive idleness from
     // the transcript tail; idle settles the frontier spinner. It is part of the
     // cache key alongside the event count.
     const agentIsIdle = !isSubagentRunning(events);
-    const renderKey = `${agentId}|${events.length}|${agentIsIdle ? 1 : 0}`;
+    const renderKey = `${chatId}|${events.length}|${agentIsIdle ? 1 : 0}`;
     if (renderKey !== rowsCacheKey) {
       // Same transcript -> sections -> rows pipeline as the main chat, so the
       // subagent's conversation renders an identical progress timeline; only the
       // idle source differs (derived here rather than from activity_state).
-      cachedRows = buildConversationRows(agentId, events, agentIsIdle);
+      cachedRows = buildConversationRows(chatId, events, agentIsIdle);
       rowsVersion += 1;
       rowsCacheKey = renderKey;
     }
@@ -159,10 +159,10 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
 
   return {
     oninit(vnode) {
-      const { agentId, subagentSessionId } = vnode.attrs;
-      engine.setAgent(null);
-      fetchSubagentEvents(agentId, subagentSessionId).then(() => {
-        connectToStream(agentId, subagentSessionId);
+      const { chatId, subagentSessionId } = vnode.attrs;
+      engine.setChat(null);
+      fetchSubagentEvents(chatId, subagentSessionId).then(() => {
+        connectToStream(chatId, subagentSessionId);
       });
     },
 
@@ -172,7 +172,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     },
 
     view(vnode) {
-      const { agentId } = vnode.attrs;
+      const { chatId } = vnode.attrs;
       const title = metadata?.description || "Sub-agent conversation";
       const agentType = metadata?.agent_type || "";
 
@@ -206,7 +206,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           m("p", { class: "text-secondary" }, "No events yet."),
         );
       } else {
-        content = renderWindowedList(agentId);
+        content = renderWindowedList(chatId);
       }
 
       return m("div", { class: "app-content-wrapper flex-1 flex flex-col min-h-0" }, [

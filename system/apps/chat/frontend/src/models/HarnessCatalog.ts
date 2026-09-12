@@ -5,7 +5,7 @@
  * the bar needs that does not vary per agent: the selectable models (and which
  * efforts each declares, which are shown) and the switch mode. The per-agent live
  * selection arrives separately, on the agents WebSocket as each agent's
- * `model_choice` (see AgentManager.ts). The backend already computes which catalog
+ * `model_choice` (see Chats.ts). The backend already computes which catalog
  * option a live choice matched, so the frontend never re-matches. The provider a chat runs on
  * is not here either -- the combo card reads it from the chat's own account label.
  */
