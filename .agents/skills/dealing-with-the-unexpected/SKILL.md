@@ -15,14 +15,14 @@ Before doing anything, understand what is actually happening:
 
 - Read any error messages carefully
 - Check the tmux windows: `tmux list-windows -t $(tmux display-message -p '#S')`
-- Check if services are running: `supervisorctl status` (compare against the programs defined in `system/supervisord.conf`)
+- Check if services are running: `supervisorctl status` (compare against the programs defined under `system/supervisord.conf.d/`)
 - Check the wait counter state: `cat data/.state/wait_counter 2>/dev/null || echo "no counter"`
 
 ## 2. Diagnose
 
 Common issues and their causes:
 
-- **Services not starting**: Run `supervisorctl status` and read the service's logs under `/var/log/supervisor/<name>-stderr.log` (or `supervisorctl tail -f <name> stderr`). The `bootstrap` tmux window shows supervisord's own output. Verify `system/supervisord.conf` is valid, then `supervisorctl reread && supervisorctl update`.
+- **Services not starting**: Run `supervisorctl status` and read the service's logs under `/var/log/supervisor/<name>-stderr.log` (or `supervisorctl tail -f <name> stderr`). The `bootstrap` tmux window shows supervisord's own output. Verify the program's `system/supervisord.conf.d/<name>.conf` is valid, then `supervisorctl reread && supervisorctl update`.
 - **Wait script behaving oddly**: Check `data/.state/wait_counter` contents. Delete it to reset: `rm -f data/.state/wait_counter`
 
 ## 3. Fix or escalate

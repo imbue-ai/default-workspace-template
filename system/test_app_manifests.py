@@ -32,8 +32,19 @@ def _built_in_manifest_paths() -> list[Path]:
 
 
 def _command_by_program() -> dict[str, str]:
+    """Every program the config declares: the main file, plus the drop-ins beside it.
+
+    ``configparser`` does not follow supervisord's ``[include]``, and the template declares its
+    programs one per file under ``system/supervisord.conf.d/``, so a bare read of the main config
+    finds none of them. The drop-ins are read after the main config, which reproduces
+    supervisord's precedence; ``test_supervisord_layout.py`` pins that directory as the one the
+    include glob names.
+    """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(_SUPERVISORD_CONF)
+    parser.read(
+        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
+    )
     return {
         section.partition(":")[2]: parser[section].get("command", "")
         for section in parser.sections()

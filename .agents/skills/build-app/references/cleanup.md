@@ -2,12 +2,11 @@
 
 1. `python3 system/scripts/forward_port.py --name <name> --remove` (drops the
    entry from `data/.state/apps.toml`).
-2. Stop the program and remove its block from `system/supervisord.conf`, then
-   reconcile:
+2. Stop the program and delete its drop-in, then reconcile:
 
    ```bash
    supervisorctl stop <name>
-   # delete the [program:<name>] block from system/supervisord.conf
+   rm system/supervisord.conf.d/<name>.conf
    supervisorctl reread && supervisorctl update
    ```
 

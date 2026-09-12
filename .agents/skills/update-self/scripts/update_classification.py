@@ -137,7 +137,8 @@ def classify_path(path: str) -> PathClass:
     - ``system_interface`` -- ``system/apps/system_interface/**``; the apply
       rebuilds or installs the bundle and refreshes the backend's environment
       on a manifest change (:func:`refresh_backend_dependencies`).
-    - ``service`` -- ``system/supervisord.conf`` and ``system/libs/bootstrap/**``.
+    - ``service`` -- ``system/supervisord.conf``, the per-program drop-ins under
+      ``system/supervisord.conf.d/**``, and ``system/libs/bootstrap/**``.
     - ``editable_tool`` -- ``system/vendor/mngr/**``; a manifest change needs
       ``uv sync --all-packages`` / an editable reinstall.
     - ``shared_runtime`` -- ``system/scripts/**``, other ``system/libs/**``,
@@ -180,7 +181,11 @@ def classify_path(path: str) -> PathClass:
         return PathClass(CLASS_PROVISIONER, project, is_manifest)
     if path.startswith("system/apps/system_interface/"):
         return PathClass(CLASS_SYSTEM_INTERFACE, project, is_manifest)
-    if path == "system/supervisord.conf" or path.startswith("system/libs/bootstrap/"):
+    if (
+        path == "system/supervisord.conf"
+        or path.startswith("system/supervisord.conf.d/")
+        or path.startswith("system/libs/bootstrap/")
+    ):
         return PathClass(CLASS_SERVICE, project, is_manifest)
     if path.startswith("system/vendor/mngr/"):
         return PathClass(CLASS_EDITABLE_TOOL, project, is_manifest)

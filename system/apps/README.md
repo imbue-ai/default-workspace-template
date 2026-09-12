@@ -30,9 +30,10 @@ registered name, the display name users see, its icon, whether it serves
 instances, its memory-shedding `priority`, whether it is `critical`, and the
 supervisord `program` that runs it (the schema is the `app_manifest` library
 in `system/libs/`). An app runs as a supervised program (a `[program:*]` entry
-in `system/supervisord.conf`) that registers the manifest and the app's port
-via `system/scripts/forward_port.py --manifest`, from its program line or
-from inside its entry point once its socket is bound, and then runs the app.
+in its own `system/supervisord.conf.d/<name>.conf`) that registers the manifest
+and the app's port via `system/scripts/forward_port.py --manifest`, from its
+program line or from inside its entry point once its socket is bound, and then
+runs the app.
 
 Every Python app with a manifest runs from its own uv tool environment,
 installed from its own `pyproject.toml` (`uv tool install -e

@@ -4,15 +4,16 @@ A background service -- a supervisord `[program:<name>]` with no tab. Two
 homes: standalone services live under `system/services/<package>/` (their own
 uv workspace member, e.g. `host_backup`, `app_watcher`); a service that exists
 solely to support one app lives in that app's folder under
-`system/apps/<package>/` and is named `<app>-<role>` in
-`system/supervisord.conf`.
+`system/apps/<package>/` and is named `<app>-<role>`.
 
 ## Where the source lives
 
 - The package (standalone: `system/services/<package>/`; app-owned: inside the
   app's folder), plus its `pyproject.toml`, `README.md`, and ratchet test.
-- The `[program:<name>]` block in `system/supervisord.conf` (see
-  `.agents/shared/references/service-processes.md` for the block schema).
+- The `[program:<name>]` block in its own `system/supervisord.conf.d/<name>.conf`
+  (see `.agents/shared/references/service-processes.md` for the block schema).
+  One file per program, so adding or removing a service never edits a file
+  another creation also owns.
 
 ## Running and testing
 
@@ -23,8 +24,11 @@ solely to support one app lives in that app's folder under
   tests in its package, and exercise its entry point (`uv run <name>`) with a
   bounded invocation where feasible. Never start supervisord, and never
   `supervisorctl` against the served tree from a worktree.
-- Verify config-only changes by parsing `system/supervisord.conf` (e.g. with
-  Python's `configparser`), not by starting the daemon.
+- Verify config-only changes by parsing the service's own
+  `system/supervisord.conf.d/<name>.conf` (e.g. with Python's `configparser`),
+  not by starting the daemon. To check the whole realized set instead, read
+  `system/supervisord.conf` through supervisord's own `ServerOptions`, which
+  follows the `[include]` glob -- `configparser` does not.
 
 ## Working in isolation
 

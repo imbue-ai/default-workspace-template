@@ -1,0 +1,1 @@
+Documentation only: the README now describes services as one `[program:*]` per file under `system/supervisord.conf.d/`, pulled in by an `[include]` glob, and gives the add/change/remove procedure in those terms. bootstrap still launches `supervisord -n -c system/supervisord.conf`; supervisord itself resolves the includes.

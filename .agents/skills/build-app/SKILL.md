@@ -121,8 +121,9 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   hyphens, and it must not start with `host-` or `agent-` (those
   prefixes are reserved for workspace hostname coordinates). Short and
   descriptive (`news`, `docs-viewer`) beats clever. Avoid names
-  already used in `system/supervisord.conf` (`system_interface`,
-  `browser`, etc. are reserved by the scaffolder).
+  already used by an existing program (`system_interface`, `browser`, etc.
+  are reserved by the scaffolder, which also refuses a name any
+  `system/supervisord.conf.d/*.conf` already declares).
 - **Draw the app's icon** -- an `.svg` glyph specific to what *this*
   app does, in the house style (see the CLI reference below);
   `forward_port.py` refuses a brand-new registration without one. The
@@ -130,7 +131,8 @@ under `system/apps/<your-package>/` so they get an isolated tab and origin.
   it.
 - **Pick a free port.** `ss -tln` lists what's bound. The scaffolder
   picks the lowest free port at or above 8080 by parsing
-  `system/supervisord.conf` and `data/.state/apps.toml`; if you're choosing
+  `system/supervisord.conf`, every `system/supervisord.conf.d/*.conf`, and
+  `data/.state/apps.toml`; if you're choosing
   manually, avoid `8000` (system_interface), `8010` (the chat app) and
   `8081` (the browser service).
 - **Bind to `127.0.0.1`** (not `0.0.0.0`). The forwarder reaches your
@@ -213,9 +215,14 @@ What gets generated:
   zero.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated and installed:
+What gets updated and installed -- no shared file is authored, which is what
+lets two agents scaffold two apps at once (`uv.lock` is the exception: `uv sync`
+regenerates it, but it is derived, so it stays out of a creation's footprint):
 
-- `system/supervisord.conf` -- appends a program block:
+- Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
+  package up and `uv sync --all-packages` installs it, so a scaffolded app
+  needs no root entry at all.
+- `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
   [program:<name>]
@@ -225,6 +232,15 @@ What gets updated and installed:
   autorestart=true
   # plus rotated stdout/stderr logfiles under /var/log/supervisor/<name>-*.log
   ```
+
+  The command ends in the app's own name, not `uv run <name>`; supervisord
+  resolves that name on PATH. The copy it finds is the console script
+  `uv sync --all-packages` writes into the workspace venv -- `uv tool install
+  -e` puts the tool's own entry point under your HOME, which supervisord's
+  children do not have on PATH. So always sync with `--all-packages`: a
+  root-closure-scoped `uv sync` prunes the member (a scaffolded app is not a
+  root dependency), deletes that script, and the next restart is a spawn error
+  with nothing to recover it.
 
   The Flask app serves at `/` and needs no prefix env var: your app
   owns its origin, so root-absolute URLs (`href="/api"`), WebSockets
@@ -493,10 +509,11 @@ priority = "user"
 program = "<name>"
 ```
 
-Then add a `[program:<name>]` block to `system/supervisord.conf` that runs
-`forward_port.py --manifest` and then your existing start command.
-supervisord runs commands directly (no shell), so wrap any command that
-chains with `&&` in `bash -c "..."`, and prefix the whole thing with
+Then add a `[program:<name>]` block as its own
+`system/supervisord.conf.d/<name>.conf` that runs `forward_port.py --manifest`
+and then your existing start command. supervisord runs commands directly (no
+shell), so wrap any command that chains with `&&` in `bash -c "..."`, and
+prefix the whole thing with
 `python3 system/services/oom_priority/bin/oom_tag_service.py user` so this user-created app is
 shed before any built-in service under memory pressure (see
 `system/services/oom_priority/README.md`):
@@ -539,8 +556,8 @@ Two valid shapes:
   autorestart=true
   ```
 
-After editing `system/supervisord.conf`, run `supervisorctl reread &&
-supervisorctl update` to start the new program.
+After writing `system/supervisord.conf.d/<name>.conf`, run `supervisorctl
+reread && supervisorctl update` to start the new program.
 
 The `forward_port.py` call MUST come first in the command -- the port
 must be registered before the app starts listening, otherwise the
