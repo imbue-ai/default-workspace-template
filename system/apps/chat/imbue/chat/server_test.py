@@ -813,7 +813,7 @@ def _model_agent_info(agent_id: str, tmp_path: Path, harness: HarnessType = Harn
 
 def _manager_with_resolver(agent_info: AgentInfo) -> tuple[AgentManager, RecordingMngrMessenger]:
     """A recording-messenger manager for the switch endpoint. The endpoint builds the
-    resolver inline from the ``_find_agent`` result, so nothing needs pre-seeding here."""
+    resolver inline from the ``_find_active_agent`` result, so nothing needs pre-seeding here."""
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
     return manager, messenger

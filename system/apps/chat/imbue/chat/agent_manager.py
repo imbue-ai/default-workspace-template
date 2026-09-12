@@ -1884,7 +1884,7 @@ class AgentManager:
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
 
-        Mirrors ``server._find_agent`` so the readiness-hook marker files and
+        Mirrors ``server._find_active_agent`` so the readiness-hook marker files and
         the activity tracker agree on the same path.
         """
         return self._host_dir / "agents" / agent_id
