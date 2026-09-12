@@ -147,6 +147,46 @@ def test_the_chat_routes_answer_beside_their_agent_keyed_aliases(client: FlaskCl
     assert client.put("/api/chats/x/destroy").status_code == 405
 
 
+def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: FlaskClient, app: Flask) -> None:
+    """``GET /api/chats`` is 503 until the first agent list has been read, then lists every
+    non-primary agent as a chat snapshot with its agent-level facts under ``active_agent``."""
+    assert create_application(build_test_state()).test_client().get("/api/chats").status_code == 503
+
+    agent_manager: AgentManager = state_of(app).agent_manager
+    with agent_manager._lock:
+        agent_manager._agents["agent-primary"] = AgentStateItem(
+            id="agent-primary", name="system-services", state="RUNNING", labels={"is_primary": "true"}, work_dir=None
+        )
+        agent_manager._agents["agent-1"] = AgentStateItem(
+            id="agent-1", name="Chat-1", state="RUNNING", labels={"display_name": "Chat 1"}, work_dir=None
+        )
+
+    response = client.get("/api/chats")
+
+    assert response.status_code == 200
+    (chat,) = response.get_json()["chats"]
+    assert chat["chat_id"] == "agent-1"
+    assert chat["title"] == "Chat 1"
+    assert chat["name"] == "Chat-1"
+    assert chat["status"] == "idle"
+    assert chat["agent_ids"] == ["agent-1"]
+    assert chat["handoff"] is None
+    assert chat["active_agent"]["agent_id"] == "agent-1"
+    assert chat["active_agent"]["state"] == "RUNNING"
+
+
+def test_subagent_route_refuses_an_agent_that_is_not_the_chats(client: FlaskClient, tmp_path: Path) -> None:
+    """The three-part subagent route names the chat's agent whose session the subagent ran
+    under: an agent id that is not the chat's active agent is 404, the active agent's reads."""
+    agent_info = _model_agent_info("agent-123", tmp_path)
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        mismatched = client.get("/api/chats/agent-123/agents/agent-456/subagents/s1/events")
+        matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
+    assert mismatched.status_code == 404
+    assert matched.status_code == 200
+    assert matched.get_json() == {"events": [], "metadata": None}
+
+
 def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     """Sending a message to a nonexistent agent returns 404."""
     with patch("imbue.chat.server.discover_agents", return_value=[]):
@@ -2115,6 +2155,27 @@ def test_create_chat_launches_a_reserved_chat_under_its_id(
     body = response.get_json()
     assert body["agent_id"] == reserved.chat_id
     assert body["display_name"] == reserved.display_name
+
+
+def test_create_chat_route_launches_a_reserved_chat_by_chat_id(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``POST /api/chats/create`` takes the minted chat under ``chat_id`` and answers the
+    chat's id under the same name, where the agent-keyed alias spells both ``agent_id``."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+    reserved = agent_manager.reserve_chat()
+
+    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id})
+
+    assert response.status_code == 201
+    assert response.get_json() == {
+        "chat_id": reserved.chat_id,
+        "name": reserved.name,
+        "display_name": reserved.display_name,
+    }
 
 
 def test_create_chat_refuses_a_message_beside_a_reserved_id(
