@@ -577,13 +577,64 @@ body > .dv-tab.dv-dragged .dv-default-tab {
  * selectors query, and the 12px glyph size is set on the icon markup at the
  * call site. Only the `.dv-custom-tab-actions` container styling lives here. */
 
-/* The New Tab page's template rails scroll sideways behind their paging arrows; the scrollbar
+/* The New Tab page's template rails scroll sideways beside their paging arrows; the scrollbar
    itself is hidden (no utility reaches the pseudo-element), and the cut-off card at the rail's
-   edge is what says there is more. */
+   edge is what says there is more.
+
+   Each end that still has rail past it fades out. The fade is an overlay rather than a mask on the
+   scroller, so showing and hiding it is opacity -- which is why it has to be painted in the
+   surface colour and kept in step with it, hence color-mix off --c-surface and not a literal
+   white.
+
+   The twelve stops are an eased ramp, (1-x)^2.2, and they do not simplify to a two-stop gradient:
+   the eye reads lightness, not alpha, so over a near-black card two plain stops band at ~12 L* per
+   pixel where this holds ~2.9. 30px cannot do much better than that whatever the stops, so if this
+   still looks banded the lever is more width, not a different curve.
+
+   Only an end the rail can scroll towards is faded (the view sets the opacity), so a card at rest
+   against an edge is never dimmed and the hover lift stays whole there. */
 .new-tab-template-rail {
   scrollbar-width: none;
 }
 
 .new-tab-template-rail::-webkit-scrollbar {
   display: none;
+}
+
+.new-tab-template-rail-fade-start {
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--c-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-surface) 0%, transparent) 100%
+  );
+}
+
+.new-tab-template-rail-fade-end {
+  background-image: linear-gradient(
+    to left,
+    color-mix(in srgb, var(--c-surface) 100%, transparent) 0%,
+    color-mix(in srgb, var(--c-surface) 82.58%, transparent) 8.33%,
+    color-mix(in srgb, var(--c-surface) 66.96%, transparent) 16.67%,
+    color-mix(in srgb, var(--c-surface) 53.1%, transparent) 25%,
+    color-mix(in srgb, var(--c-surface) 40.98%, transparent) 33.33%,
+    color-mix(in srgb, var(--c-surface) 30.55%, transparent) 41.67%,
+    color-mix(in srgb, var(--c-surface) 21.76%, transparent) 50%,
+    color-mix(in srgb, var(--c-surface) 14.57%, transparent) 58.33%,
+    color-mix(in srgb, var(--c-surface) 8.92%, transparent) 66.67%,
+    color-mix(in srgb, var(--c-surface) 4.74%, transparent) 75%,
+    color-mix(in srgb, var(--c-surface) 1.94%, transparent) 83.33%,
+    color-mix(in srgb, var(--c-surface) 0.42%, transparent) 91.67%,
+    color-mix(in srgb, var(--c-surface) 0%, transparent) 100%
+  );
 }

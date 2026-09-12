@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable
 from collections.abc import Iterator
 from collections.abc import Mapping
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timedelta
@@ -45,11 +46,14 @@ from imbue.minds.desktop_client.environment_signals import SleepTracker
 from imbue.minds.desktop_client.environment_signals import SshEndpoint
 from imbue.minds.desktop_client.imbue_cloud_cli import ImbueCloudCli
 from imbue.minds.desktop_client.latchkey.gateway_client import AccountsRequestPayload
+from imbue.minds.desktop_client.latchkey.gateway_client import CustomServiceLogin
+from imbue.minds.desktop_client.latchkey.gateway_client import CustomServiceRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingAccess
 from imbue.minds.desktop_client.latchkey.gateway_client import FileSharingRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import PermissionEffect
 from imbue.minds.desktop_client.latchkey.gateway_client import PredefinedRequestPayload
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_ACCOUNTS
+from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_CUSTOM_SERVICE
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_FILE_SHARING
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_PREDEFINED
 from imbue.minds.desktop_client.latchkey.gateway_client import REQUEST_TYPE_WORKSPACE
@@ -61,6 +65,12 @@ from imbue.minds.desktop_client.minds_config import MindsConfig
 from imbue.minds.desktop_client.notification import NotificationDispatcher
 from imbue.minds.desktop_client.notification import NotificationRequest
 from imbue.minds.desktop_client.restic_cli import _get_restic_binary
+from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_BEGIN_SENTINEL
+from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_END_SENTINEL
+from imbue.minds.desktop_client.skill_chat import ACCOUNT_ARGS_EXIT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_ABSENT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import LOCAL_SETTINGS_PRESENT_SENTINEL
+from imbue.minds.desktop_client.skill_chat import NO_ACCOUNT_STORE_SENTINEL
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import set_state
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
@@ -85,6 +95,7 @@ from imbue.minds.desktop_client.update_status import UpdateRunStatus
 from imbue.minds.desktop_client.update_status import UpdateVerdict
 from imbue.minds.desktop_client.workspace_update_state import WorkspaceUpdateStateStore
 from imbue.minds.primitives import DeviceId
+from imbue.minds.utils.mngr_caller import MngrCallResult
 from imbue.minds.utils.testing import RecordingMngrCaller
 from imbue.mngr.api.discovery_events import DiscoveredProvider
 from imbue.mngr.api.discovery_events import DiscoveryError
@@ -101,6 +112,7 @@ from imbue.mngr_forward.testing import make_in_memory_test_ca
 from imbue.mngr_forward.tls import build_server_ssl_context
 from imbue.mngr_forward.tls import generate_server_credentials
 from imbue.mngr_latchkey.core import LatchkeyError
+from imbue.mngr_latchkey.custom_services import Scheme
 
 
 def device_id_for_test(name: str) -> DeviceId:
@@ -699,6 +711,31 @@ def write_blocking_stub_mngr(tmp_path: Path, name: str, release_path: Path) -> s
 SUPPRESSION_WAIT_SECONDS: Final[float] = 5.0
 
 
+class RefusingSpawnMngrCaller(RecordingMngrCaller):
+    """Answers the skill probe, then refuses the ``mngr create`` the way a wedged machine does.
+
+    The refusal a wedged machine gives is not the outer ``mngr exec``'s: the inner
+    command's verdict arrives on the same stream, between the outer mngr's
+    discovery chatter and its own closing "command failed". Only a double that
+    fails the create alone -- while the probe ahead of it still answers -- puts
+    those three in the order the app has to read them apart in.
+    """
+
+    refusal_stderr: str = Field(default="", description="The stderr the refused inner ``mngr create`` answers with")
+
+    def call(
+        self,
+        argv: Sequence[str],
+        timeout: float | None = None,
+        env_overrides: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
+    ) -> MngrCallResult:
+        result = super().call(argv, timeout, env_overrides, cwd)
+        if any("mngr create" in arg for arg in argv):
+            return MngrCallResult(returncode=1, stderr=self.refusal_stderr, is_mngr_output=True)
+        return result
+
+
 class RecordingNotificationDispatcher(NotificationDispatcher):
     """Dispatcher double that records dispatch calls instead of hitting any OS channel."""
 
@@ -852,6 +889,42 @@ def landed_verdict(
     )
 
 
+SIGNED_IN_ACCOUNT_DIR: Final[str] = "/home/user/.minds/accounts/account-1"
+
+
+def account_binding_probe_stdout(*, account_dir: str | None = SIGNED_IN_ACCOUNT_DIR, exit_code: int = 0) -> str:
+    """One workspace's answer to the account probe: the resolver's fenced arguments and its status.
+
+    ``account_dir=""`` renders a workspace that keeps accounts but resolved none;
+    ``account_dir=None`` renders one whose template predates the account store;
+    a non-zero ``exit_code`` renders a resolver that broke rather than declined.
+    """
+    if account_dir is None:
+        return f"{NO_ACCOUNT_STORE_SENTINEL}\n"
+    body = f"--env\nCLAUDE_CONFIG_DIR={account_dir}\n" if account_dir else ""
+    return (
+        f"{ACCOUNT_ARGS_BEGIN_SENTINEL}\n{body}{ACCOUNT_ARGS_END_SENTINEL}\n{ACCOUNT_ARGS_EXIT_SENTINEL}{exit_code}\n"
+    )
+
+
+def ready_machine_probe_stdout(
+    skill_probe_stdout: str,
+    *,
+    account_dir: str | None = SIGNED_IN_ACCOUNT_DIR,
+    is_local_settings_present: bool = False,
+) -> str:
+    """The one answer a machine ready to host a skill chat gives, whichever pre-spawn probe asks.
+
+    ``RecordingMngrCaller`` answers every call alike, so this carries the skill sentinel,
+    the local-settings sentinel, and the account probe's fenced binding together.
+    ``is_local_settings_present`` renders a workspace that writes its own create defaults
+    (the app then asks its resolver nothing); ``account_dir`` keeps
+    ``account_binding_probe_stdout``'s three-way contract for one that does not.
+    """
+    local_settings = LOCAL_SETTINGS_PRESENT_SENTINEL if is_local_settings_present else LOCAL_SETTINGS_ABSENT_SENTINEL
+    return f"{skill_probe_stdout}{local_settings}\n" + account_binding_probe_stdout(account_dir=account_dir)
+
+
 def update_run_probe_stdout(*, run: str = "", agents: str | None = "") -> str:
     """One workspace's answer to the update run probe, in the wire format.
 
@@ -944,7 +1017,13 @@ def _streamed_request(
     agent_id: str,
     rationale: str,
     request_type: str,
-    payload: PredefinedRequestPayload | FileSharingRequestPayload | WorkspaceRequestPayload | AccountsRequestPayload,
+    payload: (
+        PredefinedRequestPayload
+        | FileSharingRequestPayload
+        | WorkspaceRequestPayload
+        | AccountsRequestPayload
+        | CustomServiceRequestPayload
+    ),
     target: str,
 ) -> StreamedPermissionRequest:
     """Assemble one gateway permission request with a fresh request id."""
@@ -1020,6 +1099,27 @@ def create_accounts_permission_request(
         rationale=rationale,
         request_type=REQUEST_TYPE_ACCOUNTS,
         payload=AccountsRequestPayload(),
+        target="/tmp/permissions.json",
+    )
+
+
+def create_custom_service_permission_request(
+    agent_id: str,
+    domain: str,
+    rationale: str,
+    scheme: Scheme = Scheme.HTTPS,
+    login: CustomServiceLogin | None = None,
+) -> StreamedPermissionRequest:
+    """Build a custom-service permission request as the gateway would stream it.
+
+    ``login`` is the browser sign-in when the service has one; ``None`` is the
+    other real case, where the user supplies a token instead.
+    """
+    return _streamed_request(
+        agent_id=agent_id,
+        rationale=rationale,
+        request_type=REQUEST_TYPE_CUSTOM_SERVICE,
+        payload=CustomServiceRequestPayload(domain=domain, scheme=scheme, login=login),
         target="/tmp/permissions.json",
     )
 

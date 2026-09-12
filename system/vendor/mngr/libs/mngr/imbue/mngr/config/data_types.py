@@ -26,6 +26,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import PositiveFloat
 from imbue.imbue_common.pure import pure
 from imbue.mngr.config.field_markers import RegistryField
+from imbue.mngr.config.field_markers import SettingsPatchField
 from imbue.mngr.config.overlay_merge import merge_models_via_overlay
 from imbue.mngr.errors import ConfigParseError
 from imbue.mngr.errors import ParseSpecError
@@ -41,6 +42,7 @@ from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.primitives import UserId
 from imbue.mngr.utils.file_utils import atomic_write
 from imbue.mngr.utils.logging import LoggingConfig
+from imbue.mngr.utils.suspension_watchdog import SuspensionWatchdog
 from imbue.overlay.markers import ScalarTuple
 
 USER_ID_FILENAME: Final[str] = "user_id"
@@ -328,8 +330,12 @@ class CommandDefaults(FrozenModel):
     Field names should match the CLI parameter names (after click's conversion).
     """
 
-    # Store as a flexible dict since we don't know all possible CLI parameters ahead of time
-    defaults: dict[str, Any] = Field(
+    # Store as a flexible dict since we don't know all possible CLI parameters ahead of time.
+    # A settings patch rather than an assign-by-default aggregate: each layer's
+    # ``[commands.<name>]`` table sets only the parameters it cares about, and a local
+    # ``type = "codex"`` must add to the project's ``connect = false`` rather than replace
+    # the whole map. A same-key list assigned bare across layers is still a narrowing.
+    defaults: Annotated[dict[str, Any], SettingsPatchField()] = Field(
         default_factory=dict,
         description="Map of parameter name to default value",
     )
@@ -616,9 +622,9 @@ class MngrConfig(FrozenModel):
 
         The narrowings are the single config-load narrowing detector: cross-scope
         bare-drops of a non-empty aggregate by a higher-precedence layer -- both ordinary
-        assign-by-default field drops (e.g. ``agent_types.<name>.cli_args``,
-        ``commands.create.defaults.env``) and ``SettingsPatchField`` drops *inside* an
-        accumulating settings patch (e.g. ``agent_types.<name>.settings_overrides.<key>...``).
+        assign-by-default field drops (e.g. ``agent_types.<name>.cli_args``) and
+        ``SettingsPatchField`` drops *inside* an accumulating settings patch (e.g.
+        ``commands.create.defaults.env``, ``agent_types.<name>.settings_overrides.<key>...``).
         ``Static*`` atomic aggregates are exempt via the override-side re-marking. The loader
         routes the whole list into its flag-gated narrowing aggregation; callers that only
         need the merged value drop the second element explicitly.
@@ -665,6 +671,10 @@ class MngrContext(FrozenModel):
     is_full_discovery: bool = Field(
         default=False,
         description="When True, always query all providers during discovery (skip event-stream optimization)",
+    )
+    suspension_watchdog: SuspensionWatchdog = Field(
+        default_factory=SuspensionWatchdog,
+        description="Closes SSH transports a machine suspension left half-open; every OuterHost connection registers with it.",
     )
     project_root: Path | None = Field(
         default=None,

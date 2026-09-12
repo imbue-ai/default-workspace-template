@@ -301,6 +301,9 @@
 # for git worktrees from other repos
 **/.external_worktrees/
 
+# Git worktrees created inside this repository
+/.worktrees/
+
 # ignore coverage files generated within subprojects
 **/cov.xml
 
@@ -379,3 +382,7 @@ apps/minds/package-lock.json
 # and the Slack post.
 **/flake-sweep-summary.md
 **/flake-sweep-claude.log
+
+# Timelines written by the sleep/wake scripts, whose --log-dir defaults to the cwd
+**/sleep_wake_probe_*.jsonl
+**/sleep_wake_drill_*.jsonl

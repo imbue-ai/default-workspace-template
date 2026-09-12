@@ -181,9 +181,22 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+// Every field is optional, because ATIF writes no key for a field it has no value for: a real
+// reference carries `trajectory_id` and an `extra` block and nothing else.
+export interface SubagentTrajectoryRef {
+  trajectory_id?: string | null;
+  session_id?: string | null;
+  trajectory_path?: string | null;
+  extra?: Record<string, unknown> | null;
+}
+
 export interface ObservationResult {
   source_call_id: string | null;
   content: ObservationContent;
+  // Where a delegated agent's own trajectory can be found. Resolved against
+  // `Trajectory.subagent_trajectories` by `trajectory_id`. Optional, because the interaction tab
+  // builds results of its own out of a recorded exchange and has no reference to put on them.
+  subagent_trajectory_ref?: SubagentTrajectoryRef[] | null;
 }
 
 export interface Observation {
@@ -207,6 +220,10 @@ export interface Step {
   tool_calls: ToolCall[] | null;
   observation: Observation | null;
   metrics: StepMetrics | null;
+  // ATIF's open metadata slot. Producers namespace what they put here, and nothing in the format
+  // constrains its shape, so readers must treat every level as unknown. Optional, because a step
+  // the viewer synthesizes for itself has no producer to have written one.
+  extra?: Record<string, unknown> | null;
 }
 
 export interface TrajectoryAgent {
@@ -226,10 +243,19 @@ export interface FinalMetrics {
 export interface Trajectory {
   schema_version: string;
   session_id: string;
+  // Unique per trajectory document, unlike `session_id`, which is scoped to the run and may be
+  // shared. The key a reference resolves against, so an embedded subagent without one cannot be
+  // reached. Optional, for the same reason the fields above are.
+  trajectory_id?: string | null;
   agent: TrajectoryAgent;
   steps: Step[];
   notes: string | null;
   final_metrics: FinalMetrics | null;
+  // Delegated agents' trajectories, each a complete document with its own step numbering. Optional,
+  // because a document that delegated to nobody carries no key for it at all.
+  subagent_trajectories?: Trajectory[] | null;
+  // ATIF's open metadata slot, as on `Step`, and optional for the same reason.
+  extra?: Record<string, unknown> | null;
 }
 
 export interface InteractionSources {

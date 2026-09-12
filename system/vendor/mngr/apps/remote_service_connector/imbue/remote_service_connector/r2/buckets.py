@@ -129,9 +129,7 @@ def _owned_bucket_exists(ops: CloudflareOps, user_id_prefix: str, full_name: str
     return any(b.get("name") == full_name for b in list_owned_buckets(ops, user_id_prefix))
 
 
-# Bound on simultaneous per-bucket usage REST calls. Reads were previously
-# sequential, which made every live-usage measurement O(bucket_count) in
-# Cloudflare round trips (~0.45s each -- ~19s for a 42-bucket account).
+# Bound on simultaneous per-bucket usage REST calls (each takes ~0.45s).
 _BUCKET_USAGE_MAX_PARALLEL_READS: Final = 8
 
 

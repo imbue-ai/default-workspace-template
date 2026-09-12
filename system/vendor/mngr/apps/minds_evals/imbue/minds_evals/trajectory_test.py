@@ -2,12 +2,13 @@ import json
 
 import pytest
 
+from imbue.minds_evals.data_types import ArmRecord
 from imbue.minds_evals.data_types import DeciderTurn
+from imbue.minds_evals.data_types import HarnessConfigRecord
 from imbue.minds_evals.data_types import StepBoundary
 from imbue.minds_evals.data_types import TrajectoryProvenance
 from imbue.minds_evals.data_types import TurnEntryKind
 from imbue.minds_evals.data_types import UsageSource
-from imbue.minds_evals.data_types import WorkerLaunch
 from imbue.minds_evals.data_types import WorkerState
 from imbue.minds_evals.errors import TrajectoryDocumentError
 from imbue.minds_evals.testing import WORKER_AGENT_ID
@@ -19,6 +20,7 @@ from imbue.minds_evals.testing import atif_document
 from imbue.minds_evals.testing import atif_document_json
 from imbue.minds_evals.testing import atif_document_with_worker_launch
 from imbue.minds_evals.testing import worker_document
+from imbue.minds_evals.testing import worker_launch
 from imbue.minds_evals.testing import worker_stream_jsonl
 from imbue.minds_evals.trajectory import EmbeddedWorker
 from imbue.minds_evals.trajectory import STEP_BOUNDARY_BANNER
@@ -52,6 +54,22 @@ def _provenance() -> TrajectoryProvenance:
         harbor_session_id="session-1",
         case_id="todo-app",
         usage_source=UsageSource.PROXY,
+        arm=ArmRecord(
+            mngr_sha="a" * 40,
+            dwt_sha="c" * 40,
+            harness_config=HarnessConfigRecord(
+                lane="api-key",
+                key_provider="anthropic",
+                account_id="acct-1",
+                harness="pi-coding",
+                model="anthropic/claude-haiku-4-5",
+                effort="medium",
+                model_choice_switch="applied",
+                observed_models=("claude-haiku-4-5",),
+                welcome_model="claude-opus-4-8",
+                is_model_confirmed=True,
+            ),
+        ),
     )
 
 
@@ -84,6 +102,23 @@ _EXPECTED_EXTRA = {
     "harbor_session_id": "session-1",
     "case_id": "todo-app",
     "usage_source": "proxy",
+    "arm": {
+        "mngr_sha": "a" * 40,
+        "dwt_sha": "c" * 40,
+        "harness_config": {
+            "lane": "api-key",
+            "key_provider": "anthropic",
+            "account_id": "acct-1",
+            "harness": "pi-coding",
+            "model": "anthropic/claude-haiku-4-5",
+            "effort": "medium",
+            "fast": False,
+            "model_choice_switch": "applied",
+            "observed_models": ["claude-haiku-4-5"],
+            "welcome_model": "claude-opus-4-8",
+            "is_model_confirmed": True,
+        },
+    },
 }
 
 
@@ -170,12 +205,6 @@ def test_hand_built_trajectory_is_none_without_an_exchange() -> None:
 
 
 # --- background workers ---
-
-
-def _launch(name: str = WORKER_NAME, depth: int = 0, lead_name: str = "") -> WorkerLaunch:
-    return WorkerLaunch(
-        name=name, tool_call_id=WORKER_LAUNCH_CALL_ID, task_file=WORKER_TASK_FILE, depth=depth, lead_name=lead_name
-    )
 
 
 def _bash_step(step_id: int, command: str, call_id: str) -> dict:
@@ -268,7 +297,7 @@ def test_scan_worker_launches_reads_the_launch_as_the_skill_spells_it() -> None:
 def test_graft_embeds_the_worker_under_its_launching_call() -> None:
     document = atif_document_with_worker_launch()
     worker = EmbeddedWorker(
-        launch=_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path="r"
+        launch=worker_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path="r"
     )
 
     grafted = graft_worker_trajectories(document, [worker])
@@ -299,7 +328,7 @@ def test_graft_synthesizes_a_pending_result_when_the_launch_has_no_output() -> N
     document = atif_document_with_worker_launch()
     document["steps"][2].pop("observation")
     worker = EmbeddedWorker(
-        launch=_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
+        launch=worker_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
     )
 
     grafted = graft_worker_trajectories(document, [worker])
@@ -318,7 +347,7 @@ def test_graft_synthesizes_a_pending_result_when_the_launch_has_no_output() -> N
 
 def test_graft_still_embeds_a_worker_whose_launching_call_is_missing() -> None:
     worker = EmbeddedWorker(
-        launch=_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
+        launch=worker_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
     )
 
     grafted = graft_worker_trajectories(atif_document(), [worker])
@@ -329,7 +358,7 @@ def test_graft_still_embeds_a_worker_whose_launching_call_is_missing() -> None:
 
 def test_workspace_trajectory_embeds_workers_and_still_validates() -> None:
     worker = EmbeddedWorker(
-        launch=_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
+        launch=worker_launch(), document=worker_document(WORKER_AGENT_ID), state=WorkerState.STOPPED, report_path=""
     )
 
     built = build_workspace_trajectory(
@@ -351,7 +380,7 @@ def test_workspace_trajectory_embeds_workers_and_still_validates() -> None:
 def test_workspace_trajectory_refuses_two_workers_with_one_id() -> None:
     workers = [
         EmbeddedWorker(
-            launch=_launch(name=name),
+            launch=worker_launch(name=name),
             document=worker_document(WORKER_AGENT_ID),
             state=WorkerState.STOPPED,
             report_path="",

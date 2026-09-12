@@ -1,4 +1,5 @@
 from enum import auto
+from functools import cached_property
 from pathlib import Path
 from typing import Annotated
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Self
 
 from pydantic import Field
 from pydantic import StringConstraints
+from pydantic import computed_field
 from pydantic import model_validator
 
 from imbue.imbue_common.enums import LowerCaseStrEnum
@@ -31,11 +33,6 @@ DEFAULT_DWT_REPO: Final[str] = "https://github.com/imbue-ai/default-workspace-te
 DEFAULT_DWT_BRANCH: Final[str] = "main"
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 3600.0
-
-# Seed value for the wordiness guard: a guess, not a measurement. To ground it,
-# take the mean over a batch of real runs and set "avg_word_count_baseline" in
-# the eval config, which overrides this per config.
-DEFAULT_AVG_WORD_COUNT_BASELINE: Final[float] = 120.0
 
 # Wall-clock the driver's evidence-collection phase gets after the conversation
 # ends; overridable per eval config via "verification_timeout_seconds".
@@ -459,9 +456,121 @@ class StepBoundary(FrozenModel):
     )
 
 
+class HarnessLane(LowerCaseStrEnum):
+    """A provider lane a workspace can be signed in on without a human at a device prompt.
+
+    The lane decides the harness, because that is how the product itself decides it: a chat runs on
+    the harness of the lane its account was minted on. ANTHROPIC serves claude; the rest serve
+    pi-coding, differing in whose key they take. The `openai` lane (codex) has no member here because
+    its sign-in cannot be driven by a run.
+    """
+
+    ANTHROPIC = auto()
+    API_KEY = auto()
+    OPENROUTER = auto()
+    OPENCODE_GO = auto()
+
+
+@pure
+def lane_id(lane: HarnessLane) -> str:
+    """The lane as the workspace's accounts API and the command line spell it: dashes, not
+    underscores (`--ak lane=api-key`)."""
+    return lane.value.replace("_", "-")
+
+
+class HarnessConfig(FrozenModel):
+    """The harness, model, effort and speed tier one run drives every one of its cases on.
+
+    One half of a run's arm, the other being the (mngr, dwt) pair the trial's box and workspace come
+    from. A run-level property like that pair, never a per-case one: it is parsed once from the run's
+    agent kwargs and applied to the one workspace each trial prepares.
+    """
+
+    lane: HarnessLane = Field(description="The provider lane the workspace is signed in on")
+    key_provider: str = Field(description="Which provider the key belongs to; only the api-key lane takes one")
+    key_env: str = Field(description="The environment variable holding the lane's key, derived when not given")
+    model: str = Field(description="The catalog id to switch the chat to before turn 1; empty means no switch")
+    effort: str = Field(description="The effort or thinking level set with the model; empty means no switch")
+    is_fast: bool = Field(description="Whether the switch asks for the fast speed tier")
+
+    @property
+    def is_switch_requested(self) -> bool:
+        """Whether this config asks for a model choice at all. A config that names no model changes
+        no setting of the workspace, and the chat runs exactly as the product ships it."""
+        return bool(self.model)
+
+
+class ObservedHarnessModels(FrozenModel):
+    """Which models actually answered, as read out of the captured transcript.
+
+    Empty until a transcript has been captured, which is the only place the models are recorded: no
+    workspace endpoint reads a chat's live model choice back. (The harness writes it to
+    `$MNGR_HOST_DIR/agents/<chat_id>/model_state.json`, which a bridged exec could read; nothing
+    here does.)
+    """
+
+    models: tuple[str, ...] = Field(
+        default=(), description="Sorted model names on the agent steps after the client's first turn"
+    )
+    welcome_model: str = Field(
+        default="", description="The model that answered the create template's greeting, before any switch"
+    )
+
+
+class HarnessConfigRecord(FrozenModel):
+    """What harness settings a trial was asked to run on and what it was observed running on.
+
+    The field names are this block's own keys wherever it is serialized, and they are the harness
+    config's kwarg names rather than this package's naming conventions -- hence `fast` for the
+    requested speed tier, which is what the operator typed.
+    """
+
+    lane: str = Field(default="", description="The provider lane the run asked to be signed in on")
+    key_provider: str = Field(default="", description="The provider the lane's key belongs to; empty off api-key")
+    account_id: str = Field(default="", description="The account the sign-in minted and the chat was created against")
+    harness: str = Field(default="", description="The harness, read back from the workspace's accounts listing")
+    model: str = Field(default="", description="The catalog id the run asked for; empty when it asked for none")
+    effort: str = Field(default="", description="The effort level the run asked for")
+    fast: bool = Field(default=False, description="The speed tier the run asked for")
+    # Named for the product's own name for the call that sets model, effort and fast together
+    # (`POST /api/agents/<id>/model`), since one such call is what this field reports on.
+    model_choice_switch: str = Field(
+        default="",
+        description="'applied', 'skipped' when the config named no model, the failure that stopped the trial, or "
+        "empty when the trial gave up before the switch",
+    )
+    observed_models: tuple[str, ...] = Field(
+        default=(), description="The models the transcript shows answering after the client's first turn"
+    )
+    welcome_model: str = Field(default="", description="The model that answered the greeting, before any switch")
+    # None rather than False for a config that requested no switch and for a catalog id whose
+    # reported naming is not known: an unrecognised model name is not evidence of a wrong model.
+    is_model_confirmed: bool | None = Field(
+        default=None,
+        description="Whether the observed models are exactly the requested one; None when it cannot be told",
+    )
+
+
+class ArmRecord(FrozenModel):
+    """The whole treatment a trial ran under: the (mngr, dwt) pair its box and workspace were built
+    from, and the harness config applied on top of that pair.
+
+    Every field is defaulted so a trajectory that no run drove -- the oracle's, built from a canned
+    transcript -- carries an empty arm rather than none at all.
+    """
+
+    mngr_sha: str = Field(default="", description="The mngr SHA the trial's box was built from")
+    dwt_sha: str = Field(default="", description="The workspace-template SHA the trial's workspace was cloned from")
+    harness_config: HarnessConfigRecord = Field(
+        default_factory=HarnessConfigRecord,
+        description="The harness settings the trial was asked to run on and was observed running on",
+    )
+
+
 class TrajectoryProvenance(FrozenModel):
     """What the eval knows about a trial's trajectory that the workspace document cannot: who drove it,
-    which decider spoke for the client, and whose account its usage figures come from."""
+    which decider spoke for the client, which arm -- pinned pair plus harness config -- it ran on,
+    and whose account its usage figures come from."""
 
     driver_name: str = Field(description="The harbor agent that drove the conversation")
     driver_version: str = Field(description="That agent's version")
@@ -472,6 +581,9 @@ class TrajectoryProvenance(FrozenModel):
     )
     case_id: str = Field(description="The case the trial ran")
     usage_source: UsageSource = Field(description="Which account final_metrics carries")
+    # Defaulted to the empty record for a trajectory no run drove: the oracle builds its own
+    # provenance from a canned transcript, pinning nothing and requesting nothing of any workspace.
+    arm: ArmRecord = Field(default_factory=ArmRecord, description="The treatment the trial was asked to run under")
 
 
 class TurnOutcome(LowerCaseStrEnum):
@@ -558,12 +670,13 @@ class StepBoxFile(FrozenModel):
 class RewardDimension(LowerCaseStrEnum):
     """A key of the verifier's reward.json that a step's `min_reward` may gate on.
 
-    GATES, QUALITY and OUTCOME are the dimensions rewardkit scores; REWARD is the composed, gated
-    score finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
+    Every member but REWARD is a dimension rewardkit scores; REWARD is the composed, gated score
+    finalize.py writes, and is what harbor compares a bare numeric `min_reward` against.
     """
 
     GATES = auto()
     QUALITY = auto()
+    HARNESS_QUALITY = auto()
     OUTCOME = auto()
     REWARD = auto()
 
@@ -673,12 +786,11 @@ class PersonaCase(FrozenModel):
 class EvalConfig(FrozenModel):
     """A validated eval config file: the mngr branch under test plus the persona cases."""
 
-    mngr_branch: str = Field(description="The mngr branch the box is built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box is built from")
     dwt_repo: str = Field(description="Workspace template repo each case is cloned from")
-    dwt_branch: str = Field(description="Workspace template branch")
+    dwt_branch: str = Field(description="Workspace template ref (branch, tag, or full SHA)")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
     cases: tuple[PersonaCase, ...] = Field(description="The persona cases, one task each")
 
 
@@ -690,12 +802,11 @@ class CaseConfig(FrozenModel):
     prompts: tuple[PromptEntry, ...] = Field(description="The conversation's entries in order")
     timeout_seconds: float = Field(description="Per-case wall-clock budget in seconds")
     verification_timeout_seconds: float = Field(description="Wall-clock budget for the evidence-collection phase")
-    mngr_branch: str = Field(description="The mngr branch the box was built from")
+    mngr_branch: str = Field(description="The mngr ref (branch, tag, or full SHA) the box was built from")
     mngr_sha: str = Field(description="Exact mngr SHA resolved at generation time")
     dwt_repo: str = Field(description="Workspace template repo")
-    dwt_branch: str = Field(description="Workspace template branch the SHA was resolved from")
+    dwt_branch: str = Field(description="Workspace template ref the SHA was resolved from")
     dwt_sha: str = Field(description="Exact workspace template SHA resolved at generation time")
-    avg_word_count_baseline: float = Field(description="Baseline for the verifier's wordiness guard")
     # The expanded form is what both the collector and the verifier act on; the authored form rides
     # along so a reader of instruction.md or case.json can see what the config actually said.
     expectations: ExpandedExpectations | None = Field(description="The expanded expectations, if the case has any")
@@ -730,6 +841,243 @@ class DeciderResult(FrozenModel):
     input_token_count: int = Field(description="Input tokens the call consumed; 0 when none completed")
     output_token_count: int = Field(description="Output tokens the call consumed; 0 when none completed")
     is_fallback: bool = Field(description="Whether the literal fallback message was used")
+
+
+class JudgeScore(FrozenModel):
+    """One likert judge criterion's score on a trial. Reported for the record, never gated."""
+
+    dimension: str = Field(description="The rewardkit dimension the criterion was scored under")
+    criterion: str = Field(description="The judge criterion's name, e.g. 'conciseness'")
+    # rewardkit normalizes a 1-10 likert to (raw - 1) / 9; both are carried so a reader can compare
+    # across runs without having to know which convention a number is in.
+    normalized_score: float = Field(description="The criterion's contribution to its dimension, 0-1")
+    raw_score: float = Field(description="The judge's own 1-10 likert answer")
+
+
+class TrialCheck(FrozenModel):
+    """How one trial of a finished run came out, under the criteria a scheduled run is gated on."""
+
+    trial_name: str = Field(description="The trial directory's name, e.g. 'todo-app__XNXFsgk'")
+    case_id: str = Field(description="The persona case the trial ran; empty when it cannot be read")
+    is_completed: bool = Field(description="Whether the trial ran to the end without erroring or timing out")
+    incompletion_reason: str = Field(description="Why the trial did not complete; empty when it did")
+    is_gates_passed: bool = Field(description="Whether every structural gate criterion scored above zero")
+    error_entry_ids: tuple[str, ...] = Field(description="Evidence manifest entries the harness could not measure")
+    reward: float | None = Field(description="The trial's final reward; None when it was never graded")
+    judge_scores: tuple[JudgeScore, ...] = Field(description="Every likert judge criterion the verifier recorded")
+    lane: str = Field(description="The provider lane the trial signed in on; empty when it recorded none")
+    requested_model: str = Field(
+        description="The catalog id the trial asked the chat to run on; empty when it asked for none"
+    )
+    is_model_confirmed: bool | None = Field(
+        description="Whether the models observed were exactly the requested one; None wherever it could not be told"
+    )
+    wrong_model_reason: str = Field(
+        description="Why the trial ran on another model than it asked for; empty when it did not"
+    )
+    modal_environment_name: str = Field(description="The Modal environment the trial left behind; empty if unrecorded")
+    mngr_sha: str = Field(description="The mngr SHA the trial's box was built from")
+    dwt_sha: str = Field(description="The workspace-template SHA the trial's workspace was cloned from")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        return self.is_completed and self.is_gates_passed and not self.error_entry_ids and not self.wrong_model_reason
+
+
+class RunCheck(FrozenModel):
+    """Whether a finished job passed the criteria a scheduled run is gated on, trial by trial."""
+
+    job_name: str = Field(description="The job directory's name")
+    trials: tuple[TrialCheck, ...] = Field(description="One entry per trial directory, in name order")
+
+    @computed_field
+    @cached_property
+    def is_passed(self) -> bool:
+        """Whether every trial passed; the check-run command's exit code follows this.
+
+        A run with no trials is not a pass: it says nothing ran, which must never read as a green
+        verdict.
+        """
+        return bool(self.trials) and all(trial.is_passed for trial in self.trials)
+
+    @computed_field
+    @cached_property
+    def modal_environment_names(self) -> tuple[str, ...]:
+        """Every environment the run leaked, so the same file that reports the run names what a
+        cleanup pass has to remove.
+
+        Derived from the rows rather than stored beside them, like the verdict above: a list a
+        caller had to keep in step with `trials` is one that can name an environment no trial in
+        the report created. A trial that never reached a workspace records no name, and an empty
+        one is dropped rather than reported as an environment to go looking for.
+        """
+        return tuple(sorted({trial.modal_environment_name for trial in self.trials if trial.modal_environment_name}))
+
+
+class ModalDeletionOutcome(UpperCaseStrEnum):
+    """How one Modal environment deletion came out.
+
+    DELETED and NOT_FOUND both mean the environment is gone, whether or not this call is what removed
+    it; only FAILED is a reason to look."""
+
+    DELETED = auto()
+    NOT_FOUND = auto()
+    FAILED = auto()
+
+
+class CleanupReport(FrozenModel):
+    """What one Modal environment cleanup pass did."""
+
+    deleted_names: tuple[str, ...] = Field(description="Environments the pass removed")
+    already_gone_names: tuple[str, ...] = Field(description="Environments that were absent by the time it looked")
+    failed_names: tuple[str, ...] = Field(description="Environments Modal refused to remove")
+
+
+class HarnessConfigEntry(FrozenModel):
+    """One named harness config in `configs/harness_configs.json`: the kwargs a scheduled cell
+    appends to its run line, under a name that labels the cell wherever it is reported.
+
+    The kwarg fields are the run line's own (`--ak lane=`, `--ak model=`, ...) and carry the same
+    defaults an empty kwarg does, so an entry that names nothing but its lane is the default harness
+    config: the product exactly as it ships. Validation is the driver's `parse_harness_config`, not
+    anything here; this model only holds the file's shape.
+    """
+
+    name: str = Field(description="The config's name, as job names, artifact names and the Slack report spell it")
+    is_nightly: bool = Field(description="Whether a scheduled run (and a dispatch naming no configs) runs it")
+    lane: str = Field(default="", description="The provider lane to sign in on; empty means anthropic")
+    key_provider: str = Field(default="", description="Which provider the key belongs to, on the api-key lane only")
+    key_env: str = Field(default="", description="The variable holding the lane's key; empty derives it from the lane")
+    model: str = Field(default="", description="The catalog id to switch the chat to before turn 1; empty means none")
+    effort: str = Field(default="", description="The effort level set with the model; empty means none")
+    fast: bool | None = Field(default=None, description="The speed tier set with the model; None leaves it unset")
+
+
+class HarnessConfigsFile(FrozenModel):
+    """The shape of `configs/harness_configs.json`."""
+
+    harness_configs: tuple[HarnessConfigEntry, ...] = Field(description="Every named config, nightly or not")
+
+
+class PairDecision(LowerCaseStrEnum):
+    """What a scheduled run decided about one (mngr, dwt) pair.
+
+    UNRESOLVED means one of its refs is not on its remote, so it has no SHAs and no cells; SKIP means
+    every one of its cells is already green; RUN means at least one cell runs, and with it the pair's
+    oracle pass.
+    """
+
+    RUN = auto()
+    SKIP = auto()
+    UNRESOLVED = auto()
+
+
+class CellDecision(LowerCaseStrEnum):
+    """What a scheduled run decided about one cell: run it, or skip it because its green marker
+    says this exact arm was already verified."""
+
+    RUN = auto()
+    SKIP = auto()
+
+
+class FrozenPair(FrozenModel):
+    """A (mngr, dwt) pair as the scheduled run's resolve job froze it: each ref resolved to a SHA
+    once, so nothing can drift between dataset generation and the run.
+
+    An unresolvable pair keeps its refs and carries empty SHAs; that is how the freeze reports it.
+    """
+
+    pair: str = Field(description="The pair's name: main, released, or custom")
+    mngr_ref: str = Field(description="The mngr ref the pair was asked for")
+    mngr_sha: str = Field(description="The mngr SHA it resolved to; empty when it did not resolve")
+    dwt_ref: str = Field(description="The workspace-template ref the pair was asked for")
+    dwt_sha: str = Field(description="The workspace-template SHA it resolved to; empty when it did not resolve")
+
+    @property
+    def is_resolved(self) -> bool:
+        return bool(self.mngr_sha) and bool(self.dwt_sha)
+
+
+class DecidedPair(FrozenPair):
+    """A frozen pair with the run's decision about it."""
+
+    decision: PairDecision = Field(description="Whether the pair runs, is skipped, or never resolved")
+
+
+class MatrixCell(FrozenModel):
+    """One arm of a scheduled run: a frozen pair times one named harness config, with everything
+    the cell's job needs spelled out so the workflow reads values and composes nothing.
+
+    Every field is a string or an enum on purpose: the cell is a GitHub Actions matrix entry, and
+    `harbor_args` is therefore a JSON-encoded list rather than a list.
+    """
+
+    pair: str = Field(description="The pair's name")
+    harness_config: str = Field(description="The harness config's name")
+    mngr_ref: str = Field(description="The mngr ref the pair was asked for")
+    mngr_sha: str = Field(description="The mngr SHA the pair froze to")
+    dwt_ref: str = Field(description="The workspace-template ref the pair was asked for")
+    dwt_sha: str = Field(description="The workspace-template SHA the pair froze to")
+    config: str = Field(description="The repo-relative eval config the dataset is generated from")
+    lane_key_env: str = Field(description="The environment variable the driver reads the lane's key from")
+    harbor_args: str = Field(description="JSON-encoded list of the `--ak` arguments appended to the run line")
+    cache_key: str = Field(description="The green marker's cache key: pair, both SHAs, config, and the harness config")
+    decision: CellDecision = Field(description="Whether the cell runs or its green marker already holds")
+
+
+class CiMatrix(FrozenModel):
+    """What the scheduled run's resolve job decided, for the jobs after it: the pairs and cells it
+    considered, and the two matrices (oracle passes per running pair, live passes per running cell)
+    read straight out of the serialized form."""
+
+    config: str = Field(description="The repo-relative eval config every cell generates its dataset from")
+    pairs: tuple[DecidedPair, ...] = Field(description="Every pair considered, skipped and unresolved ones included")
+    cells: tuple[MatrixCell, ...] = Field(description="Every cell of every resolved pair, skipped ones included")
+
+    @computed_field
+    @cached_property
+    def oracle_matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `oracle` job's matrix: one entry per pair that has a cell to run."""
+        return {
+            "include": [
+                pair.model_dump(mode="json", exclude={"decision"})
+                for pair in self.pairs
+                if pair.decision is PairDecision.RUN
+            ]
+        }
+
+    @computed_field
+    @cached_property
+    def matrix(self) -> dict[str, list[dict[str, Any]]]:
+        """The `evaluate` job's matrix: one entry per running cell."""
+        return {
+            "include": [
+                cell.model_dump(mode="json", exclude={"decision"})
+                for cell in self.cells
+                if cell.decision is CellDecision.RUN
+            ]
+        }
+
+    @computed_field
+    @cached_property
+    def is_any_cell_running(self) -> bool:
+        return any(cell.decision is CellDecision.RUN for cell in self.cells)
+
+
+class CiReportContext(FrozenModel):
+    """What the Slack report of a scheduled run knows about the run beyond its summaries: where it
+    is, what started it, how long it took, and how its jobs ended as GitHub reports them."""
+
+    run_url: str = Field(description="The workflow run's URL")
+    trigger: str = Field(description="The event that started the run: schedule, workflow_dispatch, or push")
+    duration_seconds: int | None = Field(
+        description="Wall clock since the run was queued; None when it could not be read"
+    )
+    is_live_pass_skipped: bool = Field(description="Whether the run stopped after the oracle passes")
+    resolve_result: str = Field(description="The resolve job's result: success, failure, cancelled, or skipped")
+    oracle_result: str = Field(description="The oracle job's result, or empty when GitHub reported none")
+    evaluate_result: str = Field(description="The evaluate job's result, or empty when GitHub reported none")
 
 
 class GoalDecision(FrozenModel):

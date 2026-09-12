@@ -2089,7 +2089,13 @@ class EvidenceCollector(MutableModel):
         # The session cookie rides this first request, so the opening navigation is already
         # authenticated (`forward_instance.session_cookie_domain` for the scope it carries).
         opening = ui_flows.FlowAction(
-            kind=ui_flows.FlowActionKind.OPEN, role="", target="", text=target_url, amount=0, reasoning="open the app"
+            kind=ui_flows.FlowActionKind.OPEN,
+            role="",
+            target="",
+            text=target_url,
+            amount=0,
+            reasoning="the flow has not opened the app yet",
+            expected="the delivered app loads",
         )
         outcome = await self._run_step_script(
             ui_flows.build_step_request(
@@ -2118,6 +2124,11 @@ class EvidenceCollector(MutableModel):
             )
             return
         state_text = outcome.state_text
+        steps.append(
+            ui_flows.flow_init_record(
+                check.steps, check.expect, target_url, state_text, outcome.screenshot_name, utc_now_iso()
+            )
+        )
 
         for step_index in range(1, ui_flows.MAX_STEPS_PER_FLOW + 1):
             if self._remaining_seconds <= 0:
@@ -2152,12 +2163,19 @@ class EvidenceCollector(MutableModel):
             if action.kind == ui_flows.FlowActionKind.DONE:
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", "", utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        "",
+                        utc_now_iso(),
                     )
                 )
                 is_finished_by_agent = True
                 break
-            history.append(described)
             outcome = await self._run_step_script(
                 ui_flows.build_step_request(
                     action,
@@ -2170,7 +2188,15 @@ class EvidenceCollector(MutableModel):
             if ui_flows.is_instrument_reason(outcome.reason):
                 steps.append(
                     ui_flows.flow_step_record(
-                        step_index, described, action.reasoning, state_text, "", outcome.reason, utc_now_iso()
+                        step_index,
+                        described,
+                        action.reasoning,
+                        action.expected,
+                        "",
+                        state_text,
+                        "",
+                        outcome.reason,
+                        utc_now_iso(),
                     )
                 )
                 await self._finish_flow(check, slug, steps, CheckStatus.ERROR, outcome.reason, outcome.detail)
@@ -2181,12 +2207,18 @@ class EvidenceCollector(MutableModel):
                 # a click that hit nothing. The page below shows the truth, so the flow carries on
                 # with the failure recorded where the grade-time judge will read it.
                 step_error = _bounded(outcome.detail.strip(), 200)
-                history.append("(that action failed: {})".format(step_error))
+            # What the page did, against what the action predicted it would do. Recorded on the step
+            # and carried into the next decision's history, which is where a wrong model of the UI
+            # -- a filter that turns out to be a toggle -- becomes visible instead of being retried.
+            observed = ui_flows.summarize_state_change(state_text, outcome.state_text or state_text)
+            history.append(ui_flows.describe_step(described, action.expected, step_error, observed))
             steps.append(
                 ui_flows.flow_step_record(
                     step_index,
                     described,
                     action.reasoning,
+                    action.expected,
+                    observed,
                     state_text,
                     # The executor names the frame it actually wrote, and names nothing when the
                     # capture failed. Naming the file it would have written instead would put a
@@ -2203,7 +2235,7 @@ class EvidenceCollector(MutableModel):
         # not its completion, because the step log already carries every state that was seen.
         reading, _reading_call = agent.read_final_state(check.steps, tuple(history), state_text)
         observation = reading.observation if reading is not None else ""
-        steps.append(ui_flows.flow_reading_record(len(steps) + 1, observation, state_text, utc_now_iso()))
+        steps.append(ui_flows.flow_final_record(len(steps), observation, state_text, utc_now_iso()))
         # Completion, not achievement: a flow that carried out its declared steps is `completed`,
         # and one that ran out of budget first is `incomplete`. Whether the app did what the
         # `expect` describes is decided at grade time, from this evidence.
@@ -2352,25 +2384,37 @@ def oracle_evidence_files(case: CaseConfig) -> dict[str, str]:
 
 @pure
 def _oracle_flow_log(check: UiFlowCheck) -> str:
+    """The log a flow would have written had the delivered app been perfect: the same record kinds a
+    real flow emits, so the oracle exercises every path a reader takes."""
+    opening_state = "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name)
     return "".join(
         line + "\n"
         for line in (
-            ui_flows.flow_step_record(
-                0,
-                "open {}".format(_ORACLE_APP_URL),
-                "Opening the delivered app to start the flow.",
-                "browser minds-eval-verify @ {}  ({})".format(_ORACLE_APP_URL, check.name),
-                "",
+            ui_flows.flow_init_record(
+                check.steps,
+                check.expect,
+                _ORACLE_APP_URL,
+                opening_state,
                 "",
                 "1970-01-01T00:00:00+00:00",
             ),
             ui_flows.flow_step_record(
                 1,
                 "finish the flow",
-                "Every declared step has been carried out.",
-                "browser minds-eval-verify @ {}  ({})\n{}".format(_ORACLE_APP_URL, check.name, check.expect),
+                "the delivered app, open and showing what the steps describe",
+                "nothing further -- every declared step has been carried out",
+                "",
+                "{}\n{}".format(opening_state, check.expect),
                 "",
                 "",
+                "1970-01-01T00:00:00+00:00",
+            ),
+            # A reading, not a verdict, exactly as a real flow's closing record is: the digest prints
+            # it as one more piece of evidence and the judge still rules on the `expect` itself.
+            ui_flows.flow_final_record(
+                2,
+                "the page shows: {}".format(check.expect),
+                "{}\n{}".format(opening_state, check.expect),
                 "1970-01-01T00:00:00+00:00",
             ),
         )

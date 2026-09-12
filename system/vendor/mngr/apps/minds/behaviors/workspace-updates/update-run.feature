@@ -24,6 +24,15 @@ Feature: Running an update
     Then no update agent is started
     And the app explains that the workspace cannot update itself
 
+  @workspace-refuses-the-agent
+  Scenario: A workspace that refuses to start the update agent has its refusal shown
+    Which account and harness an agent runs on is the workspace's own decision, and so is whether one can run at all: a workspace with no provider account signed in refuses the agent in its own words, which the app shows rather than composing a reason of its own. That refusal is one the user clears themselves, so the run has to be startable again the moment they have.
+    Given an out-of-date workspace that refuses to start any agent in it
+    When the user starts an update for that workspace
+    Then no update agent is started
+    And the app shows the workspace's own refusal
+    And starting that workspace's update again is not refused as one already in flight
+
   @stop-mid-apply-is-confirmed
   Scenario: Stopping a workspace while its update is being applied asks first
     A run that is only preparing has changed nothing, so it withholds nothing; the apply is the one step a stop can leave half-done.

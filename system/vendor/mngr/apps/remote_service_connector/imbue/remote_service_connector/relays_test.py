@@ -25,9 +25,7 @@ def _admin_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_ADMIN_KEY}"}
 
 
-# ---------------------------------------------------------------------------
 # Pure helpers
-# ---------------------------------------------------------------------------
 
 
 def test_generate_relay_id_is_valid_and_unique() -> None:
@@ -110,9 +108,7 @@ def test_relay_endpoints_for_region_filters_sorts_and_ignores_health() -> None:
     assert relay_endpoints_for_region(rows, "eu1") == []
 
 
-# ---------------------------------------------------------------------------
 # Admin API
-# ---------------------------------------------------------------------------
 
 
 def test_admin_relays_requires_the_admin_key(monkeypatch: pytest.MonkeyPatch) -> None:

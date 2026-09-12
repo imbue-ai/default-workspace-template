@@ -8,6 +8,7 @@ import { getAppContext } from "../../../app-context";
 import { Button } from "../../components/Button";
 import { ColorSwatch } from "../../components/ColorSwatch";
 import { Icon16 } from "../../components/Icon";
+import { machineVerdict } from "../../components/MachineVerdict";
 import { Modal } from "../../components/Modal";
 import { Notice } from "../../components/Notice";
 import { routeLinkAttrs } from "../../components/route-link";
@@ -24,7 +25,7 @@ import {
   updateActivityNotice,
 } from "../../../models/updates";
 import { noBackupConfirmPrompt, scheduledLine, updateVersionRow } from "../../components/UpdateModal";
-import { BackupGroupSlot } from "./BackupGroupSlot";
+import { BackupGroup } from "./BackupGroup";
 import { Spinner } from "../../components/Spinner";
 import { navEntryClass, splitPane } from "../../components/SplitPane";
 import { workspacePageNoticeFor } from "../../shell/notice-band";
@@ -59,7 +60,7 @@ interface SettingsGroupsLocalState {
   /** The press held for the go-ahead-without-backups confirmation, and its machine. */
   noBackupConfirm: { agentId: string; action: "now" | "schedule"; targetRef: string } | null;
   /** The last dispatch's refusal and the machine it was refused for, or null. */
-  updateError: { agentId: string; message: string } | null;
+  updateError: { agentId: string; message: string; detail: string } | null;
 }
 
 /** The piece of update state only when it belongs to the machine being drawn:
@@ -124,7 +125,7 @@ export function SettingsGroups(): m.Component<SettingsGroupsAttrs> {
           content: [
             selectedGroup === "general" ? renderGeneralGroup(model, local) : null,
             selectedGroup === "account" ? renderAccountGroup(model, local) : null,
-            selectedGroup === "backup" ? m(BackupGroupSlot, { agentId: data.agent_id }) : null,
+            selectedGroup === "backup" ? m(BackupGroup, { agentId: data.agent_id }) : null,
             selectedGroup === "updates" ? renderUpdatesGroup(data.agent_id, local) : null,
           ],
           extra: "mt-8",
@@ -216,7 +217,7 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
       action === "schedule" ? updates.scheduleUpdate(agentId, targetRef) : updates.cancelSchedule(agentId);
     void call.then((result) => {
       if (local.pendingSchedule === inFlight) local.pendingSchedule = null;
-      if (!result.isOk) local.updateError = { agentId, message: result.error };
+      if (!result.isOk) local.updateError = { agentId, message: result.error, detail: result.detail };
       m.redraw();
     });
   }
@@ -231,14 +232,15 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
       if (local.pendingDispatch === inFlight) local.pendingDispatch = null;
       // Into the machine, as the modal's Update now does: an attended update is a conversation.
       if (result.isOk) shell.enterWorkspace(agentId);
-      else local.updateError = { agentId, message: result.error };
+      else local.updateError = { agentId, message: result.error, detail: result.detail };
       m.redraw();
     });
   }
 
   const activity = updateActivityNotice(update, isUpdating);
   const held = forMachine(local.noBackupConfirm, agentId);
-  const errorMessage = forMachine(local.updateError, agentId)?.message ?? "";
+  const shownError = forMachine(local.updateError, agentId);
+  const errorMessage = shownError?.message ?? "";
 
   return m("div", { class: "max-w-md" }, [
     m(SectionHeader, "Version"),
@@ -398,7 +400,10 @@ function renderUpdatesGroup(agentId: string, local: SettingsGroupsLocalState): m
           ]),
           ],
       errorMessage
-        ? m("p", { class: "type-helper text-important mt-3", role: "alert" }, errorMessage)
+        ? m("div", { class: "type-helper text-important mt-3", role: "alert" }, [
+            errorMessage,
+            machineVerdict(shownError?.detail ?? ""),
+          ])
         : null,
     ]),
   ]);

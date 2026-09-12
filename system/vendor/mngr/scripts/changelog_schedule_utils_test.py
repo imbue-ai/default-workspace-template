@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from imbue.mngr_modal.errors import ModalCliOutputError
 from scripts.changelog_schedule_utils import MNGR_ROOT_NAME
 from scripts.changelog_schedule_utils import ModalCommandError
 from scripts.changelog_schedule_utils import ModalSchemaError
@@ -65,8 +66,8 @@ def test_stop_all_apps_stops_running_apps_in_matching_envs_only(env_name_key: st
         environments=[{env_name_key: target_env}, {env_name_key: "mngr-other-user-bbb"}],
         apps_by_env={
             target_env: [
-                {"App ID": "ap-1", "State": "deployed"},
-                {"App ID": "ap-2", "State": "stopped"},
+                {"app_id": "ap-1", "description": "changelog-consolidation", "state": "deployed"},
+                {"app_id": "ap-2", "description": "changelog-consolidation", "state": "stopped"},
             ],
         },
     )
@@ -87,7 +88,7 @@ def test_stop_all_apps_dry_run_reports_without_stopping() -> None:
     target_env = f"{MNGR_ROOT_NAME}-aaa"
     fake = FakeModal(
         environments=[{"name": target_env}],
-        apps_by_env={target_env: [{"App ID": "ap-1", "State": "deployed"}]},
+        apps_by_env={target_env: [{"app_id": "ap-1", "description": "changelog-consolidation", "state": "deployed"}]},
     )
     result = stop_all_apps_in_changelog_envs(fake, is_dry_run=True)
     assert result == [(target_env, "ap-1")]
@@ -100,8 +101,8 @@ def test_stop_all_apps_continues_past_individual_stop_failure() -> None:
         environments=[{"name": target_env}],
         apps_by_env={
             target_env: [
-                {"App ID": "ap-1", "State": "deployed"},
-                {"App ID": "ap-2", "State": "running"},
+                {"app_id": "ap-1", "description": "changelog-consolidation", "state": "deployed"},
+                {"app_id": "ap-2", "description": "changelog-consolidation", "state": "running"},
             ]
         },
         stop_failures=frozenset({"ap-1"}),
@@ -115,9 +116,9 @@ def test_stop_all_apps_raises_on_missing_app_id_key() -> None:
     target_env = f"{MNGR_ROOT_NAME}-aaa"
     fake = FakeModal(
         environments=[{"name": target_env}],
-        apps_by_env={target_env: [{"State": "deployed"}]},
+        apps_by_env={target_env: [{"description": "changelog-consolidation", "state": "deployed"}]},
     )
-    with pytest.raises(ModalSchemaError):
+    with pytest.raises(ModalCliOutputError):
         stop_all_apps_in_changelog_envs(fake)
 
 

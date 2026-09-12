@@ -68,6 +68,8 @@ from imbue.minds.desktop_client.state import get_state
 from imbue.minds.desktop_client.sync_scheduler import WorkspaceSyncScheduler
 from imbue.minds.desktop_client.system_interface_health import AgentHealth
 from imbue.minds.desktop_client.system_interface_health import SystemInterfaceHealthTracker
+from imbue.minds.desktop_client.testing import RefusingSpawnMngrCaller
+from imbue.minds.desktop_client.testing import SIGNED_IN_ACCOUNT_DIR
 from imbue.minds.desktop_client.testing import StaticPendingRequests
 from imbue.minds.desktop_client.testing import blocking_release_wait_body
 from imbue.minds.desktop_client.testing import build_resolver_with_system_services
@@ -75,6 +77,7 @@ from imbue.minds.desktop_client.testing import create_predefined_permission_requ
 from imbue.minds.desktop_client.testing import drain_ui_channel_frames
 from imbue.minds.desktop_client.testing import exec_json_envelope
 from imbue.minds.desktop_client.testing import install_stub_mngr_on_path
+from imbue.minds.desktop_client.testing import ready_machine_probe_stdout
 from imbue.minds.desktop_client.testing import record_provider_discovery_error
 from imbue.minds.desktop_client.testing import tamper_session_cookie_signed_content
 from imbue.minds.desktop_client.testing import write_stub_mngr
@@ -1360,17 +1363,105 @@ def test_help_assist_reports_unreachable_workspace(tmp_path: Path) -> None:
     assert len(caller.calls) == 1
 
 
+_ASSIST_SKILL_PRESENT_STDOUT = "MNGR_ASSIST_SKILL_PRESENT\n"
+
+
 def test_help_assist_spawns_when_the_skill_is_present(tmp_path: Path) -> None:
-    """A supported machine probes clean, then the chat is created (probe call + create call)."""
-    caller = RecordingMngrCaller(result=MngrCallResult(returncode=0, stdout="MNGR_ASSIST_SKILL_PRESENT\n"))
+    """A supported machine that writes no create defaults probes clean, is asked its resolver, and the chat is
+    created bound to the account it named."""
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(returncode=0, stdout=ready_machine_probe_stdout(_ASSIST_SKILL_PRESENT_STDOUT))
+    )
     client, _ = _create_test_client_with_stores(tmp_path, mngr_caller=caller)
     response = client.post("/help/assist", json={"description": "it broke", "workspace_agent_id": str(AgentId())})
     assert response.status_code == 200
-    # First the skill probe, then the inner ``mngr create``.
-    assert len(caller.calls) == 2
+    # The skill probe, the account probe, then the inner ``mngr create``.
+    assert len(caller.calls) == 3
     assert caller.calls[0][0] == "exec"
-    assert caller.calls[1][:2] == ["exec", "--agent"]
-    assert "mngr create" in caller.calls[1][3]
+    assert "system/scripts/default_account_args.py" in caller.calls[1][3]
+    create = caller.calls[2]
+    assert create[:2] == ["exec", "--agent"]
+    assert "mngr create" in create[3]
+    # An unbound chat would answer every turn "Not logged in".
+    assert f"CLAUDE_CONFIG_DIR={SIGNED_IN_ACCOUNT_DIR}" in create[3]
+
+
+def test_help_assist_spawns_unbound_on_a_machine_whose_template_keeps_no_accounts(tmp_path: Path) -> None:
+    """Before the account store one shared config dir held the credential, so a binding would point at nothing."""
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(
+            returncode=0, stdout=ready_machine_probe_stdout(_ASSIST_SKILL_PRESENT_STDOUT, account_dir=None)
+        )
+    )
+    client, _ = _create_test_client_with_stores(tmp_path, mngr_caller=caller)
+
+    response = client.post("/help/assist", json={"description": "it broke", "workspace_agent_id": str(AgentId())})
+
+    assert response.status_code == 200
+    create = caller.calls[2]
+    assert "mngr create" in create[3]
+    assert "CLAUDE_CONFIG_DIR" not in create[3]
+
+
+def test_help_assist_spawns_bare_on_a_machine_that_writes_its_create_defaults(tmp_path: Path) -> None:
+    """The machine's own mngr resolves the account and harness: one probe, then a create naming neither."""
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(
+            returncode=0,
+            stdout=ready_machine_probe_stdout(_ASSIST_SKILL_PRESENT_STDOUT, is_local_settings_present=True),
+        )
+    )
+    client, _ = _create_test_client_with_stores(tmp_path, mngr_caller=caller)
+
+    response = client.post("/help/assist", json={"description": "it broke", "workspace_agent_id": str(AgentId())})
+
+    assert response.status_code == 200
+    assert len(caller.calls) == 2
+    create = caller.calls[1][3]
+    assert "mngr create" in create
+    assert "CLAUDE_CONFIG_DIR" not in create and "--type" not in create
+    # The one setting the app adds: the lever for a machine whose claude no longer matches its pin.
+    assert "agent_types.claude.check_installation=false" in create
+
+
+def test_help_assist_spawns_unbound_when_the_resolver_names_no_account(tmp_path: Path) -> None:
+    """The create runs, and what the machine makes of it is the verdict the user sees, rather than a
+    refusal the app composes out here."""
+    caller = RecordingMngrCaller(
+        result=MngrCallResult(
+            returncode=0, stdout=ready_machine_probe_stdout(_ASSIST_SKILL_PRESENT_STDOUT, account_dir="")
+        )
+    )
+    client, _ = _create_test_client_with_stores(tmp_path, mngr_caller=caller)
+
+    response = client.post("/help/assist", json={"description": "it broke", "workspace_agent_id": str(AgentId())})
+
+    assert response.status_code == 200
+    create = caller.calls[2][3]
+    assert "mngr create" in create
+    assert "CLAUDE_CONFIG_DIR" not in create
+
+
+def test_help_assist_tells_the_user_what_a_refusing_machine_said(tmp_path: Path) -> None:
+    """A machine that will not start any agent is one retrying cannot fix, so its own words have to reach the user."""
+    caller = RefusingSpawnMngrCaller(
+        result=MngrCallResult(returncode=0, stdout=ready_machine_probe_stdout(_ASSIST_SKILL_PRESENT_STDOUT)),
+        refusal_stderr=(
+            "WARNING: outer SSH unreachable for host host-other: Host not found: host-other\n"
+            "Error: Unknown fields in agent_types.opencode: ['auto_allow_permissions']\n"
+            "ERROR: Command failed on agent system-services\n"
+        ),
+    )
+    client, _ = _create_test_client_with_stores(tmp_path, mngr_caller=caller)
+
+    response = client.post("/help/assist", json={"description": "it broke", "workspace_agent_id": str(AgentId())})
+
+    assert response.status_code == 502
+    body = response.get_json()
+    assert body["error"] == "Couldn't start an agent in this machine."
+    assert body["detail"].startswith("Error: Unknown fields in agent_types.opencode")
+    # The unrelated unreachable host is the first thing mngr prints and the last thing to blame.
+    assert "outer SSH unreachable" not in body["detail"]
 
 
 def test_help_report_requires_description(tmp_path: Path) -> None:

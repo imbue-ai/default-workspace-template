@@ -11,10 +11,15 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceCreateAttemptFailedError
 from imbue.minds.desktop_client.e2e_workspace_runner import WorkspaceFlowError
+from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_CHAT_TILE_SELECTOR
+from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_TAB_ADD_BUTTON_SELECTOR
+from imbue.minds.desktop_client.e2e_workspace_runner import _NEW_TERMINAL_TILE_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _TERMINAL_IFRAME_SELECTOR
 from imbue.minds.desktop_client.e2e_workspace_runner import _chat_frame
 from imbue.minds.desktop_client.e2e_workspace_runner import _read_failure_message
 from imbue.minds.desktop_client.e2e_workspace_runner import _wait_for_workspace_ready_or_failure
+from imbue.minds.desktop_client.e2e_workspace_runner import open_terminal_from_new_tab
+from imbue.minds.desktop_client.e2e_workspace_runner import start_new_chat_from_new_tab
 
 # A workspace-ready URL (matches the agent-subdomain pattern) and a still-pending
 # backend URL (does not), used to drive the waiter's success/failure branches.
@@ -259,8 +264,8 @@ def test_chat_frame_is_the_child_whose_path_is_the_chat_agent_id() -> None:
 
 
 def test_chat_frame_polls_until_the_chat_attaches() -> None:
-    # The first chat is created asynchronously after sign-in, so the frame is
-    # not there on the first scan; the poll runs through Playwright's own wait.
+    # The shell docks the chat's frame after the tile is pressed, so it is not
+    # there on the first scan; the poll runs through Playwright's own wait.
     chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
     workspace = _FakeWorkspaceFrame(child_frame_lists=[[], [chat]])
     assert _chat_frame(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
@@ -279,3 +284,70 @@ def test_chat_frame_raises_when_no_chat_opens_in_time() -> None:
     workspace = _FakeWorkspaceFrame(child_frame_lists=[[_FakeFrame(urls=[_TERMINAL_PAGE_URL])]])
     with pytest.raises(WorkspaceFlowError):
         _chat_frame(cast(Frame, workspace), timeout_seconds=0)
+
+
+class _FakeNewTabWorkspace(_FakeWorkspaceFrame):
+    """A workspace frame whose New Tab page may or may not be showing.
+
+    As in the shell, the dockview add button is visible only while no New Tab page is showing.
+    Records the selectors clicked; the chat frame appears among the children only after the
+    New Chat tile is pressed, the way the shell docks it.
+    """
+
+    def __init__(self, *, is_new_tab_showing: bool, chat: _FakeFrame) -> None:
+        super().__init__(child_frame_lists=[[]])
+        self._is_new_tab_showing = is_new_tab_showing
+        self._chat = chat
+        self.clicked: list[str] = []
+
+    def query_selector(self, selector: str) -> object | None:
+        is_add_button_visible = not self._is_new_tab_showing
+        return object() if is_add_button_visible and selector == f"{_NEW_TAB_ADD_BUTTON_SELECTOR}:visible" else None
+
+    def wait_for_selector(self, selector: str, state: str, timeout: float) -> None:
+        pass
+
+    def click(self, selector: str) -> None:
+        self.clicked.append(selector)
+        if selector == _NEW_CHAT_TILE_SELECTOR:
+            self._child_frame_lists = [[self._chat]]
+
+
+class _FakeTerminalNewTabWorkspace(_FakeNewTabWorkspace):
+    """The New Tab fake for the terminal tile: records what it waits for, since the terminal docks as a plain iframe."""
+
+    def __init__(self, *, is_new_tab_showing: bool) -> None:
+        super().__init__(is_new_tab_showing=is_new_tab_showing, chat=_FakeFrame(urls=[]))
+        self.waited_for: list[str] = []
+
+    def wait_for_selector(self, selector: str, state: str, timeout: float) -> None:
+        self.waited_for.append(selector)
+
+
+def test_open_terminal_presses_the_terminal_tile_and_waits_for_its_frame() -> None:
+    workspace = _FakeTerminalNewTabWorkspace(is_new_tab_showing=True)
+    open_terminal_from_new_tab(cast(Frame, workspace))
+    assert workspace.clicked == [_NEW_TERMINAL_TILE_SELECTOR]
+    assert workspace.waited_for == [_NEW_TERMINAL_TILE_SELECTOR, _TERMINAL_IFRAME_SELECTOR]
+
+
+def test_open_terminal_opens_a_new_tab_page_first_when_none_is_showing() -> None:
+    workspace = _FakeTerminalNewTabWorkspace(is_new_tab_showing=False)
+    open_terminal_from_new_tab(cast(Frame, workspace))
+    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _NEW_TERMINAL_TILE_SELECTOR]
+
+
+def test_start_new_chat_presses_the_tile_and_returns_the_chat_frame_it_docks() -> None:
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=True, chat=chat)
+    assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+    assert workspace.clicked == [_NEW_CHAT_TILE_SELECTOR]
+
+
+def test_start_new_chat_opens_a_new_tab_page_first_when_none_is_showing() -> None:
+    # A workspace showing only docked tabs has no tile on screen; the dockview add button
+    # opens the New Tab page that carries it.
+    chat = _FakeFrame(urls=[_CHAT_PAGE_URL])
+    workspace = _FakeNewTabWorkspace(is_new_tab_showing=False, chat=chat)
+    assert start_new_chat_from_new_tab(cast(Frame, workspace), timeout_seconds=5) is cast(Frame, chat)
+    assert workspace.clicked == [_NEW_TAB_ADD_BUTTON_SELECTOR, _NEW_CHAT_TILE_SELECTOR]

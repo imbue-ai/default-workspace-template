@@ -78,8 +78,10 @@ Key fields:
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.
-(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: every claude
-in the workspace uses claude's own default `~/.claude`.)
+(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: a claude is bound
+to a provider account on its `mngr create`, and a create that names no account
+gets the workspace's default one from `.mngr/settings.local.toml`, which the
+chat app maintains; `~/.claude` holds no credential.)
 
 ## OOM priority (memory-pressure shedding)
 

@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import tomllib
+from collections.abc import Mapping
 from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
@@ -27,6 +28,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 from imbue.minds_evals.errors import BoxCommandError
+from imbue.minds_evals.errors import ModalNameBudgetError
 from imbue.minds_evals.errors import WorkspaceCreateError
 
 BOX_MNGR_DIR: Final[str] = "/work/mngr"
@@ -43,9 +45,9 @@ BOX_LOGS_DIR: Final[str] = "/logs/agent"
 BOX_SERVICE_LOGS_DIR: Final[str] = "/logs/artifacts/minds"
 BOX_LOG_FILENAME: Final[str] = "box.log"
 # Scripts this app runs inside the box, shipped in the package and uploaded per trial. They are not
-# baked into the box image because it is layer-cached per mngr SHA and has to stay byte-identical
-# across a dataset, so changing them would cost a rebuild -- and because the image is built from the
-# pinned mngr SHA, which predates them.
+# baked into the box image because the image is one build per mngr SHA, cached whole, and has to
+# stay byte-identical across a dataset -- so changing them would cost a full rebuild -- and because
+# the image is built from the pinned mngr SHA, which predates them.
 _RESOURCES = resources.files("imbue.minds_evals") / "resources"
 BOX_REVERSE_TUNNEL_FILENAME: Final[str] = "box_reverse_tunnel.py"
 BOX_REVERSE_TUNNEL_PATH: Final[str] = "/tmp/box_reverse_tunnel.py"
@@ -55,8 +57,16 @@ BOX_FLOW_STEP_FILENAME: Final[str] = "box_flow_step.py"
 # and is imported by it as a plain module, so the two files must land in the same directory.
 BOX_FLOW_PROTOCOL_FILENAME: Final[str] = "flow_step_protocol.py"
 BOX_PROXY_DIR: Final[str] = "/tmp/eval_proxy"
+# The venv the proxy is served from, built by the box image and holding nothing else. Never the
+# workspace venv under BOX_MNGR_DIR: that one carries plain `litellm`, whose CLI refuses to serve
+# without the [proxy] extra, and every `uv run` in the box re-syncs it from the lock -- so proxy
+# dependencies added to it would be stripped out from under a running proxy mid-trial. It is a
+# different directory from BOX_PROXY_DIR above, which holds the proxy's config, hooks and usage
+# log (proxy.log itself goes to the service logs dir, like every other long-running service's).
+BOX_PROXY_VENV_DIR: Final[str] = "/opt/eval_proxy"
+BOX_PROXY_LITELLM_PATH: Final[str] = "{}/bin/litellm".format(BOX_PROXY_VENV_DIR)
 PROXY_CONFIG_FILENAME: Final[str] = "proxy_config.yaml"
-BOX_PROXY_USAGE_LOG_PATH: Final[str] = "/tmp/eval_proxy/usage_proxy.jsonl"
+BOX_PROXY_USAGE_LOG_PATH: Final[str] = "{}/usage_proxy.jsonl".format(BOX_PROXY_DIR)
 TUNNEL_LOG_FILENAME: Final[str] = "reverse_tunnel.log"
 PROXY_LOG_FILENAME: Final[str] = "proxy.log"
 # How much of a service log the timeout diagnostics keep. The tail is where a wedged service says
@@ -91,6 +101,26 @@ ANTHROPIC_BASE_URL_ENV_VAR: Final[str] = "ANTHROPIC_BASE_URL"
 # "api_key", a key plus a base URL (the proxy form) is "imbue".
 AUTH_MODE_API_KEY: Final[str] = "api_key"
 AUTH_MODE_IMBUE: Final[str] = "imbue"
+
+# The workspace's accounts API -- the endpoints the product's account screen posts to when a user
+# adds a provider account. A chat runs on the harness of the lane its account was minted on, so the
+# lane a workspace is signed in on is what decides the harness a run measures.
+ACCOUNTS_PATH: Final[str] = "/api/accounts"
+ACCOUNT_FLOW_PATH_TEMPLATE: Final[str] = "/api/accounts/flow/{flow_id}"
+# The one sign-in method a run can drive: a pasted key. The other methods put a human at a device
+# prompt, which is why the lanes that only offer those are out of reach of an eval.
+ACCOUNT_FLOW_METHOD_API_KEY: Final[str] = "api_key"
+# What a flow reports on the submit and on every poll of it; anything else means it is still working.
+_ACCOUNT_FLOW_STATE_OK: Final[str] = "ok"
+_ACCOUNT_FLOW_STATE_FAILED: Final[str] = "failed"
+# The endpoint the product's model picker posts to. It is harness-blind and validated against the
+# chat's own catalog, and it answers with nothing that reads the choice back.
+MODEL_CHOICE_PATH_TEMPLATE: Final[str] = "/api/agents/{agent_id}/model"
+# Sent on every switch so the endpoint applies all three axes, rather than only the ones a client's
+# own diffing would have considered changed.
+MODEL_CHOICE_AXES: Final[tuple[str, ...]] = ("model", "effort", "fast")
+# How much of a refusal is kept: enough to read a mistyped catalog id off a trial listing.
+_REFUSAL_DETAIL_LIMIT: Final[int] = 300
 
 _QUICK_EXEC_TIMEOUT_SECONDS: Final[int] = 180
 _SLOW_EXEC_TIMEOUT_SECONDS: Final[int] = 900
@@ -179,6 +209,32 @@ async def fetch_minds_activation_env(environment: BaseEnvironment, minds_env: st
                 "silently see no workspaces".format(required_key, sorted(activation_env))
             )
     return activation_env
+
+
+# mngr's modal provider truncates the environment name it derives to this many characters
+# (MODAL_NAME_MAX_LENGTH in mngr_modal, which this project does not depend on). Truncation is a
+# lossy left-slice with no disambiguating hash, so a truncated name is a name that can collide with
+# another trial's -- and a name nothing here could reconstruct afterwards to clean up.
+MODAL_ENVIRONMENT_NAME_MAX_LENGTH: Final[int] = 64
+
+
+@pure
+def derive_modal_environment_name(activation_env: Mapping[str, str], user_id: str) -> str:
+    """The Modal environment mngr's modal provider will put this trial's workspaces in.
+
+    Derived here rather than read back from Modal because the environment is created lazily, deep
+    inside the first workspace create: a trial that dies before then still has to leave the name
+    behind for cleanup to act on. It is the same concatenation mngr makes.
+    """
+    environment_name = "{}{}".format(activation_env["MNGR_PREFIX"], user_id)
+    if len(environment_name) > MODAL_ENVIRONMENT_NAME_MAX_LENGTH:
+        raise ModalNameBudgetError(
+            "the Modal environment name {!r} is {} characters and mngr would truncate it to {}; "
+            "shorten the user id budget so the recorded name stays the created one".format(
+                environment_name, len(environment_name), MODAL_ENVIRONMENT_NAME_MAX_LENGTH
+            )
+        )
+    return environment_name
 
 
 @pure
@@ -841,6 +897,202 @@ async def authenticate_workspace(
     return WorkspaceSignIn(is_signed_in=True, account_id=account_id)
 
 
+class AccountSignIn(FrozenModel):
+    """What the workspace's accounts flow reported when a lane was signed in through it.
+
+    The claude lane keeps its own path (``authenticate_workspace``), whose answer carries the auth
+    mode a proxied sign-in is verified by; every other lane comes through here.
+    """
+
+    is_signed_in: bool = Field(description="Whether the flow settled with the workspace signed in")
+    account_id: str = Field(default="", description="The account the flow minted; empty when it did not sign in")
+    failure: str = Field(default="", description="Prose naming what went wrong; empty when the workspace signed in")
+    is_failure_from_waiting: bool = Field(
+        default=False,
+        description="Whether the failure is a wait that ran out, which callers report as a readiness reason",
+    )
+
+
+@pure
+def _response_detail(response: WorkspaceResponse) -> str:
+    """An endpoint's own account of an answer: its ``detail``, else whatever it sent, else the bare
+    status -- an answer that says nothing still has to name itself in a failure a reader diagnoses
+    a trial from."""
+    body = response.body if isinstance(response.body, dict) else {}
+    detail = str(body.get("detail") or response.text or "")
+    if detail:
+        return detail
+    return "HTTP {}".format(response.status) if response.status else "the call was never answered"
+
+
+@pure
+def _read_account_flow_answer(response: WorkspaceResponse, lane_id: str, api_key: str) -> AccountSignIn | None:
+    """The sign-in an accounts-flow answer reports, or None while the flow is still working on it.
+
+    A key the harness could not use settles the flow as ``failed``: the workspace probes the
+    provider with the key before it answers, so this is where a key that does not work for the lane
+    is caught, rather than a turn later. An answer this side cannot read counts as still working,
+    since the flow is polled on the same URL and the next answer may settle it.
+    """
+    body = response.body if isinstance(response.body, dict) else {}
+    state = str(body.get("state") or "")
+    if state == _ACCOUNT_FLOW_STATE_FAILED:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the workspace rejected the key for lane {}: {}".format(
+                lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+            ),
+        )
+    if state != _ACCOUNT_FLOW_STATE_OK:
+        return None
+    account_id = body.get("account_id")
+    if isinstance(account_id, str) and account_id:
+        return AccountSignIn(is_signed_in=True, account_id=account_id)
+    return AccountSignIn(is_signed_in=True)
+
+
+async def sign_in_via_accounts_flow(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    lane_id: str,
+    api_key: str,
+    key_provider: str,
+    deadline: float,
+    poll_seconds: float,
+) -> AccountSignIn:
+    """Sign the workspace in on a provider lane through the flow the product's account screen drives,
+    and report the account it minted.
+
+    The lane decides which harness a chat bound to that account runs on, so this is how a run
+    chooses a harness at all. It is two calls: one that starts a flow and answers its id, and one
+    that submits the key against it. An API-key lane settles on the submit, but the flow may also
+    answer that it is still working, which is polled on the same URL until it settles or the wait
+    runs out.
+
+    The key never reaches a log or a return value: whatever refuses a sign-in can quote the request
+    that carried it, and trial logs outlive the run.
+    """
+    start_payload = json.dumps({"lane_id": lane_id, "method_id": ACCOUNT_FLOW_METHOD_API_KEY})
+    start_response = await workspace_curl(environment, env, workspace_agent_id, ACCOUNTS_PATH, start_payload)
+    started = start_response.body if isinstance(start_response.body, dict) else {}
+    flow_id = started.get("flow_id")
+    if not start_response.is_ok or not isinstance(flow_id, str) or not flow_id:
+        failure = "the workspace refused to start a sign-in on lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(start_response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    flow_path = ACCOUNT_FLOW_PATH_TEMPLATE.format(flow_id=flow_id)
+    submit_fields = {"api_key": api_key}
+    # Sent only by a lane that has one to send: the api-key lane pairs a key with the provider it
+    # belongs to, and a lane that serves one provider has no use for the field.
+    if key_provider:
+        submit_fields["key_provider"] = key_provider
+    response = await workspace_curl(environment, env, workspace_agent_id, flow_path, json.dumps(submit_fields))
+    if not response.is_ok:
+        failure = "the workspace rejected the key for lane {}: {}".format(
+            lane_id, redact_secret(_response_detail(response), api_key)[:_REFUSAL_DETAIL_LIMIT]
+        )
+        logger.error(failure)
+        return AccountSignIn(is_signed_in=False, failure=failure)
+
+    heartbeat = WaitHeartbeat(label="the sign-in on lane {} to settle".format(lane_id))
+    sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    while sign_in is None and time.time() < deadline:
+        heartbeat.tick(redact_secret(_response_detail(response), api_key)[:200])
+        await asyncio.sleep(poll_seconds)
+        response = await workspace_curl(environment, env, workspace_agent_id, flow_path, None)
+        sign_in = _read_account_flow_answer(response, lane_id, api_key)
+    if sign_in is None:
+        return AccountSignIn(
+            is_signed_in=False,
+            failure="the sign-in on lane {} never settled".format(lane_id),
+            is_failure_from_waiting=True,
+        )
+    if sign_in.failure:
+        logger.error(sign_in.failure)
+        return sign_in
+    if not sign_in.account_id:
+        logger.warning(
+            "The workspace signed in on lane {} but named no account; its chat will be created against "
+            "whichever account the workspace picks for itself",
+            lane_id,
+        )
+        return sign_in
+    logger.info("Signed the workspace in on lane {} (account {})", lane_id, sign_in.account_id)
+    return sign_in
+
+
+class AccountRecord(FrozenModel):
+    """One row of the workspace's accounts listing."""
+
+    id: str = Field(description="The account id a chat is created against")
+    lane: str = Field(description="The provider lane the account was minted on")
+    harness: str = Field(description="The harness a chat bound to this account runs on")
+
+
+async def fetch_account(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    account_id: str,
+) -> AccountRecord | None:
+    """The workspace's own row for an account, or None when it lists no such row.
+
+    This is the only readback of the harness a trial gets: which harness an account runs is the
+    workspace's to say, never the run's to assume from the lane it asked for.
+    """
+    body = await workspace_curl_json(environment, env, workspace_agent_id, ACCOUNTS_PATH, None)
+    accounts = body.get("accounts") if isinstance(body, dict) else None
+    if not isinstance(accounts, list):
+        logger.warning("The workspace's accounts listing answered nothing readable; the harness stays unrecorded")
+        return None
+    for account in accounts:
+        if isinstance(account, dict) and str(account.get("id") or "") == account_id:
+            return AccountRecord(
+                id=account_id, lane=str(account.get("lane") or ""), harness=str(account.get("harness") or "")
+            )
+    logger.warning("The workspace lists no account {}; the harness stays unrecorded", account_id)
+    return None
+
+
+class ModelSwitchOutcome(FrozenModel):
+    """What the workspace answered when a chat's model choice was set."""
+
+    is_applied: bool = Field(description="Whether the endpoint took the choice")
+    status: int = Field(description="The response status; 0 when the call never reached the endpoint")
+    detail: str = Field(default="", description="The endpoint's account of a refusal; empty when it was applied")
+
+
+async def switch_model_choice(
+    environment: BaseEnvironment,
+    env: dict[str, str],
+    workspace_agent_id: str,
+    chat_agent_id: str,
+    model_id: str,
+    effort: str,
+    is_fast: bool,
+) -> ModelSwitchOutcome:
+    """Set a chat's model, effort and speed tier through the endpoint the product's model picker
+    posts to.
+
+    The ids are the chat's catalog ids, which differ by harness and are validated by the endpoint
+    alone: its 400 is the validation, and it is quoted verbatim because a mistyped catalog id is a
+    configuration error the reader has to be able to see, not a workspace fault to retry.
+    """
+    payload = json.dumps({"model_id": model_id, "effort": effort, "fast": is_fast, "axes": list(MODEL_CHOICE_AXES)})
+    url_path = MODEL_CHOICE_PATH_TEMPLATE.format(agent_id=chat_agent_id)
+    response = await workspace_curl(environment, env, workspace_agent_id, url_path, payload)
+    if response.is_ok:
+        logger.info("The workspace took the model choice {} (effort {}, fast {})", model_id, effort, is_fast)
+        return ModelSwitchOutcome(is_applied=True, status=response.status)
+    detail = _response_detail(response)[:_REFUSAL_DETAIL_LIMIT]
+    logger.error("The workspace refused the model choice {} (HTTP {}): {}", model_id, response.status, detail)
+    return ModelSwitchOutcome(is_applied=False, status=response.status, detail=detail)
+
+
 @pure
 def parse_agent_ssh_info(listed_json: str, agent_id: str) -> dict[str, str] | None:
     """The workspace's SSH endpoint out of `mngr list --format json`, the same payload mngr's own
@@ -887,8 +1139,9 @@ async def start_reverse_tunnel(
 ) -> None:
     """Upload the tunnel holder and start it in the background in the box.
 
-    Uploaded at run time rather than baked into the box image: the image is layer-cached per mngr SHA
-    and has to stay byte-identical across a dataset, so shipping this in it would cost a rebuild.
+    Uploaded at run time rather than baked into the box image: the image is one build per mngr SHA,
+    cached whole, and has to stay byte-identical across a dataset, so shipping this in it would cost
+    a full rebuild.
     """
     with resources.as_file(_RESOURCES / BOX_REVERSE_TUNNEL_FILENAME) as script_path:
         await environment.upload_file(script_path, BOX_REVERSE_TUNNEL_PATH)
@@ -918,8 +1171,8 @@ async def upload_flow_step_script(environment: BaseEnvironment, target_path: str
 
     Both land in the target's directory, because the script imports the protocol as a plain module
     beside it. Uploaded per trial rather than baked into the box image for the same reason the
-    reverse-tunnel holder is: the image is layer-cached per mngr SHA and has to stay byte-identical
-    across a dataset, so a change here would otherwise cost a full rebuild.
+    reverse-tunnel holder is: the image is one build per mngr SHA, cached whole, and has to stay
+    byte-identical across a dataset, so a change here would otherwise cost a full rebuild.
     """
     box_dir = target_path.rsplit("/", 1)[0]
     for filename, destination in (
@@ -974,17 +1227,17 @@ async def start_proxy(
             "ANTHROPIC_API_KEY": anthropic_api_key,
             PROXY_KEY_ENV_VAR: proxy_key,
             PROXY_USAGE_LOG_ENV_VAR: BOX_PROXY_USAGE_LOG_PATH,
-            # litellm imports the hooks by module name, so the directory holding them must be on the
-            # path; it is not the working directory, which stays the monorepo for `uv run`.
+            # litellm imports the hooks by module name, so the directory holding them must be on
+            # the path.
             "PYTHONPATH": BOX_PROXY_DIR,
         }
     )
     command = (
-        "mkdir -p {logs} && cd {mngr} && setsid nohup uv run --package modal-litellm litellm --config {config} "
+        "mkdir -p {logs} && setsid nohup {litellm} --config {config} "
         "--port {port} --host 127.0.0.1 > {log} 2>&1 < /dev/null &"
     ).format(
         logs=BOX_SERVICE_LOGS_DIR,
-        mngr=BOX_MNGR_DIR,
+        litellm=BOX_PROXY_LITELLM_PATH,
         config="{}/{}".format(BOX_PROXY_DIR, PROXY_CONFIG_FILENAME),
         port=port,
         log=service_log_path(PROXY_LOG_FILENAME),
@@ -1179,6 +1432,15 @@ SNAPSHOT_EXCLUDES: Final[tuple[str, ...]] = (
 # The workspace home tree, which contains the mngr host dir -- code, agent
 # state, and data -- so snapshotting it captures everything a trial produced.
 WORKSPACE_BACKUP_ROOT: Final[str] = "/home/user"
+# Where mngr rescues a destroyed agent's transcripts to. The agent side of the workspace runs as root,
+# so its own host dir is /root/.mngr, outside the home tree above -- and a worker the lead destroys
+# after merging (which the launch-task flow invites) leaves its conversation ONLY here. Without it a
+# hardening pass that ran, reported and was cleaned up is unreconstructable: its branch and its report
+# survive in the home tree, its trajectory does not.
+PRESERVED_AGENT_STATE_DIR: Final[str] = "/root/.mngr/preserved"
+# Where Claude transcripts are stored for Minds provider accounts when the service runs as root.
+# Restricting to accounts/*/projects avoids archiving credentials (such as settings.json) under accounts/.
+ROOT_MINDS_PROJECTS_PATTERN: Final[str] = "/root/.minds/accounts/*/projects"
 
 
 async def snapshot_workspace(
@@ -1202,8 +1464,21 @@ async def snapshot_workspace(
     # directory keeps its basename, whereas rsync to an explicit file path was
     # observed to create a directory of that name and nest the tarball inside.
     workspace_tar = "/tmp/{}.tar.gz".format(tag)
-    tar_command = "tar czf {} {} -C {} . 2>/dev/null || true".format(
-        workspace_tar, exclude_flags, WORKSPACE_BACKUP_ROOT
+    # The preserved and minds dirs are added as their own -C segments, and only when they exist:
+    # naming a missing path makes tar exit nonzero and the snapshot is skipped entirely. Their
+    # entries land under `root/.mngr/preserved/` and `root/.minds/accounts/<id>/projects/`, distinct
+    # from the home tree's `./`. Restricting to `accounts/*/projects` avoids archiving credentials.
+    tar_command = (
+        "preserved=''; [ -d {preserved} ] && preserved='-C / {preserved_relative}'; "
+        'minds=\'\'; for p in {minds_pattern}; do [ -d "$p" ] && minds="$minds -C / ${{p#/}}"; done; '
+        "tar czf {tar} {excludes} -C {root} . $preserved $minds 2>/dev/null || true"
+    ).format(
+        preserved=shlex.quote(PRESERVED_AGENT_STATE_DIR),
+        preserved_relative=shlex.quote(PRESERVED_AGENT_STATE_DIR.lstrip("/")),
+        minds_pattern=ROOT_MINDS_PROJECTS_PATTERN,
+        tar=workspace_tar,
+        excludes=exclude_flags,
+        root=WORKSPACE_BACKUP_ROOT,
     )
     is_success, _ = await run_in_workspace(environment, env, workspace_agent_id, tar_command, 300)
     if not is_success:

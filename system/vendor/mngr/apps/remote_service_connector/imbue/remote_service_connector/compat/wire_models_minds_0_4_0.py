@@ -69,7 +69,15 @@ RELEASE_DATE = date(2026, 8, 18)
 # this tag, and no new strict-parse call sites were added client-side. The
 # release is a minor bump for the workspace-side sign-in and chat rewrite, none
 # of which crosses the connector wire.
-SUPPORT_ENDS = date(2026, 10, 2)
+# Also covers minds 0.5.1 (released 2026-09-08): the strictly-parsed surface is
+# still identical -- wire_types.py is byte-unchanged between minds-v0.5.0 and
+# this tag, and no new strict-parse call sites were added client-side. The
+# release moves credential and permission-policy ownership onto each machine,
+# none of which crosses the connector wire.
+# Also covers minds 0.5.2 (released 2026-09-09): the strictly-parsed surface is
+# still identical -- wire_types.py is byte-unchanged between minds-v0.5.1 and
+# this tag, and no new strict-parse call sites were added client-side.
+SUPPORT_ENDS = date(2026, 10, 9)
 
 
 class _TolerantModel(BaseModel):

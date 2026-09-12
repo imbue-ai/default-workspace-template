@@ -355,6 +355,11 @@ minds-evals-run dataset job_name concurrency="4" *harbor_args="":
     #!/usr/bin/env bash
     set -euo pipefail
     : "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY -- the decider and judge call the Anthropic API}"
+    # just splices a variadic parameter in as raw text, so `{{harbor_args}}` below is subject to
+    # word splitting (which is how several --ak flags arrive as several words) AND to pathname
+    # expansion, which nothing here wants: `--ak model=opus[1m]` is a valid glob bracket
+    # expression, and a matching file in the working directory would rewrite the model.
+    set -f
     # --project selects the standalone minds_evals venv (harbor and the driver
     # package live only there); it leaves cwd at the repo root, so the
     # root-relative -o/-p paths below stay correct.
@@ -372,6 +377,24 @@ minds-evals-run dataset job_name concurrency="4" *harbor_args="":
         {{harbor_args}})
     echo ">> ${cmd[*]}"
     "${cmd[@]}"
+
+# List the Modal environments YOUR OWN run left behind, without deleting any of
+# them. A trial never destroys its environment: it outlives the sandboxes inside
+# it and is where a failed trial's workspace state is recovered from. So every
+# run leaks one environment per trial, on purpose, and removing them is opt-in.
+[group("minds evals")]
+minds-evals-list-environments job_dir:
+    uv run --project apps/minds_evals minds-evals cleanup-environments --job-dir "{{job_dir}}" --dry-run
+
+# Delete exactly the Modal environments the trials in JOB_DIR recorded, and
+# nothing else -- the names come from each trial's own state.json, never from a
+# pattern. Run the list recipe above first and read what it prints. There is
+# deliberately no developer-facing sweep: a sweep by name is the scheduled job's
+# backstop for its own runs, and pointing one at a shared prefix would take out
+# somebody else's environments along with yours.
+[group("minds evals")]
+minds-evals-cleanup-environments job_dir:
+    uv run --project apps/minds_evals minds-evals cleanup-environments --job-dir "{{job_dir}}"
 
 # Browse a harbor job or task directory with the vendored viewer
 # (apps/minds_evals/viewer, a copy of harbor's own frontend -- see its

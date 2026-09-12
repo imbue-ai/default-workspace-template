@@ -25,6 +25,7 @@ import {
 } from "./NewTabLauncher";
 import type { LaunchTile, LauncherRow, NewTabLauncherAttrs } from "./NewTabLauncher";
 import { START_OPTIONS, START_PAGE_SIZE } from "./startSomething";
+import { HOVER_LIFT_TRANSITION } from "./hoverLift";
 
 function row(
   address: string,
@@ -378,6 +379,55 @@ describe("NewTabLauncher", () => {
     const templateTile = root.querySelector<HTMLElement>('[data-start="template"]')!;
     expect(templateTile.getAttribute("aria-disabled")).toBe("true");
     expect(root.querySelector<HTMLElement>('[data-start="build-app"]')!.getAttribute("aria-disabled")).toBeNull();
+    // A tile that cannot be picked does not answer the pointer with the lift.
+    expect(templateTile.className).not.toContain(HOVER_LIFT_TRANSITION);
+    expect(root.querySelector<HTMLElement>('[data-start="build-app"]')!.className).toContain(HOVER_LIFT_TRANSITION);
+  });
+
+  it("floats a tile without moving it, and grows its glyph instead", () => {
+    mount({});
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    const glyph = buildTile.querySelector<HTMLElement>("span")!;
+    // The tile takes the shadow and nothing else -- its text stays put under the pointer.
+    expect(buildTile.className).toContain("hover:shadow-overlay");
+    expect(buildTile.className).not.toContain("scale-");
+    expect(buildTile.classList).toContain("group");
+    // The glyph is the one thing that grows, and it is the tile that drives it.
+    expect(glyph.className).toContain("group-hover:scale-[1.15]");
+    // The lift is the whole answer: a tile no longer fills behind it.
+    expect(buildTile.className).not.toContain("hover:bg-fill-hover");
+  });
+
+  it("brings a pickable tile's sentence up to the title's colour under the pointer", () => {
+    mount({});
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="build-app"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("group-hover:text-primary");
+    // It rides the lift's timing, so the tile answers the pointer all at once.
+    expect(sentence.className).toContain("duration-300");
+  });
+
+  it("leaves a standing-down tile's sentence faint", () => {
+    mount({ catalog: { kind: "disabled" } });
+    const sentence = [...root.querySelectorAll<HTMLElement>('[data-start="template"] span')].find((el) =>
+      el.className.includes("type-helper"),
+    )!;
+    expect(sentence.className).toContain("text-faint");
+    expect(sentence.className).not.toContain("group-hover:text-primary");
+  });
+
+  it("times the tile, its glyph and a template's drawing alike", () => {
+    mount({});
+    // One shared transition across all three, so the page's answers cannot drift apart.
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    expect(buildTile.className).toContain(HOVER_LIFT_TRANSITION);
+    expect(buildTile.querySelector<HTMLElement>("span")!.className).toContain(HOVER_LIFT_TRANSITION);
+    const art = root.querySelector<HTMLElement>("[data-template] .new-tab-template-art")!;
+    expect(art.className).toContain(HOVER_LIFT_TRANSITION);
+    // A card's drawing still grows, driven by the button around it.
+    expect(art.className).toContain("group-hover:scale-[1.02]");
+    expect(root.querySelector<HTMLElement>("[data-template]")!.classList).toContain("group");
   });
 
   it("reveals the intents a page at a time behind See more, until every one is shown", () => {
