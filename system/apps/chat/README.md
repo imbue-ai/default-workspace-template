@@ -35,8 +35,9 @@ its manifest and port 8010 through `system/scripts/forward_port.py`, starts
   `/api/chats/<chat-id>/agents/<agent-id>/subagents/<session-id>/`),
   `/api/chats/create`, `/api/chats`, `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, and `/api/latchkey`. Every
-  chat route is also served under its older `/api/agents/...` spelling, whose
-  id is read as a chat id.
+  per-chat route, `/api/chats/create`, and the subagent reads are also served
+  under their older `/api/agents/...` spelling, whose id is read as a chat id;
+  `/api/agents` stays the plain listing of every mngr agent.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
   per chat, the agent-level facts under `active_agent`) and the provisional-chat
   events (`provisional_chat_created`, `provisional_chat_completed`).
