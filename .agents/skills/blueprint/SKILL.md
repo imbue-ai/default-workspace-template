@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: Start a new plan-writing session. Explores the codebase and asks clarifying questions.
+description: Start a plan-writing session for a feature, refactor, or migration the user wants designed before any code changes. Picks a plan template, explores the codebase, and works through rounds of clarifying questions. Writes no code and produces no plan file itself; the session ends when the user invokes blueprint-generate.
 metadata:
   author: imbue
 ---

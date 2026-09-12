@@ -1,6 +1,6 @@
 ---
 name: dealing-with-the-unexpected
-description: Handle unexpected situations where things are not working as expected. Use when you encounter errors, confusing state, or behavior that contradicts your docs and prompts.
+description: Work out what is actually happening when the workspace does not behave as documented -- an unexplained error, state that makes no sense, or a command whose result contradicts these instructions. Walks through gathering evidence from tmux, supervisord and on-disk state before diagnosing, so you act on what is true rather than on what should be true. Use when you are surprised, not when a command simply failed for a reason you already understand.
 metadata:
   author: imbue
 ---

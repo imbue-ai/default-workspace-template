@@ -1,6 +1,6 @@
 ---
 name: heal-creation
-description: "Fix an existing creation that errored or delivered a wrong result. This applies to skills, apps, and services. Invoke at turn-end, after you worked around the failure to satisfy the user's request."
+description: "Fix a skill, app, or service that errored or returned a wrong result, by dispatching a background worker to reproduce the incident, find the root cause, apply a minimal fix, re-run the scenarios, and come back with one approval gate. Use at turn-end, after you have already worked around the failure and delivered what the user asked for -- never inline, and never to patch the creation by hand. A system-interface regression goes through update-system-interface instead, which owns the preview and roll-back."
 metadata:
   author: imbue
 ---

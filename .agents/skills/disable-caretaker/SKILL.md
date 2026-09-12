@@ -1,6 +1,6 @@
 ---
 name: disable-caretaker
-description: Switch off the weekly Caretaker. Use when the user asks to turn off, pause, or get rid of the Caretaker.
+description: Switch off the weekly Caretaker by removing its cron entry, so the maintenance agent is never woken again. Use when the user asks to turn it off, pause it, or get rid of it. Its run history and recorded permissions survive by default, so enable-caretaker can pick up where it left off; clearing those is a separate, confirmed step.
 metadata:
   author: imbue
 ---

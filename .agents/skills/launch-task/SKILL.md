@@ -1,6 +1,6 @@
 ---
 name: launch-task
-description: Create a sub-agent to perform a larger task. Use when work is large enough to warrant a separate context, involves multi-file changes, or benefits from isolation.
+description: Hand a task to a sub-agent that works in its own git worktree and reports back through a report file. Use when a task spans many files and would otherwise fill this conversation's context, or when its changes need to stay isolated from the workspace checkout until they are reviewed and merged. Not for work you could finish in a handful of tool calls, and not for reviewing or verifying your own work; a sub-agent re-establishes context from scratch, so the round trip costs more than a short task is worth. The whole delegation shows up as one step in the user's progress view.
 metadata:
   author: imbue
 ---
