@@ -43,7 +43,7 @@ the request is -- it changes what you do *before* touching code:
 
 - **Larger-scope change** -- a redesign, a new page or view, a meaningful
   shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
+  mock-confirm flow `build-app` uses to create a service: **read
   `.agents/shared/references/interactive-delivery.md`**, put a cheap,
   throwaway version of the *proposed* change in front of the user, loop until
   they **explicitly confirm** the shape, and only then build the real thing
