@@ -2060,7 +2060,7 @@ def test_get_or_create_watcher_seeds_activity_before_starting_the_watcher() -> N
     assert calls.index("get_all_events") < calls.index("start")
 
 
-def test_create_chat_agent_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_chat_without_work_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     """Creating a chat agent without a primary agent work dir returns 400."""
     monkeypatch.delenv("MNGR_AGENT_WORK_DIR", raising=False)
     monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
