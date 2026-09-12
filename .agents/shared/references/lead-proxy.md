@@ -156,7 +156,7 @@ the directory is clean for future runs.
 
 ## `mngr rsync` rationale
 
-When syncing reports (or the initial runtime dir to the worker):
+When syncing the initial runtime dir (or any other directory) to the worker:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \
