@@ -232,14 +232,15 @@ describe("NewTabLauncher", () => {
     return Array.from(root.querySelectorAll<HTMLElement>("[data-section]")).map((section) => section.dataset.section!);
   }
 
-  /** Open a table's filter menu and uncheck the app the menu shows as ``displayName``. */
+  /** Open a table's filter menu and uncheck the app the menu shows as ``displayName``. The
+   *  menu portals to <body>, so its rows are found on the document rather than the root. */
   function uncheckAppInFilter(sectionKey: string, displayName: string): void {
     root.querySelector<HTMLElement>(`[data-section="${sectionKey}"] button[aria-expanded]`)!.click();
     m.redraw.sync();
-    const label = Array.from(root.querySelectorAll("label")).find((candidate) =>
+    const label = Array.from(document.querySelectorAll("label")).find((candidate) =>
       candidate.textContent!.includes(displayName),
     )!;
-    label.querySelector("input")!.dispatchEvent(new Event("change"));
+    label.querySelector("input")!.dispatchEvent(new Event("change", { bubbles: true }));
     m.redraw.sync();
   }
 
@@ -291,25 +292,26 @@ describe("NewTabLauncher", () => {
     expect(attrs.onRunAction).not.toHaveBeenCalled();
   });
 
-  it("closes the filter menu from its own toggle", () => {
+  it("closes the filter menu on a press outside it", () => {
     mount({ isEverything: true });
     const toggle = root.querySelector<HTMLElement>('[data-section="on-machine"] button[aria-expanded]')!;
     toggle.click();
     m.redraw.sync();
-    expect(root.querySelector('input[type="checkbox"]')).not.toBeNull();
-    // A real press is a pointerdown (which the open menu listens for on the document) then a click.
-    toggle.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    toggle.click();
+    expect(document.querySelector('input[type="checkbox"]')).not.toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    // A press anywhere but the menu -- the toggle included -- lands on the menu's sheet.
+    document.querySelector('[data-menu-part="sheet"]')!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     m.redraw.sync();
-    expect(root.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(document.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
   it("filters one table by app without touching the other", () => {
     mount({ isEverything: true });
     root.querySelector<HTMLElement>('[data-section="on-machine"] button[aria-expanded]')!.click();
     m.redraw.sync();
-    const checkbox = Array.from(root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))[0];
-    checkbox.dispatchEvent(new Event("change"));
+    const checkbox = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))[0];
+    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
     m.redraw.sync();
     expect(root.querySelectorAll(".new-tab-launcher-row").length).toBe(2);
   });

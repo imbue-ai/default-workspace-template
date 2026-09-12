@@ -62,12 +62,12 @@ vi.mock("../shell", () => ({
 
 import m from "mithril";
 
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function render(): void {
-  m.render(ROOT(), m(ModelBar as never, { agentId: "a1" }));
+  m.render(ROOT(), m(ModelProviderMenu as never, { agentId: "a1" }));
 }
 
 /** Everything on screen, card and flyout included -- both portal out of the component. */
@@ -261,7 +261,7 @@ describe("the combo card", () => {
     click(".model-selector-trigger");
     const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
     if (slider === null) throw new Error("no slider");
-    const row = (): string => document.querySelector('[data-card-row="effort"]')?.textContent ?? "";
+    const row = (): string => document.querySelector('[data-menu-row="effort"]')?.textContent ?? "";
     expect(row()).toContain("Low");
 
     slider.value = "1";
@@ -300,7 +300,7 @@ describe("the combo card", () => {
     slider.dispatchEvent(new Event("change", { bubbles: true }));
     render();
     expect(picks).toHaveLength(1);
-    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Low");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Low");
   });
 
   it("keeps naming a hidden level while the thumb sits at the far left", () => {
@@ -321,7 +321,7 @@ describe("the combo card", () => {
     };
     render();
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="effort"]')?.textContent).toContain("Ultra");
+    expect(document.querySelector('[data-menu-row="effort"]')?.textContent).toContain("Ultra");
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
   });
 
@@ -334,7 +334,7 @@ describe("the combo card", () => {
     ];
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
     expect(rows[0].getAttribute("aria-disabled")).toBeNull();
@@ -348,7 +348,7 @@ describe("the combo card", () => {
     click(".notice-dismiss");
     expect(screenText()).not.toContain("Launch a new chat?");
     expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
 
     // Launch starts the chat on that account and takes the card down.
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -358,7 +358,7 @@ describe("the combo card", () => {
     launch.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
     expect(started).toEqual(["acct-2"]);
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
   it("stars the default account and pins another on a press of its star", () => {
@@ -366,7 +366,7 @@ describe("the combo card", () => {
     providerState.defaultId = "acct-1";
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     const pinned = document.querySelector('[aria-label="Stop opening new chats on Anthropic by default"]');
     expect(pinned?.getAttribute("aria-pressed")).toBe("true");
     const other = document.querySelector<HTMLElement>('[aria-label="Open new chats on Google by default"]');
@@ -384,7 +384,7 @@ describe("the combo card", () => {
     // too often be someone finding out what it was.
     render();
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     expect(screenText()).not.toContain("Remove account");
     click('[aria-label="Sign out of Anthropic"]');
     expect(screenText()).toContain("Remove account");
@@ -392,7 +392,7 @@ describe("the combo card", () => {
     // Closing and reopening must not leave the confirmation up.
     click(".model-selector-trigger");
     click(".model-selector-trigger");
-    click('[data-card-row="providers"]');
+    click('[data-menu-row="providers"]');
     expect(screenText()).not.toContain("Remove account");
   });
 
@@ -423,9 +423,9 @@ describe("the combo card", () => {
     catalogState.catalog = catalogOf({ switch_mode: "read_only" });
     render();
     click(".model-selector-trigger");
-    expect(document.querySelector('[data-card-row="model"]')?.querySelector("svg")).toBeNull();
-    click('[data-card-row="model"]');
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-row="model"]')?.querySelector("svg")).toBeNull();
+    click('[data-menu-row="model"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("survives a dynamic harness with no static options", () => {

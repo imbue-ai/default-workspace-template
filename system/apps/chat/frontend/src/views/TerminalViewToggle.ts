@@ -17,7 +17,7 @@
  */
 import m from "mithril";
 
-import * as css from "./modelCardStyles";
+import * as css from "./modelProviderMenuStyles";
 
 export interface TerminalViewToggleAttrs {
   on: boolean;

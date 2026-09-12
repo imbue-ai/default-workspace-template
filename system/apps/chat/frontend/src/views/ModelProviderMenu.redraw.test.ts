@@ -2,7 +2,7 @@
 /**
  * The card must react to the FIRST click, on its own.
  *
- * This is the one thing `ModelBar.test.ts` cannot catch: its `click()` helper re-renders by
+ * This is the one thing `ModelProviderMenu.test.ts` cannot catch: its `click()` helper re-renders by
  * hand afterwards, which supplies exactly the redraw whose absence was the bug. The card and
  * its flyouts are drawn through `Portal` -> `m.render`, mithril's manual API, which does not
  * wire auto-redraw into event handlers. Every handler inside them set state and nothing
@@ -60,7 +60,7 @@ vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTa
 
 import m from "mithril";
 
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 
 const OPUS = {
   id: "opus",
@@ -127,23 +127,23 @@ beforeEach(() => {
   // MOUNTED, not rendered: this is what gives handlers in the main tree their auto-redraw,
   // and what the portal has to reproduce for the handlers inside it.
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(ModelBar as never, { agentId: "a1" }),
+    view: () => m(ModelProviderMenu as never, { agentId: "a1" }),
   });
 });
 
 describe("the card without a hand-cranked redraw", () => {
   it("opens a flyout on the first press of a row", async () => {
     await press(".model-selector-trigger");
-    expect(document.querySelector('[data-model-popover="card"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
 
-    await press('[data-card-row="providers"]');
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    await press('[data-menu-row="providers"]');
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
   });
 
   it("moves the effort label with the thumb, on the portal's own redraw", async () => {
     // The label lives inside the portal, and the portal's `input` -> redraw is the only thing
     // that can repaint it mid-drag -- `m.render` wires no auto-redraw of its own. A test that
-    // hand-cranks a render (ModelBar.test.ts) supplies exactly the redraw in question, so only
+    // hand-cranks a render (ModelProviderMenu.test.ts) supplies exactly the redraw in question, so only
     // this file can say whether a real drag actually changes the word on screen.
     const model = {
       ...OPUS,
@@ -163,7 +163,7 @@ describe("the card without a hand-cranked redraw", () => {
 
     const slider = document.querySelector<HTMLInputElement>('input[type="range"]');
     if (slider === null) throw new Error("no slider on screen");
-    const row = (): string => document.querySelector('[data-card-row="effort"]')?.textContent ?? "";
+    const row = (): string => document.querySelector('[data-menu-row="effort"]')?.textContent ?? "";
     expect(row()).toContain("Low");
 
     slider.value = "2";
@@ -175,11 +175,11 @@ describe("the card without a hand-cranked redraw", () => {
 
   it("opens the removal dialog on a trash press instead of closing the picker", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
 
     // The bug: mousedown read as outside, the popover went away, and the click never landed.
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
     expect(document.body.textContent).toContain("Remove account");
     expect(deleted).toEqual([]);
 
@@ -190,7 +190,7 @@ describe("the card without a hand-cranked redraw", () => {
 
   it("turns a row into a rename field and files what was typed on blur", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Rename Anthropic"]');
 
     const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Anthropic"]');
@@ -217,7 +217,7 @@ describe("the card without a hand-cranked redraw", () => {
     // the displayed name read "Work" over "Work" as "reset to the provider" and wiped it.
     providerState.accounts = [{ ...ACCOUNT, provider: "Work", name: "Work" }];
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Rename Work"]');
 
     const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Work"]');
@@ -231,7 +231,7 @@ describe("the card without a hand-cranked redraw", () => {
   it("clears the name when the field is emptied, which is the only way back", async () => {
     providerState.accounts = [{ ...ACCOUNT, provider: "Work", name: "Work" }];
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Rename Work"]');
 
     const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Work"]');
@@ -245,7 +245,7 @@ describe("the card without a hand-cranked redraw", () => {
 
   it("discards a rename on Escape, and does not re-file it on the blur that follows", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Rename Anthropic"]');
 
     const field = document.querySelector<HTMLInputElement>('input[aria-label="Rename Anthropic"]');
@@ -263,7 +263,7 @@ describe("the card without a hand-cranked redraw", () => {
 
   it("cancels the removal dialog without deleting anything", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
     expect(document.body.textContent).toContain("Remove account");
 
@@ -271,15 +271,15 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.body.textContent).not.toContain("Remove account");
     expect(deleted).toEqual([]);
     // Backing out of the dialog must not have taken the flyout down with it.
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
   });
 
   it("keeps the removal dialog open while the pointer wanders the rest of the submenu", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     await press('[aria-label="Sign out of Anthropic"]');
     document
-      .querySelector('[data-model-popover="flyout"]')
+      .querySelector('[data-menu-part="submenu"]')
       ?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await settle();
     expect(document.body.textContent).toContain("Remove account");
@@ -287,7 +287,7 @@ describe("the card without a hand-cranked redraw", () => {
 
   it("opens the chooser from + Add a provider, and takes the picker down with it", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     const add = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Add a provider"));
     if (add === undefined) throw new Error("no add-provider row");
     add.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -295,8 +295,8 @@ describe("the card without a hand-cranked redraw", () => {
     await settle();
 
     expect(chooserOpens).toEqual([1]);
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("ignores a press on a locked provider, without closing anything", async () => {
@@ -305,30 +305,30 @@ describe("the card without a hand-cranked redraw", () => {
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
     ];
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
     const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
     if (locked === undefined) throw new Error("no locked row");
     locked.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     locked.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).not.toBeNull();
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {
     await press(".model-selector-trigger");
-    await press('[data-card-row="providers"]');
+    await press('[data-menu-row="providers"]');
 
     // A pointer merely leaving is not a dismissal.
-    document
-      .querySelector('[data-model-popover="card"]')
-      ?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
+    document.querySelector('[data-menu-part="menu"]')?.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await settle();
-    expect(document.querySelector('[data-model-popover="card"]')).not.toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).not.toBeNull();
 
-    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    // "Outside" is the sheet: it covers everything that is not the menu, so a press anywhere
+    // else lands on it.
+    document.querySelector('[data-menu-part="sheet"]')?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     await settle();
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
-    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
+    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 });

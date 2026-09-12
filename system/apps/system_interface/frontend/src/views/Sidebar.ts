@@ -44,7 +44,9 @@ import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import type { TooltipPlacement } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { Menu, MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { TAB_MENU_DIVIDER, tabMenuEntries } from "./tabMenu";
 import type { TabMenuActions } from "./tabMenu";
 import { ProjectSettingsModal } from "./ProjectSettingsModal";
@@ -127,18 +129,14 @@ const ROW_ICON_SIZE = 16;
 const ACTION_ICON_SIZE = 14;
 const ROW_CLASS = "flex h-7 w-full shrink-0 cursor-pointer items-center gap-1 rounded-md text-left";
 
-const MENU_CARD_CLASS = `project-rail-menu ${menuCardClass(`fixed ${ROW_TEXT_CLASS} text-primary`)}`;
-// tightGap (4px) matches the rail's own rows (ROW_CLASS), so a menu row reads as tight as the
-// rail row sitting right above it.
-const MENU_ROW_CLASS = `project-rail-menu-item group ${menuRowClass({ tightGap: true })}`;
-// The scrim shares the menu card's --z-dropdown layer; the card stays on top because it
-// renders after the scrim as a sibling. `project-rail-menu-scrim` is a bare marker.
-const MENU_SCRIM_CLASS = "project-rail-menu-scrim fixed inset-0 z-(--z-dropdown)";
-const MENU_MARGIN = 6;
+/** The rail's menus are the shared Menu; `project-rail-menu` is a bare marker for tests, and the
+ *  rail's own text size rides along so a menu reads at the size of the rows beside it. */
+const MENU_MARKER_CLASS = `project-rail-menu ${ROW_TEXT_CLASS} text-primary`;
+/** Every menu row: a bare marker, plus `group` for the trailing controls that reveal on the
+ *  row's hover. tightGap (4px) matches the rail's own rows (ROW_CLASS), so a menu row reads as
+ *  tight as the rail row sitting right above it. */
+const MENU_ROW_EXTRA = "project-rail-menu-item group";
 const SWITCHER_MENU_WIDTH = 256;
-const SWITCHER_ROW_CLASS =
-  "project-rail-menu-item group flex h-8 w-full cursor-pointer items-center gap-1 pl-[5px] pr-3 text-left " +
-  "hover:bg-fill-hover";
 
 const RAIL_PATHS = {
   app: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
@@ -184,51 +182,7 @@ function viewIdentityMarkup(project: ProjectInfo | null, size: number): string {
     : monogramMarkup(project.name, project.color, size);
 }
 
-// ---------- Floating menu placement ----------
-
-export interface MenuAnchor {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-  width: number;
-}
-
-export interface MenuSize {
-  width: number;
-  height: number;
-}
-
-export interface MenuPosition {
-  left: number;
-  top: number;
-}
-
-/**
- * Where a floating menu goes: hanging under its anchor ("below") or beside it ("right"). Either
- * way it flips to the opposite side when it would overflow the window and there is room on the
- * other one, then clamps MENU_MARGIN from the edges.
- */
-export function placeMenu(
-  anchor: MenuAnchor,
-  size: MenuSize,
-  viewport: MenuSize,
-  placement: "below" | "right",
-): MenuPosition {
-  let left = placement === "below" ? anchor.left : anchor.right;
-  let top = placement === "below" ? anchor.bottom : anchor.top;
-  if (placement === "below") {
-    const above = anchor.top - size.height;
-    if (top + size.height > viewport.height - MENU_MARGIN && above >= MENU_MARGIN) top = above;
-  } else {
-    const toLeft = anchor.left - size.width;
-    if (left + size.width > viewport.width - MENU_MARGIN && toLeft >= MENU_MARGIN) left = toLeft;
-  }
-  return {
-    left: Math.max(Math.min(MENU_MARGIN, anchor.left), Math.min(left, viewport.width - MENU_MARGIN - size.width)),
-    top: Math.max(MENU_MARGIN, Math.min(top, viewport.height - MENU_MARGIN - size.height)),
-  };
-}
+// ---------- Floating menu anchors ----------
 
 function anchorForEvent(event: Event): MenuAnchor {
   return (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -326,59 +280,76 @@ export function nextGlyphIndex(usedGlyphs: readonly number[]): number {
 
 // ---------- The component ----------
 
-type OpenMenu =
-  | { kind: "switcher"; anchor: MenuAnchor }
-  | { kind: "header"; anchor: MenuAnchor }
-  | { kind: "allApps"; anchor: MenuAnchor }
-  | { kind: "row"; anchor: MenuAnchor; address: string }
-  | { kind: "shortcut"; anchor: MenuAnchor; key: string };
-
 function shortcutKey(shortcut: ProjectShortcut): string {
   return `${shortcut.app}:${shortcut.action}`;
 }
 
 export function Sidebar(): m.Component<SidebarAttrs> {
   let expanded = false;
-  let openMenu: OpenMenu | null = null;
   let settingsProject: ProjectInfo | null = null;
   let renamingAddress: string | null = null;
   let renameDraft = "";
   let isPointerOverRail = false;
   let searchQuery = "";
   let menuError: string | null = null;
-  let rootElement: HTMLElement | null = null;
   let lastRenderedViewId: string | null = null;
 
+  // Which row, and which shortcut, the row and shortcut menus are open for. The menus
+  // themselves are below; these ride beside them because the shared menu knows nothing about
+  // rails.
+  let menuRowAddress: string | null = null;
+  let menuShortcutKey: string | null = null;
+
+  /** One of the rail's menus: the shared Menu with the rail's marker class, and the rail's
+   *  expansion tied to it -- a menu closing takes the expansion with it unless the pointer is
+   *  still on the rail, since the menu floats beside the rail and the pointer is usually off
+   *  it by the time the menu closes. */
+  function railMenu(placement: "below" | "right", width: number | null, role: "menu" | "dialog" = "menu"): Menu {
+    return createMenu({
+      placement,
+      ...(width === null ? {} : { width }),
+      role,
+      extraClass: MENU_MARKER_CLASS,
+      onClose: () => {
+        menuError = null;
+        if (!isPointerOverRail) expanded = false;
+      },
+    });
+  }
+
+  const switcherMenu = railMenu("below", SWITCHER_MENU_WIDTH);
+  const headerMenu = railMenu("right", null);
+  const allAppsMenu = railMenu("right", null, "dialog");
+  const rowMenu = railMenu("right", null);
+  const shortcutMenu = railMenu("right", null);
+  const railMenus = [switcherMenu, headerMenu, allAppsMenu, rowMenu, shortcutMenu];
+
+  function isRailMenuOpen(): boolean {
+    return railMenus.some((menu) => menu.isOpen());
+  }
+
   function isAnyMenuOpen(): boolean {
-    return openMenu !== null || settingsProject !== null;
+    return isRailMenuOpen() || settingsProject !== null;
   }
 
   function closeMenus(): void {
-    openMenu = null;
+    for (const menu of railMenus) menu.close();
     menuError = null;
     expanded = false;
   }
 
-  function handleOutsideMousedown(event: MouseEvent): void {
-    if (!isAnyMenuOpen()) return;
-    if (rootElement !== null && !rootElement.contains(event.target as Node)) {
-      closeMenus();
-      m.redraw();
-    }
-  }
-
-  /** Close on the window losing focus, which is how a click into a cross-origin pane is seen. */
+  /** Collapse on the window losing focus, which is how a click into a cross-origin pane is
+   *  seen. A menu stays: it closes on a press or Escape and on nothing else. */
   function handleWindowBlur(): void {
     isPointerOverRail = false;
-    if (renamingAddress !== null) return;
-    if (!isAnyMenuOpen() && !expanded) return;
-    closeMenus();
+    if (renamingAddress !== null || isAnyMenuOpen() || !expanded) return;
+    expanded = false;
     m.redraw();
   }
 
   function handleDocumentPointerLeave(): void {
     isPointerOverRail = false;
-    if (openMenu !== null || renamingAddress !== null) return;
+    if (isRailMenuOpen() || renamingAddress !== null) return;
     closeMenus();
     m.redraw();
   }
@@ -388,20 +359,22 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     handleDocumentPointerLeave();
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== "Escape" || !isAnyMenuOpen()) return;
-    closeMenus();
-    m.redraw();
-  }
-
-  function openMenuAt(next: OpenMenu): void {
-    openMenu = next;
+  function openRowMenu(anchor: MenuAnchor, address: string): void {
+    menuRowAddress = address;
     menuError = null;
+    rowMenu.open(anchor);
   }
 
+  function openShortcutMenu(anchor: MenuAnchor, key: string): void {
+    menuShortcutKey = key;
+    menuError = null;
+    shortcutMenu.open(anchor);
+  }
+
+  /** A rail action: run it, and take down whichever menu was up. */
   function pick(action: () => void): void {
     action();
-    openMenu = null;
+    for (const menu of railMenus) menu.close();
     menuError = null;
   }
 
@@ -482,36 +455,32 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     return entries;
   }
 
-  function shortcutMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "shortcut" }>): m.Children {
+  function shortcutMenuRows(attrs: SidebarAttrs): MenuRow[] {
+    if (menuShortcutKey === null) return [];
     const resolved = effectiveShortcuts(activeProject(attrs), getOpenableApps()).find(
-      (candidate) => shortcutKey(candidate.shortcut) === menu.key,
+      (candidate) => shortcutKey(candidate.shortcut) === menuShortcutKey,
     );
-    if (resolved === undefined) return null;
+    if (resolved === undefined) return [];
     const entries = shortcutMenuEntries(resolved, attrs);
     const canUnpin = !isEverythingView(attrs.activeViewId);
-    return floatingCard({
-      anchor: menu.anchor,
-      placement: "right",
-      role: "menu",
-      width: null,
-      children: [
-        ...entries.map((entry) =>
-          menuRow({
-            iconMarkup: null,
-            label: entry.label,
-            isDisabled: entry.isDisabled,
-            onclick: () => pick(entry.run),
-          }),
-        ),
-        canUnpin
-          ? menuRow({
-              iconMarkup: null,
-              label: "Unpin",
-              onclick: () => pick(() => attrs.onRemoveShortcut(resolved.shortcut)),
-            })
-          : null,
-      ],
-    });
+    const rows: MenuRow[] = entries.map((entry) => ({
+      kind: "action",
+      label: entry.label,
+      isDisabled: entry.isDisabled,
+      tightGap: true,
+      extraClass: MENU_ROW_EXTRA,
+      onSelect: () => pick(entry.run),
+    }));
+    if (canUnpin) {
+      rows.push({
+        kind: "action",
+        label: "Unpin",
+        tightGap: true,
+        extraClass: MENU_ROW_EXTRA,
+        onSelect: () => pick(() => attrs.onRemoveShortcut(resolved.shortcut)),
+      });
+    }
+    return rows;
   }
 
   function activeProject(attrs: SidebarAttrs): ProjectInfo | null {
@@ -586,31 +555,27 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           "project-rail-header group -mx-[5px] -mt-[5px] flex h-[34px] w-[calc(100%+10px)] shrink-0 cursor-pointer " +
           "items-center gap-1 px-[5px] text-left text-primary hover:bg-fill-hover",
         "aria-haspopup": "menu",
-        "aria-expanded": openMenu?.kind === "switcher" ? "true" : "false",
+        "aria-expanded": switcherMenu.isOpen() ? "true" : "false",
         ...hoverTooltipAttrs("Switch projects", "right"),
         onclick: (event: MouseEvent) => {
-          if (openMenu?.kind === "switcher") {
-            openMenu = null;
-            return;
-          }
+          // As wide as the rail's card, hanging off the header's bottom edge.
           const headerRect = anchorForEvent(event);
           const card = (event.currentTarget as HTMLElement).closest(".machine-sidebar");
           const cardRect = card === null ? headerRect : card.getBoundingClientRect();
-          openMenuAt({
-            kind: "switcher",
-            anchor: {
-              left: cardRect.left,
-              right: cardRect.right,
-              top: headerRect.top,
-              bottom: headerRect.bottom,
-              width: cardRect.width,
-            },
+          menuError = null;
+          switcherMenu.open({
+            left: cardRect.left,
+            right: cardRect.right,
+            top: headerRect.top,
+            bottom: headerRect.bottom,
+            width: cardRect.width,
           });
         },
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
           if (project === null) return;
-          openMenuAt({ kind: "header", anchor: anchorForPointer(event) });
+          menuError = null;
+          headerMenu.open(anchorForPointer(event));
         },
       },
       [
@@ -638,7 +603,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     const isStopped = !resolved.app.is_running;
     const label = isAwaiting ? "Starting…" : shortcutLabel(resolved);
     const canUnpin = !isEverythingView(attrs.activeViewId);
-    const isMenuOpen = openMenu?.kind === "shortcut" && openMenu.key === key;
+    const isMenuOpen = shortcutMenu.isOpen() && menuShortcutKey === key;
     const tooltip = isStopped ? `${label} — not running` : label;
     return m(
       "span",
@@ -649,7 +614,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         ...hoverTooltipAttrs(tooltip, "right"),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
-          openMenuAt({ kind: "shortcut", anchor: anchorForPointer(event), key });
+          openShortcutMenu(anchorForPointer(event), key);
         },
       },
       [
@@ -684,7 +649,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           label: `Shortcut options for ${resolved.app.display_name}`,
           isRevealed: isMenuOpen,
           extra: "project-rail-shortcut-menu absolute " + (canUnpin ? "right-6" : "right-1"),
-          onclick: (event) => openMenuAt({ kind: "shortcut", anchor: anchorForEvent(event), key }),
+          onclick: (event) => openShortcutMenu(anchorForEvent(event), key),
         }),
       ],
     );
@@ -705,13 +670,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         type: "button",
         class: `project-rail-all-apps ${ROW_CLASS} text-faint hover:bg-fill-hover hover:text-secondary`,
         "aria-haspopup": "menu",
-        "aria-expanded": openMenu?.kind === "allApps" ? "true" : "false",
+        "aria-expanded": allAppsMenu.isOpen() ? "true" : "false",
         onclick: (event: MouseEvent) => {
-          if (openMenu?.kind === "allApps") {
-            openMenu = null;
-            return;
-          }
-          openMenuAt({ kind: "allApps", anchor: anchorForEvent(event) });
+          menuError = null;
+          allAppsMenu.open(anchorForEvent(event));
         },
       },
       [m("span", { class: ICON_BOX_CLASS }, m.trust(railIcon("ellipsis", ROW_ICON_SIZE))), railLabel("All apps", "")],
@@ -783,7 +745,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
 
   function tabRow(row: SidebarTabRow, ranges: readonly MatchRange[], attrs: SidebarAttrs): m.Vnode {
     if (renamingAddress === row.address) return renameRow(row, attrs);
-    const isMenuOpenHere = openMenu?.kind === "row" && openMenu.address === row.address;
+    const isMenuOpenHere = rowMenu.isOpen() && menuRowAddress === row.address;
     return m(
       "div",
       {
@@ -804,7 +766,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           }),
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
-          openMenuAt({ kind: "row", anchor: anchorForPointer(event), address: row.address });
+          openRowMenu(anchorForPointer(event), row.address);
         },
       },
       [
@@ -818,13 +780,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           iconMarkup: railIcon("kebab", ACTION_ICON_SIZE),
           label: `Actions for ${row.label}`,
           isRevealed: isMenuOpenHere,
-          onclick: (event) => {
-            if (isMenuOpenHere) {
-              openMenu = null;
-              return;
-            }
-            openMenuAt({ kind: "row", anchor: anchorForEvent(event), address: row.address });
-          },
+          onclick: (event) => openRowMenu(anchorForEvent(event), row.address),
         }),
       ],
     );
@@ -852,91 +808,6 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   // ---------- Floating menus ----------
-
-  function menuScrim(): m.Vnode {
-    return m("div", {
-      class: MENU_SCRIM_CLASS,
-      onmousedown: (event: MouseEvent) => {
-        event.preventDefault();
-        event.stopPropagation();
-        closeMenus();
-      },
-    });
-  }
-
-  function floatingCard(options: {
-    anchor: MenuAnchor;
-    placement: "below" | "right";
-    role: string;
-    width: number | null;
-    children: m.Children;
-  }): m.Vnode {
-    const place = (vnode: m.VnodeDOM): void => {
-      const element = vnode.dom as HTMLElement;
-      const rect = element.getBoundingClientRect();
-      const position = placeMenu(
-        options.anchor,
-        { width: rect.width, height: rect.height },
-        { width: window.innerWidth, height: window.innerHeight },
-        options.placement,
-      );
-      element.style.left = `${position.left}px`;
-      element.style.top = `${position.top}px`;
-    };
-    return m(
-      "div",
-      {
-        class: MENU_CARD_CLASS,
-        role: options.role,
-        style: `left: 0; top: 0; ${options.width === null ? "" : `width: ${options.width}px;`}`,
-        oncreate: place,
-        onupdate: place,
-      },
-      options.children,
-    );
-  }
-
-  function menuRow(options: {
-    iconMarkup: string | null;
-    label: string;
-    isDestructive?: boolean;
-    isQuiet?: boolean;
-    isDisabled?: boolean;
-    tooltip?: string | null;
-    onclick: (event: MouseEvent) => void;
-    trailing?: m.Children;
-    rowClass?: string;
-    iconBoxClass?: string;
-  }): m.Vnode {
-    const tone = options.isDisabled
-      ? "project-rail-menu-item-disabled text-faint cursor-default hover:bg-transparent"
-      : options.isDestructive
-        ? "text-danger"
-        : options.isQuiet
-          ? "text-faint hover:text-primary"
-          : "text-primary";
-    return m(
-      "div",
-      {
-        class: `${options.rowClass ?? MENU_ROW_CLASS} ${tone}`,
-        role: "menuitem",
-        "aria-disabled": options.isDisabled === true ? "true" : undefined,
-        ...(options.tooltip === null || options.tooltip === undefined ? {} : hoverTooltipAttrs(options.tooltip)),
-        onclick: options.isDisabled === true ? undefined : options.onclick,
-      },
-      [
-        options.iconMarkup === null
-          ? null
-          : m(
-              "span",
-              { class: options.iconBoxClass ?? "flex w-4 shrink-0 items-center justify-center" },
-              m.trust(options.iconMarkup),
-            ),
-        m("span", { class: "min-w-0 flex-1 truncate" }, options.label),
-        options.trailing ?? null,
-      ],
-    );
-  }
 
   function switcherEditButton(
     project: ProjectInfo,
@@ -993,115 +864,118 @@ export function Sidebar(): m.Component<SidebarAttrs> {
     ]);
   }
 
-  function switcherMenu(attrs: SidebarAttrs, anchor: MenuAnchor): m.Vnode {
+  function switcherMenuRows(attrs: SidebarAttrs): MenuRow[] {
     const isEverythingActive = isEverythingView(attrs.activeViewId);
-    return floatingCard({
-      anchor,
-      placement: "below",
-      role: "menu",
-      width: SWITCHER_MENU_WIDTH,
-      children: [
-        attrs.projects.map((project) => {
-          const isCurrent = project.id === attrs.activeViewId;
-          return menuRow({
-            iconMarkup: viewIdentityMarkup(project, ROW_ICON_SIZE),
-            label: project.name,
-            rowClass: SWITCHER_ROW_CLASS,
-            iconBoxClass: ICON_BOX_CLASS,
-            trailing: switcherRowTrailing(isCurrent, project, (target) =>
-              pick(() => {
-                settingsProject = target;
-              }),
-            ),
-            onclick: () =>
-              pick(() => {
-                if (isCurrent) return;
-                attrs.onSelectView(project.id);
-              }),
-          });
-        }),
-        menuRow({
-          iconMarkup: railIcon("plus", ROW_ICON_SIZE),
-          label: "New project",
-          isQuiet: true,
-          rowClass: SWITCHER_ROW_CLASS,
-          iconBoxClass: ICON_BOX_CLASS,
-          onclick: () => {
-            void createNewProject(attrs);
-          },
-        }),
-        menuError === null ? null : m("div", { class: "px-3 py-1 text-[12px] text-danger" }, menuError),
-        m("div", { class: menuDividerClass() }),
-        menuRow({
-          iconMarkup: compositeSquiggleMarkup(ROW_ICON_SIZE),
-          label: EVERYTHING_VIEW_NAME,
-          rowClass: SWITCHER_ROW_CLASS,
-          iconBoxClass: ICON_BOX_CLASS,
-          trailing: switcherRowTrailing(isEverythingActive, null, null),
-          onclick: () => pick(() => attrs.onSelectView(EVERYTHING_VIEW_ID)),
-        }),
-      ],
+    const rows: MenuRow[] = attrs.projects.map((project) => {
+      const isCurrent = project.id === attrs.activeViewId;
+      return {
+        kind: "action",
+        label: project.name,
+        icon: { markup: viewIdentityMarkup(project, ROW_ICON_SIZE) },
+        iconBoxClass: ICON_BOX_CLASS,
+        tightGap: true,
+        extraClass: MENU_ROW_EXTRA,
+        trailing: switcherRowTrailing(isCurrent, project, (target) =>
+          pick(() => {
+            settingsProject = target;
+          }),
+        ),
+        onSelect: () => {
+          if (isCurrent) return;
+          attrs.onSelectView(project.id);
+        },
+      };
     });
+    rows.push({
+      kind: "action",
+      label: "New project",
+      icon: { markup: railIcon("plus", ROW_ICON_SIZE) },
+      iconBoxClass: ICON_BOX_CLASS,
+      tone: "quiet",
+      tightGap: true,
+      extraClass: MENU_ROW_EXTRA,
+      // Stays up: a create that fails says so on the line under the rows, and closes itself
+      // on success.
+      keepsOpen: true,
+      onSelect: () => {
+        void createNewProject(attrs);
+      },
+    });
+    if (menuError !== null) {
+      const error = menuError;
+      rows.push({
+        kind: "custom",
+        key: "error",
+        render: () => m("div", { class: "px-3 py-1 text-[12px] text-danger" }, error),
+      });
+    }
+    rows.push({ kind: "divider" });
+    rows.push({
+      kind: "action",
+      label: EVERYTHING_VIEW_NAME,
+      icon: { markup: compositeSquiggleMarkup(ROW_ICON_SIZE) },
+      iconBoxClass: ICON_BOX_CLASS,
+      tightGap: true,
+      extraClass: MENU_ROW_EXTRA,
+      trailing: switcherRowTrailing(isEverythingActive, null, null),
+      onSelect: () => attrs.onSelectView(EVERYTHING_VIEW_ID),
+    });
+    return rows;
   }
 
-  function headerMenu(project: ProjectInfo, anchor: MenuAnchor): m.Vnode {
-    return floatingCard({
-      anchor,
-      placement: "right",
-      role: "menu",
-      width: null,
-      children: menuRow({
-        iconMarkup: null,
+  function headerMenuRows(project: ProjectInfo): MenuRow[] {
+    return [
+      {
+        kind: "action",
         label: "Project settings...",
-        onclick: () => {
-          openMenu = null;
+        tightGap: true,
+        extraClass: MENU_ROW_EXTRA,
+        onSelect: () => {
           settingsProject = project;
         },
-      }),
-    });
+      },
+    ];
   }
 
   /** A row's kebab/context menu: the same shared verb set the tab's own kebab renders. */
-  function rowMenu(attrs: SidebarAttrs, menu: Extract<OpenMenu, { kind: "row" }>): m.Children {
-    const row = attrs.rows.find((candidate) => candidate.address === menu.address);
-    if (row === undefined) return null;
+  function rowMenuRows(attrs: SidebarAttrs): MenuRow[] {
+    const row = attrs.rows.find((candidate) => candidate.address === menuRowAddress);
+    if (row === undefined) return [];
     const resolved = findInstance(row.address);
-    if (resolved === null) return null;
+    if (resolved === null) return [];
     const entries = tabMenuEntries(resolved.app, resolved.instance, railMenuActions(row, attrs));
-    return floatingCard({
-      anchor: menu.anchor,
-      placement: "right",
-      role: "menu",
-      width: null,
-      children: entries.map((entry) =>
-        entry === TAB_MENU_DIVIDER
-          ? m("div", { class: menuDividerClass() })
-          : menuRow({
-              iconMarkup: icon(entry.iconName, { size: ACTION_ICON_SIZE }),
-              label: entry.label,
-              isDestructive: entry.isDestructive,
-              onclick: () => pick(entry.run),
-            }),
-      ),
-    });
+    return entries.map((entry) =>
+      entry === TAB_MENU_DIVIDER
+        ? { kind: "divider" }
+        : {
+            kind: "action",
+            label: entry.label,
+            icon: { markup: icon(entry.iconName, { size: ACTION_ICON_SIZE }) },
+            tone: entry.isDestructive ? "danger" : "default",
+            tightGap: true,
+            extraClass: MENU_ROW_EXTRA,
+            onSelect: () => pick(entry.run),
+          },
+    );
   }
 
-  function allAppsMenu(attrs: SidebarAttrs, anchor: MenuAnchor, project: ProjectInfo | null): m.Vnode {
-    return floatingCard({
-      anchor,
-      placement: "right",
-      role: "dialog",
-      width: null,
-      children: m(AllAppsPicker, {
-        projectName: project?.name ?? null,
-        pinnedKeys: (project?.shortcuts ?? []).map(shortcutKey),
-        onRunAction: (app, action) => pick(() => attrs.onRunAppAction(app, action)),
-        onPin: (app, action) => {
-          // Pinning is not picking: the popover stays open so several rows can be pinned.
-          attrs.onPinShortcut(app, action);
-        },
-      }),
-    });
+  function allAppsMenuRows(attrs: SidebarAttrs, project: ProjectInfo | null): MenuRow[] {
+    return [
+      {
+        kind: "custom",
+        key: "picker",
+        render: () =>
+          m(AllAppsPicker, {
+            projectName: project?.name ?? null,
+            pinnedKeys: (project?.shortcuts ?? []).map(shortcutKey),
+            onRunAction: (app, action) => pick(() => attrs.onRunAppAction(app, action)),
+            onPin: (app, action) => {
+              // Pinning is not picking: the popover stays open so several rows can be pinned.
+              attrs.onPinShortcut(app, action);
+            },
+          }),
+      },
+    ];
   }
 
   function settingsModal(attrs: SidebarAttrs): m.Children {
@@ -1143,18 +1017,13 @@ export function Sidebar(): m.Component<SidebarAttrs> {
         "div",
         {
           class: "relative w-[37px] shrink-0",
-          oncreate: (slot: m.VnodeDOM) => {
-            rootElement = slot.dom as HTMLElement;
-            document.addEventListener("mousedown", handleOutsideMousedown);
-            document.addEventListener("keydown", handleKeydown);
+          oncreate: () => {
             document.addEventListener("mouseout", handlePointerLeftWindow);
             document.documentElement.addEventListener("mouseleave", handleDocumentPointerLeave);
             window.addEventListener("blur", handleWindowBlur);
           },
           onremove: () => {
-            rootElement = null;
-            document.removeEventListener("mousedown", handleOutsideMousedown);
-            document.removeEventListener("keydown", handleKeydown);
+            for (const menu of railMenus) menu.dispose();
             document.removeEventListener("mouseout", handlePointerLeftWindow);
             document.documentElement.removeEventListener("mouseleave", handleDocumentPointerLeave);
             window.removeEventListener("blur", handleWindowBlur);
@@ -1165,7 +1034,7 @@ export function Sidebar(): m.Component<SidebarAttrs> {
           },
           onmouseleave: () => {
             isPointerOverRail = false;
-            if (openMenu !== null || renamingAddress !== null) return;
+            if (isRailMenuOpen() || renamingAddress !== null) return;
             closeMenus();
           },
         },
@@ -1188,12 +1057,11 @@ export function Sidebar(): m.Component<SidebarAttrs> {
               expanded ? tabList(attrs) : null,
             ],
           ),
-          openMenu === null ? null : menuScrim(),
-          openMenu?.kind === "switcher" ? switcherMenu(attrs, openMenu.anchor) : null,
-          openMenu?.kind === "header" && project !== null ? headerMenu(project, openMenu.anchor) : null,
-          openMenu?.kind === "allApps" ? allAppsMenu(attrs, openMenu.anchor, project) : null,
-          openMenu?.kind === "row" ? rowMenu(attrs, openMenu) : null,
-          openMenu?.kind === "shortcut" ? shortcutMenu(attrs, openMenu) : null,
+          switcherMenu.view(switcherMenuRows(attrs)),
+          project === null ? null : headerMenu.view(headerMenuRows(project)),
+          allAppsMenu.view(allAppsMenuRows(attrs, project)),
+          rowMenu.view(rowMenuRows(attrs)),
+          shortcutMenu.view(shortcutMenuRows(attrs)),
           settingsModal(attrs),
         ],
       );

@@ -17,7 +17,7 @@ import { deleteAccount, loadAccounts, renameAccount, setDefaultAccount } from ".
 import type { ProviderAccount } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import * as css from "./modelCardStyles";
+import * as css from "./modelProviderMenuStyles";
 import { removeAccountDialog } from "./removeAccountDialog";
 
 /** Which row, if any, is showing its controls in a non-resting state. Both are per-flyout. */
@@ -164,14 +164,14 @@ export function accountRow(opts: AccountRowOptions): m.Vnode {
         },
       },
       [
-        m("span", { class: css.FLYOUT_ROW_NAME }, row.provider),
-        m("span", { class: css.FLYOUT_ROW_SUB }, `(${row.harness_label})`),
+        m("span", { class: css.SUBMENU_ROW_NAME }, row.provider),
+        m("span", { class: css.SUBMENU_ROW_SUB }, `(${row.harness_label})`),
       ],
     ),
     // Siblings of the row button rather than children -- buttons cannot nest -- each pinned
     // to its own offset from the right edge so none of the three ever displaces another.
     isCurrent
-      ? m("span", { class: css.FLYOUT_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+      ? m("span", { class: css.SUBMENU_CHECK_PINNED }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
       : null,
     m(
       "button",
