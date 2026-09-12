@@ -1,6 +1,6 @@
 ---
 name: enable-caretaker
-description: Turn on the weekly Caretaker, a BETA feature that is off by default. Use ONLY when the user explicitly asks about the Caretaker or about enabling it -- never suggest, mention, or enable it proactively.
+description: Turn on the weekly Caretaker, a beta feature that is off by default -- a background agent that checks the workspace once a week and opens a chat tab only when it has something to report. Use only when the user explicitly asks about the Caretaker or about enabling it; it is not something to raise on your own.
 metadata:
   author: imbue
 ---
@@ -15,7 +15,9 @@ cron entry exists until this skill creates it.
 
 Before enabling it, make sure the user genuinely wants it: say plainly that
 it is a beta feature and they should not expect it to be polished or optimal,
-and get their explicit confirmation. Only proceed on a clear yes.
+and get their explicit confirmation. Only proceed on a clear yes. This is not a
+feature to bring up unprompted -- if the user has not asked about it, leave it
+alone.
 
 To enable, write the Caretaker's schedule entry (durably, then live) and
 clear any stale job state:

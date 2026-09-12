@@ -1,6 +1,6 @@
 ---
 name: migrate-workspace
-description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user says anything like 'move my stuff over from my old workspace', 'I made a new mind, bring everything across', 'my old workspace is broken, start me fresh', 'import my other mind', or -- asked from the OLD side -- 'I'd like to move to a new workspace'. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
+description: "Bring everything from another (older, broken, or replaced) workspace of the user's into this one -- their apps, skills, documents, data, scheduled automations, and every past chat. Use when the user wants to move, import, or consolidate another mind of theirs into this one, asked from either side of the move. Requires the other workspace to be startable, since the transfer runs over a live connection to it."
 compatibility: Requires latchkey (the minds-api gateway) plus ssh/ssh-keygen for the live session, and mngr (vendored) for recreating the old chats.
 metadata:
   author: imbue

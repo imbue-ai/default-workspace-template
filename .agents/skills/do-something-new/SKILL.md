@@ -1,6 +1,6 @@
 ---
 name: do-something-new
-description: Use immediately when the user asks you to do something net-new -- a task you haven't done before, no existing skill or app applies, and getting it right will require nontrivial research, exploration, or experimentation. Routes the request to the right interactive flow. When doing this, give a very short confirmation message to the user's request, then load this immediately before responding further. Your confirmation message shouldn't mention loading the skill. Skip when an applicable skill or app already exists or for pure dev/code-writing work.
+description: Route a net-new request to the right interactive flow -- a task you have not done before, where no existing skill or app applies and getting it right needs real research, exploration, or experimentation. Use at the start of such a request, before doing the research. Skip it when an applicable skill or app already exists, and for plain code-writing work.
 metadata:
   author: imbue
 ---
@@ -11,6 +11,10 @@ A net-new task that needs research or experimentation has landed. This skill is 
 thin **router**: it scans for an existing skill, then sends you to the right
 interactive flow. The actual flow lives in the specialization you route to (or,
 for the rare task that fits neither, in the shared principles).
+
+Acknowledge the request in a line before you route -- the user is waiting on a
+reply, and routing takes a moment. Keep that line about their request; there is
+nothing to say about which skill you reached for.
 
 The overriding goal of any net-new interactive task is the same: deliver a result
 the user cares about *fast*, confirm the basic shape cheaply, and defer the
