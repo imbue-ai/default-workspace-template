@@ -274,6 +274,9 @@ def send_through_mngr(chat_id: str, text: str) -> int:
             ["mngr", "message", chat_id, "--start", "--message-file", message_path],
             check=False,
         )
+    except FileNotFoundError as exc:
+        print(f"The backoff could not run `mngr`: {exc}", file=sys.stderr)
+        return EXIT_FAILED
     finally:
         os.unlink(message_path)
     return completed.returncode
