@@ -28,7 +28,8 @@ just-created agent is unknown for a moment after its create, so a 404 is retried
 briefly first). Any other answer is the chat app's decision and is never
 second-guessed by pasting the text around it: a refusal during a handoff is
 what keeps the message from landing on the wrong agent, and a blocked send has
-already put the text in the pane.
+already put the text in the pane. The backoff passes ``--start``: the chat app's
+route revives a stopped agent on send, so the backoff does the same.
 
 A 503 means the chat app is up but not ready (it has not read its agent list
 from mngr yet, or the agent's daemon is still starting), so it is retried for a
@@ -263,7 +264,7 @@ def send_through_chat_app(
 
 
 def send_through_mngr(chat_id: str, text: str) -> int:
-    """The backoff: ``mngr message`` straight to the agent, its exit status passed through."""
+    """The backoff: ``mngr message --start`` straight to the agent, its exit status passed through."""
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", suffix=".md", delete=False
     ) as message_file:
@@ -271,7 +272,7 @@ def send_through_mngr(chat_id: str, text: str) -> int:
         message_path = message_file.name
     try:
         completed = subprocess.run(
-            ["mngr", "message", chat_id, "--message-file", message_path],
+            ["mngr", "message", chat_id, "--start", "--message-file", message_path],
             check=False,
         )
     finally:
