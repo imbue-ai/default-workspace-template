@@ -6,7 +6,7 @@ The one mngr-side reader of the workspace's supervisord program lines (the evals
 
 ## Changes
 
-- `apps/minds_evals/imbue/minds_evals/minds_bridge.py`: the bridged calls (`/api/agents/create-chat`, `/api/agents`, `/api/agents/<id>/message`, `/api/agents/<id>/events`) target the chat app's loopback URL instead of port 8000.
+- `apps/minds_evals/imbue/minds_evals/minds_bridge.py`: the bridged calls (`/api/agents/create-chat`, `/api/agents`, `/api/agents/<id>/message`, `/api/agents/<id>/events`) target the chat app's loopback URL instead of port 8000. Since the chat-agent split's phase 2 those are aliases of `/api/chats/create`, `/api/chats`, and `/api/chats/<chat-id>/...`, kept until phase 7 retargets the bridge.
   The URL is read from the workspace's registry (`data/.state/apps.toml`, the row named `chat`) through the same bridged exec, with a fallback to `http://127.0.0.1:8010`; the auth readiness gate polls the chat app's `/api/claude-auth/status`.
   The bridge's tests cover the registry read.
 - `apps/minds/imbue/minds/desktop_client/e2e_workspace_runner.py` and the e2e tests that assert on chat markup (`test_creating_page_layout.py`, `test_sync_e2e.py`, `test_snapshot_resume.py`): every chat locator goes through the chat frame inside the workspace frame; the runner walks frames, so this is a selector change. `_send_message_and_await_reply` resolves the chat frame (`_chat_frame`, the workspace frame's child whose URL path is the chat's agent id) and drives the composer and transcript there.

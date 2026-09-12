@@ -233,7 +233,7 @@ The auto-name word stays per lane or harness until phase 7, when it becomes a la
 - Stop is `mngr stop` of the active agent; start is the in-process ensure-started path for the active agent.
 - Destroy is one `mngr destroy --force` naming every member agent, archived ones included.
   Nothing else ever destroys, stops, starts, or messages an archived agent.
-  Nothing in the workspace runs `mngr cleanup` or `mngr gc`, so archived agents persist and their transcripts stay readable.
+  Nothing in the workspace runs `mngr cleanup`, and the `mngr gc` that follows a destroy collects only orphaned worktrees, the snapshots and machines of destroyed hosts, and unreferenced volumes, never a live agent, so archived agents persist and their transcripts stay readable.
 - Rename is the active agent's rename (section 4.3).
 - The re-auth restart (`restart_agents_on_account`) is filtered to active agents so a stopped archived agent is never revived by a sign-in.
   The filter is load-bearing, not defensive: since the workspace's create defaults landed, every agent bound to an account carries the `account` label (workers, automations, and the minds app's chats included, not only chats this app created), and an archived agent keeps the label it was created with.
@@ -250,10 +250,11 @@ That changes what they run on, not what they are: they remain own chats with no 
   The shell resolves `self` and attributes ops to clients through that address, so an archived or successor agent's ops land on the chat's tab and client.
 - The chat app posts the chat id as the `key` of its client-activity reports, so the shell's attribution log is keyed by chat.
 - The `automation` create template's prompt, the caretaker, manage-layout, update-self, and every other skill that names its own chat use `$MINDS_CHAT_ID` with the same fallback.
-- Anything that identifies the chat for UI routing outside the workspace carries the chat id: permission requests filed with the latchkey gateway (the minds chrome routes a request to the chat frame whose URL is the chat id), `update_self.py --agent-id` and `surface-chat-tab`, and the file-sharing and workspace requests in the minds-api and migrate-workspace skills.
+- Anything that identifies the chat for UI routing outside the workspace carries the chat id: permission requests filed with the latchkey gateway (the minds chrome routes a request to the chat frame whose URL is the chat id), `update_self.py surface-chat-tab --chat-id`, and the file-sharing and workspace requests in the minds-api and migrate-workspace skills.
   Agent ids remain only where mngr itself is the target (`mngr transcript`, `mngr list`, `mngr rsync`, `mngr message` as a backoff).
-  The minds desktop client's latchkey handlers use a permission request's `agent_id` twice: to route the request to the chat frame, and to nudge the waiting agent with `mngr message <agent_id>` once it is resolved.
-  A request that carries only the chat id would nudge an archived agent after a handoff, so the request carries both (the chat id for routing, the active agent's id for the nudge) or the minds side resolves the chat to its active agent through the chat app; which one is decided in phase 2 (section 9).
+  A permission request's `agent_id` field is the chat id: the gateway checks only its shape and rejects extra fields, the minds chrome routes a request by workspace and matches its card by `request_id`, and the id is never an authorization key.
+  The minds desktop client's latchkey handlers also use that id to nudge the waiting agent with `mngr message <agent_id>` once the request is resolved, which after a handoff would reach an archived agent (archiving is a label plus a stop, so the agent stays discoverable and the nudge lands on a stopped pane).
+  That nudge moves to the chat: `mngr exec <chat id> -- python3 system/scripts/message_chat.py <chat id> -m ...`, which the chat app delivers to the chat's active agent, with a label-aware fallback when the id names no live agent; it lands in phase 4's paired minds branch, since until then every chat's id is its live agent's.
 - Whether the latchkey gateway's per-agent registration follows a successor agent automatically on discovery is to be verified in phase 4; if not, the handoff registers it.
 
 Messaging a chat from inside the workspace goes through the chat app:
@@ -273,8 +274,10 @@ Messaging a chat from inside the workspace goes through the chat app:
   The script offers `--system`, which wraps the text in the system-message sentinel the browser app wraps its nudges in today (`_wrap_system_message`), so the transcript renders a collapsed chip; the wrapping moves into the script and the browser app calls the script.
 - Every in-workspace `mngr message` moves to the script, with no exceptions: the browser app's wake, the lead's replies to a worker (`lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, fetch-process-show), the task message `create_worker.py` sends after its syncs, and the automation runner's `/clear` and `/<skill>` sends (the route revives a stopped agent on send, which is what the runner's `--start` asked for).
 - Workers do not message their lead and gain no wake-up message: the report is a file and the lead polls for it, and a message would land as a user turn in the lead's chat.
-  What changes is the address: `create_worker.py` stamps `lead_agent` from `MNGR_AGENT_ID` instead of `MNGR_AGENT_NAME` (the key keeps its name so older task files and workers still parse), so `mngr rsync "$LEAD_AGENT:..."` and `mngr transcript $LEAD_AGENT` survive a rename.
-  The same-repo write becomes the primary report delivery for a lead whose work dir is the workspace root (every chat agent's is), with the id-addressed rsync kept for a lead in a worktree.
+  What changes is the address: `create_worker.py` stamps `lead_agent` from `MNGR_AGENT_ID` instead of `MNGR_AGENT_NAME` (the key keeps its name so older task files and workers still parse), so `mngr transcript $LEAD_AGENT` survives a rename.
+  `lead_agent` stays an agent id, not a chat id: it names the agent that dispatched the worker, and mngr, whose transcript the worker reads, knows only agents (a chat is the chat app's notion).
+  The report is delivered by a write into the lead's checkout: `create_worker.py` stamps `lead_work_dir` from `MNGR_AGENT_WORK_DIR` beside the id, and the worker copies its report there, falling back to the repo's main worktree (every chat agent's work dir) when the field is absent; there is no `mngr rsync` delivery path.
+  Reading a chat's earlier segments (the lead's predecessors) is a phase 4 concern: the worker lists them by the `chat_id` label and reads their transcripts.
 - Sends that arrive while a chat is converging are held and delivered to the new agent (section 5.7).
 - This lands in phase 1, before the rename, addressing by `MNGR_AGENT_ID` (equal to the chat id today), and learns `MINDS_CHAT_ID` in phase 2.
 
@@ -513,7 +516,7 @@ Where the minds repo is touched, the paired branch is named.
 - The chat app's message route: 503 until the agent list is known (4.5).
   Nothing changes about how a send with no client fields is recorded.
 - Every in-workspace `mngr message` switches to the script: the browser app's wake (which hands its sentinel wrapping to the script), the lead-to-worker replies in `lead-proxy.md`, dead-worker-recovery, update-self, migrate-workspace, and fetch-process-show, `create_worker.py`'s task message, and `run_automation.sh`.
-- The worker path (4.5): `create_worker.py` stamps `lead_agent` with the lead's agent id, `worker-reporting.md` makes the same-repo write the primary delivery with the id-addressed rsync as the worktree case, and `transcript-exploration.md` reads the lead's transcript by that id.
+- The worker path (4.5): `create_worker.py` stamps `lead_agent` with the lead's agent id, `worker-reporting.md` makes the same-repo write the primary delivery (phase 2 replaces the id-addressed rsync for a lead in a worktree with the stamped `lead_work_dir`), and `transcript-exploration.md` reads the lead's transcript by that id.
 - Tests: the script against a stub chat app (delivered, blocked, refused, 503 then delivered, unreachable, and 404); the route's 503 gate in the chat app's suite; `create_worker_test.py` asserting the stamped id; one integration test under the vendored mngr that renames a local agent and shows `mngr rsync` and `mngr transcript` still resolve it by id.
 - Exit check: a worker's report reaches a lead that was renamed mid-task, its `mngr transcript $LEAD_AGENT` still reads, and a lead's reply reaches the worker through the chat app.
 
@@ -525,9 +528,10 @@ Where the minds repo is touched, the paired branch is named.
   `ChatState` renamed `ChatAppState`.
 - The `ChatSnapshot` wire shape with `active_agent` (4.6), the renamed WebSocket messages, the chat-keyed routes with the agent-keyed aliases.
 - The frontend: `agentId` becomes `chatId` in every model and view, `AgentManager.ts` becomes the chats model, `ProtoAgent` becomes a provisional chat, and every agent-level read comes from `active_agent`.
-- `MINDS_CHAT_ID` on every chat-app-created agent; `layout.py`, the phase 1 script, `create_worker.py`'s `lead_agent` stamp, the automation prompt, and the skills prefer it with the `MNGR_AGENT_ID` fallback; the client-activity key becomes the chat id.
+- `MINDS_CHAT_ID` on every chat-app-created agent; `layout.py`, the automation prompt, and the skills that name their own chat prefer it with the `MNGR_AGENT_ID` fallback; the client-activity key becomes the chat id.
+  `create_worker.py`'s `lead_agent` stamp stays the dispatching agent's id (4.5) and gains `lead_work_dir`, which replaces the `mngr rsync` report delivery.
 - The auto-open reactor's ledger and address (4.8) keyed by chat id.
-- The minds side's decision on the permission request's ids (4.5): both ids on the request, or a chat-to-active-agent lookup through the chat app, in the paired minds branch.
+- Permission requests carry the chat id in their `agent_id` field (4.5); no minds-side change in this phase, since every chat's id is its live agent's until phase 3, and the resolution nudge's move to the chat lands with phase 4's paired minds branch.
 - Subagent keys become `<chat_id>.<agent_id>.<session_id>`.
 - The transcript loader lifted out of each watcher, and the segment facade in front of it with exactly one segment.
 - The handoff phase enum declared and carried as `null`.
@@ -579,15 +583,15 @@ Where the minds repo is touched, the paired branch is named.
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |
-| the minds latchkey handlers' resolution nudge (`mngr message <agent_id>`) | the request's `agent_id` | the active agent's id, carried on the request beside the chat id or looked up through the chat app (4.5) | unchanged |
+| the minds latchkey handlers' resolution nudge (`mngr message <agent_id>`) | the request's `agent_id` | unchanged (the chat id is the live agent's id until phase 3); phase 4's paired minds branch routes the nudge through the chat app by chat id (4.5) | unchanged |
 
 ## 10. Open questions and things to verify
 
 - Whether tmux accepts a session name of about 120 characters under `MNGR_PREFIX` (phase 4).
 - Whether latchkey's per-agent registration follows a successor automatically on discovery, or the handoff must register it (phase 4).
-- Whether the minds side treats a permission request's `agent_id` purely as a routing key (safe to carry the chat id) or also as an authorization key against the registered-agent set; if the latter, requests carry both the chat id and the agent id (phase 2).
+- Settled for phase 2 (4.5): the minds side treats a permission request's `agent_id` purely as a routing key (the gateway checks its shape, the chrome routes by workspace and matches the card by `request_id`), so the request carries the chat id alone; the resolution nudge moves to the chat in phase 4.
 - Per-harness session resumption under a swapped credential for the rebind (phase 6).
-- Settled for phase 1 (4.5): the same-repo write is the primary report delivery when the lead's work dir is the repo's main worktree, and a lead in a worktree of its own is reached by the id-addressed `mngr rsync`; whether that second path is ever exercised in practice is to be confirmed by the launch-task suite.
+- Settled for phase 2 (4.5): the report is written into the lead's checkout, `lead_work_dir` when the launcher stamped it and the repo's main worktree otherwise; the id-addressed `mngr rsync` delivery is gone.
 - The exact wording and placement of the `AGENTS.md` section and the summary skill's content rules (phase 4, with the user).
 
 ## 11. Documents this plan revises
