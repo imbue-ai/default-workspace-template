@@ -21,12 +21,7 @@
 
 import m from "mithril";
 import type { DockviewPanelApi } from "dockview-core";
-
-/** What a panel is showing: an instance, by address, in the tab the shell minted for it; or
- *  the New Tab launcher, which is a question about a pane rather than an instance. The same
- *  object is shared between the mounted view's bookkeeping (which the autosave serializes) and
- *  the live surface (which renders it), so a rebind reaches both at once. */
-export type PanelParams = { kind: "instance"; address: string; tabId: string } | { kind: "launcher" };
+import type { PanelParams } from "../models/Layouts";
 
 /** The identity a live page is filed under: the instance's address. */
 export type LiveKey = string;
@@ -40,9 +35,9 @@ export interface LiveSurface {
   /** The element that holds the page. Created once, appended to the live layer, and removed
    *  only when the instance is gone. */
   readonly element: HTMLElement;
-  /** What to render. Read on every redraw rather than captured, so a rebind follows without
-   *  remounting. */
-  params: PanelParams;
+  /** The page's id: minted by the panel that first opened it and baked into its url, so it
+   *  stays the same whichever panel (in whichever view) is showing the page now. */
+  readonly tabId: string;
   /** Whether a pane is showing this page right now. */
   isVisible: boolean;
   /** The path the page itself last reported (``shell:location``), cleared by the frame's next
@@ -66,8 +61,8 @@ let reconcileFrame: number | null = null;
 let isDragUnderWay = false;
 
 /** The live page a panel stands for: the instance's address, or null for a launcher. */
-export function liveKeyForPanel(params: PanelParams | undefined): LiveKey | null {
-  if (params === undefined || params.kind === "launcher") return null;
+export function liveKeyForPanel(params: PanelParams | null): LiveKey | null {
+  if (params === null || params.kind === "launcher") return null;
   return params.address;
 }
 
@@ -124,12 +119,12 @@ export function liveSurfaceKeys(): LiveKey[] {
  * The page for ``key``, creating it on first open.
  *
  * ``mountContent`` runs exactly once per instance, ever: the mount outlives every pane that
- * shows it, so an existing page is handed back untouched -- same document, same params, same
+ * shows it, so an existing page is handed back untouched -- same document, same tab id, same
  * scroll position -- no matter what the caller was about to render into it.
  */
 export function ensureLiveSurface(
   key: LiveKey,
-  params: PanelParams,
+  tabId: string,
   mountContent: (surface: LiveSurface) => void,
 ): LiveSurface {
   const existing = surfacesByKey.get(key);
@@ -145,7 +140,7 @@ export function ensureLiveSurface(
   const surface: LiveSurface = {
     key,
     element,
-    params,
+    tabId,
     isVisible: false,
     lastReportedPath: null,
     boundPanelId: null,

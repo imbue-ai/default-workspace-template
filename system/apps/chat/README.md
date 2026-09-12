@@ -55,9 +55,35 @@ binds to an account when it is created and never changes it. A launch that names
 no account (the New Tab tile, a rail shortcut, `layout.py open chat`) goes to the
 account the user pinned as the default in a chat's provider menu, else to the
 most recently used one; pressing another account in that menu offers to launch a
-new chat on it. `system/scripts/default_account_args.py`
-and `system/scripts/migrate_claude_auth.py` import this package from the root
-venv.
+new chat on it. `system/scripts/migrate_claude_auth.py` imports this package from
+the root venv.
+
+The same default reaches every `mngr create` in the workspace that names no
+harness and no account -- the chats the Minds app starts from outside, workers,
+automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
+git-ignored local config layer (`create_defaults.py`). The account store writes
+it on every index write and at boot: `[commands.create]` with the default
+account's harness as `type`, its binding (`env__extend` for claude, an
+`extra_provision_command__extend` credential link over `$MNGR_AGENT_STATE_DIR`
+for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
+by. The pin and the most recently used account stay in `index.json`; the file is
+derived from them and nobody is expected to edit it, though keys outside the
+managed ones survive every rewrite. With no usable account the managed keys are
+removed, and a create in the workspace is then refused by
+`system/scripts/require_create_account.py` (mngr's `pre_command_scripts.create`
+entry in `.mngr/settings.toml`) with a message that says to sign in.
+
+A chat created from outside the workspace with an `auto_open` or `assist` label
+(the Minds app's update and help chats) has its tab surfaced by this app
+(`auto_open.py`): when the agent appears, the app asks the shell to open the
+chat's address in every connected client, holds the open until a client is
+connected if none is, and records the delivery under
+`data/.apps/chat/auto_opened_chats.json` so a restart never re-pops a tab. The
+open is held for as long as the chat exists, so a chat started while nobody was
+connected still gets its tab whenever someone finally connects. The one
+exception is a workspace with no ledger to read (its chats predate this app
+keeping one, or the file was lost): every labeled chat it already has is adopted
+as shown, since a tab for each is worse than missing one.
 
 ## Development
 
