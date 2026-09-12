@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 from conftest import message_chat
 
@@ -191,6 +192,8 @@ def test_an_unreachable_chat_app_hands_the_message_to_mngr_and_passes_its_exit_c
     [call] = _mngr_calls(fake_mngr)
     assert call["argv"][:4] == ["message", _CHAT_ID, "--start", "--message-file"]
     assert call["text"] == "<agentic-browser-fleet>wake up</agentic-browser-fleet>"
+    # The argv is hand-built, so the live CLI, not the fake, is what says it is well-formed.
+    assert_mngr_argv_valid(["mngr", *call["argv"]])
 
 
 def test_a_backoff_with_no_mngr_on_path_is_a_failure_not_a_traceback(
@@ -242,6 +245,7 @@ def test_a_persisting_404_hands_the_message_to_mngr(
     # `--start` mirrors the chat app's revive-on-send, so a stopped agent is reached either way.
     assert call["argv"][:3] == ["message", _CHAT_ID, "--start"]
     assert call["text"] == "hello"
+    assert_mngr_argv_valid(["mngr", *call["argv"]])
 
 
 def test_a_404_that_clears_within_the_window_is_delivered_by_the_chat_app(
