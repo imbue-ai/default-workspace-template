@@ -126,7 +126,10 @@ Edit the service's code under `system/apps/<package>/` (or wherever the program'
 command points). If the change renders HTML a person looks at, invoke the
 `frontend-design` skill before writing markup, and if it calls Claude,
 follow `use-ai-integration` -- the same rules as when the service was
-built.
+built. Anything the change creates for the app outside its own directory --
+a skill that drives it, a script, a doc -- is registered in the app's `app.toml`
+under `[[references]]` with a `note` naming the surface it uses, so it travels
+with the app through hardening, testing, and publishing.
 
 ### 2. Apply it so it actually takes effect
 

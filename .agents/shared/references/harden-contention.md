@@ -66,22 +66,39 @@ or a provisional milestone merge:
    will usually make your pass stale anyway, which the next check catches.
 
 2. **Freshness check.** The pass is mergeable only if the creation has not
-   changed since the worker branched:
+   changed since the worker branched. The paths to diff are the creation's
+   whole footprint, not just the files the worker touched, which is what the
+   worker's scope file holds. That file lives under the worker's own `data/`
+   (gitignored, and only the reports directory syncs back), so recompute it on
+   your side with the same command:
 
    ```bash
    BASE=$(git merge-base HEAD "$WORKER_BRANCH")
-   git diff --name-only "$BASE" HEAD -- <CREATION_PATHS>
+   SCOPE=$(mktemp)
+   # an app with a manifest:
+   uv run app-manifest footprint system/apps/<package>/app.toml --out "$SCOPE" || exit 1
+   # a skill:
+   uv run app-manifest footprint --for-path .agents/skills/<name> --out "$SCOPE" || exit 1
+
+   PATHS=$(jq -r '[.primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE")
+   [ -n "$PATHS" ] || exit 1
+   git diff --name-only "$BASE" HEAD -- $PATHS
    ```
 
-   `<CREATION_PATHS>` is the creation's whole footprint, not just the files
-   the worker touched: for an app, `system/apps/<package>/ system/supervisord.conf`
-   (a standalone service likewise, under `system/services/<package>/`);
-   for a skill, `.agents/skills/<name>/`; for a shared script or reference,
-   its path; for the system interface, `system/apps/system_interface/` (that
-   creation's merge lives in `update-system-interface` Step 4, which applies
-   this same check). Empty output means fresh: merge normally. Any output
-   means the base moved under the worker: the pass is stale -- do not merge;
-   supersede it (below).
+   The two guards matter: with an empty `$PATHS` the diff covers the whole
+   tree, and any commit anywhere reads as a moved base. If the footprint
+   command fails (a reference the manifest names no longer exists, say), fix
+   the manifest on your branch first and rerun; do not treat the failure as
+   staleness. When the worker's `done` report lists paths under `References
+   registered:`, add them to `$PATHS` as well -- your tree's manifest predates
+   them.
+   A creation with no manifest is diffed at its own path: a standalone service
+   under `system/services/<package>/` (plus `system/supervisord.conf`), a shared
+   script or reference at its path, the system interface at
+   `system/apps/system_interface/` (that creation's merge lives in
+   `update-system-interface` Step 4, which applies this same check). Empty
+   output means fresh: merge normally. Any output means the base moved under
+   the worker: the pass is stale -- do not merge; supersede it (below).
 
 3. **Never hand-resolve a conflicted hardened branch.** If the merge itself
    conflicts, `git merge --abort` and treat the pass as stale. Resolving the

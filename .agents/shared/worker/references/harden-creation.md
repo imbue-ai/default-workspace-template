@@ -42,6 +42,60 @@ Write tests and optimize in parallel, if possible. Avoid running full test suite
 unless necessary, such as at the very end. The long tail is often review passes
 and full test suites at the end of hardening.
 
+## The scope file
+
+Every run over a creation with a footprint -- an app with an `app.toml`, or a
+skill -- computes that footprint and writes it to the path the task
+frontmatter's `scope_file` names -- Step 1's `eval` exposes it as
+`SCOPE_FILE`, and it sits beside your task file at
+`data/.tasks/harden/<slug>/scope.json`. Compute it before any other work when
+the creation already exists on disk; for a skill you are building from scratch
+(a skill `crystallize`), compute it as soon as the skill directory exists,
+since the command refuses a path that is not there:
+
+```bash
+mkdir -p "$(dirname "$SCOPE_FILE")"
+
+# TYPE app (an app with an app.toml) -- from the manifest:
+uv run app-manifest footprint system/apps/<package>/app.toml \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+
+# TYPE skill -- by path:
+uv run app-manifest footprint --for-path .agents/skills/<name> \
+    --diff-base "$DIFF_BASE" --out "$SCOPE_FILE"
+```
+
+`DIFF_BASE` comes from the task frontmatter's `diff_base`: the commit the lead
+recorded at dispatch as the one *before* the work being hardened began, so the
+scope file's `diff` covers the committed change you are verifying, and -- once
+you regenerate it -- your own commits too. Fail loudly if it is unset.
+
+A creation with no manifest -- a pre-manifest app, a standalone service, the
+system interface -- has nothing to resolve: its footprint is its own directory
+plus its supervisord section, and the run carries no scope file.
+
+The file records `primary` (the creation's own directories), `wiring` (the
+`system/supervisord.conf` sections that run it), `references` (what its
+manifest claims outside its directory -- a skill that drives it, a script, a
+doc), `context` (paths to read but never change), `conventions`, `exclude` (a
+hard denylist of globs), and `diff` (the branch's changed files, split into
+those inside the footprint and `outside_footprint`). Two consumers read it:
+the test selection in `type-app.md`, and the freshness check the lead runs
+before merging (`.agents/shared/references/harden-contention.md`). Regenerate
+it whenever the footprint
+moves under you -- when you register a `[[references]]` entry, or when you add a
+supervisord section -- and once more immediately before your final report, after
+committing everything, so the `diff` it carries includes every commit you made
+(the diff reads commits only; an uncommitted edit is invisible to it).
+
+A non-empty `diff.outside_footprint` in that final scope file is a claim to
+settle before you report. For each path, either add a `[[references]]` entry to
+the app's `app.toml` -- when the file genuinely belongs to the creation -- or
+name it in your final report under `Outside footprint:`, one line each on why it
+changed on this branch. A skill run's one sanctioned edit inside an app
+directory, the `[[references]]` entry it adds to that app's manifest, sits under
+the scope file's `context` and is counted as inside the footprint.
+
 ## Testing and hardening contract
 
 - **Write or extend thorough tests** that assert on markers which are true if
@@ -154,8 +208,45 @@ evicts is not hardened, no matter how well-tested its happy path is.
 ## Review gates
 
 1. Ensure all in-flight changes have settled and are committed
-2. Ensure that tests pass. If there are long running tests, this is the moment to run them
-3. Fix failing tests with narrowly targeted changes
+2. Run the scoped test set below and fix what it flags with narrowly targeted
+   changes
+
+### The scoped test set
+
+Three parts, in order, **each its own `pytest` invocation** -- passing two of
+these path sets to one command makes `conftest` resolve to whichever it reaches
+first and dies during collection. A bare `uv run pytest` from the repo root is
+not one of them: it collects the whole monorepo -- on this workspace about 2,500
+tests and several minutes -- to check a change that usually touches a handful of
+files.
+
+1. **The creation's own suite**, as your `type-<TYPE>.md` defines it.
+
+2. **The repo guards** -- the cross-cutting checks no creation owns: manifest
+   and registry consistency, template stacking, hook wiring, the meta-ratchets.
+   Run them whatever you touched:
+
+   ```bash
+   uv run pytest system/*.py system/scripts
+   ```
+
+   A few hundred tests, well under a minute. This is what catches a change that
+   breaks a contract the rest of the tree depends on, which part 1 by
+   construction cannot see.
+
+3. **The full suite, only when the change left the footprint.** Regenerate the
+   scope file, then read `diff.outside_footprint`. Empty means parts 1 and 2
+   cover the change. Non-empty means it reached code outside the creation, and
+   whatever depends on that code is in neither set:
+
+   ```bash
+   jq -e '.diff.outside_footprint | length == 0' "$SCOPE_FILE" >/dev/null \
+       || echo "changed files outside the footprint -- run the full suite"
+   ```
+
+A run that carries no scope file -- a pre-manifest app, a standalone service,
+the system interface, per "The scope file" above -- cannot make that check, so
+it runs parts 1 and 2 and then the full suite once.
 
 When complete, report back to the lead.
 

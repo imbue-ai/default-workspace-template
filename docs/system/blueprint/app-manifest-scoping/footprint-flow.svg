@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="330" viewBox="0 0 860 330" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill: #f7f7f7; stroke: #333; stroke-width: 1.2; }
+    .src { fill: #e8f0fe; stroke: #1a56db; stroke-width: 1.2; }
+    .core { fill: #fff4e5; stroke: #b45309; stroke-width: 1.6; }
+    .edge { stroke: #333; stroke-width: 1.2; fill: none; marker-end: url(#arrow); }
+    .lbl { fill: #333; }
+    .small { fill: #555; font-size: 11px; }
+  </style>
+
+  <!-- sources -->
+  <rect class="src" x="20" y="30" width="200" height="54" rx="6"/>
+  <text class="lbl" x="120" y="52" text-anchor="middle">system/apps/&lt;pkg&gt;/app.toml</text>
+  <text class="small" x="120" y="70" text-anchor="middle">name, program, [[references]]</text>
+
+  <rect class="src" x="20" y="120" width="200" height="54" rx="6"/>
+  <text class="lbl" x="120" y="142" text-anchor="middle">system/supervisord.conf</text>
+  <text class="small" x="120" y="160" text-anchor="middle">[program:&lt;name&gt;], [program:&lt;name&gt;-*]</text>
+
+  <rect class="src" x="20" y="210" width="200" height="54" rx="6"/>
+  <text class="lbl" x="120" y="232" text-anchor="middle">branch diff</text>
+  <text class="small" x="120" y="250" text-anchor="middle">git diff base...HEAD</text>
+
+  <!-- core -->
+  <rect class="core" x="310" y="110" width="220" height="80" rx="8"/>
+  <text class="lbl" x="420" y="140" text-anchor="middle" font-weight="bold">app-manifest footprint</text>
+  <text class="small" x="420" y="160" text-anchor="middle">one computation, one scope file</text>
+  <text class="small" x="420" y="176" text-anchor="middle">data/.tasks/harden/&lt;slug&gt;/scope.json</text>
+
+  <!-- consumers -->
+  <rect class="box" x="640" y="20" width="200" height="46" rx="6"/>
+  <text class="lbl" x="740" y="40" text-anchor="middle">review agents</text>
+  <text class="small" x="740" y="56" text-anchor="middle">autofix, verify-architecture</text>
+
+  <rect class="box" x="640" y="90" width="200" height="46" rx="6"/>
+  <text class="lbl" x="740" y="110" text-anchor="middle">test selection</text>
+  <text class="small" x="740" y="126" text-anchor="middle">pytest over footprint paths</text>
+
+  <rect class="box" x="640" y="160" width="200" height="46" rx="6"/>
+  <text class="lbl" x="740" y="180" text-anchor="middle">freshness check</text>
+  <text class="small" x="740" y="196" text-anchor="middle">harden-contention CREATION_PATHS</text>
+
+  <rect class="box" x="640" y="230" width="200" height="46" rx="6"/>
+  <text class="lbl" x="740" y="250" text-anchor="middle">publish-template</text>
+  <text class="small" x="740" y="266" text-anchor="middle">proposed include set</text>
+
+  <!-- edges -->
+  <path class="edge" d="M220,57 C270,57 270,140 310,140"/>
+  <path class="edge" d="M220,147 L310,147"/>
+  <path class="edge" d="M220,237 C270,237 270,160 310,160"/>
+
+  <path class="edge" d="M530,140 C590,140 590,43 640,43"/>
+  <path class="edge" d="M530,145 C590,145 590,113 640,113"/>
+  <path class="edge" d="M530,155 C590,155 590,183 640,183"/>
+  <path class="edge" d="M530,160 C590,160 590,253 640,253"/>
+
+  <!-- caption -->
+  <text class="small" x="430" y="312" text-anchor="middle">Blue: inputs the footprint is derived from. Orange: the single derivation. Grey: the four places that hand-derive a footprint today.</text>
+</svg>
