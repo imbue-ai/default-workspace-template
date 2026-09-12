@@ -330,6 +330,10 @@ def _ensure_lead_agent(task_file: Path) -> int | None:
     lead_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
     if lead_work_dir and frontmatter.get(_LEAD_WORK_DIR_FIELD) != lead_work_dir:
         stamped = _set_frontmatter_field(stamped, _LEAD_WORK_DIR_FIELD, lead_work_dir)
+        print(
+            f"create_worker: set {_LEAD_WORK_DIR_FIELD} to {lead_work_dir!r}",
+            file=sys.stderr,
+        )
     lead_id = os.environ.get("MNGR_AGENT_ID")
     if lead_id and current != lead_id:
         stamped = _set_frontmatter_field(stamped, _LEAD_AGENT_FIELD, lead_id)
