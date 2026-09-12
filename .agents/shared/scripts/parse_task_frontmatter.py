@@ -9,17 +9,18 @@ Pins the required schema so workers can't silently consume a task file
 whose `finish_report_path` was missing, misspelled, or the wrong type.
 `lead_agent` is the dispatching agent's mngr id (an `agent-<hex>` value; older
 launchers stamped the lead's name, which a rename invalidates), normally
-stamped by `create_worker.py launch` beside `lead_work_dir`, the lead's own
-checkout; both are deliberately OPTIONAL here (absent -> warn on stderr for
-`lead_agent`, emit no line) because a task file can be authored by a *newer*
-flow than the launcher that provisioned the worker (update-self stages the
-target version's prose for an older lead), and a worker that finished its
+stamped by `create_worker.py launch`; it is deliberately OPTIONAL here (absent
+-> warn on stderr, emit no line) because a task file can be authored by a
+*newer* flow than the launcher that provisioned the worker (update-self stages
+the target version's prose for an older lead), and a worker that finished its
 task must never be structurally unable to say so -- the delivery in
 `worker-reporting.md` is a write into the lead's work dir, falling back to
 the repo's main worktree. Beyond those, any additional top-level
 string fields the lead sets are passed through to the worker -- so leads
 can attach flow-specific context (a ticket id, a feature flag, a list of
-staged inputs) without each new key requiring a parser change.
+staged inputs) without each new key requiring a parser change. The launcher's
+`lead_work_dir` stamp (the lead's own checkout) reaches the worker that way,
+as `LEAD_WORK_DIR`, and is absent from the output when it was not stamped.
 
 The positional argument is a path that may contain a shell-style glob
 (e.g. ``data/.tasks/harden/*/task.md``). The helper resolves the
