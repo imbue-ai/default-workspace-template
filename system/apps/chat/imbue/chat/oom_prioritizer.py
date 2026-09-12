@@ -15,7 +15,7 @@ Signals, and where each comes from:
 - **messaged** -- a message sent through the chat app's send route; drives a
   recency ranking across all chats, newest-first,
 - **running** -- the chat's mngr lifecycle state, pushed in from the observe
-  stream via ``record_running_agents``. Entering a running state counts as
+  stream via ``record_running_chats``. Entering a running state counts as
   engagement (it is the only evidence of a message sent outside the UI -- by
   ``mngr message`` or by another agent), and staying in one marks the chat
   mid-turn, which suspends its staleness climb until the turn ends.

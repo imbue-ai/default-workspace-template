@@ -21,8 +21,10 @@ AGENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^agent-[A-Za-z0-9_-]{1,1
 class ChatId(NonEmptyStr):
     """A chat's id: the id of its first agent, distinct from an agent id in code.
 
-    Its shape is ``AGENT_ID_PATTERN``'s; the routes that take one from a URL check that, and
-    nothing else needs to, so an id minted by mngr or by a test passes through unchecked.
+    Its shape is ``AGENT_ID_PATTERN``'s. The presence route and the chat document check that
+    shape (they accept a chat the app does not list yet); every other route resolves the id
+    through the manager and answers 404 otherwise, so an id minted by mngr or by a test
+    passes through unchecked.
     """
 
 
