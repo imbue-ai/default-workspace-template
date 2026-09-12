@@ -2890,6 +2890,7 @@ class FakePoolBackend:
             (db_mod, "get_pool_db_connection", self.get_connection),
             (hosts_module, "_append_authorized_key", self.append_authorized_key),
             (hosts_module, "_write_files_on_container", self.write_files_on_container),
+            (hosts_module, "_assert_container_serves_pinned_host_key", self.assert_container_serves_pinned_host_key),
             (hosts_module, "_adopt_workspace_on_container", self.adopt_workspace_on_container),
             (hosts_module, "_start_workspace_agent_on_container", self.start_workspace_agent_on_container),
             (hosts_module, "clean_up_slice_on_box", self.clean_up_slice_on_box),
@@ -3147,6 +3148,11 @@ class FakePoolBackend:
         if self.agent_start_should_fail:
             raise paramiko.SSHException("injected agent start failure")
         self.started_agent_containers.append((host, port))
+
+    def assert_container_serves_pinned_host_key(self, host: str, port: int, expected_host_public_key: str) -> None:
+        """Stand in for the pre-share host-key handshake; the mismatch flag models a desktop-rotated key."""
+        if self.is_container_host_key_mismatched:
+            raise paramiko.BadHostKeyException(host, paramiko.ECDSAKey.generate(), paramiko.ECDSAKey.generate())
 
     def write_files_on_container(
         self,

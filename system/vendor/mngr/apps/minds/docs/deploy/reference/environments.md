@@ -321,6 +321,23 @@ For the packaged Electron app, see "Build embedding for the desktop
 client" below -- the runtime exports `MINDS_ROOT_NAME` and passes
 `--config-file` automatically from the embedded bundle.
 
+**One instance per env per machine.** Never run two minds instances (two
+`minds run` backends, or a backend plus a stale supervisor) against the same
+env on one machine. Each instance's detached `mngr latchkey forward`
+supervisor provisions the same remote machines: the last one to run
+overwrites the desktop-owned latchkey secrets on them, while only one of them
+can hold the tunnel those secrets are checked against, so agents in those
+workspaces lose their permission channel with "Unauthorized". Separate
+instances for different envs or tiers are fine. `just minds-stop` and killing
+`minds run` deliberately leave the supervisor running (so workspaces keep
+their gateway across desktop restarts), so a second env root used for a
+multi-device test has to be stopped as a whole:
+
+```bash
+uv run minds-admin env stop-local dev-<your-user>-b   # backend + supervisor
+uv run minds-admin env stop-local --list-only <env>    # just report what holds the root
+```
+
 ## Dynamic dev environments
 
 Each developer can stand up their own dev env on top of the shared
@@ -403,6 +420,15 @@ uv run minds-admin env destroy
 # `minds-admin env destroy` rmdir's ~/.minds-dev-<your-user> after success;
 # clear your shell with `eval "$(uv run minds-admin env deactivate)"`.
 ```
+
+The destroy first checks for local processes still holding the env root: the
+desktop backend (a packaged launch, or a `just minds-start` / `minds run` dev
+launch, matched by the config path in its environment) and the `mngr latchkey
+forward` supervisor. It refuses while any is running. `just minds-stop` is not
+enough, because the supervisor survives it by design; stop both with
+`minds-admin env stop-local <env>` first, or pass `--stop-local-processes` to
+have the destroy SIGTERM them itself. A dev env destroy asks no further
+confirmation once that check passes.
 
 See what envs exist on this machine (globs `~/.minds*/` directly):
 

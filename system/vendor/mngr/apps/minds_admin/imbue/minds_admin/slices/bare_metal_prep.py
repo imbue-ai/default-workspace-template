@@ -109,7 +109,9 @@ _SLICE_AUTOSTART_PARALLELISM: Final[int] = 4
 # used to pre-install Docker + inotify-tools into the golden slice image so per-VM
 # first-boot provisioning skips those downloads. ``zstd`` compresses the workspace
 # stop/start transfer streams (the box-health sweep probes for it alongside the
-# pinned age + s5cmd installs below).
+# pinned age + s5cmd installs below). ``bind9-dnsutils`` provides ``dig`` for the
+# S3 IPv4 pin refresher, which must query DNS directly rather than through
+# ``/etc/hosts``.
 _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "qemu-system-x86",
     "qemu-utils",
@@ -121,6 +123,25 @@ _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "iproute2",
     "libguestfs-tools",
     "zstd",
+    "bind9-dnsutils",
+)
+
+# OVH Object Storage endpoints the boxes transfer workspace stop/start artifacts
+# to, pinned to their IPv4 addresses in /etc/hosts. The in-DC IPv6 path to these
+# VIPs intermittently blackholes TCP flows for tens of seconds under the boxes'
+# 1 Gbps QoS (observed in both the vin and hil datacenters), which starves
+# uploads to ~2-30 MB/s and trips server-side RequestTimeout errors, while IPv4
+# sustains the full provisioned 1 Gbps. Go S3 clients (s5cmd) prefer IPv6 but
+# honor /etc/hosts, so the pin routes every transfer over IPv4. A 1-minute
+# systemd timer re-resolves the A records so a changed VIP heals within a
+# minute.
+# CLEANUP: drop the pin machinery (this list, _render_s3_ipv4_pin_section and
+# its two call sites, bind9-dnsutils in both apt lists, and their tests) once
+# OVH ticket #723301 confirms the in-DC IPv6 path to Object Storage no longer
+# blackholes flows.
+_S3_IPV4_PIN_HOSTNAMES: Final[tuple[str, ...]] = (
+    "s3.us-east-va.io.cloud.ovh.us",
+    "s3.us-west-or.io.cloud.ovh.us",
 )
 
 # Packages a gen-2 box needs (specs/slice-fleet-gen2): raw qemu + OVMF firmware
@@ -133,8 +154,9 @@ _BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
 # systemd-cryptsetup (the LUKS storage volume and its TPM enrollment; the
 # latter is trixie's split package carrying systemd-cryptenroll and the TPM2
 # unlock path) + tpm2-tools (operator diagnostics), ethtool for the telemetry
-# collector's link-speed audit, plus the same bake/transfer tooling as gen-1.
-# No lima; gen-2 data disks are formatted inside the guest, and
+# collector's link-speed audit, bind9-dnsutils for the S3 IPv4 pin refresher's
+# ``dig`` (see ``_S3_IPV4_PIN_HOSTNAMES``), plus the same bake/transfer tooling
+# as gen-1. No lima; gen-2 data disks are formatted inside the guest, and
 # btrfs-progs is here only for the cutover's box-side transplant of gen-1 home
 # subvolumes into fresh gen-2 data disks (mounted through qemu-nbd).
 # CLEANUP: drop btrfs-progs and the nbd module-load below once the gen-1 ->
@@ -160,6 +182,7 @@ _GEN2_BOX_APT_PACKAGES: Final[tuple[str, ...]] = (
     "iproute2",
     "libguestfs-tools",
     "zstd",
+    "bind9-dnsutils",
 )
 
 # Marker directory for the pinned-binary installs. Gen-1 boxes historically
@@ -225,6 +248,81 @@ if [ "$(cat "$transfer_tools_marker" 2>/dev/null)" != "{AGE_VERSION}-{S5CMD_VERS
     mkdir -p {marker_dir}
     printf '%s\\n' "{AGE_VERSION}-{S5CMD_VERSION}" > "$transfer_tools_marker"
 fi
+"""
+
+
+@pure
+def _render_s3_ipv4_pin_section() -> str:
+    """The OVH Object Storage IPv4 pin (script, oneshot unit, minutely timer) shared by both generations' preps."""
+    s3_pin_hostnames = " ".join(_S3_IPV4_PIN_HOSTNAMES)
+    return f"""\
+# Pin the OVH Object Storage endpoints to their IPv4 addresses via a managed
+# /etc/hosts block, re-resolved every minute by a systemd timer. The in-DC
+# IPv6 path blackholes flows (OVH ticket #723301); full rationale on
+# _S3_IPV4_PIN_HOSTNAMES in bare_metal_prep.py.
+cat > /usr/local/sbin/mngr-s3-ipv4-pin.sh <<'MNGR_S3_PIN'
+#!/bin/bash
+# Managed by mngr (bare_metal_prep): pin the OVH Object Storage endpoints to
+# their IPv4 addresses so box->S3 transfers never ride the in-DC IPv6 path,
+# which intermittently blackholes flows (OVH ticket #723301). Re-run every
+# minute by mngr-s3-ipv4-pin.timer; a failed lookup keeps the current pin.
+set -euo pipefail
+hosts_file=/etc/hosts
+begin_mark="# BEGIN mngr-s3-ipv4-pin (managed block, do not edit)"
+end_mark="# END mngr-s3-ipv4-pin"
+pin_lines=""
+for endpoint_hostname in {s3_pin_hostnames}; do
+    # dig queries DNS directly (it never reads the hosts file), so the
+    # re-resolution is not poisoned by the existing pin.
+    address=$(dig +short +time=3 +tries=2 A "$endpoint_hostname" 2>/dev/null | grep -Em1 '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' || true)
+    if [ -z "$address" ]; then
+        # Journal-visible so a persistent re-resolution failure (a stale pin
+        # after a VIP change) does not go unnoticed.
+        echo "mngr-s3-ipv4-pin: failed to resolve $endpoint_hostname; falling back to the existing pin" >&2
+        address=$(sed -n "/^$begin_mark\\$/,/^$end_mark\\$/p" "$hosts_file" | awk -v h="$endpoint_hostname" '$2 == h {{print $1}}' | head -n1)
+    fi
+    if [ -n "$address" ]; then
+        pin_lines="$pin_lines$address $endpoint_hostname"$'\\n'
+    fi
+done
+without_block=$(awk -v b="$begin_mark" -v e="$end_mark" '$0 == b {{skip=1}} !skip {{print}} $0 == e {{skip=0}}' "$hosts_file")
+# Per-process temp name: enabling the timer fires the service immediately (its
+# OnBootSec point has already elapsed), so that run races prep's synchronous
+# seed run; a shared temp path would make the losing run's mv fail.
+tmp_file="$hosts_file.mngr-s3-pin-tmp.$$"
+printf '%s\\n%s\\n%s%s\\n' "$without_block" "$begin_mark" "$pin_lines" "$end_mark" > "$tmp_file"
+if cmp -s "$tmp_file" "$hosts_file"; then
+    rm -f "$tmp_file"
+else
+    chmod 644 "$tmp_file"
+    mv "$tmp_file" "$hosts_file"
+fi
+MNGR_S3_PIN
+chmod +x /usr/local/sbin/mngr-s3-ipv4-pin.sh
+cat > /etc/systemd/system/mngr-s3-ipv4-pin.service <<'MNGR_S3_PIN_UNIT'
+[Unit]
+Description=Refresh the IPv4 hosts-file pin for OVH Object Storage endpoints
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mngr-s3-ipv4-pin.sh
+MNGR_S3_PIN_UNIT
+cat > /etc/systemd/system/mngr-s3-ipv4-pin.timer <<'MNGR_S3_PIN_TIMER'
+[Unit]
+Description=Re-resolve the OVH Object Storage IPv4 pin every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target
+MNGR_S3_PIN_TIMER
+systemctl daemon-reload
+systemctl enable --now mngr-s3-ipv4-pin.timer
+# Seed the pin synchronously so the first transfer after prep already rides IPv4.
+/usr/local/sbin/mngr-s3-ipv4-pin.sh
 """
 
 
@@ -377,6 +475,9 @@ def build_box_prep_script(
     Debian mirror. The staged image is additionally customized (via ``virt-customize``)
     to pre-install the pinned Docker Engine + inotify-tools, so each slice VM's
     first-boot provisioning finds them present and skips the per-VM download/install.
+    Also pins the OVH Object Storage endpoints to their IPv4 addresses via a managed
+    ``/etc/hosts`` block refreshed by the ``mngr-s3-ipv4-pin`` systemd timer, keeping
+    stop/start transfers off the flow-blackholing in-DC IPv6 path (OVH ticket #723301).
     Also hardens the box against reboots: pins unattended-upgrades to never auto-reboot,
     and installs (enable-only) the ``mngr-slices-autostart.service`` boot unit that
     starts every stopped ``mngr-slice-*`` VM as the lima user after a box reboot.
@@ -414,6 +515,7 @@ if [ "$(cat "$lima_version_marker" 2>/dev/null)" != "{lima_version}" ]; then
 fi
 
 {_render_transfer_tools_section(_GEN1_INSTALL_MARKER_DIR)}
+{_render_s3_ipv4_pin_section()}
 {_render_service_user_section(slice_service_user)}
 {_render_gen1_pool_key_section(slice_service_user, pool_public_key)}
 # 6. Stage + customize the golden slice guest image once (idempotent). Download the
@@ -811,7 +913,7 @@ def build_gen2_box_prep_script(
     home and both temp directories bind-mounted onto it), the staged trixie
     guest image on that volume (pinned docker + the pinned gVisor runtime
     baked in), the kvm nested-virtualization module pin, the shared swapfile /
-    no-auto-reboot / transfer-tooling hardening, the management WireGuard
+    no-auto-reboot / transfer-tooling / S3-IPv4-pin hardening, the management WireGuard
     bring-up (echoing the box's public key for the caller to stamp on the row),
     the ``:22`` lockdown when the tier's Modal Proxy IPs are configured, and
     the box telemetry collector + timer (phase 4) with its prep-artifact hash
@@ -898,6 +1000,7 @@ install -d -o {service_user} -g {service_user} -m 751 {GEN2_INSTANCES_DIR} {GEN2
 
 {_render_retired_gen2_service_user_section(service_user)}
 {_render_transfer_tools_section(_GEN2_INSTALL_MARKER_DIR)}
+{_render_s3_ipv4_pin_section()}
 {_render_gen2_prep_artifacts_section()}
 {_render_gen2_dhcp_server_section()}
 # Stage + customize the golden trixie guest image (idempotent; same

@@ -43,6 +43,7 @@ from imbue.minds.desktop_client.api_v1 import create_api_v1_blueprint
 from imbue.minds.desktop_client.assist_chat import ASSIST_SKILL_NAME
 from imbue.minds.desktop_client.assist_chat import build_assist_chat_message
 from imbue.minds.desktop_client.auth import AuthStoreInterface
+from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backup_env_store import read_canonical_env
@@ -52,6 +53,7 @@ from imbue.minds.desktop_client.cookie_manager import verify_session_cookie
 from imbue.minds.desktop_client.create_attempt_rows import CreateAttemptRow
 from imbue.minds.desktop_client.create_attempt_rows import derive_create_attempt_rows
 from imbue.minds.desktop_client.data_types import BackupAccessState
+from imbue.minds.desktop_client.data_types import CloudRowKeyState
 from imbue.minds.desktop_client.data_types import RemoteWorkspaceKind
 from imbue.minds.desktop_client.data_types import RemoteWorkspaceTile
 from imbue.minds.desktop_client.dek_store import is_account_unlocked
@@ -89,13 +91,13 @@ from imbue.minds.desktop_client.responses import make_json_error_response
 from imbue.minds.desktop_client.responses import make_redirect_response
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
+from imbue.minds.desktop_client.session_store import AccountSession
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sharing_handler import delete_share_for_host
-from imbue.minds.desktop_client.skill_chat import AccountBindingState
 from imbue.minds.desktop_client.skill_chat import SkillSupport
-from imbue.minds.desktop_client.skill_chat import check_skill_support
 from imbue.minds.desktop_client.skill_chat import generate_chat_name
-from imbue.minds.desktop_client.skill_chat import resolve_account_binding
+from imbue.minds.desktop_client.skill_chat import probe_skill
+from imbue.minds.desktop_client.skill_chat import resolve_legacy_account_args
 from imbue.minds.desktop_client.skill_chat import spawn_skill_chat
 from imbue.minds.desktop_client.state import DesktopClientState
 from imbue.minds.desktop_client.state import get_state
@@ -676,8 +678,8 @@ def _handle_help_assist() -> Response:
     # half-created chat behind. The probe is a quick filesystem check inside the
     # container; on an unsupported/unreachable workspace we return a clear error the
     # modal turns into a "report a bug instead" screen rather than a dead spinner.
-    support = check_skill_support(mngr_caller, workspace_agent_id, ASSIST_SKILL_NAME)
-    if support is SkillSupport.UNSUPPORTED:
+    probe = probe_skill(mngr_caller, workspace_agent_id, ASSIST_SKILL_NAME)
+    if probe.support is SkillSupport.UNSUPPORTED:
         return make_response(
             status_code=409,
             content=json.dumps(
@@ -685,44 +687,24 @@ def _handle_help_assist() -> Response:
             ),
             media_type="application/json",
         )
-    if support is SkillSupport.UNREACHABLE:
+    if probe.support is SkillSupport.UNREACHABLE:
         return make_response(
             status_code=502,
             content=json.dumps({"error": _MACHINE_UNREACHABLE_ERROR}),
-            media_type="application/json",
-        )
-
-    # An unbound chat reaches a config dir holding no credential, so it can never take a turn.
-    binding = resolve_account_binding(mngr_caller, workspace_agent_id)
-    if binding.state is AccountBindingState.UNREACHABLE:
-        return make_response(
-            status_code=502,
-            content=json.dumps({"error": _MACHINE_UNREACHABLE_ERROR}),
-            media_type="application/json",
-        )
-    if binding.state is AccountBindingState.UNAVAILABLE:
-        return make_response(
-            status_code=409,
-            content=json.dumps(
-                {
-                    "error": (
-                        "This machine has no signed-in Anthropic account for an agent to run on. "
-                        "Sign in inside the machine and try again."
-                    )
-                }
-            ),
             media_type="application/json",
         )
 
     # Wait for the create to finish before responding so the get-help modal keeps its
     # "starting..." state until the chat exists, rather than dismissing into a blank gap
     # while the agent boots. The cheroot WSGI pool (50 threads) absorbs the blocking call.
+    # Which account the chat runs on is the workspace's own default; a workspace with none
+    # signed in refuses the create in its own words, which the spawn carries back.
     spawn = spawn_skill_chat(
         mngr_caller,
         workspace_agent_id,
         chat_name=generate_chat_name(ASSIST_SKILL_NAME),
         message=build_assist_chat_message(description),
-        account_args=binding.create_args,
+        account_args=resolve_legacy_account_args(mngr_caller, workspace_agent_id, probe),
     )
     if not spawn.is_started:
         # The same wall that stops an /assist chat stops every other agent
@@ -1281,6 +1263,11 @@ def _build_workspace_list(
             account = session_store.get_account_for_workspace(str(aid))
             if account is not None:
                 entry["account"] = account.email
+                # A cloud machine is listed on every device signed in to its
+                # account, but only opens from a device holding its SSH key.
+                key_state = _cloud_row_key_state(session_store.record_store, account, info)
+                if key_state is not None:
+                    entry["key_state"] = key_state.value
         workspaces.append(entry)
     # In-flight / interrupted / failed create attempts ride in the same list,
     # badged via ``create_attempt_state``, so they sit inline with the finished
@@ -1307,6 +1294,29 @@ def _build_workspace_list(
             remote_entry["account"] = owner.email
         workspaces.append(remote_entry)
     return workspaces
+
+
+def _cloud_row_key_state(
+    record_store: WorkspaceRecordStore | None,
+    account: AccountSession,
+    info: AgentDisplayInfo | None,
+) -> CloudRowKeyState | None:
+    """Why this device cannot open a live cloud row, or None when it can (or the row is not a cloud one)."""
+    if record_store is None or info is None or info.provider_name is None:
+        return None
+    if not is_cloud_provider_kind(str(info.provider_name)):
+        return None
+    key_path = record_store.imbue_cloud_host_ssh_key_path(str(account.email), str(info.host_id))
+    if key_path is None or key_path.is_file():
+        return None
+    user_id = str(account.user_id)
+    if is_account_unlocked(record_store.paths, user_id):
+        return CloudRowKeyState.SYNCING
+    # The same test the unlock banner runs, so the chip's "enter your master
+    # password" never shows without the banner to enter it in, or vice versa.
+    if user_id in record_store.locked_account_user_ids([user_id]):
+        return CloudRowKeyState.LOCKED
+    return CloudRowKeyState.UNAVAILABLE
 
 
 def _build_requests_payload(
@@ -1666,6 +1676,7 @@ def _ui_workspace_entry_from_legacy_dict(entry: Mapping[str, str]) -> UiWorkspac
         remote_kind=entry.get("remote_kind", ""),
         location=entry.get("location", ""),
         backup_access=entry.get("backup_access", ""),
+        key_state=entry.get("key_state", ""),
     )
 
 

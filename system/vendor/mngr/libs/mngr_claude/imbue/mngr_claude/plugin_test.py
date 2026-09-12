@@ -81,6 +81,7 @@ from imbue.mngr.providers.local.instance import LocalProviderInstance
 from imbue.mngr.utils.testing import capture_loguru
 from imbue.mngr.utils.testing import init_git_repo
 from imbue.mngr.utils.testing import make_mngr_ctx
+from imbue.mngr.utils.testing import poll_until_file_contains
 from imbue.mngr_claude.claude_config import ClaudeDirectoryNotTrustedError
 from imbue.mngr_claude.claude_config import ClaudeEffortCalloutNotDismissedError
 from imbue.mngr_claude.claude_config import MAIN_SESSION_ONLY_GUARD
@@ -102,6 +103,7 @@ from imbue.mngr_claude.plugin import ClaudeAgentConfig
 from imbue.mngr_claude.plugin import DialogDetectedError
 from imbue.mngr_claude.plugin import MANAGED_SETTINGS_LAUNCH_ARG
 from imbue.mngr_claude.plugin import ProvisioningContext
+from imbue.mngr_claude.plugin import STDERR_LOG_NAME
 from imbue.mngr_claude.plugin import _build_claude_install_command
 from imbue.mngr_claude.plugin import _build_install_command_hint
 from imbue.mngr_claude.plugin import _build_settings_json
@@ -732,10 +734,11 @@ def test_claude_agent_assemble_command_sets_is_sandbox_for_remote_host(
     assert command == CommandString(
         f"{background_cmd} export IS_SANDBOX=1 && {sid_export}"
         f" && rm -rf $MNGR_AGENT_STATE_DIR/session_started $MNGR_AGENT_STATE_DIR/claude_main_pid"
-        f' && {{ {marker_gate} && claude --resume "$MAIN_CLAUDE_SESSION_ID" ; }}'
+        f' && {{ {{ {marker_gate} && claude --resume "$MAIN_CLAUDE_SESSION_ID" ; }}'
         f' || {{ [ "$MAIN_CLAUDE_SESSION_ID" != "{uuid}" ] && {uuid_gate}'
         f" && export MAIN_CLAUDE_SESSION_ID={uuid} && claude --resume {uuid} ; }}"
-        f" || {{ export MAIN_CLAUDE_SESSION_ID={uuid} && claude --session-id {uuid} ; }}"
+        f" || {{ export MAIN_CLAUDE_SESSION_ID={uuid} && claude --session-id {uuid} ; }} ; }}"
+        f' 2> >(tee -i "$MNGR_AGENT_STATE_DIR/stderr.log" >&2)'
     )
 
 
@@ -928,7 +931,20 @@ def test_claude_agent_assemble_command_falls_back_to_agent_uuid_when_marker_sess
     assert invocations == [
         f"--resume {foreign_sid} ",
         f"--resume {agent_uuid} ",
-    ], f"Expected foreign resume to fail then the UUID fallback to fire, got {invocations!r}"
+    ], f"Expected foreign resume to fire and fail, then the UUID fallback, got {invocations!r}"
+    # The failing branch's own stderr is what says why the fallback happened. It must
+    # reach the pane (the process's stderr here), and it must still be in the file after
+    # the branch that followed it ran -- a redirect on each branch instead of on the whole
+    # chain would have truncated it away.
+    diagnostic = f"No conversation found with session ID: {foreign_sid}"
+    assert diagnostic in result.stderr, f"The failed resume's diagnostic did not reach the pane: {result.stderr!r}"
+    # The shell does not wait for the tee behind the redirect, so the file can trail the
+    # process's exit by a moment.
+    stderr_log = state_dir / STDERR_LOG_NAME
+    assert poll_until_file_contains(stderr_log, diagnostic), (
+        "The failed resume's diagnostic did not survive into stderr.log: "
+        f"{stderr_log.read_text() if stderr_log.exists() else None!r}"
+    )
 
 
 def test_claude_agent_assemble_command_skips_blank_marker_session_without_launching_it(

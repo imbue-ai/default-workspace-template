@@ -106,6 +106,11 @@ _ENV_D_BROWSER_UNIT: Final[str] = "system/scripts/env.d/1000-playwright-fortress
 # half-provisioned guest.
 _GUEST_FIRST_BOOT_TIMEOUT_SECONDS: Final[float] = 600.0
 
+# Where the slice VM's root sshd reads its authorized keys; the bake's
+# ephemeral box-to-VM transfer key is authorized and removed here.
+_VM_ROOT_SSH_DIR: Final[str] = "/root/.ssh"
+_VM_ROOT_AUTHORIZED_KEYS_PATH: Final[str] = f"{_VM_ROOT_SSH_DIR}/authorized_keys"
+
 
 def wait_for_guest_cloud_init_to_finish(outer: OuterHostInterface) -> None:
     """Block until the guest's cloud-init reaches a terminal state.
@@ -356,9 +361,6 @@ class SliceVpsDockerProviderConfig(VpsProviderConfig):
             "(dev --workspace-dir bakes always build)."
         ),
     )
-
-
-_VM_ROOT_AUTHORIZED_KEYS_PATH: Final[str] = "/root/.ssh/authorized_keys"
 
 
 @pure
@@ -837,7 +839,10 @@ class SliceVpsDockerProvider(VpsProvider):
             self._deauthorize_transfer_key(outer, transfer_key.public_key)
 
     def _authorize_transfer_key(self, outer: OuterHostInterface, public_key: str) -> None:
-        command = f"install -d -m 700 /root/.ssh && printf '%s\\n' {shlex.quote(public_key)} >> {_VM_ROOT_AUTHORIZED_KEYS_PATH}"
+        command = (
+            f"install -d -m 700 {_VM_ROOT_SSH_DIR} && "
+            f"printf '%s\\n' {shlex.quote(public_key)} >> {_VM_ROOT_AUTHORIZED_KEYS_PATH}"
+        )
         result = outer.execute_idempotent_command(command, timeout_seconds=30.0)
         if not result.success:
             raise BoxImageCacheError(f"failed to authorize the transfer key on the slice: {result.stderr.strip()}")

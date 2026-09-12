@@ -80,6 +80,8 @@ just minds-start
 
 That's it. After the create-form is filled in and you've created an agent, see [Iterating on a running agent](#iterating-on-a-running-agent) for the inner loop.
 
+Never run two minds instances against the same env on one machine (two `just minds-start` / `minds run` launches, or a launch next to a supervisor left over from another env root for the same env). Both supervisors provision the same remote machines and the agents there lose their latchkey permission channel ("Unauthorized"). Different envs or tiers side by side are fine. `just minds-stop` deliberately leaves the `mngr latchkey forward` supervisor running; to stop an env root completely (a second-device test root, say), run `uv run minds-admin env stop-local <env>`.
+
 If you want to run against prod / staging instead of a personal dev env, use `eval "$(uv run minds-admin env activate production)"` (or `... activate staging`) and then `just minds-start`. **Do not** run `minds-admin env deploy` against production / staging without coordinating with the rest of the team -- that pushes Vault secrets to Modal and re-deploys the live tier; the unified deploy CLI requires `--yes-i-mean-production` / `--yes-i-mean-staging` as a safety bar.
 
 ### What `just minds-start` does

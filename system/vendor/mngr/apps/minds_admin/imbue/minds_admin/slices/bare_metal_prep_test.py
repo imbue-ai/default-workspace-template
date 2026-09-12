@@ -1,4 +1,5 @@
 import json
+import os
 import posixpath
 import subprocess
 from pathlib import Path
@@ -288,6 +289,156 @@ def test_prep_script_customizes_before_atomic_publish() -> None:
     assert customize_idx < publish_idx
     # The finished image is chowned to the lima user that limactl reads it as.
     assert f'chown {_GEN1_USER}:{_GEN1_USER} "$img.tmp"' in script
+
+
+def _extract_pin_script_body(tmp_path: Path, hosts_file: Path) -> Path:
+    """Extract the S3 IPv4 pin heredoc verbatim, retargeted at a test hosts file."""
+    script = _script()
+    body = script.split("<<'MNGR_S3_PIN'\n")[1].split("\nMNGR_S3_PIN\n")[0]
+    retargeted = body.replace("hosts_file=/etc/hosts", f"hosts_file={hosts_file}")
+    pin_script = tmp_path / "pin.sh"
+    pin_script.write_text(retargeted)
+    return pin_script
+
+
+def _write_dig_stub(tmp_path: Path, stub_body: str) -> dict[str, str]:
+    """Install a fake ``dig`` on PATH and return the env to run the pin script with."""
+    stub_bin = tmp_path / "stubbin"
+    stub_bin.mkdir(exist_ok=True)
+    dig = stub_bin / "dig"
+    dig.write_text(f"#!/bin/bash\n{stub_body}\n")
+    dig.chmod(0o755)
+    return {"PATH": f"{stub_bin}:{os.environ['PATH']}"}
+
+
+_RESOLVING_DIG_STUB = """\
+case "${!#}" in
+  s3.us-east-va.io.cloud.ovh.us) echo "51.81.92.24";;
+  s3.us-west-or.io.cloud.ovh.us) echo "147.135.33.112";;
+esac"""
+
+_UNRELATED_HOSTS_CONTENT = "127.0.0.1 localhost\n::1 localhost\n10.0.0.5 mybox\n"
+
+
+def _hosts_content_with_pin_block(east_address: str, west_address: str) -> str:
+    """Hosts-file content with unrelated lines plus a managed pin block holding the given addresses."""
+    return (
+        _UNRELATED_HOSTS_CONTENT + "# BEGIN mngr-s3-ipv4-pin (managed block, do not edit)\n"
+        f"{east_address} s3.us-east-va.io.cloud.ovh.us\n"
+        f"{west_address} s3.us-west-or.io.cloud.ovh.us\n"
+        "# END mngr-s3-ipv4-pin\n"
+    )
+
+
+def _run_pin_script(pin_script: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run the extracted pin script, assert it succeeded, and return the completed process."""
+    result = subprocess.run(["bash", str(pin_script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_prep_script_installs_s3_ipv4_pin_refresher_with_minutely_timer() -> None:
+    # Box->S3 transfers must ride IPv4 (the in-DC IPv6 path blackholes flows, OVH
+    # ticket #723301): prep installs a hosts-file pin refresher, runs it once
+    # synchronously, and keeps it fresh with a 1-minute systemd timer so a changed
+    # VIP heals within a minute. dig comes from the box apt packages because the
+    # refresher must query DNS directly, not through the hosts file it manages.
+    script = _script()
+    assert "bind9-dnsutils" in script
+    assert "/usr/local/sbin/mngr-s3-ipv4-pin.sh" in script
+    assert "/etc/systemd/system/mngr-s3-ipv4-pin.service" in script
+    assert "/etc/systemd/system/mngr-s3-ipv4-pin.timer" in script
+    assert "OnUnitActiveSec=1min" in script
+    assert "systemctl enable --now mngr-s3-ipv4-pin.timer" in script
+    # The seed run happens after the units land, so the first transfer after prep
+    # already rides IPv4 even before the timer's first tick.
+    assert script.index("systemctl enable --now mngr-s3-ipv4-pin.timer") < script.rindex(
+        "/usr/local/sbin/mngr-s3-ipv4-pin.sh"
+    )
+
+
+def test_s3_ipv4_pin_script_writes_managed_block_and_preserves_other_lines(tmp_path: Path) -> None:
+    # The pin script (extracted verbatim from the prep heredoc) must append a
+    # managed block with one IPv4 line per endpoint and leave every unrelated
+    # hosts line untouched, and a re-run must not modify the file again.
+    hosts_file = tmp_path / "hosts"
+    hosts_file.write_text(_UNRELATED_HOSTS_CONTENT)
+    pin_script = _extract_pin_script_body(tmp_path, hosts_file)
+    env = _write_dig_stub(tmp_path, _RESOLVING_DIG_STUB)
+
+    _run_pin_script(pin_script, env)
+
+    content = hosts_file.read_text()
+    assert content.startswith(_UNRELATED_HOSTS_CONTENT)
+    assert "51.81.92.24 s3.us-east-va.io.cloud.ovh.us" in content
+    assert "147.135.33.112 s3.us-west-or.io.cloud.ovh.us" in content
+    assert "# BEGIN mngr-s3-ipv4-pin" in content
+    assert content.rstrip().endswith("# END mngr-s3-ipv4-pin")
+
+    # Second run: byte-for-byte identical (the atomic rewrite is skipped).
+    before_second_run = hosts_file.read_text()
+    _run_pin_script(pin_script, env)
+    assert hosts_file.read_text() == before_second_run
+
+
+def test_s3_ipv4_pin_script_keeps_existing_pin_when_resolution_fails(tmp_path: Path) -> None:
+    # A transient DNS outage must never drop a working pin: with dig failing, the
+    # script re-reads each endpoint's address from the existing managed block and
+    # succeeds, leaving the file unchanged -- but warns on stderr so a persistent
+    # failure is visible in the journal.
+    hosts_file = tmp_path / "hosts"
+    hosts_file.write_text(_hosts_content_with_pin_block("51.81.92.24", "147.135.33.112"))
+    before = hosts_file.read_text()
+    pin_script = _extract_pin_script_body(tmp_path, hosts_file)
+    env = _write_dig_stub(tmp_path, "exit 9")
+
+    result = _run_pin_script(pin_script, env)
+
+    assert hosts_file.read_text() == before
+    assert "failed to resolve s3.us-east-va.io.cloud.ovh.us" in result.stderr
+    assert "failed to resolve s3.us-west-or.io.cloud.ovh.us" in result.stderr
+
+
+def test_s3_ipv4_pin_script_updates_pin_when_vip_address_changes(tmp_path: Path) -> None:
+    # A VIP address change must propagate: an existing block holding a stale
+    # address is rewritten with the freshly resolved one.
+    hosts_file = tmp_path / "hosts"
+    hosts_file.write_text(_hosts_content_with_pin_block("192.0.2.99", "192.0.2.98"))
+    pin_script = _extract_pin_script_body(tmp_path, hosts_file)
+    env = _write_dig_stub(tmp_path, _RESOLVING_DIG_STUB)
+
+    _run_pin_script(pin_script, env)
+
+    content = hosts_file.read_text()
+    assert "192.0.2.99" not in content
+    assert "51.81.92.24 s3.us-east-va.io.cloud.ovh.us" in content
+    assert content.count("# BEGIN mngr-s3-ipv4-pin") == 1
+
+
+def test_s3_ipv4_pin_script_merges_fresh_resolution_with_fallback_for_failed_lookup(tmp_path: Path) -> None:
+    # Partial DNS outage: one endpoint resolves to a new address while the other
+    # lookup fails. The single rewrite must merge both mechanisms -- the fresh
+    # address for the resolved endpoint, the existing pin for the failed one --
+    # and warn only about the failed lookup.
+    hosts_file = tmp_path / "hosts"
+    hosts_file.write_text(_hosts_content_with_pin_block("192.0.2.99", "147.135.33.112"))
+    pin_script = _extract_pin_script_body(tmp_path, hosts_file)
+    east_only_dig_stub = """\
+case "${!#}" in
+  s3.us-east-va.io.cloud.ovh.us) echo "198.51.100.7";;
+  *) exit 9;;
+esac"""
+    env = _write_dig_stub(tmp_path, east_only_dig_stub)
+
+    result = _run_pin_script(pin_script, env)
+
+    content = hosts_file.read_text()
+    assert "198.51.100.7 s3.us-east-va.io.cloud.ovh.us" in content
+    assert "192.0.2.99" not in content
+    assert "147.135.33.112 s3.us-west-or.io.cloud.ovh.us" in content
+    assert content.count("# BEGIN mngr-s3-ipv4-pin") == 1
+    assert "failed to resolve s3.us-west-or.io.cloud.ovh.us" in result.stderr
+    assert "failed to resolve s3.us-east-va.io.cloud.ovh.us" not in result.stderr
 
 
 def test_box_prep_installs_transfer_tooling_and_skips_stop_marked_vms() -> None:
@@ -619,6 +770,29 @@ def test_gen2_prep_script_keeps_the_shared_hardening_and_transfer_tooling() -> N
     assert "swapon /swapfile" not in script
     assert """awk '!($3 == "swap" && $1 != "/srv/mngr-slices/swapfile")'""" in script
     assert "99mngr-no-auto-reboot" in script
+
+
+def _s3_ipv4_pin_block(script: str) -> str:
+    """The rendered pin section: from the refresher script's heredoc through its synchronous seed run."""
+    start = script.index("cat > /usr/local/sbin/mngr-s3-ipv4-pin.sh")
+    enable_idx = script.index("systemctl enable --now mngr-s3-ipv4-pin.timer", start)
+    seed_marker = "/usr/local/sbin/mngr-s3-ipv4-pin.sh\n"
+    return script[start : script.index(seed_marker, enable_idx) + len(seed_marker)]
+
+
+def test_gen2_prep_script_installs_the_same_s3_ipv4_pin_as_gen1() -> None:
+    # The gen-2 boxes are the ones doing workspace stop/start uploads with s5cmd,
+    # so the IPv4 pin (script, oneshot unit, minutely timer, synchronous seed run)
+    # lands there too, byte-identical to the gen-1 block the pin script tests
+    # above exercise, with dig among the gen-2 apt packages.
+    gen2_script = _gen2_script()
+    assert _s3_ipv4_pin_block(gen2_script) == _s3_ipv4_pin_block(_script())
+    gen2_apt_line = next(line for line in gen2_script.splitlines() if line.startswith("apt-get install"))
+    assert "bind9-dnsutils" in gen2_apt_line.split()
+    # The pin follows the transfer tooling it exists for, and precedes the
+    # telemetry manifest like every other prep artifact.
+    assert gen2_script.index("transfer_tools_marker=") < gen2_script.index("mngr-s3-ipv4-pin.sh")
+    assert gen2_script.index("mngr-s3-ipv4-pin.sh") < gen2_script.index("prep-artifacts.sha256")
 
 
 def test_gen2_prep_script_keeps_the_image_tar_cache_on_the_storage_partition() -> None:

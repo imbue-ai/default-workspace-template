@@ -1,4 +1,4 @@
-"""``minds-admin env {activate,deactivate,deploy,destroy,list}``.
+"""``minds-admin env {activate,deactivate,deploy,destroy,stop-local,list}``.
 
 Activation is the central UX: ``eval "$(minds-admin env activate <name>)"``
 exports the four env vars (``MINDS_ROOT_NAME``, ``MNGR_HOST_DIR``,
@@ -7,7 +7,9 @@ the stack at the activated env's ``~/.minds-<name>/`` data root.
 ``minds-admin env deploy`` / ``destroy`` then operate implicitly on whichever
 env the shell is activated against -- no env-name argument is accepted,
 which keeps "I'm activated against dev env A but accidentally typed
-``minds-admin env destroy production``" impossible.
+``minds-admin env destroy production``" impossible. ``stop-local`` touches
+only processes on this machine, so it alone takes an optional env name (the
+extra env roots a multi-device test creates are stopped from one shell).
 
 The CLI side constructs real provider callables (Modal CLI / Neon /
 SuperTokens / Modal deploy) and threads them into the
@@ -69,7 +71,9 @@ from imbue.minds_admin.cli.pool import tear_down_env_pool_slices
 from imbue.minds_admin.envs.generation import delete_generation_id as real_delete_generation_id
 from imbue.minds_admin.envs.generation import ensure_generation_id as real_ensure_generation_id
 from imbue.minds_admin.envs.health_check import await_apps_healthy as real_await_apps_healthy
+from imbue.minds_admin.envs.local_process_preflight import EnvLocalHolders
 from imbue.minds_admin.envs.local_process_preflight import EnvLocalProcessesStillRunningError
+from imbue.minds_admin.envs.local_process_preflight import describe_env_local_holder_lines
 from imbue.minds_admin.envs.local_process_preflight import describe_env_local_holders
 from imbue.minds_admin.envs.local_process_preflight import find_env_local_holders
 from imbue.minds_admin.envs.local_process_preflight import stop_env_local_processes
@@ -1368,6 +1372,72 @@ def env_deploy(
                 _exec_into_recover(deploy_error=exc)
             raise click.ClickException(str(exc)) from exc
         _emit_deploy_result(result, output_format=output_format)
+
+
+@env.command("stop-local")
+@click.argument("env_name", type=str, required=False)
+@click.option(
+    "--list-only",
+    is_flag=True,
+    default=False,
+    help="Report the local processes holding the env root without stopping anything.",
+)
+@click.pass_context
+def env_stop_local(ctx: click.Context, env_name: str | None, list_only: bool) -> None:
+    """Stop every local process still running against one env root.
+
+    That is the minds desktop backend plus the detached ``mngr latchkey
+    forward`` supervisor that ``just minds-stop`` (and killing ``minds run``)
+    deliberately leaves behind. ``ENV_NAME`` defaults to the activated env, and
+    can name any other env root on this machine (the extra roots a multi-device
+    test creates with ``minds-admin env activate --create``), so a whole test
+    setup can be stopped from one shell.
+
+    One machine must never run two minds instances against the same env at
+    once. Each instance's supervisor provisions the same remote machines and
+    the last one to do so overwrites the desktop-owned latchkey secrets on
+    them, while only one of them can hold the tunnel those secrets are checked
+    against -- so the agents in those workspaces lose their permission channel
+    ("Unauthorized"). Separate instances for different envs or tiers are fine.
+    """
+    output_format: OutputFormat = ctx.obj.get("output_format", OutputFormat.HUMAN)
+    target_env_name = env_name if env_name else require_activated_env_name()
+    try:
+        env_root = env_root_dir(DevEnvName(target_env_name))
+    except InvalidDevEnvNameError as exc:
+        raise click.ClickException(str(exc)) from exc
+    holders = find_env_local_holders(env_root)
+    is_stopping = holders.is_anything_running and not list_only
+    if is_stopping:
+        try:
+            stop_env_local_processes(holders)
+        except EnvLocalProcessesStillRunningError as exc:
+            raise click.ClickException(str(exc)) from exc
+    _emit_stop_local_result(target_env_name, env_root, holders, is_stopped=is_stopping, output_format=output_format)
+
+
+def _emit_stop_local_result(
+    env_name: str, env_root: Path, holders: EnvLocalHolders, *, is_stopped: bool, output_format: OutputFormat
+) -> None:
+    if output_format is OutputFormat.HUMAN:
+        if not holders.is_anything_running:
+            write_stdout_line(f"Nothing on this machine holds {env_root}.")
+            return
+        verb = "Stopped the local processes holding" if is_stopped else "Local processes holding"
+        write_stdout_line(f"{verb} {env_root}:")
+        for line in describe_env_local_holder_lines(holders):
+            write_stdout_line(line)
+        return
+    _emit_json(
+        {
+            "name": env_name,
+            "env_root": str(env_root),
+            "desktop_pids": list(holders.desktop_pids),
+            "latchkey_forward_pid": holders.latchkey_forward_pid,
+            "status": "stopped" if is_stopped else ("running" if holders.is_anything_running else "none"),
+        },
+        output_format=output_format,
+    )
 
 
 @env.command("destroy")

@@ -9,3 +9,5 @@ Constituent entries: `new-fleet-base.md`, `new-fleet-runsc-prototype.md`, `new-f
 Gen-2 small follow-ups: the historical slice-fleet gen-2 spec and the pre-cutover / variable-sizing blueprints note that the per-tier `management_plane.toml` they describe was merged into `deploy.toml` as the `[management_plane]` table.
 
 The `server-order` recipe's example names the current OVH plan code `24sys03-v1-us` (the `24sys032-us` code left the eco catalog).
+
+The `minds-dev-workflow` skill now states that one machine must never run two minds instances against the same env at once (each instance's `mngr latchkey forward` supervisor provisions the same remote machines, and the agents there lose their permission channel with "Unauthorized"), that `just minds-stop` deliberately leaves that supervisor running, and that `uv run minds-admin env stop-local <env>` stops an env root completely.

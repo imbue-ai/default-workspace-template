@@ -173,11 +173,17 @@ the connector's default hour-long instant-restart window.
   restore then locks a fresh inode) is the safe remediation.
 - KEK rotation re-wraps the per-stop identities in the DB only -- objects
   are never re-encrypted.
-- Known constraint: upload from boxes to OVH Object Storage is currently
-  throttled server-side (~6-25 MB/s regardless of parallelism; download is
-  ~1 GB/s), so slot reclaim after a stop takes tens of minutes. Tracked as
-  a parallel ops investigation; content-addressed chunk dedupe (planned
-  phase 2) cuts uploads to the workspace's unique bytes.
+- Known constraint: box uplink bandwidth is QoS-capped at the plan's
+  1 Gbps, so a ~13 GB stop artifact uploads in about 2 minutes (download
+  is ~1 GB/s). The historical 6-25 MB/s uploads (tens of minutes per
+  stop) were the in-DC IPv6 path to the Object Storage VIP intermittently
+  blackholing TCP flows (OVH ticket #723301): s5cmd preferred IPv6, and a
+  blackholed flow stalls until the server kills it with RequestTimeout.
+  Box prep (`bare_metal_prep.py`) now pins the S3 endpoints to their IPv4
+  addresses in /etc/hosts, refreshed every minute by the
+  `mngr-s3-ipv4-pin` systemd timer, which restores the full 1 Gbps.
+  Content-addressed chunk dedupe (planned phase 2) remains the path to
+  cutting uploads below the bandwidth cap by shipping only unique bytes.
 
 ## End-to-end verification
 

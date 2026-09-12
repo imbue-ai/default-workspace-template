@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shlex
+import socket
 from collections.abc import Iterator
 from collections.abc import Set as AbstractSet
 from typing import Any
@@ -325,13 +326,12 @@ def build_lease_request_metric_tags(
     }
 
 
-def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
-    """Pin ``expected_host_public_key`` for ``host:port`` and reject any other host key.
+def _parse_pinned_host_key(host: str, port: int, expected_host_public_key: str) -> tuple[str, paramiko.PKey]:
+    """Return the known-hosts name for ``host:port`` and the row's pinned key parsed as a paramiko key.
 
     paramiko keys non-default ports under the ``[host]:port`` known-hosts name, so
     a container/forwarded port must be pinned under that bracketed name to match
-    what ``connect`` looks up. Replaces trust-on-first-use: a mismatched or
-    unknown host key is rejected.
+    what ``connect`` looks up.
     """
     known_hosts_name = host if port == 22 else f"[{host}]:{port}"
     entry = HostKeyEntry.from_line(f"{known_hosts_name} {expected_host_public_key.strip()}")
@@ -343,8 +343,71 @@ def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, exp
         raise paramiko.SSHException(
             f"could not parse expected host key for {known_hosts_name}: {expected_host_public_key!r}"
         )
-    client.get_host_keys().add(known_hosts_name, entry.key.get_name(), entry.key)
+    return known_hosts_name, entry.key
+
+
+def _pin_expected_host_key(client: paramiko.SSHClient, host: str, port: int, expected_host_public_key: str) -> None:
+    """Pin ``expected_host_public_key`` for ``host:port`` and reject any other host key.
+
+    Replaces trust-on-first-use: a mismatched or unknown host key is rejected.
+    """
+    known_hosts_name, pinned_key = _parse_pinned_host_key(host, port, expected_host_public_key)
+    client.get_host_keys().add(known_hosts_name, pinned_key.get_name(), pinned_key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
+
+
+# Unauthenticated handshake budget for the pre-share host-key probe.
+_HOST_KEY_PROBE_TIMEOUT_SECONDS: Final[float] = 15.0
+
+
+def _assert_container_serves_pinned_host_key(host: str, port: int, expected_host_public_key: str) -> None:
+    """Handshake with the container sshd and raise ``paramiko.BadHostKeyException`` unless it serves the pinned key.
+
+    Runs before a share is activated and its relay token rotated: a workspace
+    the connector cannot reach (the minds desktop app adopted it and rotated the
+    key) must keep the share its desktop established, not be left holding a
+    token the rotation just invalidated.
+    """
+    known_hosts_name, pinned_key = _parse_pinned_host_key(host, port, expected_host_public_key)
+    with socket.create_connection((host, port), timeout=_HOST_KEY_PROBE_TIMEOUT_SECONDS) as sock:
+        transport = paramiko.Transport(sock)
+        # Ask for the pinned key's type first (as SSHClient.connect does for a
+        # known host), so an sshd serving several host keys presents the one
+        # the row recorded rather than paramiko's default preference.
+        security_options = transport.get_security_options()
+        security_options.key_types = [pinned_key.get_name()] + [
+            key_type for key_type in security_options.key_types if key_type != pinned_key.get_name()
+        ]
+        try:
+            transport.start_client(timeout=_HOST_KEY_PROBE_TIMEOUT_SECONDS)
+            served_key = transport.get_remote_server_key()
+        finally:
+            transport.close()
+    if served_key.get_name() != pinned_key.get_name() or served_key.asbytes() != pinned_key.asbytes():
+        raise paramiko.BadHostKeyException(known_hosts_name, served_key, pinned_key)
+
+
+def _desktop_managed_workspace_conflict(host_db_id: UUID) -> HTTPException:
+    """The 409 for a workspace whose container serves a host key the row never learned.
+
+    The minds desktop app adopted it and rotated its host keys client-side (the
+    connector never learns them by design), so a server-side share bring-up
+    cannot reach the container; the desktop app enables sharing over the user's
+    own SSH instead.
+    """
+    logger.info(
+        "Host %s serves a rotated container host key; sharing must be enabled from the desktop app", host_db_id
+    )
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "workspace_managed_by_desktop",
+            "message": (
+                "This workspace is managed by the minds desktop app, which rotated its SSH host key; "
+                "enable sharing from the desktop app."
+            ),
+        },
+    )
 
 
 @contextlib.contextmanager
@@ -1698,6 +1761,16 @@ def _enable_sharing_core(
             region=region,
             content_domain=shares_module.share_content_domain(),
         )
+    # Reach the container BEFORE touching the share: activating the share
+    # rotates its relay token, and a rotation the container never receives
+    # kills the tunnel a desktop-established share is already running on.
+    try:
+        _assert_container_serves_pinned_host_key(vps_address, container_ssh_port, container_host_public_key)
+    except paramiko.BadHostKeyException as exc:
+        raise _desktop_managed_workspace_conflict(host_db_id) from exc
+    except (paramiko.SSHException, OSError) as exc:
+        logger.warning("Could not reach host %s to enable sharing: %s", host_db_id, exc)
+        raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc
     relay_token = shares_module.generate_relay_token()
     # No entry label is supplied here: the frps NewProxy callback records it
     # once the workspace's tunnel claims its service labels, so the connector
@@ -1734,24 +1807,9 @@ def _enable_sharing_core(
             seed_only_remote_paths=frozenset({_SHARE_GRANTS_REMOTE_PATH}),
         )
     except paramiko.BadHostKeyException as exc:
-        # The container no longer serves the key the row recorded at bake: the
-        # minds desktop app adopted the workspace and rotated its host keys
-        # client-side (the connector never learns them by design), so this
-        # server-side bring-up cannot reach the container -- the desktop app
-        # enables sharing over the user's own SSH instead.
-        logger.info(
-            "Host %s serves a rotated container host key; sharing must be enabled from the desktop app", host_db_id
-        )
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "workspace_managed_by_desktop",
-                "message": (
-                    "This workspace is managed by the minds desktop app, which rotated its SSH host key; "
-                    "enable sharing from the desktop app."
-                ),
-            },
-        ) from exc
+        # The key changed between the probe above and this write (an adoption
+        # racing the enable); same answer, the desktop app owns the share now.
+        raise _desktop_managed_workspace_conflict(host_db_id) from exc
     except (paramiko.SSHException, OSError) as exc:
         logger.warning("Failed to inject share materials on host %s: %s", host_db_id, exc)
         raise HTTPException(status_code=502, detail=f"Failed to enable sharing on host: {exc}") from exc

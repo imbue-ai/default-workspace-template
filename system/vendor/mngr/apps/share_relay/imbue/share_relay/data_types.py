@@ -127,3 +127,10 @@ class RelayConfiguration(FrozenModel):
     def vhost_wildcard(self) -> str:
         """The wildcard ``customDomains`` pattern this relay's tunnels register under."""
         return f"*.{self.region_domain}"
+
+
+class SshdWaitPolicy(FrozenModel):
+    """How long, and how often, a deploy probes a relay host's sshd before its first real step."""
+
+    wait_seconds: float = Field(gt=0, description="Give up once the host has not answered for this long")
+    poll_interval_seconds: float = Field(ge=0, description="Pause between two probes")

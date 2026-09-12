@@ -207,6 +207,17 @@ def test_transfer_key_authorize_and_deauthorize_render_expected_commands() -> No
     assert public_key in deauthorize_command
 
 
+def _remove_authorized_key(authorized_keys: Path, public_key: str) -> None:
+    """Run the rendered removal against a real file; it must succeed and leave no temp file behind."""
+    result = subprocess.run(
+        ["bash", "-c", render_remove_authorized_key_command(public_key, str(authorized_keys))],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not authorized_keys.with_name(f"{authorized_keys.name}.tmp").exists()
+
+
 def test_remove_authorized_key_command_empties_a_file_that_held_only_that_key(tmp_path: Path) -> None:
     # The gen-2 case: VM root authorizes nothing but the bake's transfer key,
     # so removing it leaves grep with nothing to print (exit 1).
@@ -214,15 +225,9 @@ def test_remove_authorized_key_command_empties_a_file_that_held_only_that_key(tm
     transfer_key = "ssh-ed25519 AAAAONLYKEY transfer@box"
     authorized_keys.write_text(f"{transfer_key}\n")
 
-    result = subprocess.run(
-        ["bash", "-c", render_remove_authorized_key_command(transfer_key, str(authorized_keys))],
-        capture_output=True,
-        text=True,
-    )
+    _remove_authorized_key(authorized_keys, transfer_key)
 
-    assert result.returncode == 0, result.stderr
     assert authorized_keys.read_text() == ""
-    assert not (tmp_path / "authorized_keys.tmp").exists()
 
 
 def test_remove_authorized_key_command_keeps_the_other_authorized_keys(tmp_path: Path) -> None:
@@ -231,15 +236,9 @@ def test_remove_authorized_key_command_keeps_the_other_authorized_keys(tmp_path:
     kept_key = "ssh-ed25519 AAAAKEPT owner@device"
     authorized_keys.write_text(f"{kept_key}\n{transfer_key}\n")
 
-    result = subprocess.run(
-        ["bash", "-c", render_remove_authorized_key_command(transfer_key, str(authorized_keys))],
-        capture_output=True,
-        text=True,
-    )
+    _remove_authorized_key(authorized_keys, transfer_key)
 
-    assert result.returncode == 0, result.stderr
     assert authorized_keys.read_text() == f"{kept_key}\n"
-    assert not (tmp_path / "authorized_keys.tmp").exists()
 
 
 def test_extra_start_args_cap_container_memory_from_the_slice_size() -> None:
