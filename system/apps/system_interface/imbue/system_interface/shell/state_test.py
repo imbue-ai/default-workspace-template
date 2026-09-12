@@ -10,7 +10,6 @@ from app_instances.testing import wait_until
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.data_types import ClientStateReport
-from imbue.system_interface.shell.data_types import instance_panel_params_by_id
 from imbue.system_interface.shell.inventory import HttpInstanceFetcher
 from imbue.system_interface.shell.primitives import Address
 from imbue.system_interface.shell.primitives import ClientId
@@ -108,8 +107,7 @@ def test_instances_an_app_stopped_listing_leave_the_tab_sets_and_layouts(
         shell.inventory.refetch_now("stub")
 
         assert shell.projects.get_project("alpha").tabs == (_STUB_2,)
-        remaining = shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP)
-        assert set(instance_panel_params_by_id(remaining.dockview)) == {"p1"}
+        assert set(shell.layouts.read_layout("alpha", "c1", DeviceKind.DESKTOP).tabs) == {"p1"}
         types = [message["type"] for message in drain_messages(client_queue)]
         assert "projects_updated" in types and "apps_updated" in types
     finally:
