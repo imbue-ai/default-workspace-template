@@ -951,10 +951,9 @@ def test_settings_narrowing_ignores_unwritten_layer_field(mngr_test_prefix: str)
     assert narrowings == []
 
 
-def test_command_defaults_accumulate_across_layers(mngr_test_prefix: str) -> None:
-    """``CommandDefaults.defaults`` is a settings patch: a layer's ``[commands.<name>]`` table adds
-    the parameters it names to the ones lower layers set, and a key the layer leaves out is kept,
-    not dropped -- so a local ``type`` never costs the project its ``connect`` or ``env``.
+def test_settings_narrowing_recurses_into_command_defaults(mngr_test_prefix: str) -> None:
+    """Per-key recursion through ``commands`` (a container dict) and ``CommandDefaults.defaults``
+    flags the deepest path where data is actually lost.
     """
     base = MngrConfig(
         prefix=mngr_test_prefix,
@@ -962,11 +961,19 @@ def test_command_defaults_accumulate_across_layers(mngr_test_prefix: str) -> Non
     )
     override = MngrConfig(
         prefix=mngr_test_prefix,
-        commands={"create": CommandDefaults(defaults={"type": "codex", "extra": "x"})},
+        commands={"create": CommandDefaults(defaults={"env": ["X=4"], "branch": "main", "extra": "x"})},
     )
-    merged, narrowings = base.merge_with(override)
+    # Override is a superset -- no narrowing.
+    _, narrowings = base.merge_with(override)
     assert narrowings == []
-    assert merged.commands["create"].defaults == {"env": ["X=4"], "branch": "main", "type": "codex", "extra": "x"}
+
+    override_drops_branch = MngrConfig(
+        prefix=mngr_test_prefix,
+        commands={"create": CommandDefaults(defaults={"env": ["X=4"]})},
+    )
+    # Override drops the "branch" key from defaults -- flagged at the defaults level.
+    _, narrowings = base.merge_with(override_drops_branch)
+    assert narrowings == ["commands.create.defaults"]
 
 
 def test_settings_narrowing_flags_nested_value_replacement(mngr_test_prefix: str) -> None:

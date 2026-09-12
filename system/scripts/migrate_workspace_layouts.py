@@ -578,21 +578,13 @@ def _panel_title(entry: dict[str, Any], params: dict[str, Any], address: str) ->
     return address
 
 
-def _panel_entry(
-    tab_id: str, address: str, title: str, last_focused_ms: int
-) -> dict[str, Any]:
-    """A panel entry in the shell's current shape: its ``params`` are the one place the tab's identity lives."""
+def _panel_entry(tab_id: str, address: str, title: str) -> dict[str, Any]:
     return {
         "id": tab_id,
         "contentComponent": INSTANCE_COMPONENT,
         "tabComponent": CUSTOM_TAB_COMPONENT,
         "title": title,
-        "params": {
-            "kind": INSTANCE_COMPONENT,
-            "address": address,
-            "tabId": tab_id,
-            "lastFocusedMs": last_focused_ms,
-        },
+        "params": {"kind": INSTANCE_COMPONENT, "address": address, "tabId": tab_id},
     }
 
 
@@ -606,8 +598,7 @@ def migrate_layout_content(
     """One old content file as a layout record (the ``layout`` of contracts.md section 6).
 
     The grid is kept as dockview saved it; every panel that maps to an address is renamed to a
-    fresh tab id and its entry rebuilt in the frontend's current shape, with the address, the tab
-    id, and the last-used stamp in the entry's ``params``; every other panel (a
+    fresh tab id and its entry rebuilt in the frontend's current shape; every other panel (a
     launcher, a subagent view, an ad-hoc URL page, a second panel of an address already kept)
     is pruned, and an active group that pruning collapsed away gives way to the first that
     survived.
@@ -624,6 +615,7 @@ def migrate_layout_content(
         for key, value in copy.deepcopy(dockview).items()
         if key not in UNMIGRATED_DOCKVIEW_KEYS
     }
+    tabs: dict[str, dict[str, Any]] = {}
     kept_addresses: list[str] = []
     dropped: list[str] = []
     for panel_id, entry in list(dockview["panels"].items()):
@@ -648,15 +640,20 @@ def migrate_layout_content(
             tab_id,
             address,
             _panel_title(entry if isinstance(entry, dict) else {}, params, address),
-            last_used_ms_by_ref.get(ref, 0),
         )
+        tabs[tab_id] = {
+            "address": address,
+            "tab_id": tab_id,
+            "last_focused_ms": last_used_ms_by_ref.get(ref, 0),
+        }
         kept_addresses.append(address)
-    if document is None or not kept_addresses:
+    if document is None or not tabs:
         return MigratedLayout(
             record=None, addresses=(), dropped_panel_ids=tuple(dropped)
         )
     record = {
         "dockview": _with_repaired_active_group(document),
+        "tabs": tabs,
         "device_kind": device,
         "updated_at": now_iso,
     }

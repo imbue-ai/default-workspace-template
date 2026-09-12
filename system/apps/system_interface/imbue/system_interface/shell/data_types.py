@@ -1,5 +1,4 @@
 from typing import Any
-from typing import Final
 
 from app_instances.data_types import InstanceLifetime
 from app_instances.data_types import InstanceRecord
@@ -11,12 +10,8 @@ from app_manifest.primitives import ActionId
 from app_manifest.primitives import AppName
 from app_manifest.registry import RegistryAction
 from app_manifest.registry import RegistryRow
-from loguru import logger
 from pydantic import AwareDatetime
-from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import ValidationError
-from pydantic import model_validator
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
@@ -51,123 +46,23 @@ class Project(FrozenModel):
     shortcuts: tuple[Shortcut, ...] = Field(description="The rail rows, in rail order")
 
 
-# The ``kind`` the ``params`` of a dockview panel showing an instance carry (contracts.md section 6). A
-# launcher panel (the New Tab page) carries another kind and names no instance, so the shell never looks for it.
-INSTANCE_PANEL_KIND: Final[str] = "instance"
+class TabRecord(FrozenModel):
+    """What one panel of a client's layout shows (the ``tabs`` map of a layout, contracts.md section 6)."""
 
-
-class InstancePanelParams(FrozenModel):
-    """The ``params`` dockview stores on a panel showing an instance: the one place a tab's identity lives (contracts.md section 6)."""
-
-    # The browser owns this object and may add keys the shell does not know; reading tolerates them, and
-    # the shell edits the stored dict itself (``with_panel_params_address``, which keeps every other key)
-    # rather than round-tripping it through this model.
-    model_config = ConfigDict(extra="ignore")
-
-    address: Address = Field(description="The instance the panel shows")
-    tab_id: TabId = Field(
-        alias="tabId",
-        description="The page's id: minted when the page was first opened, shared by every panel showing it",
-    )
-    last_focused_ms: int = Field(
-        default=0,
-        alias="lastFocusedMs",
-        description="Epoch milliseconds the panel was last the active one, 0 when never",
-    )
-
-
-@pure
-def _panel_entries(dockview: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    panels = dockview.get("panels") if dockview is not None else None
-    if not isinstance(panels, dict):
-        return {}
-    return {panel_id: entry for panel_id, entry in panels.items() if isinstance(entry, dict)}
-
-
-def instance_panel_params_by_id(dockview: dict[str, Any] | None) -> dict[str, InstancePanelParams]:
-    """Each instance panel's params, keyed by dockview panel id. Launchers are skipped; an instance panel whose params
-    do not parse is skipped with a warning, so a damaged entry costs one tab rather than the whole arrangement."""
-    parsed: dict[str, InstancePanelParams] = {}
-    for panel_id, entry in _panel_entries(dockview).items():
-        params = entry.get("params")
-        if not isinstance(params, dict) or params.get("kind") != INSTANCE_PANEL_KIND:
-            continue
-        try:
-            parsed[panel_id] = InstancePanelParams.model_validate(params)
-        except ValidationError as e:
-            logger.warning("Skipped panel {} with unreadable params: {}", panel_id, e.errors()[0]["msg"])
-    return parsed
-
-
-@pure
-def instance_panel_params_json(address: Address, tab_id: TabId, last_focused_ms: int) -> dict[str, Any]:
-    """The ``params`` entry the shell writes for an instance panel, in the browser's spelling."""
-    return {
-        "kind": INSTANCE_PANEL_KIND,
-        "address": str(address),
-        "tabId": str(tab_id),
-        "lastFocusedMs": last_focused_ms,
-    }
-
-
-@pure
-def with_panel_params_address(dockview: dict[str, Any], panel_id: str, address: Address) -> dict[str, Any]:
-    """The document with the params of ``panel_id`` pointed at ``address``, every other key of the params kept."""
-    panels = dockview["panels"]
-    entry = panels[panel_id]
-    return {
-        **dockview,
-        "panels": {**panels, panel_id: {**entry, "params": {**entry["params"], "address": str(address)}}},
-    }
-
-
-# CLEANUP: drop this fold, the ``_fold_legacy_tabs`` validators on ``LayoutRecord`` and ``LayoutSaveRequest`` that
-# call it, the ``tabs`` mention in the docstrings that cite it, and the two tests of the older shape
-# (``test_a_layout_in_the_older_shape_reads_as_params_only`` in data_types_test.py and
-# ``test_a_save_in_the_older_shape_is_folded_into_the_panels_params`` in routes_test.py) once every workspace has
-# saved a layout with a shell from after the workspace app model's params-only layout files: a file written by
-# the older shell carried a ``tabs`` block beside the dockview document, and that block was the truth of each
-# panel's identity.
-@pure
-def fold_legacy_tabs_into_dockview(data: Any) -> Any:
-    """A layout body in the older shape, with its ``tabs`` block folded into each panel's ``params``; any other value unchanged."""
-    if not isinstance(data, dict) or "tabs" not in data:
-        return data
-    without_tabs = {key: value for key, value in data.items() if key != "tabs"}
-    tabs = data["tabs"]
-    dockview = without_tabs.get("dockview")
-    if not isinstance(tabs, dict) or not isinstance(dockview, dict) or not isinstance(dockview.get("panels"), dict):
-        return without_tabs
-    panels = dict(dockview["panels"])
-    for panel_id, tab in tabs.items():
-        entry = panels.get(panel_id)
-        if not isinstance(tab, dict) or not isinstance(entry, dict):
-            continue
-        panels[panel_id] = {
-            **entry,
-            "params": {
-                "kind": INSTANCE_PANEL_KIND,
-                "address": tab.get("address"),
-                "tabId": tab.get("tab_id"),
-                "lastFocusedMs": tab.get("last_focused_ms", 0),
-            },
-        }
-    return {**without_tabs, "dockview": {**dockview, "panels": panels}}
+    address: Address = Field(description="The instance the tab shows")
+    tab_id: TabId = Field(description="The id minted when the panel was created")
+    last_focused_ms: int = Field(description="Epoch milliseconds the tab was last the active one, 0 when never")
 
 
 class LayoutRecord(FrozenModel):
-    """One client's arrangement of one view (contracts.md section 6): dockview's own document, whose per-panel ``params`` name what each tab shows."""
+    """One client's arrangement of one view (contracts.md section 6)."""
 
     dockview: dict[str, Any] | None = Field(description="The serialized dockview grid, None for a never-arranged view")
+    tabs: dict[str, TabRecord] = Field(description="Each panel's tab record, keyed by dockview panel id")
     device_kind: DeviceKind = Field(description="The device kind the arrangement was made on")
     updated_at: AwareDatetime | None = Field(
         description="When the arrangement was last saved, None for the empty layout"
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_legacy_tabs(cls, data: Any) -> Any:
-        return fold_legacy_tabs_into_dockview(data)
 
 
 class ClientRecord(FrozenModel):
@@ -346,12 +241,8 @@ class LayoutSaveRequest(FrozenModel):
         description="The updated_at of the arrangement the window last fetched or saved; None for one it only saw empty",
     )
     device_kind: DeviceKind = Field(description="The device kind the arrangement was made on")
-    dockview: dict[str, Any] | None = Field(description="The serialized dockview grid, its panels' params included")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_legacy_tabs(cls, data: Any) -> Any:
-        return fold_legacy_tabs_into_dockview(data)
+    dockview: dict[str, Any] | None = Field(description="The serialized dockview grid")
+    tabs: dict[str, TabRecord] = Field(description="Each panel's tab record")
 
 
 class ClientReportOutcome(FrozenModel):
