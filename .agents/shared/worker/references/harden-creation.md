@@ -97,15 +97,19 @@ directory, the `[[references]]` entry it adds to that app's manifest, sits under
 the scope file's `context` and is counted as inside the footprint.
 ## Splitting the pass across sub-workers
 
-When the creation has genuinely independent areas -- a Flask app's backend and
-its frontend, say -- you may split the pass across sibling sub-workers instead
-of doing all of it yourself. Nothing prescribes the split: you decide it for the
-creation at hand, or decide there is none worth making.
+Split the pass across sibling sub-workers when the creation has at least two
+areas that each carry enough code to be a worker's whole job, counting two as
+separate even where they share an interface; otherwise harden the creation
+yourself, since every sibling pays a venv converge and a plugin install before
+it does any work. Split an app whose data ingestion, server, and frontend each
+hold substantial code and each want their own kind of test work, or disjoint
+features that could each be hardened alone. Do not split a few small files, a
+script, or a single-page app whose backend only serves the page.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
-name as the prefix (`update-todo-backend`, `update-todo-frontend`): names are
-unique across the host in every state, so a re-run of the same pass reaches
+name as the prefix (`update-roadmap-ingest`, `update-roadmap-frontend`): names
+are unique across the host in every state, so a re-run of the same pass reaches
 the same names only after the old pass has been superseded and destroyed. You
 are its lead, and the rules that are yours are in
 `.agents/shared/references/lead-proxy.md` under "When you are a worker
@@ -127,10 +131,6 @@ a stuck one, and await it with `--timeout 60m`.
   run exactly the verification a direct pass runs -- the "Review gates" section
   below, scoped to your own footprint rather than any sibling's -- once on the
   merged result, and report `done` with the same body a direct pass would.
-
-Weigh the cost before splitting: every sibling pays a venv converge and a plugin
-install before it does any work, and on a small creation that overhead can
-exceed what the parallelism saves.
 
 ## Testing and hardening contract
 
