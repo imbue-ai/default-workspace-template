@@ -1,5 +1,5 @@
 /**
- * The composer's combo card: which PROVIDER this chat runs on, and which model on it.
+ * The composer's model/provider menu: which PROVIDER this chat runs on, and which model on it.
  *
  * The provider leads, because with several accounts signed in it is the first thing worth
  * knowing about a chat.
@@ -12,6 +12,12 @@
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
+ *
+ * How the menu opens, closes and grows its submenus is the workspace `Menu`'s
+ * (`components/menu`), not this file's: it opens on a click of the chip, its submenus open on
+ * hover, and it is dismissed the way it was summoned. What this file owns is the rows -- the
+ * effort slider, the fast switch, the account list with its controls, the model list with its
+ * search -- and the data behind them.
  */
 
 import m from "mithril";
@@ -24,17 +30,16 @@ import type { ModelIdentity } from "../models/ModelSettings";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
-import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
-import { Portal } from "@imbue/workspace-ui/src/portal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
+import { createMenu, startTruncated, type MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { accountRow, emptyAccountRowState } from "./accountRow";
-import * as css from "./modelCardStyles";
+import * as css from "./modelProviderMenuStyles";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
- *  scriptable form, so the card cannot drive it -- and says where the user can. */
+ *  scriptable form, so the menu cannot drive it -- and says where the user can. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
@@ -52,26 +57,20 @@ function clampEffort(option: CatalogModelOption, currentEffort: string | null): 
 }
 
 function capitalizeEffort(level: string): string {
-  return level.length === 0 ? level : level[0].toUpperCase() + level.slice(1);
+  return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
-// A search picker (pi) can carry thousands of models; never lay out more than
-// this many <li> at once. The user narrows with the search box; the cap bounds the DOM.
+/** How many rows a searched model list shows at most. Past this a query, not a scroll, is the
+ *  way to the model. */
 const MODEL_SEARCH_CAP = 100;
 
-/** Gap kept between the card (and its flyout) and every viewport edge. */
-const CARD_MARGIN = 8;
-
-/** Marks the trigger, the card and the flyout as one popover stack, so an outside-click test
- *  is a `closest` call rather than three element references that can go stale. */
-const POPOVER_ATTR = "data-model-popover";
-
-/** The slider's filled portion, deepening with effort. */
+/** The slider's filled portion, deepening with effort: 70% lightness at the bottom of the
+ *  scale, 40% at the top. Darker than 40% reads as near-black rather than as a deep green. */
 function effortFillColor(fraction: number): string {
-  return `hsl(152 39% ${Math.round(70 - 40 * fraction)}%)`;
+  return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-export function ModelBar(): m.Component<{ agentId: string }> {
+export function ModelProviderMenu(): m.Component<{ agentId: string }> {
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
@@ -85,26 +84,65 @@ export function ModelBar(): m.Component<{ agentId: string }> {
   // opens (D2 -- so a subscription-tier change shows up live). `null` until the first fetch (or when
   // the harness is not dynamic). Codex has no static catalog, so these ARE the picker's model rows.
   let dynamicOptions: CatalogModelOption[] | null = null;
-
-  // Where the card and its flyout sit, captured when each opens. Both are `fixed` and
-  // portalled out of the composer, so they carry viewport coordinates rather than being
-  // laid out by their parent -- see `openCard`.
-  let cardAnchor: DOMRect | null = null;
-  let flyout: "model" | "providers" | null = null;
-  let flyoutRowBottom = 0;
-  // The provider rows' own transient state -- an armed "Remove?", an open rename field.
-  // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
+  // Whether this open of the menu has already fetched its offerable models. The menu's own
+  // open warms them, and with hover-opened submenus a pointer crossing the Model row would
+  // otherwise re-run a `pi --list-models` that takes up to 15s. Fresh per open is what
+  // matters -- a /login between two opens still shows up -- so this resets with the menu.
+  let offeredFetchedForOpen = false;
+  // The account rows' own transient state -- an armed "Remove?", an open rename field.
+  // Cleared whenever the submenu or the menu closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
   // The account whose row was pressed and is waiting for "Launch" or "Cancel". A chat's
   // account is fixed at create time, so pressing another account's row can only mean a new
-  // chat on it -- asked, not done by surprise. Cleared with the rest of the flyout's state.
+  // chat on it -- asked, not done by surprise. Cleared with the rest of the submenu's state.
   let launchPromptAccountId: string | null = null;
   const launchDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
   let draggingEffortIndex: number | null = null;
+  // What the last view saw, for the menu's own open hook to read: which agent this is, and
+  // whether its picker is the kind whose model list is worth warming.
+  let viewedAgentId = "";
+  let viewedPickerIsFetched = false;
+
+  /** What is scoped to a submenu: reset whenever the open submenu changes. */
+  function resetSubmenuState(): void {
+    rowState.confirmingRemoval = null;
+    rowState.renamingId = null;
+    rowState.renameDraft = "";
+    launchPromptAccountId = null;
+  }
+
+  const menu = createMenu({
+    // The menu hangs off the chip's top edge, because the composer sits at the bottom of the
+    // panel and there is nothing under it to grow into.
+    placement: "above",
+    width: css.MENU_WIDTH,
+    // A stable hook for tests, and for the composer's own styles.
+    extraClass: "model-provider-menu",
+    onOpen: () => {
+      modelQuery = "";
+      offeredFetchedForOpen = false;
+      // Warm the model list the moment the MENU opens, not when the submenu does: the fetch is
+      // the slow part (pi shells out to `pi --list-models`), and by the time a pointer has
+      // crossed the menu it is usually already back. With hover-opened submenus this is what
+      // makes the Model row cheap to pass over -- by the time the hover lands, the list is warm
+      // and its own request is a no-op.
+      if (viewedPickerIsFetched) warmOfferedModels(viewedAgentId);
+    },
+    onClose: () => {
+      // A drag that never released (the menu can be torn down mid-gesture) would otherwise
+      // still be driving the label and the thumb the next time the menu opens.
+      draggingEffortIndex = null;
+      resetSubmenuState();
+    },
+    onSubmenuChange: () => {
+      resetSubmenuState();
+      modelQuery = "";
+    },
+  });
 
   // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
@@ -126,8 +164,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       // answers with `models` (ids), null meaning "offer the whole catalog".
       offeredModels = response.models == null ? null : new Set(response.models);
       dynamicOptions = response.options ?? null;
-    } catch (error) {
-      console.warn(`Failed to load offered models for agent ${agentId}`, error);
+    } catch {
       offeredModels = null;
       dynamicOptions = null;
     } finally {
@@ -137,104 +174,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     }
   }
 
-  function openCard(trigger: HTMLElement): void {
-    cardAnchor = trigger.getBoundingClientRect();
-    setFlyout(null);
-    modelQuery = "";
+  /** Load this agent's offerable models once per open. See `offeredFetchedForOpen`. */
+  function warmOfferedModels(agentId: string): void {
+    if (offeredFetchedForOpen) return;
+    offeredFetchedForOpen = true;
+    void fetchOfferedModels(agentId);
   }
 
-  function closeCard(): void {
-    cardAnchor = null;
-    // A drag that never released (the card can be torn down mid-gesture) would otherwise
-    // still be driving the label and the thumb the next time the card opens.
-    draggingEffortIndex = null;
-    setFlyout(null);
-  }
-
-  /** The ONLY way the open flyout changes.
-   *
-   *  An armed "Remove?" belongs to the submenu it was armed in and must outlive everything
-   *  short of that submenu going away -- another row being pressed, the pointer wandering off,
-   *  a redraw. Routing every change through here is what makes "until the submenu closes"
-   *  true by construction rather than by remembering to clear it at four call sites. */
-  function setFlyout(next: "model" | "providers" | null): void {
-    if (next !== flyout) {
-      rowState.confirmingRemoval = null;
-      rowState.renamingId = null;
-      rowState.renameDraft = "";
-      launchPromptAccountId = null;
-    }
-    flyout = next;
-  }
-
-  /** A click outside the card, its flyout and its trigger closes the whole stack -- and only
-   *  a click does; a pointer that merely drifts off leaves everything up.
-   *
-   *  The test is `closest`, not a cached element reference. References captured in `oncreate`
-   *  go stale or arrive late, and when they do this handler decides an inside click was an
-   *  outside one and tears the popover down on mousedown -- before the click that was supposed
-   *  to act ever reaches its button. That is what made the trash and "+ Add a provider" look
-   *  like they did nothing. The DOM already knows the answer; ask it. */
-  function handleOutsideMousedown(event: MouseEvent): void {
-    if (cardAnchor === null) return;
-    const target = event.target as Element | null;
-    if (target?.closest?.(`[${POPOVER_ATTR}]`) != null) return;
-    closeCard();
-    m.redraw();
-  }
-
-  /** A row's tooltip attrs, or nothing when it has none to give. Spread, not wrapped: the
-   *  bubble lives on <body>, so the row needs no container of its own. */
   function tooltipAttrs(text: string | null): m.Attributes {
-    return text === null ? {} : hoverTooltipAttrs(text);
-  }
-
-  /** One card row that opens a flyout, or -- when `openable` is false -- one that just states
-   *  its value and explains, on hover, where it can be changed instead. */
-  function menuRow(opts: {
-    label: string;
-    value: string;
-    sub?: string;
-    which: "model" | "providers";
-    openable: boolean;
-    tooltip: string | null;
-    onOpen?: () => void;
-  }): m.Vnode {
-    const row = m(
-      "button",
-      {
-        type: "button",
-        class: opts.openable ? css.ROW : css.ROW_INERT,
-        // A stable hook so a test can address a row by what it is rather than by its classes.
-        "data-card-row": opts.which,
-        ...tooltipAttrs(opts.tooltip),
-        // CLICK, not hover. Opening the model flyout fetches this agent's offerable models,
-        // which for pi shells out to `pi --list-models` (up to 15s) and for codex connects to
-        // its daemon -- on hover that would fire on every pointer sweep across the card.
-        // Clicking also spares us the safe-triangle hover-aim machinery a hover menu needs.
-        onclick: (event: MouseEvent) => {
-          if (!opts.openable) return;
-          flyoutRowBottom = (event.currentTarget as HTMLElement).getBoundingClientRect().bottom;
-          const opening = flyout !== opts.which;
-          setFlyout(opening ? opts.which : null);
-          if (opening) {
-            modelQuery = "";
-            opts.onOpen?.();
-          }
-        },
-      },
-      [
-        m("span", { class: css.ROW_LABEL }, opts.label),
-        m("span", { class: css.ROW_VALUE }, [
-          m("span", { class: css.ROW_TEXT }, opts.value),
-          opts.sub !== undefined ? m("span", { class: css.ROW_SUBTEXT }, `(${opts.sub})`) : null,
-          // No chevron when there is nothing to drill into. A disclosure arrow on a row that
-          // opens nothing is a promise the card cannot keep.
-          opts.openable ? m("span", { class: css.ROW_CHEVRON }, m.trust(icon("chevron-right", { size: 13 }))) : null,
-        ]),
-      ],
-    );
-    return row;
+    return text === null ? {} : hoverTooltipAttrs(text, "above");
   }
 
   /** The effort slider, or null when there is nothing to slide.
@@ -257,7 +205,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     interactive: boolean;
     tooltip: string | null;
     onPick: (level: string) => void;
-  }): m.Vnode | null {
+  }): m.Children {
     const shown = opts.efforts.filter((effort) => effort.in_picker);
     // One stop is not a choice. pi's non-reasoning models declare exactly `("off",)`, and a
     // one-stop slider renders as an immovable full-green track labelled "Off" -- which looks
@@ -276,17 +224,32 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, "data-card-row": "effort", ...tooltipAttrs(opts.tooltip) }, [
+    return m("div", { class: css.ROW_STATIC, ...tooltipAttrs(opts.tooltip) }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
         m("span", { class: css.SLIDER_WRAP }, [
           // A dot at each level: without them the slider is a bare line and the levels it can
-          // land on are guesswork.
+          // land on are guesswork. Every level EXCEPT the one the thumb is on -- there the ball
+          // is the mark, and it is dropped from the list rather than hidden in place, because a
+          // keyed list may not carry holes.
+          //
+          // A dot takes the colour of what it is drawn ON, which is the fill below the thumb
+          // and the bare track above it: one mark in two colours reads as a scale the fill is
+          // swallowing, where one colour throughout reads as dots disappearing under it.
           m(
             "span",
             { class: css.SLIDER_TICKS },
-            shown.map((effort) => m("span", { key: effort.level, class: css.SLIDER_TICK })),
+            shown
+              .map((effort, index) => ({ effort, index }))
+              .filter(({ index }) => index !== position)
+              .map(({ effort, index }) =>
+                m("span", {
+                  key: effort.level,
+                  class: index < position ? css.SLIDER_TICK_ON_FILL : css.SLIDER_TICK_ON_TRACK,
+                  style: `left: ${(index / (shown.length - 1)) * 100}%`,
+                }),
+              ),
           ),
           m("input", {
             type: "range",
@@ -303,7 +266,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
-              `var(--color-fill-active) ${pct}%)`,
+              `var(--color-fill-hover) ${pct}%)`,
             oninput: (event: Event) => {
               draggingEffortIndex = Number((event.target as HTMLInputElement).value);
             },
@@ -339,7 +302,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           {
             type: "button",
             role: "switch",
-            class: `${css.SWITCH} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
+            class: `${css.switchClass("sm")} ${opts.on ? css.SWITCH_ON : css.SWITCH_OFF}`,
             "aria-label": "Fast Mode",
             "aria-checked": opts.on ? "true" : "false",
             disabled: !opts.interactive,
@@ -349,9 +312,13 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           },
           m(
             "span",
-            { class: `${css.SWITCH_KNOB} ${opts.on ? css.SWITCH_KNOB_ON : css.SWITCH_KNOB_OFF}` },
+            { class: css.switchKnobClass("sm", opts.on) },
             opts.on
-              ? m("span", { class: css.SWITCH_CHECK }, m.trust(icon("check", { size: 12, strokeWidth: 3.5 })))
+              ? m(
+                  "span",
+                  { class: css.SWITCH_CHECK },
+                  m.trust(icon("check", { size: css.switchCheckSize("sm"), strokeWidth: 3.5 })),
+                )
               : null,
           ),
         ),
@@ -359,89 +326,24 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     ]);
   }
 
-  /** The card's viewport left, clamped so it cannot hang off either edge. */
-  function cardLeft(anchor: DOMRect): number {
-    return Math.min(
-      Math.max(anchor.left, CARD_MARGIN),
-      Math.max(CARD_MARGIN, window.innerWidth - CARD_MARGIN - css.CARD_WIDTH),
-    );
-  }
-
-  /** The card hangs off the trigger's top-left corner, because the composer sits at the
-   *  bottom of the panel. The width is set here rather than as a class
-   *  because the rows are `w-full` -- a card left to size itself to its content gives them a
-   *  click target only as wide as their own text. */
-  function cardPlacement(anchor: DOMRect): string {
-    return (
-      `left: ${cardLeft(anchor)}px; bottom: ${window.innerHeight - anchor.top + 8}px; ` + `width: ${css.CARD_WIDTH}px;`
-    );
-  }
-
-  /** Where a flyout sits: beside the card, standing on the row that opened it. */
-  function flyoutPlacement(): string {
-    const anchor = cardAnchor;
-    if (anchor === null) return "";
-    const placed = placeFlyout({
-      cardLeft: cardLeft(anchor),
-      cardWidth: css.CARD_WIDTH,
-      rowBottom: flyoutRowBottom,
-      flyoutWidth: css.FLYOUT_WIDTH,
-      maxFlyoutHeight: css.FLYOUT_MAX_HEIGHT,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight,
-      margin: CARD_MARGIN,
-      overlap: css.FLYOUT_OVERLAP,
-    });
-    return (
-      `left: ${placed.left}px; bottom: ${placed.bottom}px; ` +
-      `width: ${css.FLYOUT_WIDTH}px; max-height: ${placed.maxHeight}px;`
-    );
-  }
-
-  /** The shell every flyout renders into, so both register the same outside-click element. */
-  function flyoutShell(children: m.Children): m.Vnode {
-    return m(
-      "div",
-      {
-        class: css.FLYOUT,
-        [POPOVER_ATTR]: "flyout",
-        style: flyoutPlacement(),
-      },
-      children,
-    );
-  }
-
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
    *  start brings back. No confirmation -- it is one message away from undone. The agent list
    *  catches up through the observe stream. */
-  function stopAgentRow(targetAgentId: string): m.Vnode {
-    return m(
-      "button",
-      {
-        type: "button",
-        class: css.ROW,
-        "data-card-row": "stop-agent",
-        onclick: (event: MouseEvent) => {
-          event.stopPropagation();
-          closeCard();
-          void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
-            .then(async (response) => {
-              if (response.ok) return;
-              const data = (await response.json().catch(() => ({}))) as { detail?: string };
-              alert(`Failed to stop the agent: ${data.detail ?? `HTTP ${response.status}`}`);
-            })
-            .catch((e: Error) => {
-              alert(`Failed to stop the agent: ${e.message}`);
-            });
-        },
-      },
-      [m("span", { class: css.ROW_LABEL }, "Stop agent"), m("span", { class: css.ROW_VALUE }, "")],
-    );
+  function stopAgent(targetAgentId: string): void {
+    void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
+      .then(async (response) => {
+        if (response.ok) return;
+        const data = (await response.json().catch(() => ({}))) as { detail?: string };
+        alert(`Failed to stop the agent: ${data.detail ?? `HTTP ${response.status}`}`);
+      })
+      .catch((e: Error) => {
+        alert(`Failed to stop the agent: ${e.message}`);
+      });
   }
 
-  /** A row of the flyout that is still fetching its contents. */
+  /** A row of the submenu that is still fetching its contents. */
   function loadingRow(): m.Vnode {
-    return m("div", { class: `${css.FLYOUT_EMPTY} flex items-center gap-2` }, [
+    return m("div", { class: `${css.SUBMENU_EMPTY} flex items-center gap-2` }, [
       m("span", { class: "pv-spinner" }),
       "Loading models...",
     ]);
@@ -460,7 +362,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         {
           label: "Launch",
           run: () => {
-            closeCard();
+            menu.close();
             void startChatOnAccount(target.id);
           },
         },
@@ -471,25 +373,27 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     });
   }
 
-  /** The Provider row's menu: every signed-in account, plus a way to add one.
+  /** The Provider row's submenu: every signed-in account, plus a way to add one.
    *
    * Our chats bind to an account when they are created and nothing rebinds them, so pressing
    * an account that is not this chat's asks to open a new chat on it. Each row also carries
    * the default toggle: the starred account is the one a new chat opens on when nothing
    * names one (the New Tab tile, the rail shortcut, an agent's `layout.py open chat`).
    */
-  function providerFlyout(current: ProviderAccount | null): m.Vnode {
+  function providerSubmenu(current: ProviderAccount | null): m.Children {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
     const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
-    return flyoutShell([
+    // The account rows (or the one line standing in for them when there are none), plus the
+    // "+ Add a provider" row under them. The launch prompt is a dialog on top, not a row.
+    return [
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
       m(
         "div",
-        { class: css.FLYOUT_SCROLL },
+        { class: css.SUBMENU_SCROLL },
         rows.length === 0
-          ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
+          ? [m("div", { class: css.SUBMENU_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
               return accountRow({
@@ -499,7 +403,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
                 onSelect: () => {
                   if (isCurrent) {
-                    setFlyout(null);
+                    menu.closeSubmenu();
                     return;
                   }
                   launchPromptAccountId = row.id;
@@ -513,19 +417,19 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         "button",
         {
           type: "button",
-          class: css.FLYOUT_ADD,
+          class: css.SUBMENU_ADD,
           onclick: () => {
-            closeCard();
+            menu.close();
             openProviderChooser({ onSignedIn: (accountId) => startChatOnAccount(accountId) });
           },
         },
         "+ Add a provider",
       ),
-    ]);
+    ];
   }
 
-  /** The Model row's menu: the models this account can actually use. */
-  function modelFlyout(
+  /** The Model row's submenu: the models this account can actually use. */
+  function modelSubmenu(
     agentId: string,
     sourceOptions: readonly CatalogModelOption[],
     matched: CatalogModelOption | null,
@@ -533,7 +437,7 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     optimistic: boolean,
     searchable: boolean,
     dynamic: boolean,
-  ): m.Vnode {
+  ): m.Children {
     const offeredIds = searchable && offeredLoaded ? offeredModels : null;
     const all = sourceOptions
       .filter((option) => option.in_picker)
@@ -542,49 +446,15 @@ export function ModelBar(): m.Component<{ agentId: string }> {
     const filtered = query === "" ? all : all.filter((option) => option.label.toLowerCase().includes(query));
     const visible = filtered.slice(0, MODEL_SEARCH_CAP);
     const loading = (searchable || dynamic) && (offeredLoading || !offeredLoaded);
-    return flyoutShell([
-      // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
-      // that mixes the two, and it throws during the DOM diff rather than at build time.
-      m(
-        "div",
-        { class: css.FLYOUT_SCROLL },
-        loading
-          ? [loadingRow()]
-          : visible.length === 0
-            ? [m("div", { class: css.FLYOUT_EMPTY }, "No models available.")]
-            : visible.map((option) => {
-                const isCurrent = matched !== null && option.id === matched.id;
-                return m(
-                  "button",
-                  {
-                    type: "button",
-                    key: option.id,
-                    class: isCurrent ? css.FLYOUT_ROW_SELECTED : css.FLYOUT_ROW,
-                    onclick: () => {
-                      const next: ModelIdentity = {
-                        model_id: option.id,
-                        effort: clampEffort(option, currentIdentity.effort),
-                        fast: option.supports_fast ? currentIdentity.fast : false,
-                      };
-                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
-                      setFlyout(null);
-                    },
-                  },
-                  [
-                    m("span", { class: css.FLYOUT_ROW_NAME }, option.label),
-                    isCurrent
-                      ? m("span", { class: css.FLYOUT_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
-                      : null,
-                  ],
-                );
-              }),
-      ),
-      // BELOW the list, not above it: the flyout is anchored at its base and grows upward, so
-      // the bottom is the edge that stays put next to the row you came from.
+    const hasSearchField = searchable || all.length > 8;
+    return [
+      // ABOVE the list: the field is where the pointer arrives and where the typing starts, so
+      // it sits at the head of the submenu rather than under a list it filters. It stays put
+      // while the list scrolls beneath it.
       //
       // The shared input recipe, with the magnifier laid over its left padding: the field owns
       // its own frame and focus ring, so nothing here re-styles either.
-      searchable || all.length > 8
+      hasSearchField
         ? m("div", { class: css.SEARCH_WRAP }, [
             m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
             m("input", {
@@ -599,22 +469,60 @@ export function ModelBar(): m.Component<{ agentId: string }> {
             }),
           ])
         : null,
-    ]);
+      // One list or the other, never a hole beside keyed rows -- mithril refuses a fragment
+      // that mixes the two, and it throws during the DOM diff rather than at build time.
+      m(
+        "div",
+        { class: css.SUBMENU_SCROLL },
+        loading
+          ? [loadingRow()]
+          : visible.length === 0
+            ? [m("div", { class: css.SUBMENU_EMPTY }, "No models available.")]
+            : visible.map((option) => {
+                const isCurrent = matched !== null && option.id === matched.id;
+                return m(
+                  "button",
+                  {
+                    type: "button",
+                    key: option.id,
+                    class: isCurrent ? css.SUBMENU_ROW_SELECTED : css.SUBMENU_ROW,
+                    onclick: () => {
+                      const next: ModelIdentity = {
+                        model_id: option.id,
+                        effort: clampEffort(option, currentIdentity.effort),
+                        fast: option.supports_fast ? currentIdentity.fast : false,
+                      };
+                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      // The pick is done; the menu stays, with the new model's effort and fast
+                      // rows there to adjust.
+                      menu.closeSubmenu();
+                    },
+                  },
+                  [
+                    // Front-truncated: an openrouter id is a path whose tail tells rows apart.
+                    startTruncated(option.label),
+                    isCurrent
+                      ? m("span", { class: css.SUBMENU_CHECK }, m.trust(icon("check", { size: 13, strokeWidth: 2.5 })))
+                      : null,
+                  ],
+                );
+              }),
+      ),
+    ];
   }
 
   return {
     oninit() {
       // The catalogs are static and shared; load them once.
       void ensureHarnessCatalogs();
-      document.addEventListener("mousedown", handleOutsideMousedown);
     },
 
     onremove() {
-      document.removeEventListener("mousedown", handleOutsideMousedown);
+      menu.dispose();
     },
 
     view(vnode) {
-      const agentId = vnode.attrs.agentId;
+      const { agentId } = vnode.attrs;
       const agent = getAgentById(agentId);
       const account = accountForAgent(agent?.labels?.account);
       const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
@@ -639,8 +547,12 @@ export function ModelBar(): m.Component<{ agentId: string }> {
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
+      const searchable = catalog?.picker_mode === "search";
+      const dynamic = catalog?.picker_mode === "dynamic";
+      viewedAgentId = agentId;
+      viewedPickerIsFetched = searchable || dynamic;
 
-      // The chip states the WHOLE choice, from the same three values the card's rows read --
+      // The chip states the WHOLE choice, from the same three values the menu's rows read --
       // one source, so the summary and the detail cannot disagree. Effort appears only when
       // the model has one to state, and the bolt only when fast is actually on.
       const trigger = m(
@@ -649,23 +561,11 @@ export function ModelBar(): m.Component<{ agentId: string }> {
           type: "button",
           // A stable hook for the composer's own styles and for tests.
           class: `model-selector-trigger ${css.TRIGGER}`,
-          [POPOVER_ATTR]: "trigger",
-          title: "Model, effort and speed",
-          "aria-expanded": cardAnchor !== null ? "true" : "false",
-          onclick: (event: MouseEvent) => {
-            event.stopPropagation();
-            if (cardAnchor !== null) {
-              closeCard();
-              return;
-            }
-            openCard(event.currentTarget as HTMLElement);
-            // Warm the model list the moment the CARD opens, not when the flyout does: the
-            // fetch is the slow part (pi shells out to `pi --list-models`), and by the time a
-            // pointer has crossed the card it is usually already back.
-            if (catalog?.picker_mode === "search" || catalog?.picker_mode === "dynamic") {
-              void fetchOfferedModels(agentId);
-            }
-          },
+          ...menu.triggerAttrs(),
+          // The workspace's own bubble, not a native `title`: one tooltip mechanism everywhere
+          // (and this one can say what the button DOES, where a native title is stuck reading
+          // as a label for what is already written on the chip).
+          ...hoverTooltipAttrs("Change model or provider", "above"),
         },
         [
           // Joined by dots between EVERY part, including before the bolt: the three axes are
@@ -683,62 +583,73 @@ export function ModelBar(): m.Component<{ agentId: string }> {
         ],
       );
 
-      if (cardAnchor === null) return m("div", { class: "model-bar" }, trigger);
+      if (!menu.isOpen()) return trigger;
 
       const currentIdentity: ModelIdentity =
         matched === null
           ? { model_id: "", effort: currentEffort, fast: currentFast }
           : { model_id: matched.id, effort: currentEffort, fast: currentFast };
-
-      const searchable = catalog?.picker_mode === "search";
-      const dynamic = catalog?.picker_mode === "dynamic";
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
-      const card = m(
-        "div",
+      const rows: MenuRow[] = [
         {
-          class: css.CARD,
-          [POPOVER_ATTR]: "card",
-          style: cardPlacement(cardAnchor),
+          kind: "submenu",
+          key: "providers",
+          label: "Provider",
+          value: account?.provider ?? "Not signed in",
+          sub: account?.harness_label,
+          content: () => providerSubmenu(account),
         },
-        m("div", { class: css.CARD_INNER }, [
-          menuRow({
-            label: "Provider",
-            value: account?.provider ?? "Not signed in",
-            sub: account?.harness_label,
-            which: "providers",
-            openable: true,
-            tooltip: null,
-          }),
-          m("div", { class: css.DIVIDER }),
-          matched !== null
-            ? menuRow({
+        { kind: "divider" },
+      ];
+      if (matched !== null) {
+        // A read-only harness gets a row that states the model and nothing more: no chevron,
+        // no list. Its models are switched from its own terminal.
+        rows.push(
+          interactive
+            ? {
+                kind: "submenu",
+                key: "model",
                 label: "Model",
                 value: matched.label,
-                which: "model",
-                // A read-only harness gets a row that states the model and nothing more: no
-                // chevron, no list. Its models are switched from its own terminal.
-                openable: interactive,
-                tooltip: readOnlyTooltip,
+                truncateValue: "start",
+                maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
                 onOpen: () => {
-                  if (searchable || dynamic) void fetchOfferedModels(agentId);
+                  if (searchable || dynamic) warmOfferedModels(agentId);
                 },
-              })
-            : null,
-          matched !== null
-            ? effortRow({
-                efforts: matched.efforts,
-                current: currentEffort,
-                interactive,
-                tooltip: readOnlyTooltip,
-                onPick: (level) => {
-                  const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
-                },
-              })
-            : null,
-          matched !== null && matched.supports_fast
-            ? fastRow({
+                content: () =>
+                  modelSubmenu(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
+              }
+            : {
+                kind: "value",
+                key: "model",
+                label: "Model",
+                value: matched.label,
+                truncateValue: "start",
+                tooltip: readOnlyTooltip ?? undefined,
+              },
+        );
+        rows.push({
+          kind: "custom",
+          key: "effort",
+          render: () =>
+            effortRow({
+              efforts: matched.efforts,
+              current: currentEffort,
+              interactive,
+              tooltip: readOnlyTooltip,
+              onPick: (level) => {
+                const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
+                setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+              },
+            }),
+        });
+        if (matched.supports_fast) {
+          rows.push({
+            kind: "custom",
+            key: "fast",
+            render: () =>
+              fastRow({
                 on: currentFast,
                 interactive,
                 tooltip: readOnlyTooltip,
@@ -746,23 +657,14 @@ export function ModelBar(): m.Component<{ agentId: string }> {
                   const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
                   setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
-              })
-            : null,
-          m("div", { class: css.DIVIDER }),
-          stopAgentRow(agentId),
-        ]),
-      );
+              }),
+          });
+        }
+      }
+      rows.push({ kind: "divider" });
+      rows.push({ kind: "action", key: "stop-agent", label: "Stop agent", onSelect: () => stopAgent(agentId) });
 
-      const openFlyout =
-        flyout === "providers"
-          ? providerFlyout(account)
-          : flyout === "model"
-            ? modelFlyout(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
-            : null;
-
-      // The card and its flyout PORTAL to <body>. The chat panel lives inside dockview's
-      // clipping overlay, so a card that extends past the panel would be cut off at its edge.
-      return [m("div", { class: "model-bar" }, trigger), m(Portal, { children: [card, openFlyout] })];
+      return [trigger, menu.view(rows)];
     },
   };
 }

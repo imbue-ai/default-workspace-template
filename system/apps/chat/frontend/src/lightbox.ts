@@ -32,7 +32,7 @@ let activeTooltips: HoverTooltip[] = [];
 
 // Native `title` is not used anywhere in the workspace -- see views/hoverTooltip.ts.
 function addTooltip(element: HTMLElement, label: string): void {
-  const tooltip = attachHoverTooltip(element);
+  const tooltip = attachHoverTooltip(element, "above");
   tooltip.setText(label);
   activeTooltips.push(tooltip);
 }

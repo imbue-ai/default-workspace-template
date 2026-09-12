@@ -32,16 +32,12 @@ const MAX_TEXTAREA_HEIGHT_PX = 200;
  * by them). Attachment status looks are resolved in code, one utility per
  * property. */
 
-/** The composer card. The two-layer shadows are design-system-exceptions: a
- *  unique upward-cast composer shadow (negative y, Notion-charcoal base) with
- *  an accent-tinted glow on focus, which no elevation-scale value expresses;
- *  the border/shadow transition runs its two properties at different speeds,
- *  hence the arbitrary transition property. */
+/** The composer card: a border and nothing else. No shadow, since the card
+ *  sits at the foot of its own pane rather than floating over the transcript.
+ *  Focus is the accent border alone. */
 const INPUT_BOX_CLASS =
   "message-input-box flex flex-col rounded-xl border bg-composer " +
-  "shadow-[0_-4px_20px_rgba(55,53,47,0.06),0_-1px_6px_rgba(55,53,47,0.04)] " +
-  "[transition:border-color_150ms,box-shadow_var(--dur-slow)] focus-within:border-accent " +
-  "focus-within:shadow-[0_-4px_24px_rgba(47,107,79,0.08),0_-1px_8px_rgba(47,107,79,0.06)]";
+  "[transition:border-color_150ms] focus-within:border-accent";
 
 const ATTACHMENT_DETAIL_BASE = "composer-attachment-detail text-(length:--font-size-helper)";
 
@@ -211,7 +207,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
             "span",
             {
               class: "composer-attachment-name truncate text-(length:--font-size-body) text-primary",
-              ...hoverTooltipAttrs(attachment.fileName),
+              ...hoverTooltipAttrs(attachment.fileName, "above"),
             },
             attachment.fileName,
           ),
@@ -243,7 +239,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                 xs: true,
                 extra: "composer-attachment-remove shrink-0",
                 "aria-label": "Remove attachment",
-                ...hoverTooltipAttrs("Remove attachment"),
+                ...hoverTooltipAttrs("Remove attachment", "above"),
                 onclick: () => removeComposerAttachment(agentId, attachment.localId),
               },
               m.trust(icon("close", { size: 12, strokeWidth: 2.5 })),
@@ -879,7 +875,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                     icon: true,
                     round: true,
                     extra: "message-input-attach-button shrink-0",
-                    ...hoverTooltipAttrs("Attach files"),
+                    ...hoverTooltipAttrs("Attach files", "above"),
                     "aria-label": "Attach files",
                     onclick: openFilePicker,
                   },
@@ -898,7 +894,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                         // it only hands messages back when there are some parked in the harness,
                         // so promising that unconditionally described a case that usually is not
                         // the one in front of the user.
-                        ...hoverTooltipAttrs(stopButtonLabel),
+                        ...hoverTooltipAttrs(stopButtonLabel, "above"),
                         "aria-label": stopButtonLabel,
                         onclick: handleStopToComposer,
                       },
@@ -913,7 +909,7 @@ export function MessageInput(): m.Component<{ agentId: string | null }> {
                         icon: true,
                         round: true,
                         extra: "message-input-send-button shrink-0",
-                        ...hoverTooltipAttrs("Send message"),
+                        ...hoverTooltipAttrs("Send message", "above"),
                         "aria-label": "Send message",
                         onclick: handleSend,
                       },

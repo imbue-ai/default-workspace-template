@@ -70,8 +70,8 @@ import { NewTabLauncher } from "./NewTabLauncher";
 import type { LaunchTile, LauncherRow } from "./NewTabLauncher";
 import { TAB_MENU_DIVIDER, tabMenuEntries } from "./tabMenu";
 import type { TabMenuActions, TabMenuEntry } from "./tabMenu";
-import { placeMenu } from "./Sidebar";
-import type { MenuAnchor, SidebarTabRow } from "./Sidebar";
+import type { SidebarTabRow } from "./Sidebar";
+import type { MenuAnchor } from "@imbue/workspace-ui/src/menu-position";
 import { normalizeTabTitle } from "./tab-rename";
 import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
@@ -81,7 +81,8 @@ import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import { reloadInterface } from "../reload";
 import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { createMenu } from "@imbue/workspace-ui/src/components/menu";
+import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import type { IconName } from "@imbue/workspace-ui/src/components/icons";
 import {
   addActiveViewChangedListener,
@@ -359,95 +360,56 @@ function tabIconMarkupForPanel(params: PanelParams | null): string {
 
 // ---------- The tab kebab menu ----------
 
-// Fixed and placed by the sidebar's placeMenu, so every floating menu flips and clamps by one rule.
-const TAB_MENU_CARD_CLASS = menuCardClass("fixed min-w-[180px] text-(length:--font-size-row)");
-const TAB_MENU_ROW_CLASS = menuRowClass();
+// The one open tab menu. It renders into a root of its own on <body>: the tab strip is
+// dockview's DOM rather than mithril's, so there is no mounted tree for the menu to live in,
+// and the strip clips its own overflow besides. The root is made on first use, since this
+// module is also imported where there is no document.
+let tabMenuHost: HTMLElement | null = null;
+let tabMenuRows: MenuRow[] = [];
+let onTabMenuClosed: (() => void) | null = null;
+const tabMenu = createMenu({
+  placement: "below",
+  minWidth: 180,
+  extraClass: "dockview-tab-menu",
+  redraw: () => renderTabMenu(),
+  onClose: () => {
+    const closed = onTabMenuClosed;
+    onTabMenuClosed = null;
+    closed?.();
+  },
+});
 
-// The one open tab menu, if any.
-let openTabMenu: { close: () => void } | null = null;
+function renderTabMenu(): void {
+  if (tabMenuHost === null) {
+    tabMenuHost = document.createElement("div");
+    document.body.appendChild(tabMenuHost);
+  }
+  m.render(tabMenuHost, tabMenu.render(tabMenuRows));
+}
 
 function closeTabMenu(): void {
-  openTabMenu?.close();
+  tabMenu.close();
 }
 
 /**
- * Open a tab's kebab menu against ``anchor``. Built on ``document.body`` rather than inside
- * the tab: the tab strip clips its own overflow. ``trigger`` -- the kebab that opened it -- is
- * excluded from the outside-press close so pressing it again toggles the menu shut.
+ * Open a tab's kebab menu against ``anchor``. Pressing the kebab again while the menu is up
+ * lands on the menu's own sheet, which is what closes it.
  */
-function openTabMenuAt(
-  anchor: MenuAnchor,
-  entries: readonly TabMenuEntry[],
-  onClosed: () => void,
-  trigger: HTMLElement | null,
-): void {
+function openTabMenuAt(anchor: MenuAnchor, entries: readonly TabMenuEntry[], onClosed: () => void): void {
   closeTabMenu();
-  const element = document.createElement("div");
-  element.className = TAB_MENU_CARD_CLASS;
-  element.setAttribute("role", "menu");
-  element.style.cssText = "left: 0; top: 0;";
-
-  const close = (): void => {
-    document.removeEventListener("pointerdown", onOutsidePointerDown, true);
-    document.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("resize", close);
-    window.removeEventListener("scroll", close, true);
-    element.remove();
-    openTabMenu = null;
-    onClosed();
-  };
-
-  function onOutsidePointerDown(event: PointerEvent): void {
-    const target = event.target as Node;
-    if (element.contains(target) || trigger?.contains(target) === true) return;
-    close();
-  }
-
-  function onKeyDown(event: KeyboardEvent): void {
-    if (event.key === "Escape") close();
-  }
-
-  for (const entry of entries) {
-    if (entry === TAB_MENU_DIVIDER) {
-      const divider = document.createElement("div");
-      divider.className = menuDividerClass();
-      element.appendChild(divider);
-      continue;
-    }
-    const row = document.createElement("div");
-    row.className = `${TAB_MENU_ROW_CLASS} ${entry.isDestructive ? "text-danger" : "text-primary"}`;
-    row.setAttribute("role", "menuitem");
-    const glyph = document.createElement("span");
-    glyph.className = "flex w-4 shrink-0 items-center justify-center";
-    glyph.innerHTML = icon(entry.iconName, { size: 14 });
-    const label = document.createElement("span");
-    label.className = "min-w-0 flex-1 truncate";
-    label.textContent = entry.label;
-    row.append(glyph, label);
-    row.addEventListener("click", (event) => {
-      event.stopPropagation();
-      close();
-      entry.run();
-    });
-    element.appendChild(row);
-  }
-
-  document.body.appendChild(element);
-  const rect = element.getBoundingClientRect();
-  const position = placeMenu(
-    anchor,
-    { width: rect.width, height: rect.height },
-    { width: window.innerWidth, height: window.innerHeight },
-    "below",
+  tabMenuRows = entries.map((entry) =>
+    entry === TAB_MENU_DIVIDER
+      ? { kind: "divider" }
+      : {
+          kind: "action",
+          label: entry.label,
+          icon: entry.iconName,
+          tone: entry.isDestructive ? "danger" : "default",
+          onSelect: entry.run,
+        },
   );
-  element.style.left = `${position.left}px`;
-  element.style.top = `${position.top}px`;
-
-  document.addEventListener("pointerdown", onOutsidePointerDown, true);
-  document.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("resize", close);
-  window.addEventListener("scroll", close, true);
-  openTabMenu = { close };
+  onTabMenuClosed = onClosed;
+  tabMenu.open(anchor);
 }
 
 /** The instance a panel shows, resolved against the inventory, or null for a launcher or an
@@ -776,33 +738,25 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
 
       // A launcher tab is a question about this pane, not an instance: it carries only the hide.
       if (!isLauncher) {
-        const openMenu = (anchor: MenuAnchor, trigger: HTMLElement | null): void => {
+        const openMenu = (anchor: MenuAnchor): void => {
           if (isMenuOpen) {
             closeTabMenu();
             return;
           }
           isMenuOpen = true;
           updateActionsVisibility();
-          openTabMenuAt(
-            anchor,
-            tabMenuEntriesForPanel(options.id),
-            () => {
-              isMenuOpen = false;
-              updateActionsVisibility();
-            },
-            trigger,
-          );
+          openTabMenuAt(anchor, tabMenuEntriesForPanel(options.id), () => {
+            isMenuOpen = false;
+            updateActionsVisibility();
+          });
         };
         const menuButton = createTabActionButton("Tab options", "kebab", disposables, () => {
-          openMenu(menuButton.getBoundingClientRect(), menuButton);
+          openMenu(menuButton.getBoundingClientRect());
         });
         actions.appendChild(menuButton);
         element.addEventListener("contextmenu", (event: MouseEvent) => {
           event.preventDefault();
-          openMenu(
-            { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 },
-            null,
-          );
+          openMenu({ left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY, width: 0 });
         });
       }
 

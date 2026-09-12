@@ -46,7 +46,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
-import { ModelBar } from "./ModelBar";
+import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
@@ -800,24 +800,24 @@ export function ChatPanel(): m.Component<{ agentId: string; isVisible?: boolean 
           // OUTSIDE the flip. Inside, the switch would rotate away with the face it turns and
           // the flip would be one-way. Everything here describes the conversation rather than
           // either rendering of it, which is the same reason it belongs to neither face.
-          // Carries the bottom gutter the footer used to supply, so the 24px sits under the
-          // under-bar rather than between the composer and it.
+          // An 8px band under the under-bar, matching the 8px above it: the row is a caption on
+          // the composer and sits evenly in its own band.
           !hasComposer(agentId)
             ? null
             : m(
                 "div",
-                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-6" },
+                { class: "chat-under-bar shrink-0 bg-chat px-8 pb-2" },
                 m(
                   "div",
                   {
                     // Same max-width as the composer card above it; relative as
                     // the containing block for centered overlays.
                     class:
-                      "composer-under-bar relative mx-auto mt-1 flex w-full " +
-                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2 px-1",
+                      "composer-under-bar relative mx-auto mt-2 flex w-full " +
+                      "max-w-[calc(var(--width-message-column)+2*var(--radius-xl))] items-center gap-2",
                   },
                   [
-                    m(ModelBar, { agentId }),
+                    m(ModelProviderMenu, { agentId }),
                     // The terminal back face attaches to the agent's own tmux session, which
                     // a chat still being created does not have: without a name the terminal
                     // dispatch attaches to whatever session it finds, so the flip waits for
