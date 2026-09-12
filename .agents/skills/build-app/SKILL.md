@@ -73,6 +73,13 @@ confirmation here, because the data sample confirms the data *shape*, not the UI
 shape. Render the handed-off `sample.json` in the mock so the user judges the UI
 against real data.
 
+If you were **not** sent here and the app reads records that come from outside
+itself -- an upload, an export, an API, a third-party service -- stop and run
+`fetch-process-show` first; come back with its confirmed sample. Reading and
+normalizing those records is its job, and where fresh batches keep arriving it
+routes on to `data-pipeline-builder`. An app whose ingestion you wrote here
+instead has no entry point anyone can re-run when the next batch lands.
+
 ## Step 0: Clarify and plan (business terms only)
 
 Ask only the questions that genuinely *block* -- a fork that is both genuinely
