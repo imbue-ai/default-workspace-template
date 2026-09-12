@@ -846,6 +846,19 @@ def test_build_observe_command_honors_injected_binary(broadcaster: WebSocketBroa
 # only surfacing at runtime. See ``mngr_cli_contract`` for the validator.
 
 
+def _chat_create_argv(**overrides: Any) -> list[str]:
+    """The argv for one demo chat on claude; ``overrides`` replace the builder's arguments."""
+    arguments: dict[str, Any] = {
+        "mngr_binary": "mngr",
+        "name": "demo",
+        "chat_id": ChatId("agent-123"),
+        "agent_id": "agent-123",
+        "primary_labels": {},
+        "harness": HarnessType.CLAUDE,
+    }
+    return _build_chat_create_command(**{**arguments, **overrides})
+
+
 def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None:
     """The harness/role split is the contract: `--type` picks the harness, the lone
     `--template` picks the role.
@@ -854,14 +867,7 @@ def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None
     directly), and the `chat` role template -- which never sets `type` -- cannot
     clobber it.
     """
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv()
     assert argv[argv.index("--type") + 1] == HarnessType.CLAUDE
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
     assert templates == ["chat"]
@@ -870,25 +876,14 @@ def test_chat_create_argv_selects_harness_by_type_and_role_by_template() -> None
 def test_chat_create_argv_names_the_chat_in_the_agents_environment() -> None:
     """Every agent the app creates carries its chat's id as ``MINDS_CHAT_ID``, which is how a
     skill or script inside the workspace addresses the chat rather than the agent."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv()
     env_values = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--env"]
     assert "MINDS_CHAT_ID=agent-123" in env_values
 
 
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
     """The codex harness reuses the chat role verbatim; only the `--type` differs."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
+    argv = _chat_create_argv(
         primary_labels={"project": "proj"},
         harness=HarnessType.CODEX,
     )
@@ -901,38 +896,16 @@ def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
 def test_chat_create_argv_carries_a_seeded_first_message_only_when_given() -> None:
     """The seeded message rides the create as ``--message`` (delivered once the harness is ready,
     like ``/welcome``); a plain chat's argv carries no ``--message`` at all."""
-    seeded = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-        initial_message="/use-template https://github.com/example/a-template",
-    )
+    seeded = _chat_create_argv(initial_message="/use-template https://github.com/example/a-template")
     assert_mngr_argv_valid(seeded)
     assert seeded[seeded.index("--message") + 1] == "/use-template https://github.com/example/a-template"
 
-    plain = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    plain = _chat_create_argv()
     assert "--message" not in plain
 
 
 def test_chat_create_argv_accepted_by_live_cli() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={"workspace": "ws", "project": "proj"},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(primary_labels={"workspace": "ws", "project": "proj"})
     assert_mngr_argv_valid(argv)
     # The chat carries user_created so the OOM launch wrapper puts it in the
     # dynamic chat band rather than the least-protected worker/unclassified band.
@@ -963,14 +936,7 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
     """Plain chats launch at the harness defaults: no `-S` overrides at all. Fast
     mode rides only the `first` create template (see .mngr/settings.toml), never
     the argv, so every non-first chat starts at standard speed."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
 
@@ -978,12 +944,7 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
     """The `first` launcher stacks its template via extra_role_templates; the
     resulting argv must resolve against the live CLI."""
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={},
+    argv = _chat_create_argv(
         harness=HarnessType.CODEX,
         extra_role_templates=("first",),
     )
@@ -1020,14 +981,7 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
     derives for itself, so its "true name is the canonical form of the display
     name" rule holds either way.
     """
-    argv = _build_chat_create_command(
-        "mngr",
-        "Chat 2",
-        ChatId("agent-1"),
-        "agent-1",
-        {},
-        HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(name="Chat 2", chat_id=ChatId("agent-1"), agent_id="agent-1")
 
     assert argv[2] == "Chat-2"
     labels = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--label"]
@@ -1337,13 +1291,8 @@ def test_create_chat_registers_the_pre_observe_state_under_the_name_pair(
 
 
 def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
+    argv = _chat_create_argv(
         primary_labels={"workspace": "ws", "project": "taxes"},
-        harness=HarnessType.CLAUDE,
         project_id="website-redesign",
     )
     assert "project=website-redesign" in argv
@@ -1352,14 +1301,7 @@ def test_chat_create_argv_labels_the_project_the_chat_was_created_in() -> None:
 
 
 def test_chat_create_argv_omits_the_project_label_when_there_is_no_project() -> None:
-    argv = _build_chat_create_command(
-        mngr_binary="mngr",
-        name="demo",
-        chat_id=ChatId("agent-123"),
-        agent_id="agent-123",
-        primary_labels={"workspace": "ws"},
-        harness=HarnessType.CLAUDE,
-    )
+    argv = _chat_create_argv(primary_labels={"workspace": "ws"})
     assert not any(token.startswith("project=") for token in argv)
     assert_mngr_argv_valid(argv)
 
