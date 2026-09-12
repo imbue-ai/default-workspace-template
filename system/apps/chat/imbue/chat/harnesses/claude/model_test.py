@@ -32,7 +32,7 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
     # string. This is the mapping the picker promises.
     reported = {option.id: option.harness_reported_model_id for option in CLAUDE_CATALOG.options if option.in_picker}
     assert reported == {
-        "fable[1m]": "claude-fable-5",
+        "fable[1m]": "claude-fable-5-1",
         "opus[1m]": "claude-opus-5",
         "sonnet[1m]": "claude-sonnet-5",
         "haiku": "claude-haiku-4-5",
@@ -40,11 +40,11 @@ def test_offered_options_carry_suffix_free_reported_ids() -> None:
 
 
 def test_picker_offers_exactly_four_models() -> None:
-    # Fable 5, Opus 5, Sonnet 5, Haiku 4.5 -- in the order claude 2.1.227's own /model
+    # Fable 5.1, Opus 5, Sonnet 5, Haiku 4.5 -- in the order claude 2.1.269's own /model
     # picker ranks them. Everything else in the catalog is display-only.
     offered = [(option.id, option.label) for option in CLAUDE_CATALOG.options if option.in_picker]
     assert offered == [
-        ("fable[1m]", "Fable 5"),
+        ("fable[1m]", "Fable 5.1"),
         ("opus[1m]", "Opus 5"),
         ("sonnet[1m]", "Sonnet 5"),
         ("haiku", "Haiku 4.5"),
@@ -53,10 +53,13 @@ def test_picker_offers_exactly_four_models() -> None:
 
 def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
     # The hidden set is defined by what the four offered models do NOT match: an agent
-    # sitting on one of these (an approved org on Mythos, or a user who typed /model
-    # opus-4-8 into the underlying session) still shows a name instead of shrugging.
+    # sitting on one of these (a chat still on the previous Fable, an approved org on
+    # Mythos, or a user who typed /model opus-4-8 into the underlying session) still shows
+    # a name instead of shrugging.
     hidden = [option.id for option in CLAUDE_CATALOG.options if not option.in_picker]
     assert hidden == [
+        "claude-fable-5",
+        "claude-mythos-5-1",
         "claude-mythos-5",
         "claude-mythos-preview",
         "claude-opus-4-8",
@@ -66,7 +69,8 @@ def test_hidden_options_are_the_models_the_picker_cannot_reach() -> None:
         "claude-opus-4-1",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5",
-        "claude-sonnet-4.6",
+        "claude-sonnet-3-7",
+        "claude-haiku-3-5",
         # Family catch-alls, last so the prefix pass cannot let them swallow the above.
         "claude-opus-4",
         "claude-sonnet-4",
@@ -91,7 +95,7 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 
 
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
-    # Claude 2.1.227 scopes fast mode to "Opus 5/4.8": 4.7 and 4.6 had it removed, and
+    # Claude 2.1.269 scopes fast mode to "Opus 5/4.8": 4.7 and 4.6 had it removed, and
     # Fable does not have it at all despite outranking Opus in capability. supports_fast
     # also gates matching -- an agent on Opus 4.8 with fast on shrugs without the flag --
     # so this is not a cosmetic field on the hidden entries.
@@ -110,21 +114,26 @@ def test_every_option_declares_the_full_effort_set() -> None:
         assert {choice.level for choice in option.efforts} == declared
 
 
-# Every claude model id the pinned 2.1.227 binary carries, extracted from its strings
+# Every claude model id the pinned 2.1.269 binary carries, extracted from its strings
 # rather than transcribed from docs:
 #
 #     strings -n 8 claude | grep -oE "claude-(opus|sonnet|haiku|fable|mythos)[a-z0-9._-]*(\\[[12]m\\])?"
 #
-# Truncation fragments ("claude-opus-") and the news-URL slug (claude-fable-5-mythos-5)
-# are dropped; everything else is a real id the statusline could report. Regenerate this
-# list against the binary whenever CLAUDE_CODE_VERSION moves.
+# Truncation fragments ("claude-fable-", "claude-haiku-", "claude-mythos-",
+# "claude-haiku-3-55") and the news-URL slug (claude-fable-5-mythos-5) are dropped;
+# everything else is a real id the statusline could report. Regenerate this list against
+# the binary whenever CLAUDE_CODE_VERSION moves.
 _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-fable-5[1m]",
+    "claude-haiku-3-5",
     "claude-haiku-4",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
     "claude-haiku-4-5-20251001-v1",
     "claude-mythos-5",
+    "claude-mythos-5-1",
     "claude-mythos-preview",
     "claude-opus-4",
     "claude-opus-4-0",
@@ -137,17 +146,15 @@ _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-opus-4-5-20251101",
     "claude-opus-4-5-20251101-v1",
     "claude-opus-4-6",
-    "claude-opus-4-6-20251101",
-    "claude-opus-4-6-fast",
     "claude-opus-4-6-v1",
     "claude-opus-4-6[1m]",
     "claude-opus-4-7",
-    "claude-opus-4-7-fast",
     "claude-opus-4-7[1m]",
     "claude-opus-4-8",
     "claude-opus-4-8[1m]",
     "claude-opus-5",
     "claude-opus-5[1m]",
+    "claude-sonnet-3-7",
     "claude-sonnet-4",
     "claude-sonnet-4-0",
     "claude-sonnet-4-20250514",
@@ -156,11 +163,11 @@ _BINARY_MODEL_IDS: tuple[str, ...] = (
     "claude-sonnet-4-5-20250929",
     "claude-sonnet-4-5-20250929-v1",
     "claude-sonnet-4-5-20250929[1m]",
+    "claude-sonnet-4-5-v1",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-6-20251114",
     "claude-sonnet-4-6[1m]",
-    "claude-sonnet-4.6",
     "claude-sonnet-5",
+    "claude-sonnet-5[1m]",
 )
 
 
@@ -193,10 +200,14 @@ def test_live_statusline_model_ids_match_their_catalog_option() -> None:
     # then /model sonnet, /model haiku). None of them is a bare catalog key any more: opus
     # and sonnet keep their [1m] launch suffix and haiku reports a dated id, so all three
     # reach their option through match_option's prefix pass rather than an exact key hit.
-    # claude-sonnet-5[1m] is the one id here NOT captured live -- it is what the sonnet[1m]
-    # switch must report given the [1m] suffix survives into opus's reported id, and is
-    # pinned so the prefix pass is exercised for it too.
+    # claude-sonnet-5[1m] and the two Fable 5.1 ids are NOT captured live -- they are what
+    # the sonnet[1m] and fable[1m] switches must report given the [1m] suffix survives into
+    # opus's reported id (2.1.269 resolves the fable alias to claude-fable-5-1), and are
+    # pinned so the prefix pass is exercised for them too. The Fable 5 ids stay because a
+    # chat created on the previous pin still reports them.
     for reported_id, expected_label in (
+        ("claude-fable-5-1", "Fable 5.1"),
+        ("claude-fable-5-1[1m]", "Fable 5.1"),
         ("claude-fable-5", "Fable 5"),
         ("claude-fable-5[1m]", "Fable 5"),
         ("claude-opus-5[1m]", "Opus 5"),
