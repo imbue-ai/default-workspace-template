@@ -1,0 +1,21 @@
+[project]
+name = "passkey-home-pitch"
+version = "0.1.0"
+description = "Landing page pitch: Passkey Home, own your passkeys"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0",
+    "flask-sock>=0.7",
+    "werkzeug>=3.0",
+]
+
+[project.scripts]
+passkey-home-pitch = "passkey_home_pitch.runner:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/passkey_home_pitch"]

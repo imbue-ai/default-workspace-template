@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Passkey setup — happy path review</title>
+<style>
+  :root {
+    --deck-bg: #15171f;
+    --deck-bg-2: #101219;
+    --panel-bg: #1c1f2a;
+    --panel-bg-soft: #23273350;
+    --panel-line: #323748;
+    --ink: #eef0f6;
+    --ink-dim: #8b90a3;
+    --ink-faint: #565b6d;
+    --rule: #262a37;
+
+    --automated: #8b7cf6;
+    --automated-dim: #8b7cf61a;
+    --verified: #45c9a5;
+    --verified-dim: #45c9a51a;
+    --unverifiable: #e8a33d;
+    --unverifiable-dim: #e8a33d1a;
+    --risk: #ef6461;
+    --risk-dim: #ef64611a;
+
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Code", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; }
+  body {
+    margin: 0;
+    background: var(--deck-bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+  }
+
+  .page { max-width: 1180px; margin: 0 auto; padding: 0 32px 120px; }
+
+  /* ---------- Header ---------- */
+  header.top {
+    padding: 76px 0 48px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .kicker {
+    font-size: 13px;
+    color: var(--ink-dim);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0 0 14px;
+  }
+  h1.title {
+    font-size: 40px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+    max-width: 720px;
+  }
+  p.deck-intro {
+    font-size: 16px;
+    color: var(--ink-dim);
+    max-width: 620px;
+    margin: 0 0 36px;
+  }
+  p.deck-intro strong { color: var(--ink); font-weight: 600; }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 8px 10px;
+    border: 1px solid var(--panel-line);
+    border-radius: 10px;
+    background: var(--panel-bg);
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .legend-item b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- Stage ---------- */
+  section.stage {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 56px;
+    padding: 64px 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: start;
+  }
+  section.stage:last-of-type { border-bottom: none; }
+
+  .stage-index {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-faint);
+    margin-bottom: 18px;
+  }
+
+  /* mock column */
+  .mock-frame {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+  }
+  .desk-backdrop {
+    width: 100%;
+    border-radius: 18px;
+    padding: 46px 28px;
+    background:
+      radial-gradient(120% 140% at 30% 0%, #262c40 0%, #14161d 62%);
+    display: flex;
+    justify-content: center;
+  }
+  .mock {
+    width: 100%;
+    max-width: 340px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-line);
+    border-radius: 16px;
+    box-shadow: 0 30px 60px -20px rgba(0,0,0,0.55);
+    padding: 26px 24px 22px;
+  }
+  .mock-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 16px;
+    background: var(--automated-dim);
+    border: 1px solid var(--panel-line);
+  }
+  .mock-icon svg { width: 20px; height: 20px; }
+  .mock-title { font-size: 17px; font-weight: 600; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .mock-sub { font-size: 13.5px; color: var(--ink-dim); margin: 0 0 20px; line-height: 1.5; }
+
+  .mock-field { margin-bottom: 14px; }
+  .mock-field label { display: block; font-size: 11.5px; color: var(--ink-faint); margin-bottom: 6px; }
+  .mock-field .fill {
+    height: 34px; border-radius: 8px;
+    background: #14161f; border: 1px solid var(--panel-line);
+    display: flex; align-items: center; padding: 0 10px;
+    font-size: 13px; color: var(--ink-faint); letter-spacing: 2px;
+  }
+
+  .strength { display: flex; gap: 4px; margin: -4px 0 18px; }
+  .strength span { height: 4px; flex: 1; border-radius: 2px; background: var(--panel-line); }
+  .strength span.on { background: var(--verified); }
+
+  .mock-primary {
+    width: 100%; height: 38px; border-radius: 9px; border: none;
+    background: var(--automated);
+    color: #100c1f; font-weight: 650; font-size: 13.5px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .mock-primary.risk { background: var(--risk); color: #23090a; }
+  .mock-primary.ghost {
+    background: transparent; border: 1px solid var(--panel-line); color: var(--ink);
+  }
+
+  .kbd-hint {
+    margin-top: 14px; font-size: 11.5px; color: var(--ink-faint);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .kbd-hint span {
+    font-family: var(--mono); font-size: 10.5px;
+    border: 1px solid var(--panel-line); border-radius: 4px;
+    padding: 1px 5px; color: var(--ink-dim);
+  }
+
+  .row-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .row-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px; border-radius: 9px;
+    background: #171923;
+  }
+  .row-item.dim { opacity: 0.42; }
+  .row-swatch { width: 20px; height: 20px; border-radius: 6px; flex: none; }
+  .row-item .rname { font-size: 13px; flex: 1; }
+  .row-item .rstate { font-size: 11.5px; color: var(--ink-faint); }
+  .row-item.match .rstate { color: var(--verified); }
+
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 4px; margin-bottom: 6px;
+  }
+  .toggle-row .tlabel { font-size: 13.5px; }
+  .switch { width: 38px; height: 22px; border-radius: 999px; background: var(--verified); position: relative; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; background: #0c1712; }
+  .caption { font-size: 12px; color: var(--ink-faint); margin: -2px 0 18px; }
+
+  .spin-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .spinner {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--panel-line); border-top-color: var(--ink-faint);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .ghost-line { font-size: 12px; color: var(--ink-faint); }
+  .connected-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px; border-radius: 10px; margin: 14px 0 18px;
+    background: var(--verified-dim); border: 1px solid #2f5a4f;
+  }
+  .connected-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--verified); }
+  .connected-row .ctext { font-size: 13px; }
+  .connected-row .ctext b { display: block; font-size: 13.5px; margin-bottom: 1px; }
+  .connected-row .ctext span { color: var(--ink-faint); font-size: 11.5px; }
+
+  .steps { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .steps li { display: flex; gap: 10px; font-size: 13px; color: var(--ink-dim); align-items: flex-start; }
+  .steps li .num {
+    width: 18px; height: 18px; border-radius: 50%; background: #171923;
+    color: var(--ink-faint); font-size: 10.5px; display: flex; align-items: center; justify-content: center;
+    flex: none; margin-top: 1px; font-family: var(--mono);
+  }
+
+  .browser-chrome {
+    border: 1px solid var(--panel-line); border-radius: 10px; overflow: hidden; margin-bottom: 14px;
+  }
+  .url-bar {
+    background: #14161f; padding: 8px 10px; font-size: 11px; color: var(--ink-faint);
+    font-family: var(--mono); border-bottom: 1px solid var(--panel-line);
+  }
+  .browser-body { padding: 16px; font-size: 12px; color: var(--ink-faint); background: #101219; }
+  .result-card {
+    background: var(--verified-dim); border: 1px solid #2f5a4f; border-radius: 10px;
+    padding: 12px; margin-bottom: 16px;
+  }
+  .result-card .rtitle { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .result-card .rmeta { font-size: 11.5px; color: var(--ink-faint); font-family: var(--mono); }
+
+  .banner {
+    border-radius: 10px; padding: 14px; margin-bottom: 18px;
+    background: var(--risk-dim); border: 1px solid #6b3436;
+  }
+  .banner .btitle { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+  .banner .bbody { font-size: 12.5px; color: var(--ink-dim); line-height: 1.5; }
+
+  .list-entry {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px; border-radius: 10px; background: #171923; margin-bottom: 8px;
+  }
+  .list-entry .lswatch { width: 26px; height: 26px; border-radius: 7px; background: var(--automated-dim); flex: none; }
+  .list-entry .lname { font-size: 13px; }
+  .list-entry .lmeta { font-size: 11px; color: var(--ink-faint); }
+  .empty-hint { font-size: 11.5px; color: var(--ink-faint); border-top: 1px dashed var(--panel-line); padding-top: 12px; margin-top: 4px; }
+
+  /* notes column */
+  .notes { max-width: 640px; padding-top: 4px; }
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 600; padding: 5px 11px 5px 8px;
+    border-radius: 999px; margin-bottom: 18px;
+  }
+  .status-badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status-badge.automated { background: var(--automated-dim); color: #c3b6ff; }
+  .status-badge.automated .dot { background: var(--automated); }
+  .status-badge.verified { background: var(--verified-dim); color: #9fe6cf; }
+  .status-badge.verified .dot { background: var(--verified); }
+  .status-badge.unverifiable { background: var(--unverifiable-dim); color: #f4c579; }
+  .status-badge.unverifiable .dot { background: var(--unverifiable); }
+  .status-badge.risk { background: var(--risk-dim); color: #f5a5a3; }
+  .status-badge.risk .dot { background: var(--risk); }
+
+  h3.stage-title { font-size: 23px; font-weight: 650; letter-spacing: -0.015em; margin: 0 0 10px; }
+  p.stage-sees { font-size: 14.5px; color: var(--ink-dim); margin: 0 0 26px; max-width: 56ch; }
+  p.stage-sees em { color: var(--ink); font-style: normal; }
+
+  .undertheHood { border-top: 1px solid var(--rule); padding-top: 20px; }
+  .uth-label { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); margin: 0 0 10px; }
+  p.uth-body { font-size: 14px; color: var(--ink-dim); margin: 0 0 12px; max-width: 62ch; }
+  p.uth-body code { font-family: var(--mono); font-size: 12.5px; color: #cfd3e0; background: #10121a; padding: 1px 5px; border-radius: 4px; }
+  .cite { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); border: 1px solid var(--panel-line); border-radius: 6px; padding: 3px 8px 3px 6px; }
+  .cite::before { content: "\2192"; color: var(--ink-faint); }
+
+  /* footer / open questions */
+  footer.close {
+    padding-top: 64px;
+  }
+  h2.close-title { font-size: 26px; font-weight: 650; margin: 0 0 10px; letter-spacing: -0.015em; }
+  p.close-sub { color: var(--ink-dim); font-size: 14.5px; margin: 0 0 30px; max-width: 60ch; }
+  .qlist { display: flex; flex-direction: column; gap: 14px; }
+  .qitem {
+    border: 1px solid var(--panel-line); border-radius: 12px;
+    padding: 18px 20px; background: var(--panel-bg);
+    display: grid; grid-template-columns: 28px 1fr; gap: 14px;
+  }
+  .qitem .qn { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); padding-top: 2px; }
+  .qitem .qbody b { display: block; font-size: 14.5px; margin-bottom: 4px; }
+  .qitem .qbody span { font-size: 13.5px; color: var(--ink-dim); }
+
+  @media (max-width: 880px) {
+    section.stage { grid-template-columns: 1fr; gap: 30px; }
+    .desk-backdrop { padding: 30px 18px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+  }
+
+  /* ---------- keyboard nav bar ---------- */
+  .nav-bar {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    background: var(--panel-bg); border: 1px solid var(--panel-line);
+    border-radius: 999px; padding: 8px 16px;
+    box-shadow: 0 16px 40px -16px rgba(0,0,0,0.6);
+    z-index: 20;
+    transition: opacity 0.4s ease;
+  }
+  .nav-bar.faded { opacity: 0.35; }
+  .nav-keys { display: flex; align-items: center; gap: 6px; }
+  .nav-keys .key {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-dim);
+    border: 1px solid var(--panel-line); border-radius: 5px;
+    padding: 2px 6px; min-width: 20px; text-align: center;
+  }
+  .nav-label { font-size: 12px; color: var(--ink-faint); }
+  .nav-count {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+    border-left: 1px solid var(--panel-line); padding-left: 14px;
+  }
+
+  @media (max-width: 560px) {
+    .nav-label { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="top">
+    <p class="kicker">422-osx-app-dev — review draft, mostly mocks</p>
+    <h1 class="title">The whole KeePassXC dance, collapsed into one guided flow.</h1>
+    <p class="deck-intro">Nine screens covering the happy path end to end: install to first working passkey. Each one is paired with <strong>what we're actually claiming happens behind it</strong> — and whether that claim is already proven, or still a guess.</p>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-dot" style="background:var(--automated)"></span>App does it, no click needed — <b>automated</b></div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--verified)"></span>User still does it, app confirms it worked — <b>verified</b></div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--unverifiable)"></span>User does it, app can't check — <b>unverifiable</b></div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--risk)"></span>Known failure mode, best-effort only — <b>risk</b></div>
+    </div>
+  </header>
+
+  <main>
+
+    <!-- Stage 1 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm-3 8V7a3 3 0 0 1 6 0v3Z"/></svg>
+            </div>
+            <p class="mock-title">Set up your passkeys</p>
+            <p class="mock-sub">A passkey replaces your password for one account. It's stored only on this Mac — never sent to us, or anyone. One master password unlocks all of them.</p>
+            <button class="mock-primary">Get started</button>
+            <div class="kbd-hint"><span>⏎</span> to continue</div>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">01 / 09</div>
+        <span class="status-badge automated"><span class="dot"></span>automated</span>
+        <h3 class="stage-title">Welcome</h3>
+        <p class="stage-sees">What the tester sees: a calm explanation of what a passkey is and why there's a master password at all — <em>before</em> being asked to pick one.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">Nothing external yet — this screen only exists to fix a specific complaint. Across three rounds of manual testing, the single most-repeated reaction wasn't a missing feature, it was not understanding what the master password even was before being asked to create one.</p>
+          <span class="cite">016a-phase0-findings.md — "master password: not explained"</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 2 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><rect x="3" y="10" width="18" height="10" rx="2"/><path d="M7 10V7a5 5 0 0 1 10 0v3"/></svg>
+            </div>
+            <p class="mock-title">Create your vault</p>
+            <p class="mock-sub">This is the only password you'll need to remember.</p>
+            <div class="mock-field">
+              <label>Master password</label>
+              <div class="fill">••••••••••••</div>
+            </div>
+            <div class="strength"><span class="on"></span><span class="on"></span><span class="on"></span><span></span></div>
+            <div class="mock-field">
+              <label>Confirm</label>
+              <div class="fill">••••••••••••</div>
+            </div>
+            <button class="mock-primary">Create vault</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">02 / 09</div>
+        <span class="status-badge automated"><span class="dot"></span>automated</span>
+        <h3 class="stage-title">One field, not a wizard</h3>
+        <p class="stage-sees">What the tester sees: one screen, one decision — a password. No encryption dropdowns, no key-file prompts, no save-location dialog.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">KeePassXC's own new-database wizard is four or five screens before it even asks for a password. We don't streamline that wizard — we skip it entirely and write the <code>.kdbx</code> file ourselves with fixed, sane defaults (Argon2id, KDBX 4.1). The only free variable left is the password.</p>
+          <span class="cite">020-kdbx-library-spike.md — KDBXKit read+write, decided</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 3 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>
+            </div>
+            <p class="mock-title">Connect your browser</p>
+            <p class="mock-sub">We found these browsers on your Mac.</p>
+            <div class="row-list">
+              <div class="row-item match">
+                <div class="row-swatch" style="background:#4f8cf7"></div>
+                <div class="rname">Chrome</div>
+                <div class="rstate">Ready</div>
+              </div>
+              <div class="row-item dim">
+                <div class="row-swatch" style="background:#e8873d"></div>
+                <div class="rname">Firefox</div>
+                <div class="rstate">Not installed</div>
+              </div>
+            </div>
+            <button class="mock-primary">Enable for Chrome</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">03 / 09</div>
+        <span class="status-badge automated"><span class="dot"></span>automated <span style="opacity:.5">+</span> <span style="color:var(--unverifiable)">guided</span></span>
+        <h3 class="stage-title">Connect your browser</h3>
+        <p class="stage-sees">What the tester sees: their real, installed browsers, with the exact right one-click destination — not a search box.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">Two different claims live on this one screen. Detecting installed browsers and writing the native-messaging manifest (<code>org.keepassxc.keepassxc_browser.json</code>) into the right <code>Application Support</code> folder — that part we do ourselves, zero clicks, format and paths already confirmed. Installing the extension itself still needs a real click in the store; no API installs a browser extension unattended. What we <em>can</em> fix is deep-linking straight to the verified listing, instead of a search box — testing found the official extension was hard to distinguish from lookalikes.</p>
+          <span class="cite">002-research.md §4.2 — manifest format & paths</span>
+          <br><br>
+          <span class="cite">016a-phase0-findings.md — "the extension is hard to find"</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 4 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M8 12h8M12 8v8"/><circle cx="12" cy="12" r="9"/></svg>
+            </div>
+            <p class="mock-title">Browser integration</p>
+            <p class="mock-sub">Lets your browser talk to this vault.</p>
+            <div class="toggle-row">
+              <div class="tlabel">Enable browser integration</div>
+              <div class="switch"></div>
+            </div>
+            <p class="caption">Turned on automatically — no need to open KeePassXC's settings.</p>
+            <button class="mock-primary ghost">Continue</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">04 / 09</div>
+        <span class="status-badge unverifiable"><span class="dot"></span>unspiked claim</span>
+        <h3 class="stage-title">The one we haven't proven yet</h3>
+        <p class="stage-sees">What the tester sees: the "Browser Integration" checkbox — normally buried in KeePassXC's own settings — already on.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">This setting lives in a small config file, not the vault — so writing it directly, the same way we bypass the vault wizard in stage 2, <em>should</em> be possible. But unlike every other automated claim in this deck, this one hasn't actually been spiked: we haven't located the exact config file or key, or proven a write-then-relaunch round-trips. Flagging it honestly rather than assuming it — this needs a short spike before it's real.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 5 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M4 12a8 8 0 0 1 8-8M20 12a8 8 0 0 1-8 8"/></svg>
+            </div>
+            <p class="mock-title">Pairing with Chrome</p>
+            <div class="spin-wrap">
+              <div class="spinner"></div>
+              <div class="ghost-line">Waiting for KeePassXC-Browser…</div>
+            </div>
+            <div class="connected-row">
+              <div class="connected-dot"></div>
+              <div class="ctext"><b>Connected</b><span>chrome-laptop, just now</span></div>
+            </div>
+            <button class="mock-primary ghost">Continue</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">05 / 09</div>
+        <span class="status-badge verified"><span class="dot"></span>verified</span>
+        <h3 class="stage-title">A real "connected," not a guess</h3>
+        <p class="stage-sees">What the tester sees: a spinner that turns into an actual name and timestamp the moment pairing succeeds — not a generic checkmark.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">When the browser extension pairs, KeePassXC writes a <code>KPXC_BROWSER_&lt;id&gt;</code> key into the vault's own metadata — plain data, zero crypto. Our app already has the vault open for the list screen, so it just polls for that key. This is the one live-status claim in the deck that's fully de-risked already.</p>
+          <span class="cite">014-spike-1b-connection-alt.md — .kdbx custom-data polling</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 6 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M12 2 3 7v6c0 5 4 8 9 9 5-1 9-4 9-9V7Z"/></svg>
+            </div>
+            <p class="mock-title">Turn on passkeys</p>
+            <p class="mock-sub">One more toggle, inside the extension itself.</p>
+            <ol class="steps">
+              <li><span class="num">1</span>Click the KeePassXC-Browser icon in your toolbar</li>
+              <li><span class="num">2</span>Open its Settings</li>
+              <li><span class="num">3</span>Turn on "Enable Passkeys"</li>
+            </ol>
+            <button class="mock-primary ghost">I've done this</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">06 / 09</div>
+        <span class="status-badge unverifiable"><span class="dot"></span>unverifiable</span>
+        <h3 class="stage-title">The screen we're honest we can't confirm</h3>
+        <p class="stage-sees">What the tester sees: exact instructions and a manual "I've done this" acknowledgement — not a checkmark we can't back up.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">This toggle lives inside the browser extension's own settings page — a separate, sandboxed process our native app can't read or write. We considered a companion browser extension whose only job is reporting this one bit of state back to us, and rejected it: it adds an install step, which fights the entire point of the app. So this screen guides, but doesn't verify — and we'd rather say that plainly than fake a green check.</p>
+          <span class="cite">014-spike-1b-connection-alt.md — Option B3, rejected</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 7 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7Z"/></svg>
+            </div>
+            <p class="mock-title">Try it for real</p>
+            <div class="browser-chrome">
+              <div class="url-bar">webauthn.io</div>
+              <div class="browser-body">Register a test passkey — nothing here touches a real account.</div>
+            </div>
+            <div class="result-card">
+              <div class="rtitle">It worked — your first passkey is saved</div>
+              <div class="rmeta">webauthn.io · created just now</div>
+            </div>
+            <button class="mock-primary ghost">Continue</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">07 / 09</div>
+        <span class="status-badge verified"><span class="dot"></span>verified</span>
+        <h3 class="stage-title">The payoff moment</h3>
+        <p class="stage-sees">What the tester sees: a harmless practice site, then confirmation their passkey actually landed where they think it did.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">A passkey created through the extension lands in the vault as a normal entry carrying <code>KPEX_PASSKEY_*</code> attributes — the exact schema was decoded straight from KeePassXC's source. After the practice flow, we re-read the vault and look for a new entry whose <code>KPEX_PASSKEY_RELYING_PARTY</code> is <code>webauthn.io</code>. If it's there, we know for certain — not a guess — that it went into the vault and nowhere else.</p>
+          <span class="cite">012-spike-1-findings.md — passkey attribute schema</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 8 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon" style="background:var(--risk-dim)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#f5a5a3" stroke-width="1.6"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            </div>
+            <p class="mock-title">Didn't see it land</p>
+            <div class="banner">
+              <div class="btitle">No new passkey appeared in your vault</div>
+              <div class="bbody">It may have been saved somewhere else — check System Settings → Passwords, or 1Password if it's installed.</div>
+            </div>
+            <button class="mock-primary risk">Check again</button>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">08 / 09</div>
+        <span class="status-badge risk"><span class="dot"></span>best-effort only</span>
+        <h3 class="stage-title">The scariest finding, screen form</h3>
+        <p class="stage-sees">What the tester sees: a plain warning the moment we can't confirm success — instead of silence.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">When another passkey provider — 1Password, or Apple's own iCloud Keychain — intercepts the browser's request, KeePassXC shows no error at all; the request just goes elsewhere. We can't observe that interception directly. The best we can do is a timeout heuristic: start a short timer the moment the user approves a passkey prompt, and if the matching entry hasn't shown up in the vault a few seconds later, assume it went elsewhere and say so. It's a real safety net, but it's inference, not detection — not overclaiming this one.</p>
+          <span class="cite">016a-phase0-findings.md — silent OS/1Password fallback</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stage 9 -->
+    <section class="stage">
+      <div class="mock-frame">
+        <div class="desk-backdrop">
+          <div class="mock">
+            <div class="mock-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="#b6a9ff" stroke-width="1.6"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+            </div>
+            <p class="mock-title">Your passkeys</p>
+            <div class="list-entry">
+              <div class="lswatch"></div>
+              <div>
+                <div class="lname">webauthn.io</div>
+                <div class="lmeta">testuser · created just now</div>
+              </div>
+            </div>
+            <p class="empty-hint">Visit any site that supports passkeys — we'll catch it automatically.</p>
+          </div>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="stage-index">09 / 09</div>
+        <span class="status-badge automated"><span class="dot"></span>automated</span>
+        <h3 class="stage-title">Home</h3>
+        <p class="stage-sees">What the tester sees: the screen KeePassXC never gives you — every passkey you own, as an actual list.</p>
+        <div class="undertheHood">
+          <p class="uth-label">under the hood</p>
+          <p class="uth-body">Every entry whose attributes include a <code>KPEX_PASSKEY_*</code> key is a passkey, full stop — enumerable directly from the file we already have open, now unblocked by the KDBXKit decision.</p>
+          <span class="cite">008-plan.md — Phase 1, list screen</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="close">
+    <h2 class="close-title">Open questions for review</h2>
+    <p class="close-sub">Four decisions this deck raises but doesn't answer on its own.</p>
+    <div class="qlist">
+      <div class="qitem">
+        <div class="qn">01</div>
+        <div class="qbody"><b>Stage 4 is an unproven automation claim.</b><span>Worth a 30-minute spike before Phase 2 build — or should it become a guided manual step like stage 6, if the config file turns out to be off-limits?</span></div>
+      </div>
+      <div class="qitem">
+        <div class="qn">02</div>
+        <div class="qbody"><b>Stage 6 has no verification path without a companion extension.</b><span>Rejected once already for adding an install step — still the right call, or worth revisiting given how central "enable passkeys" is to the whole flow?</span></div>
+      </div>
+      <div class="qitem">
+        <div class="qn">03</div>
+        <div class="qbody"><b>Stage 8's timeout heuristic needs a real number.</b><span>How many seconds before we warn the user their passkey may have gone elsewhere? Untested — depends on how slow the real approval flow feels.</span></div>
+      </div>
+      <div class="qitem">
+        <div class="qn">04</div>
+        <div class="qbody"><b>Tone check.</b><span>This leans calm and minimal — closer to a utility than a security product. Right personality for something managing credentials, or does it need to feel more serious?</span></div>
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<div class="nav-bar" id="navBar">
+  <div class="nav-keys">
+    <span class="key">&uarr;</span><span class="key">&darr;</span>
+    <span class="nav-label">move between screens</span>
+  </div>
+  <div class="nav-count" id="navCount">1 / 11</div>
+</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('header.top, section.stage, footer.close'));
+  var idx = 0;
+  var navBar = document.getElementById('navBar');
+  var navCount = document.getElementById('navCount');
+  var fadeTimer = null;
+
+  function render() {
+    navCount.textContent = (idx + 1) + ' / ' + slides.length;
+  }
+
+  function wake() {
+    navBar.classList.remove('faded');
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(function () { navBar.classList.add('faded'); }, 2600);
+  }
+
+  // A slide "becomes current" once its top has scrolled to (or past) the
+  // viewport top -- the last slide whose top is at or above the current
+  // scroll position.
+  function indexFromScroll() {
+    var y = window.scrollY + 80;
+    var best = 0;
+    for (var i = 0; i < slides.length; i++) {
+      if (slides[i].offsetTop <= y) best = i;
+    }
+    return best;
+  }
+
+  function goTo(next) {
+    idx = Math.max(0, Math.min(slides.length - 1, next));
+    slides[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+    render();
+    wake();
+  }
+
+  // Only resync the counter from actual scroll position on a genuine manual
+  // gesture (wheel/trackpad/touch) -- never on a plain 'scroll' event, which
+  // also fires throughout a keyboard-triggered smooth-scroll animation and
+  // would otherwise race goTo()'s own idx bookkeeping.
+  var manualScrollTimer = null;
+  function onManualScroll() {
+    clearTimeout(manualScrollTimer);
+    manualScrollTimer = setTimeout(function () {
+      idx = indexFromScroll();
+      render();
+    }, 120);
+  }
+  window.addEventListener('wheel', onManualScroll, { passive: true });
+  window.addEventListener('touchmove', onManualScroll, { passive: true });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown') {
+      e.preventDefault(); goTo(idx + 1);
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault(); goTo(idx - 1);
+    } else if (e.key === 'Home') {
+      e.preventDefault(); goTo(0);
+    } else if (e.key === 'End') {
+      e.preventDefault(); goTo(slides.length - 1);
+    }
+  });
+
+  idx = indexFromScroll();
+  render();
+  wake();
+})();
+</script>
+</body>
+</html>

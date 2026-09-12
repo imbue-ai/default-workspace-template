@@ -1,0 +1,6 @@
+name = "passkey-home-pitch"
+display_name = "Passkey Home pitch"
+icon = "icon.svg"
+instances = false
+priority = "user"
+program = "passkey-home-pitch"

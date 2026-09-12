@@ -18,8 +18,10 @@ import {
   BTN_PRIMARY,
   BTN_SECONDARY,
   CenteredCard,
+  CheckIcon,
   ErrorBanner,
   GoogleLogo,
+  InfoIcon,
   INPUT_CLASS,
   LINK_CLASS,
   MindsWordmark,
@@ -48,22 +50,42 @@ const LOGIN_ERROR_COPY: Record<string, string> = {
   account_suspended: "This account is suspended. If you believe this is a mistake, contact support@imbue.com.",
 };
 
+interface SignupPlan {
+  value: string;
+  name: string;
+  shortDescription: string;
+  price: string;
+  buttonLabel: string;
+  features: string[];
+  infoText: string;
+  learnMoreLabel: string;
+}
+
 // The plans the signup form offers. Explorer is the recommended default; its
 // description is the plain-language consent for the product-data sharing that
 // comes with it, so it must always render alongside the selector.
-const SIGNUP_PLANS: { value: string; label: string; description: string }[] = [
-  {
-    value: "explorer",
-    label: "Explorer (2 free cloud workspaces)",
-    description:
-      "You agree to share product data from those workspaces with Imbue to help improve Minds.",
-  },
+const SIGNUP_PLANS: SignupPlan[] = [
   {
     value: "free",
-    label: "Free (1 free cloud workspace)",
-    description:
+    name: "Free",
+    shortDescription: "A single cloud workspace to get started.",
+    price: "$0",
+    buttonLabel: "Choose Free",
+    features: ["1 cloud workspace", "Product data is not shared with Imbue"],
+    infoText:
       "Your workspace may be temporarily paused when idle or when capacity is low. " +
       "Our goal is to make your data private and secure.",
+    learnMoreLabel: "Learn more about Free",
+  },
+  {
+    value: "explorer",
+    name: "Explorer",
+    shortDescription: "Twice the workspaces, in exchange for sharing product data.",
+    price: "$0",
+    buttonLabel: "Choose Explorer",
+    features: ["2 cloud workspaces", "Your usage helps improve Minds"],
+    infoText: "You agree to share product data from those workspaces with Imbue to help improve Minds.",
+    learnMoreLabel: "Learn more about Explorer",
   },
 ];
 const DEFAULT_SIGNUP_PLAN = "explorer";
@@ -318,30 +340,58 @@ function DocLink(href: string, label: string): m.Vnode {
   return m("a", { href, target: "_blank", rel: "noopener", class: LINK_CLASS }, label);
 }
 
-function PlanSelector(state: PageState): m.Vnode {
-  const selected = SIGNUP_PLANS.find((plan) => plan.value === state.selectedPlan) ?? SIGNUP_PLANS[0];
-  return m("div", { class: "mb-4" }, [
-    m("label", { class: "block type-label mb-1", for: "plan-select" }, "Plan"),
-    m(
-      "select",
-      {
-        id: "plan-select",
-        name: "plan",
-        class: INPUT_CLASS + " mb-2",
-        onchange: (event: Event) => {
-          state.selectedPlan = (event.target as HTMLSelectElement).value;
+function PlanCards(state: PageState): m.Vnode {
+  return m(
+    "div",
+    { class: "grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6" },
+    SIGNUP_PLANS.map((plan) => {
+      const isSelected = plan.value === state.selectedPlan;
+      return m(
+        "div",
+        {
+          id: `plan-card-${plan.value}`,
+          class:
+            "rounded-xl border p-4 flex flex-col " +
+            (isSelected ? "border-stronger bg-surface-primary" : "border-subtle bg-surface-primary"),
         },
-      },
-      SIGNUP_PLANS.map((plan) =>
-        m("option", { value: plan.value, selected: plan.value === state.selectedPlan }, plan.label),
-      ),
-    ),
-    m("p", { class: "type-helper text-tertiary" }, [
-      selected.description,
-      " ",
-      DocLink("/privacy-policy", "Learn more."),
-    ]),
-  ]);
+        [
+          m("div", { class: "mb-1" }, [
+            m("h3", { class: "type-heading" }, plan.name),
+            m("p", { class: "type-helper text-secondary mt-1" }, plan.shortDescription),
+          ]),
+          m("div", { class: "type-heading-lg my-3" }, plan.price),
+          m(
+            "button",
+            {
+              type: "button",
+              class: isSelected ? BTN_PRIMARY : BTN_SECONDARY,
+              "aria-pressed": String(isSelected),
+              onclick: () => {
+                state.selectedPlan = plan.value;
+              },
+            },
+            isSelected ? [CheckIcon({ class: "w-4 h-4" }), "Selected"] : plan.buttonLabel,
+          ),
+          m("div", { class: "border-t border-subtle my-4" }),
+          m(
+            "ul",
+            { class: "space-y-2 mb-4" },
+            plan.features.map((feature) =>
+              m("li", { class: "flex items-start gap-2 type-body text-secondary" }, [
+                m("span", { class: "text-primary mt-0.5 shrink-0" }, CheckIcon({ class: "w-4 h-4" })),
+                feature,
+              ]),
+            ),
+          ),
+          m("div", { class: "flex items-start gap-2 type-helper text-tertiary mb-4" }, [
+            m("span", { class: "mt-0.5 shrink-0" }, InfoIcon({ class: "w-4 h-4" })),
+            plan.infoText,
+          ]),
+          m("div", { class: "mt-auto" }, [DocLink("/privacy-policy", plan.learnMoreLabel)]),
+        ],
+      );
+    }),
+  );
 }
 
 function TermsCheckbox(state: PageState): m.Vnode {
@@ -416,32 +466,35 @@ function RevealEmailFormLink(state: PageState): m.Vnode {
 }
 
 function FormView(state: PageState): m.Vnode {
-  const purpose = isAuthorizeNext(state.next)
-    ? m(
-        "p",
-        { class: "type-body text-secondary mb-6" },
-        `Sign in or create a Minds account to ${describeNext(state.next)}.`,
-      )
-    : null;
+  const purpose = m(
+    "p",
+    { class: "type-body text-secondary mb-6 text-center" },
+    isAuthorizeNext(state.next)
+      ? `Sign in or create a Minds account to ${describeNext(state.next)}.`
+      : "Sign in or create a Minds account to sign in to the Minds app.",
+  );
   // Sign-in always shows the credentials form (Google on top). Sign-up leads
   // with Google alone and keeps email/password collapsed behind the reveal
   // link; without Google configured (some dev tiers) the form is the only
-  // option, so it renders expanded. The plan selector and terms checkbox sit
+  // option, so it renders expanded. The plan cards and terms checkbox sit
   // above both creation paths because they gate both.
   const isGoogleShown = !!state.config?.google_enabled;
   const isEmailFormShown = !isGoogleShown || state.tab === "signin" || state.isEmailSignupFormRevealed;
-  return CenteredCard(
+  const cardChildren = [
     m("div", { class: "flex justify-center mb-6 text-primary" }, MindsWordmark()),
     purpose,
     ErrorBanner(state.error),
     SuccessNote(state.notice),
     TabBar(state),
-    state.tab === "signup" ? PlanSelector(state) : null,
+    state.tab === "signup" ? PlanCards(state) : null,
     state.tab === "signup" ? TermsCheckbox(state) : null,
     isGoogleShown ? GoogleButton(state) : null,
     isGoogleShown && isEmailFormShown ? OrDivider() : null,
     isEmailFormShown ? CredentialsForm(state) : RevealEmailFormLink(state),
-  );
+  ];
+  return state.tab === "signup"
+    ? CenteredCard(...cardChildren, { widthClass: "max-w-2xl" })
+    : CenteredCard(...cardChildren);
 }
 
 function InterstitialView(state: PageState): m.Vnode {

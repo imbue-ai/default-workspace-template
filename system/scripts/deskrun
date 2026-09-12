@@ -1,0 +1,28 @@
+#!/bin/bash
+# deskrun.sh -- run a shell command on the Mac via the print-bridge cmd inbox and
+# print its output. Usage: deskrun.sh "shell command..."   (or pipe the script on stdin)
+set -euo pipefail
+FB="http://latchkey-self.invalid/minds-api-proxy/api/v1/files"
+# The bridge lives under the *Mac's* home, which differs from this container's
+# $HOME. Resolve it from MINDS_MAC_HOME, else a config file, else fall back to
+# $HOME (correct only when the container and Mac share a home path).
+MAC_HOME="${MINDS_MAC_HOME:-$(cat "$HOME/.config/latchkey-dev-workbench/mac_home" 2>/dev/null || echo "$HOME")}"
+DIR="$MAC_HOME/tmp/minds_data/printbridge"
+name="dr-$(date +%s)-$$"
+tmp="$(mktemp)"
+if [ "$#" -gt 0 ]; then printf '%s\n' "$*" > "$tmp"; else cat > "$tmp"; fi
+latchkey curl -s -o /dev/null -w "" -T "$tmp" "$FB$DIR/cmd/$name.cmd"
+# The helper moves the original snippet to cmd_done/<name>.cmd only AFTER it has
+# finished writing <name>.cmd.out, so use the archived original as the "done"
+# signal (the .out file itself exists mid-run and would read back partial).
+for _ in $(seq 1 60); do
+  done_code="$(latchkey curl -s -o /dev/null -w "%{http_code}" "$FB$DIR/cmd_done/$name.cmd" 2>/dev/null || true)"
+  if [ "$done_code" = "200" ]; then
+    latchkey curl -s -o "$tmp.out" "$FB$DIR/cmd_done/$name.cmd.out" 2>/dev/null || true
+    cat "$tmp.out"; rm -f "$tmp" "$tmp.out"; exit 0
+  fi
+  sleep 1
+done
+echo "deskrun: timed out waiting for $name output" >&2
+rm -f "$tmp" "$tmp.out" 2>/dev/null || true
+exit 1

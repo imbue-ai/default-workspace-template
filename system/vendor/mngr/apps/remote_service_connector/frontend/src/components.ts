@@ -77,15 +77,69 @@ export function SuccessNote(message: string): m.Vnode | null {
   );
 }
 
-export function CenteredCard(...children: m.Children[]): m.Vnode {
+interface CenteredCardOptions {
+  widthClass?: string;
+}
+
+export function CenteredCard(...children: (m.Children | CenteredCardOptions)[]): m.Vnode {
+  let widthClass = "max-w-sm";
+  const last = children[children.length - 1];
+  if (
+    children.length > 0 &&
+    last !== null &&
+    typeof last === "object" &&
+    !Array.isArray(last) &&
+    "widthClass" in last
+  ) {
+    widthClass = (last as CenteredCardOptions).widthClass ?? widthClass;
+    children = children.slice(0, -1);
+  }
   return m(
     "div",
     { class: "min-h-full flex items-center justify-center px-4 py-12" },
     m(
       "div",
-      { class: "w-full max-w-sm rounded-xl border border-subtle bg-surface-primary shadow-overlay p-8" },
-      children,
+      { class: `w-full ${widthClass} rounded-xl border border-subtle bg-surface-primary shadow-overlay p-8` },
+      children as m.Children[],
     ),
+  );
+}
+
+export function CheckIcon(attrs: { class?: string } = {}): m.Vnode {
+  return m(
+    "svg",
+    {
+      width: "16",
+      height: "16",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "3",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: attrs.class,
+      "aria-hidden": "true",
+    },
+    [m("polyline", { points: "20 6 9 17 4 12" })],
+  );
+}
+
+export function InfoIcon(attrs: { class?: string } = {}): m.Vnode {
+  return m(
+    "svg",
+    {
+      width: "16",
+      height: "16",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      "stroke-width": "2",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+      class: attrs.class,
+      "aria-hidden": "true",
+    },
+    [m("circle", { cx: "12", cy: "12", r: "10" }), m("line", { x1: "12", y1: "16", x2: "12", y2: "12" }), m("line", { x1: "12", y1: "8", x2: "12.01", y2: "8" })],
   );
 }
 
