@@ -1,6 +1,6 @@
 Phase 2 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`): the chat app names a chat apart from the agent it runs on. Every chat still runs on exactly one agent (its id is that agent's id), so nothing behaves differently for the user; the code, the wire, and the pages are written against chats.
 
-- `ChatId` (`primitives.py`) is distinct from an agent id in code, with the bridging rule (a chat's id is its first agent's id) named in one place and marked `CLEANUP` wherever it is assumed. Instance records, provisional chats, presence, message stamps, pending permissions, the auto-open ledger, and the OOM prioritizer key by chat id. `ChatState` is `ChatAppState`.
+- `ChatId` (`primitives.py`) is distinct from an agent id in code, with the bridging rule (a chat's id is its first agent's id) named in one place and marked `CLEANUP` wherever it is assumed. Instance records, provisional chats, presence, message stamps, the auto-open ledger, and the OOM prioritizer key by chat id. `ChatState` is `ChatAppState`.
 
 - The chat pages' socket sends `chats_updated` (a `ChatSnapshot` per chat: id, title, name, project, status, labels, the agent ids, the handoff phase carried as `null`, and the agent-level facts under `active_agent`), `provisional_chat_created`, and `provisional_chat_completed` keyed by `chat_id`, in place of `agents_updated` and the `proto_agent_*` messages.
 
