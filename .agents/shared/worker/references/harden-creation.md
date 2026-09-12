@@ -97,14 +97,14 @@ directory, the `[[references]]` entry it adds to that app's manifest, sits under
 the scope file's `context` and is counted as inside the footprint.
 ## Splitting the pass across sub-workers
 
-Split the pass across sibling sub-workers when the creation has at least two
-areas that each carry enough code to be a worker's whole job, counting two as
-separate even where they share an interface; otherwise harden the creation
-yourself, since every sibling pays a venv converge and a plugin install before
-it does any work. Split an app whose data ingestion, server, and frontend each
-hold substantial code and each want their own kind of test work, or disjoint
-features that could each be hardened alone. Do not split a few small files, a
-script, or a single-page app whose backend only serves the page.
+Split the pass across sibling sub-workers when the creation has two or more
+parts a user would name separately -- the code that reads the data, the server,
+a front end with several views, one of two unrelated features -- and each has
+enough in it to keep a worker busy; otherwise harden it yourself, since every
+sibling pays a venv converge and a plugin install before it does any work. A
+page with three views over an ingested export splits: the interface is one
+worker's job and the ingestion is another's. A single page whose backend only
+serves it does not, nor do a few small files or a script.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
