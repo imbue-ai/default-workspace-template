@@ -33,8 +33,7 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
-/** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
- *  scriptable form, so the card cannot drive it -- and says where the user can. */
+/** Shown on rows for harnesses that intentionally expose no chat-side switch. */
 const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
 /** The effort to carry when switching to `option`: keep the current one if the new
