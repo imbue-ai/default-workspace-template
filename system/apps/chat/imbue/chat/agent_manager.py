@@ -1214,6 +1214,10 @@ class AgentManager:
             returned_block = runner.drain(chat_id, handoff.handoff_id)
         except HandoffCancelledError:
             return HandoffPhase.DRAINING, ""
+        # A cancel that landed while the queue was being drained leaves nothing to run; the
+        # drained text still goes back with the answer, the one place left for it.
+        if self.get_handoff_state(chat_id) is None:
+            return HandoffPhase.DRAINING, returned_block
         self._spawn_handoff(chat_id, handoff.handoff_id, runner)
         return HandoffPhase.SUMMARIZING, returned_block
 

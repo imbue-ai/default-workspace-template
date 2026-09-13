@@ -618,6 +618,23 @@ def test_a_cancelled_handoff_stops_the_runner_before_switching(tmp_path: Path) -
     assert successor not in workspace.agents and workspace.agents[first].name == "Chat-1"
 
 
+def test_a_cancel_during_draining_still_returns_the_drained_queue(tmp_path: Path) -> None:
+    """The queue is out of the agent once drained, so a cancel that lands meanwhile must not lose it:
+    the block still comes back for the composer, and the record stays without a handoff."""
+    workspace, first, _successor = _workspace(tmp_path)
+    record = workspace.record()
+
+    def drain_then_cancel(agent_info: AgentInfo) -> str:
+        workspace.store.write(record.model_copy_update(to_update(record.field_ref().handoff, None)))
+        return "typed while it ran"
+
+    block = _runner(workspace, drain_to_composer=drain_then_cancel).drain(workspace.chat_id, "h-1")
+
+    assert block == "typed while it ran"
+    assert workspace.record().handoff is None
+    assert workspace.agents[first].name == "Chat-1"
+
+
 def _track_archived_retiring_and_running_successor(workspace: _FakeWorkspace, first: str, successor: str) -> str:
     """What mngr shows after the switch's stop, rename, and create: the first agent stopped under its
     archival name and the successor running. Returns the archival name."""

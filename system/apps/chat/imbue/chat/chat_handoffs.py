@@ -322,7 +322,9 @@ class HandoffRunner:
         without ending it, so the stop button's own interrupt does the draining, which also
         waits out an in-flight send under the message lock. A stopped agent has nothing to
         drain. Returns the block for the composer; the route answers with it, and it also
-        stays on the record for a page that reloads.
+        stays on the record for a page that reloads. A cancel that lands while the queue is
+        being pulled still gets the block returned: the text is out of the agent by then and
+        the composer is the only place left for it.
         """
         record, handoff = self._current(chat_id, handoff_id)
         if handoff.phase is not HandoffPhase.DRAINING:
@@ -338,14 +340,21 @@ class HandoffRunner:
                 # The switch stops the agent regardless; what was queued is then gone with the
                 # session, which the queue contract allows, so this is logged, not fatal.
                 logger.warning("Handoff of chat {}: could not drain agent {}: {}", chat_id, retiring_id, e)
-        self._update_handoff(
-            chat_id,
-            handoff_id,
-            lambda current: current.model_copy_update(
-                to_update(current.field_ref().phase, HandoffPhase.SUMMARIZING),
-                to_update(current.field_ref().returned_block, _joined_blocks(current.returned_block, block)),
-            ),
-        )
+        try:
+            self._update_handoff(
+                chat_id,
+                handoff_id,
+                lambda current: current.model_copy_update(
+                    to_update(current.field_ref().phase, HandoffPhase.SUMMARIZING),
+                    to_update(current.field_ref().returned_block, _joined_blocks(current.returned_block, block)),
+                ),
+            )
+        except HandoffCancelledError as e:
+            logger.info(
+                "Handoff of chat {} was cancelled while draining; the drained queue goes to the composer: {}",
+                chat_id,
+                e,
+            )
         return _joined_blocks(handoff.returned_block, block)
 
     # -- summarizing ---------------------------------------------------------------------------
