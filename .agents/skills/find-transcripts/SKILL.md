@@ -32,6 +32,23 @@ whether the agent still exists:
 have short, task-focused transcripts. `mngr list` shows agent names and labels to
 help you identify which is which.
 
+**One chat, several agents.** A chat that the chat app moved to another harness
+has run on more than one agent, and the user sees it as one conversation. Every
+agent of such a chat carries the labels `chat_id=<chat id>` (the id of the
+chat's first agent) and `chat_seq=<n>` (its position, 1 for the first). The
+agents the chat has left are stopped and renamed `archived-<seq>-<name>-<id>`
+with `display_name` "<title> (archived <seq>)"; only the current agent keeps
+the chat's name. To read the whole conversation, list the chat's agents and
+read their transcripts in `chat_seq` order:
+
+```bash
+mngr list --include 'labels.chat_id == "<chat id>"'     # every agent of one chat, archived ones included
+mngr list --include 'labels.chat_id == "$MINDS_CHAT_ID"'   # the agents of the chat you are running in
+```
+
+An archived agent is still present (not destroyed), so `mngr transcript <id>`
+and the still-present path below both work for it.
+
 ## What this skill does NOT cover
 
 - **Other services** (ChatGPT, claude.ai, other AI tools): their chats are not
