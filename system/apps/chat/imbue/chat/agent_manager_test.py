@@ -3233,9 +3233,10 @@ def test_a_successor_being_made_is_its_chats_and_not_a_chat_of_its_own(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The observe stream tracks the successor as soon as mngr lists it, before the record appends it;
-    the chat keeps listing once, from the retiring stand-in, and the successor resolves to that chat."""
+    the chat keeps listing once, from the retiring stand-in, the successor resolves to that chat, and
+    destroying the chat takes the successor with it."""
     sent: list[tuple[str, str, str]] = []
-    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
     first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
     seed_agent_state(
         manager,
@@ -3254,6 +3255,10 @@ def test_a_successor_being_made_is_its_chats_and_not_a_chat_of_its_own(
         assert manager.get_chat_snapshot(successor) is None
         assert manager.get_active_agent_info(ChatId(successor)) is None
         assert manager.chat_id_of_agent(successor) == ChatId(first)
+
+        manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {successor} --force"]
+        assert manager.get_agent_by_id(successor) is None and store.read(ChatId(first)) is None
     finally:
         manager.stop()
 

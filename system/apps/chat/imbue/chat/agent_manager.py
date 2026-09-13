@@ -1518,10 +1518,11 @@ class AgentManager:
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
             is_active_tracked = chat is not None and chat.active_agent_id in self._agents
+            agent_ids = self._destroyed_with_chat_locked(chat) if chat is not None else ()
         if chat is None or not is_active_tracked:
             raise AgentDestroyError(f"Chat '{chat_id}' not found")
         result = run_local_command_modern_version(
-            command=_build_chat_destroy_command(self._mngr_binary, chat.member_agent_ids),
+            command=_build_chat_destroy_command(self._mngr_binary, agent_ids),
             cwd=None,
             is_checked=False,
             timeout=DESTROY_TIMEOUT_SECONDS,
@@ -1540,8 +1541,20 @@ class AgentManager:
         # Reflect the destruction immediately rather than waiting for mngr observe. With the
         # record gone, the first member is its own chat again, so removing it forgets the
         # chat's per-chat records.
-        for agent_id in chat.member_agent_ids:
+        for agent_id in agent_ids:
             self.remove_agent(agent_id)
+
+    def _destroyed_with_chat_locked(self, chat: _ResolvedChat) -> tuple[str, ...]:
+        """Every agent a chat's destroy names: its members, plus the successor a handoff is still making
+        when mngr already lists it (an untracked pre-minted id names nothing to destroy). Lock held."""
+        handoff = chat.handoff
+        if (
+            handoff is None
+            or handoff.next_agent_id in chat.member_agent_ids
+            or handoff.next_agent_id not in self._agents
+        ):
+            return chat.member_agent_ids
+        return (*chat.member_agent_ids, handoff.next_agent_id)
 
     def stop_chat(self, chat_id: ChatId) -> None:
         """Run ``mngr stop`` for a chat's active agent: the reversible counterpart to a destroy.
