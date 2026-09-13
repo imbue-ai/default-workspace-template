@@ -485,8 +485,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
     # persisted on the record, and delivered in order once the successor runs. A 202 tells the
     # page to keep its "Sending" placeholder and the script that nothing needs backing off.
-    origin = HeldSendOrigin.CLIENT if is_client_activity_reportable(send_message_request) else HeldSendOrigin.SCRIPT
-    held_phase = agent_manager.hold_send(ChatId(chat_id), message_id, send_message_request.message, origin)
+    held_phase = agent_manager.hold_send(
+        ChatId(chat_id), message_id, send_message_request.message, _held_send_origin(send_message_request)
+    )
     if held_phase is not None:
         _record_client_message_activity(ChatId(chat_id), send_message_request)
         agent_manager.record_message_sent(ChatId(chat_id))
@@ -527,6 +528,12 @@ def is_client_activity_reportable(send_message_request: SendMessageRequest) -> b
         and send_message_request.device_kind != ""
         and send_message_request.active_layout != ""
     )
+
+
+@pure
+def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigin:
+    """Who a send held during a handoff came from: a chat page names its client, anything else is a script."""
+    return HeldSendOrigin.CLIENT if is_client_activity_reportable(send_message_request) else HeldSendOrigin.SCRIPT
 
 
 @pure
@@ -1045,29 +1052,19 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return converging
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
-    origin = (
-        HeldSendOrigin.CLIENT
-        if switch_request.client_id and switch_request.device_kind and switch_request.active_layout
-        else HeldSendOrigin.SCRIPT
-    )
     try:
         phase, returned_block = agent_manager.begin_handoff(
-            ChatId(chat_id), switch_request.account_id, switch_request.message, message_id, origin
+            ChatId(chat_id),
+            switch_request.account_id,
+            switch_request.message,
+            message_id,
+            _held_send_origin(switch_request),
         )
     except ChatConvergingError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=409)
     except HandoffError as e:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
-    _record_client_message_activity(
-        ChatId(chat_id),
-        SendMessageRequest(
-            message=switch_request.message,
-            message_id=message_id,
-            client_id=switch_request.client_id,
-            active_layout=switch_request.active_layout,
-            device_kind=switch_request.device_kind,
-        ),
-    )
+    _record_client_message_activity(ChatId(chat_id), switch_request)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", phase=phase, returned_block=returned_block)
     return json_response(response.model_dump(mode="json"), status_code=202)

@@ -333,17 +333,11 @@ class HandoffState(FrozenModel):
     error: str | None = Field(default=None, description="Why the successor could not be started, in the failed phase")
 
 
-class SwitchChatRequest(FrozenModel):
-    """Request body for POST /api/chats/{id}/handoff: continue the chat on another account."""
+class SwitchChatRequest(SendMessageRequest):
+    """Request body for POST /api/chats/{id}/handoff: a send (the new agent's first message, with the
+    sender's client fields) plus the account the chat moves to."""
 
     account_id: str = Field(description="The signed-in account the chat moves to")
-    message: str = Field(
-        description="The message typed for the new agent; its first, delivered with the handoff prompt"
-    )
-    message_id: str = Field(default="", description="The sender's stable id for that message ('' mints one)")
-    client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
-    active_layout: str = Field(default="", description="The id of the view the sender was on ('' for legacy callers)")
-    device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
 
 
 class SwitchChatResponse(FrozenModel):
