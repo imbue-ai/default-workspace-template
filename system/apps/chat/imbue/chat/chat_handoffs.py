@@ -537,12 +537,20 @@ class HandoffRunner:
             # A half-made agent from a create this process did not see finish holds the id;
             # mngr refuses to reuse it, so it is destroyed and the create run again once.
             logger.warning("Handoff of chat {}: destroying the half-made agent {}", chat_id, handoff.next_agent_id)
-            run_local_command_modern_version(
+            destroyed = run_local_command_modern_version(
                 command=[self._deps.mngr_binary, "destroy", handoff.next_agent_id, "--force"],
                 cwd=None,
                 is_checked=False,
                 timeout=_DESTROY_TIMEOUT_SECONDS,
             )
+            if destroyed.returncode != 0:
+                logger.warning(
+                    "Handoff of chat {}: could not destroy the half-made agent {} (exit {}): {}",
+                    chat_id,
+                    handoff.next_agent_id,
+                    destroyed.returncode,
+                    destroyed.stderr.strip(),
+                )
             error = self._run_create(chat_id, command)
         if error is not None:
             self._fail(chat_id, handoff_id, error)
