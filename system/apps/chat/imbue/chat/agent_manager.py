@@ -434,6 +434,18 @@ def _stand_in_active_agent_id(record: ChatRecord) -> str | None:
     return record.agents[-1].agent_id if record.handoff is not None else None
 
 
+def _lane_of_account_label(account_label: str) -> str:
+    """The lane of the account an agent's ``account`` label names, or '' when the label is empty or the
+    account has been deleted since the agent was created (the lane is then unknown)."""
+    if not account_label:
+        return ""
+    try:
+        return resolve_account(account_label).lane
+    except AccountError as e:
+        _loguru_logger.debug("Recorded no lane for account {}: {}", account_label, e)
+        return ""
+
+
 @pure
 def _handoff_state_of(record: ChatRecord | None) -> HandoffState | None:
     if record is None or record.handoff is None:
@@ -1206,13 +1218,6 @@ class AgentManager:
     def _first_record_locked(self, chat_id: ChatId, agent_state: AgentStateItem, now: datetime) -> ChatRecord:
         """The record a chat gets at its first handoff: its one agent so far, as seq 1. Lock held."""
         account_label = agent_state.labels.get("account", "")
-        lane = ""
-        if account_label:
-            try:
-                lane = resolve_account(account_label).lane
-            except AccountError:
-                # The account it was created on may have been deleted since; the lane is then unknown.
-                lane = ""
         details = self._agent_details_by_id.get(agent_state.id)
         return ChatRecord(
             chat_id=chat_id,
@@ -1220,7 +1225,7 @@ class AgentManager:
                 ChatAgentEntry(
                     seq=1,
                     agent_id=agent_state.id,
-                    lane=lane,
+                    lane=_lane_of_account_label(account_label),
                     account_id=account_label,
                     harness=agent_state.harness,
                     started_at=details.create_time if details is not None else now,
