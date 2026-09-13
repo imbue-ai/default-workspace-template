@@ -807,25 +807,25 @@ class AgentManager:
             self._chat_records = records
         self._broadcast_chats_updated()
 
+    def _record_naming_locked(self, agent_id: str) -> ChatRecord | None:
+        """The record that names the agent as a member (its first agent included, whose id is the chat's), or None."""
+        return next((record for record in self._chat_records.values() if record.entry_for(agent_id) is not None), None)
+
     def _chat_id_of_agent_locked(self, agent_id: str) -> ChatId:
         """The chat an agent belongs to: the record that names it, else itself under the own-chat rule."""
-        for record in self._chat_records.values():
-            if record.entry_for(agent_id) is not None:
-                return record.chat_id
-        return ChatId(agent_id)
+        record = self._record_naming_locked(agent_id)
+        return ChatId(agent_id) if record is None else record.chat_id
 
     def _is_recorded_member_locked(self, agent_id: str) -> bool:
-        """Whether some record names the agent (its first agent included, whose id is the chat's)."""
-        return any(record.entry_for(agent_id) is not None for record in self._chat_records.values())
+        return self._record_naming_locked(agent_id) is not None
 
     def _is_archived_member_locked(self, agent_id: str) -> bool:
         """Whether an agent is a record's member other than the one its chat runs on."""
-        for record in self._chat_records.values():
-            entry = record.entry_for(agent_id)
-            if entry is not None:
-                active = record.active_entry
-                return active is None or active.agent_id != agent_id
-        return False
+        record = self._record_naming_locked(agent_id)
+        if record is None:
+            return False
+        active = record.active_entry
+        return active is None or active.agent_id != agent_id
 
     def _resolve_chat_locked(self, chat_id: ChatId) -> _ResolvedChat | None:
         """A chat id's members and active agent, or None for an id that names no chat.
