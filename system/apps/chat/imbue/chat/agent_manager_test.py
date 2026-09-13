@@ -2764,7 +2764,7 @@ def _recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
 
 
 def _recorded_chat(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path, mngr_binary: str | None = None
+    broadcaster: WebSocketBroadcaster, mngr_binary: str | None = None
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
     """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
     store = InMemoryChatRecordStore()
@@ -2796,9 +2796,9 @@ def _recorded_chat(
 
 
 def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_order(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster,
 ) -> None:
-    manager, _store, first, second = _recorded_chat(broadcaster, tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster)
     try:
         snapshots = manager.get_chat_snapshots()
         assert [snapshot.chat_id for snapshot in snapshots] == [first]
@@ -2820,9 +2820,9 @@ def test_a_recorded_chat_lists_once_under_its_first_agent_with_its_members_in_or
 
 
 def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_longer_lists(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster,
 ) -> None:
-    manager, store, first, second = _recorded_chat(broadcaster, tmp_path)
+    manager, store, first, second = _recorded_chat(broadcaster)
     try:
         segments = manager.get_chat_segments(ChatId(first))
         assert segments is not None
@@ -2852,7 +2852,7 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
-    manager, store, first, second = _recorded_chat(broadcaster, tmp_path, mngr_binary)
+    manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.stop_chat(ChatId(first))
         manager.rename_chat(first, "New Name")
@@ -2886,7 +2886,7 @@ def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
-    manager, _store, first, second = _recorded_chat(broadcaster, tmp_path, mngr_binary)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.remove_agent(second)
         with pytest.raises(AgentStopError):
@@ -2899,9 +2899,9 @@ def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
 
 
 def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_standing(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster,
 ) -> None:
-    manager, _store, first, second = _recorded_chat(broadcaster, tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster)
     evicted: list[str] = []
     manager.set_watcher_eviction_callback(evicted.append)
     try:
@@ -2926,9 +2926,9 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
 
 
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster,
 ) -> None:
-    manager, _store, first, second = _recorded_chat(broadcaster, tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster)
     try:
         manager.record_presence(ChatId(first), "client-1", PresenceState.VISIBLE)
         manager._handle_observe_event(make_agent_state_event(_agent_details("Chat-1", agent_id=MngrAgentId(second))))
@@ -2944,7 +2944,7 @@ def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
 
 
 def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
-    broadcaster: WebSocketBroadcaster, tmp_path: Path
+    broadcaster: WebSocketBroadcaster,
 ) -> None:
     store = InMemoryChatRecordStore()
     manager = AgentManager.build(broadcaster, chat_record_store=store)
