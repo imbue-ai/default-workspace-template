@@ -47,6 +47,7 @@ from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
 from imbue.chat.chat_transcript import ChatTranscript
+from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.config import Config
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
@@ -68,6 +69,7 @@ from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.instances import CHAT_APP_NAME
 from imbue.chat.instances import build_chat_instance_source
 from imbue.chat.instances import parse_subagent_key
@@ -81,6 +83,7 @@ from imbue.chat.models import AgentStopError
 from imbue.chat.models import AttachmentError
 from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import ChatListResponse
+from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import CreateAgentResponse
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreateChatResponse
@@ -101,6 +104,7 @@ from imbue.chat.models import StopAgentResponse
 from imbue.chat.presence import PresenceReport
 from imbue.chat.primitives import AGENT_ID_PATTERN
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import handle_unhandled_exception
 from imbue.chat.request_helpers import json_response
 from imbue.chat.request_helpers import parse_json_object_body
@@ -131,8 +135,11 @@ _CHAT_NOT_BUILT_HTML: Final[str] = (
 
 def _find_active_agent(chat_id: str) -> AgentInfo | None:
     """The agent a chat runs on, from the AgentManager's already-loaded state; None for an id that names no chat."""
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
+        return None
     agent_manager: AgentManager = get_state().agent_manager
-    return agent_manager.get_active_agent_info(chat_id)
+    return agent_manager.get_active_agent_info(parsed)
 
 
 def _chat_not_found_response(chat_id: str) -> Response:
@@ -174,17 +181,50 @@ def _get_event_detail(chat_id: str, event_id: str) -> Response:
     return json_response({"event_id": event_id, **detail})
 
 
-def _chat_transcript(chat_id: str) -> ChatTranscript | None:
-    """The chat's transcript, or None for a chat the app does not list.
+def _segment_reader(state: ChatAppState, segment: ChatSegmentInfo) -> TranscriptReader:
+    """The reader of one segment: the active agent's watcher, or an archived agent's loader."""
+    if segment.is_active:
+        return state.get_or_create_watcher(segment.agent)
+    return state.get_or_create_loader(segment.agent)
 
-    One segment, the active agent's watcher: the chat-agent split's phase 3 adds the
-    earlier agents' segments here, behind the same reads.
+
+def _chat_transcript(chat_id: str) -> ChatTranscript | None:
+    """The chat's transcript over every segment the record names, or None for a chat the app does not list.
+
+    The live segment reads through its watcher (built here if need be, so a chat's first
+    read starts tailing it); an archived segment reads through the loader the state already
+    holds, or loads on the first read that reaches into it.
     """
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
         return None
-    watcher = get_state().get_or_create_watcher(agent_info)
-    return ChatTranscript.of_single_segment(ChatId(chat_id), agent_info.id, watcher)
+    state = get_state()
+    segments = state.agent_manager.get_chat_segments(parsed)
+    if segments is None:
+        return None
+    info_by_agent_id = {segment.agent.id: segment for segment in segments}
+    loaded_readers: dict[str, TranscriptReader] = {}
+    for segment in segments:
+        resident: TranscriptReader | None = (
+            state.get_or_create_watcher(segment.agent) if segment.is_active else state.loaders.get(segment.agent.id)
+        )
+        if resident is not None:
+            loaded_readers[segment.agent.id] = resident
+    return ChatTranscript.build(
+        parsed,
+        tuple(
+            TranscriptSegment(
+                agent_id=segment.agent.id,
+                harness=segment.agent.harness,
+                seq=segment.seq,
+                recorded_event_count=segment.recorded_event_count,
+                ended_at=segment.ended_at,
+            )
+            for segment in segments
+        ),
+        loaded_readers,
+        lambda transcript_segment: _segment_reader(state, info_by_agent_id[transcript_segment.agent_id]),
+    )
 
 
 def _get_events(chat_id: str) -> Response:
@@ -914,49 +954,52 @@ def _chat_agent_not_found_response(chat_id: str, agent_id: str) -> Response:
     return json_response(error.model_dump(), status_code=404)
 
 
-def _find_chat_agent(chat_id: str, agent_id: str) -> AgentInfo | Response:
-    """The agent ``agent_id`` of chat ``chat_id``, or the 404 that says which of the two is missing."""
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
+def _find_chat_agent(chat_id: str, agent_id: str) -> ChatSegmentInfo | Response:
+    """The agent ``agent_id`` of chat ``chat_id`` (an archived member included), or the 404 that says which of the two is missing."""
+    parsed = parse_chat_ref(chat_id)
+    agent_manager: AgentManager = get_state().agent_manager
+    if parsed is None or agent_manager.get_chat_segments(parsed) is None:
         return _chat_not_found_response(chat_id)
-    # CLEANUP: resolve any member of the chat (an archived one included) through the chat
-    # record store once phase 3 of the chat-agent split lands; today a chat's one agent is
-    # its active agent.
-    if agent_info.id != agent_id:
+    segment = agent_manager.get_chat_segment(parsed, agent_id)
+    if segment is None:
         return _chat_agent_not_found_response(chat_id, agent_id)
-    return agent_info
+    return segment
 
 
 def _get_subagent_events(chat_id: str, agent_id: str, subagent_session_id: str) -> Response:
-    """Get events for one subagent session of one agent of a chat."""
-    agent_info = _find_chat_agent(chat_id, agent_id)
-    if isinstance(agent_info, Response):
-        return agent_info
+    """Get events for one subagent session of one agent of a chat, from that agent's own segment."""
+    segment = _find_chat_agent(chat_id, agent_id)
+    if isinstance(segment, Response):
+        return segment
 
-    watcher = get_state().get_or_create_watcher(agent_info)
-    events = watcher.get_all_events(session_id=subagent_session_id)
+    reader = _segment_reader(get_state(), segment)
+    events = reader.get_all_events(session_id=subagent_session_id)
 
     # Include metadata in the response
-    metadata = watcher.get_subagent_metadata(subagent_session_id)
+    metadata = reader.get_subagent_metadata(subagent_session_id)
 
     return json_response({"events": events, "metadata": metadata})
 
 
 def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: str) -> Response:
-    """SSE stream for a subagent's new events, filtered by session_id."""
-    agent_info = _find_chat_agent(chat_id, agent_id)
-    if isinstance(agent_info, Response):
-        return agent_info
+    """SSE stream for a subagent's new events, filtered by session_id.
+
+    An archived agent's segment never changes, so its stream carries nothing but keepalives;
+    the route keeps one shape for every member.
+    """
+    segment = _find_chat_agent(chat_id, agent_id)
+    if isinstance(segment, Response):
+        return segment
 
     state = get_state()
-    state.get_or_create_watcher(agent_info)
+    _segment_reader(state, segment)
 
     event_queues = state.event_queues
-    event_queue = event_queues.register(agent_info.id)
+    event_queue = event_queues.register(segment.agent.id)
 
     return _sse_response(
         _stream_filtered_events(
-            agent_info.id,
+            segment.agent.id,
             event_queues,
             event_queue,
             lambda event: event.get("session_id") == subagent_session_id,

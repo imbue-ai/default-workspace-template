@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { TranscriptEvent, ToolResultEvent, AssistantMessageEvent, UserMessageEvent } from "../models/Response";
+import type {
+  TranscriptEvent,
+  ToolResultEvent,
+  AssistantMessageEvent,
+  AgentSwitchEvent,
+  UserMessageEvent,
+} from "../models/Response";
 import type { StepNode, TimelineItem } from "./turn-grouping";
 import { buildSections } from "./turn-grouping";
 import type { PermissionResolution } from "./message-classification";
@@ -1380,5 +1386,66 @@ describe("permission resolutions", () => {
     expect(verdictFor(sections[0].items[0] as PermissionItem, "r1")).toBeNull();
     expect(sections).toHaveLength(2);
     expect(sections[1].user_event).toBeNull();
+  });
+});
+
+// --- Agent switches -------------------------------------------------------------------
+
+function agentSwitch(ts: string, id: string, fromHarness = "claude", toHarness = "codex"): AgentSwitchEvent {
+  return {
+    timestamp: ts,
+    type: "agent_switch",
+    event_id: id,
+    source: "chat",
+    agent_id: "agent-b",
+    from_agent_id: "agent-a",
+    to_agent_id: "agent-b",
+    from_harness: fromHarness,
+    to_harness: toHarness,
+    seq: 1,
+  };
+}
+
+describe("agent switches", () => {
+  it("closes the prior turn on a switch and opens a bubble-less section on the chip", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "before the switch"),
+      assistantText("t2", "done on claude"),
+      agentSwitch("t3", "sw1"),
+      assistantText("t4", "hello from codex"),
+      userMsg("t5", "after the switch"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", null, "u-t5"]);
+    // The switch section opens on the chip, and the new agent's greeting is its reply.
+    expect(sections[1].items.map((i) => i.kind)).toEqual(["switch"]);
+    const chip = sections[1].items[0];
+    expect(chip.kind === "switch" && chip.event.event_id).toBe("sw1");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t4"]);
+    // The prior turn keeps its own reply.
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+  });
+
+  it("carries a step still open at the switch over into the new agent's section", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do it"),
+      tkMsg("t2", 'tk create --step "Carry me"', "c1"),
+      tkMsg("t3", "tk start cod-step-aaaa", "c2"),
+      agentSwitch("t4", "sw1"),
+      workMsg("t5", "Read", "c3"),
+    ];
+    const results = new Map<string, ToolResultEvent>([
+      ["c1", result("t2r", "c1", "Created cod-step-aaaa: Carry me")],
+      ["c2", result("t3r", "c2", "Updated cod-step-aaaa -> in_progress\ntk-step cod-step-aaaa title: Carry me")],
+    ]);
+    const sections = buildSections(events, results, true);
+
+    expect(sections).toHaveLength(2);
+    const carried = sections[1].items.filter((i): i is Extract<TimelineItem, { kind: "step" }> => i.kind === "step");
+    expect(carried.map((i) => i.step.ticket_id)).toEqual(["cod-step-aaaa"]);
+    expect(carried[0].step.is_carryover).toBe(true);
+    // A carried step leads its section, as it does after a user turn; the chip follows it.
+    expect(sections[1].items.map((i) => i.kind)).toEqual(["step", "switch"]);
   });
 });

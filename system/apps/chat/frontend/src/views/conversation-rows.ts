@@ -28,6 +28,7 @@ import {
 import { isHiddenUserMessage } from "./message-classification";
 import { buildSections, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
+import { renderAgentSwitchChip } from "./agent-switch-chip";
 
 // Per-type fallback row heights, used until a row has been measured (live or
 // offscreen). Rough is fine: they only affect spacer sizing for not-yet-measured
@@ -167,6 +168,14 @@ function buildRows(
             render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
+      } else if (item.kind === "switch") {
+        const switchEvent = item.event;
+        rows.push({
+          key: switchEvent.event_id,
+          estimate: ESTIMATED_USER_HEIGHT_PX,
+          anchorEventId: switchEvent.event_id,
+          render: () => renderAgentSwitchChip(switchEvent),
+        });
       }
     }
     for (const event of section.trailing_reply) {

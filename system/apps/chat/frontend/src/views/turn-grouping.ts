@@ -68,6 +68,7 @@
 
 import type {
   TranscriptEvent,
+  AgentSwitchEvent,
   AssistantMessageEvent,
   UserMessageEvent,
   ToolResultEvent,
@@ -130,7 +131,10 @@ export type TimelineItem =
       resolutionsByRequestId: ReadonlyMap<string, PermissionResolution>;
     }
   /** A non-boundary user message shown inline (e.g. a stop-hook chip). */
-  | { kind: "chip"; event: UserMessageEvent };
+  | { kind: "chip"; event: UserMessageEvent }
+  /** The chat moved to another agent here: the switch chip that opens the new
+   *  agent's first section. */
+  | { kind: "switch"; event: AgentSwitchEvent };
 
 /** A turn: the user message, its timeline, and the wrap-up reply below it. */
 export interface SectionView {
@@ -370,6 +374,9 @@ type SectionEntry =
    *  what lets the ejection pass tell a delivered reply from mid-step narration
    *  (see collectEjectedProse). */
   | { kind: "chip"; event: UserMessageEvent }
+  /** The chat moved to another agent: the first entry of the section the new
+   *  agent's transcript opens with. */
+  | { kind: "switch"; event: AgentSwitchEvent }
   | { kind: "event"; event: AssistantMessageEvent; step_id: string | null };
 
 interface SectionBuilder {
@@ -428,6 +435,15 @@ export function buildSections(
   };
 
   for (const e of events) {
+    if (e.type === "agent_switch") {
+      // The chat moved to another agent. The new agent starts fresh (its steps were closed
+      // at the handoff), so the switch is a turn boundary: the prior section closes,
+      // carrying whatever was still open, and a bubble-less section opens on the chip.
+      carryover = current === null ? [] : openStepsAtEnd(current);
+      current = ensureSection(null, `section-switch-${e.event_id}`);
+      current.entries.push({ kind: "switch", event: e });
+      continue;
+    }
     if (e.type === "user_message") {
       // A granted/denied notification for an earlier permission request. Record
       // the verdict (it reflects on that request's card, not as a user prompt),
@@ -771,6 +787,9 @@ function finalizeSection(
       // own transcript position.
       flushUngrouped();
       items.push({ kind: "chip", event: entry.event });
+    } else if (entry.kind === "switch") {
+      flushUngrouped();
+      items.push({ kind: "switch", event: entry.event });
     } else if (trailingIds.has(entry.event.event_id)) {
       // Trailing reply: rendered below the timeline (see trailing_reply).
     } else if (entry.step_id === null || ejectedIds.has(entry.event.event_id)) {

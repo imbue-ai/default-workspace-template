@@ -22,6 +22,7 @@ import {
   renderUserMessage,
 } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
+import { renderAgentSwitchChip } from "./agent-switch-chip";
 import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "@imbue/workspace-ui/src/components/icons";
 
 interface ProgressBlockAttrs {
@@ -225,6 +226,15 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             "div",
             { class: "pv-permission relative z-[2] mt-1.5 mb-3.5", key: `perm-${item.event.event_id}` },
             renderPermissionItem(item.event, toolResults, chatId, item.resolutionsByRequestId),
+          );
+        }
+        if (item.kind === "switch") {
+          // The chat moved to another agent here; the chip breaks the thread the same
+          // way a stop-hook chip does. z-[2]: design-system-exception, as above.
+          return m(
+            "div",
+            { class: "pv-switch relative z-[2] mt-1.5 mb-3.5 bg-chat", key: `switch-${item.event.event_id}` },
+            renderAgentSwitchChip(item.event),
           );
         }
         // A stop-hook chip woven into the timeline at the point the hook

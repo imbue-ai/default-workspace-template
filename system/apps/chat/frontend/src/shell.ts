@@ -132,16 +132,16 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
  * The session belongs to the chat's active agent, which is what the app keys the view on.
  */
 export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
-  // CLEANUP: a chat the page does not list yet is its own first agent under the own-chat
-  // rule; drop the fallback once the chat record store (phase 3 of the chat-agent split)
-  // names the active agent for every chat.
-  const agentId = getChatById(chatId)?.active_agent.agent_id ?? chatId;
-  const key = `${chatId}.${agentId}.${sessionId}`;
+  // The app keys the view on the chat's active agent and answers the key it made; the page's
+  // own guess (the listed active agent, else the chat's own id) stands in only when the create
+  // failed, so the open still names the view the app would have made.
+  let key = `${chatId}.${getChatById(chatId)?.active_agent.agent_id ?? chatId}.${sessionId}`;
   try {
-    await postJson(apiUrl("/_instances"), {
+    const record = await postJson<{ key?: string }>(apiUrl("/_instances"), {
       action: "subagent",
       params: { parent: chatId, session: sessionId, description },
     });
+    if (record?.key) key = record.key;
   } catch (error) {
     console.warn(`[chat] could not create the subagent instance ${key}`, error);
   }
