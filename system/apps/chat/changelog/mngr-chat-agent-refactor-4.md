@@ -9,3 +9,5 @@ Phase 4 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`): the
 - The transcript fan-out and the SSE streams (`/api/chats/<chat-id>/stream`, the subagent streams) are keyed by chat id rather than agent id, so an open page follows the chat through the switch and receives the `agent_switch` chip the moment the successor is active.
 
 - The `chats_updated` snapshot's `handoff` object gains `error`; the chat app's request for a summary renders as an "Asked for a handoff summary" chip.
+
+- A delivered send to a stopped claude or pi chat marks the agent alive at once (mngr's send starts it, and the observe stream would notice only minutes later), as a codex revive already did; a handoff of a stopped chat therefore waits for the summary the revived agent writes and stops it before archiving it, instead of reading the stale lifecycle as the agent being dead.

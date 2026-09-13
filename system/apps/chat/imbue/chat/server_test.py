@@ -529,6 +529,32 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
+def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
+    """mngr's send auto-starts a stopped claude/pi agent, and the observe stream sees the revival
+    only on its full snapshot; a delivered send flips the tracked lifecycle at once, so the UI
+    and a handoff's summary wait do not read the agent they just messaged as dead."""
+    agent_id = "agent-00000000000000000000000000000002"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="stopped-agent",
+        state="STOPPED",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="stopped-agent", state="STOPPED")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/agents/{agent_id}/message", json={"message": "wake up"})
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "wake up")]
+    tracked = manager.get_agent_by_id(agent_id)
+    assert tracked is not None and tracked.state == "WAITING"
+
+
 class _FakeCodexLedger:
     """A stand-in for the live codex ledger the endpoints reach through the agent manager."""
 

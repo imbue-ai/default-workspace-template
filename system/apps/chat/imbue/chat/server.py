@@ -451,6 +451,13 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         outcome = _revive_and_retry_send(
             agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
         )
+    # A delivered send means the agent is up: mngr's own send auto-starts a stopped
+    # file-harness agent (``is_start_desired``), and the observe stream would not see that
+    # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
+    # liveness unblocks with the send and a handoff's summary wait and stop step read a
+    # lifecycle that is true rather than one that says the agent they just messaged is dead.
+    if outcome is SendOutcome.OK:
+        agent_manager.note_agent_alive(agent_info.id)
     return outcome
 
 
