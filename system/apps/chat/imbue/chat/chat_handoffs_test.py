@@ -41,12 +41,11 @@ from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
+from imbue.chat.testing import write_summary_for_request
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
-
-# The repo's own prompt template, so its placeholders are checked against the runner's fields.
-_PROMPT_TEMPLATE = Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
 
 _NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 _OPENAI_ACCOUNT = Account(id="acct-openai", lane="openai", seq=1, display="OpenAI")
@@ -151,10 +150,8 @@ class _FakeWorkspace(MutableModel):
         if self.is_delivery_refused:
             raise SendFailedError("the agent is in shell mode", kind="INPUT_BLOCKED")
         self.delivered.append((agent_info.id, text, message_id))
-        if text.startswith("/handoff-summary ") and self.is_summary_written_on_request:
-            path = Path(text.split(" ", 1)[1])
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# Summary\n\nThe user wants the tests green.\n")
+        if self.is_summary_written_on_request:
+            write_summary_for_request(text)
         return SendOutcome.OK
 
     def drain_to_composer(self, agent_info: AgentInfo) -> str:
@@ -292,7 +289,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         host_dir=workspace.tmp_path,
         work_dir=workspace.tmp_path / "work",
         chat_files_root=workspace.tmp_path / "chats",
-        prompt_template_path=_PROMPT_TEMPLATE,
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
         shutdown_event=ShutdownEvent.build_root(),
         read_record=workspace.read_record,
         update_record=workspace.update_record,

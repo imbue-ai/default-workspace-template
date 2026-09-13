@@ -69,6 +69,7 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import HandoffPhase
@@ -183,6 +184,24 @@ def make_chat_agent_entry(
         archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
         final_event_count=final_event_count if is_archived else None,
     )
+
+
+# The repo's own handoff prompt template, so a test renders the real placeholders against the runner's fields.
+CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
+    Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
+)
+
+
+def write_summary_for_request(text: str) -> None:
+    """What a fake ``deliver`` does with a handoff summary request: write a stub summary at the path it names.
+
+    A no-op for any other message, so a fake send can call it on everything it is handed.
+    """
+    if not text.startswith(f"{HANDOFF_SUMMARY_COMMAND} "):
+        return
+    path = Path(text.split(" ", 1)[1])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# Summary\n\nThe user wants the tests green.\n")
 
 
 def make_chat_handoff_record(

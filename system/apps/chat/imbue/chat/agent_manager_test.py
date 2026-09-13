@@ -67,12 +67,14 @@ from imbue.chat.models import SummaryOutcome
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import write_recording_mngr_binary
+from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
@@ -3013,18 +3015,14 @@ def test_a_recorded_chat_whose_active_agent_is_unknown_lists_nothing(
 
 # The handoff: moving a chat to another harness (``chat_handoffs.py`` runs it; these cover the manager's side).
 
-_PROMPT_TEMPLATE = Path(__file__).parents[5] / ".agents" / "shared" / "references" / "continue-chat.md"
-
 
 def _handoff_capabilities(sent: list[tuple[str, str, str]], is_summary_written: bool = True) -> HandoffCapabilities:
     """Capabilities whose send records itself and, for the summary request, writes the file at once."""
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         sent.append((agent_info.id, text, message_id))
-        if text.startswith("/handoff-summary ") and is_summary_written:
-            path = Path(text.split(" ", 1)[1])
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# Summary\n")
+        if is_summary_written:
+            write_summary_for_request(text)
         return SendOutcome.OK
 
     return HandoffCapabilities(
@@ -3050,7 +3048,7 @@ def _handoff_manager(
         chat_record_store=store,
         mngr_binary=mngr_binary,
         chat_files_root=tmp_path / "chats",
-        prompt_template_path=_PROMPT_TEMPLATE,
+        prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
     )
     manager.set_handoff_capabilities(_handoff_capabilities(sent))
     return manager, store, argv_log
