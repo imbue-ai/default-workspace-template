@@ -213,19 +213,29 @@ def _empty_document(group_id: str, panel_id: str) -> dict[str, Any]:
     }
 
 
-def _holds_only_launchers(leaf: dict[str, Any]) -> bool:
-    return all(is_launcher_panel_id(view) for view in leaf["data"].get("views") or [])
+def _is_pane_to_fill(leaf: dict[str, Any]) -> bool:
+    """Whether a dock fills this group rather than splitting beside it: it shows nothing, or one New Tab.
+
+    A New Tab alone in a pane is a question about that pane, which docking there answers, so the pane is
+    as good as empty. A pane holding several holds tabs the user asked for and is split beside like any
+    other."""
+    views = leaf["data"].get("views") or []
+    return len(views) == 0 or (len(views) == 1 and is_launcher_panel_id(views[0]))
 
 
-def _drop_launchers_from_leaf(document: dict[str, Any], leaf: dict[str, Any]) -> None:
-    """A New Tab launcher is a question about an empty pane; docking into the pane answers it."""
-    data = leaf["data"]
-    launchers = [view for view in data.get("views", []) if is_launcher_panel_id(view)]
-    if not launchers:
+def _drop_answered_launcher(document: dict[str, Any], leaf: dict[str, Any], docked_panel_id: str) -> None:
+    """Drop the New Tab a dock into ``leaf`` answers: the one alone in that group.
+
+    A New Tab is an ordinary tab and survives an op docking beside it, but one alone in a pane stands
+    for the pane, so the panel docking there takes its place. The browser applies the same rule in
+    ``retireAnsweredLauncher``. Scoped to the group being filled: a New Tab in another pane has
+    nothing to do with this op."""
+    others = [view for view in leaf["data"].get("views") or [] if view != docked_panel_id]
+    if len(others) != 1 or not is_launcher_panel_id(others[0]):
         return
-    data["views"] = [view for view in data["views"] if view not in launchers]
-    for launcher in launchers:
-        document.get("panels", {}).pop(launcher, None)
+    answered = others[0]
+    leaf["data"]["views"] = [view for view in leaf["data"]["views"] if view != answered]
+    document.get("panels", {}).pop(answered, None)
 
 
 def _flatten(node: dict[str, Any]) -> dict[str, Any]:
@@ -322,8 +332,8 @@ def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict
     else:
         anchor_path = _active_leaf_path(document)
     direction = placement.direction
-    # An anchor group holding nothing but launchers is an empty pane: it is filled, never split beside.
-    if direction is None or direction is Direction.WITHIN or _holds_only_launchers(_node_at(root, anchor_path)):
+    # An anchor group showing nothing, or one New Tab, is a pane to fill rather than split beside.
+    if direction is None or direction is Direction.WITHIN or _is_pane_to_fill(_node_at(root, anchor_path)):
         target_path = anchor_path
     elif (
         not placement.is_new_group
@@ -333,7 +343,7 @@ def _dock(document: dict[str, Any], panel_id: str, placement: Placement) -> dict
     else:
         target_path = _split_beside(grid, root_orientation, anchor_path, direction, placement)
     target = _node_at(root, target_path)
-    _drop_launchers_from_leaf(document, target)
+    _drop_answered_launcher(document, target, panel_id)
     if panel_id not in target["data"]["views"]:
         target["data"]["views"].append(panel_id)
     target["data"]["activeView"] = panel_id

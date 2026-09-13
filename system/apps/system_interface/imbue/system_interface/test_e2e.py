@@ -327,6 +327,30 @@ def _wait_for_layout_saved(state_dir: Path, view_id: str, containing: str | None
     )
 
 
+def _wait_for_saved_launcher_count(state_dir: Path, view_id: str, count: int) -> None:
+    """Wait until the browser's autosave has written ``count`` New Tabs into the view's layout.
+
+    A document op is applied to the saved file, so an op issued before the (debounced) save lands
+    would edit an arrangement the browser has not finished describing -- and the refetch that
+    follows would put that older arrangement back on screen.
+    """
+
+    def _saved() -> bool:
+        for path in _client_layout_files(state_dir, view_id):
+            panels = (json.loads(path.read_text()).get("dockview") or {}).get("panels") or {}
+            launchers = [key for key, entry in panels.items() if (entry.get("params") or {}).get("kind") == "launcher"]
+            if len(launchers) == count:
+                return True
+        return False
+
+    wait_for(
+        _saved,
+        timeout=15.0,
+        poll_interval=0.1,
+        error_message=f"autosave never wrote {count} New Tab(s) into the layout of {view_id}",
+    )
+
+
 def _wait_for_view(page: Page, view_id: str) -> None:
     """The dock names the view it has mounted; the active view itself lives in the shell's client record."""
     page.wait_for_selector(
@@ -353,7 +377,7 @@ def _open_from_launcher(page: Page, address: str) -> None:
     """
     # The dock must be up first: before it mounts there is neither a launcher nor a "+". A view
     # that mounts its launcher does so a beat after the switch lands, so the launcher gets a
-    # moment to appear before the "+" (which a launcher hides) is reached for.
+    # moment to appear before the "+" is reached for.
     expect(page.locator(".dv-default-tab-content").first).to_be_visible(timeout=15000)
     launcher = page.locator(".new-tab-launcher:visible")
     if launcher.count() == 0:
@@ -361,7 +385,7 @@ def _open_from_launcher(page: Page, address: str) -> None:
             expect(launcher.first).to_be_visible(timeout=3000)
         except AssertionError:
             page.locator(".dockview-add-tab-button:visible").first.click()
-    expect(page.locator(".new-tab-launcher")).to_be_visible(timeout=10000)
+    expect(launcher.first).to_be_visible(timeout=10000)
     row = _launcher_row(page, address)
     if row.count() == 0:
         _search_launcher(page, _app_name_of_address(address))
@@ -602,6 +626,117 @@ def test_opening_a_row_files_it_into_the_project_and_shows_its_page(e2e_server: 
     )
     # And the launcher that was in the pane made way for it.
     expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_many_new_tabs_stay_open_beside_each_other_and_survive_a_reload(tmp_path: Path, page: Page) -> None:
+    """A New Tab is an ordinary tab: the "+" opens another, and clicking away leaves them all up.
+
+    Opens a real instance first, so the New Tabs under test share their pane with a real tab rather
+    than standing for a pane of their own (which a dock does still fill).
+    """
+    with _running_e2e_server(tmp_path, _PORT + 26) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0)
+
+        # The "+" is offered even once the pane already holds a New Tab, and each press adds one.
+        add_button = page.locator(".dockview-add-tab-button")
+        for expected in (1, 2, 3):
+            expect(add_button).to_have_count(1)
+            add_button.click()
+            expect(page.locator(".new-tab-launcher")).to_have_count(expected, timeout=10000)
+
+        # Focus landing on a real tab leaves every New Tab where it is.
+        _tab(page, _FIXTURE_TITLE).click()
+        expect(page.locator(f'iframe[data-address="{_FIXTURE_ADDRESS}"]')).to_have_count(1, timeout=10000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3)
+        expect(page.locator(".dv-default-tab-content", has_text="New tab")).to_have_count(3)
+
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+        page.reload()
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        expect(page.locator(".new-tab-launcher")).to_have_count(3, timeout=15000)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_an_agent_open_takes_the_place_of_a_lone_new_tab_but_not_of_several(tmp_path: Path, page: Page) -> None:
+    """A New Tab alone in a pane stands for the pane, so an agent's open takes its place; two do not.
+
+    The first open answers a pane holding nothing but one New Tab, so it replaces it. The user then
+    presses "+" twice, and the next open docks beside both.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 27, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=15000)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _FIXTURE_ADDRESS})
+        expect(_tab(page, _FIXTURE_TITLE)).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0, timeout=10000)
+
+        add_button = page.locator(".dockview-add-tab-button")
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=10000)
+        add_button.click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(2, timeout=10000)
+        _wait_for_saved_launcher_count(server.state_dir, STARTER_PROJECT_ID, 2)
+
+        _broadcast_layout_op(server.base_url, "open", {"address": _stub_address("stub-2")})
+        expect(_tab(page, "Stub 2")).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(2)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_new_tab_alone_in_a_pane_is_taken_while_the_other_pane_keeps_its_tab(tmp_path: Path, page: Page) -> None:
+    """The rule is per pane: opening into a pane showing one New Tab takes its place, and the tab in
+    the other pane is left where it is.
+
+    Builds the two panes by splitting a second instance out to the right, adding a New Tab beside
+    it, and closing it -- so the right pane shows one New Tab while the left holds a real tab.
+    """
+    with _running_e2e_server(tmp_path, _PORT + 29, stub_instances=(_FIXTURE_KEY, "stub-2")) as server:
+        page.goto(server.base_url)
+        _wait_for_view(page, STARTER_PROJECT_ID)
+        _serve_stub_pages(page, server)
+        _open_fixture_instance(page)
+        _wait_for_layout_saved(server.state_dir, STARTER_PROJECT_ID, containing=_FIXTURE_ADDRESS)
+
+        _broadcast_layout_op(
+            server.base_url,
+            "split",
+            {
+                "address": _stub_address("stub-2"),
+                "relative_to": _FIXTURE_ADDRESS,
+                "direction": "right",
+                "new_group": True,
+            },
+        )
+        add_buttons = page.locator(".dockview-add-tab-button")
+        expect(add_buttons).to_have_count(2, timeout=15000)
+        boxes = [add_buttons.nth(i).bounding_box() for i in range(2)]
+        assert boxes[0] is not None and boxes[1] is not None
+        add_buttons.nth(0 if boxes[0]["x"] > boxes[1]["x"] else 1).click()
+        expect(page.locator(".new-tab-launcher")).to_have_count(1, timeout=10000)
+
+        stub_two_tab = page.locator(".dv-tab", has=page.locator(".dv-default-tab-content", has_text="Stub 2"))
+        stub_two_tab.hover()
+        stub_two_tab.locator('[aria-label="Close tab"]').click()
+        expect(_tab(page, "Stub 2")).to_have_count(0, timeout=10000)
+        right_group = page.locator(
+            ".dv-groupview", has=page.locator(".dv-default-tab-content", has_text="New tab")
+        )
+        expect(right_group).to_have_class(re.compile(r"\bdv-active-group\b"))
+
+        _open_all_apps(page)
+        page.locator(f'.project-rail-app[data-app="{_STUB_APP_NAME}"]').click()
+
+        expect(_tab(page, _STUB_TAB_TITLE_RE)).to_be_visible(timeout=15000)
+        expect(page.locator(".new-tab-launcher")).to_have_count(0, timeout=10000)
+        expect(_tab(page, _FIXTURE_TITLE)).to_have_count(1)
 
 
 @pytest.mark.timeout(60, func_only=False)
