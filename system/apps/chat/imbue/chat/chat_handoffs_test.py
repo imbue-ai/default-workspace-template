@@ -227,6 +227,8 @@ def _write_fake_mngr(tmp_path: Path) -> tuple[Path, Path]:
 def _workspace(tmp_path: Path, *, phase: HandoffPhase = HandoffPhase.DRAINING) -> tuple[_FakeWorkspace, str, str]:
     """A claude chat of one agent with a handoff to codex written in ``phase``; returns it with the two agent ids."""
     log, fail_dir = _write_fake_mngr(tmp_path)
+    # The successor's create runs in the primary agent's work dir, which has to exist.
+    (tmp_path / "work").mkdir()
     first = f"agent-{uuid4().hex}"
     successor = f"agent-{uuid4().hex}"
     chat_id = ChatId(first)
@@ -318,8 +320,6 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
 def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path) -> None:
     workspace, first, successor = _workspace(tmp_path)
     workspace.drain_block = "still queued"
-    workspace.mngr_log.parent.mkdir(exist_ok=True)
-    (tmp_path / "work").mkdir()
     runner = _runner(workspace)
     chat_id = workspace.chat_id
 
@@ -406,7 +406,6 @@ def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: 
     summary.parent.mkdir(parents=True)
     summary.write_text("# earlier summary\n")
     runner = _runner(workspace)
-    (tmp_path / "work").mkdir()
 
     runner.run(workspace.chat_id, "h-1")
 
@@ -426,7 +425,6 @@ def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_
     workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_written_on_request = False
     workspace.activity_by_agent[first] = ActivityState.IDLE
-    (tmp_path / "work").mkdir()
     runner = _runner(workspace)
 
     runner.run(workspace.chat_id, "h-1")
@@ -442,7 +440,6 @@ def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_
 def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
     workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_written_on_request = False
-    (tmp_path / "work").mkdir()
     # Busy for the first polls, then idle: the idle reading after a busy one ends the wait at once.
     readings = iter([ActivityState.THINKING, ActivityState.TOOL_RUNNING, ActivityState.IDLE])
 
@@ -462,7 +459,6 @@ def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
 def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_path: Path) -> None:
     workspace, _first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_delivery_refused = True
-    (tmp_path / "work").mkdir()
 
     _runner(workspace).run(workspace.chat_id, "h-1")
 
@@ -472,7 +468,6 @@ def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_
 
 def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reuses_the_prompt(tmp_path: Path) -> None:
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
-    (tmp_path / "work").mkdir()
     (workspace.fail_dir / "fail-create").write_text("")
     runner = _runner(workspace)
 
@@ -517,7 +512,6 @@ def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reu
 
 def test_a_half_made_successor_is_destroyed_and_created_again(tmp_path: Path) -> None:
     workspace, _first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
-    (tmp_path / "work").mkdir()
     (workspace.fail_dir / "dup-once").write_text("")
 
     _runner(workspace).run(workspace.chat_id, "h-1")
@@ -533,7 +527,6 @@ def test_a_half_made_successor_is_destroyed_and_created_again(tmp_path: Path) ->
 def test_a_cancelled_handoff_stops_the_runner_before_switching(tmp_path: Path) -> None:
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_written_on_request = False
-    (tmp_path / "work").mkdir()
     record = workspace.record()
 
     # The cancel route clears the handoff while the runner waits for the summary.
@@ -571,7 +564,6 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
     """A restart mid-switch: the retiring agent is already archived and the successor's create
     landed without this process seeing it, so the resume renames and creates nothing."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
-    (tmp_path / "work").mkdir()
     archival = _track_archived_retiring_and_running_successor(workspace, first, successor)
     record = workspace.record()
     assert record.handoff is not None
@@ -640,7 +632,6 @@ def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_a
     """A restart after the successor was appended to the record but before every held send reached
     it: the switch is not run again on the successor (the record's last entry); only the delivery is."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
-    (tmp_path / "work").mkdir()
     _track_archived_retiring_and_running_successor(workspace, first, successor)
     mid_delivery = _write_record_mid_delivery(workspace, successor)
 
@@ -658,7 +649,6 @@ def test_a_resume_mid_delivery_keeps_the_held_sends_while_the_successor_is_untra
     """A resume that runs before the observe stream lists the appended successor has nothing to deliver
     to: the sends stay on the record, in the switching phase, for the next resume."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
-    (tmp_path / "work").mkdir()
     _track_archived_retiring_and_running_successor(workspace, first, successor)
     del workspace.agents[successor]
     mid_delivery = _write_record_mid_delivery(workspace, successor)
@@ -671,7 +661,6 @@ def test_a_resume_mid_delivery_keeps_the_held_sends_while_the_successor_is_untra
 
 def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> None:
     workspace, _first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
-    (tmp_path / "work").mkdir()
 
     _runner(workspace).run(workspace.chat_id, "another-handoff")
 
