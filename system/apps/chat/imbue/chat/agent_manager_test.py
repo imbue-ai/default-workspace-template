@@ -1022,6 +1022,21 @@ def test_chat_create_argv_canonicalizes_the_name_and_labels_the_human_one() -> N
     assert_mngr_argv_valid(argv)
 
 
+def test_a_successor_create_argv_is_accepted_by_the_live_cli() -> None:
+    """A handoff's create adds the chat membership labels after the account args and carries its prompt as
+    ``--message-file`` (last), both of which the vendored mngr has to accept."""
+    argv = _chat_create_argv(
+        account_args=("--label", "account=acct-1"),
+        extra_labels=("chat_id=agent-123", "chat_seq=2"),
+        message_file=Path("/tmp/handoff-prompt-2.md"),
+    )
+    assert_mngr_argv_valid(argv)
+    labels = [argv[i + 1] for i, token in enumerate(argv) if token == "--label"]
+    assert labels[-3:] == ["account=acct-1", "chat_id=agent-123", "chat_seq=2"]
+    assert argv[-2:] == ["--message-file", "/tmp/handoff-prompt-2.md"]
+    assert "--message" not in argv
+
+
 def test_chat_rename_argv_accepted_by_live_cli() -> None:
     """A rename carries the same name pair a create does: canonical name + typed label.
 

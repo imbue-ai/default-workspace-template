@@ -112,6 +112,21 @@ def _archived_display_name(chat_title: str, seq: int) -> str:
 
 
 @pure
+def archive_rename_command(
+    mngr_binary: str, agent_id: str, archival_name: str, labels: Mapping[str, str]
+) -> list[str]:
+    """The one ``mngr rename`` that archives a retiring agent: the archival name and every label in one write.
+
+    Pure argv assembly, like the manager's builders, so the repo<->mngr CLI contract is
+    testable against the live CLI without a subprocess.
+    """
+    command = [mngr_binary, "rename", agent_id, archival_name]
+    for key, value in labels.items():
+        command.extend(["--label", f"{key}={value}"])
+    return command
+
+
+@pure
 def summary_path(chat_files_root: Path, chat_id: ChatId, retiring_seq: int) -> Path:
     """Where the retiring agent's summary goes: beside the chat's record, named by its sequence number."""
     return chat_files_root / chat_id / _SUMMARIES_DIRNAME / f"{retiring_seq}.md"
@@ -496,11 +511,11 @@ class HandoffRunner:
             "chat_seq": str(retiring.seq),
             "archived_at": self._deps.now().isoformat(),
         }
-        command = [self._deps.mngr_binary, "rename", retiring.agent_id, archival_name]
-        for key, value in labels.items():
-            command.extend(["--label", f"{key}={value}"])
         result = run_local_command_modern_version(
-            command=command, cwd=None, is_checked=False, timeout=_RENAME_TIMEOUT_SECONDS
+            command=archive_rename_command(self._deps.mngr_binary, retiring.agent_id, archival_name, labels),
+            cwd=None,
+            is_checked=False,
+            timeout=_RENAME_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             raise HandoffStepError(

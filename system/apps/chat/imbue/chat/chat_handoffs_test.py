@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from mngr_cli_contract.contract import assert_mngr_argv_valid
 from pydantic import Field
 from pydantic import PrivateAttr
 
@@ -20,6 +21,7 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
@@ -317,6 +319,29 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         summary_timeout_seconds=20.0,
     )
     return HandoffRunner.build(HandoffDeps(**{**bound, **overrides}))
+
+
+def test_the_archival_rename_argv_is_accepted_by_the_live_cli() -> None:
+    """The archive is one rename carrying every label, checked against the vendored mngr like the manager's argvs."""
+    argv = archive_rename_command(
+        "mngr",
+        "agent-123",
+        archived_agent_name(1, "Chat-1", "agent-123"),
+        {
+            "display_name": "Chat 1 (archived 1)",
+            "chat_id": "agent-123",
+            "chat_seq": "1",
+            "archived_at": _NOW.isoformat(),
+        },
+    )
+    assert_mngr_argv_valid(argv)
+    assert argv[:4] == ["mngr", "rename", "agent-123", "archived-1-Chat-1-agent-123"]
+    assert [argv[i + 1] for i, token in enumerate(argv) if token == "--label"] == [
+        "display_name=Chat 1 (archived 1)",
+        "chat_id=agent-123",
+        "chat_seq=1",
+        f"archived_at={_NOW.isoformat()}",
+    ]
 
 
 def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path) -> None:
