@@ -600,17 +600,16 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
     assert workspace.delivered == []
 
 
-def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_agent(tmp_path: Path) -> None:
-    """A restart after the successor was appended to the record but before every held send reached
-    it: the switch is not run again on the successor (the record's last entry); only the delivery is."""
-    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
-    (tmp_path / "work").mkdir()
-    archival = _track_archived_retiring_and_running_successor(workspace, first, successor)
+def _write_record_mid_delivery(workspace: _FakeWorkspace, successor: str) -> ChatRecord:
+    """The record as a process dying mid-delivery leaves it: the retiring agent closed, the successor
+    appended, and one send still held for it. Returns what was written."""
     record = workspace.record()
     assert record.handoff is not None
     retired = record.agents[0].model_copy_update(
         to_update(record.agents[0].field_ref().ended_at, _NOW),
-        to_update(record.agents[0].field_ref().archived_name, archival),
+        to_update(
+            record.agents[0].field_ref().archived_name, archived_agent_name(1, "Chat-1", record.agents[0].agent_id)
+        ),
         to_update(record.agents[0].field_ref().final_event_count, 3),
     )
     appended = ChatAgentEntry(
@@ -622,28 +621,52 @@ def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_a
         started_at=_NOW,
     )
     late = HeldSend(message_id="m-late", text="one more", origin=HeldSendOrigin.SCRIPT, received_at=_NOW)
-    workspace.store.write(
-        record.model_copy_update(
-            to_update(record.field_ref().agents, (retired, appended)),
-            to_update(
-                record.field_ref().handoff,
-                record.handoff.model_copy_update(
-                    to_update(record.handoff.field_ref().prompt, "the stored prompt"),
-                    to_update(record.handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
-                    to_update(record.handoff.field_ref().held_sends, (late,)),
-                ),
+    mid_delivery = record.model_copy_update(
+        to_update(record.field_ref().agents, (retired, appended)),
+        to_update(
+            record.field_ref().handoff,
+            record.handoff.model_copy_update(
+                to_update(record.handoff.field_ref().prompt, "the stored prompt"),
+                to_update(record.handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
+                to_update(record.handoff.field_ref().held_sends, (late,)),
             ),
-        )
+        ),
     )
+    workspace.store.write(mid_delivery)
+    return mid_delivery
+
+
+def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_agent(tmp_path: Path) -> None:
+    """A restart after the successor was appended to the record but before every held send reached
+    it: the switch is not run again on the successor (the record's last entry); only the delivery is."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    (tmp_path / "work").mkdir()
+    _track_archived_retiring_and_running_successor(workspace, first, successor)
+    mid_delivery = _write_record_mid_delivery(workspace, successor)
 
     _runner(workspace).run(workspace.chat_id, "h-1")
 
     finished = workspace.record()
     assert finished.handoff is None
-    assert finished.agents == (retired, appended)
+    assert finished.agents == mid_delivery.agents
     assert workspace.stopped == [] and workspace.argv_lines() == [] and workspace.broadcasts == []
     assert (workspace.agents[successor].state, workspace.agents[successor].name) == ("RUNNING", "Chat-1")
     assert workspace.delivered == [(successor, "one more", "m-late")]
+
+
+def test_a_resume_mid_delivery_keeps_the_held_sends_while_the_successor_is_untracked(tmp_path: Path) -> None:
+    """A resume that runs before the observe stream lists the appended successor has nothing to deliver
+    to: the sends stay on the record, in the switching phase, for the next resume."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    (tmp_path / "work").mkdir()
+    _track_archived_retiring_and_running_successor(workspace, first, successor)
+    del workspace.agents[successor]
+    mid_delivery = _write_record_mid_delivery(workspace, successor)
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    assert workspace.record() == mid_delivery
+    assert workspace.delivered == [] and workspace.argv_lines() == []
 
 
 def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> None:

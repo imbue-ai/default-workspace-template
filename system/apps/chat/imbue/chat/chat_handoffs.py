@@ -662,15 +662,18 @@ class HandoffRunner:
 
         The handoff entry is cleared only once the held list is empty, inside the same lock
         the message route appends under, so a send that arrives during delivery is delivered
-        by this loop rather than overtaking one still held.
+        by this loop rather than overtaking one still held. Raises ``HandoffStepError`` while
+        the successor is untracked (a resume that ran before the observe stream listed it):
+        the sends stay on the record for the next resume rather than being popped with
+        nothing to receive them.
         """
         successor_info = self._deps.get_agent_info(successor_id)
-        if successor_info is not None:
-            self._deps.ensure_watcher(successor_info)
+        if successor_info is None:
+            raise HandoffStepError(
+                f"agent {successor_id} of chat {chat_id} is untracked; its held sends stay on the record"
+            )
+        self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            if successor_info is None:
-                logger.warning("Handoff of chat {}: agent {} is untracked; a held send is lost", chat_id, successor_id)
-                continue
             deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
