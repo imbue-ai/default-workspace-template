@@ -105,7 +105,7 @@ class ChatTranscript:
         segments: tuple[TranscriptSegment, ...],
         # The readers already resident, by agent id: the live segment's watcher, and any
         # archived segment an earlier read loaded.
-        loaded_readers: Mapping[str, TranscriptReader],
+        reader_by_agent_id: Mapping[str, TranscriptReader],
         load_segment: Callable[[TranscriptSegment], TranscriptReader],
     ) -> "ChatTranscript":
         if not segments:
@@ -114,9 +114,9 @@ class ChatTranscript:
         transcript._chat_id = chat_id
         transcript._segments = segments
         transcript._reader_by_index = {
-            index: loaded_readers[segment.agent_id]
+            index: reader_by_agent_id[segment.agent_id]
             for index, segment in enumerate(segments)
-            if segment.agent_id in loaded_readers
+            if segment.agent_id in reader_by_agent_id
         }
         transcript._load_segment = load_segment
         return transcript

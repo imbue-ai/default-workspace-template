@@ -157,19 +157,19 @@ class InMemoryChatRecordStore(ChatRecordStore):
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
-    records: dict[ChatId, ChatRecord] = Field(default_factory=dict, description="The records, by chat id")
+    record_by_chat_id: dict[ChatId, ChatRecord] = Field(default_factory=dict, description="The records, by chat id")
 
     def read(self, chat_id: ChatId) -> ChatRecord | None:
-        return self.records.get(chat_id)
+        return self.record_by_chat_id.get(chat_id)
 
     def read_all(self) -> dict[ChatId, ChatRecord]:
-        return dict(self.records)
+        return dict(self.record_by_chat_id)
 
     def write(self, record: ChatRecord) -> None:
-        self.records[record.chat_id] = record
+        self.record_by_chat_id[record.chat_id] = record
 
     def delete(self, chat_id: ChatId) -> None:
-        self.records.pop(chat_id, None)
+        self.record_by_chat_id.pop(chat_id, None)
 
 
 def _parse_record(payload: str, path: Path) -> ChatRecord:
@@ -230,7 +230,7 @@ class FileChatRecordStore(ChatRecordStore):
         file costs its chat the record (its agents fall under the own-chat rule) and nothing else."""
         if not self.root.is_dir():
             return {}
-        records: dict[ChatId, ChatRecord] = {}
+        record_by_chat_id: dict[ChatId, ChatRecord] = {}
         for record_path in sorted(self.root.glob(f"*/{_RECORD_FILENAME}")):
             try:
                 record = self._read_path(record_path)
@@ -247,8 +247,8 @@ class FileChatRecordStore(ChatRecordStore):
                     record_path.parent.name,
                 )
                 continue
-            records[record.chat_id] = record
-        return records
+            record_by_chat_id[record.chat_id] = record
+        return record_by_chat_id
 
     def write(self, record: ChatRecord) -> None:
         with self._chat_lock(record.chat_id):

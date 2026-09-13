@@ -203,13 +203,13 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
     if segments is None:
         return None
     info_by_agent_id = {segment.agent.id: segment for segment in segments}
-    loaded_readers: dict[str, TranscriptReader] = {}
+    reader_by_agent_id: dict[str, TranscriptReader] = {}
     for segment in segments:
         resident: TranscriptReader | None = (
             state.get_or_create_watcher(segment.agent) if segment.is_active else state.loaders.get(segment.agent.id)
         )
         if resident is not None:
-            loaded_readers[segment.agent.id] = resident
+            reader_by_agent_id[segment.agent.id] = resident
     return ChatTranscript.build(
         parsed,
         tuple(
@@ -222,7 +222,7 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
             )
             for segment in segments
         ),
-        loaded_readers,
+        reader_by_agent_id,
         lambda transcript_segment: _segment_reader(state, info_by_agent_id[transcript_segment.agent_id]),
     )
 

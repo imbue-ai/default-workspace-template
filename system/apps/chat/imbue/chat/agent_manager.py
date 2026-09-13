@@ -525,7 +525,7 @@ class AgentManager:
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
-    _chat_records: dict[ChatId, ChatRecord]
+    _chat_record_by_id: dict[ChatId, ChatRecord]
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
@@ -641,7 +641,7 @@ class AgentManager:
         manager._match_by_agent_id = {}
         manager._provisional_chats = {}
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
-        manager._chat_records = manager._chat_record_store.read_all()
+        manager._chat_record_by_id = manager._chat_record_store.read_all()
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
@@ -695,7 +695,7 @@ class AgentManager:
         hands over come from ``get_chat_ids``, which never names an archived member, so the
         own-chat fallback is right for every id that reaches here.
         """
-        record = self._chat_records.get(chat_id)
+        record = self._chat_record_by_id.get(chat_id)
         if record is None:
             return str(chat_id)
         active = record.active_entry
@@ -802,14 +802,16 @@ class AgentManager:
 
     def refresh_chat_records(self) -> None:
         """Re-read the chat records from the store and push the chats they change."""
-        records = self._chat_record_store.read_all()
+        record_by_chat_id = self._chat_record_store.read_all()
         with self._lock:
-            self._chat_records = records
+            self._chat_record_by_id = record_by_chat_id
         self._broadcast_chats_updated()
 
     def _record_naming_locked(self, agent_id: str) -> ChatRecord | None:
         """The record that names the agent as a member (its first agent included, whose id is the chat's), or None."""
-        return next((record for record in self._chat_records.values() if record.entry_for(agent_id) is not None), None)
+        return next(
+            (record for record in self._chat_record_by_id.values() if record.entry_for(agent_id) is not None), None
+        )
 
     def _chat_id_of_agent_locked(self, agent_id: str) -> ChatId:
         """The chat an agent belongs to: the record that names it, else itself under the own-chat rule."""
@@ -834,7 +836,7 @@ class AgentManager:
         is that chat's, not a chat of its own, so it resolves to nothing here; any other id
         is an agent that is its own chat (the own-chat rule), whether or not it is tracked.
         """
-        record = self._chat_records.get(chat_id)
+        record = self._chat_record_by_id.get(chat_id)
         if record is not None:
             active = record.active_entry
             return _ResolvedChat(
@@ -1075,7 +1077,7 @@ class AgentManager:
         if chat.record is not None:
             self._chat_record_store.delete(chat_id)
             with self._lock:
-                self._chat_records.pop(chat_id, None)
+                self._chat_record_by_id.pop(chat_id, None)
         # Reflect the destruction immediately rather than waiting for mngr observe. With the
         # record gone, the first member is its own chat again, so removing it forgets the
         # chat's per-chat records.
