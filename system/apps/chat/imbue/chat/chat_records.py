@@ -182,6 +182,16 @@ class ChatRecord(FrozenModel):
     def entry_for(self, agent_id: str) -> ChatAgentEntry | None:
         return next((entry for entry in self.agents if entry.agent_id == agent_id), None)
 
+    def names_agent(self, agent_id: str) -> bool:
+        """Whether the agent is this chat's: a member, or the successor its handoff is still making.
+
+        The successor exists on the host (and is tracked) from its create until the handoff
+        appends it, and is the chat's for that whole time rather than a chat of its own.
+        """
+        if self.entry_for(agent_id) is not None:
+            return True
+        return self.handoff is not None and self.handoff.next_agent_id == agent_id
+
 
 class ChatRecordStore(MutableModel, ABC):
     """Where the chat app keeps its chat records."""

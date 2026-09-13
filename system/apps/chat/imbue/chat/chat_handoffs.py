@@ -615,6 +615,10 @@ class HandoffRunner:
             harness=handoff.target_harness,
             started_at=self._deps.now(),
         )
+        # Tracked first: the record's handoff names the successor, so a tracked successor the
+        # record has yet to append is hidden, whereas an appended one that is not tracked yet
+        # would list the chat as nothing for that instant.
+        self._deps.note_agent_created(successor_state)
         self._deps.update_record(
             chat_id,
             handoff_id,
@@ -622,7 +626,6 @@ class HandoffRunner:
                 to_update(current.field_ref().agents, (*current.agents, successor))
             ),
         )
-        self._deps.note_agent_created(successor_state)
         self._deps.broadcast_transcript_events(
             chat_id,
             [

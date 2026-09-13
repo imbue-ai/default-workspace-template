@@ -878,10 +878,10 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def _record_naming_locked(self, agent_id: str) -> ChatRecord | None:
-        """The record that names the agent as a member (its first agent included, whose id is the chat's), or None."""
-        return next(
-            (record for record in self._chat_record_by_id.values() if record.entry_for(agent_id) is not None), None
-        )
+        """The record that names the agent, or None: a member (the first agent included, whose id is the
+        chat's), or the successor a handoff is making, which is the chat's from its create on rather than
+        a chat of its own while the record has yet to append it."""
+        return next((record for record in self._chat_record_by_id.values() if record.names_agent(agent_id)), None)
 
     def _chat_id_of_agent_locked(self, agent_id: str) -> ChatId:
         """The chat an agent belongs to: the record that names it, else itself under the own-chat rule."""
@@ -892,7 +892,8 @@ class AgentManager:
         return self._record_naming_locked(agent_id) is not None
 
     def _is_archived_member_locked(self, agent_id: str) -> bool:
-        """Whether an agent is a record's member other than the one its chat is read from."""
+        """Whether an agent is a record's other than the one its chat is read from: an archived member,
+        or the successor a handoff is still making."""
         record = self._record_naming_locked(agent_id)
         if record is None:
             return False
