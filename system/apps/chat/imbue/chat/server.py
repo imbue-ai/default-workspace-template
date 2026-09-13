@@ -206,7 +206,9 @@ def _chat_transcript(chat_id: str) -> ChatTranscript | None:
     reader_by_agent_id: dict[str, TranscriptReader] = {}
     for segment in segments:
         resident: TranscriptReader | None = (
-            state.get_or_create_watcher(segment.agent) if segment.is_active else state.loaders.get(segment.agent.id)
+            state.get_or_create_watcher(segment.agent)
+            if segment.is_active
+            else state.get_resident_loader(segment.agent.id)
         )
         if resident is not None:
             reader_by_agent_id[segment.agent.id] = resident

@@ -161,6 +161,15 @@ class ChatAppState(MutableModel):
             self.loaders[agent_info.id] = loader
             return loader
 
+    def get_resident_loader(self, agent_id: str) -> TranscriptLoader | None:
+        """The loader an earlier read already loaded for one archived agent, or None.
+
+        Never loads one: a chat's transcript hands its resident readers over at build and
+        calls ``get_or_create_loader`` only from the first read that reaches into a segment.
+        """
+        with self._watchers_lock:
+            return self.loaders.get(agent_id)
+
     def stop_and_remove_watcher(self, agent_id: str) -> None:
         """Evict everything resident for one agent: its watcher (the resident transcript, thread,
         and filesystem watches) and, for an archived member of a chat, its loader.
