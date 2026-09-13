@@ -3178,7 +3178,7 @@ def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(
         assert manager.get_chat_snapshot(first) is not None and manager.get_handoff_state(chat_id) is None
         with pytest.raises(HandoffError):
             manager.cancel_handoff(chat_id)
-        assert argv_log.read_text() if argv_log.exists() else "" == ""
+        assert not argv_log.exists()
     finally:
         manager.stop()
 
