@@ -70,11 +70,11 @@ DEFAULT_PROMPT_TEMPLATE_PATH: Final[Path] = Path(".agents/shared/references/cont
 # How long the retiring agent gets to write its summary once the request was accepted. A
 # summary can take a while; an agent that cannot write one (out of tokens, a full context
 # window) ends its turn within seconds and is caught by the idle rule long before this.
-SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
+_SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
 # The turn the request starts can be shorter than one poll, so an idle reading counts as the
 # turn having ended either after a busy reading or after this much time with none.
-SUMMARY_IDLE_GRACE_SECONDS: Final[float] = 10.0
-SUMMARY_POLL_INTERVAL_SECONDS: Final[float] = 1.0
+_SUMMARY_IDLE_GRACE_SECONDS: Final[float] = 10.0
+_SUMMARY_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
 # How long one ``mngr rename`` (a metadata write) and one ``mngr destroy`` may take.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -83,7 +83,7 @@ _DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 # and delivers the prompt before it returns.
 _CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
 # How much of a failed create's output the failed phase carries.
-CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
+_CREATION_OUTPUT_TAIL_LINES: Final[int] = 20
 
 _SUMMARIES_DIRNAME: Final[str] = "summaries"
 _PROMPT_FILENAME_PREFIX: Final[str] = "handoff-prompt-"
@@ -104,7 +104,7 @@ def archived_agent_name(seq: int, chat_name: str, agent_id: str) -> str:
 
 
 @pure
-def archived_display_name(chat_title: str, seq: int) -> str:
+def _archived_display_name(chat_title: str, seq: int) -> str:
     return f"{chat_title} (archived {seq})"
 
 
@@ -171,7 +171,7 @@ class CreationOutputTail(MutableModel):
     def __call__(self, line: str, _is_stdout: bool) -> None:
         stripped = line.rstrip("\n")
         logger.debug("mngr create: {}", stripped)
-        self.lines = [*self.lines, stripped][-CREATION_OUTPUT_TAIL_LINES:]
+        self.lines = [*self.lines, stripped][-_CREATION_OUTPUT_TAIL_LINES:]
 
     def text(self) -> str:
         return "\n".join(self.lines)
@@ -227,9 +227,9 @@ class HandoffDeps(FrozenModel):
     now: Callable[[], datetime]
     monotonic: Callable[[], float]
     sleep: Callable[[float], None]
-    summary_timeout_seconds: float = SUMMARY_TIMEOUT_SECONDS
-    summary_idle_grace_seconds: float = SUMMARY_IDLE_GRACE_SECONDS
-    summary_poll_interval_seconds: float = SUMMARY_POLL_INTERVAL_SECONDS
+    summary_timeout_seconds: float = _SUMMARY_TIMEOUT_SECONDS
+    summary_idle_grace_seconds: float = _SUMMARY_IDLE_GRACE_SECONDS
+    summary_poll_interval_seconds: float = _SUMMARY_POLL_INTERVAL_SECONDS
 
 
 class HandoffRunner:
@@ -467,7 +467,7 @@ class HandoffRunner:
         if agent_state.name == archival_name:
             return
         labels = {
-            "display_name": archived_display_name(handoff.chat_title, retiring.seq),
+            "display_name": _archived_display_name(handoff.chat_title, retiring.seq),
             "chat_id": str(chat_id),
             "chat_seq": str(retiring.seq),
             "archived_at": self._deps.now().isoformat(),

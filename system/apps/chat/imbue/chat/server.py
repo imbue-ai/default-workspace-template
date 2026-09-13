@@ -426,7 +426,7 @@ def _revive_and_retry_send(
     return outcome
 
 
-def deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
     """Deliver one message to an agent the way the message route does, revival included.
 
     Raises ``SendFailedError`` with the harness's own words when it refused. Shared with the
@@ -454,14 +454,14 @@ def deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, messa
     return outcome
 
 
-def build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
+def _build_handoff_capabilities(state: ChatAppState) -> HandoffCapabilities:
     """What the manager's handoffs borrow from the app state and these routes."""
     return HandoffCapabilities(
         ensure_watcher=state.get_or_create_watcher,
         drain_to_composer=lambda agent_info: state.drain_to_composer(
             agent_info, lambda: _restart_agent_process(agent_info.name)
         ),
-        deliver=lambda agent_info, text, message_id: deliver_message(state, agent_info, text, message_id),
+        deliver=lambda agent_info, text, message_id: _deliver_message(state, agent_info, text, message_id),
     )
 
 
@@ -496,7 +496,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
         )
 
     try:
-        outcome = deliver_message(state, agent_info, send_message_request.message, message_id)
+        outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
     except SendFailedError as send_failure:
         # The harness said why it refused, in words written for the person who has to fix it
         # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
@@ -1598,7 +1598,7 @@ def create_application(state: ChatAppState) -> Flask:
     attach_state(application, state)
     # The handoff borrows the watchers and the send path from here; wired where the routes
     # are, so a manager built by a test that never assembles the app refuses to hand off.
-    state.agent_manager.set_handoff_capabilities(build_handoff_capabilities(state))
+    state.agent_manager.set_handoff_capabilities(_build_handoff_capabilities(state))
     application.register_error_handler(Exception, handle_unhandled_exception)
     # The presence route reads its body through the library's parser, so its errors answer
     # like the blueprint's: a status from the contract with a ``{"detail"}`` body.
