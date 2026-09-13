@@ -884,11 +884,11 @@ def _refuse_queue_action_on_primary(agent_info: AgentInfo, action: str) -> Respo
 def _interrupt_capabilities(
     agent_info: AgentInfo,
 ) -> tuple[AgentSessionWatcher, Callable[[], tuple[bool, str]], Callable[[], None]]:
-    """The harness-neutral capabilities a queue action binds for one agent: the queue mirror,
-    a process restart (``mngr start --restart --no-resume``), and an activity-settle.
+    """The harness-neutral capabilities the restart-drain flush binds for one agent: the queue
+    mirror, a process restart (``mngr start --restart --no-resume``), and an activity-settle.
 
-    Shared by the restart-drain flush and the (per-harness) stop button, mirroring how the
-    switch endpoint binds its ``send`` callback.
+    The stop button and the handoff's draining step bind theirs through
+    ``ChatAppState.drain_to_composer`` instead, which dispatches to the harness's interrupt.
     """
     state = get_state()
     watcher = state.get_or_create_watcher(agent_info)
