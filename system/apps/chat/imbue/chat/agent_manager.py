@@ -2083,10 +2083,11 @@ class AgentManager:
         for agent_id in recompute_ids:
             self._recompute_activity_state(agent_id, broadcast_on_change=False)
 
-        # Drop the resident transcript of every chat that just stopped, its archived
-        # segments included. Edge-triggered (transition into dead, never dead-as-a-level): a
-        # user viewing a stopped chat's history rebuilds the watcher on read, and a
-        # level-triggered evict would tear that rebuild down again on the next observe tick.
+        # Drop the resident transcript of every chat that just stopped (its active agent
+        # died), its archived segments included; an archived member dying drops only its
+        # own. Edge-triggered (transition into dead, never dead-as-a-level): a user viewing
+        # a stopped chat's history rebuilds the watcher on read, and a level-triggered evict
+        # would tear that rebuild down again on the next observe tick.
         for agent_id in newly_dead_ids:
             self._evict_chat_transcripts(agent_id)
 
@@ -2107,10 +2108,12 @@ class AgentManager:
         )
 
     def _evict_chat_transcripts(self, agent_id: str) -> None:
-        """Drop the resident transcripts of the chat an agent runs: its own and its archived members'."""
+        """Drop what a dead agent held resident: the whole chat's transcripts when it was the
+        chat's active agent (the chat stopped), else its own alone (an archived member
+        stopping leaves the chat, and the watcher a user may be viewing, standing)."""
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
-        member_ids = chat.member_agent_ids if chat is not None else (agent_id,)
+        member_ids = chat.member_agent_ids if chat is not None and chat.active_agent_id == agent_id else (agent_id,)
         for member_id in member_ids:
             self._evict_watcher(member_id)
 

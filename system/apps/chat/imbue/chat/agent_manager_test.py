@@ -2922,6 +2922,29 @@ def test_an_archived_members_removal_leaves_its_chats_records_and_transcripts_st
         manager.stop()
 
 
+def test_an_archived_member_stopping_evicts_only_its_own_transcript(broadcaster: WebSocketBroadcaster) -> None:
+    """A retiring agent that is still running when it is archived stops a moment later; that
+    death is the member's, not the chat's, so the active agent's watcher (which a user may be
+    viewing) stays resident."""
+    manager, _store, first, second = _recorded_chat(broadcaster)
+    evicted: list[str] = []
+    manager.set_watcher_eviction_callback(evicted.append)
+    try:
+        for agent_id, name in ((second, "Chat-1"), (first, f"archived-1-Chat-1-{first}")):
+            details = _agent_details(name, agent_id=MngrAgentId(agent_id), state=AgentLifecycleState.RUNNING)
+            manager._handle_observe_event(make_agent_state_event(details))
+        assert evicted == []
+
+        first_details = _agent_details(f"archived-1-Chat-1-{first}", agent_id=MngrAgentId(first))
+        stopped = first_details.model_copy_update(
+            to_update(first_details.field_ref().state, AgentLifecycleState.STOPPED)
+        )
+        manager._handle_observe_event(make_agent_state_event(stopped))
+        assert evicted == [first]
+    finally:
+        manager.stop()
+
+
 def test_removing_an_archived_member_through_the_observe_stream_keeps_the_chat(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
