@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import assert_never
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
@@ -290,6 +291,8 @@ class HandoffRunner:
                     is_done = True
                 case HandoffPhase.FAILED:
                     is_done = True
+                case _ as unreachable:
+                    assert_never(unreachable)
 
     # -- draining ------------------------------------------------------------------------------
 
@@ -420,6 +423,8 @@ class HandoffRunner:
                 summary_line = f"Your predecessor's summary is at {path}; read it first."
             case SummaryOutcome.MISSING:
                 summary_line = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
+            case _ as unreachable:
+                assert_never(unreachable)
         predecessors = "\n".join(
             f"- seq {entry.seq}: {archived_agent_name(entry.seq, handoff.chat_name, entry.agent_id)}, id "
             f"{entry.agent_id}, harness {entry.harness.value}, state dir {self._deps.host_dir / 'agents' / entry.agent_id}"
