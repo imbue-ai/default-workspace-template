@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import quote
+from uuid import uuid4
 
 import pytest
 from flask import Flask
@@ -25,6 +26,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
@@ -43,6 +45,7 @@ from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffPhase
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
@@ -58,6 +61,8 @@ from imbue.chat.state import state_of
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
@@ -67,6 +72,7 @@ from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexModel
 
 # Generous: the first receive can take several seconds on a loaded machine even
@@ -2864,3 +2870,154 @@ def test_a_two_member_chats_subagent_reads_resolve_by_member(client: FlaskClient
     assert archived.get_json() == {"events": [], "metadata": None}
     assert stranger.status_code == 404
     assert stranger.get_json()["detail"] == f"Chat '{first}' has no agent 'agent-stranger'"
+
+
+# The handoff routes.
+
+
+def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
+    """An app whose manager records sends instead of reaching mngr and logs the mngr argv it would run."""
+    log_path = tmp_path / "mngr-argv.log"
+    script = tmp_path / "fake-mngr"
+    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
+    script.chmod(0o755)
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=str(script), chat_files_root=tmp_path
+    )
+    # The successor's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    state = build_test_state(agent_manager=manager)
+    manager.note_agent_list_known()
+    return create_application(state), log_path
+
+
+def _converging_claude_chat(app: Flask, tmp_path: Path, phase: HandoffPhase) -> tuple[str, str]:
+    """A running claude chat of one agent whose record carries a handoff in ``phase``; returns the two agent ids."""
+    first, successor = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    _write_claude_session(
+        tmp_path / "claude_config", "one-session", [_user_event("u-1", "2026-01-01T00:00:00Z", "hi")]
+    )
+    (state_dir / "claude_session_id_history").write_text("one-session\n")
+    manager: AgentManager = state_of(app).agent_manager
+    manager._chat_record_store.write(
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(make_chat_agent_entry(1, first, is_archived=False),),
+            handoff=make_chat_handoff_record(retiring_seq=1, next_agent_id=successor, phase=phase),
+        )
+    )
+    manager.refresh_chat_records()
+    return first, successor
+
+
+def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cancelled(tmp_path: Path) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(f"/api/chats/{first}/message", json={"message": "and this", "message_id": "m-2"})
+    assert held.status_code == 202
+    assert held.get_json() == {"status": "held", "phase": "summarizing"}
+
+    for suffix in ("stop", "start", "interrupt", "flush-queue", "drain-to-composer", "model"):
+        refused = client.post(f"/api/chats/{first}/{suffix}", json={})
+        assert refused.status_code == 409, suffix
+        assert refused.get_json()["phase"] == "summarizing"
+    again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
+    assert again.status_code == 409
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["status"], chat["handoff"]["phase"]) for chat in listed] == [
+        (first, "working", "summarizing")
+    ]
+    instances = client.get("/_instances").get_json()
+    assert [(record["key"], record["status"]) for record in instances["instances"]] == [(first, "working")]
+    # The chat still reads from the agent it is leaving.
+    assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
+
+    cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.get_json() == {"status": "cancelled", "returned_block": "Carry on in Codex"}
+    manager: AgentManager = state_of(app).agent_manager
+    assert manager.get_handoff_state(ChatId(first)) is None
+    # The held send went to the agent the chat stayed on, through the ordinary send path.
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    wait_for(lambda: (first, "and this") in messenger.sent, timeout=5.0)
+    assert client.post(f"/api/chats/{first}/handoff/cancel").status_code == 400
+    assert not log_path.exists()
+
+
+def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    assert state_dir.exists()
+
+    missing = client.post(
+        f"/api/chats/agent-{uuid4().hex}/handoff", json={"account_id": signed_in_account, "message": "x"}
+    )
+    assert missing.status_code == 404
+    unknown_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-nope", "message": "x"})
+    assert unknown_account.status_code == 400
+    # A claude chat moving to another claude account is a rebind, which a later phase adds.
+    same_harness = client.post(f"/api/chats/{first}/handoff", json={"account_id": signed_in_account, "message": "x"})
+    assert same_harness.status_code == 400
+    assert "not supported yet" in same_harness.get_json()["detail"]
+    assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
+
+
+def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, successor = _converging_claude_chat(app, tmp_path, HandoffPhase.FAILED)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    manager._chat_record_store.write(
+        record.model_copy_update(
+            to_update(
+                record.field_ref().handoff,
+                record.handoff.model_copy_update(
+                    to_update(record.handoff.field_ref().held_sends, ()),
+                    to_update(record.handoff.field_ref().prompt, "the stored prompt"),
+                    to_update(record.handoff.field_ref().error, "mngr create exited with code 3"),
+                ),
+            )
+        )
+    )
+    manager.refresh_chat_records()
+    openai_id, _ = mint_account_dir()
+    commit_account(openai_id, "openai", "OpenAI")
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["status"], chat["handoff"]["error"]) for chat in listed] == [
+        ("error", "mngr create exited with code 3")
+    ]
+
+    retried = client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": openai_id})
+    assert retried.status_code == 202
+    assert retried.get_json() == {"status": "converging", "phase": "switching"}
+    wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
+    argv = log_path.read_text().splitlines()
+    assert [line.split(" ")[0] for line in argv] == ["stop", "rename", "create"]
+    assert f"--id {successor}" in argv[2] and "--type codex" in argv[2]
+    listed_after = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
+        (first, successor, [first, successor])
+    ]
+
+
+def test_the_event_fan_out_is_keyed_by_chat(app: Flask, tmp_path: Path) -> None:
+    """A page's stream is registered under the chat id, so the successor's events reach it after a switch."""
+    first, second = _two_member_chat(app, tmp_path)
+    state = state_of(app)
+    assert state.agent_manager.chat_id_of_agent(second) == ChatId(first)
+    assert state.agent_manager.chat_id_of_agent(first) == ChatId(first)
+    # An event of an agent with no resident watcher, and a chat-level chip, both pass the main-session filter.
+    assert state.is_main_session_event({"type": "agent_switch", "agent_id": second}) is True
+    assert (
+        state.is_main_session_event({"type": "user_message", "agent_id": "agent-untracked", "session_id": "s"}) is True
+    )

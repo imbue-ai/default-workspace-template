@@ -27,6 +27,8 @@ from pydantic import model_validator
 
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
+from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -72,13 +74,49 @@ class ChatAgentEntry(FrozenModel):
 class ChatHandoffRecord(FrozenModel):
     """The in-progress handoff a record carries while the chat converges on a new agent.
 
-    Phase 4 of the chat-agent split extends this with the handoff's working state; this phase
-    reads only the phase and target the chat snapshot shows.
+    Everything a resumed handoff needs to pick up where it stopped lives here (spec 5.11): the
+    phase, the target, the pre-minted successor id, the sends held for it, the summary's
+    outcome, and the prompt the successor is created with, so a chat-app restart at any point
+    reconciles against mngr's state rather than replaying steps.
     """
 
+    handoff_id: str = Field(
+        description="Minted per handoff; a runner that finds another id stops (the handoff was cancelled)"
+    )
     phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
+    started_at: datetime = Field(description="When the handoff was confirmed")
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
+    target_harness: HarnessType = Field(
+        description="The harness the target account runs, fixed when the handoff began"
+    )
+    retiring_seq: int = Field(ge=1, description="The sequence number of the agent the chat is leaving")
+    next_agent_id: str = Field(
+        description="The successor's id, minted before its create so a resume can tell whether it landed"
+    )
+    next_seq: int = Field(ge=2, description="The successor's sequence number")
+    chat_name: str = Field(description="The chat's canonical mngr name, which the successor takes over")
+    chat_title: str = Field(description="The name the user sees, kept for the archival display name and the prompt")
+    project_label: str = Field(default="", description="The retiring agent's project label, carried to the successor")
+    trigger_message_id: str = Field(
+        description="The id of the message that confirmed the handoff, the successor's first"
+    )
+    held_sends: tuple[HeldSend, ...] = Field(
+        default=(), description="The sends received while converging, in order; delivered to the successor"
+    )
+    returned_block: str = Field(
+        default="", description="The queued text draining took off the retiring agent, for the composer"
+    )
+    summary_outcome: SummaryOutcome | None = Field(
+        default=None, description="How summarizing ended; None before it has"
+    )
+    prompt: str | None = Field(
+        default=None, description="The successor's first message, built once and resent verbatim"
+    )
+    error: str | None = Field(default=None, description="Why the successor's create failed, in the failed phase")
+
+    def entry_of(self, message_id: str) -> HeldSend | None:
+        return next((held for held in self.held_sends if held.message_id == message_id), None)
 
 
 class ChatRecord(FrozenModel):
@@ -109,6 +147,22 @@ class ChatRecord(FrozenModel):
                 raise InvalidChatRecordError(
                     f"chat {self.chat_id}: agent {entry.agent_id} (seq {entry.seq}) has a successor but no ended_at"
                 )
+        if self.handoff is not None:
+            last = self.agents[-1]
+            # The successor is appended while the handoff still delivers the sends it held, so
+            # the last agent is either the one retiring or the one taking over.
+            is_successor_appended = last.agent_id == self.handoff.next_agent_id and last.seq == self.handoff.next_seq
+            if not is_successor_appended and self.handoff.retiring_seq != last.seq:
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: the handoff retires seq {self.handoff.retiring_seq} but the last agent is "
+                    f"seq {last.seq}"
+                )
+            if self.handoff.next_seq != self.handoff.retiring_seq + 1:
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: the handoff's successor is seq {self.handoff.next_seq}, not the next"
+                )
+            if self.handoff.next_agent_id in self.member_agent_ids and not is_successor_appended:
+                raise InvalidChatRecordError(f"chat {self.chat_id}: the handoff's successor is already a member")
         return self
 
     @property

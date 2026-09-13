@@ -54,6 +54,13 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 # and never a model reply -- neither is a conversational turn.
 _COMPOSER_COMMAND_RE = re.compile(r"^/(model|fast|effort)\b")
 
+# The slash command the chat app sends a retiring agent for its handoff summary (the
+# ``handoff-summary`` skill), followed by the output path. Shown as a chip rather than hidden:
+# the user sees the chat pause for it, and a chip says why. ``chat_handoffs.py`` builds the
+# message from this constant, so the two cannot drift apart.
+HANDOFF_SUMMARY_COMMAND = "/handoff-summary"
+_HANDOFF_SUMMARY_LABEL = "Asked for a handoff summary"
+
 # Claude Code wraps the output of ANY local slash command in these. Hiding is keyed on
 # the wrapper alone, not on the text inside it: the wrapper is by construction machine
 # output rather than a human turn, so every command that produces one should be silent.
@@ -187,6 +194,14 @@ def _match_composer_command(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
+def _match_handoff_summary_request(content: str) -> MessageDisplay | None:
+    """The chat app's request for a handoff summary; a chip, so the pause reads as one."""
+    trimmed = content.strip()
+    if trimmed != HANDOFF_SUMMARY_COMMAND and not trimmed.startswith(f"{HANDOFF_SUMMARY_COMMAND} "):
+        return None
+    return MessageDisplay(display=DisplayKind.CHIP, display_label=_HANDOFF_SUMMARY_LABEL)
+
+
 def _match_local_command_output(content: str) -> MessageDisplay | None:
     """Any local slash command's captured output -- machine text, never a turn."""
     trimmed = content.lstrip()
@@ -245,6 +260,7 @@ _DETECTORS = (
     _match_task_notification,
     _match_browser_fleet,
     _match_composer_command,
+    _match_handoff_summary_request,
     _match_local_command_output,
     _match_bash_block,
     _match_permission_resolution,

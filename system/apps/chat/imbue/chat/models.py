@@ -203,6 +203,18 @@ class AgentStopError(RuntimeError):
     ...
 
 
+class ChatConvergingError(RuntimeError):
+    """Raised when a verb is refused because the chat is in the middle of a handoff (a 409)."""
+
+    ...
+
+
+class HandoffError(ValueError):
+    """Raised when a handoff cannot begin, be cancelled, or be retried as asked (a 400)."""
+
+    ...
+
+
 class ErrorResponse(FrozenModel):
     """Error response body."""
 
@@ -282,12 +294,93 @@ class HandoffPhase(LowerCaseStrEnum):
     FAILED = auto()
 
 
+class SummaryOutcome(LowerCaseStrEnum):
+    """How the summarizing phase of a handoff ended."""
+
+    # A fresh summary already existed, so none was requested.
+    REUSED = auto()
+    # The retiring agent wrote one on request.
+    WRITTEN = auto()
+    # No summary: the request failed, the turn ended without a file, the wait ran out, or the
+    # agent was gone.
+    MISSING = auto()
+
+
+class HeldSendOrigin(LowerCaseStrEnum):
+    """Who sent a message the chat app held while converging."""
+
+    # A chat page (the send named its client).
+    CLIENT = auto()
+    # An in-workspace sender through ``system/scripts/message_chat.py``, or any other caller.
+    SCRIPT = auto()
+
+
+class HeldSend(FrozenModel):
+    """One message the chat app accepted while converging and will deliver to the successor."""
+
+    message_id: str = Field(description="The sender's stable send-time id (contract A4)")
+    text: str = Field(description="The message, verbatim")
+    origin: HeldSendOrigin = Field(description="Who sent it")
+    received_at: datetime = Field(description="When the chat app accepted it")
+
+
 class HandoffState(FrozenModel):
     """The in-progress handoff a chat snapshot carries while the chat is converging."""
 
     phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
+    error: str | None = Field(default=None, description="Why the successor could not be started, in the failed phase")
+
+
+class SwitchChatRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/handoff: continue the chat on another account."""
+
+    account_id: str = Field(description="The signed-in account the chat moves to")
+    message: str = Field(
+        description="The message typed for the new agent; its first, delivered with the handoff prompt"
+    )
+    message_id: str = Field(default="", description="The sender's stable id for that message ('' mints one)")
+    client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
+    active_layout: str = Field(default="", description="The id of the view the sender was on ('' for legacy callers)")
+    device_kind: str = Field(default="", description="'mobile' or 'desktop', derived from the sender's user agent")
+
+
+class SwitchChatResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff."""
+
+    status: str = Field(description="'converging' once the handoff has begun")
+    phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
+    returned_block: str = Field(
+        description="The queued text taken off the retiring agent, for the composer ('' for none)"
+    )
+
+
+class HeldSendResponse(FrozenModel):
+    """Response from the message route while the chat is converging: the send is held for the successor."""
+
+    status: str = Field(description="'held'")
+    phase: HandoffPhase = Field(description="The phase the chat is in")
+
+
+class HandoffCancelResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff/cancel."""
+
+    status: str = Field(description="'cancelled'")
+    returned_block: str = Field(description="The message that confirmed the handoff, back for the composer")
+
+
+class HandoffRetryRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/handoff/retry: try the successor's create again on an account."""
+
+    account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
+
+
+class HandoffRetryResponse(FrozenModel):
+    """Response from POST /api/chats/{id}/handoff/retry."""
+
+    status: str = Field(description="'converging' once the retry has begun")
+    phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
 
 
 class ActiveAgentSnapshot(FrozenModel):

@@ -60,6 +60,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_records import ChatAgentEntry
+from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.config import Config
 from imbue.chat.create_defaults import TYPE_KEY
@@ -70,6 +71,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSend
+from imbue.chat.models import HeldSendOrigin
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -178,6 +182,37 @@ def make_chat_agent_entry(
         ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
         archived_name=f"archived-{seq}-Chat-1-{agent_id}" if is_archived else None,
         final_event_count=final_event_count if is_archived else None,
+    )
+
+
+def make_chat_handoff_record(
+    *,
+    retiring_seq: int,
+    next_agent_id: str,
+    phase: HandoffPhase = HandoffPhase.SUMMARIZING,
+    handoff_id: str = "handoff-1",
+    held_sends: tuple[HeldSend, ...] | None = None,
+    target_account_id: str = "acct-openai",
+) -> ChatHandoffRecord:
+    """The handoff entry of a hand-built record: a claude chat named ``Chat 1`` moving to a codex account."""
+    started_at = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
+    trigger = HeldSend(
+        message_id="trigger-1", text="Carry on in Codex", origin=HeldSendOrigin.CLIENT, received_at=started_at
+    )
+    return ChatHandoffRecord(
+        handoff_id=handoff_id,
+        phase=phase,
+        started_at=started_at,
+        target_lane="openai",
+        target_account_id=target_account_id,
+        target_harness=HarnessType.CODEX,
+        retiring_seq=retiring_seq,
+        next_agent_id=next_agent_id,
+        next_seq=retiring_seq + 1,
+        chat_name="Chat-1",
+        chat_title="Chat 1",
+        trigger_message_id=trigger.message_id,
+        held_sends=held_sends if held_sends is not None else (trigger,),
     )
 
 

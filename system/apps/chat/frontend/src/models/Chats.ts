@@ -45,6 +45,8 @@ export interface HandoffState {
   phase: HandoffPhase;
   target_lane: string;
   target_account_id: string;
+  // Why the new agent could not be started, in the failed phase; null otherwise.
+  error: string | null;
 }
 
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
