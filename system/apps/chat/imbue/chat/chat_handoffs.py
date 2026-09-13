@@ -326,7 +326,7 @@ class HandoffRunner:
         outcome = self._summary_outcome(chat_id, handoff_id, record, handoff)
         # The prompt is built once, here, and resent verbatim by every retry (spec 5.8); the
         # trigger message rides inside it, so it leaves the held list.
-        trigger = handoff.entry_of(handoff.trigger_message_id)
+        trigger = handoff.held_send_for(handoff.trigger_message_id)
         prompt = self._render_prompt(record, handoff, outcome, trigger.text if trigger is not None else "")
         self._update_handoff(
             chat_id,

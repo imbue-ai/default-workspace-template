@@ -82,8 +82,8 @@ def test_a_records_handoff_must_retire_its_last_agent_and_name_a_new_successor()
             agents=(archived_first, live_second),
             handoff=handoff.model_copy_update(to_update(handoff.field_ref().next_agent_id, first)),
         )
-    assert handoff.entry_of(handoff.trigger_message_id) is not None
-    assert handoff.entry_of("no-such-message") is None
+    assert handoff.held_send_for(handoff.trigger_message_id) is not None
+    assert handoff.held_send_for("no-such-message") is None
 
 
 def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path) -> None:

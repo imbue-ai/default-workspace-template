@@ -115,7 +115,7 @@ class ChatHandoffRecord(FrozenModel):
     )
     error: str | None = Field(default=None, description="Why the successor's create failed, in the failed phase")
 
-    def entry_of(self, message_id: str) -> HeldSend | None:
+    def held_send_for(self, message_id: str) -> HeldSend | None:
         return next((held for held in self.held_sends if held.message_id == message_id), None)
 
 

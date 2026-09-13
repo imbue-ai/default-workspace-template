@@ -1249,7 +1249,7 @@ class AgentManager:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
             if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
                 raise ChatConvergingError(f"Chat '{chat_id}' can no longer go back ({handoff.phase.value})")
-            trigger = handoff.entry_of(handoff.trigger_message_id)
+            trigger = handoff.held_send_for(handoff.trigger_message_id)
             others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
             if len(record.agents) == 1:
                 self._chat_record_store.delete(chat_id)
@@ -1328,7 +1328,7 @@ class AgentManager:
             handoff = record.handoff if record is not None else None
             if record is None or handoff is None:
                 return None
-            if handoff.entry_of(message_id) is None:
+            if handoff.held_send_for(message_id) is None:
                 held = HeldSend(
                     message_id=message_id, text=text, origin=origin, received_at=datetime.now(timezone.utc)
                 )
