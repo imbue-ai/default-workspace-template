@@ -15,6 +15,7 @@ failed create leaves the chat in the ``failed`` phase, which a retry on any acco
 create step of again with the same prompt.
 """
 
+import shlex
 import string
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -602,7 +603,7 @@ class HandoffRunner:
     def _run_create(self, chat_id: ChatId, command: list[str]) -> str | None:
         """Run the successor's create; None on success, else the notice the failed phase shows."""
         output_tail = CreationOutputTail()
-        logger.info("Handoff of chat {}: mngr create: {}", chat_id, " ".join(command))
+        logger.info("Handoff of chat {}: mngr create: {}", chat_id, shlex.join(command))
         try:
             result = run_local_command_modern_version(
                 command=command,
