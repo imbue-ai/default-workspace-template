@@ -1448,14 +1448,7 @@ class AgentManager:
     def stop_agent_process(self, agent_info: AgentInfo) -> None:
         """``mngr stop`` one agent and reflect the stop at once: its session's live state is reaped and its
         tracked lifecycle reads stopped before the observe stream confirms it. Raises ``AgentStopError``."""
-        result = run_local_command_modern_version(
-            command=_build_chat_stop_command(self._mngr_binary, agent_info.name),
-            cwd=None,
-            is_checked=False,
-            timeout=DESTROY_TIMEOUT_SECONDS,
-        )
-        if result.returncode != 0:
-            raise AgentStopError(f"Failed to stop agent '{agent_info.name}': {result.stderr.strip()}")
+        self._run_mngr_stop(agent_info.name)
         with self._lock:
             session = self._session_by_agent.get(agent_info.id)
             agent_state = self._agents.get(agent_info.id)
@@ -1563,16 +1556,22 @@ class AgentManager:
             raise ChatConvergingError(f"Chat '{chat_id}' is moving to another agent ({chat.handoff.phase.value})")
         if agent_state is None:
             raise AgentStopError(f"Chat '{chat_id}' has no agent to stop")
-        # Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it
-        # shares the destroy's generous bound.
+        self._run_mngr_stop(agent_state.name)
+
+    def _run_mngr_stop(self, agent_name: str) -> None:
+        """Run ``mngr stop`` for one agent. Raises ``AgentStopError`` when mngr refuses or fails.
+
+        Stopping rides the same mngr CLI startup and host-lock path as a destroy, so it
+        shares the destroy's generous bound.
+        """
         result = run_local_command_modern_version(
-            command=_build_chat_stop_command(self._mngr_binary, agent_state.name),
+            command=_build_chat_stop_command(self._mngr_binary, agent_name),
             cwd=None,
             is_checked=False,
             timeout=DESTROY_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            raise AgentStopError(f"Failed to stop agent '{agent_state.name}': {result.stderr.strip()}")
+            raise AgentStopError(f"Failed to stop agent '{agent_name}': {result.stderr.strip()}")
 
     def _seed_oom_prioritizer(self) -> None:
         """Seed the prioritizer's per-chat message times from the on-disk message stamps.
