@@ -952,13 +952,6 @@ class AgentManager:
             )
         return segments
 
-    def get_chat_segment(self, chat_id: ChatId, agent_id: str) -> ChatSegmentInfo | None:
-        """One agent of a chat as its transcript reads it (archived members included), or None when the chat has no such agent."""
-        segments = self.get_chat_segments(chat_id)
-        if segments is None:
-            return None
-        return next((segment for segment in segments if segment.agent.id == agent_id), None)
-
     def get_chat_ids(self) -> list[ChatId]:
         """Ids of the chats the OOM prioritizer manages: user-facing chats only.
 

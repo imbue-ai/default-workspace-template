@@ -958,9 +958,10 @@ def _find_chat_agent(chat_id: str, agent_id: str) -> ChatSegmentInfo | Response:
     """The agent ``agent_id`` of chat ``chat_id`` (an archived member included), or the 404 that says which of the two is missing."""
     parsed = parse_chat_ref(chat_id)
     agent_manager: AgentManager = get_state().agent_manager
-    if parsed is None or agent_manager.get_chat_segments(parsed) is None:
+    segments = agent_manager.get_chat_segments(parsed) if parsed is not None else None
+    if segments is None:
         return _chat_not_found_response(chat_id)
-    segment = agent_manager.get_chat_segment(parsed, agent_id)
+    segment = next((candidate for candidate in segments if candidate.agent.id == agent_id), None)
     if segment is None:
         return _chat_agent_not_found_response(chat_id, agent_id)
     return segment

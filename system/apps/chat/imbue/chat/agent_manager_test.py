@@ -2830,9 +2830,6 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
             (first, 1, False, 7),
             (second, 2, True, None),
         ]
-        member = manager.get_chat_segment(ChatId(first), first)
-        assert member is not None and not member.is_active
-        assert manager.get_chat_segment(ChatId(first), "agent-nobody") is None
         assert manager.get_chat_segments(ChatId(second)) is None
 
         # An archived member mngr has forgotten leaves a gap; a forgotten active agent leaves no chat.
