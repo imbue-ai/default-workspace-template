@@ -394,8 +394,8 @@ The sequence:
    Otherwise, if the active agent is stopped, start it.
    Then send the summary request through the chat's normal send path and wait (5.5).
    Cancel is still possible here.
-3. **switching**: drain-and-stop the old agent: capture the queue under the message lock as a backstop (only a direct `mngr message`, the backoff path, can have parked anything since draining; whatever it finds rides back to the composer too), close any live connection (codex's app-server session), `mngr stop`.
-   Then close the open tk steps (5.9), rename and archive the old agent (4.3), record its final event count, and create the new agent (5.8).
+3. **switching**: `mngr stop` the old agent (the chat app reaps its session's live state, codex's app-server connection included), then rename and archive it (4.3), record its final event count, and create the new agent (5.8).
+   The queue was already returned in draining (5.3) and the open tk steps carry over (5.9), so nothing else is captured or closed here.
    Entering this phase is the point of no return.
 4. **active**: the record's `handoff` is cleared, the new agent is the last member, the switch chip is emitted, held sends are delivered, and the chat snapshot is pushed.
 
@@ -434,7 +434,7 @@ Cancel is refused with 409 in `switching` and later.
 - From `draining` until the new agent is active, every send to the chat (from the composer, from a worker through the script, from anything else) is held: persisted on the record's `handoff` entry and answered 202 with `{"status": "held", "phase": ...}`, so the page keeps its "Sending" placeholder (shown with the phase text) and the script, which treats any 2xx as delivered-or-queued, never backs off around the hold.
   The held sends are delivered in order to the new agent right after the handoff prompt.
   This satisfies the conservation contract: the message is continuously visible and the backend, not the frontend, resolves the placeholder, which happens when the turn appears in the new agent's segment on the chat-keyed stream (4.7).
-- A repeated `message_id` while held answers 200 and holds nothing twice: the delivered-id ledger phase 1 deferred, scoped to held sends.
+- A repeated `message_id` while held answers 202 like the first time and holds nothing twice: the delivered-id ledger phase 1 deferred, scoped to held sends.
 - Sends keep being held in the `failed` phase too; they deliver on the retry.
 - The trigger message is the first of the held sends.
   It rides the new agent's `mngr create --message-file` together with the handoff prompt (5.8); the others follow through the normal send path once the agent is ready.
