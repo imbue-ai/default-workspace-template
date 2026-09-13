@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -31,6 +32,27 @@ def test_the_active_entry_is_the_last_one_unless_it_has_ended() -> None:
 
     converging = ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=True),))
     assert converging.active_entry is None
+
+
+def test_a_record_refuses_agents_that_contradict_what_it_says_about_them() -> None:
+    """The manager keys a chat on its first agent, the transcript derives its switch markers from
+    ``seq``, and ``active_entry`` reads only the last entry, so a record breaking any of those is
+    refused at the parse boundary rather than read wrong."""
+    first, second = _agent_id(), _agent_id()
+    archived_first = make_chat_agent_entry(1, first, is_archived=True)
+    live_second = make_chat_agent_entry(2, second, is_archived=False)
+
+    with pytest.raises(ValidationError, match="first agent"):
+        ChatRecord(chat_id=ChatId(second), agents=(archived_first, live_second))
+    with pytest.raises(ValidationError, match="carries seq 3"):
+        ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(3, second, is_archived=False)))
+    with pytest.raises(ValidationError, match="twice"):
+        ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(2, first, is_archived=False)))
+    with pytest.raises(ValidationError, match="no ended_at"):
+        ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=False), live_second))
+    # A converging chat (every agent archived, none active yet) and a single agent are both fine.
+    ChatRecord(chat_id=ChatId(first), agents=(archived_first, make_chat_agent_entry(2, second, is_archived=True)))
+    ChatRecord(chat_id=ChatId(first), agents=(make_chat_agent_entry(1, first, is_archived=False),))
 
 
 def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path) -> None:
@@ -107,9 +129,20 @@ def test_a_file_store_skips_a_corrupt_or_misfiled_record_and_keeps_the_rest(tmp_
         json.dumps(two_member_record(misfiled_first, _agent_id()).model_dump(mode="json"))
     )
 
+    # A record that contradicts itself (here, a chat named after an agent it does not start with)
+    # is skipped the same way, and read one at a time it names the problem.
+    inconsistent_first = _agent_id()
+    inconsistent_dir = tmp_path / "chats" / inconsistent_first
+    inconsistent_dir.mkdir()
+    inconsistent = two_member_record(_agent_id(), _agent_id()).model_dump(mode="json")
+    inconsistent["chat_id"] = inconsistent_first
+    (inconsistent_dir / "record.json").write_text(json.dumps(inconsistent))
+
     assert store.read_all() == {ChatId(good_first): good}
     with pytest.raises(ChatRecordError, match="not valid JSON"):
         store.read(ChatId(corrupt_dir.name))
+    with pytest.raises(ChatRecordError, match="first agent"):
+        store.read(ChatId(inconsistent_first))
 
 
 def test_an_in_memory_store_behaves_like_the_file_store() -> None:

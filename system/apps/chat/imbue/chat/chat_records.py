@@ -18,10 +18,12 @@ from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Final
+from typing import Self
 
 from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import model_validator
 
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.models import HandoffPhase
@@ -44,6 +46,11 @@ _LOCK_FILENAME: Final[str] = "record.lock"
 
 class ChatRecordError(RuntimeError):
     """A chat record could not be read or written."""
+
+
+class InvalidChatRecordError(ChatRecordError, ValueError):
+    """A chat record whose agents contradict what it says about them; raised inside validation, so
+    pydantic reports it as a ``ValidationError`` and the store's read turns it into a ``ChatRecordError``."""
 
 
 class ChatAgentEntry(FrozenModel):
@@ -81,6 +88,28 @@ class ChatRecord(FrozenModel):
     chat_id: ChatId = Field(description="The chat's id: its first agent's id")
     agents: tuple[ChatAgentEntry, ...] = Field(min_length=1, description="The chat's agents, in order")
     handoff: ChatHandoffRecord | None = Field(default=None, description="The in-progress handoff, or None")
+
+    @model_validator(mode="after")
+    def _check_agents_are_the_chats_in_order(self) -> Self:
+        """The record's own claims about its agents hold: the first is the chat's namesake, every
+        ``seq`` is its position, no agent appears twice, and only the last can still be running."""
+        if self.agents[0].agent_id != self.chat_id:
+            raise InvalidChatRecordError(
+                f"chat {self.chat_id}'s first agent is {self.agents[0].agent_id}, but a chat's id is its first agent's"
+            )
+        for index, entry in enumerate(self.agents):
+            if entry.seq != index + 1:
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: agent {entry.agent_id} is entry {index + 1} but carries seq {entry.seq}"
+                )
+        if len(set(self.member_agent_ids)) != len(self.agents):
+            raise InvalidChatRecordError(f"chat {self.chat_id} names an agent twice")
+        for entry in self.agents[:-1]:
+            if entry.ended_at is None:
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: agent {entry.agent_id} (seq {entry.seq}) has a successor but no ended_at"
+                )
+        return self
 
     @property
     def member_agent_ids(self) -> tuple[str, ...]:
