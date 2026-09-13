@@ -11,18 +11,18 @@ import os
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from flask import Flask
 
-from imbue.chat.accounts import commit_account
-from imbue.chat.accounts import mint_account_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_transcript import AGENT_SWITCH_EVENT_TYPE
-from imbue.chat.harnesses.auth_flows import _write_paste
+from imbue.chat.harnesses.auth_flows import FlowState
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import LANE_ANTHROPIC
 from imbue.chat.harnesses.lanes import LANE_OPENROUTER
+from imbue.chat.harnesses.lanes import Lane
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.models import HandoffPhase
 from imbue.chat.primitives import ChatId
@@ -53,19 +53,18 @@ pytestmark = [
 ]
 
 
-def _paste_method(lane_id: str) -> PasteMethod:
-    lane = LANE_ANTHROPIC if lane_id == LANE_ANTHROPIC.id else LANE_OPENROUTER
+def _sign_in_with_key(app: Flask, lane: Lane, api_key: str, key_provider: str | None) -> str:
+    """Sign one account in through the app's own paste flow, and return its id.
+
+    The test state's flow service probes nothing (its probe answers UNKNOWN), so the key
+    commits without a harness CLI check.
+    """
     method = next(method for method in lane.methods if isinstance(method, PasteMethod))
-    return method
-
-
-def _sign_in_with_key(lane_id: str, api_key: str, key_provider: str | None) -> str:
-    """Seed one account the way the paste sign-in does, and return its id."""
-    lane = LANE_ANTHROPIC if lane_id == LANE_ANTHROPIC.id else LANE_OPENROUTER
-    account_id, account_path = mint_account_dir()
-    display = _write_paste(_paste_method(lane_id).sink, account_path, api_key, key_provider, lane)
-    commit_account(account_id, lane.id, display)
-    return account_id
+    auth_flows = state_of(app).auth_flows
+    started = auth_flows.start(lane.id, method.id)
+    status = auth_flows.submit_key(started.flow_id, api_key, key_provider)
+    assert status.state is FlowState.OK and status.account_id is not None, status
+    return status.account_id
 
 
 @pytest.fixture
@@ -80,15 +79,15 @@ def handoff_app(tmp_path: Path) -> Iterator[Flask]:
         state.shutdown()
 
 
-def _events(app: Flask, chat_id: str) -> dict:
+def _events(app: Flask, chat_id: str) -> dict[str, Any]:
     response = app.test_client().get(f"/api/chats/{chat_id}/events")
     assert response.status_code == 200, response.get_data(as_text=True)
     return response.get_json()
 
 
 def test_a_chat_moves_from_claude_to_pi_and_reads_as_one_transcript(handoff_app: Flask) -> None:
-    anthropic_id = _sign_in_with_key(LANE_ANTHROPIC.id, os.environ[ANTHROPIC_KEY_ENV], None)
-    openrouter_id = _sign_in_with_key(LANE_OPENROUTER.id, os.environ[OPENROUTER_KEY_ENV], "openrouter")
+    anthropic_id = _sign_in_with_key(handoff_app, LANE_ANTHROPIC, os.environ[ANTHROPIC_KEY_ENV], None)
+    openrouter_id = _sign_in_with_key(handoff_app, LANE_OPENROUTER, os.environ[OPENROUTER_KEY_ENV], "openrouter")
     client = handoff_app.test_client()
     manager: AgentManager = state_of(handoff_app).agent_manager
 
