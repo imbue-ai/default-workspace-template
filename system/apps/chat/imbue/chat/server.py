@@ -1173,7 +1173,7 @@ def _refuse_primary_agent(agent_state_name: str, labels: dict[str, str], verb: s
 
 
 def _destroy_chat(chat_id: str) -> Response:
-    """Destroy a chat by running ``mngr destroy --force`` on its agent (the instances API's delete does the same)."""
+    """Destroy a chat by running ``mngr destroy --force`` on every agent of it (the instances API's delete does the same)."""
     agent_manager: AgentManager = get_state().agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:

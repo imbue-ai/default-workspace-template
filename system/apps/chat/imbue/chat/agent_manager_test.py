@@ -32,6 +32,7 @@ from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
@@ -2763,11 +2764,20 @@ def _recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     return str(script), log_path
 
 
+class _UnremovableChatRecordStore(InMemoryChatRecordStore):
+    """A store whose records cannot be deleted: what a read-only chat folder looks like to the file store."""
+
+    def delete(self, chat_id: ChatId) -> None:
+        raise ChatRecordError(f"chat record folder for {chat_id} could not be removed")
+
+
 def _recorded_chat(
-    broadcaster: WebSocketBroadcaster, mngr_binary: str | None = None
+    broadcaster: WebSocketBroadcaster,
+    mngr_binary: str | None = None,
+    store: InMemoryChatRecordStore | None = None,
 ) -> tuple[AgentManager, InMemoryChatRecordStore, str, str]:
     """A manager tracking a chat that moved from ``first`` (archived, stopped) to ``second`` (running)."""
-    store = InMemoryChatRecordStore()
+    store = store if store is not None else InMemoryChatRecordStore()
     manager = AgentManager.build(
         broadcaster, chat_record_store=store, mngr_binary=mngr_binary if mngr_binary is not None else "mngr"
     )
@@ -2891,6 +2901,21 @@ def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
         with pytest.raises(AgentDestroyError):
             manager.destroy_chat(ChatId(first))
         assert not argv_log.exists()
+    finally:
+        manager.stop()
+
+
+def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The agents are gone but the record would resurrect the chat at the next build, so the verb
+    reports the failure through the error its callers handle, not a foreign one."""
+    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
+    try:
+        with pytest.raises(AgentDestroyError, match="record could not be removed"):
+            manager.destroy_chat(ChatId(first))
+        assert argv_log.read_text().splitlines() == [f"destroy {first} {second} --force"]
     finally:
         manager.stop()
 

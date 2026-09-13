@@ -36,6 +36,7 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import ChatRecordStore
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.harnesses.activity import HarnessActivityTracker
@@ -1058,8 +1059,10 @@ class AgentManager:
         """Run one ``mngr destroy --force`` naming every agent of a chat, archived ones included, then drop them at once.
 
         The chat's record goes with its agents. Raises ``AgentDestroyError`` when the chat is
-        unknown or mngr refuses or fails; the caller has already refused the primary services
-        agent, which is never a chat.
+        unknown, mngr refuses or fails, or the record cannot be removed once the agents are
+        gone (a record left behind would resurrect the chat at the next build; the observe
+        stream drops the destroyed agents from the tracked state on its own); the caller has
+        already refused the primary services agent, which is never a chat.
         """
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
@@ -1075,7 +1078,12 @@ class AgentManager:
         if result.returncode != 0:
             raise AgentDestroyError(f"Failed to destroy chat '{chat_id}': {result.stderr.strip()}")
         if chat.record is not None:
-            self._chat_record_store.delete(chat_id)
+            try:
+                self._chat_record_store.delete(chat_id)
+            except ChatRecordError as e:
+                raise AgentDestroyError(
+                    f"Destroyed the agents of chat '{chat_id}', but its record could not be removed: {e}"
+                ) from e
             with self._lock:
                 self._chat_record_by_id.pop(chat_id, None)
         # Reflect the destruction immediately rather than waiting for mngr observe. With the
