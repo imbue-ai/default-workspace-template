@@ -524,10 +524,12 @@ class HandoffRunner:
         except AccountError as e:
             self._fail(chat_id, handoff_id, f"The account the chat was moving to is gone: {e}")
             return None
+        if handoff.prompt is None:
+            raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
         state_dir = self._deps.host_dir / "agents" / handoff.next_agent_id
         prompt_file = prompt_path(self._deps.chat_files_root, chat_id, handoff.next_seq)
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        prompt_file.write_text(handoff.prompt or "")
+        prompt_file.write_text(handoff.prompt)
         spec = SuccessorCreateSpec(
             name=handoff.chat_title,
             chat_id=chat_id,
