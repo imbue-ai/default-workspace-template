@@ -688,9 +688,10 @@ def _with_retiring_closed(record: ChatRecord, retiring: ChatAgentEntry, ended_at
 
 
 def _non_empty_mtime(path: Path) -> float | None:
-    """The file's mtime when it exists with content, else None."""
+    """The file's mtime when it exists with content, else None; a summary not yet written is the expected case,
+    any other failure to read it propagates (the runner logs it as the step that could not finish)."""
     try:
         stat = path.stat()
-    except OSError:
+    except FileNotFoundError:
         return None
     return stat.st_mtime if stat.st_size > 0 else None
