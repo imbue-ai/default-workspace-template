@@ -523,6 +523,54 @@ def test_a_prompt_template_that_cannot_be_filled_in_leaves_the_handoff_where_it_
     assert successor not in workspace.agents and workspace.agents[first].name == "Chat-1"
 
 
+def test_the_prompt_names_an_earlier_predecessor_by_the_archival_name_it_was_given(tmp_path: Path) -> None:
+    """A chat rename between two handoffs renames the active agent only, so an earlier member keeps the
+    archival name recorded on its entry; the prompt has to say that name, and derive one from the current
+    chat name only for the agent retiring now, which is not archived yet when the prompt is rendered."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    second = f"agent-{uuid4().hex}"
+    workspace.agents[second] = workspace.agents[first].model_copy_update(
+        to_update(workspace.agents[first].field_ref().id, second)
+    )
+    workspace.events_by_agent[second] = workspace.events_by_agent[first]
+    record = workspace.record()
+    assert record.handoff is not None
+    retired_first = record.agents[0].model_copy_update(
+        to_update(record.agents[0].field_ref().ended_at, _NOW),
+        to_update(record.agents[0].field_ref().archived_name, archived_agent_name(1, "Old-Name", first)),
+        to_update(record.agents[0].field_ref().final_event_count, 2),
+    )
+    live_second = ChatAgentEntry(
+        seq=2,
+        agent_id=second,
+        lane="anthropic",
+        account_id="acct-anthropic",
+        harness=HarnessType.CLAUDE,
+        started_at=_NOW,
+    )
+    workspace.store.write(
+        record.model_copy_update(
+            to_update(record.field_ref().agents, (retired_first, live_second)),
+            to_update(
+                record.field_ref().handoff,
+                record.handoff.model_copy_update(
+                    to_update(record.handoff.field_ref().retiring_seq, 2),
+                    to_update(record.handoff.field_ref().next_seq, 3),
+                ),
+            ),
+        )
+    )
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    prompt = prompt_path(tmp_path / "chats", workspace.chat_id, 3).read_text()
+    assert f"- seq 1: {archived_agent_name(1, 'Old-Name', first)}, id {first}" in prompt
+    assert f"- seq 2: {archived_agent_name(2, 'Chat-1', second)}, id {second}" in prompt
+    assert archived_agent_name(1, "Chat-1", first) not in prompt
+    assert successor in workspace.agents
+
+
 def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_path: Path) -> None:
     workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_written_on_request = False

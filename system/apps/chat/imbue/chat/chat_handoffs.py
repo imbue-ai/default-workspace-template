@@ -470,7 +470,7 @@ class HandoffRunner:
             case _ as unreachable:
                 assert_never(unreachable)
         predecessors = "\n".join(
-            f"- seq {entry.seq}: {archived_agent_name(entry.seq, handoff.chat_name, entry.agent_id)}, id "
+            f"- seq {entry.seq}: {_predecessor_archival_name(entry, handoff.chat_name)}, id "
             f"{entry.agent_id}, harness {entry.harness.value}, state dir {agent_state_dir(self._deps.host_dir, entry.agent_id)}"
             for entry in record.agents
         )
@@ -776,6 +776,15 @@ def _successor_state(chat_id: ChatId, handoff: ChatHandoffRecord, account_id: st
         work_dir=str(work_dir),
         harness=handoff.target_harness,
     )
+
+
+@pure
+def _predecessor_archival_name(entry: ChatAgentEntry, chat_name: str) -> str:
+    """The archival name a member carries, or will: the one recorded when it was archived (a chat rename
+    since then leaves it untouched), else the one the retiring agent is about to get under the current name."""
+    if entry.archived_name is not None:
+        return entry.archived_name
+    return archived_agent_name(entry.seq, chat_name, entry.agent_id)
 
 
 @pure
