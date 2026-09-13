@@ -20,6 +20,7 @@ from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
 from pydantic import Field
 
+from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import claim_first_chat
@@ -455,6 +456,25 @@ def _lane_of_account_label(account_label: str) -> str:
     except AccountError as e:
         _loguru_logger.debug("Recorded no lane for account {}: {}", account_label, e)
         return ""
+
+
+class _HandoffTarget(FrozenModel):
+    """The account a handoff moves a chat to, with the harness its lane runs."""
+
+    account: Account = Field(description="The signed-in account the chat moves to")
+    harness: HarnessType = Field(description="The harness the account's lane runs")
+
+
+def _resolve_handoff_target(account_id: str) -> _HandoffTarget:
+    """The account a handoff names. Raises ``HandoffError`` when it is unknown or on a lane this build lacks."""
+    try:
+        account = resolve_account(account_id)
+    except AccountError as e:
+        raise HandoffError(str(e)) from e
+    harness = harness_for(account)
+    if harness is None:
+        raise HandoffError(f"Account {account_id} is on a lane this build does not have")
+    return _HandoffTarget(account=account, harness=harness)
 
 
 @pure
@@ -1169,56 +1189,18 @@ class AgentManager:
         converging = self.get_handoff_state(chat_id)
         if converging is not None:
             raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({converging.phase.value})")
-        try:
-            account = resolve_account(account_id)
-        except AccountError as e:
-            raise HandoffError(str(e)) from e
-        target_harness = harness_for(account)
-        if target_harness is None:
-            raise HandoffError(f"Account {account_id} is on a lane this build does not have")
+        target = _resolve_handoff_target(account_id)
         now = datetime.now(timezone.utc)
         with self._lock:
-            chat = self._resolve_chat_locked(chat_id)
-            agent_state = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
-            if chat is None or agent_state is None:
-                raise HandoffError(f"Chat '{chat_id}' has no active agent to move")
-            if chat.handoff is not None:
-                raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({chat.handoff.phase.value})")
-            if is_primary_agent(agent_state):
-                raise HandoffError("The workspace's services agent is not a chat")
-            if agent_state.labels.get("account") == account.id:
-                raise HandoffError(f"Chat '{chat_id}' already runs on account {account.id}")
-            if agent_state.harness is target_harness:
-                raise HandoffError(
-                    f"Chat '{chat_id}' already runs on {target_harness.value}; switching accounts within one "
-                    "harness is not supported yet"
-                )
-            record = chat.record if chat.record is not None else self._first_record_locked(chat_id, agent_state, now)
-            retiring = record.agents[-1]
-            handoff = ChatHandoffRecord(
-                handoff_id=uuid4().hex,
-                phase=HandoffPhase.DRAINING,
-                started_at=now,
-                target_lane=account.lane,
-                target_account_id=account.id,
-                target_harness=target_harness,
-                retiring_seq=retiring.seq,
-                next_agent_id=str(AgentId()),
-                next_seq=retiring.seq + 1,
-                chat_name=agent_state.name,
-                chat_title=agent_state.labels.get("display_name") or agent_state.name,
-                project_label=agent_state.labels.get("project", ""),
-                trigger_message_id=message_id,
-                held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
-            )
-            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, handoff)))
+            agent_state = self._movable_agent_locked(chat_id, target)
+            handoff = self._open_handoff_locked(chat_id, agent_state, target, message, message_id, origin, now)
         self._broadcast_chats_updated()
         _loguru_logger.info(
             "Chat {} is moving from {} to {} (account {})",
             chat_id,
             agent_state.harness.value,
-            target_harness.value,
-            account.id,
+            target.harness.value,
+            target.account.id,
         )
         try:
             returned_block = runner.drain(chat_id, handoff.handoff_id)
@@ -1230,6 +1212,59 @@ class AgentManager:
             return HandoffPhase.DRAINING, returned_block
         self._spawn_handoff(chat_id, handoff.handoff_id, runner)
         return HandoffPhase.SUMMARIZING, returned_block
+
+    def _movable_agent_locked(self, chat_id: ChatId, target: _HandoffTarget) -> AgentStateItem:
+        """The tracked agent a chat may be moved off, or the refusal (spec 5.2). Lock held."""
+        chat = self._resolve_chat_locked(chat_id)
+        agent_state = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+        if chat is None or agent_state is None:
+            raise HandoffError(f"Chat '{chat_id}' has no active agent to move")
+        if chat.handoff is not None:
+            raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({chat.handoff.phase.value})")
+        if is_primary_agent(agent_state):
+            raise HandoffError("The workspace's services agent is not a chat")
+        if agent_state.labels.get("account") == target.account.id:
+            raise HandoffError(f"Chat '{chat_id}' already runs on account {target.account.id}")
+        if agent_state.harness is target.harness:
+            raise HandoffError(
+                f"Chat '{chat_id}' already runs on {target.harness.value}; switching accounts within one "
+                "harness is not supported yet"
+            )
+        return agent_state
+
+    def _open_handoff_locked(
+        self,
+        chat_id: ChatId,
+        agent_state: AgentStateItem,
+        target: _HandoffTarget,
+        message: str,
+        message_id: str,
+        origin: HeldSendOrigin,
+        now: datetime,
+    ) -> ChatHandoffRecord:
+        """Write the chat's handoff entry in the draining phase, with the trigger message as its first held
+        send; a chat that is still its one agent gets its record here. Lock held."""
+        existing = self._chat_record_by_id.get(chat_id)
+        record = existing if existing is not None else self._first_record_locked(chat_id, agent_state, now)
+        retiring = record.agents[-1]
+        handoff = ChatHandoffRecord(
+            handoff_id=uuid4().hex,
+            phase=HandoffPhase.DRAINING,
+            started_at=now,
+            target_lane=target.account.lane,
+            target_account_id=target.account.id,
+            target_harness=target.harness,
+            retiring_seq=retiring.seq,
+            next_agent_id=str(AgentId()),
+            next_seq=retiring.seq + 1,
+            chat_name=agent_state.name,
+            chat_title=agent_state.labels.get("display_name") or agent_state.name,
+            project_label=agent_state.labels.get("project", ""),
+            trigger_message_id=message_id,
+            held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+        )
+        self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, handoff)))
+        return handoff
 
     def _first_record_locked(self, chat_id: ChatId, agent_state: AgentStateItem, now: datetime) -> ChatRecord:
         """The record a chat gets at its first handoff: its one agent so far, as seq 1. Lock held."""
@@ -1301,13 +1336,7 @@ class AgentManager:
         when the chat is not in the failed phase or the account is unknown.
         """
         runner = self._handoff_runner()
-        try:
-            account = resolve_account(account_id)
-        except AccountError as e:
-            raise HandoffError(str(e)) from e
-        target_harness = harness_for(account)
-        if target_harness is None:
-            raise HandoffError(f"Account {account_id} is on a lane this build does not have")
+        target = _resolve_handoff_target(account_id)
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
             handoff = record.handoff if record is not None else None
@@ -1316,13 +1345,13 @@ class AgentManager:
             retried = handoff.model_copy_update(
                 to_update(handoff.field_ref().phase, HandoffPhase.SWITCHING),
                 to_update(handoff.field_ref().error, None),
-                to_update(handoff.field_ref().target_lane, account.lane),
-                to_update(handoff.field_ref().target_account_id, account.id),
-                to_update(handoff.field_ref().target_harness, target_harness),
+                to_update(handoff.field_ref().target_lane, target.account.lane),
+                to_update(handoff.field_ref().target_account_id, target.account.id),
+                to_update(handoff.field_ref().target_harness, target.harness),
             )
             self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, retried)))
         self._broadcast_chats_updated()
-        _loguru_logger.info("Retrying the handoff of chat {} on account {}", chat_id, account.id)
+        _loguru_logger.info("Retrying the handoff of chat {} on account {}", chat_id, target.account.id)
         self._spawn_handoff(chat_id, retried.handoff_id, runner)
         return HandoffPhase.SWITCHING
 
