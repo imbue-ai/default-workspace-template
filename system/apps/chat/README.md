@@ -66,8 +66,30 @@ the chat's transcript as its agents' segments in order with an `agent_switch`
 chip between them: an archived segment is read through its harness's
 `TranscriptLoader` (the watcher without the watching), loaded on the first read
 that reaches into it and dropped with the chat, and every event on the wire
-carries its `agent_id`. Nothing writes a record yet; the handoff that does is
-the next phase of that plan.
+carries its `agent_id`.
+
+A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
+`POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
+for the new agent. The chat app stops the current agent's turn and hands its
+queue back (draining), asks the agent for a summary through the
+`handoff-summary` skill unless a fresh one exists (summarizing), then stops and
+archives it under `archived-<seq>-<name>-<id>` with one `mngr rename`, records
+its segment's length, and creates the successor under a pre-minted id with the
+chat's name, the account's binding, `chat_id`/`chat_seq` labels, and a first
+message filled in from `.agents/shared/references/continue-chat.md`
+(switching). Every step is recorded on the chat record's `handoff` entry and
+re-checked against mngr's state, so a restart of the app resumes an unfinished
+handoff where it stopped. While a chat converges its instance stays listed as
+`working` from the retiring agent; stop, start, rename, interrupt, the queue
+actions, and the model change answer 409; a send is held (202, `{"status":
+"held"}`) and delivered to the successor in order once it runs; destroy
+proceeds. `POST .../handoff/cancel` calls it off before switching begins and
+returns the confirming message for the composer; a failed create leaves the
+chat in the `failed` phase with the reason, and `POST .../handoff/retry` with
+an `account_id` runs the create again with the same prompt. The event fan-out
+and the SSE streams are keyed by chat id, so an open page follows the chat
+through the switch and sees the chip live. The summaries and prompts live
+beside the record under `data/.apps/chat/chats/<chat-id>/`.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
