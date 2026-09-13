@@ -551,11 +551,9 @@ def test_a_cancelled_handoff_stops_the_runner_before_switching(tmp_path: Path) -
     assert successor not in workspace.agents and workspace.agents[first].name == "Chat-1"
 
 
-def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(tmp_path: Path) -> None:
-    """A restart mid-switch: the retiring agent is already archived and the successor's create
-    landed without this process seeing it, so the resume renames and creates nothing."""
-    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
-    (tmp_path / "work").mkdir()
+def _track_archived_retiring_and_running_successor(workspace: _FakeWorkspace, first: str, successor: str) -> str:
+    """What mngr shows after the switch's stop, rename, and create: the first agent stopped under its
+    archival name and the successor running. Returns the archival name."""
     archival = archived_agent_name(1, "Chat-1", first)
     workspace.agents[first] = workspace.agents[first].model_copy_update(
         to_update(workspace.agents[first].field_ref().name, archival),
@@ -569,6 +567,15 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
         work_dir=None,
         harness=HarnessType.CODEX,
     )
+    return archival
+
+
+def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(tmp_path: Path) -> None:
+    """A restart mid-switch: the retiring agent is already archived and the successor's create
+    landed without this process seeing it, so the resume renames and creates nothing."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    (tmp_path / "work").mkdir()
+    archival = _track_archived_retiring_and_running_successor(workspace, first, successor)
     record = workspace.record()
     assert record.handoff is not None
     workspace.store.write(
@@ -594,6 +601,52 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
     assert workspace.argv_lines() == [] and workspace.stopped == []
     # The adopted agent got the prompt from its own create; nothing else was held for it.
     assert workspace.delivered == []
+
+
+def test_a_resume_mid_delivery_delivers_what_is_still_held_and_touches_neither_agent(tmp_path: Path) -> None:
+    """A restart after the successor was appended to the record but before every held send reached
+    it: the switch is not run again on the successor (the record's last entry); only the delivery is."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SWITCHING)
+    (tmp_path / "work").mkdir()
+    archival = _track_archived_retiring_and_running_successor(workspace, first, successor)
+    record = workspace.record()
+    assert record.handoff is not None
+    retired = record.agents[0].model_copy_update(
+        to_update(record.agents[0].field_ref().ended_at, _NOW),
+        to_update(record.agents[0].field_ref().archived_name, archival),
+        to_update(record.agents[0].field_ref().final_event_count, 3),
+    )
+    appended = ChatAgentEntry(
+        seq=2,
+        agent_id=successor,
+        lane="openai",
+        account_id=_OPENAI_ACCOUNT.id,
+        harness=HarnessType.CODEX,
+        started_at=_NOW,
+    )
+    late = HeldSend(message_id="m-late", text="one more", origin=HeldSendOrigin.SCRIPT, received_at=_NOW)
+    workspace.store.write(
+        record.model_copy_update(
+            to_update(record.field_ref().agents, (retired, appended)),
+            to_update(
+                record.field_ref().handoff,
+                record.handoff.model_copy_update(
+                    to_update(record.handoff.field_ref().prompt, "the stored prompt"),
+                    to_update(record.handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
+                    to_update(record.handoff.field_ref().held_sends, (late,)),
+                ),
+            ),
+        )
+    )
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    finished = workspace.record()
+    assert finished.handoff is None
+    assert finished.agents == (retired, appended)
+    assert workspace.stopped == [] and workspace.argv_lines() == [] and workspace.broadcasts == []
+    assert (workspace.agents[successor].state, workspace.agents[successor].name) == ("RUNNING", "Chat-1")
+    assert workspace.delivered == [(successor, "one more", "m-late")]
 
 
 def test_a_runner_for_a_handoff_that_is_gone_does_nothing(tmp_path: Path) -> None:

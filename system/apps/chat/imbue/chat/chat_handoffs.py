@@ -430,15 +430,24 @@ class HandoffRunner:
     # -- switching -----------------------------------------------------------------------------
 
     def _switch(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
-        """Stop, archive, and measure the retiring agent, then create the successor and hand it the held sends."""
-        retiring = record.agents[-1]
-        self._stop_retiring(chat_id, retiring)
-        self._archive_retiring(chat_id, handoff, retiring)
-        record_after_count = self._record_final_count(chat_id, handoff_id, retiring)
-        successor_state = self._create_successor(chat_id, handoff_id, record_after_count, handoff)
-        if successor_state is None:
-            return
-        self._complete(chat_id, handoff_id, record_after_count, handoff, successor_state)
+        """Stop, archive, and measure the retiring agent, then create the successor and hand it the held sends.
+
+        The phase outlasts the successor's appearance in the record: the held sends are
+        delivered after it is appended, so a resume that finds it there (the last process
+        died mid-delivery) has only the delivery left to do.
+        """
+        if record.agents[-1].agent_id != handoff.next_agent_id:
+            retiring = _retiring_entry(record, handoff)
+            self._stop_retiring(chat_id, retiring)
+            self._archive_retiring(chat_id, handoff, retiring)
+            record_after_count = self._record_final_count(chat_id, handoff_id, retiring)
+            successor_state = self._create_successor(chat_id, handoff_id, record_after_count, handoff)
+            if successor_state is None:
+                return
+            self._adopt_successor(
+                chat_id, handoff_id, _retiring_entry(record_after_count, handoff), handoff, successor_state
+            )
+        self._deliver_held_sends(chat_id, handoff_id, handoff.next_agent_id)
 
     def _stop_retiring(self, chat_id: ChatId, retiring: ChatAgentEntry) -> None:
         agent_state = self._deps.get_agent_state(retiring.agent_id)
@@ -589,21 +598,15 @@ class HandoffRunner:
             return None
         return failure_notice(f"mngr create exited with code {result.returncode}", output_tail.text())
 
-    def _complete(
+    def _adopt_successor(
         self,
         chat_id: ChatId,
         handoff_id: str,
-        record: ChatRecord,
+        retiring: ChatAgentEntry,
         handoff: ChatHandoffRecord,
         successor_state: AgentStateItem,
     ) -> None:
-        """Make the successor the chat's agent, emit the chip, and deliver the held sends in order.
-
-        The handoff entry is cleared only once the held list is empty, inside the same lock
-        the message route appends under, so a send that arrives during delivery is delivered
-        by this loop rather than overtaking one still held.
-        """
-        retiring = record.agents[-1]
+        """Make the successor the chat's agent: append its entry to the record, track it, and emit the chip."""
         successor = ChatAgentEntry(
             seq=handoff.next_seq,
             agent_id=handoff.next_agent_id,
@@ -642,14 +645,20 @@ class HandoffRunner:
                 )
             ],
         )
-        successor_info = self._deps.get_agent_info(successor.agent_id)
+
+    def _deliver_held_sends(self, chat_id: ChatId, handoff_id: str, successor_id: str) -> None:
+        """Deliver the held sends to the successor in order, then finish the handoff.
+
+        The handoff entry is cleared only once the held list is empty, inside the same lock
+        the message route appends under, so a send that arrives during delivery is delivered
+        by this loop rather than overtaking one still held.
+        """
+        successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is not None:
             self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
             if successor_info is None:
-                logger.warning(
-                    "Handoff of chat {}: agent {} is untracked; a held send is lost", chat_id, successor.agent_id
-                )
+                logger.warning("Handoff of chat {}: agent {} is untracked; a held send is lost", chat_id, successor_id)
                 continue
             try:
                 outcome = self._deps.deliver(successor_info, held.text, held.message_id)
@@ -658,7 +667,13 @@ class HandoffRunner:
                 continue
             if outcome is not SendOutcome.OK:
                 logger.warning("Handoff of chat {}: a held send did not land ({})", chat_id, outcome.value)
-        logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor.agent_id)
+        logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
+
+
+@pure
+def _retiring_entry(record: ChatRecord, handoff: ChatHandoffRecord) -> ChatAgentEntry:
+    """The entry of the agent the handoff retires: the last one, or the one before a successor already appended."""
+    return next(entry for entry in record.agents if entry.seq == handoff.retiring_seq)
 
 
 @pure
