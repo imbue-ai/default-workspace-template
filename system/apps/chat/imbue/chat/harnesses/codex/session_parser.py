@@ -49,6 +49,7 @@ re-read from byte 0) the same user bubble dedups instead of duplicating.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -324,7 +325,19 @@ def _item_content_text(content: Any) -> str | None:
     return text or None
 
 
-def _marker_event_id(payload: dict[str, Any], payload_type: str, line_index: int) -> str:
+def _synthetic_event_id(kind: str, timestamp: str, payload: dict[str, Any]) -> str:
+    """A position-independent id for a rollout line codex gave no id of its own.
+
+    Derived from the line's own content (its timestamp plus its payload) so a rollout that is
+    compressed and re-materialised, or re-serialised on resume, yields the same id for the same
+    line and the store dedups the copies -- and so two codex agents of one chat can never mint
+    the same id from the same line number (the spine's rule at the top of ``harnesses/events``).
+    """
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"codex-{kind}-{timestamp}-{digest}"
+
+
+def _marker_event_id(payload: dict[str, Any], payload_type: str, timestamp: str) -> str:
     """The event id for a turn-lifecycle marker, keyed on codex's own ``turn_id``.
 
     The spine's rule: an ``event_id`` must be the harness's own STABLE id, never a
@@ -332,12 +345,12 @@ def _marker_event_id(payload: dict[str, Any], payload_type: str, line_index: int
     duplicating the marker, and makes truncation/supersession inexpressible). Codex's
     ``task_started`` / ``task_complete`` / ``turn_aborted`` carry a ``turn_id`` (the
     started/complete pair share one, so the ``payload_type`` suffix keeps them
-    distinct). Falls back to the line index only if a marker ever arrives without one.
+    distinct). Falls back to a content-derived id only if a marker ever arrives without one.
     """
     turn_id = payload.get("turn_id")
     if isinstance(turn_id, str) and turn_id:
         return f"codex-turn-{turn_id}-{payload_type}"
-    return f"codex-{line_index}-{payload_type}"
+    return _synthetic_event_id(payload_type, timestamp, payload)
 
 
 def _marker_turn_id(payload: dict[str, Any]) -> str | None:
@@ -376,7 +389,6 @@ def _user_message_events(timestamp: str, text: str | None, client_id: str | None
 # JSON object per line, keyed by a stable ``queued_id`` (see the fork's
 def parse_lines(
     record: dict[str, Any],
-    line_index: int,
     tool_name_by_call_id: dict[str, str],
     turn_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -384,7 +396,6 @@ def parse_lines(
 
     Returns a *list* because one rollout line can expand to more than one event.
 
-    ``line_index`` is the stable physical line number (for event-id synthesis).
     ``tool_name_by_call_id`` is a mutable cross-line map so a ``function_call_output``
     can recover its tool name from the earlier ``function_call``.
     ``turn_state`` is a mutable cross-line dict carrying the EFFECTIVE per-turn model/effort read
@@ -450,7 +461,7 @@ def parse_lines(
         # turn_aborted marker; the activity layer treats it as resolving every
         # still-open tool call (see ``activity_state.pending_tool_call``).
         if payload_type == "turn_aborted":
-            event_id = _marker_event_id(payload, "turn_aborted", line_index)
+            event_id = _marker_event_id(payload, "turn_aborted", timestamp)
             return [
                 {
                     "timestamp": timestamp,
@@ -470,7 +481,7 @@ def parse_lines(
         # on screen.
         if payload_type in ("task_started", "task_complete"):
             kind = SpecialEventKind.TURN_STARTED if payload_type == "task_started" else SpecialEventKind.TURN_COMPLETED
-            event_id = _marker_event_id(payload, payload_type, line_index)
+            event_id = _marker_event_id(payload, payload_type, timestamp)
             marker: dict[str, Any] = {
                 "timestamp": timestamp,
                 "type": SPECIAL_EVENT_TYPE,
@@ -519,9 +530,13 @@ def parse_lines(
     if payload_type == "message":
         if payload.get("role") == "assistant":
             # codex re-serialises history; each copy shares the message ``id``, so
-            # keying the event id on it dedups the copies (fall back to line index).
+            # keying the event id on it dedups the copies.
             msg_id = payload.get("id")
-            event_id = f"codex-{msg_id}" if isinstance(msg_id, str) and msg_id else f"codex-{line_index}-assistant"
+            event_id = (
+                f"codex-{msg_id}"
+                if isinstance(msg_id, str) and msg_id
+                else _synthetic_event_id("assistant", timestamp, payload)
+            )
             return [
                 _assistant_event(
                     timestamp,
@@ -540,7 +555,7 @@ def parse_lines(
         if call_id and tool_name:
             tool_name_by_call_id[call_id] = tool_name
         # Same dedup rationale: a re-serialised tool call keeps its ``call_id``.
-        event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
+        event_id = f"codex-call-{call_id}" if call_id else _synthetic_event_id("assistant", timestamp, payload)
         return [
             _assistant_event(
                 timestamp,
@@ -553,7 +568,7 @@ def parse_lines(
 
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
+        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
         raw_output = _output_text(payload.get("output"))
         # The structured facts lifted from the full output, which itself stays off the
         # event (the payload-free wire contract): the permission-request object the card
@@ -603,7 +618,7 @@ def _reasoning_summary_text(payload: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def parse_line_detail(record: dict[str, Any], line_index: int) -> dict[str, dict[str, Any]]:
+def parse_line_detail(record: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Full deferred payloads by event_id for one raw codex rollout line.
 
     The read half of the payload-free wire contract: tool inputs and outputs are re-read
@@ -611,12 +626,13 @@ def parse_line_detail(record: dict[str, Any], line_index: int) -> dict[str, dict
     a DIFFERENT line than the assistant event; see :func:`parse_reasoning_detail`).
     """
     payload = record.get("payload")
-    if record.get("type") != "response_item" or not isinstance(payload, dict):
+    timestamp = record.get("timestamp", "")
+    if record.get("type") != "response_item" or not isinstance(payload, dict) or not isinstance(timestamp, str):
         return {}
     payload_type = payload.get("type")
     if payload_type in ("function_call", "custom_tool_call"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-call-{call_id}" if call_id else f"codex-{line_index}-assistant"
+        event_id = f"codex-call-{call_id}" if call_id else _synthetic_event_id("assistant", timestamp, payload)
         return {
             event_id: {
                 "inputs_by_tool_call_id": {call_id: _tool_call_raw_input(payload)},
@@ -626,7 +642,7 @@ def parse_line_detail(record: dict[str, Any], line_index: int) -> dict[str, dict
         }
     if payload_type in ("function_call_output", "custom_tool_call_output"):
         call_id = str(payload.get("call_id", ""))
-        event_id = f"codex-result-{call_id}" if call_id else f"codex-{line_index}-tool_result"
+        event_id = f"codex-result-{call_id}" if call_id else _synthetic_event_id("tool_result", timestamp, payload)
         return {
             event_id: {"inputs_by_tool_call_id": {}, "output": _output_text(payload.get("output")), "thinking": None}
         }

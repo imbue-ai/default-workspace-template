@@ -15,8 +15,10 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -38,9 +40,10 @@ class ChatAppState(MutableModel):
     """Holds every shared service handle and config for one chat app.
 
     Built once in ``main.build_production_state`` (or by a test) and stored on the Flask
-    app; handlers read it via ``get_state()``. Owns the per-agent session-watcher registry
-    and the latchkey catalog cache (both guarded for concurrent access under the threaded
-    WSGI server).
+    app; handlers read it via ``get_state()``. Owns the per-agent session-watcher registry,
+    the loaders of the archived segments a chat's transcript has been read into, and the
+    latchkey catalog cache (all guarded for concurrent access under the threaded WSGI
+    server).
     """
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
@@ -56,6 +59,10 @@ class ChatAppState(MutableModel):
     http_client: httpx.Client
     latchkey_http_client: httpx.Client
     watchers: dict[str, AgentSessionWatcher] = {}
+    # The archived segments read so far, by agent id: loaded on the first read that reaches
+    # one and dropped with the chat (``stop_and_remove_watcher``), so a chat that is not
+    # being read holds none of its history resident.
+    loaders: dict[str, TranscriptLoader] = {}
     latchkey_catalog_cache: dict[str, Any] = {}
     static_directory: Path = Field(
         default=DEFAULT_STATIC_DIRECTORY,
@@ -138,15 +145,32 @@ class ChatAppState(MutableModel):
         watcher.start()
         return watcher
 
+    def get_or_create_loader(self, agent_info: AgentInfo) -> TranscriptLoader:
+        """The loader over one archived agent's transcript, built on the first read that needs it.
+
+        The read side of the agent's watcher with nothing live: an archived segment of a chat
+        is read through this (``chat_transcript.py``). Cached beside the watchers, under the
+        same lock, and dropped with the chat by ``stop_and_remove_watcher``.
+        """
+        with self._watchers_lock:
+            existing = self.loaders.get(agent_info.id)
+            if existing is not None:
+                return existing
+            logger.debug("Loading the archived transcript of agent {}", agent_info.id)
+            loader = build_loader(agent_info)
+            self.loaders[agent_info.id] = loader
+            return loader
+
     def stop_and_remove_watcher(self, agent_id: str) -> None:
-        """Evict one agent's watcher, releasing its resident transcript, thread, and
-        filesystem watches.
+        """Evict everything resident for one agent: its watcher (the resident transcript, thread,
+        and filesystem watches) and, for an archived member of a chat, its loader.
 
         The memory half of the chat lifecycle: called when an agent is destroyed or its
-        lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an OOM
-        shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
-        Cheap no-op when no watcher exists. Rebuild-on-demand is `get_or_create_watcher`:
-        viewing a stopped chat re-reads its transcript from disk transparently.
+        chat's lifecycle transitions to positively dead (stopped from the UI, `mngr stop`, an
+        OOM shed, idle shutdown), so a chat that is not running holds no chat-backend memory.
+        Cheap no-op when nothing is resident. Rebuild-on-demand is `get_or_create_watcher`
+        and `get_or_create_loader`: viewing a stopped chat re-reads its transcript from disk
+        transparently.
 
         The watcher is popped under the lock but stopped outside it -- `stop` joins the
         watch thread, and holding the lock across that join would stall every other
@@ -154,15 +178,22 @@ class ChatAppState(MutableModel):
         """
         with self._watchers_lock:
             watcher = self.watchers.pop(agent_id, None)
+            loader = self.loaders.pop(agent_id, None)
         if watcher is not None:
             logger.debug("Evicting the session watcher for agent {}", agent_id)
             watcher.stop()
+        if loader is not None:
+            logger.debug("Evicting the loaded transcript of agent {}", agent_id)
+            loader.close()
 
     def stop_all_watchers(self) -> None:
         with self._watchers_lock:
             for watcher in self.watchers.values():
                 watcher.stop()
             self.watchers.clear()
+            for loader in self.loaders.values():
+                loader.close()
+            self.loaders.clear()
 
     def shutdown(self) -> None:
         """Tear down every owned resource. Idempotent."""

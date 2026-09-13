@@ -1,11 +1,13 @@
-"""Tail a pi agent's native session JSONL and emit UI events.
+"""Read a pi agent's native session JSONL into UI events, and tail the live one.
 
 Built on the shared :class:`~imbue.chat.harnesses.transcript_store` scaffolding
-with a single lane: pi is one logical session to the UI. The watcher registers EVERY
+with a single lane: pi is one logical session to the UI. The loader registers EVERY
 session file in the sessions dir: static (pre-rotation) files are consumed once in
 chronological order, then the live file (followed across ``/new`` via the
-``pi_session_file`` marker) is tailed incrementally. A rebuilt watcher therefore recovers
+``pi_session_file`` marker) is tailed incrementally. A rebuilt reader therefore recovers
 the full cross-rotation history from disk, which is what makes eviction-on-stop safe.
+:class:`PiTranscriptLoader` is the read half, which an archived chat segment is read through
+with no thread and no watches; :class:`PiSessionWatcher` adds the live half and the queue.
 
 Queued messages (the shoulder tap) are populated from mngr's ``pi_inbox`` -- the file mngr
 appends each outgoing message to before the extension injects it: each new inbox line is an
@@ -14,7 +16,8 @@ process generation: the lifecycle extension archives-and-truncates ``pi_inbox`` 
 the enqueue replay only ever sees current-generation lines), and leaves only pop when the
 ``user_message`` timestamp is at or after the ``pi_process_started`` marker's mtime (so a
 dead generation's drains -- including everything in the static files -- never pop
-current-generation entries).
+current-generation entries). The queue is the watcher's alone: an archived agent has no
+live process whose inbox could be mirrored.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from imbue.chat.harnesses.pi_coding.session_parser import parse_record
 from imbue.chat.harnesses.pi_coding.session_parser import parse_record_detail
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
+from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
 from imbue.chat.harnesses.transcript_store import split_at_last_complete_line
@@ -92,80 +96,63 @@ def _is_current_generation_drain(event_timestamp: str | None, process_started_at
     return event_at >= process_started_at
 
 
-class PiSessionWatcher(StoreBackedWatcher):
-    """Watches a pi agent's native session files (+ inbox) and emits parsed UI events."""
+class PiTranscriptLoader(StoreBackedTranscriptLoader):
+    """Reads a pi agent's native session files (static ones once, the live one incrementally) into the store."""
 
-    # Instance attributes declared at class level so a `build()` classmethod (no
+    # Instance attributes declared at class level so a `build_loader()` classmethod (no
     # __init__) can assign them while the type checker still resolves every access.
     _marker_path: Path
     _process_started_marker_path: Path
     _sessions_dir: Path
-    _inbox_path: Path
     _current_path: Path | None
     _byte_offset: int
     _consumed_static_paths: set[Path]
     _is_static_scan_done: bool
-    _queue_tracker: PiQueueTracker
-    _inbox_offset: int
-    _inbox_line_count: int
-    _queue_snapshot_callback: QueueSnapshotCallback | None
-    _last_queue_snapshot: list[dict[str, str]]
 
     @classmethod
-    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "PiSessionWatcher":
-        """Build from the agent record. pi needs only the state dir: its session files and
-        inbox both live under it."""
-        agent_state_dir = agent_info.agent_state_dir
-        self = cls.__new__(cls)
-        self._init_store_watcher(agent_info.id, on_events)
+    def build_loader(cls, agent_info: AgentInfo) -> "PiTranscriptLoader":
+        loader = cls.__new__(cls)
+        loader._init_loader(agent_info.id)
+        loader._init_pi_state(agent_info.agent_state_dir)
+        return loader
+
+    def _init_pi_state(self, agent_state_dir: Path) -> None:
         self._marker_path = agent_state_dir / _MARKER_RELATIVE
         self._process_started_marker_path = agent_state_dir / _PROCESS_STARTED_MARKER_RELATIVE
         self._sessions_dir = agent_state_dir / _SESSIONS_RELATIVE
-        self._inbox_path = agent_state_dir / _INBOX_RELATIVE
-
         # The live file being tailed and its cursor; static (pre-rotation) files are
         # consumed whole exactly once.
-        self._current_path: Path | None = None
+        self._current_path = None
         self._byte_offset = 0
-        self._consumed_static_paths: set[Path] = set()
+        self._consumed_static_paths = set()
         # Static files only ever appear through a rotation (the marker changing) or before
         # the first scan, so the rglob sweep is gated on those rather than run per refresh.
         self._is_static_scan_done = False
 
-        # Queue: the populator, the inbox cursor, a monotonic line counter (for stable
-        # queued ids), the snapshot sink, and the last snapshot pushed (so a cycle that
-        # leaves the queue unchanged pushes nothing).
-        self._queue_tracker = PiQueueTracker.build()
-        self._inbox_offset = 0
-        self._inbox_line_count = 0
-        self._queue_snapshot_callback: QueueSnapshotCallback | None = None
-        self._last_queue_snapshot: list[dict[str, str]] = []
-        return self
+    # -- the queue's hooks (the watcher's; a loader mirrors no live queue) -----------------
+
+    def _consume_inbox_locked(self) -> None:
+        """Fold the inbox's new lines into the live queue, before the turns they drain into are read."""
+
+    def _on_live_session_rotated_locked(self) -> None:
+        """The live session file moved (a ``/new``): pi's followUp queue does not survive it."""
+
+    def _on_user_turn_drained_locked(self) -> None:
+        """A current-generation ``user_message`` was committed: one queued message left the queue."""
 
     # -- base hooks -----------------------------------------------------------------------
 
-    def _watch_paths(self) -> tuple[Path, ...]:
-        # The sessions dir (recursive, so appends to whichever session file is live wake
-        # the loop without re-scheduling on a /new rotation) plus the inbox file.
-        return (self._sessions_dir, self._inbox_path)
-
-    def _before_broadcast(self) -> None:
-        # A3b depart-before-arrive: when a queued message drains into a real turn, the chip
-        # must be removed before the transcript turn is shown -- push the snapshot (chip
-        # removal) first, then the events (the turn).
-        self._push_queue_snapshot_if_changed()
-
     def _refresh_locked(self) -> None:
-        """Bring the store + queue up to date with disk: the inbox first (so an enqueue
-        exists before the turn it drains into is counted as a leave), then the static
-        session files (once each, in chronological order), then the live file."""
+        """Bring the store (and the watcher's queue) up to date with disk: the inbox first (so
+        an enqueue exists before the turn it drains into is counted as a leave), then the
+        static session files (once each, in chronological order), then the live file."""
         self._consume_inbox_locked()
         process_started_at = self._read_process_started_at()
         target = read_marker_session_path(self._marker_path)
 
         # Static files: every session file that is not the live one, consumed whole once,
         # oldest first, so pre-rotation history lands in chronological order. This is what
-        # lets a rebuilt watcher (backend restart, eviction) recover the full timeline.
+        # lets a rebuilt reader (backend restart, eviction) recover the full timeline.
         if not self._is_static_scan_done or target != self._current_path:
             try:
                 candidates = list(self._sessions_dir.rglob("*.jsonl"))
@@ -187,13 +174,12 @@ class PiSessionWatcher(StoreBackedWatcher):
             return
         if target != self._current_path:
             # First resolution or a /new rotation. Consume any remaining tail of the old
-            # live file, then tail the new one from its start. pi's followUp queue does not
-            # survive /new, so clear the queued set on a real rotation.
+            # live file, then tail the new one from its start.
             if self._current_path is not None:
                 self._consume_live_tail_locked(self._current_path, process_started_at)
                 if self._is_fully_tailed_locked(self._current_path):
                     self._consumed_static_paths.add(self._current_path)
-                self._queue_tracker.clear()
+                self._on_live_session_rotated_locked()
             self._current_path = target
             self._byte_offset = 0
         self._consume_live_tail_locked(target, process_started_at)
@@ -261,7 +247,7 @@ class PiSessionWatcher(StoreBackedWatcher):
             if not stripped:
                 continue
             for event in self._adapt_line(stripped):
-                is_new = self._store.ingest(_LANE, event, (path, byte_offset, byte_len))
+                is_new = self._ingest_locked(_LANE, event, (path, byte_offset, byte_len))
                 # A newly-committed ``user_message`` from the current process generation is
                 # a drained turn, so it pops one queue head; a dead generation's drain (and
                 # any supersede/duplicate) leaves the queue untouched.
@@ -270,7 +256,7 @@ class PiSessionWatcher(StoreBackedWatcher):
                     and event.get("type") == "user_message"
                     and _is_current_generation_drain(event.get("timestamp"), process_started_at)
                 ):
-                    self._queue_tracker.leave()
+                    self._on_user_turn_drained_locked()
 
     def _adapt_line(self, line: str) -> list[dict[str, Any]]:
         try:
@@ -283,6 +269,107 @@ class PiSessionWatcher(StoreBackedWatcher):
         if not isinstance(record, dict):
             return []
         return parse_record(record)
+
+    def _read_process_started_at(self) -> float | None:
+        """The ``pi_process_started`` marker's mtime, or None when it is absent."""
+        try:
+            return self._process_started_marker_path.stat().st_mtime
+        except OSError:
+            return None
+
+    # -- on-demand payload detail ---------------------------------------------------------
+
+    def _parse_detail(
+        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
+    ) -> dict[str, Any] | None:
+        if source_line is None:
+            return None
+        try:
+            record = json.loads(source_line.strip())
+        except json.JSONDecodeError as e:
+            # A recorded byte range no longer decodes: a stale range or real corruption,
+            # rare either way and worth surfacing (the fallback scan runs next).
+            logger.warning("pi watcher: undecodable session line during a payload read: {}", e)
+            return None
+        if not isinstance(record, dict):
+            return None
+        return parse_record_detail(record).get(event["event_id"])
+
+    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
+        """Scan the live session file for the record that carries this event's payloads."""
+        with self._lock:
+            target = self._current_path
+        if target is None:
+            return None
+        event_id = event["event_id"]
+        try:
+            with target.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError as e:
+                        # A complete line failing to decode mid-scan is corruption; the
+                        # trailing partial line (mid-write) is the routine near-miss.
+                        logger.warning("pi watcher: undecodable line in a payload fallback scan: {}", e)
+                        continue
+                    if isinstance(record, dict) and event_id in parse_record_detail(record):
+                        return line
+        except OSError:
+            return None
+        return None
+
+
+class PiSessionWatcher(PiTranscriptLoader, StoreBackedWatcher):
+    """Watches a pi agent's native session files (+ inbox) and emits parsed UI events."""
+
+    _inbox_path: Path
+    _queue_tracker: PiQueueTracker
+    _inbox_offset: int
+    _inbox_line_count: int
+    _queue_snapshot_callback: QueueSnapshotCallback | None
+    _last_queue_snapshot: list[dict[str, str]]
+
+    @classmethod
+    def build(cls, agent_info: AgentInfo, on_events: OnEventsCallback) -> "PiSessionWatcher":
+        """Build from the agent record. pi needs only the state dir: its session files and
+        inbox both live under it."""
+        agent_state_dir = agent_info.agent_state_dir
+        self = cls.__new__(cls)
+        self._init_store_watcher(agent_info.id, on_events)
+        self._init_pi_state(agent_state_dir)
+        self._inbox_path = agent_state_dir / _INBOX_RELATIVE
+
+        # Queue: the populator, the inbox cursor, a monotonic line counter (for stable
+        # queued ids), the snapshot sink, and the last snapshot pushed (so a cycle that
+        # leaves the queue unchanged pushes nothing).
+        self._queue_tracker = PiQueueTracker.build()
+        self._inbox_offset = 0
+        self._inbox_line_count = 0
+        self._queue_snapshot_callback = None
+        self._last_queue_snapshot = []
+        return self
+
+    # -- base hooks -----------------------------------------------------------------------
+
+    def _watch_paths(self) -> tuple[Path, ...]:
+        # The sessions dir (recursive, so appends to whichever session file is live wake
+        # the loop without re-scheduling on a /new rotation) plus the inbox file.
+        return (self._sessions_dir, self._inbox_path)
+
+    def _before_broadcast(self) -> None:
+        # A3b depart-before-arrive: when a queued message drains into a real turn, the chip
+        # must be removed before the transcript turn is shown -- push the snapshot (chip
+        # removal) first, then the events (the turn).
+        self._push_queue_snapshot_if_changed()
+
+    def _on_live_session_rotated_locked(self) -> None:
+        self._queue_tracker.clear()
+
+    def _on_user_turn_drained_locked(self) -> None:
+        self._queue_tracker.leave()
 
     # -- inbox / queue --------------------------------------------------------------------
 
@@ -338,13 +425,6 @@ class PiSessionWatcher(StoreBackedWatcher):
             self._queue_tracker.enqueue(self._inbox_line_count, content, "")
             self._inbox_line_count += 1
 
-    def _read_process_started_at(self) -> float | None:
-        """The ``pi_process_started`` marker's mtime, or None when it is absent."""
-        try:
-            return self._process_started_marker_path.stat().st_mtime
-        except OSError:
-            return None
-
     def _push_queue_snapshot_if_changed(self) -> None:
         """Push the live queued snapshot to the sink iff it differs from the last pushed.
 
@@ -391,47 +471,3 @@ class PiSessionWatcher(StoreBackedWatcher):
             # the same empty set (the manager broadcasts the returned value directly).
             self._last_queue_snapshot = snapshot
         return snapshot
-
-    # -- on-demand payload detail ---------------------------------------------------------
-
-    def _parse_detail(
-        self, event: dict[str, Any], source_line: str | None, thinking_line: str | None
-    ) -> dict[str, Any] | None:
-        if source_line is None:
-            return None
-        try:
-            record = json.loads(source_line.strip())
-        except json.JSONDecodeError as e:
-            # A recorded byte range no longer decodes: a stale range or real corruption,
-            # rare either way and worth surfacing (the fallback scan runs next).
-            logger.warning("pi watcher: undecodable session line during a payload read: {}", e)
-            return None
-        if not isinstance(record, dict):
-            return None
-        return parse_record_detail(record).get(event["event_id"])
-
-    def _find_detail_source_fallback(self, event: dict[str, Any]) -> str | None:
-        """Scan the live session file for the record that carries this event's payloads."""
-        with self._lock:
-            target = self._current_path
-        if target is None:
-            return None
-        event_id = event["event_id"]
-        try:
-            with target.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        record = json.loads(stripped)
-                    except json.JSONDecodeError as e:
-                        # A complete line failing to decode mid-scan is corruption; the
-                        # trailing partial line (mid-write) is the routine near-miss.
-                        logger.warning("pi watcher: undecodable line in a payload fallback scan: {}", e)
-                        continue
-                    if isinstance(record, dict) and event_id in parse_record_detail(record):
-                        return line
-        except OSError:
-            return None
-        return None
