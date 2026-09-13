@@ -23,6 +23,8 @@ from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import DEFAULT_LEDGER_PATH
 from imbue.chat.auto_open import ShellLayoutClient
+from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
+from imbue.chat.chat_records import FileChatRecordStore
 from imbue.chat.config import Config
 from imbue.chat.config import load_config
 from imbue.chat.event_queues import AgentEventQueues
@@ -107,6 +109,8 @@ def build_production_state(
         auto_open=AutoOpenReactor(
             ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())
         ),
+        # Which agents each chat has run on, for the chats that have had a handoff.
+        chat_record_store=FileChatRecordStore(root=DEFAULT_CHAT_RECORDS_ROOT),
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-agent event fan-out the session watchers use. Wired here (not at manager build)

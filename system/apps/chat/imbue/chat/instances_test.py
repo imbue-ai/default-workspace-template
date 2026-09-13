@@ -21,6 +21,7 @@ from imbue.chat.accounts import index_path
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import chat_status_for_agent
+from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.errors import ChatCreateRefusedError
 from imbue.chat.errors import ChatStartFailedError
 from imbue.chat.errors import ChatStopFailedError
@@ -33,6 +34,7 @@ from imbue.chat.models import CreatedChat
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.errors import MngrError
@@ -560,3 +562,30 @@ def test_stop_and_start_refuse_unknown_keys_and_the_primary_agent(agent_manager:
         source.stop_instance(InstanceKey(primary_id))
     with pytest.raises(UnknownInstanceError):
         source.start_instance(InstanceKey(_agent_id()))
+
+
+def test_a_recorded_chat_is_one_instance_keyed_by_its_first_agent_and_its_delete_destroys_every_member(
+    broadcaster: WebSocketBroadcaster, true_binary: str
+) -> None:
+    """An archived member is excluded because the record names it, never because of a label; the
+    instance is titled from the active agent and deleting it takes both agents and the record."""
+    store = InMemoryChatRecordStore()
+    agent_manager = AgentManager.build(broadcaster, mngr_binary=true_binary, chat_record_store=store)
+    first, second = _agent_id(), _agent_id()
+    _seed_agent(agent_manager, first, f"archived-1-Chat-1-{first}", labels={"display_name": "Chat 1 (archived 1)"})
+    _seed_agent(agent_manager, second, "Chat-1", labels={"display_name": "Chat 1"})
+    store.write(make_two_member_chat_record(first, second))
+    agent_manager.refresh_chat_records()
+    source = _source(agent_manager)
+
+    records = source.list_instances()
+    assert [(record.key, record.title) for record in records] == [(first, "Chat 1")]
+    # A subagent view is keyed on the chat and its active agent.
+    subagent = source.create_instance(ActionId("subagent"), {"parent": first, "session": "s1"})
+    assert subagent.key == f"{first}.{second}.s1"
+
+    source.delete_instance(InstanceKey(first))
+
+    assert agent_manager.get_agent_by_id(first) is None and agent_manager.get_agent_by_id(second) is None
+    assert store.read(ChatId(first)) is None
+    assert source.list_instances() == []
