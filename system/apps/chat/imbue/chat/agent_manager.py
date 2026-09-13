@@ -807,10 +807,6 @@ class AgentManager:
             self._chat_records = records
         self._broadcast_chats_updated()
 
-    def get_chat_record(self, chat_id: ChatId) -> ChatRecord | None:
-        with self._lock:
-            return self._chat_records.get(chat_id)
-
     def _chat_id_of_agent_locked(self, agent_id: str) -> ChatId:
         """The chat an agent belongs to: the record that names it, else itself under the own-chat rule."""
         for record in self._chat_records.values():
