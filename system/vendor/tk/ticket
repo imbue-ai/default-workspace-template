@@ -64,14 +64,6 @@ else
     _grep() { grep "$@"; }
 fi
 
-# Portable, fixed-width microsecond UTC ISO-8601 timestamp, e.g.
-# 2026-04-28T01:00:00.123456Z. GNU date expands %N (nanoseconds), so %6N
-# yields microseconds; BSD/macOS date does not support %N and leaves the spec
-# literal (an 'N' survives in the output), so detect that and fall back to a
-# zero microsecond suffix. The width is always identical, so a plain
-# lexicographic comparison of two timestamps equals their chronological order
-# -- the invariant every downstream consumer (the tickets watcher, the chat
-# progress view) relies on for ordering steps.
 # The creator a step record is scoped to. The chat's id when the chat app
 # set one (MINDS_CHAT_ID), so the steps follow the chat: a chat that moves
 # to a new agent keeps its open steps, and a rename of the agent (which
@@ -82,6 +74,14 @@ tk_creator() {
     printf '%s' "${MINDS_CHAT_ID:-${MNGR_AGENT_NAME:-}}"
 }
 
+# Portable, fixed-width microsecond UTC ISO-8601 timestamp, e.g.
+# 2026-04-28T01:00:00.123456Z. GNU date expands %N (nanoseconds), so %6N
+# yields microseconds; BSD/macOS date does not support %N and leaves the spec
+# literal (an 'N' survives in the output), so detect that and fall back to a
+# zero microsecond suffix. The width is always identical, so a plain
+# lexicographic comparison of two timestamps equals their chronological order
+# -- the invariant every downstream consumer (the tickets watcher, the chat
+# progress view) relies on for ordering steps.
 _iso_date() {
     local ts
     ts=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null)
