@@ -72,6 +72,7 @@ from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
@@ -2768,15 +2769,6 @@ def test_observe_events_feed_the_auto_open_reactor(
 # --- Chats that have run on several agents (a hand-built record; nothing writes one yet) ---
 
 
-def _recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
-    """A stand-in ``mngr`` that succeeds and appends every argv it is given to a log."""
-    log_path = tmp_path / "mngr-argv.log"
-    script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
-    script.chmod(0o755)
-    return str(script), log_path
-
-
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
     """A store whose records cannot be deleted: what a read-only chat folder looks like to the file store."""
 
@@ -2871,7 +2863,7 @@ def test_a_recorded_chats_segments_follow_the_record_and_skip_an_agent_mngr_no_l
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.stop_chat(ChatId(first))
@@ -2905,7 +2897,7 @@ def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
 def test_stopping_or_destroying_a_recorded_chat_with_no_active_agent_is_refused(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary)
     try:
         manager.remove_agent(second)
@@ -2923,7 +2915,7 @@ def test_a_record_that_cannot_be_removed_fails_the_destroy_as_a_destroy_error(
 ) -> None:
     """The agents are gone but the record would resurrect the chat at the next build, so the verb
     reports the failure through the error its callers handle, not a foreign one."""
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager, _store, first, second = _recorded_chat(broadcaster, mngr_binary, store=_UnremovableChatRecordStore())
     try:
         with pytest.raises(AgentDestroyError, match="record could not be removed"):
@@ -3051,7 +3043,7 @@ def _openai_account() -> str:
 def _handoff_manager(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, sent: list[tuple[str, str, str]]
 ) -> tuple[AgentManager, InMemoryChatRecordStore, Path]:
-    mngr_binary, argv_log = _recording_mngr_binary(tmp_path)
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     store = InMemoryChatRecordStore()
     manager = AgentManager.build(
         broadcaster,

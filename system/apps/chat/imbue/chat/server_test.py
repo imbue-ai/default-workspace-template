@@ -67,6 +67,7 @@ from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
+from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
@@ -2877,12 +2878,9 @@ def test_a_two_member_chats_subagent_reads_resolve_by_member(client: FlaskClient
 
 def _recording_app(tmp_path: Path) -> tuple[Flask, Path]:
     """An app whose manager records sends instead of reaching mngr and logs the mngr argv it would run."""
-    log_path = tmp_path / "mngr-argv.log"
-    script = tmp_path / "fake-mngr"
-    script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{log_path}"\n')
-    script.chmod(0o755)
+    mngr_binary, log_path = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(
-        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=str(script), chat_files_root=tmp_path
+        WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), mngr_binary=mngr_binary, chat_files_root=tmp_path
     )
     # The successor's create runs in the primary agent's work dir, which the isolation fixture only names.
     Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
