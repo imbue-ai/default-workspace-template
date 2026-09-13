@@ -72,6 +72,16 @@ fi
 # lexicographic comparison of two timestamps equals their chronological order
 # -- the invariant every downstream consumer (the tickets watcher, the chat
 # progress view) relies on for ordering steps.
+# The creator a step record is scoped to. The chat's id when the chat app
+# set one (MINDS_CHAT_ID), so the steps follow the chat: a chat that moves
+# to a new agent keeps its open steps, and a rename of the agent (which
+# changes MNGR_AGENT_NAME under a running process) no longer orphans them.
+# The agent's name otherwise, which is every agent the chat app did not
+# create. Empty outside an mngr context.
+tk_creator() {
+    printf '%s' "${MINDS_CHAT_ID:-${MNGR_AGENT_NAME:-}}"
+}
+
 _iso_date() {
     local ts
     ts=$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ 2>/dev/null)
@@ -248,7 +258,7 @@ cmd_create() {
 
     # Default assignee to git user.name if available, BUT only when
     # running outside an mngr-managed agent. Inside an mngr context the
-    # MNGR_AGENT_NAME is stamped separately as `agent:` (creator) and
+    # creator (see tk_creator) is stamped separately as `agent:` and
     # `assignee:` is the load-bearing "who is currently working it"
     # signal -- tickets are unassigned until `tk start` (auto) or
     # `tk assign` (explicit).
@@ -309,11 +319,11 @@ cmd_create() {
         echo "type: $issue_type"
         echo "priority: $priority"
         [[ -n "$assignee" ]] && echo "assignee: $assignee"
-        # Stamp the creating mngr agent's name when running inside an
-        # mngr-managed agent, so consumers (e.g. the minds workspace
-        # server's progress view) can attribute each ticket to its source
-        # agent. Absent when not in an mngr context -- no-op upstream.
-        [[ -n "${MNGR_AGENT_NAME:-}" ]] && echo "agent: $MNGR_AGENT_NAME"
+        # Stamp the creator when running inside an mngr-managed agent, so
+        # consumers (e.g. the minds workspace server's progress view) can
+        # attribute each ticket to its source. Absent when not in an mngr
+        # context -- no-op upstream.
+        [[ -n "$(tk_creator)" ]] && echo "agent: $(tk_creator)"
         # `step: true` marks turn-bound progress records to distinguish
         # them from regular tickets. Cross-agent surfaces (`tk ready`,
         # `tk ls`, the open-tickets reminder hook) hide step records by
@@ -1048,13 +1058,13 @@ cmd_closed() {
 }
 
 # List step records belonging to a specific agent (default: current
-# $MNGR_AGENT_NAME). Step records are turn-bound progress markers and
+# tk_creator). Step records are turn-bound progress markers and
 # are by design creator-private -- this command is the canonical way
 # for the chat-progress reminder hooks and for an agent to see its own
 # outstanding steps. Use `--all-agents` to peek at every agent's steps
 # (debugging / observability).
 cmd_steps() {
-    local agent_filter="${MNGR_AGENT_NAME:-}" status_filter="" all_agents=0
+    local agent_filter="$(tk_creator)" status_filter="" all_agents=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --status=*) status_filter="${1#--status=}"; shift ;;
