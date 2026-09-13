@@ -144,12 +144,6 @@ _DEFAULT_MNGR_BINARY = "mngr"
 _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 
 
-# A NOT_READY send's revive budget. ``start_agent`` returns once mngr has launched the
-# session WITHOUT awaiting the daemon handshake (codex readiness is only awaited on
-# create), so the daemon needs a few more seconds before the session can connect.
-_REVIVE_RETRY_INTERVAL_SECONDS: Final[float] = 0.5
-_REVIVE_RETRY_BUDGET_SECONDS: Final[float] = 15.0
-
 # How often the session sweep retries the live backend of every tracked agent that does not
 # have one yet (see ``_reconnect_pending_sessions``). Also bounds the service's idle wake-up
 # rate, which costs ~3x under gVisor.
