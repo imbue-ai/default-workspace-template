@@ -166,11 +166,10 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         return loader
 
     def close(self) -> None:
-        """Release the held read connections and the per-agent registries a build claimed."""
-        with self._lock:
-            for db_path in list(self._connections):
-                self._drop_connection_locked(db_path)
-        drop_turn_state(self._agent_id)
+        """Release what a loader holds: ``stop`` (which, unstarted, has only the connections and the
+        turn state to release) plus the tracker, which ``stop`` keeps for a watcher's restart but
+        an archived agent will never need again."""
+        self.stop()
         drop_tracker(self._agent_id)
 
     # --- paths ---------------------------------------------------------------------------
