@@ -450,6 +450,22 @@ def test_a_stale_summary_is_not_taken_for_the_one_just_requested(tmp_path: Path)
     assert is_summary_written(stale + 1.0, None) is True
 
 
+def test_a_prompt_template_that_cannot_be_filled_in_leaves_the_handoff_where_it_is(tmp_path: Path) -> None:
+    """The reference document is editable; one with an unknown placeholder is the step that could not
+    finish, not a dead thread: the record keeps its phase for a resume once the template is repaired."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    template = tmp_path / "continue-chat.md"
+    template.write_text("Continue ${title}; the summary is ${summary_line}; ${no_such_placeholder}.\n")
+
+    _runner(workspace, prompt_template_path=template).run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is not None and record.handoff.phase is HandoffPhase.SUMMARIZING
+    assert record.handoff.prompt is None
+    assert workspace.stopped == [] and workspace.argv_lines() == []
+    assert successor not in workspace.agents and workspace.agents[first].name == "Chat-1"
+
+
 def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_path: Path) -> None:
     workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     workspace.is_summary_written_on_request = False

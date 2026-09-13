@@ -432,18 +432,24 @@ class HandoffRunner:
             f"{entry.agent_id}, harness {entry.harness.value}, state dir {agent_state_dir(self._deps.host_dir, entry.agent_id)}"
             for entry in record.agents
         )
-        return template.substitute(
-            title=handoff.chat_title,
-            chat_id=record.chat_id,
-            predecessor_harness=HARNESS_LABEL[retiring.harness],
-            successor_harness=HARNESS_LABEL[handoff.target_harness],
-            summary_line=summary_line,
-            predecessors=predecessors,
-            source_lane=retiring.lane,
-            target_lane=handoff.target_lane,
-            target_account=handoff.target_account_id,
-            message=trigger_text,
-        )
+        try:
+            return template.substitute(
+                title=handoff.chat_title,
+                chat_id=record.chat_id,
+                predecessor_harness=HARNESS_LABEL[retiring.harness],
+                successor_harness=HARNESS_LABEL[handoff.target_harness],
+                summary_line=summary_line,
+                predecessors=predecessors,
+                source_lane=retiring.lane,
+                target_lane=handoff.target_lane,
+                target_account=handoff.target_account_id,
+                message=trigger_text,
+            )
+        except (KeyError, ValueError) as e:
+            # An edited reference document with an unknown placeholder or a stray ``$``.
+            raise HandoffStepError(
+                f"the handoff prompt template at {self._deps.prompt_template_path} could not be filled in: {e!r}"
+            ) from e
 
     # -- switching -----------------------------------------------------------------------------
 
