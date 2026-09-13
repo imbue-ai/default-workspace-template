@@ -2768,7 +2768,7 @@ def test_observe_events_feed_the_auto_open_reactor(
     assert not reactor.ledger.is_delivered(ChatId(appeared.id))
 
 
-# --- Chats that have run on several agents (a hand-built record; nothing writes one yet) ---
+# --- Chats that have run on several agents (a hand-built record) ---
 
 
 class _UnremovableChatRecordStore(InMemoryChatRecordStore):
