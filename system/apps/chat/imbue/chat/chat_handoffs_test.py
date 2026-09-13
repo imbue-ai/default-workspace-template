@@ -170,6 +170,12 @@ class _FakeWorkspace(MutableModel):
         state = self.agents[agent_info.id]
         self.agents[agent_info.id] = state.model_copy_update(to_update(state.field_ref().state, "STOPPED"))
 
+    def destroy_agent(self, agent_id: str) -> None:
+        # Logged in the fake mngr's own line shape, so a test reads the whole switch off one log.
+        with self.mngr_log.open("a") as log:
+            log.write(f"destroy {agent_id} --force\n")
+        self.agents.pop(agent_id, None)
+
     def note_agent_renamed(self, agent_id: str, name: str, labels: Mapping[str, str]) -> None:
         state = self.agents[agent_id]
         self.agents[agent_id] = state.model_copy_update(
@@ -307,6 +313,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         drain_to_composer=workspace.drain_to_composer,
         ensure_watcher=workspace.ensure_watcher,
         stop_agent=workspace.stop_agent,
+        destroy_agent=workspace.destroy_agent,
         note_agent_renamed=workspace.note_agent_renamed,
         note_agent_created=workspace.note_agent_created,
         build_create_command=workspace.build_create_command,

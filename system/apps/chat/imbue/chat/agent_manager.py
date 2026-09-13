@@ -1363,6 +1363,7 @@ class AgentManager:
             drain_to_composer=capabilities.drain_to_composer,
             ensure_watcher=capabilities.ensure_watcher,
             stop_agent=self.stop_agent_process,
+            destroy_agent=self.destroy_agent_process,
             note_agent_renamed=self._note_agent_renamed,
             note_agent_created=self._note_agent_created,
             build_create_command=self._build_successor_create_command,
@@ -1518,12 +1519,7 @@ class AgentManager:
             agent_ids = self._destroyed_with_chat_locked(chat) if chat is not None else ()
         if chat is None or not is_active_tracked:
             raise AgentDestroyError(f"Chat '{chat_id}' not found")
-        result = run_local_command_modern_version(
-            command=_build_chat_destroy_command(self._mngr_binary, agent_ids),
-            cwd=None,
-            is_checked=False,
-            timeout=DESTROY_TIMEOUT_SECONDS,
-        )
+        result = self._run_mngr_destroy(agent_ids)
         if result.returncode != 0:
             raise AgentDestroyError(f"Failed to destroy chat '{chat_id}': {result.stderr.strip()}")
         if chat.record is not None:
@@ -1540,6 +1536,23 @@ class AgentManager:
         # chat's per-chat records.
         for agent_id in agent_ids:
             self.remove_agent(agent_id)
+
+    def _run_mngr_destroy(self, agent_ids: Sequence[str]) -> FinishedProcess:
+        """Run the one ``mngr destroy --force`` naming ``agent_ids``; the caller reads the exit code."""
+        return run_local_command_modern_version(
+            command=_build_chat_destroy_command(self._mngr_binary, agent_ids),
+            cwd=None,
+            is_checked=False,
+            timeout=DESTROY_TIMEOUT_SECONDS,
+        )
+
+    def destroy_agent_process(self, agent_id: str) -> None:
+        """``mngr destroy --force`` one agent by id (a handoff's half-made successor). Raises ``AgentDestroyError``."""
+        result = self._run_mngr_destroy((agent_id,))
+        if result.returncode != 0:
+            raise AgentDestroyError(
+                f"Failed to destroy agent '{agent_id}' (exit {result.returncode}): {result.stderr.strip()}"
+            )
 
     def _destroyed_with_chat_locked(self, chat: _ResolvedChat) -> tuple[str, ...]:
         """Every agent a chat's destroy names: its members, plus the successor a handoff is still making

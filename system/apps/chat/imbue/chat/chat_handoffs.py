@@ -49,6 +49,7 @@ from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentRestartError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
@@ -79,9 +80,8 @@ _SUMMARY_TIMEOUT_SECONDS: Final[float] = 300.0
 _SUMMARY_IDLE_GRACE_SECONDS: Final[float] = 10.0
 _SUMMARY_POLL_INTERVAL_SECONDS: Final[float] = 1.0
 
-# How long one ``mngr rename`` (a metadata write) and one ``mngr destroy`` may take.
+# How long one ``mngr rename`` (a metadata write) may take.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
-_DESTROY_TIMEOUT_SECONDS: Final[float] = 120.0
 # The successor's ``mngr create`` provisions, starts, awaits readiness (45s in this workspace)
 # and delivers the prompt before it returns.
 _CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
@@ -244,6 +244,8 @@ class HandoffDeps(FrozenModel):
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
     # ``mngr stop`` plus the session's dead-lifecycle teardown, reflected in the tracked state.
     stop_agent: Callable[[AgentInfo], None]
+    # ``mngr destroy --force`` of one agent by id; raises ``AgentDestroyError`` when mngr refuses or fails.
+    destroy_agent: Callable[[str], None]
     note_agent_renamed: Callable[[str, str, Mapping[str, str]], None]
     note_agent_created: Callable[[AgentStateItem], None]
     build_create_command: Callable[[SuccessorCreateSpec], list[str]]
@@ -593,19 +595,11 @@ class HandoffRunner:
         Returns the second create's failure notice, or None when it succeeded.
         """
         logger.warning("Handoff of chat {}: destroying the half-made agent {}", chat_id, successor_id)
-        destroyed = run_local_command_modern_version(
-            command=[self._deps.mngr_binary, "destroy", successor_id, "--force"],
-            cwd=None,
-            is_checked=False,
-            timeout=_DESTROY_TIMEOUT_SECONDS,
-        )
-        if destroyed.returncode != 0:
+        try:
+            self._deps.destroy_agent(successor_id)
+        except AgentDestroyError as e:
             logger.warning(
-                "Handoff of chat {}: could not destroy the half-made agent {} (exit {}): {}",
-                chat_id,
-                successor_id,
-                destroyed.returncode,
-                destroyed.stderr.strip(),
+                "Handoff of chat {}: could not destroy the half-made agent {}: {}", chat_id, successor_id, e
             )
         return self._run_create(chat_id, command)
 

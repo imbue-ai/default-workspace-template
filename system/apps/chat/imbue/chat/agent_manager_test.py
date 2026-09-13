@@ -3223,6 +3223,24 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         manager.stop()
 
 
+def test_destroying_one_agent_runs_the_shared_destroy_and_reports_a_refusal(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, false_binary: str
+) -> None:
+    """The handoff's destroy of a half-made successor is the chat destroy's own ``mngr destroy --force``, by id."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    refusing = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    try:
+        manager.destroy_agent_process(agent_id)
+        assert argv_log.read_text().splitlines() == [f"destroy {agent_id} --force"]
+        with pytest.raises(AgentDestroyError, match=f"Failed to destroy agent '{agent_id}'"):
+            refusing.destroy_agent_process(agent_id)
+    finally:
+        manager.stop()
+        refusing.stop()
+
+
 def test_an_unfinished_handoff_resumes_when_the_manager_starts(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
