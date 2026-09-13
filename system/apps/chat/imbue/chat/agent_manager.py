@@ -33,6 +33,7 @@ from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
+from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
@@ -2601,7 +2602,7 @@ class AgentManager:
         Mirrors ``server._find_active_agent`` so the readiness-hook marker files and
         the activity tracker agree on the same path.
         """
-        return self._host_dir / "agents" / agent_id
+        return agent_state_dir(self._host_dir, agent_id)
 
     def _ensure_activity_tracking(self, agent_id: str) -> None:
         """Start activity tracking for ``agent_id`` if its local state dir exists.

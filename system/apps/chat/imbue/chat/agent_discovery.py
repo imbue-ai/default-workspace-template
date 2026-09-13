@@ -16,6 +16,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.find import find_all_agents
 from imbue.mngr.api.find import find_one_agent
@@ -98,6 +99,12 @@ def _read_claude_config_dir_from_env(env_file: Path) -> Path | None:
     return Path(value)
 
 
+@pure
+def agent_state_dir(host_dir: Path, agent_id: str) -> Path:
+    """Where mngr keeps one agent's state under a host dir: ``<host_dir>/agents/<agent_id>``."""
+    return host_dir / "agents" / agent_id
+
+
 def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
     """Resolve a Claude agent's effective Claude config dir.
 
@@ -162,17 +169,17 @@ def discover_agents(
         state = str(agent_details.state.value) if agent_details.state else "unknown"
 
         # Compute agent state dir from the default host dir
-        agent_state_dir = default_host_dir / "agents" / agent_id
+        state_dir = agent_state_dir(default_host_dir, agent_id)
 
         # Get CLAUDE_CONFIG_DIR from the agent's env file
-        claude_config_dir = read_claude_config_dir_from_env_file(agent_state_dir)
+        claude_config_dir = read_claude_config_dir_from_env_file(state_dir)
 
         agents.append(
             AgentInfo(
                 id=agent_id,
                 name=agent_name,
                 state=state,
-                agent_state_dir=agent_state_dir,
+                agent_state_dir=state_dir,
                 claude_config_dir=claude_config_dir,
                 labels=dict(agent_details.labels),
                 work_dir=str(agent_details.work_dir),

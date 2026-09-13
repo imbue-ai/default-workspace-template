@@ -35,6 +35,7 @@ from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
 from imbue.chat.chat_records import ChatRecord
@@ -427,7 +428,7 @@ class HandoffRunner:
                 assert_never(unreachable)
         predecessors = "\n".join(
             f"- seq {entry.seq}: {archived_agent_name(entry.seq, handoff.chat_name, entry.agent_id)}, id "
-            f"{entry.agent_id}, harness {entry.harness.value}, state dir {self._deps.host_dir / 'agents' / entry.agent_id}"
+            f"{entry.agent_id}, harness {entry.harness.value}, state dir {agent_state_dir(self._deps.host_dir, entry.agent_id)}"
             for entry in record.agents
         )
         return template.substitute(
@@ -531,7 +532,7 @@ class HandoffRunner:
             return None
         if handoff.prompt is None:
             raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
-        state_dir = self._deps.host_dir / "agents" / handoff.next_agent_id
+        state_dir = agent_state_dir(self._deps.host_dir, handoff.next_agent_id)
         prompt_file = prompt_path(self._deps.chat_files_root, chat_id, handoff.next_seq)
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(handoff.prompt)
