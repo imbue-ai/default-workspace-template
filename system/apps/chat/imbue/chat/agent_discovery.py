@@ -105,7 +105,7 @@ def agent_state_dir(host_dir: Path, agent_id: str) -> Path:
     return host_dir / "agents" / agent_id
 
 
-def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
+def read_claude_config_dir_from_env_file(state_dir: Path) -> Path:
     """Resolve a Claude agent's effective Claude config dir.
 
     In the current layout no agent or host env file sets CLAUDE_CONFIG_DIR
@@ -116,14 +116,14 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
     that somehow carries an explicit pin (e.g. one created from a shell
     with the var exported) is still watched at the dir it actually uses:
 
-    1. Agent's per-agent env file (`<agent_state_dir>/env`).
+    1. Agent's per-agent env file (`<state_dir>/env`).
     2. Host env file (`$MNGR_HOST_DIR/env`).
-    3. Conventional per-agent path (`<agent_state_dir>/plugin/claude/
+    3. Conventional per-agent path (`<state_dir>/plugin/claude/
        anthropic`) if it exists on disk (an isolated mngr_claude agent).
     4. The shared `~/.claude` (claude's default when the var is unset).
     """
     # 1. Per-agent env (an explicitly pinned agent)
-    per_agent = _read_claude_config_dir_from_env(agent_state_dir / "env")
+    per_agent = _read_claude_config_dir_from_env(state_dir / "env")
     if per_agent is not None:
         return per_agent
     # 2. Host env (nothing writes this anymore; kept as an env-chain mirror)
@@ -133,7 +133,7 @@ def read_claude_config_dir_from_env_file(agent_state_dir: Path) -> Path:
         if host_level is not None:
             return host_level
     # 3. Conventional per-agent path (an isolated mngr_claude agent)
-    conventional = agent_state_dir / "plugin" / "claude" / "anthropic"
+    conventional = state_dir / "plugin" / "claude" / "anthropic"
     if conventional.exists():
         return conventional
     # 4. Claude's own default: the shared ~/.claude

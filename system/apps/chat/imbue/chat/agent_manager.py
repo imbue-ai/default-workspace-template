@@ -1600,13 +1600,13 @@ class AgentManager:
         agent_state = self.get_agent_by_id(agent_id)
         if agent_state is None:
             return None
-        agent_state_dir = self._get_agent_state_dir(agent_state.id)
+        state_dir = self._get_agent_state_dir(agent_state.id)
         return AgentInfo(
             id=agent_state.id,
             name=agent_state.name,
             state=agent_state.state,
-            agent_state_dir=agent_state_dir,
-            claude_config_dir=read_claude_config_dir_from_env_file(agent_state_dir),
+            agent_state_dir=state_dir,
+            claude_config_dir=read_claude_config_dir_from_env_file(state_dir),
             labels=agent_state.labels,
             work_dir=agent_state.work_dir,
             harness=agent_state.harness,
