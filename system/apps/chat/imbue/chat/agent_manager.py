@@ -1213,7 +1213,7 @@ class AgentManager:
             returned_block = runner.drain(chat_id, handoff.handoff_id)
         except HandoffCancelledError:
             return HandoffPhase.DRAINING, ""
-        self._spawn_handoff(chat_id, handoff.handoff_id)
+        self._spawn_handoff(chat_id, handoff.handoff_id, runner)
         return HandoffPhase.SUMMARIZING, returned_block
 
     def _first_record_locked(self, chat_id: ChatId, agent_state: AgentStateItem, now: datetime) -> ChatRecord:
