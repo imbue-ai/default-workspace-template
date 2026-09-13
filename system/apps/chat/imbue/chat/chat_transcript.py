@@ -125,7 +125,7 @@ class ChatTranscript:
     def segments(self) -> tuple[TranscriptSegment, ...]:
         return self._segments
 
-    # -- segments and their lengths -------------------------------------------------------
+    # Segments and their lengths.
 
     def _reader(self, index: int) -> TranscriptReader:
         """The segment's reader, loading it on first use."""
@@ -206,7 +206,7 @@ class ChatTranscript:
                 return _EventPosition(segment_index=index, local_offset=local_offset)
         return None
 
-    # -- the read API ---------------------------------------------------------------------
+    # The read API.
 
     def get_tail_events(self, limit: int) -> list[dict[str, Any]]:
         """The newest ``limit`` events of the chat, crossing into earlier segments when the live one is short."""

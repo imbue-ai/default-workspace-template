@@ -1437,7 +1437,6 @@ class AgentManager:
         it. ``message`` is kept on the reservation and sent by that launch, so a chat seeded
         with a prompt still opens on it after the sign-in it had to wait for.
         """
-        # A new chat's id is the id its first agent is created with.
         chat_id = ChatId(str(AgentId()))
         with self._lock:
             display_name = first_free_numbered_name(
@@ -1575,7 +1574,6 @@ class AgentManager:
                 phase=ProvisionalChatPhase.CREATING,
             )
             self._provisional_chats[launched_chat_id] = provisional
-        # The chat's first agent is created under the chat's id.
         agent_id = str(launched_chat_id)
 
         # Launching on an account makes it the most recently used one, which is what the
