@@ -935,6 +935,23 @@ function placementForGroup(targetGroup: DockviewGroupPanel | null | undefined): 
   return {};
 }
 
+/**
+ * Placement that takes ``panelId``'s own slot in its strip, for a panel that replaces it.
+ *
+ * Opening from inside a New Tab answers that tab, so what it opens belongs where it stood: with
+ * three New Tabs up, opening from the middle one leaves you in the middle. A panel that is no
+ * longer there to take a slot from leaves ``targetGroup`` to place it, as an open that named no
+ * launcher would.
+ */
+function placementInPlaceOf(panelId: string, targetGroup: DockviewGroupPanel | null): AddPanelPlacementOptions {
+  const panel = panelById(panelId);
+  const group = panel?.api.group;
+  if (panel === undefined || group === undefined) return placementForGroup(targetGroup);
+  if (!dockview?.groups.some((candidate) => candidate.id === group.id)) return placementForGroup(targetGroup);
+  const index = group.panels.indexOf(panel);
+  return { position: index < 0 ? { referenceGroup: group.id } : { referenceGroup: group.id, index } };
+}
+
 // ---------- The "+" and the New Tab launcher ----------
 
 function groupForPanel(panelId: string): DockviewGroupPanel | null {
@@ -1097,7 +1114,9 @@ function createLauncherRenderer(panelId: string): IContentRenderer {
                 flashPanelTab(openPanelId);
                 return;
               }
-              if (openAddressInGroup(row.address, groupForPanel(panelId)) !== null) retireLauncher(panelId);
+              if (openAddressInGroup(row.address, groupForPanel(panelId), panelId) !== null) {
+                retireLauncher(panelId);
+              }
             },
           }),
       });
@@ -1180,8 +1199,15 @@ export function getSidebarRows(): SidebarTabRow[] {
 /**
  * Focus the tab an address already has, or open one for it in the active pane. Flashes the
  * tab when it was already open, so the click visibly does something.
+ *
+ * ``replacedLauncherPanelId`` names the New Tab the open was asked for from, whose slot the new
+ * tab takes; the caller retires it once the open lands.
  */
-function openAddressInGroup(address: string, targetGroup: DockviewGroupPanel | null): string | null {
+function openAddressInGroup(
+  address: string,
+  targetGroup: DockviewGroupPanel | null,
+  replacedLauncherPanelId: string | null = null,
+): string | null {
   if (!dockview) return null;
   const openPanelId = panelIdForAddress(address);
   if (openPanelId !== null) {
@@ -1190,7 +1216,11 @@ function openAddressInGroup(address: string, targetGroup: DockviewGroupPanel | n
     flashPanelTab(openPanelId);
     return openPanelId;
   }
-  const dockedPanelId = addPanelForAddress(address, placementForGroup(targetGroup));
+  const placement =
+    replacedLauncherPanelId === null
+      ? placementForGroup(targetGroup)
+      : placementInPlaceOf(replacedLauncherPanelId, targetGroup);
+  const dockedPanelId = addPanelForAddress(address, placement);
   if (dockedPanelId !== null) retireAnsweredLauncher(dockedPanelId);
   return dockedPanelId;
 }
@@ -1362,7 +1392,9 @@ async function runActionInPane(
   launcherPanelId: string | null,
 ): Promise<void> {
   if (!app.has_instances) {
-    if (openAddressInGroup(addressFor(app.name, ""), targetGroup) !== null) retireLauncher(launcherPanelId);
+    if (openAddressInGroup(addressFor(app.name, ""), targetGroup, launcherPanelId) !== null) {
+      retireLauncher(launcherPanelId);
+    }
     m.redraw();
     return;
   }
@@ -1384,7 +1416,7 @@ async function runActionInPane(
       fileIntoProject(originViewId, address);
       return;
     }
-    if (openAddressInGroup(address, targetGroup) !== null) retireLauncher(launcherPanelId);
+    if (openAddressInGroup(address, targetGroup, launcherPanelId) !== null) retireLauncher(launcherPanelId);
   } catch (e) {
     alert(`Failed to open ${app.display_name}: ${(e as Error).message}`);
   } finally {
@@ -1436,9 +1468,12 @@ function anyPanelIdOfApp(appName: string): string | null {
   return instancePanels().find(({ params }) => appNameFromAddress(params.address) === appName)?.panel.id ?? null;
 }
 
-/** Position + size options passed through to ``dockview.addPanel``. */
+/** Position + size options passed through to ``dockview.addPanel``. ``index`` places the panel
+ *  within the reference group's strip; without one it goes on the end. */
 type AddPanelPlacementOptions = {
-  position?: { referenceGroup: string } | { referencePanel: string; direction: "left" | "right" | "above" | "below" };
+  position?:
+    | { referenceGroup: string; index?: number }
+    | { referencePanel: string; direction: "left" | "right" | "above" | "below" };
   initialWidth?: number;
   initialHeight?: number;
 };
