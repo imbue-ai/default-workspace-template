@@ -1046,9 +1046,9 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
 
     The route runs draining synchronously, so its answer carries the queued text taken off
     the retiring agent for the composer, and the remaining phases run in the background.
-    Answers 409 while the chat is already converging and 400 when it has no active agent, the
-    account is unknown or the chat's own, or the target runs the same harness (a rebind, which
-    a later phase adds).
+    Answers 409 while the chat is already converging, 404 when it has no active agent, and 400
+    when the account is unknown or the chat's own, or the target runs the same harness (a
+    rebind, which a later phase adds).
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():

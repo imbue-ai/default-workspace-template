@@ -366,7 +366,7 @@ The auto-open reactor fires for an agent that appears carrying an `auto_open` or
 
 One switch route (`POST /api/chats/<chat_id>/handoff`, body `account_id`, `message`, `message_id`, and the client fields a send carries) takes the chat id, the target account, and the message, and dispatches on the target account's harness: the active agent's own harness means a rebind (section 6), any other harness means a handoff.
 Two lanes can share a harness (Opencode Go and OpenRouter both run on pi), which is why the dispatch keys on harness rather than lane.
-The route refuses with 409 when the chat is already converging, and with 400 when the chat has no active agent (a provisional chat, or one in the failed-next-agent state, which retries through its own route), when the target account is unknown, or when the target account is the active agent's own account.
+The route refuses with 409 when the chat is already converging (the failed phase included, which retries through its own route), with 404 when the chat has no active agent (a provisional chat, or an id that names no chat), and with 400 when the target account is unknown or is the active agent's own account.
 Until phase 6 lands the rebind, a target on the active agent's own harness is refused with 400 too.
 The route runs draining on the request's thread and answers 202 with the phase the chat is then in and the queued text draining returned for the composer; the remaining phases run on a thread of the chat app's.
 Cancel is `POST .../handoff/cancel` and the retry of a failed create `POST .../handoff/retry` with an `account_id`.
