@@ -1117,7 +1117,11 @@ class AgentManager:
     # Chat-level: handoffs (moving a chat to another harness; ``chat_handoffs.py`` runs the steps).
 
     def set_handoff_capabilities(self, capabilities: HandoffCapabilities) -> None:
-        """Install what a handoff needs from the app state; ``main`` and the test state builder call this once."""
+        """Install what a handoff needs from the app state.
+
+        ``create_application`` calls this once, where the routes are; a manager built without
+        the app (a test that never assembles it) refuses every handoff.
+        """
         self._handoff_capabilities = capabilities
 
     def get_handoff_state(self, chat_id: ChatId) -> HandoffState | None:
