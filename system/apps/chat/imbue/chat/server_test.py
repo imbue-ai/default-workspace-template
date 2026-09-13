@@ -46,7 +46,7 @@ from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
-from imbue.chat.primitives import ChatId as _ChatIdForRecords
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _build_fast_mode_answered_label_command
@@ -2816,7 +2816,7 @@ def test_a_two_member_chat_reads_as_one_transcript_with_the_switch_between(
     client: FlaskClient, app: Flask, tmp_path: Path
 ) -> None:
     first, second = _two_member_chat(app, tmp_path)
-    switch_id = agent_switch_event_id(_ChatIdForRecords(first), 1)
+    switch_id = agent_switch_event_id(ChatId(first), 1)
 
     whole = client.get(f"/api/chats/{first}/events").get_json()
     assert (whole["offset"], whole["total"]) == (0, 5)
