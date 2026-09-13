@@ -1315,15 +1315,17 @@ class AgentManager:
         """Hold a send for the successor while the chat converges; None when the chat is not converging.
 
         Idempotent on ``message_id``: a caller that retries after a 202 does not queue the
-        message twice. Atomic with the runner's completion under the manager's lock, so a
-        send can never land on a handoff that has just finished.
+        message twice, the trigger message included once summarizing has folded it into the
+        prompt and taken it off the held list. Atomic with the runner's completion under the
+        manager's lock, so a send can never land on a handoff that has just finished.
         """
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
             handoff = record.handoff if record is not None else None
             if record is None or handoff is None:
                 return None
-            if handoff.held_send_for(message_id) is None:
+            is_already_held = message_id == handoff.trigger_message_id or handoff.held_send_for(message_id) is not None
+            if not is_already_held:
                 held = HeldSend(
                     message_id=message_id, text=text, origin=origin, received_at=datetime.now(timezone.utc)
                 )

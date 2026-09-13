@@ -3188,6 +3188,12 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
         with pytest.raises(ChatConvergingError):
             manager.cancel_handoff(chat_id)
+        # The trigger already rides the stored prompt: a retried send with its id is not held again.
+        assert (
+            manager.hold_send(chat_id, "trigger-1", "Carry on in Codex", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
+        )
+        failed = store.read(chat_id)
+        assert failed is not None and failed.handoff is not None and failed.handoff.held_sends == ()
 
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         record = _wait_until_settled(store, chat_id)
