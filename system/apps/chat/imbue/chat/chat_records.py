@@ -155,8 +155,6 @@ class ChatRecordStore(MutableModel, ABC):
 class InMemoryChatRecordStore(ChatRecordStore):
     """Records held in memory: the default a manager built without a root gets, and what tests use."""
 
-    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
-
     record_by_chat_id: dict[ChatId, ChatRecord] = Field(default_factory=dict, description="The records, by chat id")
 
     def read(self, chat_id: ChatId) -> ChatRecord | None:
