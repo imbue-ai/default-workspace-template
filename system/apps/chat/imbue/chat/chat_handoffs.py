@@ -671,14 +671,37 @@ class HandoffRunner:
             if successor_info is None:
                 logger.warning("Handoff of chat {}: agent {} is untracked; a held send is lost", chat_id, successor_id)
                 continue
-            try:
-                outcome = self._deps.deliver(successor_info, held.text, held.message_id)
-            except SendFailedError as e:
-                logger.warning("Handoff of chat {}: a held send was refused: {}", chat_id, e.detail)
-                continue
-            if outcome is not SendOutcome.OK:
-                logger.warning("Handoff of chat {}: a held send did not land ({})", chat_id, outcome.value)
+            deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
+
+
+def deliver_held_send(
+    deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
+) -> None:
+    """Hand one held send to an agent through the message route's path.
+
+    A refusal or a miss is logged rather than raised: the send was answered 202 when it was
+    held, and one that cannot land must not stop the ones behind it.
+    """
+    try:
+        outcome = deliver(agent_info, held.text, held.message_id)
+    except SendFailedError as e:
+        logger.warning(
+            "Handoff of chat {}: held send {} to agent {} was refused: {}",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            e.detail,
+        )
+        return
+    if outcome is not SendOutcome.OK:
+        logger.warning(
+            "Handoff of chat {}: held send {} to agent {} did not land ({})",
+            chat_id,
+            held.message_id,
+            agent_info.id,
+            outcome.value,
+        )
 
 
 @pure

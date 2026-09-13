@@ -32,7 +32,6 @@ from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
-from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
@@ -47,6 +46,7 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
@@ -1263,13 +1263,13 @@ class AgentManager:
         if others:
             self._creation_cg.start_new_thread(
                 target=self._deliver_held_sends,
-                args=(retiring_id, others),
+                args=(chat_id, retiring_id, others),
                 name=f"handoff-cancel-{str(chat_id)[:14]}",
                 is_checked=False,
             )
         return trigger.text if trigger is not None else ""
 
-    def _deliver_held_sends(self, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
+    def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
         """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""
         capabilities = self._handoff_capabilities
         agent_info = self.get_agent_info_by_id(agent_id)
@@ -1277,13 +1277,7 @@ class AgentManager:
             _loguru_logger.warning("Could not deliver {} held send(s) to agent {}", len(held_sends), agent_id)
             return
         for held in held_sends:
-            try:
-                outcome = capabilities.deliver(agent_info, held.text, held.message_id)
-            except SendFailedError as e:
-                _loguru_logger.warning("A held send to agent {} was refused: {}", agent_id, e.detail)
-                continue
-            if outcome is not SendOutcome.OK:
-                _loguru_logger.warning("A held send to agent {} did not land ({})", agent_id, outcome.value)
+            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str) -> HandoffPhase:
         """Run a failed handoff's create again, on ``account_id`` (any signed-in account; spec 5.10).
