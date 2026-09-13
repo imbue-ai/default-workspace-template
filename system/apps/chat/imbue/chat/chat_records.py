@@ -117,7 +117,10 @@ class ChatRecordStore(MutableModel, ABC):
 
     @abstractmethod
     def delete(self, chat_id: ChatId) -> None:
-        """Drop the chat's record and everything stored beside it; a no-op for a chat with none."""
+        """Drop the chat's record and everything stored beside it; a no-op for a chat with none.
+
+        Raises ``ChatRecordError`` when the record exists but cannot be removed.
+        """
 
 
 class InMemoryChatRecordStore(ChatRecordStore):
@@ -233,4 +236,7 @@ class FileChatRecordStore(ChatRecordStore):
         if not chat_dir.exists():
             return
         with self._chat_lock(chat_id):
-            shutil.rmtree(chat_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(chat_dir)
+            except OSError as e:
+                raise ChatRecordError(f"chat record folder {chat_dir} could not be removed: {e}") from e

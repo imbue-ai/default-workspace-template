@@ -1,6 +1,7 @@
 """The chat record store: round trips, the version guard, and the per-record skip on a bad file."""
 
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -52,6 +53,26 @@ def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path
     assert store.read(ChatId(first)) is None
     # Deleting a chat that has no record is a no-op.
     store.delete(ChatId(second))
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root removes a folder whatever its parent's mode says")
+def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:
+    """A delete that leaves the record on disk must not look like a delete: the next build would
+    read the record back and resurrect a destroyed chat."""
+    root = tmp_path / "chats"
+    store = FileChatRecordStore(root=root)
+    first = _agent_id()
+    store.write(two_member_record(first, _agent_id()))
+
+    # Nothing inside a read-only folder can be unlinked, so the record file stays where it is.
+    chat_dir = root / first
+    chat_dir.chmod(0o555)
+    try:
+        with pytest.raises(ChatRecordError, match="could not be removed"):
+            store.delete(ChatId(first))
+    finally:
+        chat_dir.chmod(0o755)
+    assert store.read(ChatId(first)) is not None
 
 
 def test_a_file_store_refuses_a_record_from_a_newer_build(tmp_path: Path) -> None:
