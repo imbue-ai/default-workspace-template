@@ -191,8 +191,6 @@ def test_turn_markers_key_on_turn_id() -> None:
     assert parse_lines(started, {})[0]["event_id"] == "codex-turn-tid1-task_started"
     assert parse_lines(complete, {})[0]["event_id"] == "codex-turn-tid1-task_complete"
     assert parse_lines(aborted, {})[0]["event_id"] == "codex-turn-tid1-turn_aborted"
-    # Position-independent: the same turn re-read at a different line keeps its id.
-    assert parse_lines(started, {})[0]["event_id"] == "codex-turn-tid1-task_started"
 
 
 def test_turn_markers_expose_turn_id_field() -> None:
