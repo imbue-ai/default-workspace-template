@@ -22,6 +22,7 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import _rename_failure_reason
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
@@ -49,6 +50,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import write_summary_for_request
 from imbue.concurrency_group.event_utils import ShutdownEvent
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
 
@@ -350,6 +352,28 @@ def test_the_archival_rename_argv_is_accepted_by_the_live_cli() -> None:
         "chat_seq=1",
         f"archived_at={_NOW.isoformat()}",
     ]
+
+
+def _finished_rename(returncode: int, stderr: str = "", is_timed_out: bool = False) -> FinishedProcess:
+    return FinishedProcess(
+        returncode=returncode,
+        stdout="",
+        stderr=stderr,
+        command=("mngr", "rename"),
+        is_timed_out=is_timed_out,
+        is_output_already_logged=False,
+    )
+
+
+def test_a_failed_archival_rename_names_its_reason_even_when_mngr_printed_nothing() -> None:
+    """The step error is the one trace of why a switch stalled, so a timeout or a signal is named
+    rather than reported as an empty stderr."""
+    assert _rename_failure_reason(_finished_rename(1, stderr="No agent named x\n")) == "No agent named x"
+    assert _rename_failure_reason(_finished_rename(-15, is_timed_out=True)).startswith(
+        "mngr rename did not finish within"
+    )
+    assert _rename_failure_reason(_finished_rename(-9)) == "mngr rename was stopped by signal 9"
+    assert _rename_failure_reason(_finished_rename(2)) == "mngr rename exited with code 2"
 
 
 def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path) -> None:

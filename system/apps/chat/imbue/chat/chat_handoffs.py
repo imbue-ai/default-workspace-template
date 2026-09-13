@@ -57,6 +57,7 @@ from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.event_utils import ShutdownEvent
+from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -173,6 +174,23 @@ def failure_notice(error: str | None, output_tail: str) -> str:
     """What a failed create's page says: the reason, then the last lines mngr printed."""
     reason = error or "mngr create failed"
     return f"{reason}\n{output_tail}" if output_tail else reason
+
+
+@pure
+def _rename_failure_reason(result: FinishedProcess) -> str:
+    """Why the archival rename failed: the timeout, mngr's own words, or the signal or exit code that ended it.
+
+    A rename that ran out of time or was killed prints nothing, so its stderr alone would
+    leave the step error (the one trace of why the switch stalled) without a reason.
+    """
+    if result.is_timed_out:
+        return f"mngr rename did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped"
+    stderr = result.stderr.strip()
+    if stderr:
+        return stderr
+    if result.returncode is not None and result.returncode < 0:
+        return f"mngr rename was stopped by signal {-result.returncode}"
+    return f"mngr rename exited with code {result.returncode}"
 
 
 @pure
@@ -528,7 +546,7 @@ class HandoffRunner:
         )
         if result.returncode != 0:
             raise HandoffStepError(
-                f"could not archive agent {retiring.agent_id} of chat {chat_id}: {result.stderr.strip()}"
+                f"could not archive agent {retiring.agent_id} of chat {chat_id}: {_rename_failure_reason(result)}"
             )
         self._deps.note_agent_renamed(retiring.agent_id, archival_name, labels)
 
