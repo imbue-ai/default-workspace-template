@@ -482,8 +482,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
+    if _find_active_agent(chat_id) is None:
         return _chat_not_found_response(chat_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
@@ -502,6 +501,12 @@ def _send_message_endpoint(chat_id: str) -> Response:
             HeldSendResponse(status="held", phase=held_phase).model_dump(mode="json"), status_code=202
         )
 
+    # Resolved after the hold said the chat is not converging: a handoff that finished between
+    # the lookup above and the hold would leave that lookup naming the retiring agent, which is
+    # archived by then and must receive nothing.
+    agent_info = _find_active_agent(chat_id)
+    if agent_info is None:
+        return _chat_not_found_response(chat_id)
     try:
         outcome = _deliver_message(state, agent_info, send_message_request.message, message_id)
     except SendFailedError as send_failure:
