@@ -147,6 +147,12 @@ def is_summary_fresh(path_mtime: float | None, last_turn_epoch: float | None) ->
 
 
 @pure
+def is_summary_written(path_mtime: float | None, stale_mtime: float | None) -> bool:
+    """Whether the requested summary has landed: a non-empty file other than the stale one that was there before."""
+    return path_mtime is not None and path_mtime != stale_mtime
+
+
+@pure
 def failure_notice(error: str | None, output_tail: str) -> str:
     """What a failed create's page says: the reason, then the last lines mngr printed."""
     reason = error or "mngr create failed"
@@ -355,7 +361,10 @@ class HandoffRunner:
             return SummaryOutcome.MISSING
         path = summary_path(self._deps.chat_files_root, chat_id, handoff.retiring_seq)
         watcher = self._deps.ensure_watcher(agent_info)
-        if is_summary_fresh(_non_empty_mtime(path), last_user_turn_epoch(watcher.get_all_events())):
+        # A summary already at the path is either fresh (reused) or stale; a stale one stays
+        # where it is, so the wait below has to tell the file the agent writes from it.
+        stale_mtime = _non_empty_mtime(path)
+        if is_summary_fresh(stale_mtime, last_user_turn_epoch(watcher.get_all_events())):
             logger.info("Handoff of chat {}: reusing the fresh summary at {}", chat_id, path)
             return SummaryOutcome.REUSED
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -367,9 +376,11 @@ class HandoffRunner:
         if sent is not SendOutcome.OK:
             logger.warning("Handoff of chat {}: the summary request did not land ({})", chat_id, sent.value)
             return SummaryOutcome.MISSING
-        return self._await_summary(chat_id, handoff_id, retiring_id, path)
+        return self._await_summary(chat_id, handoff_id, retiring_id, path, stale_mtime)
 
-    def _await_summary(self, chat_id: ChatId, handoff_id: str, retiring_id: str, path: Path) -> SummaryOutcome:
+    def _await_summary(
+        self, chat_id: ChatId, handoff_id: str, retiring_id: str, path: Path, stale_mtime: float | None
+    ) -> SummaryOutcome:
         """Wait for the file, the turn ending without it, or the timeout; cancel is checked on every poll."""
         accepted_at = self._deps.monotonic()
         deadline = accepted_at + self._deps.summary_timeout_seconds
@@ -385,7 +396,7 @@ class HandoffRunner:
             is_turn_over = activity not in (ActivityState.THINKING, ActivityState.TOOL_RUNNING) and (
                 is_dead or is_busy_seen or now - accepted_at >= self._deps.summary_idle_grace_seconds
             )
-            if _non_empty_mtime(path) is not None:
+            if is_summary_written(_non_empty_mtime(path), stale_mtime):
                 outcome = SummaryOutcome.WRITTEN
             elif is_turn_over:
                 logger.info("Handoff of chat {}: the summary turn ended with no file at {}", chat_id, path)

@@ -1,3 +1,4 @@
+import os
 import threading
 from collections.abc import Callable
 from collections.abc import Mapping
@@ -22,6 +23,7 @@ from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import archived_agent_name
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
+from imbue.chat.chat_handoffs import is_summary_written
 from imbue.chat.chat_handoffs import last_user_turn_epoch
 from imbue.chat.chat_handoffs import prompt_path
 from imbue.chat.chat_handoffs import summary_path
@@ -419,6 +421,31 @@ def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: 
     assert is_summary_fresh(stale + 1.0, stale) is True
     assert is_summary_fresh(None, stale) is False
     assert is_summary_fresh(1.0, None) is True
+
+
+def test_a_stale_summary_is_not_taken_for_the_one_just_requested(tmp_path: Path) -> None:
+    """A summary older than the last user turn stays at the path while a new one is asked for; the
+    wait must not proceed on it, only on the file the agent writes in answer."""
+    workspace, first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.is_summary_written_on_request = False
+    workspace.activity_by_agent[first] = ActivityState.IDLE
+    summary = summary_path(tmp_path / "chats", workspace.chat_id, 1)
+    summary.parent.mkdir(parents=True)
+    summary.write_text("# stale summary\n")
+    stale = last_user_turn_epoch(workspace.events_by_agent[first])
+    assert stale is not None
+    os.utime(summary, (stale - 60.0, stale - 60.0))
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    # The request went out, the turn ended without a new file, and the successor is told so.
+    assert workspace.delivered[0][1].startswith("/handoff-summary ")
+    assert workspace.clock == pytest.approx(3.0)
+    assert "did not produce a summary" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    assert is_summary_written(stale - 60.0, stale - 60.0) is False
+    assert is_summary_written(None, stale - 60.0) is False
+    assert is_summary_written(stale + 1.0, stale - 60.0) is True
+    assert is_summary_written(stale + 1.0, None) is True
 
 
 def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_path: Path) -> None:
