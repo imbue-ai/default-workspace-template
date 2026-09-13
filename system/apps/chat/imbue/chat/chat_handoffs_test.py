@@ -16,6 +16,7 @@ from pydantic import PrivateAttr
 from imbue.chat.accounts import Account
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_manager import _account_binding_args
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
@@ -195,7 +196,7 @@ class _FakeWorkspace(MutableModel):
             spec.harness,
             (),
             spec.project_id,
-            spec.account_args,
+            _account_binding_args(spec.harness, spec.account_id, self.tmp_path / "agents" / spec.agent_id),
             extra_labels=spec.extra_labels,
             message_file=spec.message_file,
         )

@@ -266,6 +266,16 @@ def _build_chat_create_command(
     return cmd
 
 
+def _account_binding_args(harness: HarnessType, account_id: str, state_dir: Path) -> list[str]:
+    """The ``mngr create`` arguments that bind a new agent to an account, for every chat create.
+
+    The binding is invisible from the outside once mngr has baked the command, so it is also
+    recorded as a label: it is how the UI shows which account a chat runs on, and how a
+    re-auth knows which chats it just revived.
+    """
+    return [*binding_create_args(harness, account_dir(account_id), state_dir), "--label", f"account={account_id}"]
+
+
 def _build_chat_rename_command(mngr_binary: str, agent_id: str, name: str) -> list[str]:
     """Build the ``mngr rename`` argv that renames a chat agent to a typed name.
 
@@ -1496,7 +1506,7 @@ class AgentManager:
             spec.harness,
             (),
             spec.project_id,
-            spec.account_args,
+            _account_binding_args(spec.harness, spec.account_id, self._get_agent_state_dir(spec.agent_id)),
             extra_labels=spec.extra_labels,
             message_file=spec.message_file,
         )
@@ -2078,14 +2088,7 @@ class AgentManager:
             set_mru(account.id)
         except AccountError as e:
             _loguru_logger.warning("Could not record {} as most-recently-used: {}", account.id, e)
-        account_args = [
-            *binding_create_args(harness, account_dir(account.id), self._get_agent_state_dir(agent_id)),
-            # The binding is invisible from the outside once mngr has baked the command, so
-            # record it as a label: it is how the UI shows which account a chat runs on, and
-            # how a re-auth knows which chats it just revived.
-            "--label",
-            f"account={account.id}",
-        ]
+        account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
 
         # The workspace's very first chat gets the `first` template, which is what delivers
         # `/welcome`. Claimed here rather than by the caller, so every path that starts a chat

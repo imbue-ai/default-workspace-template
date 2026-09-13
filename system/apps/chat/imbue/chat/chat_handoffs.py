@@ -30,7 +30,6 @@ from pydantic import Field
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
-from imbue.chat.accounts import account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
@@ -43,7 +42,6 @@ from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.chat_transcript import agent_switch_event
-from imbue.chat.harnesses.binding import create_args as binding_create_args
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
@@ -209,7 +207,7 @@ class SuccessorCreateSpec(FrozenModel):
     agent_id: str = Field(description="The pre-minted successor id")
     harness: HarnessType = Field(description="The harness the successor runs")
     project_id: str = Field(description="The project label to carry, '' for none")
-    account_args: tuple[str, ...] = Field(description="The account binding arguments")
+    account_id: str = Field(description="The account the successor is bound to")
     extra_labels: tuple[str, ...] = Field(description="Further ``KEY=VALUE`` labels: the chat membership")
     message_file: Path = Field(description="The file holding the handoff prompt, the successor's first message")
 
@@ -565,7 +563,6 @@ class HandoffRunner:
             return None
         if handoff.prompt is None:
             raise HandoffStepError(f"the handoff of chat {chat_id} reached switching with no prompt for the successor")
-        state_dir = agent_state_dir(self._deps.host_dir, handoff.next_agent_id)
         prompt_file = prompt_path(self._deps.chat_files_root, chat_id, handoff.next_seq)
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
         prompt_file.write_text(handoff.prompt)
@@ -575,11 +572,7 @@ class HandoffRunner:
             agent_id=handoff.next_agent_id,
             harness=handoff.target_harness,
             project_id=handoff.project_label,
-            account_args=(
-                *binding_create_args(handoff.target_harness, account_dir(account.id), state_dir),
-                "--label",
-                f"account={account.id}",
-            ),
+            account_id=account.id,
             extra_labels=(f"chat_id={chat_id}", f"chat_seq={handoff.next_seq}"),
             message_file=prompt_file,
         )
