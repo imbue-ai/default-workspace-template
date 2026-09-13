@@ -70,7 +70,14 @@ def _three_segment_transcript() -> tuple[ChatTranscript, _LoadRecorder]:
 
 def test_a_single_segment_transcript_reads_as_its_one_agent_does() -> None:
     reader = ListTranscriptReader(["e1", "e2", "e3", "e4"])
-    transcript = ChatTranscript.of_single_segment(ChatId("agent-1"), "agent-1", reader)
+    # The chat of one agent: its segment is the live one, and nothing is ever loaded (the
+    # recorder holds no reader, so a load would raise).
+    transcript = ChatTranscript.build(
+        ChatId("agent-1"),
+        (_segment("agent-1", 1, None, HarnessType.CLAUDE),),
+        {"agent-1": reader},
+        _LoadRecorder({}),
+    )
 
     assert transcript.segments[0].agent_id == "agent-1"
     assert _ids(transcript.get_tail_events(2)) == ["e3", "e4"]

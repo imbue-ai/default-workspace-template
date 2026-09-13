@@ -121,14 +121,6 @@ class ChatTranscript:
         transcript._load_segment = load_segment
         return transcript
 
-    @classmethod
-    def of_single_segment(cls, chat_id: ChatId, agent_id: str, reader: TranscriptReader) -> "ChatTranscript":
-        """The transcript of a chat that has run on one agent only."""
-        segment = TranscriptSegment(
-            agent_id=agent_id, harness=HarnessType.CLAUDE, seq=1, recorded_event_count=None, ended_at=None
-        )
-        return cls.build(chat_id, (segment,), {agent_id: reader}, lambda _segment: reader)
-
     @property
     def segments(self) -> tuple[TranscriptSegment, ...]:
         return self._segments
