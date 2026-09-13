@@ -407,16 +407,18 @@ def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: 
     summary = summary_path(tmp_path / "chats", workspace.chat_id, 1)
     summary.parent.mkdir(parents=True)
     summary.write_text("# earlier summary\n")
+    stale = last_user_turn_epoch(workspace.events_by_agent[first])
+    assert stale is not None
+    # Written a minute after the last user turn, whatever the clock says today.
+    os.utime(summary, (stale + 60.0, stale + 60.0))
     runner = _runner(workspace)
 
     runner.run(workspace.chat_id, "h-1")
 
-    # Written now, after the last user turn: nothing was asked, and the prompt points at it.
+    # Fresh: nothing was asked, and the prompt points at it.
     assert not any(text.startswith("/handoff-summary") for _agent, text, _id in workspace.delivered)
     assert f"summary is at {summary}" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
 
-    stale = last_user_turn_epoch(workspace.events_by_agent[first])
-    assert stale is not None
     assert is_summary_fresh(stale - 1.0, stale) is False
     assert is_summary_fresh(stale + 1.0, stale) is True
     assert is_summary_fresh(None, stale) is False
