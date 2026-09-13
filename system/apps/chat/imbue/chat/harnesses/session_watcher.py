@@ -106,7 +106,12 @@ class TranscriptLoader(TranscriptReader, ABC):
     @classmethod
     @abstractmethod
     def build_loader(cls, agent_info: AgentInfo) -> "TranscriptLoader":
-        """Construct a loader for ``agent_info``; nothing is read until the first call."""
+        """Construct a loader for ``agent_info``, ready to answer reads.
+
+        Whether it reads the files here or on the first read is the harness's choice: a
+        store-backed loader refreshes on every read, while one whose reads never refresh
+        (antigravity) primes itself at build.
+        """
 
     def close(self) -> None:
         """Release whatever the loader holds open. Idempotent; a no-op for a loader that holds nothing."""
