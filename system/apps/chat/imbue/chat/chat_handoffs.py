@@ -545,46 +545,41 @@ class HandoffRunner:
             message_file=prompt_file,
         )
         command = self._deps.build_create_command(spec)
-        error = self._run_create(chat_id, command)
-        if error is not None and is_duplicate_id_refusal(error, handoff.next_agent_id):
-            # A half-made agent from a create this process did not see finish holds the id;
-            # mngr refuses to reuse it, so it is destroyed and the create run again once.
-            logger.warning("Handoff of chat {}: destroying the half-made agent {}", chat_id, handoff.next_agent_id)
-            destroyed = run_local_command_modern_version(
-                command=[self._deps.mngr_binary, "destroy", handoff.next_agent_id, "--force"],
-                cwd=None,
-                is_checked=False,
-                timeout=_DESTROY_TIMEOUT_SECONDS,
-            )
-            if destroyed.returncode != 0:
-                logger.warning(
-                    "Handoff of chat {}: could not destroy the half-made agent {} (exit {}): {}",
-                    chat_id,
-                    handoff.next_agent_id,
-                    destroyed.returncode,
-                    destroyed.stderr.strip(),
-                )
-            error = self._run_create(chat_id, command)
+        first_error = self._run_create(chat_id, command)
+        error = (
+            self._recreate_after_destroying_half_made(chat_id, handoff.next_agent_id, command)
+            if first_error is not None and is_duplicate_id_refusal(first_error, handoff.next_agent_id)
+            else first_error
+        )
         if error is not None:
             self._fail(chat_id, handoff_id, error)
             return None
-        labels = {
-            "user_created": "true",
-            "display_name": handoff.chat_title,
-            "account": account.id,
-            "chat_id": str(chat_id),
-            "chat_seq": str(handoff.next_seq),
-        }
-        if handoff.project_label:
-            labels["project"] = handoff.project_label
-        return AgentStateItem(
-            id=handoff.next_agent_id,
-            name=handoff.chat_name,
-            state="RUNNING",
-            labels=labels,
-            work_dir=str(self._deps.work_dir),
-            harness=handoff.target_harness,
+        return _successor_state(chat_id, handoff, account.id, self._deps.work_dir)
+
+    def _recreate_after_destroying_half_made(
+        self, chat_id: ChatId, successor_id: str, command: list[str]
+    ) -> str | None:
+        """Destroy the half-made agent holding the successor's id and run the create once more.
+
+        A create this process did not see finish left an agent mngr refuses to reuse the id of.
+        Returns the second create's failure notice, or None when it succeeded.
+        """
+        logger.warning("Handoff of chat {}: destroying the half-made agent {}", chat_id, successor_id)
+        destroyed = run_local_command_modern_version(
+            command=[self._deps.mngr_binary, "destroy", successor_id, "--force"],
+            cwd=None,
+            is_checked=False,
+            timeout=_DESTROY_TIMEOUT_SECONDS,
         )
+        if destroyed.returncode != 0:
+            logger.warning(
+                "Handoff of chat {}: could not destroy the half-made agent {} (exit {}): {}",
+                chat_id,
+                successor_id,
+                destroyed.returncode,
+                destroyed.stderr.strip(),
+            )
+        return self._run_create(chat_id, command)
 
     def _fail(self, chat_id: ChatId, handoff_id: str, error: str) -> None:
         """The failed phase (spec 5.10): the chat has no running agent, the page shows why, and a retry reruns the create."""
@@ -718,6 +713,27 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
+
+
+@pure
+def _successor_state(chat_id: ChatId, handoff: ChatHandoffRecord, account_id: str, work_dir: Path) -> AgentStateItem:
+    """The tracked state a freshly created successor gets, with the labels its create gave it."""
+    labels = {
+        "user_created": "true",
+        "display_name": handoff.chat_title,
+        "account": account_id,
+        "chat_id": str(chat_id),
+        "chat_seq": str(handoff.next_seq),
+        **({"project": handoff.project_label} if handoff.project_label else {}),
+    }
+    return AgentStateItem(
+        id=handoff.next_agent_id,
+        name=handoff.chat_name,
+        state="RUNNING",
+        labels=labels,
+        work_dir=str(work_dir),
+        harness=handoff.target_harness,
+    )
 
 
 @pure
