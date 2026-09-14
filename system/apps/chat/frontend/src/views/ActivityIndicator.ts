@@ -226,12 +226,11 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       // A chat switching harness reports the switch, not the retiring agent's turn: that
       // agent is busy with the summary it was asked for, which is the switch's own business.
       // The failed phase has its own notice over the composer and shows nothing here.
-      const handoff = chat?.handoff ?? null;
-      if (handoff !== null && handoff.phase !== "failed") {
+      if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
         cancelRelease();
         cancelWake();
         heldToolCaption = null;
-        return renderStrip(handoffPhaseText(handoff, chat!.active_agent.harness), `HANDOFF_${handoff.phase}`);
+        return renderStrip(handoffPhaseText(chat.handoff, chat.active_agent.harness), `HANDOFF_${chat.handoff.phase}`);
       }
       const state = chat?.active_agent.activity_state ?? null;
       const label = labelForActivityState(state, events);
