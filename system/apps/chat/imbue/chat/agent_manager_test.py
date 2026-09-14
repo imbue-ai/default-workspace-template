@@ -3439,6 +3439,38 @@ def test_the_switch_target_rule_keeps_the_agent_only_for_its_own_harness_and_lan
     assert is_rebind_target(unscoped, target(anthropic_2, HarnessType.OPENCODE)) is False
 
 
+def test_a_retry_on_an_unwired_manager_leaves_the_failed_phase_as_it_is(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The refusal comes before anything is written: the page keeps its failed notice and its retry."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, mngr_binary=mngr_binary)
+    first_account, second_account = _anthropic_account(), _anthropic_account()
+    agent_id = f"agent-{uuid4().hex}"
+    chat_id = ChatId(agent_id)
+    seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
+    failed = make_chat_rebind_record(agent_id=agent_id, phase=HandoffPhase.FAILED, target_account_id=second_account)
+    store.write(
+        ChatRecord(
+            chat_id=chat_id,
+            agents=(_entry_on_account(make_chat_agent_entry(1, agent_id, is_archived=False), first_account),),
+            rebind=failed,
+        )
+    )
+    manager.refresh_chat_records()
+    try:
+        with pytest.raises(HandoffError, match="not wired"):
+            manager.retry_handoff(chat_id, second_account)
+        assert store.read(chat_id) == ChatRecord(
+            chat_id=chat_id,
+            agents=(_entry_on_account(make_chat_agent_entry(1, agent_id, is_archived=False), first_account),),
+            rebind=failed,
+        )
+    finally:
+        manager.stop()
+
+
 def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_lane(
     broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

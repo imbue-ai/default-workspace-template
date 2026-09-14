@@ -1488,6 +1488,8 @@ class AgentManager:
         harness and lane (its agent stays the chat's). Raises ``HandoffError`` when the chat is
         not in the failed phase, the account is unknown, or it is not one a rebind can move to.
         """
+        # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
+        self._require_switch_capabilities()
         target = _resolve_switch_target(account_id)
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
@@ -1509,7 +1511,6 @@ class AgentManager:
                     to_update(transition.field_ref().target_label, target.label),
                 )
                 self._write_record_locked(record.with_converging(retried_rebind))
-                rebind_runner = self._rebind_runner()
             else:
                 retried_handoff = transition.model_copy_update(
                     to_update(transition.field_ref().phase, HandoffPhase.SWITCHING),
@@ -1519,13 +1520,12 @@ class AgentManager:
                     to_update(transition.field_ref().target_harness, target.harness),
                 )
                 self._write_record_locked(record.with_converging(retried_handoff))
-                handoff_runner = self._handoff_runner()
         self._broadcast_chats_updated()
         _loguru_logger.info("Retrying the switch of chat {} on account {}", chat_id, target.account.id)
         if isinstance(transition, ChatRebindRecord):
-            self._spawn_rebind(chat_id, transition.rebind_id, rebind_runner)
+            self._spawn_rebind(chat_id, transition.rebind_id)
             return HandoffPhase.RESTARTING
-        self._spawn_handoff(chat_id, transition.handoff_id, handoff_runner)
+        self._spawn_handoff(chat_id, transition.handoff_id)
         return HandoffPhase.SWITCHING
 
     def hold_send(self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin) -> HandoffPhase | None:
