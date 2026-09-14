@@ -5,7 +5,7 @@
   beside it. And a change to code a harden pass already covered extends that
   code's tests in the same commit.
 
-- The `modal_eval` create template gives an eval workspace 4h instead of 3h. The
+- The `modal_eval` create template gives an eval workspace 4h10m instead of 3h. The
   timeout is only the backstop for a driver that dies without tearing its
   workspaces down, but because every step of a stepped case shares one workspace
   it also caps how long those steps may run together -- and two roadmap trials
