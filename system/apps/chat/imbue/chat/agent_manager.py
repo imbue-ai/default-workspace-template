@@ -2278,10 +2278,10 @@ class AgentManager:
 
         Returns the chat's id (its first agent's, minted before the create) together with the
         chat's name pair: the human-readable display name and its canonical true name (see
-        ``imbue.chat.naming``). An empty ``requested_name`` mints the
-        first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
-        server-side, under the same lock that registers the in-flight create --
-        so two simultaneous creates cannot both mint "Chat 1".
+        ``imbue.chat.naming``). An empty ``requested_name`` mints the first free "Chat N"
+        here, whatever harness the account runs on, server-side, under the same lock that
+        registers the in-flight create -- so two simultaneous creates cannot both mint
+        "Chat 1".
 
         ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
         failed): it is launched under that id and keeps the name and project it was minted

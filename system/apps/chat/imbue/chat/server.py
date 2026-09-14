@@ -1220,12 +1220,12 @@ def _run_create_chat() -> CreatedChat | Response:
     whose create failed -- under that id, keeping the name it was minted with.
 
     The chat's display name is minted here (server-side) when the request names
-    none: the first free "<word> N" for the harness, counted against every name
-    on the machine -- agents and in-flight creates -- so simultaneous creates
-    cannot both mint "Chat 1". An
-    explicitly requested name that collides answers 409 so the caller can retry
-    with another. The response carries the resulting name pair (canonical
-    ``name`` + human-readable ``display_name``) beside the agent id.
+    none: the first free "Chat N", whatever harness the account runs on, counted
+    against every name on the machine -- agents and in-flight creates -- so
+    simultaneous creates cannot both mint "Chat 1". An explicitly requested name
+    that collides answers 409 so the caller can retry with another. The response
+    carries the resulting name pair (canonical ``name`` + human-readable
+    ``display_name``) beside the chat's id.
 
     A chat created inside a project carries that project's id in the agent's
     ``project`` label, which records where it was started (mngr propagates the

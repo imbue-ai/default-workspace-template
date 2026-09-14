@@ -464,8 +464,8 @@ class CreateChatRequest(FrozenModel):
 
     name: str = Field(
         default="",
-        description="Display name for the new chat agent; empty mints the first free "
-        '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
+        description='Display name for the new chat agent; empty mints the first free "Chat N" server-side, '
+        "whatever harness the account runs on",
     )
     account_id: str = Field(
         default="",
