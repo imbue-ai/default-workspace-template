@@ -342,7 +342,7 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
 ```
 
 - `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
-  It carries no `lane`: the lane is the account's, and phase 5 needed none, since whether a pending account means a switch is decided by harness (two lanes can share one) against the accounts the page already holds.
+  It carries no `lane`: the lane is the account's, and the page reads it off the account row it already holds for `account_id`, which is all the switch rule needs (5.1: any account but the chat's own is a switch; the kind, a rebind or a handoff, is read by harness and lane, since two lanes can share one harness).
   The frontend never calls an agent-keyed route.
 - `handoff` is `null` except while converging (section 5.4, section 6): one shape for both kinds of switch, since the page renders them the same way.
   While set it carries `kind` (`handoff` or `rebind`), the phase (`restarting` is the rebind's), the target lane, account, and harness, `target_label` (what the phase text and the 409s name the destination by: the harness for a handoff, the account for a rebind), the messages held for after the switch (the confirming message first, so a reloaded page keeps showing them until they land in the transcript; the record keeps the confirming text as `trigger_text` once it leaves the held list), and the failed phase's `error`.
