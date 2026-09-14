@@ -91,6 +91,17 @@ and the SSE streams are keyed by chat id, so an open page follows the chat
 through the switch and sees the chip live. The summaries and prompts live
 beside the record under `data/.apps/chat/chats/<chat-id>/`.
 
+The page drives it from the composer's provider menu: pressing an account on
+another harness makes it the chat's pending lane ("next"), the send button then
+reads "Switch and send" and asks a two-line confirm, and the typed message
+becomes the new agent's first. While the chat converges the held messages
+render from the snapshot's `handoff.held_sends` with the phase as their
+caption, the activity strip and the placeholder say what is happening, and the
+Stop button is "Cancel switch" until the old agent is stopped; a failed create
+shows its reason over the composer with a retry on any signed-in account. The
+verbs the app refuses meanwhile answer 409 with a detail written for the user,
+which the page and the shell's tab menu show as is.
+
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
 wake-ups, a lead's replies to a worker, the automation runner) and falls back
