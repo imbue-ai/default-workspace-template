@@ -431,6 +431,32 @@ def test_a_resume_after_the_env_was_rewritten_still_finds_the_sessions_where_the
     assert workspace.record() is None
 
 
+def test_a_resume_after_the_start_landed_only_delivers_the_held_sends(tmp_path: Path) -> None:
+    """The record's entry names the new account only once the start landed, so a resume mid-delivery does not restart again."""
+    workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
+    record = workspace.record()
+    assert record is not None
+    entry = record.agents[0]
+    workspace.store.write(
+        record.model_copy_update(
+            to_update(
+                record.field_ref().agents,
+                (entry.model_copy_update(to_update(entry.field_ref().account_id, _NEW_ACCOUNT.id)),),
+            )
+        )
+    )
+    state = workspace.agents[agent_id]
+    workspace.agents[agent_id] = state.model_copy_update(
+        to_update(state.field_ref().labels, {**state.labels, "account": _NEW_ACCOUNT.id})
+    )
+
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+
+    assert workspace.stopped == [] and workspace.argv_lines() == [] and workspace.evicted == []
+    assert workspace.delivered == [(agent_id, "Carry on on the other account", "trigger-1")]
+    assert workspace.record() is None
+
+
 def test_a_gone_agent_or_account_fails_the_rebind_with_the_reason(tmp_path: Path) -> None:
     workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
     workspace.is_target_account_gone = True

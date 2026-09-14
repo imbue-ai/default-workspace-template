@@ -235,18 +235,35 @@ class RebindRunner:
 
         Each step finds its work done or does it: a stopped agent is not stopped again, a moved
         session file is not moved again, the env line and the link are rewritten to the same
-        value, ``mngr label`` merges, and ``mngr start`` is a no-op for a running agent.
+        value, ``mngr label`` merges, and ``mngr start`` is a no-op for a running agent. The
+        phase outlasts the start: the record's active entry is moved to the target account only
+        once the start landed, so a resume that finds it there (the last process died
+        mid-delivery) has only the delivery left to do and does not restart the agent again.
         """
         agent_state = self._deps.get_agent_state(rebind.agent_id)
         agent_info = self._deps.get_agent_info(rebind.agent_id)
         if agent_state is None or agent_info is None:
             self._fail(chat_id, rebind_id, f"The chat's agent {rebind.agent_id} is no longer listed by mngr")
             return
+        if record.agents[-1].account_id != rebind.target_account_id:
+            if not self._restart_on_target(chat_id, rebind_id, rebind, agent_state, agent_info):
+                return
+        self._deliver_held_sends(chat_id, rebind_id, rebind.agent_id)
+
+    def _restart_on_target(
+        self,
+        chat_id: ChatId,
+        rebind_id: str,
+        rebind: ChatRebindRecord,
+        agent_state: AgentStateItem,
+        agent_info: AgentInfo,
+    ) -> bool:
+        """The restart proper, through to the record naming the new account; False once the failed phase has been written."""
         try:
             account = self._deps.resolve_account(rebind.target_account_id)
         except AccountError as e:
             self._fail(chat_id, rebind_id, f"The account the chat was moving to is gone: {e}")
-            return
+            return False
         if not is_lifecycle_dead(agent_state.state):
             logger.info("Rebind of chat {}: stopping agent {}", chat_id, rebind.agent_id)
             self._deps.stop_agent(agent_info)
@@ -258,11 +275,11 @@ class RebindRunner:
         rebind_agent(agent_state.harness, target_dir, agent_info.agent_state_dir)
         self._relabel(chat_id, rebind, account.id)
         if not self._start(chat_id, rebind_id, agent_info):
-            return
+            return False
         self._deps.update_record(
             chat_id, rebind_id, lambda current: _with_active_entry_rebound(current, rebind.agent_id, account)
         )
-        self._deliver_held_sends(chat_id, rebind_id, rebind.agent_id)
+        return True
 
     def _move_claude_sessions(
         self, chat_id: ChatId, rebind_id: str, rebind: ChatRebindRecord, agent_info: AgentInfo, target_dir: Path
