@@ -217,25 +217,21 @@ def _write_mngr_stub(
 
     The collector asks mngr three things -- which agents exist, what was said in
     one, and what is on one's pane -- so the stub answers exactly those three
-    shapes: the pipe template
-    ``{name}|{name}@{host.name}.{host.provider_name}|{id}`` for ``list``, raw
-    JSONL for ``event``, and pane text for ``capture``. Both per-agent targets
-    arrive as the pinned ``name@host.provider`` address the listing handed out,
-    so the stub keys its canned answers by the name in front of the ``@``. An
-    agent with no canned pane exits nonzero, as the real ``mngr capture`` does
-    for an agent that is not running.
+    shapes: the pipe template ``{name}|{id}`` for ``list``, raw JSONL for
+    ``event``, and pane text for ``capture``. Both per-agent targets arrive as
+    the agent id the listing handed out, so the stub keys its canned answers by
+    that id. An agent with no canned pane exits nonzero, as the real ``mngr
+    capture`` does for an agent that is not running.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, events in (events_by_agent or {}).items():
-        (events_dir / agent_name).write_text(events, encoding="utf-8")
+        (events_dir / _agent_id_for(agent_name)).write_text(events, encoding="utf-8")
     panes_dir = tmp_path / "stub-panes"
     panes_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, pane in (panes_by_agent or {}).items():
-        (panes_dir / agent_name).write_text(pane, encoding="utf-8")
-    listing = "".join(
-        f"{name}|{name}@stub-host.local|{_agent_id_for(name)}\n" for name in agents
-    )
+        (panes_dir / _agent_id_for(agent_name)).write_text(pane, encoding="utf-8")
+    listing = "".join(f"{name}|{_agent_id_for(name)}\n" for name in agents)
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
     argv_log = tmp_path / "stub-argv.log"
@@ -249,14 +245,12 @@ def _write_mngr_stub(
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = "event" ]; then\n'
-        '  agent_name="${2%%@*}"\n'
-        f'  f="{events_dir}/$agent_name"\n'
+        f'  f="{events_dir}/$2"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
         "fi\n"
         'if [ "$1" = "capture" ]; then\n'
-        '  agent_name="${2%%@*}"\n'
-        f'  f="{panes_dir}/$agent_name"\n'
+        f'  f="{panes_dir}/$2"\n'
         '  if [ -f "$f" ]; then cat "$f"; exit 0; fi\n'
         "  exit 1\n"
         "fi\n"
@@ -480,9 +474,9 @@ def test_every_agent_is_a_transcript_candidate(
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
-        ("chatty", "chatty@stub-host.local", "agent-chatty"),
-        ("system-services", "system-services@stub-host.local", "agent-system-services"),
-        ("worker", "worker@stub-host.local", "agent-worker"),
+        ("chatty", "agent-chatty"),
+        ("system-services", "agent-system-services"),
+        ("worker", "agent-worker"),
     ]
 
 
@@ -1584,13 +1578,13 @@ def test_capturing_a_pane_never_starts_a_stopped_agent(tmp_path: Path) -> None:
     )
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("chatty@stub-host.local", 5.0) == "on screen"
+    assert module.capture_pane("agent-chatty", 5.0) == "on screen"
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     capture_calls = [
         line for line in invocations.splitlines() if line.startswith("capture ")
     ]
-    assert capture_calls == ["capture chatty@stub-host.local --full --no-start"]
+    assert capture_calls == ["capture agent-chatty --full --no-start"]
 
 
 def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> None:
@@ -1599,7 +1593,7 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
     stub = _write_mngr_stub(tmp_path, agents=("chatty",))
     module = _load_collector(mngr_binary=stub)
 
-    assert module.capture_pane("chatty@stub-host.local", 5.0) is None
+    assert module.capture_pane("agent-chatty", 5.0) is None
 
 
 def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
@@ -1994,7 +1988,4 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
         assert "chats/agent-a-claude.jsonl" in archive.namelist()
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     list_calls = [line for line in invocations.splitlines() if line.startswith("list ")]
-    assert list_calls == [
-        "list --provider local"
-        " --format {name}|{name}@{host.name}.{host.provider_name}|{id}"
-    ], invocations
+    assert list_calls == ["list --provider local --format {name}|{id}"], invocations
