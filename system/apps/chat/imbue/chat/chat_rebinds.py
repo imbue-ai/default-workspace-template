@@ -32,6 +32,7 @@ from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import joined_blocks
 from imbue.chat.chat_handoffs import mngr_exit_summary
+from imbue.chat.chat_handoffs import mngr_failure_reason
 from imbue.chat.chat_records import ChatRebindRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -308,7 +309,7 @@ class RebindRunner:
             timeout=_LABEL_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            reason = result.stderr.strip() or mngr_exit_summary("label", result, _LABEL_TIMEOUT_SECONDS)
+            reason = mngr_failure_reason("label", result, _LABEL_TIMEOUT_SECONDS)
             raise RebindStepError(f"could not relabel agent {rebind.agent_id} of chat {chat_id}: {reason}")
         self._deps.note_agent_relabeled(rebind.agent_id, {"account": account_id})
 

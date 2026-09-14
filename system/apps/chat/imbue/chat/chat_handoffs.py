@@ -220,15 +220,15 @@ def mngr_exit_summary(verb: str, result: FinishedProcess, timeout_seconds: float
 
 
 @pure
-def _rename_failure_reason(result: FinishedProcess) -> str:
-    """Why the archival rename failed: the timeout, mngr's own words, or the signal or exit code that ended it.
+def mngr_failure_reason(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
+    """Why an mngr verb failed, for a step error: the timeout, mngr's own words, or the signal or exit code that ended it.
 
-    A rename that ran out of time or was killed prints nothing, so its stderr alone would
-    leave the step error (the one trace of why the switch stalled) without a reason.
+    A verb that ran out of time or was killed prints nothing, so its stderr alone would leave
+    the step error (the one trace of why the switch stalled) without a reason.
     """
     if result.is_timed_out:
-        return mngr_exit_summary("rename", result, _RENAME_TIMEOUT_SECONDS)
-    return result.stderr.strip() or mngr_exit_summary("rename", result, _RENAME_TIMEOUT_SECONDS)
+        return mngr_exit_summary(verb, result, timeout_seconds)
+    return result.stderr.strip() or mngr_exit_summary(verb, result, timeout_seconds)
 
 
 @pure
@@ -582,7 +582,8 @@ class HandoffRunner:
         )
         if result.returncode != 0:
             raise HandoffStepError(
-                f"could not archive agent {retiring.agent_id} of chat {chat_id}: {_rename_failure_reason(result)}"
+                f"could not archive agent {retiring.agent_id} of chat {chat_id}: "
+                f"{mngr_failure_reason('rename', result, _RENAME_TIMEOUT_SECONDS)}"
             )
         self._deps.note_agent_renamed(retiring.agent_id, archival_name, labels)
 
