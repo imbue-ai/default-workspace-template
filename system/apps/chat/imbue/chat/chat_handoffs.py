@@ -100,6 +100,23 @@ class HandoffStepError(RuntimeError):
 
 
 @pure
+def converging_detail(phase: HandoffPhase, target_harness: HarnessType) -> str:
+    """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
+
+    Names the harness and the phase in plain words rather than the chat's id: the shell's tab
+    menu and the chat page both put this text in front of the user.
+    """
+    label = HARNESS_LABEL[target_harness]
+    match phase:
+        case HandoffPhase.DRAINING | HandoffPhase.SUMMARIZING | HandoffPhase.SWITCHING:
+            return f"This chat is switching to {label} and is {phase.value}; wait for the switch to finish, then try again."
+        case HandoffPhase.FAILED:
+            return f"This chat's switch to {label} failed; retry the switch from the chat before anything else."
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
 def archived_agent_name(seq: int, chat_name: str, agent_id: str) -> str:
     """The archival mngr name (spec 4.3): sorts archived agents together, orders them, stays unique."""
     return f"archived-{seq}-{chat_name}-{agent_id}"

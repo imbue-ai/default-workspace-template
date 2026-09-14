@@ -41,6 +41,7 @@ from pydantic import PrivateAttr
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.errors import ChatCreateRefusedError
 from imbue.chat.errors import ChatDestroyFailedError
 from imbue.chat.errors import ChatMovingError
@@ -125,10 +126,7 @@ def _refuse_while_moving(snapshot: ChatSnapshot) -> None:
     and a stop or rename would act on behind the handoff's back.
     """
     if snapshot.handoff is not None:
-        raise ChatMovingError(
-            f"chat {snapshot.chat_id!r} is moving to another agent ({snapshot.handoff.phase.value}); "
-            "try again once it has"
-        )
+        raise ChatMovingError(converging_detail(snapshot.handoff.phase, snapshot.handoff.target_harness))
 
 
 _STATUS_BY_PROVISIONAL_PHASE: Final[dict[ProvisionalChatPhase, InstanceStatus]] = {

@@ -2947,12 +2947,21 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     for suffix in ("stop", "start", "interrupt", "flush-queue", "drain-to-composer", "model"):
         refused = client.post(f"/api/chats/{first}/{suffix}", json={})
         assert refused.status_code == 409, suffix
-        assert refused.get_json()["phase"] == "summarizing"
+        assert refused.get_json() == {
+            "detail": "This chat is switching to Codex and is summarizing; wait for the switch to finish, then try again.",
+            "phase": "summarizing",
+        }
     again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
     assert again.status_code == 409
     listed = client.get("/api/chats").get_json()["chats"]
     assert [(chat["chat_id"], chat["status"], chat["handoff"]["phase"]) for chat in listed] == [
         (first, "working", "summarizing")
+    ]
+    # The page renders the held messages and the phase text from the snapshot, so both ride it.
+    assert listed[0]["handoff"]["target_harness"] == "codex"
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex"},
+        {"message_id": "m-2", "text": "and this"},
     ]
     instances = client.get("/_instances").get_json()
     assert [(record["key"], record["status"]) for record in instances["instances"]] == [(first, "working")]

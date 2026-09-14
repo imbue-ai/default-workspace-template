@@ -231,6 +231,7 @@ def make_chat_handoff_record(
         chat_name="Chat-1",
         chat_title="Chat 1",
         trigger_message_id=trigger.message_id,
+        trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
     )
 
