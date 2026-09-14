@@ -585,7 +585,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       /** Enter and the send button do the same thing: send, or ask to switch when a lane is pending. */
       function handleSubmit(): Promise<void> {
         if (switchTarget !== null) {
-          if (chatId && (messageText.trim().length > 0 || hasReadyAttachments(chatId))) {
+          if (chatId && canSend) {
             isSwitchConfirmOpen = true;
             m.redraw();
           }
