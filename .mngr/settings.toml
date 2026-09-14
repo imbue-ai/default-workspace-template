@@ -479,6 +479,13 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
+# Publish each workspace container's sshd on loopback only. The minds desktop
+# client always talks to a local daemon and connects to 127.0.0.1, so nothing
+# needs the container reachable from the machine's LAN. This is also mngr's
+# default for a local daemon; it is pinned here so the workspace's exposure does
+# not depend on that default. (Requires the vendored mngr to know the field:
+# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
