@@ -22,11 +22,16 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener } from "./Chats";
+import type { HeldSend } from "./Chats";
 
 export interface OutgoingMessage {
   id: string;
   /** The text the user typed (shown verbatim), not the attachment-expanded form. */
   content: string;
+  /** The send-time message_id (contract A4) when the caller minted one. A backend record that
+   *  carries the same id (a message held while the chat switches harness) replaces this bubble
+   *  exactly, rather than by position. */
+  messageId?: string;
 }
 
 const byChat: Record<string, OutgoingMessage[]> = {};
@@ -37,11 +42,26 @@ let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
  *  so the caller can drop it on failure. */
-export function addOutgoing(chatId: string, content: string): string {
+export function addOutgoing(chatId: string, content: string, messageId?: string): string {
   const id = `outgoing-${nextId++}`;
-  (byChat[chatId] ??= []).push({ id, content });
+  (byChat[chatId] ??= []).push(messageId === undefined ? { id, content } : { id, content, messageId });
   m.redraw();
   return id;
+}
+
+/** Remove the bubbles whose send-time message ids the backend now lists itself (the held sends of
+ *  a switching chat): the snapshot's own rendering takes over, so the bubble stands down by id. */
+export function dropOutgoingByMessageId(chatId: string, messageIds: readonly string[]): void {
+  const list = byChat[chatId];
+  if (list === undefined || messageIds.length === 0) {
+    return;
+  }
+  const toRemove = new Set(messageIds);
+  const next = list.filter((entry) => entry.messageId === undefined || !toRemove.has(entry.messageId));
+  if (next.length !== list.length) {
+    byChat[chatId] = next;
+    m.redraw();
+  }
 }
 
 export function getOutgoingMessages(chatId: string): OutgoingMessage[] {
@@ -117,17 +137,50 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
   }
 }
 
+/** What the previous snapshot said a switching chat was holding, and the agent it was leaving. */
+interface HeldSnapshot {
+  retiringAgentId: string;
+  held: HeldSend[];
+}
+
 /**
  * Follow the agents store so a newly-queued message drops its "Sending…" bubble the instant
  * it becomes a real queued entry (no overlap). Deduped by queued_id, so re-pushed snapshots
  * are harmless. Installed once by the chat document at boot.
+ *
+ * A chat switching harness holds its sends on the backend instead, and the snapshot lists them
+ * (``handoff.held_sends``): a bubble whose id the list carries stands down for the snapshot's
+ * own rendering. When the switch ends, the held messages leave the snapshot before their turns
+ * reach the transcript, so they come back as bubbles here and drop by the arrivals that follow.
+ * A cancelled switch returns its confirming message to the composer, so that one is skipped.
  */
 export function trackBackendArrivals(): void {
+  const heldByChat = new Map<string, HeldSnapshot>();
   addChatsUpdatedListener((chats) => {
     for (const chat of chats) {
       const queuedIds = chat.active_agent.queued_messages.map((queued) => queued.queued_id);
       if (queuedIds.length > 0) {
         noteBackendArrivals(chat.chat_id, queuedIds);
+      }
+      const previous = heldByChat.get(chat.chat_id);
+      if (chat.handoff !== null) {
+        const held = chat.handoff.held_sends;
+        dropOutgoingByMessageId(
+          chat.chat_id,
+          held.map((entry) => entry.message_id),
+        );
+        // The retiring agent is the one the chat ran on when the switch began; the snapshot
+        // names the successor before the switch ends, once it is created.
+        heldByChat.set(chat.chat_id, {
+          retiringAgentId: previous?.retiringAgentId ?? chat.active_agent.agent_id,
+          held,
+        });
+      } else if (previous !== undefined) {
+        heldByChat.delete(chat.chat_id);
+        const isCancelled = previous.retiringAgentId === chat.active_agent.agent_id;
+        for (const held of isCancelled ? previous.held.slice(1) : previous.held) {
+          addOutgoing(chat.chat_id, held.text, held.message_id);
+        }
       }
     }
   });

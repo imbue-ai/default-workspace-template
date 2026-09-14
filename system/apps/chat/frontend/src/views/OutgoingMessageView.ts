@@ -8,6 +8,7 @@
  * + text restored), and the bubble is dropped.
  */
 import m from "mithril";
+import { getChatById } from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { USER_BUBBLE_CLASS, USER_MESSAGE_ROW_CLASS } from "./user-message-display";
@@ -40,7 +41,11 @@ function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
 }
 
 /** The optimistic outgoing bubbles for a chat, in send order. Returns [] when
- *  there are none. */
+ *  there are none. A bubble whose send the chat app is holding while the chat switches harness
+ *  is left to the held-send rendering, so the message shows once even before the store drops it. */
 export function renderOutgoingMessages(chatId: string): m.Vnode[] {
-  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
+  const heldIds = new Set((getChatById(chatId)?.handoff?.held_sends ?? []).map((held) => held.message_id));
+  return getOutgoingMessages(chatId)
+    .filter((outgoing) => outgoing.messageId === undefined || !heldIds.has(outgoing.messageId))
+    .map(renderOutgoingBubble);
 }

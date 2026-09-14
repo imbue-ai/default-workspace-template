@@ -27,6 +27,7 @@ import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 
@@ -221,7 +222,18 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     },
     view(vnode) {
       const { chatId, events } = vnode.attrs;
-      const state = getChatById(chatId)?.active_agent.activity_state ?? null;
+      const chat = getChatById(chatId);
+      // A chat switching harness reports the switch, not the retiring agent's turn: that
+      // agent is busy with the summary it was asked for, which is the switch's own business.
+      // The failed phase has its own notice over the composer and shows nothing here.
+      const handoff = chat?.handoff ?? null;
+      if (handoff !== null && handoff.phase !== "failed") {
+        cancelRelease();
+        cancelWake();
+        heldToolCaption = null;
+        return renderStrip(handoffPhaseText(handoff, chat!.active_agent.harness), `HANDOFF_${handoff.phase}`);
+      }
+      const state = chat?.active_agent.activity_state ?? null;
       const label = labelForActivityState(state, events);
 
       const now = Date.now();

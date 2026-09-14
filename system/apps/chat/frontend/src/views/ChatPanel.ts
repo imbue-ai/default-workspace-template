@@ -61,6 +61,8 @@ import { ActivityIndicator } from "./ActivityIndicator";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
+import { renderHeldSends } from "./HeldSendView";
+import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The terminal output a page shows in place of a transcript: what mngr printed when a create
@@ -540,7 +542,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
     // reload firing under a fresh chat replaces that bubble with a spinner or an
     // error screen.
     const tailNodes =
-      getEventCount(chatId) === 0 ? [...renderQueuedMessages(chatId), ...renderOutgoingMessages(chatId)] : [];
+      getEventCount(chatId) === 0
+        ? [...renderQueuedMessages(chatId), ...renderHeldSends(chatId), ...renderOutgoingMessages(chatId)]
+        : [];
     const hasNothingToShow = getEventCount(chatId) === 0 && tailNodes.length === 0;
 
     // Read per-render rather than latched at load time, so the panel leaves the
@@ -653,6 +657,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
         ...renderQueuedMessages(chatId),
+        // The messages the chat app holds while the chat switches harness, then this page's
+        // own not-yet-real sends.
+        ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
       ]),
     ]);
@@ -784,6 +791,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean }
                 ? null
                 : m("footer", { class: "app-footer shrink-0 bg-chat px-8" }, [
                     m(EmptySlot, { name: "conversation-before-input" }),
+                    // Why a switch to another harness failed, with a retry on any account (spec 5.10).
+                    m(HandoffFailedNotice, { chatId }),
                     isConversationNotFound(chatId)
                       ? null
                       : m(ActivityIndicator, {

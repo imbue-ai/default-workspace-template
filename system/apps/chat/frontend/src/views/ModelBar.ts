@@ -21,6 +21,7 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
+import { getPendingAccountId, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
@@ -471,16 +472,26 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     });
   }
 
+  /** Where an account that is not the chat's own leads: the chat's next send switches to it when
+   *  it runs another harness (the pending lane, spec 5.1); on the chat's own harness it can only
+   *  open a new chat, until a later phase lets a chat change account in place. */
+  function isSwitchTarget(chatId: string, account: ProviderAccount): boolean {
+    const activeHarness = getChatById(chatId)?.active_agent.harness;
+    return activeHarness !== undefined && account.harness !== activeHarness;
+  }
+
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Our chats bind to an account when they are created and nothing rebinds them, so pressing
-   * an account that is not this chat's asks to open a new chat on it. Each row also carries
-   * the default toggle: the starred account is the one a new chat opens on when nothing
-   * names one (the New Tab tile, the rail shortcut, an agent's `layout.py open chat`).
+   * Pressing an account on another harness makes it the chat's pending lane, applied by the
+   * next send; pressing it again takes that back. An account on the chat's own harness asks to
+   * open a new chat on it, since nothing rebinds a chat yet. Each row also carries the default
+   * toggle: the starred account is the one a new chat opens on when nothing names one (the New
+   * Tab tile, the rail shortcut, an agent's `layout.py open chat`).
    */
-  function providerFlyout(current: ProviderAccount | null): m.Vnode {
+  function providerFlyout(chatId: string, current: ProviderAccount | null): m.Vnode {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
+    const pendingId = getPendingAccountId(chatId);
     const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
@@ -492,13 +503,21 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
           : rows.map((row) => {
               const isCurrent = current !== null && row.id === current.id;
+              const isPending = row.id === pendingId;
               return accountRow({
                 row,
                 isCurrent,
                 isDefault: row.id === defaultId,
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                ...(isPending ? { badge: "next" } : {}),
                 onSelect: () => {
                   if (isCurrent) {
+                    setPendingAccount(chatId, null);
+                    setFlyout(null);
+                    return;
+                  }
+                  if (isSwitchTarget(chatId, row)) {
+                    setPendingAccount(chatId, isPending ? null : row.id);
                     setFlyout(null);
                     return;
                   }
@@ -516,7 +535,19 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           class: css.FLYOUT_ADD,
           onclick: () => {
             closeCard();
-            openProviderChooser({ onSignedIn: (accountId) => startChatOnAccount(accountId) });
+            openProviderChooser({
+              onSignedIn: (accountId) => {
+                // Signed in from inside a chat: an account on another harness is what the user
+                // switches this chat to next; one on its own harness can only start a new chat.
+                const added = accountForAgent(accountId);
+                if (added !== null && isSwitchTarget(chatId, added)) {
+                  setPendingAccount(chatId, accountId);
+                  m.redraw();
+                } else {
+                  void startChatOnAccount(accountId);
+                }
+              },
+            });
           },
         },
         "+ Add a provider",
@@ -694,6 +725,14 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       const dynamic = catalog?.picker_mode === "dynamic";
       const sourceOptions: CatalogModelOption[] = dynamic ? (dynamicOptions ?? []) : (catalog?.options ?? []);
 
+      // The account the next send switches the chat to, named beside the current one so the
+      // pending choice is visible without opening the menu.
+      const pending = pendingSwitchTarget(chatId);
+      const providerSub =
+        pending !== null
+          ? `${account?.harness_label ?? "not signed in"}, next: ${pending.label}`
+          : account?.harness_label;
+
       const card = m(
         "div",
         {
@@ -705,7 +744,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
           menuRow({
             label: "Provider",
             value: account?.provider ?? "Not signed in",
-            sub: account?.harness_label,
+            ...(providerSub !== undefined ? { sub: providerSub } : {}),
             which: "providers",
             openable: true,
             tooltip: null,
@@ -755,7 +794,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
 
       const openFlyout =
         flyout === "providers"
-          ? providerFlyout(account)
+          ? providerFlyout(chatId, account)
           : flyout === "model"
             ? modelFlyout(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic)
             : null;
