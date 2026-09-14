@@ -46,6 +46,7 @@ from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.chat.harnesses.claude.session_files import PROJECTS_DIRNAME
 from imbue.chat.harnesses.claude.session_files import SESSION_ID_HISTORY_FILENAME
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import QueueSignal
@@ -288,7 +289,7 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
                 self._subagent_tool_use_id[sub_id] = tool_use_id
 
     def _find_session_file(self, session_id: str) -> Path | None:
-        return find_session_file(self._claude_config_dir / "projects", session_id)
+        return find_session_file(self._claude_config_dir / PROJECTS_DIRNAME, session_id)
 
     # -- consumption ----------------------------------------------------------------------
 
@@ -508,7 +509,7 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
     def _watch_paths(self) -> tuple[Path, ...]:
         # The projects tree (recursive: every session file and subagent dir under it wakes
         # the loop, including ones created later) plus the history file's directory.
-        return (self._claude_config_dir / "projects", self._agent_state_dir / SESSION_ID_HISTORY_FILENAME)
+        return (self._claude_config_dir / PROJECTS_DIRNAME, self._agent_state_dir / SESSION_ID_HISTORY_FILENAME)
 
     def _before_broadcast(self) -> None:
         # A3b ordering: a Queued->Delivered message leaves the queue and appears as a

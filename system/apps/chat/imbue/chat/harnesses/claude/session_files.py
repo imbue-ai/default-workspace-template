@@ -23,7 +23,7 @@ logger = _loguru_logger
 
 # Where mngr's SessionStart hook lists every session the agent has run, first mention first.
 SESSION_ID_HISTORY_FILENAME: Final = "claude_session_id_history"
-_PROJECTS_DIRNAME: Final = "projects"
+PROJECTS_DIRNAME: Final = "projects"
 
 
 def claude_session_ids(agent_state_dir: Path, agent_id: str) -> tuple[str, ...]:
@@ -56,7 +56,7 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
     """
     if source_config_dir == target_config_dir:
         return []
-    source_projects = source_config_dir / _PROJECTS_DIRNAME
+    source_projects = source_config_dir / PROJECTS_DIRNAME
     if not source_projects.is_dir():
         return []
     moved: list[Path] = []
@@ -65,7 +65,7 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
         if session_file is None:
             continue
         relative_dir = session_file.parent.relative_to(source_projects)
-        target_dir = target_config_dir / _PROJECTS_DIRNAME / relative_dir
+        target_dir = target_config_dir / PROJECTS_DIRNAME / relative_dir
         target_dir.mkdir(parents=True, exist_ok=True)
         for source_path in (session_file, session_file.parent / session_id):
             if not source_path.exists():
