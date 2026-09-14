@@ -1473,8 +1473,7 @@ class AgentManager:
                 raise ChatConvergingError(cancel_refused_detail(transition.target_harness))
             others = transition.held_sends_after_trigger()
             if len(record.agents) == 1:
-                self._chat_record_store.delete(chat_id)
-                self._chat_record_by_id.pop(chat_id, None)
+                self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
             retiring_id = record.agents[-1].agent_id
@@ -1686,6 +1685,11 @@ class AgentManager:
         self._chat_record_store.write(record)
         self._chat_record_by_id[record.chat_id] = record
 
+    def _delete_record_locked(self, chat_id: ChatId) -> None:
+        """Drop a record from the store and from what the manager resolves by: the chat is its one agent again. Lock held."""
+        self._chat_record_store.delete(chat_id)
+        self._chat_record_by_id.pop(chat_id, None)
+
     def _require_transition_locked(self, record: ChatRecord | None, chat_id: ChatId, transition_id: str) -> ChatRecord:
         """The record still carrying the switch ``transition_id`` names; raises the switch's own cancelled error otherwise."""
         transition = record.converging if record is not None else None
@@ -1738,8 +1742,7 @@ class AgentManager:
                 self._write_record_locked(record.with_converging(remaining))
                 return held
             if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
-                self._chat_record_store.delete(chat_id)
-                self._chat_record_by_id.pop(chat_id, None)
+                self._delete_record_locked(chat_id)
             else:
                 self._write_record_locked(record.with_converging(None))
         self._broadcast_chats_updated()
