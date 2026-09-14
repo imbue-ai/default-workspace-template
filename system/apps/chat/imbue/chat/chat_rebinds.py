@@ -165,12 +165,12 @@ class RebindRunner:
     def _run_phases(self, chat_id: ChatId, rebind_id: str) -> None:
         is_done = False
         while not is_done:
-            record, rebind = self._current(chat_id, rebind_id)
+            _record, rebind = self._current(chat_id, rebind_id)
             match rebind.phase:
                 case HandoffPhase.DRAINING:
                     self.drain(chat_id, rebind_id)
                 case HandoffPhase.RESTARTING:
-                    self._restart(chat_id, rebind_id, record, rebind)
+                    self._restart(chat_id, rebind_id, rebind)
                     is_done = True
                 case HandoffPhase.FAILED:
                     is_done = True
@@ -191,7 +191,7 @@ class RebindRunner:
         the block for the composer; the route answers with it, and it also stays on the record
         for a page that reloads.
         """
-        record, rebind = self._current(chat_id, rebind_id)
+        _record, rebind = self._current(chat_id, rebind_id)
         if rebind.phase is not HandoffPhase.DRAINING:
             return rebind.returned_block
         agent_state = self._deps.get_agent_state(rebind.agent_id)
@@ -216,22 +216,24 @@ class RebindRunner:
 
     # -- restarting ----------------------------------------------------------------------------
 
-    def _restart(self, chat_id: ChatId, rebind_id: str, record: ChatRecord, rebind: ChatRebindRecord) -> None:
+    def _restart(self, chat_id: ChatId, rebind_id: str, rebind: ChatRebindRecord) -> None:
         """Stop the agent, repoint its binding, relabel it, start it, and hand it the held sends.
 
         Each step finds its work done or does it: a stopped agent is not stopped again, a moved
         session file is not moved again, the env line and the link are rewritten to the same
         value, ``mngr label`` merges, and ``mngr start`` is a no-op for a running agent. The
-        phase outlasts the start: the record's active entry is moved to the target account only
-        once the start landed, so a resume that finds it there (the last process died
-        mid-delivery) has only the delivery left to do and does not restart the agent again.
+        phase outlasts the start: ``restarted_account_id`` is written once the start landed, so
+        a resume that finds it naming the target (the last process died mid-delivery) has only
+        the delivery left to do and does not restart the agent again. The record's active entry
+        cannot serve as that marker: it names the previous account until the start lands, and a
+        retry may name the previous account as its target.
         """
         agent_state = self._deps.get_agent_state(rebind.agent_id)
         agent_info = self._deps.get_agent_info(rebind.agent_id)
         if agent_state is None or agent_info is None:
             self._fail(chat_id, rebind_id, f"The chat's agent {rebind.agent_id} is no longer listed by mngr")
             return
-        if record.agents[-1].account_id != rebind.target_account_id:
+        if rebind.restarted_account_id != rebind.target_account_id:
             if not self._restart_on_target(chat_id, rebind_id, rebind, agent_state, agent_info):
                 return
         self._deliver_held_sends(chat_id, rebind_id, rebind.agent_id)
@@ -369,10 +371,16 @@ def _with_rebind_changed(record: ChatRecord, change: Callable[[ChatRebindRecord]
 
 @pure
 def _with_active_entry_rebound(record: ChatRecord, agent_id: str, account: Account) -> ChatRecord:
-    """The record with its active entry naming the account and lane the agent now runs on."""
+    """The record with its active entry naming the account and lane the agent now runs on, and its
+    rebind marking the restart as landed there; one write, so a resume reads both or neither."""
     last = record.agents[-1]
     assert last.agent_id == agent_id, "a rebind names the record's active agent"
+    assert record.rebind is not None, "update_record only applies to the record carrying this rebind"
     rebound = last.model_copy_update(
         to_update(last.field_ref().account_id, account.id), to_update(last.field_ref().lane, account.lane)
     )
-    return record.model_copy_update(to_update(record.field_ref().agents, (*record.agents[:-1], rebound)))
+    landed = record.rebind.model_copy_update(to_update(record.rebind.field_ref().restarted_account_id, account.id))
+    return record.model_copy_update(
+        to_update(record.field_ref().agents, (*record.agents[:-1], rebound)),
+        to_update(record.field_ref().rebind, landed),
+    )

@@ -164,6 +164,13 @@ class ChatRebindRecord(ChatTransitionRecord):
             "a resume or a retry on another account still knows where to look"
         ),
     )
+    restarted_account_id: str | None = Field(
+        default=None,
+        description=(
+            "The account the agent's restart landed on, written once mngr start succeeded; None until then, and so "
+            "in the failed phase. A resume that finds it naming the target has only the delivery left to do"
+        ),
+    )
 
     @property
     def transition_id(self) -> str:

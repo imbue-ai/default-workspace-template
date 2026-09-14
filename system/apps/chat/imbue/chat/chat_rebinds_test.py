@@ -470,18 +470,62 @@ def test_a_retry_on_a_third_account_moves_the_sessions_on_from_where_the_failed_
     assert workspace.record() is None
 
 
+def test_a_retry_back_on_the_previous_account_restarts_rather_than_trusting_the_records_entry(
+    tmp_path: Path,
+) -> None:
+    """After a failed start the entry still names the previous account, which the retry may name as its target too;
+    the restart must run regardless, or the agent stays bound and labelled to the failed target."""
+    workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
+    (workspace.fail_dir / "fail-start").touch()
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+    failed = workspace.record()
+    assert failed is not None and failed.rebind is not None and failed.rebind.phase is HandoffPhase.FAILED
+    assert failed.rebind.restarted_account_id is None
+    assert failed.agents[0].account_id == _OLD_ACCOUNT.id
+
+    (workspace.fail_dir / "fail-start").unlink()
+    workspace.store.write(
+        failed.with_converging(
+            failed.rebind.model_copy_update(
+                to_update(failed.rebind.field_ref().phase, HandoffPhase.RESTARTING),
+                to_update(failed.rebind.field_ref().error, None),
+                to_update(failed.rebind.field_ref().target_account_id, _OLD_ACCOUNT.id),
+            )
+        )
+    )
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+
+    old_dir = workspace.account_dir(_OLD_ACCOUNT.id)
+    assert (old_dir / "projects" / "-home-user-workspace" / f"{_SESSION_ID}.jsonl").exists()
+    assert not list((workspace.account_dir(_NEW_ACCOUNT.id) / "projects").rglob(f"{_SESSION_ID}.jsonl"))
+    assert f"CLAUDE_CONFIG_DIR={old_dir}" in workspace.env_text(agent_id)
+    assert workspace.argv_lines()[-2:] == [
+        f"label {agent_id} --label account={_OLD_ACCOUNT.id}",
+        "start Chat-1 --no-resume",
+    ]
+    assert workspace.agents[agent_id].labels["account"] == _OLD_ACCOUNT.id
+    assert workspace.delivered == [(agent_id, "Carry on on the other account", "trigger-1")]
+    assert workspace.record() is None
+
+
 def test_a_resume_after_the_start_landed_only_delivers_the_held_sends(tmp_path: Path) -> None:
-    """The record's entry names the new account only once the start landed, so a resume mid-delivery does not restart again."""
+    """The rebind marks the account its restart landed on, so a resume mid-delivery does not restart again."""
     workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
     record = workspace.record()
-    assert record is not None
+    assert record is not None and record.rebind is not None
     entry = record.agents[0]
     workspace.store.write(
         record.model_copy_update(
             to_update(
                 record.field_ref().agents,
                 (entry.model_copy_update(to_update(entry.field_ref().account_id, _NEW_ACCOUNT.id)),),
-            )
+            ),
+            to_update(
+                record.field_ref().rebind,
+                record.rebind.model_copy_update(
+                    to_update(record.rebind.field_ref().restarted_account_id, _NEW_ACCOUNT.id)
+                ),
+            ),
         )
     )
     state = workspace.agents[agent_id]

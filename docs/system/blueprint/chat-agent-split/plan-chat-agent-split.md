@@ -224,6 +224,7 @@ The `rebind` entry (section 6) sits in the same place, and a record carries at m
   "previous_account_id": "...",
   "previous_lane": "anthropic",
   "claude_sessions_config_dir": "/home/user/.minds/accounts/<previous, then the target once the files moved>",
+  "restarted_account_id": null,
   "trigger_message_id": "...",
   "trigger_text": "the user's message",
   "held_sends": [{"message_id": "...", "text": "...", "origin": "client"}],
@@ -555,6 +556,7 @@ A rebind is the same gesture applied to an account on the active agent's own har
 - A start that fails leaves the chat in the `failed` phase with mngr's output, the binding and the label already at the new account; the page's retry offers the accounts of the same harness and lane (the agent stays the chat's) and reruns the restart, every step finding its work done; "Start a new chat instead" is the way out to anywhere else, and destroy remains available.
 - Feasibility per harness: `REBIND_VERIFIED_HARNESSES` lists every harness with an account scope (claude, codex, pi, antigravity), and a same-lane target on a harness outside the list falls back to a handoff, which is the spec's fallback for a harness that cannot resume under a swapped credential; the hand test with two real accounts per harness is the user's, and a harness that fails it is dropped from the list.
 - Every step is idempotent and re-checked on resume (`_resume_handoffs` spawns the rebind runner beside the handoff runner): a stopped agent is not stopped again, a moved session file is not moved again, the env line and the link are rewritten to the same value, `mngr label` merges, and `mngr start` is a no-op for a running agent.
+  The entry records the account the start landed on (`restarted_account_id`, written in the same update that moves the active entry), so a resume that finds it naming the target has only the delivery left; the active entry cannot serve as that marker, since it names the previous account until the start lands and a retry may name the previous account as its target.
 - A rebind on a chat of one agent gets its first record like a first handoff does, and the record is dropped again when the rebind completes; on a multi-agent chat the active entry's `account_id` and `lane` are updated in place.
   The target becomes the most recently used account, as a launch does.
 
