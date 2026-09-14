@@ -1,6 +1,25 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import "../testing/dom";
 
-import { isOwnSaveId, mintSaveId, mintTabId, panelsWithUnlistedAddresses } from "./Layouts";
+import {
+  DockviewComponent,
+  Orientation,
+  type GroupPanelPartInitParameters,
+  type IContentRenderer,
+  type PanelUpdateEvent,
+  type SerializedDockview,
+} from "dockview-core";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  isOwnSaveId,
+  mintSaveId,
+  mintTabId,
+  panelParamsInDocument,
+  panelsWithUnlistedAddresses,
+  parsePanelParams,
+} from "./Layouts";
+import type { PanelParams } from "./Layouts";
 
 describe("tab ids", () => {
   it("mints ids in the fixed shape, never twice", () => {
@@ -26,12 +45,160 @@ describe("save ids", () => {
   });
 });
 
-describe("panelsWithUnlistedAddresses", () => {
-  it("names the panels whose address no app lists any more", () => {
-    const tabs = {
-      p1: { address: "app:files", tab_id: "tab-0000000000000001", last_focused_ms: 0 },
-      p2: { address: "app:terminal?instance=terminal-9", tab_id: "tab-0000000000000002", last_focused_ms: 0 },
+describe("parsePanelParams", () => {
+  it("reads an instance's params, defaulting a missing focus stamp to never", () => {
+    expect(parsePanelParams({ kind: "instance", address: "app:files", tabId: "tab-0000000000000001" })).toEqual({
+      kind: "instance",
+      address: "app:files",
+      tabId: "tab-0000000000000001",
+      lastFocusedMs: 0,
+    });
+    expect(
+      parsePanelParams({ kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 42 }),
+    ).toEqual({ kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 42 });
+  });
+
+  it("reads a launcher and rejects anything that names no instance", () => {
+    expect(parsePanelParams({ kind: "launcher" })).toEqual({ kind: "launcher" });
+    expect(parsePanelParams({ kind: "instance", address: "app:files" })).toBeNull();
+    expect(parsePanelParams({ kind: "other" })).toBeNull();
+    expect(parsePanelParams({})).toBeNull();
+    expect(parsePanelParams(undefined)).toBeNull();
+    expect(parsePanelParams("app:files")).toBeNull();
+  });
+});
+
+describe("panelParamsInDocument", () => {
+  it("collects the readable params of every panel a document names", () => {
+    const serialized: SerializedDockview = {
+      grid: { root: { type: "branch", data: [] }, width: 1, height: 1, orientation: Orientation.HORIZONTAL },
+      panels: {
+        p1: { id: "p1", params: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001" } },
+        p2: { id: "p2", params: { kind: "launcher" } },
+        p3: { id: "p3" },
+      },
     };
-    expect(panelsWithUnlistedAddresses(tabs, (address) => address === "app:files")).toEqual(["p2"]);
+    expect(panelParamsInDocument(serialized)).toEqual({
+      p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
+      p2: { kind: "launcher" },
+    });
+  });
+});
+
+describe("panelsWithUnlistedAddresses", () => {
+  it("names the panels whose address no app lists any more, never a launcher", () => {
+    const params: Record<string, PanelParams> = {
+      p1: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
+      p2: {
+        kind: "instance",
+        address: "app:terminal?instance=terminal-9",
+        tabId: "tab-0000000000000002",
+        lastFocusedMs: 0,
+      },
+      p3: { kind: "launcher" },
+    };
+    expect(panelsWithUnlistedAddresses(params, (address) => address === "app:files")).toEqual(["p2"]);
+  });
+});
+
+/**
+ * The design of this module rests on dockview owning a panel's params: what ``addPanel`` is
+ * given reaches the renderer's ``init``, survives ``toJSON`` into ``fromJSON`` (where it reaches
+ * ``init`` again), and ``updateParameters`` lands in the next ``toJSON``. Pinned here against the
+ * installed dockview-core, since nothing else in this suite drives a real DockviewComponent.
+ */
+describe("dockview panel params", () => {
+  const docks: DockviewComponent[] = [];
+
+  function buildDock(
+    onInit: (parameters: GroupPanelPartInitParameters) => void,
+    onUpdate?: (event: PanelUpdateEvent) => void,
+  ): DockviewComponent {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const dock = new DockviewComponent(container, {
+      createComponent(): IContentRenderer {
+        return { element: document.createElement("div"), init: onInit, update: onUpdate };
+      },
+    });
+    dock.layout(800, 600);
+    docks.push(dock);
+    return dock;
+  }
+
+  afterEach(() => {
+    for (const dock of docks.splice(0)) {
+      const container = dock.element.parentElement;
+      dock.dispose();
+      container?.remove();
+    }
+  });
+
+  it("hands the params of addPanel to init, round-trips them through toJSON and fromJSON, and keeps updates", () => {
+    const seen: Record<string, unknown>[] = [];
+    const dock = buildDock((parameters) => seen.push(parameters.params));
+    const params: PanelParams = {
+      kind: "instance",
+      address: "app:files",
+      tabId: "tab-0000000000000001",
+      lastFocusedMs: 0,
+    };
+    dock.addPanel({ id: "tab-0000000000000001", component: "instance", title: "Files", params });
+    expect(seen).toEqual([params]);
+
+    dock.panels[0].api.updateParameters({ lastFocusedMs: 7 });
+    const saved = dock.toJSON();
+    expect(saved.panels["tab-0000000000000001"].params).toEqual({ ...params, lastFocusedMs: 7 });
+    expect(parsePanelParams(dock.panels[0].params)).toEqual({ ...params, lastFocusedMs: 7 });
+
+    const restoredSeen: Record<string, unknown>[] = [];
+    const restored = buildDock((parameters) => restoredSeen.push(parameters.params));
+    restored.fromJSON(saved);
+    expect(restoredSeen).toEqual([{ ...params, lastFocusedMs: 7 }]);
+    expect(panelParamsInDocument(restored.toJSON())).toEqual({
+      "tab-0000000000000001": { ...params, lastFocusedMs: 7 },
+    });
+  });
+
+  it("keeps a parameter a renderer updates from inside init", () => {
+    // What a slot does when the page it binds was opened under another id: the panel takes the page's.
+    const dock = buildDock((parameters) => parameters.api.updateParameters({ tabId: "tab-0000000000000002" }));
+    dock.addPanel({
+      id: "tab-0000000000000001",
+      component: "instance",
+      title: "Files",
+      params: { kind: "instance", address: "app:files", tabId: "tab-0000000000000001", lastFocusedMs: 0 },
+    });
+    const expected = { kind: "instance", address: "app:files", tabId: "tab-0000000000000002", lastFocusedMs: 0 };
+    expect(parsePanelParams(dock.panels[0].params)).toEqual(expected);
+    expect(dock.toJSON().panels["tab-0000000000000001"].params).toEqual(expected);
+  });
+
+  it("runs init before the panel is listed, and hands a later update to the renderer with the whole params", () => {
+    // Why a renderer keeps the params it was handed rather than looking its panel up by id.
+    const listedDuringInit: boolean[] = [];
+    const updates: Record<string, unknown>[] = [];
+    const dock = buildDock(
+      (parameters) => listedDuringInit.push(dock.panels.some((panel) => panel.id === parameters.api.id)),
+      (event) => updates.push(event.params),
+    );
+    const params: PanelParams = {
+      kind: "instance",
+      address: "app:files",
+      tabId: "tab-0000000000000001",
+      lastFocusedMs: 0,
+    };
+    dock.addPanel({ id: "tab-0000000000000001", component: "instance", title: "Files", params });
+    expect(listedDuringInit).toEqual([false]);
+
+    dock.panels[0].api.updateParameters({ address: "app:terminal?instance=terminal-2" });
+    expect(updates).toEqual([{ ...params, address: "app:terminal?instance=terminal-2" }]);
+
+    const restoredListedDuringInit: boolean[] = [];
+    const restored = buildDock((parameters) =>
+      restoredListedDuringInit.push(restored.panels.some((panel) => panel.id === parameters.api.id)),
+    );
+    restored.fromJSON(dock.toJSON());
+    expect(restoredListedDuringInit).toEqual([false]);
   });
 });
