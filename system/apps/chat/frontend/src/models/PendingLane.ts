@@ -6,6 +6,7 @@
  */
 
 import { addChatsUpdatedListener, getChatById } from "./Chats";
+import type { ChatSnapshot } from "./Chats";
 import { accountForAgent } from "./Providers";
 import type { ProviderAccount } from "./Providers";
 
@@ -25,15 +26,22 @@ export function getPendingAccountId(chatId: string): string | null {
 }
 
 /**
+ * Whether a send to ``account`` moves the chat: it runs another harness than the chat's active
+ * agent. An account on the chat's own harness (its own included) is not a switch target: that
+ * is a rebind, which a later phase adds, so the provider row offers a new chat on it instead.
+ */
+export function isSwitchTarget(chat: ChatSnapshot, account: ProviderAccount): boolean {
+  return account.harness !== chat.active_agent.harness;
+}
+
+/**
  * The account the chat's next send switches it to, or null when the next send is an ordinary
- * one: nothing is pending, the pending account is gone, the chat already runs on it, or it runs
- * the chat's own harness (a rebind, which a later phase adds; the row never offers it).
+ * one: nothing is pending, the pending account is gone, or it is not a switch target.
  */
 export function pendingSwitchTarget(chatId: string): ProviderAccount | null {
   const account = accountForAgent(getPendingAccountId(chatId) ?? undefined);
   const chat = getChatById(chatId);
-  if (account === null || chat === undefined) return null;
-  if (account.id === chat.active_agent.account_id || account.harness === chat.active_agent.harness) return null;
+  if (account === null || chat === undefined || !isSwitchTarget(chat, account)) return null;
   return account;
 }
 

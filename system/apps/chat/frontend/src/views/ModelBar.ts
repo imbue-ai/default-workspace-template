@@ -21,7 +21,7 @@ import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalo
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
 import type { ModelIdentity } from "../models/ModelSettings";
-import { getPendingAccountId, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
+import { getPendingAccountId, isSwitchTarget, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
 import { startChatOnAccount } from "../shell";
@@ -472,14 +472,6 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     });
   }
 
-  /** Where an account that is not the chat's own leads: the chat's next send switches to it when
-   *  it runs another harness (the pending lane, spec 5.1); on the chat's own harness it can only
-   *  open a new chat, until a later phase lets a chat change account in place. */
-  function isSwitchTarget(chatId: string, account: ProviderAccount): boolean {
-    const activeHarness = getChatById(chatId)?.active_agent.harness;
-    return activeHarness !== undefined && account.harness !== activeHarness;
-  }
-
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
    * Pressing an account on another harness makes it the chat's pending lane, applied by the
@@ -492,6 +484,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
     const pendingId = getPendingAccountId(chatId);
+    const chat = getChatById(chatId);
     const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
@@ -516,7 +509,7 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                     setFlyout(null);
                     return;
                   }
-                  if (isSwitchTarget(chatId, row)) {
+                  if (chat !== undefined && isSwitchTarget(chat, row)) {
                     setPendingAccount(chatId, isPending ? null : row.id);
                     setFlyout(null);
                     return;
@@ -540,7 +533,8 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                 // Signed in from inside a chat: an account on another harness is what the user
                 // switches this chat to next; one on its own harness can only start a new chat.
                 const added = accountForAgent(accountId);
-                if (added !== null && isSwitchTarget(chatId, added)) {
+                const signedInChat = getChatById(chatId);
+                if (added !== null && signedInChat !== undefined && isSwitchTarget(signedInChat, added)) {
                   setPendingAccount(chatId, accountId);
                   m.redraw();
                 } else {

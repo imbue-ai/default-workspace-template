@@ -16,8 +16,10 @@ vi.mock("./Providers", () => ({
 }));
 
 import { chatSnapshotFixture } from "./chatSnapshotFixture";
+import type { ProviderAccount } from "./Providers";
 import {
   getPendingAccountId,
+  isSwitchTarget,
   pendingSwitchTarget,
   setPendingAccount,
   trackPendingLaneSettlement,
@@ -43,6 +45,10 @@ describe("the pending lane", () => {
   });
 
   it("makes the next send a switch only for a signed-in account on another harness", () => {
+    const chat = chatSnapshotFixture("agent-1", { active_agent: { harness: "claude", account_id: "acct-anthropic" } });
+    expect(isSwitchTarget(chat, CODEX_ACCOUNT as ProviderAccount)).toBe(true);
+    expect(isSwitchTarget(chat, OTHER_CLAUDE_ACCOUNT as ProviderAccount)).toBe(false);
+
     setPendingAccount("agent-1", "acct-openai");
     expect(pendingSwitchTarget("agent-1")?.id).toBe("acct-openai");
 
