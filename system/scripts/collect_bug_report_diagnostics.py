@@ -733,12 +733,9 @@ def _query_agents(timeout: float) -> tuple[tuple[str, str], ...]:
     the inner mngr's own, and asking the cloud providers baked into the
     settings only makes mngr probe backends that cannot answer from inside a
     container -- that probing, not the listing, is what used to cost the
-    collection most of its budget. Each later per-agent call targets the id
-    rather than a ``name@host.provider`` address composed from the listing: the
-    host name the listing reports is the one recorded in the host dir, which
-    inside a workspace is the name the outer provider gave the host, and the
-    inner mngr does not necessarily resolve that name. An id is exact, and mngr
-    resolves it from its own event stream without the provider fan-out.
+    collection most of its budget. Each later per-agent call targets the id: it
+    is exact, and mngr resolves it from its own event stream without the
+    provider fan-out.
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
