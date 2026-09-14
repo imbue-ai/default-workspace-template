@@ -38,6 +38,11 @@ const byChat: Record<string, OutgoingMessage[]> = {};
 // Arrival ids already accounted for, per chat -- so a re-streamed transcript
 // event or a re-pushed queued snapshot does not drop a bubble twice.
 const seenArrivalIds: Record<string, Set<string>> = {};
+// For a chat whose switch has named its successor: how many of the successor's real user
+// items arrived while the snapshot still held the sends. The held sends come back as bubbles
+// only when the switch ends, so these arrivals consume them then, oldest first, as they would
+// have had the bubbles been standing when they landed.
+const successorArrivalsByChat = new Map<string, number>();
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
@@ -133,6 +138,10 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
     // Record every arrival id (so a re-stream/re-push cannot drop a later bubble),
     // and drop the oldest bubble -- a no-op when there are none.
     seen.add(id);
+    const successorArrivals = successorArrivalsByChat.get(chatId);
+    if (successorArrivals !== undefined) {
+      successorArrivalsByChat.set(chatId, successorArrivals + 1);
+    }
     removeOldest(chatId);
   }
 }
@@ -152,30 +161,36 @@ interface HeldSnapshot {
  * (``handoff.held_sends``): a bubble whose id the list carries stands down for the snapshot's
  * own rendering. When the switch ends, the held messages leave the snapshot before their turns
  * reach the transcript, so they come back as bubbles here and drop by the arrivals that follow.
- * A cancelled switch returns its confirming message to the composer, so that one is skipped.
+ * The successor's items that landed before then (the backend delivers the held sends before it
+ * clears the switch) consume them at that point instead. A cancelled switch returns its
+ * confirming message to the composer, so that one is skipped.
  */
 export function trackBackendArrivals(): void {
   const heldByChat = new Map<string, HeldSnapshot>();
   addChatsUpdatedListener((chats) => {
     for (const chat of chats) {
+      const previous = heldByChat.get(chat.chat_id);
+      // The retiring agent is the one the chat ran on when the switch began; the snapshot
+      // names the successor before the switch ends, once it is created.
+      const retiringAgentId = previous?.retiringAgentId ?? chat.active_agent.agent_id;
+      const isSuccessorNamed = chat.handoff !== null && chat.active_agent.agent_id !== retiringAgentId;
+      if (isSuccessorNamed && !successorArrivalsByChat.has(chat.chat_id)) {
+        successorArrivalsByChat.set(chat.chat_id, 0);
+      }
       const queuedIds = chat.active_agent.queued_messages.map((queued) => queued.queued_id);
       if (queuedIds.length > 0) {
         noteBackendArrivals(chat.chat_id, queuedIds);
       }
-      const previous = heldByChat.get(chat.chat_id);
       if (chat.handoff !== null) {
         dropOutgoingByMessageId(
           chat.chat_id,
           chat.handoff.held_sends.map((entry) => entry.message_id),
         );
-        // The retiring agent is the one the chat ran on when the switch began; the snapshot
-        // names the successor before the switch ends, once it is created.
-        heldByChat.set(chat.chat_id, {
-          retiringAgentId: previous?.retiringAgentId ?? chat.active_agent.agent_id,
-          handoff: chat.handoff,
-        });
+        heldByChat.set(chat.chat_id, { retiringAgentId, handoff: chat.handoff });
       } else if (previous !== undefined) {
         heldByChat.delete(chat.chat_id);
+        const consumedBySuccessor = successorArrivalsByChat.get(chat.chat_id) ?? 0;
+        successorArrivalsByChat.delete(chat.chat_id);
         // The agent alone does not tell a cancel from a completion: a page that first saw the
         // switch after the successor was named recorded that successor as the retiring agent.
         // A cancel is refused once switching begins, so the phase settles it.
@@ -184,6 +199,9 @@ export function trackBackendArrivals(): void {
         const returning = previous.handoff.held_sends;
         for (const held of isCancelled ? returning.slice(1) : returning) {
           addOutgoing(chat.chat_id, held.text, held.message_id);
+        }
+        for (let i = 0; i < consumedBySuccessor; i++) {
+          removeOldest(chat.chat_id);
         }
       }
     }
