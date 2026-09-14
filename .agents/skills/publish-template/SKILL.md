@@ -150,9 +150,12 @@ Ask the user, in plain language. Never enumerate files at them:
 - what they want to include -- an app or feature, but equally a skill, a chat
   customization or behavior, a workflow, a service, config, or seed data:
   anything committable that lives in the repo tree. You translate this into a set
-  of repo-root-relative include paths (e.g. `system/apps/slack_inbox`
-  plus their service wiring, or `.agents/skills/<name>` for a skill) -- you reason
-  about the backing paths, the user does not;
+  of repo-root-relative include paths (e.g. `system/apps/slack_inbox` plus its
+  supervisord program at `system/supervisord.conf.d/slack-inbox.conf`, or
+  `.agents/skills/<name>` for a skill) -- you reason about the backing paths,
+  the user does not. Include the program's own drop-in, never
+  `system/supervisord.conf`: that file is the daemon's config plus every other
+  program the mind happens to run, none of which belongs in this snapshot;
 - what data should be included -- and this is NOT an all-or-nothing default.
   Judge each candidate data path by whether it is **personal**: information
   about the user or specific real people (names, emails, accounts, messages,
@@ -272,19 +275,25 @@ fetch or pull from upstream to obtain `BASE_REF` in any case -- `system/config/p
 is a provenance link only.
 
 **Mandatory pre-check (before ANY assembly).** Verify the resolved base is a
-bootable template -- its tree must name both `pyproject.toml` and
-`system/supervisord.conf`:
+bootable template -- its tree must name `pyproject.toml`,
+`system/supervisord.conf`, and `system/supervisord.conf.d` (the drop-in
+directory every program is declared in; a base without it cannot boot a
+service). Pass each path to `git ls-tree` rather than grepping its output:
+without a pathspec it lists only the tree's top level, so a nested path never
+appears.
 
 ```bash
-git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx pyproject.toml \
-  && git ls-tree --name-only "<BASE_REF>^{tree}" | grep -qx system/supervisord.conf
+for required in pyproject.toml system/supervisord.conf system/supervisord.conf.d; do
+    git ls-tree --name-only "<BASE_REF>^{tree}" -- "$required" | grep -q . \
+      || echo "MISSING: $required"
+done
 ```
 
-If the check fails, STOP and reconsider the base (e.g. walk forward along the
-first-parent chain to the earliest commit that passes both checks, or ask
-the user) rather than launching the worker -- this catches the wrong-root and
+If anything is missing, STOP and reconsider the base (e.g. walk forward along
+the first-parent chain to the earliest commit that passes all three checks, or
+ask the user) rather than launching the worker -- this catches the wrong-root and
 too-old-base problems in seconds instead of a full worker round-trip.
-`build_template.sh` re-validates both conditions itself and exits 5 with
+`build_template.sh` re-validates all three conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
 pre-check.
 
@@ -676,7 +685,10 @@ stderr. What each exit means, and what you do:
 - **No-diff guard (exit 3).** The resolved include set contributes nothing
   beyond `BASE_REF` (the assembled tree equals the base tree). Tell the user
   plainly and do NOT create a repo -- there are no empty template repos.
-- **Boot smoke-check (exit 4).** The clean base does not boot at all; abort
+- **Boot smoke-check (exit 4).** The clean base does not boot at all -- its
+  `system/supervisord.conf` does not parse, or it realizes no programs
+  whatsoever (an `[include]` glob that matches no drop-in yields a config that
+  parses cleanly and runs nothing). Abort
   BEFORE any repo creation. Selected apps having unresolved requirements is expected and does NOT
   fail the check.
 - **Manifest validation (exit 6).** The generated `template.toml` did not
@@ -689,7 +701,8 @@ stderr. What each exit means, and what you do:
   problem at once. Fix them and re-run; never publish around it.
 - **Non-template base (exit 5).** The `--base-ref` does not resolve to a tree
   in the repo, or its tree is not a bootable template: it lacks
-  `pyproject.toml` and/or `system/supervisord.conf` (e.g. a parallel subtree root was
+  `pyproject.toml`, `system/supervisord.conf`, and/or `system/supervisord.conf.d`
+  (e.g. a parallel subtree root was
   picked instead of the real seed). Nothing was committed; re-resolve
   `BASE_REF` per
   §2 (its pre-check should have caught this before launch) and relaunch.
@@ -1113,7 +1126,8 @@ remote: `git merge-base --is-ancestor <BASE_REF> "$SNAPSHOT_COMMIT"` fails
 base, and `rev-list --count > 1` fails if the mint came out parentless
 (an empty `<BASE_REF>` makes `git commit-tree` drop `-p` and produce a lone
 orphan). If either check fails, nothing is pushed -- STOP, re-resolve
-`BASE_REF` per §2 (its tree must name `pyproject.toml` and `system/supervisord.conf`),
+`BASE_REF` per §2 (its tree must name `pyproject.toml`, `system/supervisord.conf`,
+and `system/supervisord.conf.d`),
 re-mint, and only then push. A correct push always lands MORE than one commit
 on `main`.
 
@@ -1334,8 +1348,9 @@ the VM). Interface (cwd = worktree repo root):
 
 What it does, in order (see the script for the exact commands):
 
-1. Validates that the `--base-ref` tree names `pyproject.toml` and
-   `system/supervisord.conf` (a bootable template base); exits 5 with a clear
+1. Validates that the `--base-ref` tree names `pyproject.toml`,
+   `system/supervisord.conf`, and `system/supervisord.conf.d` (a bootable
+   template base); exits 5 with a clear
    message otherwise, before touching the worktree (see §5).
 2. Stages the selected paths out of the worker's checkout into a scratch dir
    (preserving relative paths) BEFORE resetting.

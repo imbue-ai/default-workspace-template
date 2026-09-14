@@ -329,12 +329,17 @@ workspace's own random password) and `cloudflare_tunnel.env` (a tunnel minted pe
 `agent_id`). Copying either would point this workspace at the old one's
 resources. Use `rsync` over the SSH session with an `--exclude` for each.
 
-**Creations.** Each app lands under `system/apps/<package>/`, is added to the root
-`pyproject.toml`, gets a `[program:<name>]` block in `system/supervisord.conf`
-that runs `system/scripts/forward_port.py` before its own start command, and
-re-registers its port that way -- never by copying the old registry file, which is
-runtime state. Then `uv sync --all-packages` and
-`supervisorctl reread && supervisorctl update`. An app that will not come up gets
+**Creations.** Each app lands under `system/apps/<package>/` and gets a
+`[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
+`system/scripts/forward_port.py` before its own start command, and re-registers its
+port that way -- never by copying the old registry file, which is runtime state. No
+root `pyproject.toml` entry: the `system/apps/*` member glob picks the package up.
+Land the app in the shape `build-app` writes today -- `uv tool install -e
+system/apps/<package>`, and a program command ending in the app's own name --
+rather than carrying over a source command that runs it out of the root venv with
+`uv run <name>`. Then `uv sync --all-packages` (never a bare `uv sync`: that is
+root-closure-scoped, and it prunes the member and deletes the console script
+supervisord resolves on PATH) and `supervisorctl reread && supervisorctl update`. An app that will not come up gets
 a **bounded** repair attempt (read its stderr log, fix the obvious break, retry
 once or twice); whatever is still broken becomes an explicit summary item naming
 what you tried.

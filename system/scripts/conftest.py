@@ -410,3 +410,31 @@ def migration_registry(tmp_path: Path) -> Path:
     path = tmp_path / "migration-apps.toml"
     _write_apps_toml(path, {"docs": (), "notes": ("new",)})
     return path
+
+
+@pytest.fixture(autouse=True)
+def _clear_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the runner's GitHub Actions environment out of these tests.
+
+    ``check_changelog_entries`` reads the branch and the diff base from the
+    process environment -- ``resolve_diff_base`` takes ``CHANGELOG_BASE_REF``
+    then ``GITHUB_BASE_REF``, and ``detect_branch`` takes ``GITHUB_HEAD_REF``
+    then ``GITHUB_REF_NAME`` -- while its tests run it against throwaway repos
+    built in ``tmp_path``. Under CI those variables describe the *real* PR, so
+    they answer questions about a repo the test never created.
+
+    The base bites hardest: a stacked PR's base branch does not exist in a
+    throwaway repo, and ``resolve_diff_base`` deliberately raises rather than
+    falling back to ``main`` for an unresolvable named base. All four are
+    cleared regardless, since the branch pair is read by the same module.
+
+    The tests that exercise a named base set their own value, which still wins
+    because that happens inside the test body.
+    """
+    for var in (
+        "CHANGELOG_BASE_REF",
+        "GITHUB_BASE_REF",
+        "GITHUB_HEAD_REF",
+        "GITHUB_REF_NAME",
+    ):
+        monkeypatch.delenv(var, raising=False)
