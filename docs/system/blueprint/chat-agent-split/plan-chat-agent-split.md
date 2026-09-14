@@ -254,7 +254,7 @@ The rename happens after `mngr stop`, so no tmux session carries the archival na
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
 
-The auto-name word stays per lane or harness until phase 7, when it becomes a lane-neutral "Chat N", since a chat that has switched harness would otherwise be called after a harness it no longer runs.
+Since phase 7 every auto-minted name is a lane-neutral "Chat N" (`naming.py`'s one `AUTO_NAME_WORD`), whatever harness or lane the chat starts on, since a chat that has switched harness would otherwise be called after a harness it no longer runs; the names chats were given before that ("Codex 1", "Pi 2") stay on their agents, and new numbers skip every taken name.
 
 ### 4.4 Status, stop, start, destroy, rename
 
