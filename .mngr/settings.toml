@@ -245,8 +245,8 @@ parent_type = "command"
 command = "sleep infinity"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
-# its own base type (registered by the vendored imbue-mngr-codex plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. Auto-approve
+# its own base type (registered by the vendored imbue-mngr-codex plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
 # approval_policy="never"). The codex binary is baked into the image
@@ -385,8 +385,8 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
-# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
@@ -417,7 +417,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
-# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
@@ -479,6 +479,13 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
+# Publish each workspace container's sshd on loopback only. The minds desktop
+# client always talks to a local daemon and connects to 127.0.0.1, so nothing
+# needs the container reachable from the machine's LAN. This is also mngr's
+# default for a local daemon; it is pinned here so the workspace's exposure does
+# not depend on that default. (Requires the vendored mngr to know the field:
+# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -493,8 +500,10 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
-# aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
+# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
+# by the aws-<region> provider start args and by the imbue_cloud slice bake's
+# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
+# slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
@@ -527,9 +536,13 @@ host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
 # so setup_system.sh provisions an identical toolchain everywhere. Set here
 # (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep.
-default_image_url_aarch64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+# mngr users keep. Served from imbue's artifact mirror rather than
+# cloud.debian.org, which prunes old releases: the same image release the
+# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
+# is the manifest; bump both together, uploading the new release with
+# `minds-admin artifacts upload` before landing the bump here).
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
