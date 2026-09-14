@@ -18,6 +18,7 @@ from pydantic import Field
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import claim_first_chat
+from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import release_first_chat
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -30,10 +31,12 @@ from imbue.chat.agent_discovery import delivered_or_raise
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
+from imbue.chat.auto_open import AutoOpenLedger
+from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.auto_open import DisconnectedShell
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.binding import BindingError
 from imbue.chat.harnesses.binding import create_args as binding_create_args
-from imbue.chat.harnesses.binding import harness_for
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
 from imbue.chat.harnesses.codex.live_user_turns import note_live_user_turn
@@ -472,6 +475,11 @@ class AgentManager:
     # nudge rides ``_broadcast_agents_updated``. ``SilentNudger`` until ``main`` installs the
     # real one, so a manager built by a test posts nothing to the workspace shell.
     _nudger: InstanceNudgerInterface
+    # Surfaces the tab of a chat created from outside with an auto-open label (the Minds
+    # app's update and help chats): fed the agents that appear and go, seeded once with the
+    # agents found at startup. Delivers through the shell, so ``main`` installs one that can
+    # reach it; the default reaches nobody, so a manager a test builds opens no tabs.
+    _auto_open: AutoOpenReactor
     # Whether the agent list has been read from mngr at least once (the initial discovery
     # or the observe stream's first full snapshot). Before that the list is empty because
     # nothing has been asked yet, not because there are no agents, and the instances API
@@ -501,6 +509,7 @@ class AgentManager:
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         message_stamps: MessageStampStore | None = None,
+        auto_open: AutoOpenReactor | None = None,
     ) -> "AgentManager":
         """Build an AgentManager with the given broadcaster.
 
@@ -510,7 +519,9 @@ class AgentManager:
         mngr executable used for the stream-events observe subprocess and for
         agent-creation commands. ``message_stamps`` remembers when each chat was
         last messaged; the default keeps that in memory only, so a real server
-        passes one backed by the chat app's state directory.
+        passes one backed by the chat app's state directory. ``auto_open``
+        surfaces labeled chats' tabs; the default remembers nothing and reaches
+        no shell, so a real server passes one backed by the ledger and the shell.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -543,6 +554,11 @@ class AgentManager:
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         manager._nudger = SilentNudger()
+        manager._auto_open = (
+            auto_open
+            if auto_open is not None
+            else AutoOpenReactor(ledger=AutoOpenLedger(path=None), shell=DisconnectedShell())
+        )
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
         # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
@@ -563,6 +579,7 @@ class AgentManager:
         rather than treating a restart as "nothing has ever been messaged".
         """
         self._initial_discover()
+        self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
         self._start_session_sweep()
@@ -576,6 +593,7 @@ class AgentManager:
         """Stop the observe subprocess, the session sweep, and creation threads."""
         self._shutdown_event.set()
         self._oom_prioritizer.stop()
+        self._auto_open.stop()
 
         self._session_sweep_stop.set()
         if self._session_sweep_thread is not None:
@@ -677,6 +695,10 @@ class AgentManager:
         harness rather than a per-harness table built on untested assumptions: a restart after
         a deliberate sign-in is cheap, and guessing wrong the other way leaves a chat dead with
         nothing on screen to say why.
+
+        Every agent bound to the account carries the label, not only the chats this app
+        created: a worker, an automation, or a chat the Minds app started on the workspace's
+        default account gets it from the create defaults (`create_defaults`), so they restart too.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
         preserved by the harness itself, and a resume prompt would tell an agent that has not
@@ -1476,6 +1498,7 @@ class AgentManager:
                     )
                     self._agents[agent_info.id] = agent_state
                 self._is_agent_list_known = True
+            self._auto_open.seed_at_startup({agent_info.id: agent_info.labels for agent_info in agents})
 
             for agent_info in agents:
                 self._ensure_activity_tracking(agent_info.id)
@@ -1643,6 +1666,7 @@ class AgentManager:
         """
         with self._lock:
             before_details = dict(self._agent_details_by_id)
+            was_agent_list_known = self._is_agent_list_known
             match event:
                 case FullAgentStateEvent():
                     self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
@@ -1724,6 +1748,19 @@ class AgentManager:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
             self._oom_prioritizer.forget_agent(agent_id)
             self._message_stamps.forget(agent_id)
+            self._auto_open.forget(agent_id)
+
+        # The first listing seeds the reactor (what a workspace already had is judged against
+        # the ledger); after that, every agent that appears is a candidate.
+        if not was_agent_list_known:
+            self._auto_open.seed_at_startup(
+                {agent_id: dict(agent.labels) for agent_id, agent in details_by_id.items()}
+            )
+        else:
+            for agent_id in added_agent_ids:
+                added = details_by_id.get(agent_id)
+                if added is not None:
+                    self._auto_open.note_appeared(agent_id, dict(added.labels))
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
