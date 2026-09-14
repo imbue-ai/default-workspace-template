@@ -533,7 +533,6 @@ def _converging_detail_of(transition: ChatHandoffRecord | ChatRebindRecord) -> s
     return converging_detail(transition.phase, HARNESS_LABEL[transition.target_harness])
 
 
-@pure
 def is_rebind_target(agent_state: AgentStateItem, target: _SwitchTarget) -> bool:
     """Whether a switch to ``target`` keeps the agent (a rebind, spec 6) rather than replacing it (a handoff).
 
