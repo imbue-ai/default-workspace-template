@@ -223,7 +223,7 @@ The `rebind` entry (section 6) sits in the same place, and a record carries at m
   "agent_id": "agent-<the active agent>",
   "previous_account_id": "...",
   "previous_lane": "anthropic",
-  "previous_claude_config_dir": "/home/user/.minds/accounts/<previous>",
+  "claude_sessions_config_dir": "/home/user/.minds/accounts/<previous, then the target once the files moved>",
   "trigger_message_id": "...",
   "trigger_text": "the user's message",
   "held_sends": [{"message_id": "...", "text": "...", "origin": "client"}],
@@ -546,7 +546,7 @@ A rebind is the same gesture applied to an account on the active agent's own har
   The binding rewrite is `binding.rebind_agent`: the `CLAUDE_CONFIG_DIR=` line of the state dir's `env` file for claude (mngr sources that file into the tmux session on every start and never rewrites it), the credential link in the state dir for codex, pi, and antigravity (`account_scope`'s tables, the same link `create_args` repoints at create); each write lands whole, by a temp file or link renamed into place.
   No mngr command is added for the edit; the env file is the interface (principle 27).
 - Claude keeps a chat's session files under the config dir it runs with, at `<account>/projects/<encoded work dir>/<session id>.jsonl` with the subagents under `<session id>/` beside it, and both mngr's resume chain and the chat app's watcher look them up under the current config dir.
-  So before the env line changes, the rebind moves the agent's sessions (the ids in the state dir's `claude_session_id_history`, plus the agent's own uuid) from the previous account's tree to the new account's, keeping their place under `projects/` (`harnesses/claude/session_files.py`), and records the previous config dir on the `rebind` entry first so a resume after the rewrite still knows where the files were.
+  So before the env line changes, the rebind moves the agent's sessions (the ids in the state dir's `claude_session_id_history`, plus the agent's own uuid) from the previous account's tree to the new account's, keeping their place under `projects/` (`harnesses/claude/session_files.py`), and tracks the dir the files are under on the `rebind` entry (`claude_sessions_config_dir`: the previous config dir, recorded before the rewrite, then the target once they moved), so a resume after the rewrite, or a retry on a third account after a failed start, still knows where the files are and moves them on.
   The other harnesses keep sessions in the agent's state dir, so only the credential moves.
 - The transcript, the tk steps, and the model settings carry over: the transcript because the watcher is rebuilt against the same files under the new dir, the model settings because every harness keeps its launch settings per agent (claude's in mngr's managed settings overlay in the state dir).
 - The trigger message and anything sent meanwhile are held on the record and delivered once the agent is up, shown with the same phased placeholder; mngr's own send waits for a claude or antigravity TUI to be ready before it pastes, pi's send is an inbox append its extension drains once running, and codex's session retries while its daemon comes up, so the first send after the restart lands on every harness.

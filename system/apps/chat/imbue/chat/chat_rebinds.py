@@ -282,25 +282,34 @@ class RebindRunner:
     def _move_claude_sessions(
         self, chat_id: ChatId, rebind_id: str, rebind: ChatRebindRecord, agent_info: AgentInfo, target_dir: Path
     ) -> None:
-        """Carry the agent's session files to the new account's tree, remembering where they were first.
+        """Carry the agent's session files to the new account's tree, tracking where they are on the record.
 
-        The old config dir is read off the env file only once, before the env line changes, and
-        kept on the record so a resume after the rewrite still knows where to look.
+        The files are looked for under the dir the record names (the one the agent ran under
+        before, read off the env file before the env line first changes) and under the env
+        file's current dir: a resume can find the env rewritten before the move ran, and a retry
+        on another account finds the files under the account the failed attempt moved them to.
+        The record then names the target, so the next attempt looks there.
         """
-        previous = rebind.previous_claude_config_dir
-        if previous is None:
-            previous = str(agent_info.claude_config_dir)
-            self._update_rebind(
-                chat_id,
-                rebind_id,
-                lambda current: current.model_copy_update(
-                    to_update(current.field_ref().previous_claude_config_dir, previous)
-                ),
-            )
+        recorded = rebind.claude_sessions_config_dir
+        if recorded is None:
+            recorded = str(agent_info.claude_config_dir)
+            self._record_claude_sessions_dir(chat_id, rebind_id, recorded)
         session_ids = claude_session_ids(agent_info.agent_state_dir, rebind.agent_id)
-        moved = move_claude_sessions(session_ids, Path(previous), target_dir)
-        if moved:
-            logger.info("Rebind of chat {}: moved {} session file(s) to {}", chat_id, len(moved), target_dir)
+        for source_dir in dict.fromkeys((Path(recorded), agent_info.claude_config_dir)):
+            moved = move_claude_sessions(session_ids, source_dir, target_dir)
+            if moved:
+                logger.info("Rebind of chat {}: moved {} session file(s) to {}", chat_id, len(moved), target_dir)
+        if Path(recorded) != target_dir:
+            self._record_claude_sessions_dir(chat_id, rebind_id, str(target_dir))
+
+    def _record_claude_sessions_dir(self, chat_id: ChatId, rebind_id: str, config_dir: str) -> None:
+        self._update_rebind(
+            chat_id,
+            rebind_id,
+            lambda current: current.model_copy_update(
+                to_update(current.field_ref().claude_sessions_config_dir, config_dir)
+            ),
+        )
 
     def _relabel(self, chat_id: ChatId, rebind: ChatRebindRecord, account_id: str) -> None:
         result = run_local_command_modern_version(

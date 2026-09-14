@@ -43,6 +43,8 @@ from imbue.imbue_common.mutable_model import MutableModel
 _NOW = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
 _OLD_ACCOUNT = Account(id="acct-anthropic", lane="anthropic", seq=1, display="Anthropic")
 _NEW_ACCOUNT = Account(id="acct-anthropic-2", lane="anthropic", seq=2, display="Anthropic")
+_THIRD_ACCOUNT = Account(id="acct-anthropic-3", lane="anthropic", seq=3, display="Anthropic")
+_ACCOUNTS = {account.id: account for account in (_OLD_ACCOUNT, _NEW_ACCOUNT, _THIRD_ACCOUNT)}
 _SESSION_ID = "11111111-2222-4333-8444-555555555555"
 
 
@@ -127,9 +129,9 @@ class _FakeWorkspace(MutableModel):
         )
 
     def resolve_account(self, account_id: str) -> Account:
-        if self.is_target_account_gone:
+        if self.is_target_account_gone or account_id not in _ACCOUNTS:
             raise AccountError(f"no such account: {account_id}")
-        return _NEW_ACCOUNT if account_id == _NEW_ACCOUNT.id else _OLD_ACCOUNT
+        return _ACCOUNTS[account_id]
 
     def account_dir(self, account_id: str) -> Path:
         return self.tmp_path / "accounts" / account_id
@@ -410,7 +412,7 @@ def test_a_resume_after_the_env_was_rewritten_still_finds_the_sessions_where_the
     workspace.store.write(
         record.with_converging(
             record.rebind.model_copy_update(
-                to_update(record.rebind.field_ref().previous_claude_config_dir, str(old_dir))
+                to_update(record.rebind.field_ref().claude_sessions_config_dir, str(old_dir))
             )
         )
     )
@@ -427,6 +429,44 @@ def test_a_resume_after_the_env_was_rewritten_still_finds_the_sessions_where_the
     assert moved.exists()
     # A stopped agent is not stopped again.
     assert workspace.stopped == []
+    assert workspace.record() is None
+
+
+def test_a_retry_on_a_third_account_moves_the_sessions_on_from_where_the_failed_attempt_left_them(
+    tmp_path: Path,
+) -> None:
+    """After a failed start the files sit under the failed target, so a retry elsewhere looks there, not under the original dir."""
+    workspace, agent_id = _workspace(tmp_path, phase=HandoffPhase.RESTARTING)
+    (workspace.fail_dir / "fail-start").touch()
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+    failed = workspace.record()
+    assert failed is not None and failed.rebind is not None and failed.rebind.phase is HandoffPhase.FAILED
+    assert failed.rebind.claude_sessions_config_dir == str(workspace.account_dir(_NEW_ACCOUNT.id))
+
+    # The retry on a third account of the same lane, as the manager rewrites the entry.
+    (workspace.fail_dir / "fail-start").unlink()
+    workspace.store.write(
+        failed.with_converging(
+            failed.rebind.model_copy_update(
+                to_update(failed.rebind.field_ref().phase, HandoffPhase.RESTARTING),
+                to_update(failed.rebind.field_ref().error, None),
+                to_update(failed.rebind.field_ref().target_account_id, _THIRD_ACCOUNT.id),
+            )
+        )
+    )
+    _runner(workspace).run(workspace.chat_id, "rebind-1")
+
+    third_dir = workspace.account_dir(_THIRD_ACCOUNT.id)
+    project_dir = third_dir / "projects" / "-home-user-workspace"
+    assert (project_dir / f"{_SESSION_ID}.jsonl").read_text() == '{"type":"user"}\n'
+    assert (project_dir / _SESSION_ID / "subagents" / "sub-1.jsonl").exists()
+    assert not list((workspace.account_dir(_NEW_ACCOUNT.id) / "projects").rglob(f"{_SESSION_ID}.jsonl"))
+    assert f"CLAUDE_CONFIG_DIR={third_dir}" in workspace.env_text(agent_id)
+    assert workspace.argv_lines()[-2:] == [
+        f"label {agent_id} --label account={_THIRD_ACCOUNT.id}",
+        "start Chat-1 --no-resume",
+    ]
+    assert workspace.delivered == [(agent_id, "Carry on on the other account", "trigger-1")]
     assert workspace.record() is None
 
 

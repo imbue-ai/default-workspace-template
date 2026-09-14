@@ -156,11 +156,12 @@ class ChatRebindRecord(ChatTransitionRecord):
     previous_account_id: str = Field(description="The account the agent ran on before ('' when it carried no label)")
     previous_lane: str = Field(description="The lane the agent ran on before ('' when unknown)")
     target_label: str = Field(description="The account's label as the picker shows it, for the page and the 409s")
-    previous_claude_config_dir: str | None = Field(
+    claude_sessions_config_dir: str | None = Field(
         default=None,
         description=(
-            "For claude, the config dir the agent ran under before the rebind, recorded before the env file is "
-            "rewritten so a resume still knows where its session files were"
+            "For claude, the config dir the agent's session files are under while the rebind runs: the dir it ran "
+            "under before, recorded before the env file is rewritten, then the target once the files have moved, so "
+            "a resume or a retry on another account still knows where to look"
         ),
     )
 
