@@ -94,13 +94,14 @@ def start_command(mngr_binary: str, agent_name: str) -> list[str]:
 
 
 @pure
-def _mngr_failure_reason(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
-    """Why an mngr verb failed: the timeout, mngr's own words, or the signal or exit code that ended it."""
+def _mngr_exit_summary(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
+    """How an mngr verb ended, in one line: the timeout, or the signal or exit code that ended it.
+
+    Never mngr's own output: the failed page shows that as the tail under this line, and a log
+    line adds it where it has it.
+    """
     if result.is_timed_out:
         return f"mngr {verb} did not finish within {timeout_seconds:.0f}s and was stopped"
-    stderr = result.stderr.strip()
-    if stderr:
-        return stderr
     if result.returncode is not None and result.returncode < 0:
         return f"mngr {verb} was stopped by signal {-result.returncode}"
     return f"mngr {verb} exited with code {result.returncode}"
@@ -294,10 +295,8 @@ class RebindRunner:
             timeout=_LABEL_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            raise RebindStepError(
-                f"could not relabel agent {rebind.agent_id} of chat {chat_id}: "
-                f"{_mngr_failure_reason('label', result, _LABEL_TIMEOUT_SECONDS)}"
-            )
+            reason = result.stderr.strip() or _mngr_exit_summary("label", result, _LABEL_TIMEOUT_SECONDS)
+            raise RebindStepError(f"could not relabel agent {rebind.agent_id} of chat {chat_id}: {reason}")
         self._deps.note_agent_relabeled(rebind.agent_id, {"account": account_id})
 
     def _start(self, chat_id: ChatId, rebind_id: str, agent_info: AgentInfo) -> bool:
@@ -311,7 +310,7 @@ class RebindRunner:
         if result.returncode != 0:
             tail = "\n".join(result.stderr.strip().splitlines()[-_START_OUTPUT_TAIL_LINES:])
             self._fail(
-                chat_id, rebind_id, failure_notice(_mngr_failure_reason("start", result, _START_TIMEOUT_SECONDS), tail)
+                chat_id, rebind_id, failure_notice(_mngr_exit_summary("start", result, _START_TIMEOUT_SECONDS), tail)
             )
             return False
         self._deps.note_agent_alive(agent_info.id)

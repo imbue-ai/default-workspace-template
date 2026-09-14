@@ -364,7 +364,8 @@ def test_a_failed_start_leaves_the_failed_phase_with_mngrs_words_and_the_binding
     record = workspace.record()
     assert record is not None and record.rebind is not None
     assert record.rebind.phase is HandoffPhase.FAILED
-    assert record.rebind.error is not None and "tmux: server exited" in record.rebind.error
+    # The exit summary on one line, mngr's output under it, neither repeated.
+    assert record.rebind.error == "mngr start exited with code 1\ntmux: server exited"
     assert workspace.delivered == [] and workspace.revived == []
     # The binding and the label already point at the new account, so a retry only has to start it.
     assert f"CLAUDE_CONFIG_DIR={workspace.account_dir(_NEW_ACCOUNT.id)}" in workspace.env_text(agent_id)
