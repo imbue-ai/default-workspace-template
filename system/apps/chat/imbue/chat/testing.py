@@ -172,13 +172,17 @@ def make_chat_agent_entry(
     is_archived: bool,
     harness: HarnessType = HarnessType.CLAUDE,
     final_event_count: int = 7,
+    account_id: str | None = None,
 ) -> ChatAgentEntry:
-    """One agent of a hand-built chat record: archived (ended, named, counted) or the live one."""
+    """One agent of a hand-built chat record: archived (ended, named, counted) or the live one.
+
+    ``account_id`` names the account the entry ran on; None takes a per-seq placeholder.
+    """
     return ChatAgentEntry(
         seq=seq,
         agent_id=agent_id,
         lane="anthropic" if harness is HarnessType.CLAUDE else "openai",
-        account_id=f"acct-{seq}",
+        account_id=account_id if account_id is not None else f"acct-{seq}",
         harness=harness,
         started_at=datetime(2026, 9, 1, 12, seq, tzinfo=timezone.utc),
         ended_at=datetime(2026, 9, 1, 13, seq, tzinfo=timezone.utc) if is_archived else None,
@@ -245,8 +249,12 @@ def make_chat_rebind_record(
     held_sends: tuple[HeldSend, ...] | None = None,
     target_account_id: str = "acct-anthropic-2",
     previous_account_id: str = "acct-anthropic",
+    error: str | None = None,
 ) -> ChatRebindRecord:
-    """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account."""
+    """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account.
+
+    ``error`` is what the failed phase carries; a record in another phase has none.
+    """
     started_at = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
     trigger = HeldSend(
         message_id="trigger-1",
@@ -268,6 +276,7 @@ def make_chat_rebind_record(
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
+        error=error,
     )
 
 

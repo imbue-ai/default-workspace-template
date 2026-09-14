@@ -39,7 +39,6 @@ from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
-from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import InMemoryChatRecordStore
@@ -3323,10 +3322,6 @@ def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadc
 # The rebind: changing a chat's account in place (``chat_rebinds.py`` runs it; these cover the manager's side).
 
 
-def _entry_on_account(entry: ChatAgentEntry, account_id: str) -> ChatAgentEntry:
-    return entry.model_copy_update(to_update(entry.field_ref().account_id, account_id))
-
-
 def _anthropic_account(display: str = "Anthropic") -> str:
     account_id, _ = mint_account_dir()
     commit_account(account_id, "anthropic", display)
@@ -3454,7 +3449,7 @@ def test_a_retry_on_an_unwired_manager_leaves_the_failed_phase_as_it_is(
     store.write(
         ChatRecord(
             chat_id=chat_id,
-            agents=(_entry_on_account(make_chat_agent_entry(1, agent_id, is_archived=False), first_account),),
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
             rebind=failed,
         )
     )
@@ -3464,7 +3459,7 @@ def test_a_retry_on_an_unwired_manager_leaves_the_failed_phase_as_it_is(
             manager.retry_handoff(chat_id, second_account)
         assert store.read(chat_id) == ChatRecord(
             chat_id=chat_id,
-            agents=(_entry_on_account(make_chat_agent_entry(1, agent_id, is_archived=False), first_account),),
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
             rebind=failed,
         )
     finally:
@@ -3483,13 +3478,12 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         store.write(
             ChatRecord(
                 chat_id=chat_id,
-                agents=(_entry_on_account(make_chat_agent_entry(1, agent_id, is_archived=False), first_account),),
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
                 rebind=make_chat_rebind_record(
-                    agent_id=agent_id, phase=HandoffPhase.FAILED, target_account_id=second_account
-                ).model_copy_update(
-                    to_update(
-                        make_chat_rebind_record(agent_id=agent_id).field_ref().error, "mngr start exited with code 1"
-                    )
+                    agent_id=agent_id,
+                    phase=HandoffPhase.FAILED,
+                    target_account_id=second_account,
+                    error="mngr start exited with code 1",
                 ),
             )
         )

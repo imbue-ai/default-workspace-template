@@ -3059,13 +3059,7 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
     manager._chat_record_store.write(
         ChatRecord(
             chat_id=ChatId(first),
-            agents=(
-                make_chat_agent_entry(1, first, is_archived=False).model_copy_update(
-                    to_update(
-                        make_chat_agent_entry(1, first, is_archived=False).field_ref().account_id, signed_in_account
-                    )
-                ),
-            ),
+            agents=(make_chat_agent_entry(1, first, is_archived=False, account_id=signed_in_account),),
             rebind=make_chat_rebind_record(agent_id=first, target_account_id=second),
         )
     )
