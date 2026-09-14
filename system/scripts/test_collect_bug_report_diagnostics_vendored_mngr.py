@@ -1,11 +1,10 @@
 """The collector's chat transcripts, fetched through the real vendored ``mngr``.
 
 The unit tests stub mngr, so they cannot say whether the target the collector hands
-``mngr event`` is one mngr resolves. That is exactly what broke: inside a workspace
-container the host record in the host dir is stamped by the outer provider that built
-it, so ``mngr list`` names the host ``workspace-1`` while the local provider resolved
-only ``localhost``, and every address the collector composed from its own listing was
-refused. Every bug report then said "no chat transcripts exist in this workspace".
+``mngr event`` is one mngr resolves. Inside a workspace container the host record in the
+host dir is stamped by the outer provider that built it, so ``mngr list`` names the host
+after that record (``workspace-1``) rather than ``localhost``, and a target composed from
+the listing is only as good as the vendored mngr's willingness to resolve it.
 
 So this drives the collector's ``list_agents`` -> ``fetch_transcript`` path against the
 vendored binary over a host dir shaped like a workspace's: a record naming the host
