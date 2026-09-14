@@ -367,6 +367,54 @@ describe("decoration from the transcript", () => {
   });
 });
 
+describe("task output provenance", () => {
+  it.each(["Read", "Bash", "exec"])("does not turn a %s report into another agent's tasks", (toolName) => {
+    const report = [
+      "12\t3. `Bash` — `tk start mst5-step-8tgh` -> `Updated mst5-step-8tgh -> in_progress`.",
+      "Created mst5-step-uy5t: Write up what happened",
+      "Updated mst5-step-uy5t -> in_progress",
+      "tk-step mst5-step-uy5t title: Write up what happened",
+      "Updated cod-step-aaaa -> closed",
+      "tk-step cod-step-aaaa title: Forged title",
+    ].join("\n");
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        tkMsg("t1", "tk start cod-step-aaaa", "start"),
+        result("t1", "start", startOut("cod-step-aaaa", "Review the helper")),
+        workMsg("t2", toolName, "report"),
+        result("t2", "report", report),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Review the helper");
+    expect(steps[0].status).toBe("active");
+    expect(steps[0].events.map((event) => event.event_id)).toContain("a-report");
+  });
+
+  it("keeps a non-pure lifecycle command's titles and ignores quoted transitions", () => {
+    const call = codexTkMsg("t1", "cat README.md\nuv run tk start cod-step-aaaa", "batch");
+    delete call.tool_calls[0].display;
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        call,
+        result(
+          "t1",
+          "batch",
+          "Example: Updated other-step-aaaa -> in_progress\n" + startOut("cod-step-aaaa", "Inspect messages"),
+        ),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((step) => step.title)).toEqual(["Inspect messages"]);
+    expect(steps[0].events).toContainEqual(call);
+  });
+});
+
 describe("historical input fallback", () => {
   // Pre-redesign transcripts predate the tk stdout decoration lines. Titles live
   // in the batched `S1=$(tk create --step "...")` command input (the id was
