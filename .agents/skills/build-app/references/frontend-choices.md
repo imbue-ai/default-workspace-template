@@ -7,13 +7,6 @@ Use these default choices unless the user has requested something different, or 
 
 You can modify your copy if necessary to fit the needs of your app or a user request.
 
-Try to use the components already provided in drop-in.css whenever possible.
+Try to use the components already provided in drop-in.css whenever available.
 
 The CSS includes font & color choices, as well as stylings for all the default HTML elements.
-
-## Theme selection
-Use this on your HTML tag to select the default theme:
-```html
-<html class="theme-schematic">...</html>
-```
-Select a different theme only if the user request requires it.
