@@ -3512,8 +3512,8 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
 
         assert manager.retry_handoff(chat_id, second_account) is HandoffPhase.RESTARTING
         wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
-        # The agent was already stopped by the failed attempt in this scenario's world? No: it is
-        # tracked RUNNING here, so the retry stops it, relabels, and starts; both held sends follow.
+        # The agent is seeded running, so the retry stops it before relabelling and starting; both
+        # held sends follow once it is back.
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"]
         assert sent == [(agent_id, "Carry on on the other account", "trigger-1"), (agent_id, "and this", "m-2")]
         assert store.read(chat_id) is None
