@@ -694,7 +694,6 @@ def running_workspace(
     stub_instances: Sequence[str] = (),
     project_names: Sequence[str] = (STARTER_PROJECT_NAME,),
     is_account_signed_in: bool = True,
-    # Further signed-in accounts as (lane id, provider display) pairs, for a chat to switch to.
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
 ) -> Iterator[RunningWorkspace]:
