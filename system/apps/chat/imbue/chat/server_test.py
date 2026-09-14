@@ -2158,25 +2158,6 @@ def test_create_chat_launches_a_reserved_chat_under_its_id(
     response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id})
 
     assert response.status_code == 201
-    body = response.get_json()
-    assert body["chat_id"] == reserved.chat_id
-    assert body["display_name"] == reserved.display_name
-
-
-def test_create_chat_route_launches_a_reserved_chat_by_chat_id(
-    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``POST /api/chats/create`` takes the minted chat under ``chat_id`` and answers the
-    chat's id under the same name, where the agent-keyed alias spells both ``agent_id``."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
-    _register_agent(app, "agent-123", "primary", "RUNNING")
-    agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat()
-
-    response = client.post("/api/chats/create", json={"chat_id": reserved.chat_id})
-
-    assert response.status_code == 201
     assert response.get_json() == {
         "chat_id": reserved.chat_id,
         "name": reserved.name,
