@@ -358,8 +358,8 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for the successor, the confirming message first, so a page (a reloaded one too) "
-            "keeps showing them until they land in the successor's transcript"
+            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
+            "too) keeps showing them until they land in the transcript"
         ),
     )
     error: str | None = Field(default=None, description="Why the agent could not be started, in the failed phase")
@@ -379,7 +379,7 @@ class SwitchChatResponse(FrozenModel):
     kind: TransitionKind = Field(description="Whether the target made the switch a handoff or a rebind")
     phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
     returned_block: str = Field(
-        description="The queued text taken off the retiring agent, for the composer ('' for none)"
+        description="The queued text draining took off the agent the chat was on, for the composer ('' for none)"
     )
 
 

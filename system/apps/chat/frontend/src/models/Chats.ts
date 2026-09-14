@@ -58,7 +58,7 @@ export interface HandoffState {
   phase: HandoffPhase;
   target_lane: string;
   target_account_id: string;
-  // The harness the chat is moving to, for the phase text.
+  // The harness the chat is moving to (a rebind keeps its own), for the phase text.
   target_harness: string;
   // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
   target_label: string;

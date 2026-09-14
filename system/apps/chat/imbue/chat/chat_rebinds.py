@@ -1,4 +1,5 @@
-"""The rebind: continuing a chat on another account of the same harness (``docs/system/blueprint/chat-agent-split/`` section 6).
+"""The rebind: continuing a chat on another account of the same harness and lane
+(``docs/system/blueprint/chat-agent-split/`` section 6).
 
 A rebind keeps the chat's agent and restarts it on the new account: the agent's turn is
 interrupted and its queue returned to the composer (``draining``), then the agent is stopped,
