@@ -487,12 +487,16 @@ def _resolve_switch_target(account_id: str) -> _SwitchTarget:
     """The account a switch names. Raises ``HandoffError`` when it is unknown or on a lane this build lacks."""
     try:
         account = resolve_account(account_id)
-        label = account_label_for(account_id)
     except AccountError as e:
         raise HandoffError(str(e)) from e
     harness = harness_for(account)
     if harness is None:
         raise HandoffError(f"Account {account_id} is on a lane this build does not have")
+    # Numbered among the accounts on lanes this build has, so the lane check comes first.
+    try:
+        label = account_label_for(account_id)
+    except AccountError as e:
+        raise HandoffError(str(e)) from e
     return _SwitchTarget(account=account, harness=harness, label=label)
 
 

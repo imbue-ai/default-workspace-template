@@ -3312,6 +3312,11 @@ def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadc
             manager.begin_handoff(ChatId(first), anthropic_id, "hi", "m-1", HeldSendOrigin.CLIENT)
         with pytest.raises(HandoffError):
             manager.begin_handoff(ChatId(first), "acct-missing", "hi", "m-1", HeldSendOrigin.CLIENT)
+        # A row naming a lane this build no longer has is refused by name, not as "no such account".
+        retired_lane_id, _ = mint_account_dir()
+        commit_account(retired_lane_id, "lane-this-build-lacks", "Elsewhere")
+        with pytest.raises(HandoffError, match="lane this build does not have"):
+            manager.begin_switch(ChatId(first), retired_lane_id, "hi", "m-1", HeldSendOrigin.CLIENT)
         with pytest.raises(HandoffError, match="no active agent"):
             manager.begin_handoff(
                 ChatId(f"agent-{uuid4().hex}"), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT
