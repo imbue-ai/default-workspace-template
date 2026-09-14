@@ -413,10 +413,7 @@ class HandoffRunner:
                 to_update(current.field_ref().phase, HandoffPhase.SWITCHING),
                 to_update(current.field_ref().summary_outcome, outcome),
                 to_update(current.field_ref().prompt, prompt),
-                to_update(
-                    current.field_ref().held_sends,
-                    tuple(held for held in current.held_sends if held.message_id != current.trigger_message_id),
-                ),
+                to_update(current.field_ref().held_sends, current.held_sends_after_trigger()),
             ),
         )
 

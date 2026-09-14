@@ -488,7 +488,7 @@ def _handoff_state_of(record: ChatRecord | None) -> HandoffState | None:
     # The confirming message leads the list for as long as the handoff lasts: summarizing folds
     # it into the successor's prompt and takes it off the held list, but the page keeps showing
     # it until the successor's first turn appears.
-    others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
+    others = handoff.held_sends_after_trigger()
     return HandoffState(
         phase=handoff.phase,
         target_lane=handoff.target_lane,
@@ -1314,7 +1314,7 @@ class AgentManager:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
             if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
                 raise ChatConvergingError(cancel_refused_detail(handoff.target_harness))
-            others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
+            others = handoff.held_sends_after_trigger()
             if len(record.agents) == 1:
                 self._chat_record_store.delete(chat_id)
                 self._chat_record_by_id.pop(chat_id, None)

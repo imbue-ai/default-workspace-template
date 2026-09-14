@@ -124,6 +124,10 @@ class ChatHandoffRecord(FrozenModel):
     def held_send_for(self, message_id: str) -> HeldSend | None:
         return next((held for held in self.held_sends if held.message_id == message_id), None)
 
+    def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
+        """The held sends other than the confirming message, in order."""
+        return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
+
 
 class ChatRecord(FrozenModel):
     """A multi-agent chat: its agents in order, and its handoff state."""
