@@ -2683,7 +2683,7 @@ def test_missing_non_image_path_is_not_a_download(client: FlaskClient, tmp_path:
 def test_create_chat_carries_the_project_id_beside_the_request_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``project_id`` is accepted on create-chat and is not mistaken for a chat field.
+    """``project_id`` is accepted on ``POST /api/chats/create`` and is not mistaken for a chat field.
 
     Chat membership rides the agent's ``project`` label rather than the member
     list, so the project a chat is created in travels with the create request.
