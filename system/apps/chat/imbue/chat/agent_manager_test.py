@@ -3498,9 +3498,7 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         with pytest.raises(ChatConvergingError, match="cannot be called off"):
             manager.cancel_handoff(chat_id)
         assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
-        with pytest.raises(
-            ChatConvergingError, match="switching to Anthropic 2 \\(Claude Code\\) and is failed|failed; retry"
-        ):
+        with pytest.raises(ChatConvergingError, match="switch to Anthropic 2 \\(Claude Code\\) failed; retry"):
             manager.stop_chat(chat_id)
         with pytest.raises(HandoffError, match="same harness and lane"):
             manager.retry_handoff(chat_id, _openai_account())
