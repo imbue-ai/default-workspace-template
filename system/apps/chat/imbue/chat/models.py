@@ -204,13 +204,13 @@ class AgentStopError(RuntimeError):
 
 
 class ChatConvergingError(RuntimeError):
-    """Raised when a verb is refused because the chat is in the middle of a handoff (a 409)."""
+    """Raised when a verb is refused because the chat is in the middle of a switch, a handoff or a rebind (a 409)."""
 
     ...
 
 
 class HandoffError(ValueError):
-    """Raised when a handoff cannot begin, be cancelled, or be retried as asked (a 400)."""
+    """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
     ...
 
@@ -289,7 +289,8 @@ class HandoffPhase(LowerCaseStrEnum):
     """Where a chat that is moving to another agent or account stands (``null`` on the wire while it is not).
 
     A handoff runs draining, summarizing, switching; a rebind runs draining, restarting. Both
-    end in failed when the new agent cannot be started.
+    end in failed when the agent the chat continues on (the successor, or the rebound one)
+    cannot be started.
     """
 
     DRAINING = auto()
@@ -328,7 +329,7 @@ class HeldSendOrigin(LowerCaseStrEnum):
 
 
 class HeldSend(FrozenModel):
-    """One message the chat app accepted while converging and will deliver to the successor."""
+    """One message the chat app accepted while converging and will deliver once the switch is done."""
 
     message_id: str = Field(description="The sender's stable send-time id (contract A4)")
     text: str = Field(description="The message, verbatim")
@@ -361,12 +362,12 @@ class HandoffState(FrozenModel):
             "keeps showing them until they land in the successor's transcript"
         ),
     )
-    error: str | None = Field(default=None, description="Why the successor could not be started, in the failed phase")
+    error: str | None = Field(default=None, description="Why the agent could not be started, in the failed phase")
 
 
 class SwitchChatRequest(SendMessageRequest):
-    """Request body for POST /api/chats/{id}/handoff: a send (the new agent's first message, with the
-    sender's client fields) plus the account the chat moves to."""
+    """Request body for POST /api/chats/{id}/handoff: a send (the first message the chat sends after the
+    switch, with the sender's client fields) plus the account the chat moves to."""
 
     account_id: str = Field(description="The signed-in account the chat moves to")
 
@@ -397,7 +398,8 @@ class HandoffCancelResponse(FrozenModel):
 
 
 class HandoffRetryRequest(FrozenModel):
-    """Request body for POST /api/chats/{id}/handoff/retry: try the successor's create again on an account."""
+    """Request body for POST /api/chats/{id}/handoff/retry: run a failed switch's last step again on an account
+    (a handoff's create, or a rebind's restart)."""
 
     account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
 

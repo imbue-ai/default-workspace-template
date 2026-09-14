@@ -114,11 +114,13 @@ then reads "Switch and send" and asks a confirm (two lines for a handoff, one
 for a rebind, with "Start a new chat instead" as the other way out), and the
 typed message becomes the first the chat sends after the switch. While the chat converges the held messages
 render from the snapshot's `handoff.held_sends` with the phase as their
-caption, the activity strip and the placeholder say what is happening, and the
-Stop button is "Cancel switch" until the old agent is stopped; a failed create
-shows its reason over the composer with a retry on any signed-in account. The
-verbs the app refuses meanwhile answer 409 with a detail written for the user,
-which the page and the shell's tab menu show as is.
+caption, the activity strip and the placeholder say what is happening, and for
+a handoff the Stop button is "Cancel switch" until the old agent is stopped; a
+failed start shows its reason over the composer with a retry (on any signed-in
+account after a handoff, on the same harness and lane after a rebind) and
+"Start a new chat instead". The verbs the app refuses meanwhile answer 409 with
+a detail written for the user, which the page and the shell's tab menu show as
+is.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
