@@ -377,9 +377,7 @@ describe("the combo card", () => {
     expect(started).toEqual([]);
   });
 
-  it("asks before launching a new chat on another account of the chat's own harness, and launches only on Launch", () => {
-    // Nothing rebinds a chat yet, so an account on its own harness can only mean a new chat
-    // on it -- asked, never done by surprise.
+  it("makes an account on the chat's own harness the pending lane too, now that a chat can change account in place", () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" },
@@ -389,29 +387,15 @@ describe("the combo card", () => {
     click('[data-card-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Anthropic 2"));
     expect(rows).toHaveLength(1);
-    expect(rows[0].getAttribute("aria-disabled")).toBeNull();
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    expect(screenText()).toContain("Launch a new chat?");
-    expect(screenText()).toContain("Anthropic 2 (Claude Code)");
+    expect(getPendingAccountId("a1")).toBe("acct-2");
     expect(started).toEqual([]);
-    expect(getPendingAccountId("a1")).toBeNull();
-
-    // Cancel keeps the flyout up and starts nothing.
-    click(".notice-dismiss");
     expect(screenText()).not.toContain("Launch a new chat?");
-    expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
-
-    // Launch starts the chat on that account and takes the card down.
-    rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render();
-    const launch = [...document.querySelectorAll("button")].find((b) => b.textContent === "Launch");
-    if (launch === undefined) throw new Error("no Launch button");
-    launch.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render();
-    expect(started).toEqual(["acct-2"]);
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain(
+      "next: Anthropic 2 (Claude Code)",
+    );
   });
 
   it("stars the default account and pins another on a press of its star", () => {

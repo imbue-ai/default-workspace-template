@@ -9,8 +9,15 @@ const state = vi.hoisted(() => {
     accounts: [] as unknown[],
     retries: [] as [string, string][],
     retryRejects: false,
+    started: [] as string[],
   };
 });
+vi.mock("../shell", () => ({
+  startChatOnAccount: (accountId: string) => {
+    state.started.push(accountId);
+    return Promise.resolve(true);
+  },
+}));
 vi.mock("../models/Chats", () => ({ getChatById: () => state.chat ?? undefined }));
 vi.mock("../models/Providers", () => ({ getAccounts: () => state.accounts }));
 vi.mock("../models/Handoffs", () => ({
@@ -24,14 +31,15 @@ vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
 }));
 
 import m from "mithril";
-import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
+import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
 const ACCOUNTS = [
-  { id: "acct-anthropic", label: "Anthropic (Claude Code)" },
-  { id: "acct-openai", label: "OpenAI (Codex)" },
-  { id: "acct-google", label: "Google (Antigravity CLI)" },
+  { id: "acct-anthropic", label: "Anthropic (Claude Code)", harness: "claude", lane: "anthropic" },
+  { id: "acct-anthropic-2", label: "Anthropic 2 (Claude Code)", harness: "claude", lane: "anthropic" },
+  { id: "acct-openai", label: "OpenAI (Codex)", harness: "codex", lane: "openai" },
+  { id: "acct-google", label: "Google (Antigravity CLI)", harness: "antigravity", lane: "google" },
 ];
 
 function render(): void {
@@ -47,6 +55,7 @@ describe("the failed-switch notice", () => {
     document.body.innerHTML = '<div id="root"></div>';
     state.accounts = ACCOUNTS;
     state.retries.length = 0;
+    state.started.length = 0;
     state.retryRejects = false;
     state.chat = chatSnapshotFixture("agent-1", {
       handoff: handoffStateFixture({ phase: "failed", error: "mngr create exited with code 3\nno such template" }),
@@ -88,5 +97,28 @@ describe("the failed-switch notice", () => {
     expect(state.retries).toEqual([["agent-1", "acct-google"]]);
     expect(ROOT().querySelector(".handoff-retry-error")?.textContent).toBe("no such account");
     expect(ROOT().querySelector(".handoff-failed-title")).not.toBeNull();
+  });
+
+  it("offers a new chat on the picked account instead of a retry", () => {
+    render();
+    const select = ROOT().querySelector<HTMLSelectElement>("select.handoff-retry-account");
+    if (select === null) throw new Error("no account picker");
+    select.value = "acct-google";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    ROOT().querySelector<HTMLButtonElement>(".handoff-new-chat-button")?.click();
+    expect(state.started).toEqual(["acct-google"]);
+    expect(state.retries).toEqual([]);
+  });
+
+  it("names the restart and offers only the agent's own harness and lane for a failed rebind", () => {
+    state.chat = chatSnapshotFixture("agent-1", {
+      active_agent: { harness: "claude", account_id: "acct-anthropic-2" },
+      handoff: rebindStateFixture({ phase: "failed", error: "mngr start exited with code 1" }),
+    });
+    render();
+    expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not restart Claude");
+    const select = ROOT().querySelector<HTMLSelectElement>("select.handoff-retry-account");
+    expect([...(select?.options ?? [])].map((option) => option.value)).toEqual(["acct-anthropic", "acct-anthropic-2"]);
+    expect(select?.value).toBe("acct-anthropic-2");
   });
 });

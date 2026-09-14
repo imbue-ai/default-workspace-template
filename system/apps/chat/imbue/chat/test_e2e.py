@@ -25,9 +25,12 @@ from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
+from imbue.chat.accounts import account_dir
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_CHAT_ADDRESS
+from imbue.chat.testing import FIXTURE_SESSION_ID
+from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import STARTER_PROJECT_ID
 from imbue.chat.testing import STARTER_PROJECT_NAME
@@ -811,6 +814,62 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         chat.locator(".model-selector-trigger").click()
         provider_row = chat.locator('[data-card-row="providers"]')
         expect(provider_row).to_contain_text("OpenAI")
+        expect(provider_row).not_to_contain_text("next:")
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Page) -> None:
+    """The rebind through the browser: a second account on the chat's own lane is a switch too, its confirm
+    is one line and offers a new chat instead, and the chat comes back on the same agent with its transcript,
+    now read from the new account's folder."""
+    with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
+        _choose_pending_account(chat, "Anthropic 2", "Anthropic 2 (Claude Code)")
+
+        chat.locator(".message-input-textbox").fill("Carry on on the other account")
+        switch_button = chat.locator(".message-input-send-button--switch")
+        expect(switch_button).to_contain_text("Switch and send")
+        switch_button.click()
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation.")
+        expect(dialog).not_to_contain_text("wraps up what it is doing")
+        expect(dialog.get_by_role("button", name="Start a new chat instead")).to_be_visible()
+        dialog.get_by_role("button", name="Switch and send").click()
+
+        # The rebind runs against the fake mngr and lands the same agent on the second account.
+        manager = server.chat_state.agent_manager
+        second_account = server.account_ids[1]
+
+        def is_rebound() -> bool:
+            snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+            return (
+                snapshot is not None
+                and snapshot.handoff is None
+                and snapshot.active_agent.account_id == second_account
+            )
+
+        wait_for(is_rebound, timeout=30.0)
+        snapshot = manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert snapshot is not None and snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+        # The session file followed the agent into the new account's folder, and the confirming
+        # message went through the ordinary send path once the agent was back.
+        assert list((account_dir(second_account) / "projects").rglob(f"{FIXTURE_SESSION_ID}.jsonl"))
+        messenger = manager._messenger
+        assert isinstance(messenger, RecordingMngrMessenger)
+        wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
+        # The page keeps the transcript, no switch chip appears (the agent did not change), the held
+        # bubble is gone, and the provider row names the new account with the lane spent.
+        expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
+        expect(chat.locator(".message-agent-switch")).to_have_count(0)
+        expect(chat.locator(".held-send")).to_have_count(0, timeout=15000)
+        expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
+        chat.locator(".model-selector-trigger").click()
+        provider_row = chat.locator('[data-card-row="providers"]')
+        expect(provider_row).to_contain_text("Anthropic 2")
         expect(provider_row).not_to_contain_text("next:")
 
 

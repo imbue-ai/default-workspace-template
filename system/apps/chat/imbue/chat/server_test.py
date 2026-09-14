@@ -19,6 +19,7 @@ from flask.testing import FlaskClient
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
@@ -63,6 +64,7 @@ from imbue.chat.testing import build_test_state
 from imbue.chat.testing import close_ws
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import open_ws
 from imbue.chat.testing import seed_agent_state
@@ -2989,6 +2991,7 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     first = f"agent-{uuid4().hex}"
     state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
     assert state_dir.exists()
+    seed_agent_state(state_of(app).agent_manager, first, name="Chat-1", labels={"account": signed_in_account})
 
     missing = client.post(
         f"/api/chats/agent-{uuid4().hex}/handoff", json={"account_id": signed_in_account, "message": "x"}
@@ -2996,10 +2999,9 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert missing.status_code == 404
     unknown_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-nope", "message": "x"})
     assert unknown_account.status_code == 400
-    # A claude chat moving to another claude account is a rebind, which a later phase adds.
-    same_harness = client.post(f"/api/chats/{first}/handoff", json={"account_id": signed_in_account, "message": "x"})
-    assert same_harness.status_code == 400
-    assert "not supported yet" in same_harness.get_json()["detail"]
+    own_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": signed_in_account, "message": "x"})
+    assert own_account.status_code == 400
+    assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
 
 
@@ -3041,6 +3043,99 @@ def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -
     assert [(chat["chat_id"], chat["active_agent"]["agent_id"], chat["agent_ids"]) for chat in listed_after] == [
         (first, successor, [first, successor])
     ]
+
+
+def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_cannot_be_cancelled(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    manager: AgentManager = state_of(app).agent_manager
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": signed_in_account})
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    manager._chat_record_store.write(
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(
+                make_chat_agent_entry(1, first, is_archived=False).model_copy_update(
+                    to_update(
+                        make_chat_agent_entry(1, first, is_archived=False).field_ref().account_id, signed_in_account
+                    )
+                ),
+            ),
+            rebind=make_chat_rebind_record(agent_id=first, target_account_id=second),
+        )
+    )
+    manager.refresh_chat_records()
+
+    held = client.post(f"/api/chats/{first}/message", json={"message": "and this", "message_id": "m-2"})
+    assert held.status_code == 202 and held.get_json() == {"status": "held", "phase": "restarting"}
+    for suffix in ("stop", "start", "interrupt", "drain-to-composer", "model"):
+        refused = client.post(f"/api/chats/{first}/{suffix}", json={})
+        assert refused.status_code == 409, suffix
+        assert refused.get_json() == {
+            "detail": "This chat is switching to Anthropic 2 (Claude Code) and is restarting; "
+            "wait for the switch to finish, then try again.",
+            "phase": "restarting",
+        }
+    cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
+    assert cancelled.status_code == 409
+    assert "cannot be called off" in cancelled.get_json()["detail"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [
+        (chat["status"], chat["handoff"]["kind"], chat["handoff"]["phase"], chat["handoff"]["target_label"])
+        for chat in listed
+    ] == [("working", "rebind", "restarting", "Anthropic 2 (Claude Code)")]
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on on the other account"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+    assert not log_path.exists()
+
+
+def test_the_switch_route_rebinds_a_chat_to_an_account_on_its_own_lane(tmp_path: Path, signed_in_account: str) -> None:
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    state_dir = _track_claude_agent(app, first, "Chat-1", tmp_path / "claude_config")
+    (state_dir / "claude_session_id_history").write_text("one-session\n")
+    _write_claude_session(
+        tmp_path / "claude_config", "one-session", [_user_event("u-1", "2026-01-01T00:00:00Z", "hi")]
+    )
+    manager: AgentManager = state_of(app).agent_manager
+    seed_agent_state(manager, first, name="Chat-1", labels={"display_name": "Chat 1", "account": signed_in_account})
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+
+    switched = client.post(
+        f"/api/chats/{first}/handoff", json={"account_id": second, "message": "Carry on here", "message_id": "m-1"}
+    )
+    assert switched.status_code == 202
+    assert switched.get_json() == {
+        "status": "converging",
+        "kind": "rebind",
+        "phase": "restarting",
+        "returned_block": "",
+    }
+    wait_for(lambda: manager.get_handoff_state(ChatId(first)) is None, timeout=15.0)
+
+    argv = log_path.read_text().splitlines()
+    assert argv == ["stop Chat-1", f"label {first} --label account={second}", "start Chat-1 --no-resume"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert [(chat["chat_id"], chat["active_agent"]["account_id"], chat["agent_ids"]) for chat in listed] == [
+        (first, second, [first])
+    ]
+    # The env file names the new account and the session file moved into its folder.
+    assert f"CLAUDE_CONFIG_DIR={account_dir(second)}" in (state_dir / "env").read_text()
+    assert list((account_dir(second) / "projects").rglob("one-session.jsonl"))
+    messenger = manager._messenger
+    assert isinstance(messenger, RecordingMngrMessenger)
+    wait_for(lambda: (first, "Carry on here") in messenger.sent, timeout=5.0)
+    # The chat still reads its transcript, now from the new account's folder.
+    assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
 
 
 def test_the_event_fan_out_is_keyed_by_chat(app: Flask, tmp_path: Path) -> None:
