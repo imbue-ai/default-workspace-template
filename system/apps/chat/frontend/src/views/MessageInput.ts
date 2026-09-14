@@ -967,7 +967,7 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
       const isStopButtonVisible = isAgentWorking && !isInterruptInFlight && handoff === null;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
-      const hasQueuedMessages = (getChatById(chatId)?.active_agent.queued_messages ?? []).length > 0;
+      const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
       const stopButtonLabel = hasQueuedMessages
         ? "Interrupt agent and bring queued messages to draft area"
         : "Interrupt agent";
