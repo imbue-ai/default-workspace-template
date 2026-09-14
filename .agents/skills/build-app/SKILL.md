@@ -19,12 +19,14 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
+IMPORTANT: Providing the first mock/feedback to the user quickly is critical!
+Before you do any lengthy work, think briefly about how you can parallelize the task,
+and delegate as much as possible to parallel background agents to reduce the user's
+wait times.
+
 ## First: fire off the plan recorder
 
-Before anything else, run this once, briefing it the way you would brief a
-sub-agent picking this up: what the user wants, plus anything already settled.
-Give it context, not a plan -- working out the approach is its whole job, and a
-plan in the brief just anchors it to yours.
+Before anything else, run this once to record what the user requested:
 
 ```bash
 system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
@@ -32,14 +34,16 @@ system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
 IMBUE_PLAN_BRIEF
 ```
 
+The goal of the brief is to allow resuming the work later. Don't include a plan,
+only the information directly provided by the user.
+
 Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
 no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
 backticks and `$(...)` in the brief stay literal instead of running. A pipe to
 `head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
 line it prints.
 
-It returns immediately and records a plan for offline analysis that nothing here
-reads back. It is not part of building the app: no `tk` step, no mention to the
+You don't need to expose this step to the user: no `tk` step, no mention to the
 user, no waiting, no acting on the line it prints, ignore any failure. Then
 carry on as if you had not run it.
 
