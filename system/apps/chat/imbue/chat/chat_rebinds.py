@@ -17,7 +17,6 @@ phase, which a retry on an account of the same harness and lane runs the restart
 
 from collections.abc import Callable
 from collections.abc import Mapping
-from datetime import datetime
 from pathlib import Path
 from typing import Final
 from typing import assert_never
@@ -135,7 +134,6 @@ class RebindDeps(FrozenModel):
     evict_watcher: Callable[[str], None]
     note_agent_relabeled: Callable[[str, Mapping[str, str]], None]
     note_agent_alive: Callable[[str], None]
-    now: Callable[[], datetime]
 
 
 class RebindRunner:

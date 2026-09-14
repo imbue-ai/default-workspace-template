@@ -1605,7 +1605,6 @@ class AgentManager:
             evict_watcher=self._evict_watcher,
             note_agent_relabeled=self._note_agent_relabeled,
             note_agent_alive=self.note_agent_alive,
-            now=lambda: datetime.now(timezone.utc),
         )
         return RebindRunner.build(deps)
 

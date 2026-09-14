@@ -257,7 +257,6 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> RebindRunner:
         evict_watcher=workspace.evict_watcher,
         note_agent_relabeled=workspace.note_agent_relabeled,
         note_agent_alive=workspace.note_agent_alive,
-        now=lambda: _NOW,
     )
     return RebindRunner.build(RebindDeps(**{**bound, **overrides}))
 
