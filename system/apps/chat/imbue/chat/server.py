@@ -1086,7 +1086,8 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
 def _cancel_handoff_endpoint(chat_id: str) -> Response:
     """Call the chat's handoff off (spec 5.6); the confirming message comes back for the composer.
 
-    Answers 400 for a chat that is not converging and 409 once switching has begun.
+    Answers 400 for a chat that is not converging and 409 once switching has begun, or when
+    the switch is a rebind, which has no window to call it off in (spec 6).
     """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
@@ -1102,7 +1103,11 @@ def _cancel_handoff_endpoint(chat_id: str) -> Response:
 
 
 def _retry_handoff_endpoint(chat_id: str) -> Response:
-    """Run a failed handoff's create again on an account (spec 5.10). 400 unless the chat is in the failed phase."""
+    """Run a failed switch's last step again on an account: a handoff's create (spec 5.10) or a rebind's restart (spec 6).
+
+    400 unless the chat is in the failed phase, and for a rebind when the account is not on the
+    agent's own harness and lane.
+    """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
         return _chat_not_found_response(chat_id)
