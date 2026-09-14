@@ -15,3 +15,8 @@
   itself, and that the worker's report body is written for the lead rather than
   for the user. The same point already landed on the `done` path in
   `launch-task`; the milestone message never got it.
+
+- `build-app` and `update-app` name the design skill by its full
+  `frontend-design:frontend-design` form. It ships as a plugin, so the bare name
+  they used before resolves only when the agent guesses the prefix -- and when it
+  does not, the design pass they call mandatory is silently skipped.
