@@ -54,19 +54,27 @@ export function addOutgoing(chatId: string, content: string, messageId?: string)
   return id;
 }
 
-/** Remove the bubbles whose send-time message ids the backend now lists itself (the held sends of
- *  a switching chat): the snapshot's own rendering takes over, so the bubble stands down by id. */
-export function dropOutgoingByMessageId(chatId: string, messageIds: readonly string[]): void {
+/** Keep only the chat's bubbles that ``keep`` accepts, redrawing when any went. */
+function retainOutgoing(chatId: string, keep: (entry: OutgoingMessage) => boolean): void {
   const list = byChat[chatId];
-  if (list === undefined || messageIds.length === 0) {
+  if (list === undefined) {
     return;
   }
-  const toRemove = new Set(messageIds);
-  const next = list.filter((entry) => entry.messageId === undefined || !toRemove.has(entry.messageId));
+  const next = list.filter(keep);
   if (next.length !== list.length) {
     byChat[chatId] = next;
     m.redraw();
   }
+}
+
+/** Remove the bubbles whose send-time message ids the backend now lists itself (the held sends of
+ *  a switching chat): the snapshot's own rendering takes over, so the bubble stands down by id. */
+export function dropOutgoingByMessageId(chatId: string, messageIds: readonly string[]): void {
+  if (messageIds.length === 0) {
+    return;
+  }
+  const toRemove = new Set(messageIds);
+  retainOutgoing(chatId, (entry) => entry.messageId === undefined || !toRemove.has(entry.messageId));
 }
 
 export function getOutgoingMessages(chatId: string): OutgoingMessage[] {
@@ -79,30 +87,17 @@ export function getOutgoingMessages(chatId: string): OutgoingMessage[] {
  *  the agent") is deliberate -- a new message the user sends DURING the interrupt
  *  round-trip must keep its bubble, since it is not part of the returned block. */
 export function clearOutgoing(chatId: string, ids: readonly string[]): void {
-  const list = byChat[chatId];
-  if (list === undefined || ids.length === 0) {
+  if (ids.length === 0) {
     return;
   }
   const toRemove = new Set(ids);
-  const next = list.filter((entry) => !toRemove.has(entry.id));
-  if (next.length !== list.length) {
-    byChat[chatId] = next;
-    m.redraw();
-  }
+  retainOutgoing(chatId, (entry) => !toRemove.has(entry.id));
 }
 
 /** Remove a specific bubble -- used by the send-failure path (the message did not
  *  send; its text is returned to the composer by the caller). */
 export function dropOutgoing(chatId: string, id: string): void {
-  const list = byChat[chatId];
-  if (list === undefined) {
-    return;
-  }
-  const next = list.filter((entry) => entry.id !== id);
-  if (next.length !== list.length) {
-    byChat[chatId] = next;
-    m.redraw();
-  }
+  retainOutgoing(chatId, (entry) => entry.id !== id);
 }
 
 function removeOldest(chatId: string): void {
