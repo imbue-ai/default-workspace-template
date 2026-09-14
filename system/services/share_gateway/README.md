@@ -48,6 +48,25 @@ the chain. Key, cert, and the cookie signing secret persist across unshare for
 a fast re-share; a daily check renews the cert when it is within 30 days of
 expiry.
 
+## When the stack cannot come up
+
+Bringing the stack up needs the connector twice (the certificate, then the
+relay assignment). A failed attempt is not retried on the next 10-second tick:
+the runner waits 15s, 30s, 1m, 2m, 8m, then 15m between attempts (a longer
+connector `Retry-After` wins), and a refusal the connector marks as permanent
+(any 4xx other than 408/429, e.g. an invalid CSR) halts retries until
+`share.env` changes -- a re-share from the desktop starts over. Each outcome is
+written to `data/.state/share_gateway/status.json`:
+
+```json
+{"state": "retrying", "workspace_domain": "...", "failed_attempt_count": 2,
+ "last_error": "certificate provisioning failed: ...",
+ "next_retry_at": "2026-09-13T12:01:00+00:00", "updated_at": "..."}
+```
+
+`state` is `up`, `retrying`, or `halted`. The minds desktop client reads this
+file to explain a share that is not live yet; it is removed at unshare.
+
 ## Grants
 
 `data/.secrets/share_grants.toml`:

@@ -33,6 +33,10 @@ CADDYFILE_PATH = STATE_DIR / "Caddyfile"
 # its region. The last-fetched relay assignment is cached so a container
 # restart brings the tunnels up without the connector.
 ASSIGNMENT_CACHE_PATH = STATE_DIR / "assignment.json"
+# Where the runner reports the stack's provisioning state (up / retrying /
+# halted, the last error, the next retry time) for the minds desktop client;
+# removed at unshare along with the rest of the stack.
+GATEWAY_STATUS_FILE = STATE_DIR / "status.json"
 
 # Local port layout: caddy terminates the share's TLS on HTTPS_PORT (each
 # relay's frpc splices its relay bytes into it); the gateway's Flask app
