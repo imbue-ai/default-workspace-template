@@ -286,12 +286,24 @@ class AgentStateItem(FrozenModel):
 
 
 class HandoffPhase(LowerCaseStrEnum):
-    """Where a chat that is moving to another harness stands (``null`` on the wire while it is not)."""
+    """Where a chat that is moving to another agent or account stands (``null`` on the wire while it is not).
+
+    A handoff runs draining, summarizing, switching; a rebind runs draining, restarting. Both
+    end in failed when the new agent cannot be started.
+    """
 
     DRAINING = auto()
     SUMMARIZING = auto()
     SWITCHING = auto()
+    RESTARTING = auto()
     FAILED = auto()
+
+
+class TransitionKind(LowerCaseStrEnum):
+    """What a converging chat is doing: moving to another harness, or changing account in place."""
+
+    HANDOFF = auto()
+    REBIND = auto()
 
 
 class SummaryOutcome(LowerCaseStrEnum):
@@ -332,12 +344,16 @@ class HeldSendSnapshot(FrozenModel):
 
 
 class HandoffState(FrozenModel):
-    """The in-progress handoff a chat snapshot carries while the chat is converging."""
+    """The in-progress switch a chat snapshot carries while the chat is converging: a handoff or a rebind."""
 
-    phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
+    kind: TransitionKind = Field(description="A handoff (another harness) or a rebind (another account, same agent)")
+    phase: HandoffPhase = Field(description="Which step of the switch the chat is in")
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
     target_harness: HarnessType = Field(description="The harness the chat is moving to, for the page's phase text")
+    target_label: str = Field(
+        description="What the phase text names the destination by: the harness for a handoff, the account for a rebind"
+    )
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
@@ -358,7 +374,8 @@ class SwitchChatRequest(SendMessageRequest):
 class SwitchChatResponse(FrozenModel):
     """Response from POST /api/chats/{id}/handoff."""
 
-    status: str = Field(description="'converging' once the handoff has begun")
+    status: str = Field(description="'converging' once the switch has begun")
+    kind: TransitionKind = Field(description="Whether the target made the switch a handoff or a rebind")
     phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
     returned_block: str = Field(
         description="The queued text taken off the retiring agent, for the composer ('' for none)"

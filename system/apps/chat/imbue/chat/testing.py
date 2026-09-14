@@ -61,6 +61,7 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
+from imbue.chat.chat_records import ChatRebindRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.config import Config
 from imbue.chat.create_defaults import TYPE_KEY
@@ -230,6 +231,40 @@ def make_chat_handoff_record(
         next_seq=retiring_seq + 1,
         chat_name="Chat-1",
         chat_title="Chat 1",
+        trigger_message_id=trigger.message_id,
+        trigger_text=trigger.text,
+        held_sends=held_sends if held_sends is not None else (trigger,),
+    )
+
+
+def make_chat_rebind_record(
+    *,
+    agent_id: str,
+    phase: HandoffPhase = HandoffPhase.RESTARTING,
+    rebind_id: str = "rebind-1",
+    held_sends: tuple[HeldSend, ...] | None = None,
+    target_account_id: str = "acct-anthropic-2",
+    previous_account_id: str = "acct-anthropic",
+) -> ChatRebindRecord:
+    """The rebind entry of a hand-built record: a claude chat's agent moving to a second Anthropic account."""
+    started_at = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+    trigger = HeldSend(
+        message_id="trigger-1",
+        text="Carry on on the other account",
+        origin=HeldSendOrigin.CLIENT,
+        received_at=started_at,
+    )
+    return ChatRebindRecord(
+        rebind_id=rebind_id,
+        phase=phase,
+        started_at=started_at,
+        target_lane="anthropic",
+        target_account_id=target_account_id,
+        target_harness=HarnessType.CLAUDE,
+        target_label="Anthropic 2 (Claude Code)",
+        agent_id=agent_id,
+        previous_account_id=previous_account_id,
+        previous_lane="anthropic",
         trigger_message_id=trigger.message_id,
         trigger_text=trigger.text,
         held_sends=held_sends if held_sends is not None else (trigger,),
