@@ -29,6 +29,8 @@ _TAB_A = TabId("tab-000000000000000a")
 _TAB_B = TabId("tab-000000000000000b")
 _TAB_C = TabId("tab-000000000000000c")
 _TAB_D = TabId("tab-000000000000000d")
+_LAUNCHER_1 = "new-tab-000000000000000e"
+_LAUNCHER_2 = "new-tab-000000000000000f"
 
 
 def _panel(panel_id: str, address: Address, tab_id: TabId) -> dict[str, Any]:
@@ -56,6 +58,21 @@ def _two_groups_side_by_side() -> LayoutRecord:
         "activeGroup": "g1",
     }
     return LayoutRecord(dockview=dockview, device_kind=DeviceKind.DESKTOP, updated_at=None)
+
+
+def _launchers_alone_in_right_group(*launcher_ids: str) -> LayoutRecord:
+    """Two panes: the left holding both instance tabs, and the active right pane showing only these New Tabs."""
+    layout = _two_groups_side_by_side()
+    dockview = layout.dockview
+    assert dockview is not None
+    left, right = (leaf["data"] for leaf in _leaves(dockview))
+    left["views"] = ["pa", "pb"]
+    right["views"] = list(launcher_ids)
+    right["activeView"] = launcher_ids[0]
+    for launcher_id in launcher_ids:
+        dockview["panels"][launcher_id] = {"id": launcher_id, "params": {"kind": "launcher"}}
+    dockview["activeGroup"] = "g2"
+    return layout
 
 
 def _placement(
@@ -108,22 +125,97 @@ def test_adding_to_a_never_arranged_view_builds_a_root_branch_dockview_accepts()
     assert addresses_by_panel_id(added.dockview) == {str(_TAB_A): _FILES}
 
 
-def test_adding_with_no_anchor_tabs_into_the_active_group_and_drops_its_launcher() -> None:
+def test_adding_with_no_anchor_tabs_into_the_active_group_and_keeps_its_launcher() -> None:
+    """A New Tab sharing its pane with a real tab is an ordinary tab: docking there leaves it open."""
     layout = _two_groups_side_by_side()
-    launcher_id = "new-tab-000000000000000f"
     dockview = layout.dockview
     assert dockview is not None
-    dockview["grid"]["root"]["data"][1]["data"]["views"].append(launcher_id)
-    dockview["panels"][launcher_id] = {"id": launcher_id}
+    dockview["grid"]["root"]["data"][1]["data"]["views"].append(_LAUNCHER_1)
+    dockview["panels"][_LAUNCHER_1] = {"id": _LAUNCHER_1}
     dockview["activeGroup"] = "g2"
 
     added = add_panel(layout, _TERMINAL_2, _TAB_C, "Terminal 2", _placement(None))
 
     assert added.dockview is not None
     right = _leaves(added.dockview)[1]["data"]
-    assert right["views"] == ["pb", str(_TAB_C)] and right["activeView"] == str(_TAB_C)
-    assert launcher_id not in added.dockview["panels"]
+    assert right["views"] == ["pb", _LAUNCHER_1, str(_TAB_C)] and right["activeView"] == str(_TAB_C)
+    assert _LAUNCHER_1 in added.dockview["panels"]
     assert added.dockview["activeGroup"] == "g2"
+
+
+def test_adding_into_a_pane_showing_one_new_tab_takes_its_place() -> None:
+    """A New Tab alone in a pane stands for the pane, so the panel docking there takes its place.
+
+    What the other panes hold has nothing to do with it: the left pane here keeps both its tabs.
+    """
+    layout = _launchers_alone_in_right_group(_LAUNCHER_1)
+
+    added = add_panel(layout, _TERMINAL_2, _TAB_C, "Terminal 2", _placement(None))
+
+    assert added.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(added.dockview)] == [["pa", "pb"], [str(_TAB_C)]]
+    assert _LAUNCHER_1 not in added.dockview["panels"]
+
+
+def test_a_pane_showing_one_new_tab_is_filled_even_where_a_new_group_was_asked_for() -> None:
+    """It stands for an empty pane, and an empty pane is filled rather than split beside."""
+    layout = _launchers_alone_in_right_group(_LAUNCHER_1)
+
+    added = add_panel(layout, _TERMINAL_2, _TAB_C, "Terminal 2", _placement(None, Direction.LEFT, is_new_group=True))
+
+    assert added.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(added.dockview)] == [["pa", "pb"], [str(_TAB_C)]]
+    assert _LAUNCHER_1 not in added.dockview["panels"]
+
+
+def test_a_pane_of_several_new_tabs_keeps_them_and_a_direction_is_honoured() -> None:
+    """Several New Tabs are tabs the user asked for, so the pane is nothing to fill: the op takes
+    the direction it was given and every launcher stays."""
+    layout = _launchers_alone_in_right_group(_LAUNCHER_1, _LAUNCHER_2)
+
+    added = add_panel(layout, _TERMINAL_2, _TAB_C, "Terminal 2", _placement(None, Direction.LEFT))
+
+    assert added.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(added.dockview)] == [
+        ["pa", "pb", str(_TAB_C)],
+        [_LAUNCHER_1, _LAUNCHER_2],
+    ]
+    assert {_LAUNCHER_1, _LAUNCHER_2} <= set(added.dockview["panels"])
+
+
+def test_moving_a_tab_into_a_pane_showing_one_new_tab_takes_its_place() -> None:
+    """A move answers a lone New Tab exactly as an open does: the pane it stood for holds a tab now."""
+    layout = _launchers_alone_in_right_group(_LAUNCHER_1)
+
+    moved = move_panel(layout, "pb", _placement(_LAUNCHER_1, Direction.WITHIN))
+
+    assert moved.dockview is not None
+    assert [leaf["data"]["views"] for leaf in _leaves(moved.dockview)] == [["pa"], ["pb"]]
+    assert _LAUNCHER_1 not in moved.dockview["panels"]
+
+
+def test_adding_into_a_dock_holding_only_a_launcher_consumes_that_launcher() -> None:
+    """The browser mints a launcher so an emptied dock shows something; filling the pane spends it."""
+    placeholder_only = LayoutRecord(
+        dockview={
+            "grid": {
+                "root": {"type": "branch", "data": [_leaf("g1", _LAUNCHER_1, size=1200)], "size": 800},
+                "width": 1200,
+                "height": 800,
+                "orientation": HORIZONTAL,
+            },
+            "panels": {_LAUNCHER_1: {"id": _LAUNCHER_1, "params": {"kind": "launcher"}}},
+            "activeGroup": "g1",
+        },
+        device_kind=DeviceKind.DESKTOP,
+        updated_at=None,
+    )
+
+    added = add_panel(placeholder_only, _TERMINAL_1, _TAB_A, "Terminal 1", _placement(None))
+
+    assert added.dockview is not None
+    assert _leaves(added.dockview)[0]["data"]["views"] == [str(_TAB_A)]
+    assert set(added.dockview["panels"]) == {str(_TAB_A)}
 
 
 def test_a_split_along_the_branchs_axis_inserts_a_sibling_sharing_the_anchors_extent() -> None:
