@@ -211,16 +211,17 @@ tk create "update-self" -t task \
     --acceptance "worker launched; conflicts triaged; validated; branch applied"
 ```
 
-Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_NAME`
+Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_ID`
 and `$REF` expand, then a **quoted** body. The `lead_agent` line must stay:
 this prose runs cross-version, and an older workspace's launcher may not stamp
-it at launch.
+it at launch. It is the lead's agent id, not its name: a rename of the lead's
+chat mid-update would otherwise strand the worker's report.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
+lead_agent: $MNGR_AGENT_ID
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -294,7 +295,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. Either way: reply via `mngr message`, consume the
+the third reaches the user. Either way: reply via `create_worker.py reply
+--task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default

@@ -332,13 +332,20 @@ def _revive_and_retry_send(
 
 def _send_message_endpoint(agent_id: str) -> Response:
     """Send a message to an agent."""
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
+    # Until the first agent list has been read, an unknown id says nothing about the agent, so
+    # the answer is "not ready" rather than 404: an in-workspace sender backs off to `mngr
+    # message` on a 404 (`system/scripts/message_chat.py`), and a 404 during the seconds after
+    # a chat-app boot would route messages around the app instead of waiting for it.
+    if not agent_manager.is_agent_list_known():
+        failure = ErrorResponse(detail="The chat app has not read its agent list from mngr yet; try again shortly.")
+        return json_response(failure.model_dump(), status_code=503)
     agent_info = _find_agent(agent_id)
     if agent_info is None:
         return _agent_not_found_response(agent_id)
 
     send_message_request = SendMessageRequest.model_validate(request.get_json())
-    state = get_state()
-    agent_manager: AgentManager = state.agent_manager
     message_id = send_message_request.message_id or uuid4().hex
 
     # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
