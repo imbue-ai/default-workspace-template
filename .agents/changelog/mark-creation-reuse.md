@@ -20,3 +20,9 @@
   `frontend-design:frontend-design` form. It ships as a plugin, so the bare name
   they used before resolves only when the agent guesses the prefix -- and when it
   does not, the design pass they call mandatory is silently skipped.
+
+- `use-ai-integration` points at the `claude_p.py` it actually ships. Its prose
+  had sent readers to `system/scripts/claude_p.py`, a path that has never existed
+  in this repo, so an agent following the skill spends its first minutes hunting
+  for the helper. The migrate-workspace note that documented the discrepancy is
+  gone with it.
