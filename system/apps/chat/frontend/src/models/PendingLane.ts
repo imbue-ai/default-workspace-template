@@ -5,7 +5,7 @@
  * on its own once the chat runs there.
  */
 
-import { addChatsUpdatedListener, getChatById } from "./Chats";
+import { addActiveAgentChangedListener, addChatsUpdatedListener, getChatById } from "./Chats";
 import type { ChatSnapshot } from "./Chats";
 import { accountForAgent } from "./Providers";
 import type { ProviderAccount } from "./Providers";
@@ -45,7 +45,12 @@ export function pendingSwitchTarget(chatId: string): ProviderAccount | null {
   return account;
 }
 
-/** Follow the chat list: a chat that now runs on its pending account has applied the choice. */
+/**
+ * Follow the chat list: a chat that now runs on its pending account has applied the choice, and
+ * so has one that moved to a new agent, whatever account that agent runs on (a failed switch
+ * retried from its notice on another account lands there, not on the one picked). A cancelled
+ * switch changes neither, so the lane survives it for the next try (spec 5.6).
+ */
 export function trackPendingLaneSettlement(): void {
   addChatsUpdatedListener((chats) => {
     for (const chat of chats) {
@@ -53,5 +58,8 @@ export function trackPendingLaneSettlement(): void {
         pendingAccountIdByChat.delete(chat.chat_id);
       }
     }
+  });
+  addActiveAgentChangedListener((chatId) => {
+    pendingAccountIdByChat.delete(chatId);
   });
 }

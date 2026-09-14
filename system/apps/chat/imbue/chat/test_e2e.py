@@ -885,3 +885,8 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         assert settled is not None and settled.handoff is None
         assert settled.active_agent.harness.value == "antigravity"
         assert settled.active_agent.account_id == server.account_ids[2]
+        # The lane picked before the failure is spent too: the next send is an ordinary one.
+        chat.locator(".model-selector-trigger").click()
+        provider_row = chat.locator('[data-card-row="providers"]')
+        expect(provider_row).to_contain_text("Google")
+        expect(provider_row).not_to_contain_text("next:")

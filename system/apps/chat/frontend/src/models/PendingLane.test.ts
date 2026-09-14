@@ -1,15 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The pending lane reads the chat and the accounts through their models; both are served from
-// mutable holders here, and the chats listener the settlement installs is captured to be driven.
+// mutable holders here, and the listeners the settlement installs are captured to be driven.
 const state = vi.hoisted(() => ({
   chat: null as unknown,
   accounts: [] as { id: string; harness: string }[],
   listeners: [] as ((chats: unknown[]) => void)[],
+  agentListeners: [] as ((chatId: string, previous: string, current: string) => void)[],
 }));
 vi.mock("./Chats", () => ({
   getChatById: () => state.chat ?? undefined,
   addChatsUpdatedListener: (listener: (chats: unknown[]) => void) => state.listeners.push(listener),
+  addActiveAgentChangedListener: (listener: (chatId: string, previous: string, current: string) => void) =>
+    state.agentListeners.push(listener),
 }));
 vi.mock("./Providers", () => ({
   accountForAgent: (id?: string) => state.accounts.find((account) => account.id === id) ?? null,
@@ -33,6 +36,7 @@ describe("the pending lane", () => {
     state.chat = chatSnapshotFixture("agent-1", { active_agent: { harness: "claude", account_id: "acct-anthropic" } });
     state.accounts = [{ id: "acct-anthropic", harness: "claude" }, CODEX_ACCOUNT, OTHER_CLAUDE_ACCOUNT];
     state.listeners.length = 0;
+    state.agentListeners.length = 0;
     setPendingAccount("agent-1", null);
   });
 
@@ -74,5 +78,17 @@ describe("the pending lane", () => {
     expect(getPendingAccountId("agent-1")).toBe("acct-openai");
     listener([chatSnapshotFixture("agent-1", { active_agent: { harness: "codex", account_id: "acct-openai" } })]);
     expect(getPendingAccountId("agent-1")).toBeNull();
+  });
+
+  it("clears itself once the chat moved to a new agent, whatever account that agent runs on", () => {
+    // A failed switch retried on a third account lands the chat there, not on the picked one.
+    trackPendingLaneSettlement();
+    setPendingAccount("agent-1", "acct-openai");
+    setPendingAccount("agent-2", "acct-openai");
+    const [agentListener] = state.agentListeners;
+    agentListener("agent-1", "agent-1", "agent-1-successor");
+    expect(getPendingAccountId("agent-1")).toBeNull();
+    expect(getPendingAccountId("agent-2")).toBe("acct-openai");
+    setPendingAccount("agent-2", null);
   });
 });
