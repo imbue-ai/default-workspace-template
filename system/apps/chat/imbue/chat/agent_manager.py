@@ -1313,7 +1313,6 @@ class AgentManager:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
             if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
                 raise ChatConvergingError(f"Chat '{chat_id}' can no longer go back ({handoff.phase.value})")
-            trigger = handoff.held_send_for(handoff.trigger_message_id)
             others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
             if len(record.agents) == 1:
                 self._chat_record_store.delete(chat_id)
@@ -1330,7 +1329,7 @@ class AgentManager:
                 name=f"handoff-cancel-{str(chat_id)[:14]}",
                 is_checked=False,
             )
-        return trigger.text if trigger is not None else ""
+        return handoff.trigger_text
 
     def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
         """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""

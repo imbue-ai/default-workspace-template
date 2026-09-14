@@ -102,11 +102,10 @@ class ChatHandoffRecord(FrozenModel):
         description="The id of the message that confirmed the handoff, the successor's first"
     )
     trigger_text: str = Field(
-        default="",
         description=(
             "The confirming message's text, kept here once summarizing folds it into the prompt and takes it off "
             "the held list, so the page can keep showing it until the successor's first turn appears"
-        ),
+        )
     )
     held_sends: tuple[HeldSend, ...] = Field(
         default=(), description="The sends received while converging, in order; delivered to the successor"

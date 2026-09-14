@@ -273,6 +273,7 @@ def _workspace(tmp_path: Path, *, phase: HandoffPhase = HandoffPhase.DRAINING) -
         chat_title="Chat 1",
         project_label="inbox",
         trigger_message_id="m-trigger",
+        trigger_text="Now do it in Codex",
         held_sends=(
             HeldSend(
                 message_id="m-trigger", text="Now do it in Codex", origin=HeldSendOrigin.CLIENT, received_at=_NOW
