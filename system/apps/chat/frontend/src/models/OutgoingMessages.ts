@@ -169,7 +169,10 @@ export function trackBackendArrivals(): void {
       // names the successor before the switch ends, once it is created.
       const retiringAgentId = previous?.retiringAgentId ?? chat.active_agent.agent_id;
       const isSuccessorNamed = chat.handoff !== null && chat.active_agent.agent_id !== retiringAgentId;
-      if (isSuccessorNamed && !successorArrivalsByChat.has(chat.chat_id)) {
+      // A rebind keeps the agent, so its held sends land in the same agent's transcript before
+      // the switch clears; those arrivals consume the returned bubbles the same way.
+      const isRebinding = chat.handoff !== null && chat.handoff.kind === "rebind";
+      if ((isSuccessorNamed || isRebinding) && !successorArrivalsByChat.has(chat.chat_id)) {
         successorArrivalsByChat.set(chat.chat_id, 0);
       }
       const queuedIds = chat.active_agent.queued_messages.map((queued) => queued.queued_id);

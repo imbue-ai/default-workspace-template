@@ -38,32 +38,40 @@ export interface ActiveAgent {
   shoulder_tap_available: boolean;
 }
 
-export type HandoffPhase = "draining" | "summarizing" | "switching" | "failed";
+/** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
+export type HandoffPhase = "draining" | "summarizing" | "switching" | "restarting" | "failed";
 
-/** One message the chat app holds for the new agent while the chat switches (the backend's
- *  ``HeldSendSnapshot``). Rendered from the snapshot until it lands in the new agent's transcript. */
+/** What a converging chat is doing: moving to another harness on a new agent, or changing account in place. */
+export type TransitionKind = "handoff" | "rebind";
+
+/** One message the chat app holds while the chat switches (the backend's ``HeldSendSnapshot``).
+ *  Rendered from the snapshot until it lands in the transcript. */
 export interface HeldSend {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
 }
 
-/** The in-progress handoff a chat carries while it converges on a new agent. */
+/** The in-progress switch a chat carries while it converges: a handoff or a rebind (spec 5, 6). */
 export interface HandoffState {
+  kind: TransitionKind;
   phase: HandoffPhase;
   target_lane: string;
   target_account_id: string;
   // The harness the chat is moving to, for the phase text.
   target_harness: string;
-  // The messages held for the new agent, the confirming one first.
+  // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
+  target_label: string;
+  // The messages held for after the switch, the confirming one first.
   held_sends: HeldSend[];
-  // Why the new agent could not be started, in the failed phase; null otherwise.
+  // Why the agent could not be started, in the failed phase; null otherwise.
   error: string | null;
 }
 
-/** Whether the switch can still be called off: only until the old agent is stopped (spec 5.6). */
+/** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
+ *  a rebind never, since the agent restarts as soon as the switch is confirmed (spec 6). */
 export function isHandoffCancellable(handoff: HandoffState): boolean {
-  return handoff.phase === "draining" || handoff.phase === "summarizing";
+  return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
@@ -403,11 +411,12 @@ export interface CreatedChat {
  * The create returns as soon as the chat has an id: its agent is still starting (the chat
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
- * any project. Throws with the server's detail on rejection.
+ * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
+ * Throws with the server's detail on rejection.
  */
-export function createChat(projectId: string, accountId: string = ""): Promise<CreatedChat> {
+export function createChat(projectId: string, accountId: string = "", message: string = ""): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId });
+  return postCreateChat({ project_id: projectId, account_id: accountId, message });
 }
 
 /**

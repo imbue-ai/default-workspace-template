@@ -15,7 +15,8 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { drainToComposer, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
-import { pendingSwitchTarget } from "../models/PendingLane";
+import { pendingSwitchTarget, setPendingAccount, switchKind } from "../models/PendingLane";
+import { startChatOnAccount } from "../shell";
 import type { ProviderAccount } from "../models/Providers";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
@@ -498,6 +499,33 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         refocusAfterSend();
       }
 
+      /**
+       * The confirm's other way out: leave this chat as it is and open a new one on the pending
+       * account, with the typed message as its first. The pending lane is spent either way; a
+       * create the shell could not make puts the message back so nothing typed is lost.
+       */
+      async function handleStartNewChatInstead(target: ProviderAccount): Promise<void> {
+        if (!chatId || isSwitchInFlight) {
+          return;
+        }
+        isSwitchInFlight = true;
+        m.redraw();
+        const prepared = await prepareSend();
+        isSwitchInFlight = false;
+        isSwitchConfirmOpen = false;
+        if (prepared === null) {
+          m.redraw();
+          return;
+        }
+        setPendingAccount(chatId, null);
+        m.redraw();
+        const isStarted = await startChatOnAccount(target.id, prepared.finalText);
+        if (!isStarted) {
+          restoreFailedMessageToComposer(chatId, prepared.text, prepared.attachments);
+          m.redraw();
+        }
+      }
+
       /** Call a running switch off (spec 5.6): the confirming message comes back to the composer, and
        *  the pending lane stays so the user can try again. */
       async function handleCancelSwitch(): Promise<void> {
@@ -891,14 +919,25 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
         });
       }
 
-      /** The two-line confirm a switch asks for (spec 5.1). Cancel keeps the pending lane. */
+      /**
+       * The confirm a switch asks for (spec 5.1, 6): two lines for a handoff (the agent stops, a
+       * new one continues), one for a rebind (the same agent restarts on the new account). Cancel
+       * keeps the pending lane; "Start a new chat instead" opens a new chat on the account with
+       * the typed message and leaves this chat alone.
+       */
       function renderSwitchConfirm(target: ProviderAccount, currentHarness: string): m.Children {
+        const chat = chatId ? getChatById(chatId) : undefined;
+        const kind = chat === undefined ? "handoff" : switchKind(chat, target);
+        const from = harnessLabel(currentHarness);
+        const isRebind = kind === "rebind";
         return m(switchConfirmDialog, {
-          title: `Switch to ${harnessLabel(target.harness)}?`,
-          body: [
-            `${harnessLabel(currentHarness)} wraps up what it is doing and stops.`,
-            `The conversation continues on ${target.label}, starting with your message.`,
-          ],
+          title: isRebind ? `Switch to ${target.label}?` : `Switch to ${harnessLabel(target.harness)}?`,
+          body: isRebind
+            ? [`${from} restarts on ${target.label} and keeps this conversation.`]
+            : [
+                `${from} wraps up what it is doing and stops.`,
+                `The conversation continues on ${target.label}, starting with your message.`,
+              ],
           dismissLabel: "Cancel",
           isDismissable: !isSwitchInFlight,
           onDismiss: () => {
@@ -907,8 +946,16 @@ export function MessageInput(): m.Component<{ chatId: string | null }> {
           },
           actions: [
             {
+              label: "Start a new chat instead",
+              tooltip: `Leaves this chat as it is and opens a new one on ${target.label} with your message`,
+              isDisabled: isSwitchInFlight,
+              run: () => void handleStartNewChatInstead(target),
+            },
+            {
               label: isSwitchInFlight ? "Switching…" : "Switch and send",
-              tooltip: `Stops ${harnessLabel(currentHarness)} and continues this chat on ${target.label}`,
+              tooltip: isRebind
+                ? `Restarts ${from} on ${target.label} and sends your message`
+                : `Stops ${from} and continues this chat on ${target.label}`,
               isDisabled: isSwitchInFlight,
               run: () => void handleSwitchAndSend(target),
             },

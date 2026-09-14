@@ -24,13 +24,11 @@ import type { ModelIdentity } from "../models/ModelSettings";
 import { getPendingAccountId, isSwitchTarget, pendingSwitchTarget, setPendingAccount } from "../models/PendingLane";
 import { accountForAgent, getAccounts, getDefaultAccountId, openProviderChooser } from "../models/Providers";
 import type { ProviderAccount } from "../models/Providers";
-import { startChatOnAccount } from "../shell";
 import { placeFlyout } from "@imbue/workspace-ui/src/flyout-position";
 import { Portal } from "@imbue/workspace-ui/src/portal";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
-import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import * as css from "./modelCardStyles";
 
@@ -97,11 +95,6 @@ export function ModelBar(): m.Component<{ chatId: string }> {
   // Cleared whenever the flyout or the card closes, so someone who clicked the bin to see
   // what it did does not come back later to a primed one.
   const rowState = emptyAccountRowState();
-  // The account whose row was pressed and is waiting for "Launch" or "Cancel". A chat's
-  // account is fixed at create time, so pressing another account's row can only mean a new
-  // chat on it -- asked, not done by surprise. Cleared with the rest of the flyout's state.
-  let launchPromptAccountId: string | null = null;
-  const launchDialog = makeNoticeDialog();
   // The index the pointer is currently dragging the effort slider to. Held locally because
   // mithril re-asserts `value` on every redraw, which would snap the thumb back under the
   // finger on a harness that does not move the chip optimistically.
@@ -163,7 +156,6 @@ export function ModelBar(): m.Component<{ chatId: string }> {
       rowState.confirmingRemoval = null;
       rowState.renamingId = null;
       rowState.renameDraft = "";
-      launchPromptAccountId = null;
     }
     flyout = next;
   }
@@ -448,45 +440,20 @@ export function ModelBar(): m.Component<{ chatId: string }> {
     ]);
   }
 
-  /** The confirmation a pressed account row opens: launch a new chat on it, or not. */
-  function launchPrompt(target: ProviderAccount, current: ProviderAccount | null): m.Children {
-    return m(launchDialog, {
-      title: "Launch a new chat?",
-      body: [
-        `A chat's provider is fixed when it starts, so this one stays on ${current?.label ?? "its provider"}. ` +
-          `Start a new chat on ${target.label}?`,
-      ],
-      dismissLabel: "Cancel",
-      actions: [
-        {
-          label: "Launch",
-          run: () => {
-            closeCard();
-            void startChatOnAccount(target.id);
-          },
-        },
-      ],
-      onDismiss: () => {
-        launchPromptAccountId = null;
-      },
-    });
-  }
-
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
-   * Pressing an account on another harness makes it the chat's pending lane, applied by the
-   * next send; pressing it again, or the account the chat runs on, takes that back. Any other
-   * account on the chat's own harness asks to
-   * open a new chat on it, since nothing rebinds a chat yet. Each row also carries the default
-   * toggle: the starred account is the one a new chat opens on when nothing names one (the New
-   * Tab tile, the rail shortcut, an agent's `layout.py open chat`).
+   * Pressing any account but the chat's own makes it the chat's pending lane, applied by the
+   * next send (a rebind for one on the chat's own harness and lane, a handoff otherwise; the
+   * confirm says which, and offers a new chat instead); pressing it again, or the account the
+   * chat runs on, takes that back. Each row also carries the default toggle: the starred
+   * account is the one a new chat opens on when nothing names one (the New Tab tile, the rail
+   * shortcut, an agent's `layout.py open chat`).
    */
   function providerFlyout(chatId: string, current: ProviderAccount | null): m.Vnode {
     const rows = getAccounts();
     const defaultId = getDefaultAccountId();
     const pendingId = getPendingAccountId(chatId);
     const chat = getChatById(chatId);
-    const prompted = rows.find((row) => row.id === launchPromptAccountId) ?? null;
     return flyoutShell([
       // Built as one list rather than with a conditional hole beside it: mithril refuses a
       // fragment that mixes keyed vnodes with a null, and every row here is keyed.
@@ -505,23 +472,17 @@ export function ModelBar(): m.Component<{ chatId: string }> {
                 rowClass: isCurrent ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
                 ...(isPending ? { badge: "next" } : {}),
                 onSelect: () => {
-                  if (isCurrent) {
+                  if (isCurrent || chat === undefined || !isSwitchTarget(chat, row)) {
                     setPendingAccount(chatId, null);
-                    setFlyout(null);
-                    return;
-                  }
-                  if (chat !== undefined && isSwitchTarget(chat, row)) {
+                  } else {
                     setPendingAccount(chatId, isPending ? null : row.id);
-                    setFlyout(null);
-                    return;
                   }
-                  launchPromptAccountId = row.id;
+                  setFlyout(null);
                 },
                 state: rowState,
               });
             }),
       ),
-      prompted !== null ? launchPrompt(prompted, current) : null,
       m(
         "button",
         {
@@ -531,16 +492,10 @@ export function ModelBar(): m.Component<{ chatId: string }> {
             closeCard();
             openProviderChooser({
               onSignedIn: (accountId) => {
-                // Signed in from inside a chat: an account on another harness is what the user
-                // switches this chat to next; one on its own harness can only start a new chat.
-                const added = accountForAgent(accountId);
-                const signedInChat = getChatById(chatId);
-                if (added !== null && signedInChat !== undefined && isSwitchTarget(signedInChat, added)) {
-                  setPendingAccount(chatId, accountId);
-                  m.redraw();
-                } else {
-                  void startChatOnAccount(accountId);
-                }
+                // Signed in from inside a chat: the new account is what the user switches this
+                // chat to next (the confirm offers a new chat on it instead).
+                setPendingAccount(chatId, accountId);
+                m.redraw();
               },
             });
           },

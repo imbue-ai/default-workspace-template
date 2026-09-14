@@ -6,7 +6,7 @@
  */
 
 import { addActiveAgentChangedListener, addChatsUpdatedListener, getChatById } from "./Chats";
-import type { ChatSnapshot } from "./Chats";
+import type { ChatSnapshot, TransitionKind } from "./Chats";
 import { accountForAgent } from "./Providers";
 import type { ProviderAccount } from "./Providers";
 
@@ -26,12 +26,20 @@ export function getPendingAccountId(chatId: string): string | null {
 }
 
 /**
- * Whether a send to ``account`` moves the chat: it runs another harness than the chat's active
- * agent. An account on the chat's own harness (its own included) is not a switch target: that
- * is a rebind, which a later phase adds, so the provider row offers a new chat on it instead.
+ * Whether a send to ``account`` moves the chat: any signed-in account but the one the chat runs
+ * on. The backend decides what the move is (spec 5.2): a rebind of the same agent for an account
+ * on the chat's own harness and lane, a handoff to a new agent otherwise; ``switchKind`` is the
+ * page's reading of the same rule, for the words the confirm uses.
  */
 export function isSwitchTarget(chat: ChatSnapshot, account: ProviderAccount): boolean {
-  return account.harness !== chat.active_agent.harness;
+  return account.id !== chat.active_agent.account_id;
+}
+
+/** What switching the chat to ``account`` does: keep the agent and change its account, or replace the agent. */
+export function switchKind(chat: ChatSnapshot, account: ProviderAccount): TransitionKind {
+  const own = accountForAgent(chat.active_agent.account_id ?? undefined);
+  const isSameLane = own !== null && own.lane === account.lane;
+  return account.harness === chat.active_agent.harness && isSameLane ? "rebind" : "handoff";
 }
 
 /**
