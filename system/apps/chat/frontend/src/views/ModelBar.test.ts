@@ -362,6 +362,19 @@ describe("the combo card", () => {
     render();
     expect(getPendingAccountId("a1")).toBeNull();
     expect(document.querySelector('[data-card-row="providers"]')?.textContent).not.toContain("next:");
+
+    // So does pressing the account the chat already runs on: staying put is the choice then.
+    setPendingAccount("a1", "acct-2");
+    click('[data-card-row="providers"]');
+    const own = [...document.querySelectorAll('[data-model-popover="flyout"] button')].find((b) =>
+      (b.textContent ?? "").includes("Anthropic"),
+    );
+    if (own === undefined) throw new Error("no row for the chat's own account");
+    own.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(started).toEqual([]);
   });
 
   it("asks before launching a new chat on another account of the chat's own harness, and launches only on Launch", () => {

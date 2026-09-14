@@ -367,7 +367,7 @@ The auto-open reactor fires for an agent that appears carrying an `auto_open` or
 
 As landed in phase 5:
 
-- Pressing an account on another harness in the provider menu sets the pending lane and closes the menu; the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing the row again takes the choice back.
+- Pressing an account on another harness in the provider menu sets the pending lane and closes the menu; the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing the row again, or the account the chat runs on, takes the choice back.
   An account on the chat's own harness keeps the "Launch a new chat?" prompt until phase 6 makes it a rebind; a sign-in from the menu's "+ Add a provider" follows the same rule by harness.
   The pending lane is spent once the chat runs on that account, or on a new agent at all (a failed switch retried on another account lands there); a cancelled switch keeps it.
 - The send button becomes a text pill reading "Switch and send" while a lane is pending; it appears, like the plain send button, only once there is something to send.

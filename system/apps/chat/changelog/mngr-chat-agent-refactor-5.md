@@ -1,6 +1,6 @@
 Phase 5 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`): a chat can be moved to another harness from its own page.
 
-- In the composer's provider menu, pressing an account on another harness makes it the chat's pending lane: the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing it again takes the choice back. An account on the chat's own harness still offers to open a new chat on it, until a later phase lets a chat change account in place.
+- In the composer's provider menu, pressing an account on another harness makes it the chat's pending lane: the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing it again (or the account the chat runs on) takes the choice back. An account on the chat's own harness still offers to open a new chat on it, until a later phase lets a chat change account in place.
 
 - With a lane pending, the send button reads "Switch and send" and asks a two-line confirm ("Claude wraps up what it is doing and stops." then "The conversation continues on OpenAI (Codex), starting with your message."). Confirming starts the handoff with the typed message as the new agent's first; the queued text taken off the old agent comes back to the composer.
 

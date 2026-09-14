@@ -475,7 +475,8 @@ export function ModelBar(): m.Component<{ chatId: string }> {
   /** The Provider row's menu: every signed-in account, plus a way to add one.
    *
    * Pressing an account on another harness makes it the chat's pending lane, applied by the
-   * next send; pressing it again takes that back. An account on the chat's own harness asks to
+   * next send; pressing it again, or the account the chat runs on, takes that back. Any other
+   * account on the chat's own harness asks to
    * open a new chat on it, since nothing rebinds a chat yet. Each row also carries the default
    * toggle: the starred account is the one a new chat opens on when nothing names one (the New
    * Tab tile, the rail shortcut, an agent's `layout.py open chat`).
