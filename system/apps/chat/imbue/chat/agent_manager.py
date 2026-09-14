@@ -510,17 +510,13 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # into the successor's prompt, a rebind delivers it first, and either way the page keeps
     # showing it until its turn appears in the transcript.
     others = transition.held_sends_after_trigger()
-    if isinstance(transition, ChatHandoffRecord):
-        kind, target_label = TransitionKind.HANDOFF, HARNESS_LABEL[transition.target_harness]
-    else:
-        kind, target_label = TransitionKind.REBIND, transition.target_label
     return HandoffState(
-        kind=kind,
+        kind=TransitionKind.REBIND if isinstance(transition, ChatRebindRecord) else TransitionKind.HANDOFF,
         phase=transition.phase,
         target_lane=transition.target_lane,
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
-        target_label=target_label,
+        target_label=_target_label_of(transition),
         held_sends=(
             HeldSendSnapshot(message_id=transition.trigger_message_id, text=transition.trigger_text),
             *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others),
@@ -530,11 +526,17 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 
 
 @pure
-def _converging_detail_of(transition: ChatHandoffRecord | ChatRebindRecord) -> str:
-    """The 409's ``detail`` for a chat converging on ``transition``: it names the harness for a handoff, the account for a rebind."""
+def _target_label_of(transition: ChatHandoffRecord | ChatRebindRecord) -> str:
+    """What the page and the 409s name a switch's destination by: the harness for a handoff, the account for a rebind."""
     if isinstance(transition, ChatRebindRecord):
-        return converging_detail(transition.phase, transition.target_label)
-    return converging_detail(transition.phase, HARNESS_LABEL[transition.target_harness])
+        return transition.target_label
+    return HARNESS_LABEL[transition.target_harness]
+
+
+@pure
+def _converging_detail_of(transition: ChatHandoffRecord | ChatRebindRecord) -> str:
+    """The 409's ``detail`` for a chat converging on ``transition``."""
+    return converging_detail(transition.phase, _target_label_of(transition))
 
 
 def is_rebind_target(agent_state: AgentStateItem, target: _SwitchTarget) -> bool:
