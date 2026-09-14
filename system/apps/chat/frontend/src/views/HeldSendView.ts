@@ -10,18 +10,18 @@
 import m from "mithril";
 import { getChatById } from "../models/Chats";
 import { handoffPhaseText } from "./handoff-phase";
-import { OUTGOING_BUBBLE_CLASS, OUTGOING_ROW_CLASS, OUTGOING_STATUS_CLASS } from "./OutgoingMessageView";
+import { renderNotYetRealBubble } from "./OutgoingMessageView";
 
 export function renderHeldSends(chatId: string): m.Vnode[] {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null) return [];
   const caption = handoffPhaseText(chat.handoff, chat.active_agent.harness);
   return chat.handoff.held_sends.map((held) =>
-    m("div", { class: `${OUTGOING_ROW_CLASS} held-send`, key: `held-${held.message_id}` }, [
-      m("div", { class: OUTGOING_BUBBLE_CLASS }, [
-        m("div", { class: "message-content whitespace-pre-wrap" }, held.text),
-      ]),
-      m("div", { class: OUTGOING_STATUS_CLASS }, caption),
-    ]),
+    renderNotYetRealBubble({
+      key: `held-${held.message_id}`,
+      content: held.text,
+      caption,
+      extraRowClass: "held-send",
+    }),
   );
 }
