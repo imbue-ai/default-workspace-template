@@ -525,15 +525,6 @@ class CreateChatResponse(FrozenModel):
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 
-class CreateAgentResponse(FrozenModel):
-    """Response from the agent-keyed create alias, POST /api/agents/create-chat."""
-
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    agent_id: str = Field(description="The chat's id, under the alias's field name")
-    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
-    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
-
-
 class DestroyAgentResponse(FrozenModel):
     """Response from the agent destroy endpoint."""
 
