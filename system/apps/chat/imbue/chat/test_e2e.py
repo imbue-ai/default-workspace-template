@@ -25,6 +25,7 @@ from playwright.sync_api import FrameLocator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 
+from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_CHAT_ADDRESS
 from imbue.chat.testing import RunningWorkspace
@@ -761,7 +762,9 @@ def _switch_and_send(chat: FrameLocator, message: str) -> None:
 
 
 def _switched_workspace(
-    tmp_path: Path, messenger: Any = None, additional_accounts: tuple[tuple[str, str], ...] = (("openai", "OpenAI"),)
+    tmp_path: Path,
+    messenger: MngrMessenger | None = None,
+    additional_accounts: tuple[tuple[str, str], ...] = (("openai", "OpenAI"),),
 ) -> AbstractContextManager[RunningWorkspace]:
     return running_workspace(
         tmp_path,
