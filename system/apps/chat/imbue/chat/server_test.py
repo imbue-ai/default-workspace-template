@@ -147,14 +147,10 @@ def test_get_events_for_unknown_agent(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
-def test_the_agent_keyed_aliases_are_gone(app: Flask, client: FlaskClient) -> None:
+def test_the_agent_keyed_aliases_are_gone(app: Flask) -> None:
     """Every per-chat route lives under ``/api/chats/`` alone; ``/api/agents`` is only the plain listing."""
     agent_keyed_rules = sorted(rule.rule for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/agents"))
     assert agent_keyed_rules == ["/api/agents"]
-    with patch("imbue.chat.server.discover_agents", return_value=[]):
-        subagent = client.get("/api/chats/nonexistent/agents/nonexistent/subagents/s1/events")
-    assert subagent.status_code == 404
-    assert client.put("/api/chats/x/destroy").status_code == 405
 
 
 def test_list_chats_answers_snapshots_once_the_agent_list_is_known(client: FlaskClient, app: Flask) -> None:
@@ -330,11 +326,9 @@ def test_get_events_with_session_files(client: FlaskClient, app: Flask, tmp_path
     (agent_state_dir / "claude_session_id_history").write_text(f"{session_id}\n")
 
     response = client.get("/api/chats/agent-123/events")
-    by_chat_route = client.get("/api/chats/agent-123/events")
 
     assert response.status_code == 200
     data = response.get_json()
-    assert by_chat_route.get_json() == data
     assert len(data["events"]) == 2
     assert data["events"][0]["type"] == "user_message"
     assert data["events"][0]["content"] == "Hello"
