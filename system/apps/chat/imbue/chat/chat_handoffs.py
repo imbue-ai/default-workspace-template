@@ -117,6 +117,15 @@ def converging_detail(phase: HandoffPhase, target_harness: HarnessType) -> str:
 
 
 @pure
+def cancel_refused_detail(target_harness: HarnessType) -> str:
+    """What a cancel refused past the point of no return tells the user (the 409's ``detail``, shown as is)."""
+    return (
+        f"This chat's switch to {HARNESS_LABEL[target_harness]} can no longer be called off: "
+        "the previous agent is already being replaced."
+    )
+
+
+@pure
 def archived_agent_name(seq: int, chat_name: str, agent_id: str) -> str:
     """The archival mngr name (spec 4.3): sorts archived agents together, orders them, stays unique."""
     return f"archived-{seq}-{chat_name}-{agent_id}"

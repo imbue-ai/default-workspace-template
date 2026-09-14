@@ -3201,7 +3201,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
         # The stand-in already carries its archival name; the snapshot still says what the chat is called.
         assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
-        with pytest.raises(ChatConvergingError):
+        with pytest.raises(ChatConvergingError, match="switch to Codex can no longer be called off"):
             manager.cancel_handoff(chat_id)
         # The trigger already rides the stored prompt: a retried send with its id is not held again.
         assert (

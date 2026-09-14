@@ -48,6 +48,7 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import cancel_refused_detail
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
@@ -1312,7 +1313,7 @@ class AgentManager:
             if record is None or handoff is None:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
             if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
-                raise ChatConvergingError(f"Chat '{chat_id}' can no longer go back ({handoff.phase.value})")
+                raise ChatConvergingError(cancel_refused_detail(handoff.target_harness))
             others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
             if len(record.agents) == 1:
                 self._chat_record_store.delete(chat_id)
