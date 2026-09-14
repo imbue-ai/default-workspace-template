@@ -30,6 +30,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
 from imbue.chat.chat_handoffs import joined_blocks
+from imbue.chat.chat_handoffs import mngr_exit_summary
 from imbue.chat.chat_records import ChatRebindRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
@@ -46,7 +47,6 @@ from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.primitives import ChatId
 from imbue.concurrency_group.event_utils import ShutdownEvent
-from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -90,20 +90,6 @@ def relabel_account_command(mngr_binary: str, agent_id: str, account_id: str) ->
 def start_command(mngr_binary: str, agent_name: str) -> list[str]:
     """The ``mngr start`` that brings the rebound agent back: no resume message, since the held sends follow."""
     return [mngr_binary, "start", agent_name, "--no-resume"]
-
-
-@pure
-def _mngr_exit_summary(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
-    """How an mngr verb ended, in one line: the timeout, or the signal or exit code that ended it.
-
-    Never mngr's own output: the failed page shows that as the tail under this line, and a log
-    line adds it where it has it.
-    """
-    if result.is_timed_out:
-        return f"mngr {verb} did not finish within {timeout_seconds:.0f}s and was stopped"
-    if result.returncode is not None and result.returncode < 0:
-        return f"mngr {verb} was stopped by signal {-result.returncode}"
-    return f"mngr {verb} exited with code {result.returncode}"
 
 
 class RebindDeps(FrozenModel):
@@ -321,7 +307,7 @@ class RebindRunner:
             timeout=_LABEL_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
-            reason = result.stderr.strip() or _mngr_exit_summary("label", result, _LABEL_TIMEOUT_SECONDS)
+            reason = result.stderr.strip() or mngr_exit_summary("label", result, _LABEL_TIMEOUT_SECONDS)
             raise RebindStepError(f"could not relabel agent {rebind.agent_id} of chat {chat_id}: {reason}")
         self._deps.note_agent_relabeled(rebind.agent_id, {"account": account_id})
 
@@ -336,7 +322,7 @@ class RebindRunner:
         if result.returncode != 0:
             tail = "\n".join(result.stderr.strip().splitlines()[-_START_OUTPUT_TAIL_LINES:])
             self._fail(
-                chat_id, rebind_id, failure_notice(_mngr_exit_summary("start", result, _START_TIMEOUT_SECONDS), tail)
+                chat_id, rebind_id, failure_notice(mngr_exit_summary("start", result, _START_TIMEOUT_SECONDS), tail)
             )
             return False
         self._deps.note_agent_alive(agent_info.id)

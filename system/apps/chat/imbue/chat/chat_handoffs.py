@@ -206,6 +206,20 @@ def failure_notice(error: str | None, output_tail: str) -> str:
 
 
 @pure
+def mngr_exit_summary(verb: str, result: FinishedProcess, timeout_seconds: float) -> str:
+    """How an mngr verb ended, in one line: the timeout, or the signal or exit code that ended it.
+
+    Never mngr's own output: a failed page shows that as the tail under this line, and a log
+    line adds it where it has it.
+    """
+    if result.is_timed_out:
+        return f"mngr {verb} did not finish within {timeout_seconds:.0f}s and was stopped"
+    if result.returncode is not None and result.returncode < 0:
+        return f"mngr {verb} was stopped by signal {-result.returncode}"
+    return f"mngr {verb} exited with code {result.returncode}"
+
+
+@pure
 def _rename_failure_reason(result: FinishedProcess) -> str:
     """Why the archival rename failed: the timeout, mngr's own words, or the signal or exit code that ended it.
 
@@ -213,13 +227,8 @@ def _rename_failure_reason(result: FinishedProcess) -> str:
     leave the step error (the one trace of why the switch stalled) without a reason.
     """
     if result.is_timed_out:
-        return f"mngr rename did not finish within {_RENAME_TIMEOUT_SECONDS:.0f}s and was stopped"
-    stderr = result.stderr.strip()
-    if stderr:
-        return stderr
-    if result.returncode is not None and result.returncode < 0:
-        return f"mngr rename was stopped by signal {-result.returncode}"
-    return f"mngr rename exited with code {result.returncode}"
+        return mngr_exit_summary("rename", result, _RENAME_TIMEOUT_SECONDS)
+    return result.stderr.strip() or mngr_exit_summary("rename", result, _RENAME_TIMEOUT_SECONDS)
 
 
 @pure
