@@ -265,12 +265,14 @@ class RebindRunner:
         if not is_lifecycle_dead(agent_state.state):
             logger.info("Rebind of chat {}: stopping agent {}", chat_id, rebind.agent_id)
             self._deps.stop_agent(agent_info)
-        # The watcher captured the old binding when it was built; the next read rebuilds it.
-        self._deps.evict_watcher(rebind.agent_id)
         target_dir = self._deps.account_dir(account.id)
         if agent_state.harness is HarnessType.CLAUDE:
             self._move_claude_sessions(chat_id, rebind_id, rebind, agent_info, target_dir)
         rebind_agent(agent_state.harness, target_dir, agent_info.agent_state_dir)
+        # The watcher captured the binding it was built against; evicted only once the new one
+        # is on disk, so a read that rebuilt it meanwhile is dropped too and the next read
+        # follows the new binding.
+        self._deps.evict_watcher(rebind.agent_id)
         self._relabel(chat_id, rebind, account.id)
         if not self._start(chat_id, rebind_id, agent_info):
             return False
