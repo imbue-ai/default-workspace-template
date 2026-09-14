@@ -30,6 +30,13 @@ def test_a_pure_invocation_satisfies_both_rules() -> None:
     assert is_tk_lifecycle_anywhere(command) is True
 
 
+def test_uv_run_lifecycle_commands_are_recognized_but_quoted_mentions_are_not() -> None:
+    assert is_tk_lifecycle_anywhere('uv run tk create --step "Inspect the messages"')
+    assert is_tk_lifecycle_anywhere("cat README.md && uv run tk start wor-step-abc")
+    assert not is_tk_lifecycle_anywhere("uv run python -c \"print('tk start wor-step-abc')\"")
+    assert not is_tk_lifecycle_anywhere('echo "uv run tk start wor-step-abc"')
+
+
 def test_a_tk_verb_quoted_inside_another_command_is_neither() -> None:
     """Shell-aware, not a substring match: the shared shlex parser keeps a mention inside a
     quoted argument from being read as a real lifecycle call."""

@@ -147,7 +147,7 @@ export interface SectionView {
 /** A status transition line printed by tk on every state change:
  *  `Updated <id> -> <status>` (see system/vendor/tk/ticket). Global so a batched
  *  command that flips several tickets is read in order. */
-const TK_UPDATED_RE = /Updated\s+(\S+)\s+->\s+(open|in_progress|closed)/g;
+const TK_UPDATED_RE = /^Updated (\S+) -> (open|in_progress|closed)\r?$/gm;
 
 /** A step id (minted by `tk create --step`) carries a literal `-step-` segment,
  *  e.g. `cod-step-f1zl`; a regular ticket id has none (`cod-f1zl`). The walk
@@ -240,6 +240,8 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
   for (const e of events) {
     if (e.type !== "assistant_message") continue;
     for (const tc of e.tool_calls) {
+      const command = tkCommand(tc);
+      if (command === null) continue;
       // The backend stamps the tk-relevant output lines resident (`tk_stamp`); the raw
       // output never rides the event.
       const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
@@ -259,8 +261,6 @@ function buildDecorationMap(events: TranscriptEvent[], toolResults: Map<string, 
       }
 
       // Historical input fallback (fills only what the output lines did not).
-      const command = tkCommand(tc);
-      if (command === null) continue;
       applyInputFallback(command, output, ensure, registerCreated, knownSteps);
     }
   }
@@ -311,12 +311,12 @@ interface ParsedMessage {
 /** Split an assistant message into the tk transitions it caused and the
  *  renderable remainder (text + non-tk tool calls). */
 function parseMessage(e: AssistantMessageEvent, toolResults: Map<string, ToolResultEvent>): ParsedMessage {
-  // Transitions are read from EVERY tool call's output -- the
-  // `Updated <id> -> <status>` line is specific enough that a genuine
-  // transition is never missed, even if the command form isn't recognised as a
-  // tk lifecycle call (so e.g. `cd x && tk close s1` still closes the step).
+  // Only actual lifecycle commands can change the timeline. A Read/search result
+  // can quote another agent's commands or even a whole transcript verbatim.
+  // Non-pure invocations (e.g. `cd x && tk close s1`) still carry tk_command.
   const transitions: { id: string; status: "in_progress" | "closed" }[] = [];
   for (const tc of e.tool_calls) {
+    if (tkCommand(tc) === null) continue;
     const output = toolResults.get(tc.tool_call_id)?.tk_stamp ?? "";
     TK_UPDATED_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
