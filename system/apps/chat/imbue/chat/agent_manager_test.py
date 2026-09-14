@@ -40,6 +40,7 @@ from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import InMemoryChatRecordStore
@@ -3550,5 +3551,24 @@ def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_si
         snapshot = manager.get_chat_snapshot(agent_id)
         assert snapshot is not None and snapshot.active_agent.account_id == third_account
         assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
+    finally:
+        manager.stop()
+
+
+def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runner catches only ``RebindCancelledError`` as the quiet stop, so a record that no longer carries the
+    rebind must reach it as that, from the held-send pop as much as from the record update."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, _second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    try:
+        deps = manager._rebind_runner()._deps
+        with pytest.raises(RebindCancelledError):
+            deps.take_next_held_send(ChatId(agent_id), "rebind-gone")
+        with pytest.raises(RebindCancelledError):
+            deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
     finally:
         manager.stop()

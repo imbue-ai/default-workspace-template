@@ -1608,7 +1608,7 @@ class AgentManager:
             shutdown_event=self._shutdown_event,
             read_record=self._read_chat_record,
             update_record=self._update_record_for_rebind,
-            take_next_held_send=self._take_next_held_send,
+            take_next_held_send=self._take_next_held_send_for_rebind,
             get_agent_state=self.get_agent_by_id,
             get_agent_info=self.get_agent_info_by_id,
             resolve_account=resolve_account,
@@ -1704,6 +1704,13 @@ class AgentManager:
         """``_update_record_for_handoff`` for a rebind, raising the rebind runner's own cancelled error."""
         try:
             return self._update_record_for_handoff(chat_id, rebind_id, apply)
+        except HandoffCancelledError as e:
+            raise RebindCancelledError(str(e)) from e
+
+    def _take_next_held_send_for_rebind(self, chat_id: ChatId, rebind_id: str) -> HeldSend | None:
+        """``_take_next_held_send`` for a rebind, raising the rebind runner's own cancelled error."""
+        try:
+            return self._take_next_held_send(chat_id, rebind_id)
         except HandoffCancelledError as e:
             raise RebindCancelledError(str(e)) from e
 
