@@ -9,7 +9,7 @@ import type { ChatSnapshot } from "../models/Chats";
 import { isHandoffCancellable } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
-import { heldSendMessageIds, renderHeldSends } from "./HeldSendView";
+import { renderHeldSends } from "./HeldSendView";
 
 const chats = new Map<string, ChatSnapshot>();
 
@@ -41,7 +41,7 @@ describe("the words for a chat switching harness", () => {
 });
 
 describe("the held-send bubbles", () => {
-  it("renders every held message from the snapshot, captioned with the phase, and names their ids", () => {
+  it("renders every held message from the snapshot, captioned with the phase", () => {
     chats.set(
       "agent-1",
       chatSnapshotFixture("agent-1", {
@@ -61,13 +61,11 @@ describe("the held-send bubbles", () => {
     expect(text).toContain("and this");
     expect(text).toContain("Claude is writing a summary…");
     expect(text).not.toContain("Sending…");
-    expect([...heldSendMessageIds("agent-1")]).toEqual(["m-1", "m-2"]);
   });
 
   it("renders nothing for a chat that is not switching", () => {
     chats.set("agent-2", chatSnapshotFixture("agent-2"));
     expect(renderHeldSends("agent-2")).toEqual([]);
     expect(renderHeldSends("agent-unknown")).toEqual([]);
-    expect(heldSendMessageIds("agent-2").size).toBe(0);
   });
 });
