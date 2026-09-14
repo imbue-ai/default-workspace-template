@@ -31,6 +31,7 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import STARTER_PROJECT_ID
 from imbue.chat.testing import STARTER_PROJECT_NAME
 from imbue.chat.testing import STUB_APP_NAME
+from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.mngr.utils.polling import wait_for
@@ -723,3 +724,161 @@ def test_a_create_that_fails_keeps_the_tab_with_the_reason_and_a_retry(
         chat.locator(".message-list-create-retry").click()
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=20000)
         expect(chat.locator(".message-list-create-failed")).to_have_count(0, timeout=15000)
+
+
+# ---------- switching a chat to another harness (the handoff, spec section 5) ----------
+
+
+def _open_provider_menu(chat: FrameLocator) -> None:
+    """Open the composer's model card and its provider menu."""
+    chat.locator(".model-selector-trigger").click()
+    chat.locator('[data-card-row="providers"]').click()
+    expect(chat.locator('[data-model-popover="flyout"]')).to_be_visible()
+
+
+def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> None:
+    """Press an account on another harness in the provider menu, which makes it the chat's pending lane.
+
+    The row shows the provider and the harness as two spans, so it is found by the provider word;
+    the Provider row then names the account by its composed label.
+    """
+    _open_provider_menu(chat)
+    chat.locator('[data-model-popover="flyout"] button', has_text=provider).first.click()
+    expect(chat.locator('[data-card-row="providers"]')).to_contain_text(f"next: {label}")
+    # The card stays up; a click on the transcript takes it down before typing.
+    chat.locator(".message-list").first.click()
+
+
+def _switch_and_send(chat: FrameLocator, message: str) -> None:
+    """Type the message, press Switch and send, and confirm."""
+    chat.locator(".message-input-textbox").fill(message)
+    switch_button = chat.locator(".message-input-send-button--switch")
+    expect(switch_button).to_contain_text("Switch and send")
+    switch_button.click()
+    dialog = chat.locator(".modal-card")
+    expect(dialog).to_contain_text("Claude wraps up what it is doing and stops.")
+    dialog.get_by_role("button", name="Switch and send").click()
+
+
+def _switched_workspace(
+    tmp_path: Path, messenger: Any = None, additional_accounts: tuple[tuple[str, str], ...] = (("openai", "OpenAI"),)
+) -> AbstractContextManager[RunningWorkspace]:
+    return running_workspace(
+        tmp_path,
+        free_port(),
+        free_port(),
+        additional_accounts=additional_accounts,
+        messenger=messenger,
+    )
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: Page) -> None:
+    """The whole switch through the browser: the pending lane, Switch and send, the confirm, the phase
+    text on the held message, the switch chip, and the provider row on the new account."""
+    with _switched_workspace(tmp_path, messenger=SummaryWritingMngrMessenger()) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        # An ordinary send button until a lane is pending.
+        chat.locator(".message-input-textbox").fill("draft")
+        expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
+        chat.locator(".message-input-textbox").fill("")
+
+        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        _switch_and_send(chat, "Carry on in Codex")
+
+        # The typed message stays visible as a held bubble captioned with the switch's phase, and
+        # the strip above the composer reports the switch rather than a turn.
+        held = chat.locator(".held-send", has_text="Carry on in Codex")
+        expect(held).to_be_visible(timeout=15000)
+        expect(held).to_contain_text(re.compile(r"Wrapping up with Claude|Claude is writing a summary|Starting Codex"))
+        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_be_visible()
+        expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
+
+        # The switch completes against the fake mngr: the chip lands live, and the chat is on Codex.
+        expect(chat.locator(".message-agent-switch")).to_contain_text("Switched from Claude to Codex", timeout=30000)
+        snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert snapshot is not None and snapshot.handoff is None
+        assert snapshot.active_agent.harness.value == "codex"
+        assert snapshot.active_agent.account_id == server.account_ids[1]
+        assert len(snapshot.agent_ids) == 2
+        # The provider row follows the new account, and the pending lane is spent.
+        chat.locator(".model-selector-trigger").click()
+        provider_row = chat.locator('[data-card-row="providers"]')
+        expect(provider_row).to_contain_text("OpenAI")
+        expect(provider_row).not_to_contain_text("next:")
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_comes_back(
+    tmp_path: Path, page: Page
+) -> None:
+    """Cancel during summarizing: the confirming message returns to the composer, the pending lane
+    stays, and the chat is still its one agent."""
+    with _switched_workspace(tmp_path) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        _switch_and_send(chat, "Carry on in Codex")
+
+        # The recording messenger never writes the summary, so summarizing lasts the idle grace
+        # period, long enough to call the switch off.
+        cancel = chat.locator(".message-input-cancel-switch-button")
+        expect(cancel).to_be_visible(timeout=15000)
+        cancel.click()
+
+        expect(chat.locator(".message-input-textbox")).to_have_value("Carry on in Codex", timeout=15000)
+        expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
+        expect(chat.locator(".held-send")).to_have_count(0)
+        # The pending lane survives the cancel, so the next send offers the switch again.
+        expect(chat.locator(".message-input-send-button--switch")).to_contain_text("Switch and send")
+        snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert snapshot is not None and snapshot.handoff is None and len(snapshot.agent_ids) == 1
+        expect(chat.locator(".message-agent-switch")).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A create that fails leaves the failed page over the composer; a retry on another account completes."""
+    with _switched_workspace(
+        tmp_path,
+        messenger=SummaryWritingMngrMessenger(),
+        additional_accounts=(("openai", "OpenAI"), ("google", "Google")),
+    ) as server:
+        page.goto(server.shell_url)
+        _open_fixture_chat(page)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+        _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
+        # The fake mngr's create fails while this is set; the successor's create inherits it.
+        monkeypatch.setenv("FAKE_MNGR_CREATE_EXIT_CODE", "3")
+        _switch_and_send(chat, "Carry on in Codex")
+
+        notice = chat.locator(".handoff-failed-notice")
+        expect(notice).to_be_visible(timeout=30000)
+        expect(notice.locator(".handoff-failed-title")).to_have_text("Could not start Codex")
+        expect(notice.locator(".handoff-failed-reason")).to_contain_text("mngr create exited with code 3")
+        expect(chat.locator(".held-send", has_text="Carry on in Codex")).to_be_visible()
+        snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert snapshot is not None and snapshot.handoff is not None
+        assert snapshot.handoff.phase.value == "failed" and snapshot.status.value == "error"
+
+        # Retry on the third account, with the create working again.
+        monkeypatch.delenv("FAKE_MNGR_CREATE_EXIT_CODE")
+        notice.locator(".handoff-retry-account").select_option(server.account_ids[2])
+        notice.locator(".handoff-retry-button").click()
+
+        expect(chat.locator(".message-agent-switch")).to_contain_text(
+            "Switched from Claude to Antigravity", timeout=30000
+        )
+        expect(chat.locator(".handoff-failed-notice")).to_have_count(0)
+        settled = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
+        assert settled is not None and settled.handoff is None
+        assert settled.active_agent.harness.value == "antigravity"
+        assert settled.active_agent.account_id == server.account_ids[2]
