@@ -689,16 +689,20 @@ describe("MessageInput switching harness", () => {
     (button!.attrs!.onclick as () => void)();
   }
 
+  /** Press the Switch and send pill on ``rendered`` and return the view with the confirm up. */
+  function openSwitchConfirm(component: m.Component<{ chatId: string | null }>, rendered: unknown): unknown {
+    press(findByAttr(rendered, "aria-label", "Switch and send"));
+    return component.view!({ attrs: { chatId: "agent-1" } } as never);
+  }
+
   it("reads Switch and send while a lane is pending, and asks before switching", async () => {
     mocks.switching.target = TARGET;
     const component = MessageInput();
     const rendered = typeDraft(component, "agent-1", "Carry on in Codex");
     expect(findByAttr(rendered, "aria-label", "Send message")).toBeUndefined();
-    const switchButton = findByAttr(rendered, "aria-label", "Switch and send");
-    expect(renderedText(switchButton)).toContain("Switch and send");
+    expect(renderedText(findByAttr(rendered, "aria-label", "Switch and send"))).toContain("Switch and send");
 
-    (switchButton?.attrs?.onclick as () => void)();
-    const withConfirm = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const withConfirm = openSwitchConfirm(component, rendered);
     const text = renderedText(withConfirm);
     expect(text).toContain("Switch to Codex?");
     expect(text).toContain("Claude wraps up what it is doing and stops.");
@@ -719,9 +723,7 @@ describe("MessageInput switching harness", () => {
     mocks.switching.target = TARGET;
     mocks.switchChat.mockResolvedValueOnce({ phase: "summarizing", returned_block: "queued one" });
     const component = MessageInput();
-    const rendered = typeDraft(component, "agent-1", "Carry on in Codex");
-    (findByAttr(rendered, "aria-label", "Switch and send")?.attrs?.onclick as () => void)();
-    const withConfirm = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
     press(findButton(withConfirm, "Switch and send"));
     await flushAsync();
 
@@ -739,9 +741,8 @@ describe("MessageInput switching harness", () => {
     mocks.switching.target = TARGET;
     mocks.switchChat.mockRejectedValueOnce(new Error("Chat already runs on account acct-openai"));
     const component = MessageInput();
-    const rendered = typeDraft(component, "agent-1", "Carry on in Codex");
-    (findByAttr(rendered, "aria-label", "Switch and send")?.attrs?.onclick as () => void)();
-    press(findButton(component.view!({ attrs: { chatId: "agent-1" } } as never), "Switch and send"));
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
+    press(findButton(withConfirm, "Switch and send"));
     await flushAsync();
 
     const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
