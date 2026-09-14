@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 /**
- * The chat page's side of the shell, as far as presence goes: the chat's own page reports the
- * chat's presence from the shell's messages, and a subagent view of the same chat reports
- * nothing (its reports would overwrite the chat page's, keyed on the same chat and client).
+ * The chat page's side of the shell: the chat's own page reports the chat's presence from the
+ * shell's messages, a subagent view of the same chat reports nothing (its reports would
+ * overwrite the chat page's, keyed on the same chat and client), and the tabs the page asks
+ * the shell to open beside it are addressed by chat id and by the three-part subagent key.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => path }));
-const createChatAgent = vi.fn();
-vi.mock("./models/AgentManager", () => ({ createChatAgent }));
+const createChat = vi.fn();
+const getChatById = vi.fn();
+vi.mock("./models/Chats", () => ({ createChat, getChatById }));
 vi.mock("./presence", () => ({
   startPresenceReporting: vi.fn(),
   reportPresence: vi.fn(),
@@ -18,6 +20,7 @@ vi.mock("./presence", () => ({
 
 import { SHELL_HANDSHAKE, SHELL_HIDDEN, SHELL_SHOWN } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection } from "@imbue/workspace-ui/src/app_contract";
+import { chatSnapshotFixture } from "./models/chatSnapshotFixture";
 
 const HANDSHAKE = {
   type: SHELL_HANDSHAKE,
@@ -35,6 +38,7 @@ let connection: ShellConnection | null = null;
 async function loadShell(): Promise<{
   connectChatToShell: typeof import("./shell").connectChatToShell;
   startChatOnAccount: typeof import("./shell").startChatOnAccount;
+  openSubagentTab: typeof import("./shell").openSubagentTab;
   presence: { startPresenceReporting: ReturnType<typeof vi.fn>; reportPresence: ReturnType<typeof vi.fn> };
 }> {
   vi.resetModules();
@@ -43,7 +47,12 @@ async function loadShell(): Promise<{
     reportPresence: ReturnType<typeof vi.fn>;
   };
   const shell = await import("./shell");
-  return { connectChatToShell: shell.connectChatToShell, startChatOnAccount: shell.startChatOnAccount, presence };
+  return {
+    connectChatToShell: shell.connectChatToShell,
+    startChatOnAccount: shell.startChatOnAccount,
+    openSubagentTab: shell.openSubagentTab,
+    presence,
+  };
 }
 
 /** Frame this window under a spy parent for the duration of the test. */
@@ -59,9 +68,11 @@ function deliver(data: unknown, source: unknown): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getChatById.mockReturnValue(undefined);
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   connection?.disconnect();
   connection = null;
   Object.defineProperty(window, "parent", { value: window, configurable: true });
@@ -113,12 +124,12 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver(HANDSHAKE, parent);
-    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+    createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");
 
     // Started from Everything, the chat is filed in no project.
-    expect(createChatAgent).toHaveBeenCalledWith("", "account-1");
+    expect(createChat).toHaveBeenCalledWith("", "account-1");
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "shell:open", address: "app:chat?instance=agent-2" }, "*");
   });
 
@@ -127,11 +138,11 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     deliver({ ...HANDSHAKE, viewId: "project-7" }, parent);
-    createChatAgent.mockResolvedValueOnce({ agentId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
+    createChat.mockResolvedValueOnce({ chatId: "agent-2", name: "Chat-2", displayName: "Chat 2" });
 
     await startChatOnAccount("account-1");
 
-    expect(createChatAgent).toHaveBeenCalledWith("project-7", "account-1");
+    expect(createChat).toHaveBeenCalledWith("project-7", "account-1");
   });
 
   it("tells the user when the create fails rather than opening nothing silently", async () => {
@@ -139,12 +150,62 @@ describe("startChatOnAccount", () => {
     const { connectChatToShell, startChatOnAccount } = await loadShell();
     connection = connectChatToShell("agent-1", { isPresenceReported: false });
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
-    createChatAgent.mockRejectedValueOnce(new Error("no usable account"));
+    createChat.mockRejectedValueOnce(new Error("no usable account"));
 
     await startChatOnAccount("account-1");
 
     expect(alertSpy).toHaveBeenCalledWith("Failed to create chat: no usable account");
     expect(parent.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "shell:open" }), "*");
     alertSpy.mockRestore();
+  });
+});
+
+describe("openSubagentTab", () => {
+  /** A chat app whose instances route accepts every subagent create. */
+  function acceptingInstancesRoute(): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  it("creates the view under the chat and its active agent, then asks the shell to open it", async () => {
+    const parent = framed();
+    const fetchSpy = acceptingInstancesRoute();
+    const { connectChatToShell, openSubagentTab } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver(HANDSHAKE, parent);
+    getChatById.mockReturnValue(chatSnapshotFixture("agent-1", { active_agent: { agent_id: "agent-9" } }));
+
+    await openSubagentTab("agent-1", "sess-3", "Explore the repo");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/_instances",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          action: "subagent",
+          params: { parent: "agent-1", session: "sess-3", description: "Explore the repo" },
+        }),
+      }),
+    );
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "shell:open", address: "app:chat?instance=agent-1.agent-9.sess-3" },
+      "*",
+    );
+  });
+
+  it("keys the view on the chat's own id while the page does not list the chat yet", async () => {
+    const parent = framed();
+    acceptingInstancesRoute();
+    const { connectChatToShell, openSubagentTab } = await loadShell();
+    connection = connectChatToShell("agent-1", { isPresenceReported: false });
+    deliver(HANDSHAKE, parent);
+
+    await openSubagentTab("agent-1", "sess-3", "Explore the repo");
+
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "shell:open", address: "app:chat?instance=agent-1.agent-1.sess-3" },
+      "*",
+    );
   });
 });

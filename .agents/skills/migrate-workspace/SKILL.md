@@ -79,7 +79,7 @@ every verb the whole pass needs, before the user starts using anything -- per th
 ```bash
 latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
   -H 'Content-Type: application/json' \
-  -d '{"agent_id": "'"$MNGR_AGENT_ID"'", "type": "workspace",
+  -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "workspace",
        "payload": {"permissions": ["minds-workspaces-ssh", "minds-workspaces-lifecycle",
                                    "minds-workspaces-backups-export", "minds-workspaces-destroy"],
                    "target_workspace_id": "<OLD>"},
@@ -403,7 +403,8 @@ Commit on `mngr/migrate-workspace` and report `done`.
 Proxy a `question` gate per `.agents/shared/references/lead-proxy.md` (worker
 `migrate-workspace`, branch `mngr/migrate-workspace`, reports dir
 `data/.tasks/migrate-workspace/reports/`): escalate genuine decisions about the
-user's intent to the user, relay the answer with `mngr message`, consume the
+user's intent to the user, relay the answer with `create_worker.py reply
+--task-file data/.tasks/migrate-workspace/task.md -m "..."`, consume the
 report, re-arm. On `stuck` or a dead-worker timeout, follow
 `.agents/skills/launch-task/references/worker-failure.md` -- nothing has been
 applied here, and the source is untouched either way.

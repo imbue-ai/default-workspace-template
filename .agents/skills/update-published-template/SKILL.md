@@ -262,7 +262,7 @@ description of what changed for the changelog entry.
 Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
-1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
+1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH`) per
    `.agents/shared/references/worker-reporting.md` -- before any reset that could
    remove the task file.
 2. **Load the published tip from the bundle** and confirm it matches the expected

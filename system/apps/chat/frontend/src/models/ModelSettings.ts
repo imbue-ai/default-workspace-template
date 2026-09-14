@@ -15,7 +15,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getAgentById } from "./AgentManager";
+import { getChatById } from "./Chats";
 import type { CatalogModelOption } from "./HarnessCatalog";
 
 export interface ModelIdentity {
@@ -36,9 +36,9 @@ interface PendingPick {
   option: CatalogModelOption;
 }
 
-// The optimistic overlay per agent, and the tail of each agent's apply chain.
-const pendingByAgent = new Map<string, PendingPick>();
-const applyChainByAgent = new Map<string, Promise<void>>();
+// The optimistic overlay per chat, and the tail of each chat's apply chain.
+const pendingByChat = new Map<string, PendingPick>();
+const applyChainByChat = new Map<string, Promise<void>>();
 
 // How long an optimistic pick is held before it is forcefully reset to the live
 // truth, if no matching live choice ever arrives (e.g. a switch the harness
@@ -66,8 +66,8 @@ export interface EffectiveChoice {
  * of per-command settings writes a harness makes never flickers the chip through an
  * intermediate state -- then cleared. Returns null when there is nothing to show yet.
  */
-export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null | undefined): EffectiveChoice | null {
-  const pending = pendingByAgent.get(agentId);
+export function effectiveChoice(chatId: string, liveChoice: ModelChoice | null | undefined): EffectiveChoice | null {
+  const pending = pendingByChat.get(chatId);
   if (pending) {
     // The pushed identity carries a raw reported id, so we reconcile against the option the
     // backend matched it to (not the raw id): the overlay settles once the matched option is
@@ -80,7 +80,7 @@ export function effectiveChoice(agentId: string, liveChoice: ModelChoice | null 
       (liveChoice.identity.effort ?? null) === (pending.identity.effort ?? null) &&
       liveChoice.identity.fast === pending.identity.fast;
     if (settled) {
-      pendingByAgent.delete(agentId);
+      pendingByChat.delete(chatId);
     } else {
       return { identity: pending.identity, matched: pending.option, isPending: true };
     }
@@ -120,52 +120,52 @@ export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] 
  *  (all three -- claude, codex, pi) shows the pick immediately and reconciles from
  *  the pushed live choice. */
 export function setModelChoice(
-  agentId: string,
+  chatId: string,
   identity: ModelIdentity,
   option: CatalogModelOption,
   axes: string[],
   optimistic = true,
 ): void {
   if (optimistic) {
-    pendingByAgent.set(agentId, { identity, option });
+    pendingByChat.set(chatId, { identity, option });
     m.redraw();
   }
 
-  const previous = applyChainByAgent.get(agentId) ?? Promise.resolve();
+  const previous = applyChainByChat.get(chatId) ?? Promise.resolve();
   const next = previous.then(
-    () => postModelChoice(agentId, identity, axes),
-    () => postModelChoice(agentId, identity, axes),
+    () => postModelChoice(chatId, identity, axes),
+    () => postModelChoice(chatId, identity, axes),
   );
-  applyChainByAgent.set(agentId, next);
+  applyChainByChat.set(chatId, next);
   void next.then(() => {
-    if (applyChainByAgent.get(agentId) === next) {
-      applyChainByAgent.delete(agentId);
+    if (applyChainByChat.get(chatId) === next) {
+      applyChainByChat.delete(chatId);
     }
     if (optimistic) {
-      schedulePendingTimeout(agentId, identity);
+      schedulePendingTimeout(chatId, identity);
     }
   });
 }
 
-async function postModelChoice(agentId: string, identity: ModelIdentity, axes: string[]): Promise<void> {
+async function postModelChoice(chatId: string, identity: ModelIdentity, axes: string[]): Promise<void> {
   try {
     await m.request({
       method: "POST",
-      url: apiUrl("/api/agents/:agentId/model"),
-      params: { agentId },
+      url: apiUrl("/api/chats/:chatId/model"),
+      params: { chatId },
       body: { model_id: identity.model_id, effort: identity.effort, fast: identity.fast, axes },
     });
   } catch (error) {
     // The pushed live choice (or the timeout) reconciles the display back to truth.
-    console.warn(`Failed to set model for agent ${agentId}`, error);
+    console.warn(`Failed to set model for chat ${chatId}`, error);
   }
 }
 
-function schedulePendingTimeout(agentId: string, identity: ModelIdentity): void {
+function schedulePendingTimeout(chatId: string, identity: ModelIdentity): void {
   setTimeout(() => {
-    const pending = pendingByAgent.get(agentId);
+    const pending = pendingByChat.get(chatId);
     if (pending && pickIdentityEquals(pending.identity, identity)) {
-      pendingByAgent.delete(agentId);
+      pendingByChat.delete(chatId);
       m.redraw();
     }
   }, PENDING_TIMEOUT_MS);
@@ -174,18 +174,16 @@ function schedulePendingTimeout(agentId: string, identity: ModelIdentity): void 
 /** The agent's current fast state, from its effective (live or pending) choice;
  *  false when the agent's model is not resolved. Used by the workspace fast-mode
  *  prompt to decide whether the question is still open. */
-export function getAgentFastMode(agentId: string): boolean {
-  const agent = getAgentById(agentId);
-  const choice = effectiveChoice(agentId, agent?.model_choice);
+export function getChatFastMode(chatId: string): boolean {
+  const choice = effectiveChoice(chatId, getChatById(chatId)?.active_agent.model_choice);
   return choice?.identity.fast ?? false;
 }
 
 /** Turn fast mode on/off on the agent's current model, keeping model and effort.
  *  Used by the workspace fast-mode prompt. No-op when the agent's model is unknown
  *  or does not support fast mode. */
-export function setFastMode(agentId: string, enabled: boolean): void {
-  const agent = getAgentById(agentId);
-  const choice = effectiveChoice(agentId, agent?.model_choice);
+export function setFastMode(chatId: string, enabled: boolean): void {
+  const choice = effectiveChoice(chatId, getChatById(chatId)?.active_agent.model_choice);
   if (!choice || choice.matched === null || !choice.matched.supports_fast) {
     return;
   }
@@ -193,5 +191,5 @@ export function setFastMode(agentId: string, enabled: boolean): void {
   // reported id), so only the fast axis is sent -- not a spurious /model.
   const prev = { model_id: choice.matched.id, effort: choice.identity.effort, fast: choice.identity.fast };
   const next = { model_id: choice.matched.id, effort: choice.identity.effort, fast: enabled };
-  setModelChoice(agentId, next, choice.matched, changedAxes(prev, next));
+  setModelChoice(chatId, next, choice.matched, changedAxes(prev, next));
 }
