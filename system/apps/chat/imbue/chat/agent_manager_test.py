@@ -23,6 +23,7 @@ from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
@@ -3511,5 +3512,45 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"]
         assert sent == [(agent_id, "Carry on on the other account", "trigger-1"), (agent_id, "and this", "m-2")]
         assert store.read(chat_id) is None
+    finally:
+        manager.stop()
+
+
+def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_signed_out(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The relabel runs before the start, so the agent's label names the failed target; deleting that account must
+    not stop a retry on another account of the lane."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    third_account = _anthropic_account()
+    try:
+        seed_agent_state(
+            manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": second_account}
+        )
+        store.write(
+            ChatRecord(
+                chat_id=chat_id,
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+                rebind=make_chat_rebind_record(
+                    agent_id=agent_id,
+                    phase=HandoffPhase.FAILED,
+                    target_account_id=second_account,
+                    error="mngr start exited with code 1",
+                ),
+            )
+        )
+        manager.refresh_chat_records()
+        delete_account(second_account)
+
+        assert manager.retry_handoff(chat_id, third_account) is HandoffPhase.RESTARTING
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        assert f"label {agent_id} --label account={third_account}" in argv_log.read_text().splitlines()
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.active_agent.account_id == third_account
+        assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
     finally:
         manager.stop()

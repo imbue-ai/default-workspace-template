@@ -548,6 +548,20 @@ def is_rebind_target(agent_state: AgentStateItem, target: _SwitchTarget) -> bool
 
 
 @pure
+def _is_rebind_retry_target(rebind: ChatRebindRecord, target: _SwitchTarget) -> bool:
+    """Whether a failed rebind may be retried on ``target``: an account of the lane the rebind runs on.
+
+    Read off the record rather than the agent's ``account`` label: the relabel runs before the
+    start, so after a failed start the label names the failed target, which the user may have
+    signed out since; the record's target lane is the agent's own (a rebind is only opened for
+    a same-lane target) and does not dangle.
+    """
+    if target.harness is not rebind.target_harness or not is_rebind_supported(target.harness):
+        return False
+    return target.account.lane == rebind.target_lane
+
+
+@pure
 def _converging_status(phase: HandoffPhase) -> InstanceStatus:
     """A converging chat is ``working`` whatever its agent does, and ``error`` once the start failed (spec 5.4)."""
     return InstanceStatus.ERROR if phase is HandoffPhase.FAILED else InstanceStatus.WORKING
@@ -1497,8 +1511,9 @@ class AgentManager:
             if record is None or transition is None or transition.phase is not HandoffPhase.FAILED:
                 raise HandoffError(f"Chat '{chat_id}' has no failed switch to retry")
             if isinstance(transition, ChatRebindRecord):
-                agent_state = self._agents.get(transition.agent_id)
-                if agent_state is None or not is_rebind_target(agent_state, target):
+                if transition.agent_id not in self._agents:
+                    raise HandoffError(f"Chat '{chat_id}' no longer has the agent its switch was restarting")
+                if not _is_rebind_retry_target(transition, target):
                     raise HandoffError(
                         f"Chat '{chat_id}' can only retry its switch on an account of the same harness and lane; "
                         "start a new chat to move it elsewhere"
