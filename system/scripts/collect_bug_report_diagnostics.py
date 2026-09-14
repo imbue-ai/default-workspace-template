@@ -543,15 +543,17 @@ def select_agent_log_files(agent_id: str) -> list[str]:
     return recent
 
 
-def capture_pane(agent_id: str, timeout: float) -> str | None:
+def capture_pane(target: str, timeout: float) -> str | None:
     """One agent's tmux scrollback, or None when it could not be captured.
+
+    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``.
 
     ``--no-start`` for the same reason the host's ``mngr exec`` passes it: a bug
     report asks a workspace what happened, it does not boot anything to find
     out. An agent that is stopped therefore contributes no pane, which is
     correct -- its pane no longer exists.
     """
-    captured = run_mngr(["capture", agent_id, "--full", "--no-start"], timeout)
+    captured = run_mngr(["capture", target, "--full", "--no-start"], timeout)
     if captured is None or not captured.strip():
         return None
     return "\n".join(captured.splitlines()[-MAX_PANE_LINES:])
@@ -571,7 +573,7 @@ def collect_agent_log_db_members(
     """
     members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for name, agent_id in list_agents(timeout):
+    for name, agent_id, _target in list_agents(timeout):
         agent_dir_member = safe_member_component(name)
         for path in select_agent_log_dbs(agent_id):
             # Rendered to text under a ``.log`` member name: the db is packed for
@@ -614,7 +616,7 @@ def collect_agent_log_members(
     log_members: list[tuple[str, str, float]] = []
     pane_members: list[tuple[str, str, float]] = []
     used_names: set[str] = set()
-    for name, agent_id in list_agents(timeout):
+    for name, agent_id, target in list_agents(timeout):
         agent_dir_member = safe_member_component(name)
         for path in select_agent_log_files(agent_id):
             member = unique_member_name(
@@ -630,7 +632,7 @@ def collect_agent_log_members(
             )
         if not is_pane_included:
             continue
-        pane = capture_pane(agent_id, timeout)
+        pane = capture_pane(target, timeout)
         if pane is not None:
             member = unique_member_name(
                 "{}/{}/{}".format(
@@ -712,7 +714,7 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
 
 
 @lru_cache(maxsize=1)
-def _query_agents(timeout: float) -> tuple[tuple[str, str], ...]:
+def _query_agents(timeout: float) -> tuple[tuple[str, str, str], ...]:
     """Ask mngr which agents exist, at most once per run.
 
     Cached because it is the collector's most expensive call (see the fan-out
@@ -733,9 +735,12 @@ def _query_agents(timeout: float) -> tuple[tuple[str, str], ...]:
     the inner mngr's own, and asking the cloud providers baked into the
     settings only makes mngr probe backends that cannot answer from inside a
     container -- that probing, not the listing, is what used to cost the
-    collection most of its budget. Each later per-agent call targets the id: it
-    is exact, and mngr resolves it from its own event stream without the
-    provider fan-out.
+    collection most of its budget. The returned ``id@host-id.provider`` target
+    pins each later ``mngr event`` and ``mngr capture`` the same way, so they
+    skip the fan-out too (a bare id is only pinned when mngr's discovery event
+    stream already knows it, and a provider-scoped listing never writes that
+    stream). It is built from ids alone: the host's recorded name, which the
+    outer provider stamps, never enters it.
 
     The pipe-delimited template is used rather than ``--format json``: inside a
     workspace container mngr cannot reach the providers that back its hosts, and
@@ -743,25 +748,31 @@ def _query_agents(timeout: float) -> tuple[tuple[str, str], ...]:
     local state.
     """
     listed = run_mngr(
-        ["list", "--provider", "local", "--format", "{name}|{id}"],
+        [
+            "list",
+            "--provider",
+            "local",
+            "--format",
+            "{name}|{id}|{id}@{host.id}.{host.provider_name}",
+        ],
         timeout,
     )
     if listed is None:
         return ()
-    agents: list[tuple[str, str]] = []
+    agents: list[tuple[str, str, str]] = []
     for line in listed.splitlines():
         parts = line.split("|")
-        if len(parts) != 2:
+        if len(parts) != 3:
             continue
-        name, agent_id = (p.strip() for p in parts)
-        if not name or not agent_id:
+        name, agent_id, target = (p.strip() for p in parts)
+        if not name or not agent_id or not target:
             continue
-        agents.append((name, agent_id))
+        agents.append((name, agent_id, target))
     return tuple(agents)
 
 
-def list_agents(timeout: float) -> list[tuple[str, str]]:
-    """Every agent, as ``(name, id)`` -- chat, worker, or the services agent.
+def list_agents(timeout: float) -> list[tuple[str, str, str]]:
+    """Every agent, as ``(name, id, pinned target)`` -- chat, worker, or the services agent.
 
     The id is what names an agent's state directory, so it is asked for here
     rather than derived: mngr owns the mapping from an agent to its own files.
@@ -772,8 +783,11 @@ def list_agents(timeout: float) -> list[tuple[str, str]]:
     return list(_query_agents(timeout))
 
 
-def fetch_transcript(agent_id: str, timeout: float) -> str | None:
+def fetch_transcript(target: str, timeout: float) -> str | None:
     """One agent's conversation as raw JSONL, or None when it has none.
+
+    ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
+    so resolving it never fans out to the unreachable cloud providers.
 
     The harness is NOT derived from the agent's type: an agent of type ``chat``
     writes its events under ``claude/``, so the two do not map onto each other.
@@ -788,7 +802,7 @@ def fetch_transcript(agent_id: str, timeout: float) -> str | None:
     events = run_mngr(
         [
             "event",
-            agent_id,
+            target,
             "--include",
             'source.endsWith("common_transcript")',
             "--exclude",
@@ -860,8 +874,8 @@ def collect_transcript_members(timeout: float) -> list[tuple[str, str, float]]:
     """
     fetched = []
     used_names: set[str] = set()
-    for name, agent_id in list_agents(timeout):
-        events = fetch_transcript(agent_id, timeout)
+    for name, _agent_id, target in list_agents(timeout):
+        events = fetch_transcript(target, timeout)
         if events is None:
             continue
         member = transcript_member_name(name, transcript_source(events), used_names)
