@@ -17,7 +17,7 @@ Every rule below is normative and describes the current contract; where a phase 
   `app:<name>` for an app with `instances = true` is not an address of an instance; it names the app for `open` and `--action`.
 - A **view id** is a project id (the slugified project name) or the literal `everything`.
 - A **client id** is the uuid the browser keeps in local storage under `si-client-id`.
-- A **tab id** is `tab-<16 hex>`, minted by the shell when a panel is created, kept in the client's layout record, and never reused.
+- A **tab id** is `tab-<16 hex>`, minted when a page is first opened, carried in the `params` of every panel showing that page in a client's layout (section 6), and never reused.
 - A **save id** is `save-<16 hex>`, minted by a window for each layout save it makes.
 
 ## 2. The manifest (`app.toml`)
@@ -192,14 +192,15 @@ Projects and views:
 | `POST /api/projects/<id>/tabs/remove` | `{"address"}` | `200 project` |
 | `POST /api/projects/<id>/shortcuts` | `{"app", "action", "mode"}` | `200 project`; replaces the entry for `(app, action)` |
 | `POST /api/projects/<id>/shortcuts/remove` | `{"app", "action"}` | `200 project` |
-| `GET /api/layouts/<view_id>?client=<client_id>&device=<device_kind>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null, "tabs": {}}`); `device` names the seed for a client the shell has no record of yet |
+| `GET /api/layouts/<view_id>?client=<client_id>&device=<device_kind>` | | `200 layout` (the client's own, else the seed for its device kind, else `{"dockview": null}`); `device` names the seed for a client the shell has no record of yet |
 | `POST /api/layouts/<view_id>` | `layout` plus `client_id`, `save_id`, `base_updated_at` | `200 {"updated_at"}`, the stamp written (the window's next `base_updated_at`), `null` when the body equalled the stored arrangement and nothing was written or broadcast; `409 {"detail"}` when the stored layout's `updated_at` is newer than `base_updated_at` (the window refetches and applies the stored one) |
 | `GET /api/clients` | | `{"clients": [client, ...]}`; a window reads its own record here on boot to learn its active view |
 | `GET /api/inventory` | | the inventory document (section 9) |
 | `GET /api/templates-catalog` | | the New Tab page's template catalog: `200 {"catalog": {"generated_at", "templates": [template with "thumbnail_url" resolved to an absolute URL, ...], "shelves": [{"key", "title", "slugs"}]}, "is_stale": bool}` (`is_stale` when the shell is answering its last good copy because the fetch failed); `200 {"catalog": null, "is_stale": false}` when no catalog URL is configured; `503 {"detail"}` when nothing could be loaded. The document, its URL, and its cache are described in `catalog/README.md` and `docs/system/blueprint/new-tab-page/plan-new-tab-page.md` |
 
 `project` is `{"id", "name", "color", "glyph", "tabs": [address], "shortcuts": [{"app", "action", "mode"}]}`.
-`layout` is `{"dockview": <dockview JSON>, "tabs": {"<panel_id>": {"address", "tab_id", "last_focused_ms"}}, "device_kind", "updated_at"}`.
+`layout` is `{"dockview": <dockview JSON>, "device_kind", "updated_at"}`.
+What each panel shows lives only in the `params` dockview keeps on the panel, at `dockview.panels.<panel_id>.params`: `{"kind": "instance", "address", "tabId", "lastFocusedMs"}` for a tab showing an instance, `{"kind": "launcher"}` for a New Tab page. `tabId` is the page's id (`tab-<16 hex>`), minted by the panel that first opened the page and shared by every panel showing it; for that first panel it equals the panel id. `lastFocusedMs` is epoch milliseconds the panel was last the active one, 0 for never. There is no second copy of a panel's identity beside the document, so nothing can fall out of step with it; a file or a save body from before this rule, which carried a `tabs` block, is folded into the panels' params on read.
 `client` is `{"id", "device_kind", "active_view", "last_seen", "is_connected"}`; `is_connected` says whether any window of the client holds the WebSocket right now.
 `base_updated_at` is the `updated_at` of the layout the window last fetched or last saved successfully, `null` for a view it has only ever seen empty.
 
