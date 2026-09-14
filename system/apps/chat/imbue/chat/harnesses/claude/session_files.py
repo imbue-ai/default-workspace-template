@@ -61,7 +61,7 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
         return []
     moved: list[Path] = []
     for session_id in session_ids:
-        session_file = _find_session_file(source_projects, session_id)
+        session_file = find_session_file(source_projects, session_id)
         if session_file is None:
             continue
         relative_dir = session_file.parent.relative_to(source_projects)
@@ -79,7 +79,8 @@ def move_claude_sessions(session_ids: tuple[str, ...], source_config_dir: Path, 
     return moved
 
 
-def _find_session_file(projects_dir: Path, session_id: str) -> Path | None:
+def find_session_file(projects_dir: Path, session_id: str) -> Path | None:
+    """The session's main file under a config dir's ``projects/`` tree, wherever claude filed it, or None."""
     target_name = f"{session_id}.jsonl"
     for root, _dirs, files in os.walk(str(projects_dir)):
         if target_name in files:
