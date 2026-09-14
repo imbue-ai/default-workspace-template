@@ -201,9 +201,9 @@ def _resolve_active_view() -> tuple[bool, str | None]:
       ``launch-task`` sub-agent in its own container, or no daemon. The caller skips
       silently: there is no screen of ours to surface into.
     * When reachable, ``view`` is the view to target -- the active view of the connected
-      client that most recently messaged THIS agent (its chat instance is addressed by the
-      agent id), else the most-recently-active connected client's view, else None
-      (reachable but nothing to place it on).
+      client that most recently messaged THIS chat (its chat instance is addressed by the
+      chat id, see ``_own_chat_id``), else the most-recently-active connected client's view,
+      else None (reachable but nothing to place it on).
     """
     root = _repo_root()
     script = root / "system" / "scripts" / "layout.py"
