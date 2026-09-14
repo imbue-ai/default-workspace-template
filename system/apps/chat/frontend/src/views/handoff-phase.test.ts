@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../models/Chats", () => ({ getChatById: (id: string) => chats.get(id) }));
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: (id: string) => chats.get(id),
+}));
 
 import type { ChatSnapshot } from "../models/Chats";
+import { isHandoffCancellable } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
-import { handoffComposerPlaceholder, handoffPhaseText, isHandoffCancellable } from "./handoff-phase";
+import { handoffComposerPlaceholder, handoffPhaseText } from "./handoff-phase";
 import { heldSendMessageIds, renderHeldSends } from "./HeldSendView";
 
 const chats = new Map<string, ChatSnapshot>();

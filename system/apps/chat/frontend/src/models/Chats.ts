@@ -61,6 +61,11 @@ export interface HandoffState {
   error: string | null;
 }
 
+/** Whether the switch can still be called off: only until the old agent is stopped (spec 5.6). */
+export function isHandoffCancellable(handoff: HandoffState): boolean {
+  return handoff.phase === "draining" || handoff.phase === "summarizing";
+}
+
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;

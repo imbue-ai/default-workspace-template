@@ -21,8 +21,8 @@
  */
 import m from "mithril";
 
-import { addChatsUpdatedListener } from "./Chats";
-import type { HeldSend } from "./Chats";
+import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
+import type { HandoffState } from "./Chats";
 
 export interface OutgoingMessage {
   id: string;
@@ -137,10 +137,10 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
   }
 }
 
-/** What the previous snapshot said a switching chat was holding, and the agent it was leaving. */
+/** What the previous snapshot said of a switching chat: the agent it was leaving, and what it held. */
 interface HeldSnapshot {
   retiringAgentId: string;
-  held: HeldSend[];
+  handoff: HandoffState;
 }
 
 /**
@@ -164,21 +164,25 @@ export function trackBackendArrivals(): void {
       }
       const previous = heldByChat.get(chat.chat_id);
       if (chat.handoff !== null) {
-        const held = chat.handoff.held_sends;
         dropOutgoingByMessageId(
           chat.chat_id,
-          held.map((entry) => entry.message_id),
+          chat.handoff.held_sends.map((entry) => entry.message_id),
         );
         // The retiring agent is the one the chat ran on when the switch began; the snapshot
         // names the successor before the switch ends, once it is created.
         heldByChat.set(chat.chat_id, {
           retiringAgentId: previous?.retiringAgentId ?? chat.active_agent.agent_id,
-          held,
+          handoff: chat.handoff,
         });
       } else if (previous !== undefined) {
         heldByChat.delete(chat.chat_id);
-        const isCancelled = previous.retiringAgentId === chat.active_agent.agent_id;
-        for (const held of isCancelled ? previous.held.slice(1) : previous.held) {
+        // The agent alone does not tell a cancel from a completion: a page that first saw the
+        // switch after the successor was named recorded that successor as the retiring agent.
+        // A cancel is refused once switching begins, so the phase settles it.
+        const isCancelled =
+          isHandoffCancellable(previous.handoff) && previous.retiringAgentId === chat.active_agent.agent_id;
+        const returning = previous.handoff.held_sends;
+        for (const held of isCancelled ? returning.slice(1) : returning) {
           addOutgoing(chat.chat_id, held.text, held.message_id);
         }
       }

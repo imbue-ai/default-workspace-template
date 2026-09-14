@@ -21,10 +21,10 @@ import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from ".
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { openProviderChooser } from "../models/Providers";
 import { ensureHarnessCatalogs, findComposerPopup, getHarnessCatalog } from "../models/HarnessCatalog";
-import { getChatById, whenChatRegistered } from "../models/Chats";
+import { getChatById, isHandoffCancellable, whenChatRegistered } from "../models/Chats";
 import { isWorkingActivityState } from "./ActivityIndicator";
 import { harnessLabel } from "./agent-switch-chip";
-import { handoffComposerPlaceholder, isHandoffCancellable } from "./handoff-phase";
+import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";

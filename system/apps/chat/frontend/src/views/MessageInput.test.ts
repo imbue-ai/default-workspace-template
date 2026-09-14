@@ -127,7 +127,8 @@ vi.mock("../models/HarnessCatalog", () => {
     },
   };
 });
-vi.mock("../models/Chats", () => ({
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: () => ({ active_agent: mocks.agent, handoff: mocks.switching.handoff }),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));

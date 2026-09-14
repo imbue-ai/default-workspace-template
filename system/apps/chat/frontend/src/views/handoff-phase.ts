@@ -25,11 +25,6 @@ export function handoffPhaseText(handoff: HandoffState, retiringHarness: string)
   }
 }
 
-/** Whether the switch can still be called off: only until the old agent is stopped (spec 5.6). */
-export function isHandoffCancellable(handoff: HandoffState): boolean {
-  return handoff.phase === "draining" || handoff.phase === "summarizing";
-}
-
 /** The composer's placeholder while the chat switches: a message typed now is held for the new agent. */
 export function handoffComposerPlaceholder(handoff: HandoffState): string {
   return `Type a message; it is delivered once ${harnessLabel(handoff.target_harness)} is ready…`;

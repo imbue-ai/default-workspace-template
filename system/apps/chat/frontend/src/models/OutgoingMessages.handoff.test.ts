@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // installs is captured here and driven with snapshots by hand.
 vi.mock("mithril", () => ({ default: { redraw: vi.fn() } }));
 const listeners = vi.hoisted(() => [] as ((chats: unknown[]) => void)[]);
-vi.mock("./Chats", () => ({
+vi.mock("./Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./Chats")>()),
   addChatsUpdatedListener: (listener: (chats: unknown[]) => void) => listeners.push(listener),
 }));
 
@@ -61,6 +62,26 @@ describe("the bubbles of a chat switching harness", () => {
     ]);
     noteBackendArrivals(chat, ["u-1"]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
+  });
+
+  it("brings every held send back for a page that first saw the switch once the successor was named", () => {
+    // A page loaded (or reconnected) while the held sends were being delivered: its first
+    // snapshot already names the successor, so the agent alone would read as a cancel.
+    const chat = `a-${Math.random()}`;
+    push([
+      chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-new" },
+        handoff: handoffStateFixture({
+          phase: "switching",
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on in Codex" },
+            { message_id: "m-2", text: "and this" },
+          ],
+        }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-new" } })]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["Carry on in Codex", "and this"]);
   });
 
   it("skips the confirming message when the switch was cancelled, since it returns to the composer", () => {
