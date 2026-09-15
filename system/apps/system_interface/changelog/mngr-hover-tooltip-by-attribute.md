@@ -1,0 +1,1 @@
+The workspace's tooltips are now driven by an attribute the element carries rather than listeners attached to it, so a tooltip cannot outlive what it was explaining. The project rail, the launcher's tiles, the all-apps picker and the template dialog all keep their behaviour; the dock's tab strip no longer has to remember to dispose a tab's tooltip when the tab closes.

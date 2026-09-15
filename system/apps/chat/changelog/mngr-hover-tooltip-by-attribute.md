@@ -1,0 +1,1 @@
+The model card's rows and the image lightbox's buttons pick up the workspace's new attribute-driven tooltips. Behaviour is unchanged; the lightbox no longer tracks its buttons' tooltips in order to dispose them on close.

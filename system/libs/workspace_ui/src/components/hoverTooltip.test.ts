@@ -2,8 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import { hoverTooltipAttrs, placeTooltip } from "./hoverTooltip";
-import { hoverTooltipText } from "../testing/tooltip";
+import { hoverTooltipAttrs, placeTooltip, setHoverTooltip } from "./hoverTooltip";
+import { hoverTooltip, hoverTooltipText, shownTooltipText } from "../testing/tooltip";
 
 const VIEWPORT = { width: 1000, height: 800 };
 const BUBBLE = { width: 100, height: 20 };
@@ -87,7 +87,10 @@ describe("placeTooltip right placement", () => {
 });
 
 describe("hoverTooltipAttrs", () => {
+  // Attached to the document: the tooltip listens at the document, so a detached
+  // tree never sees the hover.
   const root = document.createElement("div");
+  document.body.appendChild(root);
 
   afterEach(() => {
     m.render(root, []);
@@ -95,7 +98,7 @@ describe("hoverTooltipAttrs", () => {
   });
 
   function renderButton(text: string | null): HTMLElement {
-    m.render(root, m("button", { ...hoverTooltipAttrs(text) }, "Go"));
+    m.render(root, m("button", { ...hoverTooltipAttrs(text) }, m("span", "Go")));
     return root.firstElementChild as HTMLElement;
   }
 
@@ -109,5 +112,65 @@ describe("hoverTooltipAttrs", () => {
 
     expect(renderButton(null)).toBe(button);
     expect(hoverTooltipText(button)).toBeNull();
+  });
+
+  it("drops the tooltip when a redraw stops spreading the attrs at all", () => {
+    vi.useFakeTimers();
+    const button = renderButton("Start");
+    expect(hoverTooltipText(button)).toBe("Start");
+
+    // The shape that used to strand a tooltip: a caller that switches to `{}`
+    // rather than passing null. Mithril patches the element and runs only the
+    // new vnode's hooks, so nothing gets a chance to clean up -- the text has
+    // to live somewhere mithril itself diffs.
+    m.render(root, m("button", {}, m("span", "Go")));
+    expect(root.firstElementChild).toBe(button);
+    expect(hoverTooltipText(button)).toBeNull();
+  });
+
+  it("picks up a tooltip an element gains only on a later redraw", () => {
+    vi.useFakeTimers();
+    m.render(root, m("button", {}, m("span", "Go")));
+    const button = root.firstElementChild as HTMLElement;
+    expect(hoverTooltipText(button)).toBeNull();
+
+    // The mirror image: the element exists before it has anything to say, so
+    // there is no create hook to attach anything.
+    expect(renderButton("Start")).toBe(button);
+    expect(hoverTooltipText(button)).toBe("Start");
+  });
+
+  it("answers a hover over anything inside the trigger", () => {
+    vi.useFakeTimers();
+    const button = renderButton("Start");
+    expect(hoverTooltipText(button.querySelector("span")!)).toBe("Start");
+  });
+
+  it("takes the bubble down with an element that leaves the document while it is up", async () => {
+    vi.useFakeTimers();
+    // Hand-built DOM, as the lightbox and the dock's tab strip build it.
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    setHoverTooltip(button, "Download");
+    hoverTooltip(button);
+    expect(shownTooltipText()).toBe("Download");
+
+    // Torn out from under the pointer, which fires no leave event of its own,
+    // and -- the point of the change -- has no teardown call to forget either.
+    button.remove();
+    await Promise.resolve();
+    expect(shownTooltipText()).toBeNull();
+  });
+
+  it("stops offering a tooltip an imperative caller takes back", () => {
+    vi.useFakeTimers();
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    setHoverTooltip(button, "Download");
+    expect(hoverTooltipText(button)).toBe("Download");
+
+    setHoverTooltip(button, null);
+    expect(hoverTooltipText(button)).toBeNull();
+    button.remove();
   });
 });

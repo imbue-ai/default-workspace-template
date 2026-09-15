@@ -76,7 +76,7 @@ import type { TabMenuActions, TabMenuEntry } from "./tabMenu";
 import { placeMenu } from "./Sidebar";
 import type { MenuAnchor, SidebarTabRow } from "./Sidebar";
 import { normalizeTabTitle } from "./tab-rename";
-import { attachHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import { SHELL_CLOSE_REQUEST, SHELL_FOCUSED, SHELL_LOCATION, SHELL_OPEN } from "@imbue/workspace-ui/src/app_contract";
@@ -733,17 +733,16 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
     endTitleEdit(true);
   });
 
-  const statusDotTooltip = attachHoverTooltip(statusDot);
   const updateStatusDot = (): void => {
     const resolved = resolvedInstance();
     if (resolved === null) {
       statusDot.style.display = "none";
-      statusDotTooltip.setText(null);
+      setHoverTooltip(statusDot, null);
       return;
     }
     statusDot.style.display = "";
     statusDot.setAttribute("data-status", resolved.instance.status);
-    statusDotTooltip.setText(resolved.instance.status);
+    setHoverTooltip(statusDot, resolved.instance.status);
   };
 
   return {
@@ -764,7 +763,6 @@ function createCustomTab(options: { id: string; name: string }): ITabRenderer {
         const statusListener = (): void => updateStatusDot();
         addAppsUpdatedListener(statusListener);
         disposables.push({ dispose: () => removeAppsUpdatedListener(statusListener) });
-        disposables.push(statusDotTooltip);
       }
 
       // An overflow-dropdown row is just the tab: none of the strip's machinery.
@@ -853,9 +851,7 @@ function createTabActionButton(
   button.className = buttonClass("ghost", { icon: true, xs: true, extra: "dv-custom-tab-action shrink-0" });
   button.setAttribute("aria-label", title);
   button.innerHTML = iconName === "kebab" ? tabIcon("kebab", 12) : icon(iconName, { size: 12 });
-  const tooltip = attachHoverTooltip(button);
-  tooltip.setText(title);
-  disposables.push(tooltip);
+  setHoverTooltip(button, title);
   button.addEventListener("pointerdown", (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
@@ -1056,8 +1052,7 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
   button.className = "dockview-add-tab-button";
   button.setAttribute("aria-label", LAUNCHER_PANEL_TITLE);
   button.textContent = "+";
-  const tooltip = attachHoverTooltip(button);
-  tooltip.setText(LAUNCHER_PANEL_TITLE);
+  setHoverTooltip(button, LAUNCHER_PANEL_TITLE);
   element.appendChild(button);
 
   button.addEventListener("click", (event) => {
@@ -1068,9 +1063,7 @@ function createAddTabButton(group: DockviewGroupPanel): IHeaderActionsRenderer {
   return {
     element,
     init() {},
-    dispose() {
-      tooltip.dispose();
-    },
+    dispose() {},
   };
 }
 

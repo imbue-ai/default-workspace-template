@@ -21,6 +21,16 @@
  * everywhere and callers should not opt out of it lightly -- one placement is
  * what keeps every tooltip in the workspace reading as the same tooltip.
  *
+ * **A trigger's whole state is its ``data-hover-tooltip`` attribute**, read at
+ * the moment the bubble goes up, with one set of listeners on the document
+ * serving every tooltip in the workspace. Nothing is attached per element, so
+ * there is nothing to strand: an element stops having a tooltip exactly when
+ * the attribute goes away, whether a view passes ``null``, stops spreading the
+ * attrs, or is patched over by a different vnode that never had them. The
+ * bubble is also re-read while it is up, so a trigger that loses its text or
+ * leaves the document takes the bubble with it. A trigger must be IN the
+ * document to be heard -- a detached tree never reaches the listeners.
+ *
  * The one deliberate exception is the project rail: a rail row sits directly
  * above the row it is being compared against (e.g. the shortcut a hover is
  * about to reveal versus the one below it), so a centered-below bubble covers
@@ -47,13 +57,6 @@ const TOOLTIP_MARGIN = 6;
  * clears the modal overlays. */
 const TOOLTIP_CLASS =
   "hover-tooltip type-helper pointer-events-none fixed z-(--z-tooltip) hidden max-w-[480px] items-center gap-1.5 rounded-md bg-inverse px-2 py-1 text-center whitespace-normal text-on-accent shadow-overlay dark:bg-surface dark:text-primary";
-
-export interface HoverTooltip {
-  /** Set the text shown on hover, or ``null`` to disable the tooltip. */
-  setText(text: string | null): void;
-  /** Remove listeners and any visible bubble. */
-  dispose(): void;
-}
 
 /** The part of a ``DOMRect`` the placement needs. */
 export interface TooltipAnchor {
@@ -138,6 +141,11 @@ export function placeTooltip(
   }
 }
 
+/** The attribute a trigger carries its text in, and the one it names a
+ *  non-default placement in. */
+const TOOLTIP_ATTR = "data-hover-tooltip";
+const PLACEMENT_ATTR = "data-hover-tooltip-placement";
+
 // One bubble is enough: only one tooltip is ever visible, so every trigger
 // shares it. ``pendingFor`` and ``shownFor`` name the trigger a scheduled or
 // visible bubble belongs to, so a trigger only ever dismisses its own.
@@ -145,7 +153,11 @@ let bubbleElement: HTMLDivElement | null = null;
 let pendingTimer: number | null = null;
 let pendingFor: Element | null = null;
 let shownFor: Element | null = null;
-let isWindowWired = false;
+let isWired = false;
+// Watches a SHOWN bubble's trigger, and only then: the trigger can lose its
+// text or leave the document while the bubble is up, and neither fires an
+// event of its own.
+let shownObserver: MutationObserver | null = null;
 
 function ensureBubble(): HTMLDivElement {
   if (bubbleElement === null) {
@@ -170,6 +182,7 @@ function hideBubble(): void {
     bubbleElement.style.display = "none";
   }
   shownFor = null;
+  shownObserver?.disconnect();
 }
 
 /** Drop the tooltip whoever it belongs to -- what the window-level events do. */
@@ -206,13 +219,114 @@ function showBubble(target: Element, text: string, placement: TooltipPlacement):
   element.style.top = `${position.top}px`;
   element.style.visibility = "visible";
   shownFor = target;
+  watchShownTrigger(target);
 }
 
-function wireWindowListeners(): void {
-  if (isWindowWired) {
+/** The text a trigger is offering right now, or null when it is offering none.
+ *  Read at every show: the DOM is the only copy, so a bubble cannot outlive the
+ *  text that put it up. */
+function tooltipTextOf(element: Element): string | null {
+  return element.isConnected ? element.getAttribute(TOOLTIP_ATTR) : null;
+}
+
+function placementOf(element: Element): TooltipPlacement {
+  return element.getAttribute(PLACEMENT_ATTR) === "right" ? "right" : "below";
+}
+
+/** Keep a shown bubble honest: its trigger can lose its text or be torn out of
+ *  the document while the pointer still rests on it, and neither is an event. */
+function watchShownTrigger(target: Element): void {
+  shownObserver ??= new MutationObserver(() => {
+    if (shownFor === null) {
+      return;
+    }
+    const text = tooltipTextOf(shownFor);
+    if (text === null) {
+      hideBubble();
+    } else if (bubbleElement?.textContent !== text) {
+      showBubble(shownFor, text, placementOf(shownFor));
+    }
+  });
+  shownObserver.disconnect();
+  shownObserver.observe(target.ownerDocument.body, {
+    childList: true,
+    subtree: true,
+    attributeFilter: [TOOLTIP_ATTR],
+  });
+}
+
+/** The trigger an event happened inside, or null when it happened outside every
+ *  trigger. ``closest``, so the whole subtree of a trigger counts as the
+ *  trigger -- a hover over a button's icon is a hover over the button. */
+function triggerOf(eventTarget: EventTarget | null): Element | null {
+  return eventTarget instanceof Element ? eventTarget.closest(`[${TOOLTIP_ATTR}]`) : null;
+}
+
+function showNow(target: Element): void {
+  cancelPending();
+  const text = tooltipTextOf(target);
+  if (text !== null) {
+    showBubble(target, text, placementOf(target));
+  }
+}
+
+function onPointerOver(event: Event): void {
+  const target = triggerOf(event.target);
+  if (target === null) {
+    // Off every trigger: the pointer has left whatever was up or queued.
+    dropTooltip();
     return;
   }
-  isWindowWired = true;
+  if (target === shownFor || target === pendingFor) {
+    return;
+  }
+  cancelPending();
+  hideBubble();
+  pendingFor = target;
+  pendingTimer = window.setTimeout(() => showNow(target), TOOLTIP_DELAY_MS);
+}
+
+function onPointerOut(event: Event): void {
+  const target = triggerOf(event.target);
+  if (target === null) {
+    return;
+  }
+  // Moving within one trigger's own subtree is not leaving it.
+  const to = event instanceof MouseEvent ? event.relatedTarget : null;
+  if (to instanceof Node && target.contains(to)) {
+    return;
+  }
+  if (target === shownFor || target === pendingFor) {
+    dropTooltip();
+  }
+}
+
+// Keyboard focus only -- not focus that came from a mouse click, which would
+// flash the tooltip and then immediately hide it on the click.
+function onFocusIn(event: Event): void {
+  const target = triggerOf(event.target);
+  if (target !== null && target.matches(":focus-visible")) {
+    showNow(target);
+  }
+}
+
+function wireListeners(): void {
+  // Views are also built without a browser (the chat app walks vnodes in plain
+  // node tests, where `document` is a stub and there is no `window` at all),
+  // and building one must not require either. Nothing can be hovered there, so
+  // there is nothing to wire.
+  if (isWired || typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+  isWired = true;
+  // One set of listeners for every tooltip in the workspace: the text lives on
+  // the elements, so nothing here is per-trigger. ``mouseover``/``mouseout``
+  // rather than enter/leave because only these bubble to the document.
+  document.addEventListener("mouseover", onPointerOver);
+  document.addEventListener("mouseout", onPointerOut);
+  document.addEventListener("focusin", onFocusIn);
+  document.addEventListener("focusout", dropTooltip);
+  document.addEventListener("click", dropTooltip, true);
   // Any scroll (capture, so nested scrollers count), resize or window blur
   // slides the trigger out from under a shown bubble, so drop it.
   window.addEventListener("scroll", dropTooltip, true);
@@ -221,77 +335,24 @@ function wireWindowListeners(): void {
 }
 
 /**
- * ``placement`` is fixed for the lifetime of the attachment (unlike the text,
- * it is not expected to change), and defaults to the shared centered-below
- * behavior -- see the module doc comment for the rail's ``"right"`` exception.
+ * Give an element a tooltip, or take it away with ``null``. For DOM this
+ * workspace builds by hand (the lightbox, the dock's tab strip); mithril views
+ * spread ``hoverTooltipAttrs`` instead. Removing the element needs no cleanup:
+ * nothing is attached to it.
  */
-export function attachHoverTooltip(target: Element, placement: TooltipPlacement = "below"): HoverTooltip {
-  let text: string | null = null;
-
-  wireWindowListeners();
-
-  const dismiss = (): void => {
-    if (pendingFor === target) {
-      cancelPending();
-    }
-    if (shownFor === target) {
-      hideBubble();
-    }
-  };
-
-  // Both entry points into a visible bubble: the delay elapsing, and keyboard
-  // focus, which skips the delay. Either way whatever else was queued loses.
-  const showNow = (): void => {
-    cancelPending();
-    if (text !== null) {
-      showBubble(target, text, placement);
-    }
-  };
-
-  const onEnter = (): void => {
-    if (text === null) {
-      return;
-    }
-    cancelPending();
-    pendingFor = target;
-    pendingTimer = window.setTimeout(showNow, TOOLTIP_DELAY_MS);
-  };
-
-  // Keyboard focus only -- not focus that came from a mouse click, which would
-  // flash the tooltip and then immediately hide it on the click.
-  const onFocus = (): void => {
-    if (target.matches(":focus-visible")) {
-      showNow();
-    }
-  };
-
-  target.addEventListener("mouseenter", onEnter);
-  target.addEventListener("mouseleave", dismiss);
-  target.addEventListener("click", dismiss);
-  target.addEventListener("focus", onFocus);
-  target.addEventListener("blur", dismiss);
-
-  return {
-    setText(next: string | null): void {
-      text = next;
-      if (text === null) {
-        dismiss();
-      } else if (shownFor === target) {
-        showBubble(target, text, placement);
-      }
-    },
-    dispose(): void {
-      target.removeEventListener("mouseenter", onEnter);
-      target.removeEventListener("mouseleave", dismiss);
-      target.removeEventListener("click", dismiss);
-      target.removeEventListener("focus", onFocus);
-      target.removeEventListener("blur", dismiss);
-      dismiss();
-    },
-  };
+export function setHoverTooltip(element: Element, text: string | null, placement: TooltipPlacement = "below"): void {
+  wireListeners();
+  if (text === null) {
+    element.removeAttribute(TOOLTIP_ATTR);
+  } else {
+    element.setAttribute(TOOLTIP_ATTR, text);
+  }
+  if (placement === "below") {
+    element.removeAttribute(PLACEMENT_ATTR);
+  } else {
+    element.setAttribute(PLACEMENT_ATTR, placement);
+  }
 }
-
-const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
 
 /**
  * The mithril form: spread into an element's attrs in place of a native
@@ -301,24 +362,20 @@ const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
  * behavior; pass ``"right"`` only for the rail's exception (see the module
  * doc comment).
  *
- * ``text`` is ``null`` for no tooltip; pass that rather than swapping these
- * attrs for ``{}``. Mithril patches the same element across redraws and runs
- * only the current vnode's hooks, so attrs that disappear leave the listeners,
- * and the last text they took, on the element.
+ * ``text`` is ``null`` for no tooltip, and so is dropping these attrs
+ * altogether: both leave the element without the attribute, which is the whole
+ * of the state. That is why the text lives in an attribute rather than in a
+ * closure held by lifecycle hooks -- mithril patches the same element across
+ * redraws and runs only the current vnode's hooks, so anything a vanished
+ * spread left behind would have nothing to clean it up.
  */
 export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
+  wireListeners();
+  // Null values are what mithril removes an attribute for, on the update where
+  // they appear -- so a caller passing null, and a caller dropping the spread,
+  // land in the same place.
   return {
-    oncreate: (vnode: m.VnodeDOM): void => {
-      const tooltip = attachHoverTooltip(vnode.dom, placement);
-      tooltip.setText(text);
-      tooltipsByElement.set(vnode.dom, tooltip);
-    },
-    onupdate: (vnode: m.VnodeDOM): void => {
-      tooltipsByElement.get(vnode.dom)?.setText(text);
-    },
-    onremove: (vnode: m.VnodeDOM): void => {
-      tooltipsByElement.get(vnode.dom)?.dispose();
-      tooltipsByElement.delete(vnode.dom);
-    },
+    [TOOLTIP_ATTR]: text,
+    [PLACEMENT_ATTR]: placement === "below" ? null : placement,
   };
 }
