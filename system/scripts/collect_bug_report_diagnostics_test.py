@@ -186,8 +186,9 @@ def _chat_events(
         json.dumps(
             {
                 "timestamp": _stamp_seconds_ago(age_seconds),
-                "type": "user_message",
-                "source": f"{source}/common_transcript",
+                "type": "step",
+                "emitter": f"{source}/common_transcript",
+                "source": "user",
                 "seq": marker,
             }
         )
@@ -223,7 +224,7 @@ def _write_mngr_stub(
     The collector asks mngr three things -- which agents exist, what was said in
     one, and what is on one's pane -- so the stub answers exactly those three
     shapes: the pipe template ``{name}|{id}|{id}@{host.id}.{host.provider_name}``
-    for ``list``, raw JSONL for ``event``, and pane text for ``capture``. Both
+    for ``list``, raw JSONL for ``transcript``, and pane text for ``capture``. Both
     per-agent targets arrive as the pinned ``id@host-id.provider`` form the
     listing handed out, so the stub keys its canned answers by the id in front
     of the ``@``. An agent with no canned pane exits nonzero, as the real
@@ -252,7 +253,7 @@ def _write_mngr_stub(
         f'  cat "{listing_path}"\n'
         "  exit 0\n"
         "fi\n"
-        'if [ "$1" = "event" ]; then\n'
+        'if [ "$1" = "transcript" ]; then\n'
         '  agent_id="${2%%@*}"\n'
         f'  f="{events_dir}/$agent_id"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
@@ -274,13 +275,14 @@ def _write_mngr_stub(
 def _transcript_events(
     *messages: str, source: str = "claude", timestamp: str = "2026-08-17T12:00:00Z"
 ) -> str:
-    """JSONL in the shape ``mngr event`` returns, one event per message."""
+    """JSONL in the shape ``mngr transcript`` returns, one ATIF step per message."""
     return "".join(
         json.dumps(
             {
                 "timestamp": timestamp,
-                "type": "user_message",
-                "source": f"{source}/common_transcript",
+                "type": "step",
+                "emitter": f"{source}/common_transcript",
+                "source": "user",
                 "message": message,
             }
         )
@@ -290,9 +292,11 @@ def _transcript_events(
 
 
 def _user_message_line(timestamp: str) -> str:
-    """One common-transcript user message, as the fallback ranking reads it."""
+    """One common-transcript user step, as the fallback ranking reads it."""
     return (
-        json.dumps({"type": "user_message", "timestamp": timestamp, "message": "hi"})
+        json.dumps(
+            {"type": "step", "source": "user", "timestamp": timestamp, "message": "hi"}
+        )
         + "\n"
     )
 
@@ -515,18 +519,17 @@ def test_a_transcript_is_named_for_the_harness_that_wrote_it_not_the_agent_type(
     assert [name for name, _, _ in members] == ["chats/chatty-claude.jsonl"]
 
 
-def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_log(
+def test_the_collector_reads_conversations_with_the_transcript_command(
     tmp_path: Path,
 ) -> None:
     """What the collector ASKS mngr for is the contract, and it is easy to get wrong.
 
-    The harness cannot be derived from the agent type (a ``chat`` agent writes
-    under ``claude/``), so the query filters on the source each event carries.
-    Everything under ``logs/`` is the converter's own stdout -- it records *that*
-    it converted, not what was said -- so including it would attach a log of
-    conversions in place of the conversation. Asserting the arguments is what
-    catches a wrong filter: a stub that answered regardless of them let a
-    deliberately broken source stay green.
+    ``transcript`` is what preserves the records as the harness wrote them,
+    speaker included; the event reader overwrites each record's ``source`` with
+    the path it read the stream from. It also picks the stream itself, so the
+    collector names neither the harness nor the converter's own stdout under
+    ``logs/``. Asserting the arguments is what catches a wrong query: a stub that
+    answered regardless of them let a deliberately broken one stay green.
     """
     chats = {"chatty": _chat_events("hello")}
     stub = _mngr_stub_for_chats(tmp_path, chats)
@@ -535,13 +538,12 @@ def test_the_transcript_query_asks_for_conversations_and_excludes_the_converter_
     module.collect_transcript_members(5.0)
 
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
-    event_calls = [
-        line for line in invocations.splitlines() if line.startswith("event ")
+    transcript_calls = [
+        line for line in invocations.splitlines() if line.startswith("transcript ")
     ]
-    assert len(event_calls) == 1, invocations
-    assert 'source.endsWith("common_transcript")' in event_calls[0]
-    assert 'source.startsWith("logs/")' in event_calls[0]
-    assert "--format jsonl" in event_calls[0]
+    assert len(transcript_calls) == 1, invocations
+    assert transcript_calls[0].endswith(" --format jsonl"), transcript_calls[0]
+    assert not [line for line in invocations.splitlines() if line.startswith("event ")]
 
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:

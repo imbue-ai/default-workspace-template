@@ -1,15 +1,17 @@
 """The collector's chat transcripts, fetched through the real vendored ``mngr``.
 
-The unit tests stub mngr, so they cannot say whether the target the collector hands
-``mngr event`` is one mngr resolves. Inside a workspace container the host record in the
-host dir is stamped by the outer provider that built it, so ``mngr list`` names the host
-after that record (``workspace-1``) rather than ``localhost``, and a target composed from
-the listing is only as good as the vendored mngr's willingness to resolve it.
+The unit tests stub mngr, so they can say neither whether the target the collector hands
+it is one mngr resolves, nor what mngr makes of a real stream. Inside a workspace
+container the host record in the host dir is stamped by the outer provider that built it,
+so ``mngr list`` names the host after that record (``workspace-1``) rather than
+``localhost``, and a target composed from the listing is only as good as the vendored
+mngr's willingness to resolve it.
 
 So this drives the collector's ``list_agents`` -> ``fetch_transcript`` path against the
 vendored binary over a host dir shaped like a workspace's: a record naming the host
-something other than ``localhost``, and one agent with a transcript. A change to mngr's
-addressing shows up here, not as archives with no ``chats/`` member.
+something other than ``localhost``, and one agent with a real ATIF stream. A change to
+mngr's addressing, or to what it makes of the records a harness writes, shows up here
+rather than as archives with no ``chats/`` member or with every line's speaker rewritten.
 """
 
 from __future__ import annotations
@@ -22,6 +24,12 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from imbue.mngr.agents.common_transcript_records import (
+    PINNED_ATIF_SCHEMA_VERSION,
+    HeaderRecord,
+    StepRecord,
+    StepSource,
+)
 from imbue.mngr.cli.testing import (
     create_agent_with_events_dir,
     write_common_transcript_events,
@@ -46,6 +54,43 @@ def _load_collector(mngr_binary: str) -> ModuleType:
     )
     namespace["MNGR_BINARY"] = mngr_binary
     return module
+
+
+def _atif_stream_records() -> list[dict[str, object]]:
+    """A stream as a harness writes one: the header, then who said what.
+
+    Built through mngr's own record models, so a change to the shape the
+    emitters must write reaches this fixture rather than leaving it asserting
+    against a shape nothing produces any more. The header carries no timestamp,
+    and a step's ``source`` is the speaker -- the two properties the collector's
+    reader has to survive and preserve.
+    """
+    header = HeaderRecord(
+        type="header",
+        event_id="header-" + "0" * 32,
+        emitter="claude/common_transcript",
+        schema_version=PINNED_ATIF_SCHEMA_VERSION,
+    )
+    asked = StepRecord(
+        type="step",
+        event_id="u1-user",
+        emitter="claude/common_transcript",
+        timestamp="2026-09-14T12:00:00Z",
+        source=StepSource.USER,
+        message="what did the update change",
+    )
+    answered = StepRecord(
+        type="step",
+        event_id="a1-agent",
+        emitter="claude/common_transcript",
+        timestamp="2026-09-14T12:00:01Z",
+        source=StepSource.AGENT,
+        message="the launch path",
+    )
+    return [
+        record.model_dump(mode="json", exclude_none=True)
+        for record in (header, asked, answered)
+    ]
 
 
 def _workspace_shaped_host_dir(tmp_path: Path) -> Path:
@@ -79,23 +124,7 @@ def test_transcripts_are_fetched_through_the_vendored_mngr(
         events_source="claude/common_transcript",
         agent_type="claude",
     )
-    write_common_transcript_events(
-        events_dir,
-        [
-            {
-                "timestamp": "2026-09-14T12:00:00Z",
-                "type": "user_message",
-                "source": "claude/common_transcript",
-                "message": "what did the update change",
-            },
-            {
-                "timestamp": "2026-09-14T12:00:01Z",
-                "type": "agent_message",
-                "source": "claude/common_transcript",
-                "message": "the launch path",
-            },
-        ],
-    )
+    write_common_transcript_events(events_dir, _atif_stream_records())
     mngr_binary = shutil.which("mngr")
     assert mngr_binary is not None and Path(mngr_binary).resolve().is_relative_to(
         _REPO_ROOT
@@ -110,4 +139,18 @@ def test_transcripts_are_fetched_through_the_vendored_mngr(
     assert [name for name, _content, _written_at in members] == [
         "chats/chatty-claude.jsonl"
     ]
-    assert "what did the update change" in members[0][1]
+    collected = [
+        json.loads(line) for line in members[0][1].splitlines() if line.strip()
+    ]
+    assert [
+        record.get("message") for record in collected if record["type"] == "step"
+    ] == [
+        "what did the update change",
+        "the launch path",
+    ]
+    # Who spoke each line survives collection: it is the field an event-stream
+    # read replaces with the path the stream was read from.
+    assert [record["source"] for record in collected if record["type"] == "step"] == [
+        "user",
+        "agent",
+    ]

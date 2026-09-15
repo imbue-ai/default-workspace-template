@@ -789,29 +789,15 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
     ``target`` is the pinned ``id@host-id.provider`` form from ``list_agents``,
     so resolving it never fans out to the unreachable cloud providers.
 
-    The harness is NOT derived from the agent's type: an agent of type ``chat``
-    writes its events under ``claude/``, so the two do not map onto each other.
-    Instead mngr is asked for every source and filtered on the source each event
-    carries, which keeps the set of harnesses mngr's business rather than a list
-    kept here.
-
-    ``logs/`` is excluded deliberately: everything under it is the converter's
-    own stdout -- it records *that* it converted, not what was said -- so
-    including it would attach a log of conversions in place of the conversation.
+    ``mngr transcript`` rather than ``mngr event``: it writes the stream's ATIF
+    records verbatim, where the event reader overwrites each record's ``source``
+    -- which in ATIF names who spoke -- with the path the stream was read from,
+    losing the speaker of every line it attaches. It also finds the stream
+    itself, so the harness stays mngr's business rather than a list kept here
+    (an agent of type ``chat`` writes its events under ``claude/``), and the
+    converter's own stdout under ``logs/`` is already not what it reads.
     """
-    events = run_mngr(
-        [
-            "event",
-            target,
-            "--include",
-            'source.endsWith("common_transcript")',
-            "--exclude",
-            'source.startsWith("logs/")',
-            "--format",
-            "jsonl",
-        ],
-        timeout,
-    )
+    events = run_mngr(["transcript", target, "--format", "jsonl"], timeout)
     if events is None or not events.strip():
         return None
     return events
@@ -820,19 +806,20 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
 def transcript_source(events: str) -> str:
     """The harness that wrote these events (``claude``, ``codex``, ...).
 
-    Taken from the events' own ``source`` field rather than the agent's type,
-    which does not name it: a ``chat`` agent's events live under ``claude/``.
+    Taken from the records' own ``emitter`` (``claude/common_transcript``),
+    which every ATIF record carries, rather than the agent's type, which does
+    not name it: a ``chat`` agent's events live under ``claude/``.
     """
     for line in events.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            source = json.loads(line).get("source")
+            emitter = json.loads(line).get("emitter")
         except ValueError:
             continue
-        if isinstance(source, str) and "/" in source:
-            return source.split("/", 1)[0]
+        if isinstance(emitter, str) and "/" in emitter:
+            return emitter.split("/", 1)[0]
     return "chat"
 
 
