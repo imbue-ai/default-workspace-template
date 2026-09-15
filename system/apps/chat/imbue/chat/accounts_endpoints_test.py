@@ -75,6 +75,21 @@ def test_exactly_one_method_per_lane_is_primary() -> None:
         assert [m["is_primary"] for m in lane["methods"]].count(True) == 1
 
 
+def test_the_google_lane_offers_a_paste_beside_its_browser_methods() -> None:
+    """The modal renders a lane generically: a paste method among PTY ones opens the key form,
+    and one key provider makes that form a single field carrying the provider's hint rather
+    than a picker."""
+    with _client() as client:
+        lanes = client.get("/api/lanes").get_json()["lanes"]
+    (google,) = [lane for lane in lanes if lane["id"] == "google"]
+    shapes = {method["id"]: method["shape"] for method in google["methods"]}
+    assert shapes["oauth"] == "url_then_code"
+    assert shapes["api_key"] == "paste"
+    (key_provider,) = google["key_providers"]
+    assert key_provider["env_var"] == "GEMINI_API_KEY"
+    assert key_provider["hint"]
+
+
 def test_accounts_carry_every_key_the_picker_reads() -> None:
     account_id, _ = mint_account_dir()
     commit_account(account_id, "anthropic", "Anthropic")

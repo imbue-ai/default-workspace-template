@@ -20,6 +20,9 @@ from imbue.chat.harnesses.account_scope import ScopeError
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import account_env
 from imbue.chat.harnesses.account_scope import agent_credential_path
+from imbue.chat.harnesses.antigravity.auth import GEMINI_MODE_SETTING
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.binding import BindingError
 from imbue.chat.harnesses.binding import create_args
 from imbue.chat.harnesses.binding import resolve_binding
@@ -84,6 +87,26 @@ def test_the_others_bind_by_replacing_the_provisioned_symlink(tmp_path: Path) ->
         assert "ln -sfn" in command
         assert str(account_credential_path(harness, tmp_path)) in command
         assert str(agent_credential_path(harness, tmp_path / "state")) in command
+
+
+def test_an_agy_account_on_a_pasted_key_binds_by_the_env_file_and_the_mode(tmp_path: Path) -> None:
+    """There is no credential file to link in key mode: the key is an environment variable mngr
+    merges into the agent's env before provisioning, and the mode is a config override that
+    reaches the per-agent settings.json mngr writes at the same moment."""
+    write_gemini_api_key(tmp_path, "AIzaSyValid")
+
+    args = create_args(HarnessType.ANTIGRAVITY, tmp_path, tmp_path / "state")
+
+    assert args == ["--env-file", str(gemini_env_path(tmp_path)), "--setting", GEMINI_MODE_SETTING]
+    # The setting names the mngr agent type, not agy's `agy` alias, or it resolves to nothing.
+    assert GEMINI_MODE_SETTING == "agent_types.antigravity.settings_overrides.modelProvider=gemini"
+
+
+def test_an_agy_account_without_a_key_still_binds_by_the_symlink(tmp_path: Path) -> None:
+    """The two sign-ins on this lane share a harness and nothing else, so the file that says
+    which one this account had is what decides how it binds."""
+    (flag, _command) = create_args(HarnessType.ANTIGRAVITY, tmp_path, tmp_path / "state")
+    assert flag == "--extra-provision-command"
 
 
 def test_the_provision_command_quotes_paths(tmp_path: Path) -> None:

@@ -44,6 +44,8 @@ from loguru import logger as _loguru_logger
 from imbue.chat import accounts
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.antigravity.auth import gemini_credential_paths
+from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.binding import seed_account
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import CLAUDE_CODE_OAUTH_TOKEN_ENV_VAR
@@ -873,6 +875,8 @@ def _credential_paths(sink: PasteSink, account_path: Path) -> tuple[Path, ...]:
             return (account_path / "auth.json",)
         case PasteSink.CLAUDE_ENV:
             return (account_path / "settings.json",)
+        case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            return gemini_credential_paths(account_path)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -888,6 +892,12 @@ def _harness_credential_paths(harness: HarnessType, account_path: Path) -> tuple
     linked = account_credential_path(harness, account_path)
     if linked is not None:
         paths.append(linked)
+    if harness is HarnessType.ANTIGRAVITY:
+        # An agy account is signed in one of two unrelated ways, and a re-auth may switch
+        # between them, so both have to go. The settings flag counts: left behind with the key
+        # gone, agy refuses to start at all rather than falling back to the browser flow, so a
+        # re-auth from a key to an OAuth login would drive a CLI that exits immediately.
+        paths.extend(gemini_credential_paths(account_path))
     if harness is HarnessType.CLAUDE:
         # What `claude auth login` / `setup-token` write themselves.
         paths.append(account_path / ".credentials.json")
@@ -972,5 +982,11 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
         case PasteSink.CLAUDE_ENV:
             write_claude_env(account_path, claude_env_from_paste(api_key))
             return lane.provider_name
+        case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            write_gemini_api_key(account_path, api_key)
+            # Its own noun rather than the lane's: the browser methods on this lane mint
+            # "Google" accounts, and a key account runs on different models and a different
+            # bill, so two rows reading "Google" would be the wrong two rows.
+            return next((k.display for k in lane.key_providers), lane.provider_name)
         case _ as unreachable:
             assert_never(unreachable)
