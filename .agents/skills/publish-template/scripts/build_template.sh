@@ -698,7 +698,7 @@ cat > README.md <<README_EOF
 # ${TITLE}
 
 <p align="center">
-  <a href="https://boweiliu.github.io/open-in-minds/?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Mind" height="64" src="https://img.shields.io/badge/Open%20in%20Minds-D8D1C0?style=for-the-badge"></a>
+  <a href="https://boweiliu.github.io/open-in-minds/?git_url=https://github.com/${REPO_URL_PLACEHOLDER}"><img alt="Open in Mind" height="64" src="https://img.shields.io/badge/Open%20in%20Mind-D8D1C0?style=for-the-badge"></a>
 </p>
 
 Didn't work? Create a Mind workspace and paste this to your agent:

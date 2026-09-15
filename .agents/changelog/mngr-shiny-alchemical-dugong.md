@@ -5,3 +5,5 @@ The welcome message every new workspace opens with, the skills that name the app
 Identifiers are unchanged: the `minds-api` skill and the `minds-api-proxy` gateway route, the `minds-workspaces-*` permission scopes, and every `MINDS_*` variable keep their names.
 
 The New Tab template catalog is left alone: it is generated from the published templates' own export, it is served from its own branch rather than from here, and its titles are the names their authors gave their own creations.
+
+The published-template README's call-to-action button reads "Open in Mind". Its alt text had been renamed while the badge image still rendered the old name.
