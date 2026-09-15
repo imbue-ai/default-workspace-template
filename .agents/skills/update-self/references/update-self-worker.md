@@ -144,8 +144,10 @@ command).
    workspace-added skill under `.agents/skills/`, and any cron or scheduled
    runners.
 2. **Search for dependents of each changed file**: its path, basename, and
-   importable module name; follow each service's code into the shared
-   scripts and libs it calls; check skills' `SKILL.md` and scripts.
+   importable module name; follow each service's code into the shared scripts
+   and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
+   app's `app.toml` claims in `[[references]]`. If the update adds reference-
+   or dependency-declaration machinery, write the declarations it expects.
 3. **Reason about interface-level coupling no grep finds**: an API surface (the
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
