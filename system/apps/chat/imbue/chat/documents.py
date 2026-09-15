@@ -23,8 +23,9 @@ FRONTEND_BUILT_HEADER: Final[str] = "X-Frontend-Built"
 BASE_PATH_META_NAME: Final[str] = "system-interface-base-path"
 HOSTNAME_META_NAME: Final[str] = "system-interface-hostname"
 PRIMARY_AGENT_ID_META_NAME: Final[str] = "system-interface-agent-id"
-# The chat document's own identity: which chat it shows, and which subagent session of it
-# when it is a subagent view.
+# The chat document's own identity: which chat it shows and, when it is a subagent view, which
+# agent of the chat the subagent session belongs to and which session it is.
+CHAT_ID_META_NAME: Final[str] = "system-interface-chat-id"
 CHAT_AGENT_ID_META_NAME: Final[str] = "system-interface-chat-agent-id"
 CHAT_SESSION_ID_META_NAME: Final[str] = "system-interface-chat-session-id"
 # The terminal app's origin label, which the chat's terminal back face is served from.
@@ -106,9 +107,10 @@ def inject_primary_agent_id_meta_tag(html_content: str) -> str:
     return inject_meta_tag(html_content, PRIMARY_AGENT_ID_META_NAME, os.environ.get("MNGR_AGENT_ID", ""))
 
 
-def inject_chat_identity_meta_tags(html_content: str, chat_agent_id: str, session_id: str) -> str:
-    """Name the chat (and, for a subagent view, the session) the chat document shows."""
-    with_agent = inject_meta_tag(html_content, CHAT_AGENT_ID_META_NAME, chat_agent_id)
+def inject_chat_identity_meta_tags(html_content: str, chat_id: str, agent_id: str, session_id: str) -> str:
+    """Name the chat the document shows and, for a subagent view, the agent and session; both "" for a chat's own page."""
+    with_chat = inject_meta_tag(html_content, CHAT_ID_META_NAME, chat_id)
+    with_agent = inject_meta_tag(with_chat, CHAT_AGENT_ID_META_NAME, agent_id)
     return inject_meta_tag(with_agent, CHAT_SESSION_ID_META_NAME, session_id)
 
 

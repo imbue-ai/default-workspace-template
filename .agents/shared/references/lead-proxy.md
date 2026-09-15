@@ -40,11 +40,11 @@ milestone comes back on the next poll.
 If await exits with code 75, the worker's own agent was **shed by the OOM
 daemon** to relieve memory pressure: it will not report until revived. This is
 not a worker bug -- revive it with `mngr start <WORKER_NAME> --restart` (a plain
-`mngr message` or `mngr start` does not relaunch a shed agent), then nudge it to
-continue (`mngr message <WORKER_NAME> -m continue`). You do not need to resend
-the task: it survives in the worker's conversation history, and a SessionStart
-hook already tells the revived worker it was paused, so it re-checks state before
-continuing.
+message or `mngr start` does not relaunch a shed agent), then nudge it to
+continue with `create_worker.py reply --task-file <TASK_FILE> -m continue`. You
+do not need to resend the task: it survives in the worker's conversation
+history, and a SessionStart hook already tells the revived worker it was paused,
+so it re-checks state before continuing.
 
 ## Diagnose worker liveness before invoking failure flow
 
@@ -102,16 +102,24 @@ On `type: gate`:
   user so they do not have to weigh in on them.
 
 The worker is framed as addressing the user directly. When you answer, write
-your reply in the user's voice and forward via `mngr message`:
+your reply in the user's voice and forward it to the worker's chat:
 
 ```bash
-mngr message <WORKER_NAME> -m "<reply, in the user's voice>"
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<reply, in the user's voice>"
 ```
 
-To escalate, ask the user, wait for
-the user's reply, then forward it via `mngr message`.
+`reply` addresses the worker by the agent id `launch` stamped into the task
+file's frontmatter (`worker_agent_id`) and sends through the chat app
+(`system/scripts/message_chat.py`, which falls back to `mngr message` on its
+own when the chat app cannot take the message); never message a worker by its
+mngr name. A task file from before the stamp (an in-flight worker launched by an
+older template) takes `--name <WORKER_NAME>` as the fallback address.
 
-After forwarding, consume the report so the next push can land a fresh
+To escalate, ask the user, wait for the user's reply, then forward it the same
+way.
+
+After forwarding, consume the report so the next report can land a fresh
 `report.md`:
 
 ```bash
@@ -177,7 +185,8 @@ de facto "no with notes" (the merge commit's subject names the worker and
 milestone, so the target is easy to find).
 
 ```bash
-mngr message <WORKER_NAME> -m "<why the milestone was reverted, in the user's voice>"
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
 ```
 
 The reverted commits remain ancestors of HEAD, so any later merge from that
@@ -227,7 +236,7 @@ the directory is clean for future runs.
 
 ## `mngr rsync` rationale
 
-When syncing reports (or the initial runtime dir to the worker):
+When syncing the initial runtime dir (or any other directory) to the worker:
 
 ```bash
 mngr rsync ./<SOURCE_DIR>/ <WORKER>:<DEST_DIR>/ \

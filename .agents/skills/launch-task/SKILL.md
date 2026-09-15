@@ -60,8 +60,8 @@ cat << 'BODY_EOF'
 ## Reporting back
 Follow `.agents/shared/references/worker-reporting.md` for the full
 report procedure: it has you parse this task's frontmatter to get
-`LEAD_AGENT` / `FINISH_REPORT_PATH`, then write the report file and push
-its parent directory back to the lead. Substitutions for this task:
+`LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH`, then write the report
+file into the lead's checkout. Substitutions for this task:
 
 - `<TASK_FILE_GLOB>` -> `data/.tasks/launch-task/*/task.md`
 - `<RUNTIME_REPORTS_DIR>` -> the directory part of `finish_report_path`,
@@ -71,17 +71,17 @@ its parent directory back to the lead. Substitutions for this task:
   (terminal), plus `milestone` reports (`type: milestone`, any name;
   non-blocking, see `worker-reporting.md`).
 
-For a mid-flight `question` gate, stop your turn after pushing -- the
-lead replies via `mngr message` and you resume. For terminal statuses,
-the run ends. A milestone is the exception: it never stops your turn --
-push it and carry straight on.
+For a mid-flight `question` gate, stop your turn after delivering the
+report -- the lead's reply arrives as a message in your chat and you
+resume. For terminal statuses, the run ends. A milestone is the
+exception: it never stops your turn -- deliver it and carry straight on.
 BODY_EOF
 } > data/.tasks/launch-task/$NAME/task.md
 ```
 
 ## 2. Launch the worker
 
-`system/scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
+`.agents/skills/launch-task/scripts/create_worker.py launch` runs the worker lifecycle: `mngr create`,
 the runtime-dir push, and the task message. Run it in the foreground so a
 failed launch surfaces immediately.
 
@@ -107,8 +107,8 @@ pushes that directory into the worker's worktree automatically.
 Poll with `create_worker.py await` as a background task
 (`run_in_background: true`) and continue with whatever else you were doing. It
 reads `finish_report_path` from the task file
-(`data/.tasks/launch-task/$NAME/reports/report.md`), blocks until the worker pushes
-back, then prints the report. `--name $NAME` is required so the poll also
+(`data/.tasks/launch-task/$NAME/reports/report.md`), blocks until the worker writes
+it back, then prints the report. `--name $NAME` is required so the poll also
 watches the OOM shed ledger: if the worker's own agent is shed for memory
 pressure (so it will never report until revived), the poll surfaces that
 promptly and actionably (exit code 75) instead of waiting out the full timeout.
@@ -130,7 +130,7 @@ completes; handle them at that point, not by blocking on the poll.
 Follow `.agents/shared/references/lead-proxy.md` for parsing the
 report's frontmatter (`type` + `name`), deciding whether to answer a
 gate yourself vs. escalate to the user, consuming the report so the
-next push can land a fresh `report.md`, and acting on terminal statuses
+next report can land a fresh `report.md`, and acting on terminal statuses
 (`done` -> merge the worker's branch; `stuck` or 30m timeout without a
 report -> diagnose worker liveness, then surface to the user per
 `references/worker-failure.md` if the worker is genuinely wedged).
@@ -164,9 +164,10 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   the worker is dead), see `references/worker-failure.md` -- do not
   silently retry.
 - If a worker is `STOPPED` with uncommitted work, default to `mngr start
-  <worker>` and message it to continue -- the worktree is preserved
-  across restart. See `references/dead-worker-recovery.md` for the
-  manual salvage fallback when restart isn't viable.
+  <worker>` and message it to continue with `create_worker.py reply` --
+  the worktree is preserved across restart. See
+  `references/dead-worker-recovery.md` for the manual salvage fallback
+  when restart isn't viable.
 - If the task references gitignored files outside the runtime dir,
   declare them with `source_artifacts_dir: <dir>` in the task
   frontmatter -- `create_worker.py launch` pushes that directory automatically.

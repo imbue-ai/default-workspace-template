@@ -1442,7 +1442,7 @@ def test_is_main_session_event_excludes_subagent_sessions(tmp_path: Path) -> Non
     assert watcher.is_main_session_event({"session_id": session_id})
     assert not watcher.is_main_session_event({"session_id": "agent-some-subagent"})
     # Events without a session_id (e.g. plugin-injected app events) stay on the main stream.
-    assert watcher.is_main_session_event({"type": "agents_updated"})
+    assert watcher.is_main_session_event({"type": "chats_updated"})
 
 
 def test_watcher_handles_missing_session_file(tmp_path: Path) -> None:

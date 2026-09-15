@@ -1,8 +1,9 @@
 # terminal
 
 The terminal tab: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-supervised as the `terminal` program in `system/supervisord.conf`, which runs
-the `terminal-app` entry point of this package (installed as its own uv tool by
+supervised as the `terminal` program, declared in
+`system/supervisord.conf.d/terminal.conf`, which runs the `terminal-app` entry
+point of this package (installed as its own uv tool by
 `system/scripts/build_workspace.sh`, like every Python app with a manifest).
 
 `terminal-app` prepares the workspace for ttyd, then runs it as the sidecar's
