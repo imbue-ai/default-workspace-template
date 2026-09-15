@@ -1,8 +1,10 @@
 /**
  * The handoff between two agents of one chat, as one timeline node: "Handing off to Codex…"
  * while it runs, "Handed off from Claude to Codex" once the switch has landed, expandable to
- * the retiring agent's summary turn. One rendering whether the node sits in a progress block's
- * timeline or stands as a row of its own, and whether it was built from the transcript
+ * the retiring agent's summary turn and the prompt the successor started with. A landed switch
+ * draws a rule under the node: everything below it is the successor's. One rendering whether
+ * the node sits in a progress block's timeline or stands as a row of its own, and whether it
+ * was built from the transcript
  * (``HandoffNode``) or, before the summary request has landed there, from the chat's snapshot
  * alone (``renderHandoffTailNode``).
  */
@@ -84,7 +86,8 @@ export interface HandoffNodeOptions {
   expansionKey: string;
 }
 
-/** The node: a status bullet, the title, and the retiring agent's summary turn behind a chevron. */
+/** The node: a status bullet, the title, and behind a chevron the retiring agent's summary turn and the
+ *  successor's handoff prompt. */
 export function renderHandoffNode(
   node: HandoffNode,
   chatId: string,
@@ -92,7 +95,7 @@ export function renderHandoffNode(
   options: HandoffNodeOptions,
 ): m.Vnode {
   const { title, status } = handoffNodeText(node, getChatById(chatId));
-  const canExpand = node.request !== null || node.events.length > 0;
+  const canExpand = node.request !== null || node.events.length > 0 || node.prompt !== null;
   const isExpanded = isBlockExpanded(options.expansionKey);
   const classes = [
     "pv-tl-node",
@@ -140,8 +143,23 @@ export function renderHandoffNode(
                     m(StableUserMessage, { event: node.request }),
                   ),
               ...node.events.flatMap((event) => renderAssistantMessageChildren(event, toolResults, chatId)),
+              node.prompt === null
+                ? null
+                : m(
+                    "div",
+                    { class: "message message-system-collapsed mt-1 flex flex-col items-end" },
+                    m(StableUserMessage, { event: node.prompt }),
+                  ),
             ],
           )
+        : null,
+      // The boundary between the two agents' segments, once the switch has landed. Pulled left
+      // under the bullet and painted opaque, so it spans the row and caps the thread.
+      status === "done"
+        ? m("div", {
+            class: "pv-handoff-rule relative z-(--z-content) mt-3.5 -ml-[30px] h-2 border-t border-subtle bg-chat",
+            "aria-hidden": "true",
+          })
         : null,
     ]),
   ]);
@@ -153,7 +171,7 @@ export function renderHandoffNode(
 export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
   if (chat === undefined || chat.handoff === null || hasOpenRequest) return null;
-  const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null };
+  const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
   return m(
     "div",

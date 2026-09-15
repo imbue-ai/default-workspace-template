@@ -1589,15 +1589,28 @@ describe("agent switches", () => {
       display_label: "Handoff prompt",
     });
     expect(hasUserTurn([welcome, prompt])).toBe(true);
-    // And it folds into the successor's opening section rather than starting a turn of its own.
+    // And it belongs to the handoff node the switch closed, not to the successor's opening section,
+    // which then holds only the successor's reply.
     const sections = buildSections(
-      [agentSwitch("t4", "sw1"), prompt, assistantText("t6", "hello from codex")],
+      [userMsg("t0", "do it"), summaryRequest("t3"), agentSwitch("t4", "sw1"), prompt, assistantText("t6", "hello")],
       new Map(),
       true,
     );
-    const opening = sections[sections.length - 1];
+    expect(sections).toHaveLength(2);
+    const node = handoffNodeOf(sections[0].items[0]);
+    expect(node.switch?.event_id).toBe("sw1");
+    expect(node.prompt?.event_id).toBe("u-p");
+    const opening = sections[1];
     expect(opening.user_event).toBeNull();
-    expect(opening.items.map((i) => i.kind)).toEqual(["chip"]);
+    expect(opening.items.map((i) => i.kind)).toEqual([]);
+    expect(opening.trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+    // A fresh start's switch made the node itself; the prompt still lands on it. Any other chip
+    // after a switch is the successor's own.
+    const fresh = buildSections([agentSwitch("t4", "sw1"), prompt], new Map(), true);
+    expect(handoffNodeOf(fresh[0].items[0]).prompt?.event_id).toBe("u-p");
+    const other = buildSections([agentSwitch("t4", "sw1"), chip], new Map(), true);
+    expect(handoffNodeOf(other[0].items[0]).prompt).toBeNull();
+    expect(other[1].items.map((i) => i.kind)).toEqual(["chip"]);
   });
 
   it("carries a step still open at the switch over into the new agent's section", () => {

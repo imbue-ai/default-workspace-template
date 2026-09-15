@@ -474,7 +474,8 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     assert "--message" not in argv[1]
     prompt = workspace.delivered_prompt()
     assert "Now do it in Codex" in prompt
-    assert f"summary is at {summary}" in prompt
+    assert f"also on disk at {summary}" in prompt
+    assert "<predecessor-summary>\n# Summary\n\nThe user wants the tests green.\n</predecessor-summary>" in prompt
     assert "${" not in prompt
     assert successor in workspace.agents and workspace.agents[successor].labels["chat_seq"] == "2"
     # The chip went out on the chat's stream, and the held send followed the prompt to the successor.
@@ -504,9 +505,10 @@ def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: 
 
     runner.run(workspace.chat_id, "h-1")
 
-    # Fresh: nothing was asked, and the prompt points at it.
+    # Fresh: nothing was asked, and the prompt carries it.
     assert not any(text.startswith("/handoff-summary") for _agent, text, _id in workspace.delivered)
-    assert f"summary is at {summary}" in workspace.delivered_prompt()
+    assert f"also on disk at {summary}" in workspace.delivered_prompt()
+    assert "<predecessor-summary>\n# earlier summary\n</predecessor-summary>" in workspace.delivered_prompt()
 
     assert is_summary_fresh(stale - 1.0, stale) is False
     assert is_summary_fresh(stale + 1.0, stale) is True
@@ -544,7 +546,7 @@ def test_a_prompt_template_that_cannot_be_filled_in_leaves_the_handoff_where_it_
     finish, not a dead thread: the record keeps its phase for a resume once the template is repaired."""
     workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
     template = tmp_path / "continue-chat.md"
-    template.write_text("Continue ${title}; the summary is ${summary_line}; ${no_such_placeholder}.\n")
+    template.write_text("Continue ${title}; the summary is ${summary}; ${no_such_placeholder}.\n")
 
     _runner(workspace, prompt_template_path=template).run(workspace.chat_id, "h-1")
 

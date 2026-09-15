@@ -52,6 +52,17 @@ const WRITE: AssistantMessageEvent = {
   is_provider_fault: false,
 };
 
+const PROMPT: UserMessageEvent = {
+  timestamp: "t4",
+  type: "user_message",
+  event_id: "u-prompt",
+  source: "test",
+  role: "user",
+  content: 'You are continuing the chat "Chat 1" (chat id agent-a). Now do it in Codex.',
+  display: "chip",
+  display_label: "Handoff prompt",
+};
+
 const ROOT = () => document.getElementById("root") as HTMLElement;
 
 function chatWith(handoff: ChatSnapshot["handoff"]): ChatSnapshot {
@@ -60,7 +71,7 @@ function chatWith(handoff: ChatSnapshot["handoff"]): ChatSnapshot {
 
 describe("the handoff node's words", () => {
   it("reads as done once the switch has landed, whatever the snapshot says", () => {
-    const node: HandoffNode = { key: "u-req", request: REQUEST, events: [WRITE], switch: SWITCH };
+    const node: HandoffNode = { key: "u-req", request: REQUEST, events: [WRITE], switch: SWITCH, prompt: null };
     expect(handoffNodeText(node, chatWith(handoffStateFixture()))).toEqual({
       title: "Handed off from Claude to Codex",
       status: "done",
@@ -68,7 +79,7 @@ describe("the handoff node's words", () => {
   });
 
   it("follows the live switch while it runs, fails, or was called off", () => {
-    const open: HandoffNode = { key: "u-req", request: REQUEST, events: [], switch: null };
+    const open: HandoffNode = { key: "u-req", request: REQUEST, events: [], switch: null, prompt: null };
     expect(handoffNodeText(open, chatWith(handoffStateFixture({ phase: "summarizing" })))).toEqual({
       title: "Handing off to Codex…",
       status: "active",
@@ -93,14 +104,16 @@ describe("the handoff node", () => {
 
   it("spins while open, and expands to the summary turn once done", () => {
     state.chat = chatWith(handoffStateFixture({ phase: "summarizing" }));
-    const open: HandoffNode = { key: "u-req", request: REQUEST, events: [WRITE], switch: null };
+    const open: HandoffNode = { key: "u-req", request: REQUEST, events: [WRITE], switch: null, prompt: null };
     m.render(ROOT(), renderHandoffNode(open, "agent-a", new Map(), { isLast: true, expansionKey: "k" }));
     expect(ROOT().querySelector('[data-handoff-status="active"]')).not.toBeNull();
     expect(ROOT().querySelector(".spinner")).not.toBeNull();
     expect(ROOT().textContent).toContain("Handing off to Codex…");
+    // No rule while the switch runs: nothing below the node is the successor's yet.
+    expect(ROOT().querySelector(".pv-handoff-rule")).toBeNull();
 
     state.chat = chatWith(null);
-    const done: HandoffNode = { ...open, switch: SWITCH };
+    const done: HandoffNode = { ...open, switch: SWITCH, prompt: PROMPT };
     m.render(ROOT(), renderHandoffNode(done, "agent-a", new Map(), { isLast: true, expansionKey: "k" }));
     expect(ROOT().querySelector('[data-handoff-status="done"]')).not.toBeNull();
     expect(ROOT().textContent).toContain("Handed off from Claude to Codex");
@@ -111,6 +124,24 @@ describe("the handoff node", () => {
     expect(ROOT().querySelector(".pv-tl-expanded")).not.toBeNull();
     expect(ROOT().textContent).toContain("Asked for a handoff summary");
     expect(ROOT().textContent).toContain("Write");
+    // The successor's prompt closes the expanded body, and the rule marks the segment boundary.
+    const chips = Array.from(ROOT().querySelectorAll(".pv-tl-expanded .message-system-collapsed"));
+    expect(chips).toHaveLength(2);
+    expect(chips[0].textContent).toContain("Asked for a handoff summary");
+    expect(chips[1].textContent).toContain("Handoff prompt");
+    expect(ROOT().querySelector(".pv-handoff-rule")).not.toBeNull();
+  });
+
+  it("expands on the prompt alone for a fresh start that asked for no summary", () => {
+    const fresh: HandoffNode = { key: "sw1", request: null, events: [], switch: SWITCH, prompt: PROMPT };
+    m.render(ROOT(), renderHandoffNode(fresh, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
+    expect(ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.disabled).toBe(false);
+    ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.click();
+    m.render(ROOT(), renderHandoffNode(fresh, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
+    expect(ROOT().textContent).toContain("Handoff prompt");
+    const bare: HandoffNode = { ...fresh, prompt: null };
+    m.render(ROOT(), renderHandoffNode(bare, "agent-a", new Map(), { isLast: true, expansionKey: "k3" }));
+    expect(ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.disabled).toBe(true);
   });
 
   it("stands in at the tail only while the transcript has no request to show", () => {

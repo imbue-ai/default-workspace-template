@@ -126,6 +126,9 @@ export interface HandoffNode {
   events: AssistantMessageEvent[];
   /** The switch that completed the handoff, once it has. */
   switch: AgentSwitchEvent | null;
+  /** The prompt the successor was started with (the chip carrying the summary and the user's message),
+   *  once it has reached the successor's segment: shown inside the node rather than as a chip of its own. */
+  prompt: UserMessageEvent | null;
 }
 
 /** One item on a section's timeline, in transcript order. */
@@ -479,7 +482,12 @@ export function buildSections(
     return section;
   };
 
+  // The node a switch just closed, until the successor's first event: the handoff prompt lands
+  // on it rather than in the successor's section.
+  let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
+    const switched = lastSwitched;
+    lastSwitched = null;
     if (e.type === "agent_switch") {
       // The chat moved to another agent. The switch closes the handoff node the summary
       // request opened (the node stays where the request was, at the end of the retiring
@@ -489,20 +497,28 @@ export function buildSections(
       if (current === null) current = ensureSection(null, "section-pre");
       if (current.open_handoff !== null) {
         current.open_handoff.switch = e;
+        lastSwitched = current.open_handoff;
         current.open_handoff = null;
       } else {
-        current.entries.push({ kind: "handoff", node: { key: e.event_id, request: null, events: [], switch: e } });
+        lastSwitched = { key: e.event_id, request: null, events: [], switch: e, prompt: null };
+        current.entries.push({ kind: "handoff", node: lastSwitched });
       }
       carryover = openStepsAtEnd(current);
       current = ensureSection(null, `section-switch-${e.event_id}`);
       continue;
     }
     if (e.type === "user_message") {
+      if (switched !== null && isHandoffPromptChip(e)) {
+        // The successor's first message: the prompt the switch started it with. It belongs to
+        // the handoff, so the node shows it and the successor's section opens on its reply.
+        switched.prompt = e;
+        continue;
+      }
       if (isHandoffSummaryRequest(e)) {
         // The chat app asked the agent for its handoff summary: the node opens here and takes
         // the agent's answer, so the pause reads as one thing rather than a chip and a write.
         if (current === null) current = ensureSection(null, "section-pre");
-        const node: HandoffNode = { key: e.event_id, request: e, events: [], switch: null };
+        const node: HandoffNode = { key: e.event_id, request: e, events: [], switch: null, prompt: null };
         current.entries.push({ kind: "handoff", node });
         current.open_handoff = node;
         continue;

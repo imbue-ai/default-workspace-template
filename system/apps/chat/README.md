@@ -121,7 +121,8 @@ with no summary and no handoff prompt, since there is nothing to hand over.
 While the chat converges the held messages render from the snapshot's
 `handoff.held_sends`, one handoff node in the transcript shows the switch's
 progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
-expandable to the summary turn), the activity strip and the placeholder say
+expandable to the summary turn and the handoff prompt, with a rule under it
+once the switch has landed), the activity strip and the placeholder say
 what is happening, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account

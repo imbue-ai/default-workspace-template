@@ -543,15 +543,22 @@ class HandoffRunner:
     def _render_prompt(
         self, record: ChatRecord, handoff: ChatHandoffRecord, outcome: SummaryOutcome, trigger_text: str
     ) -> str:
-        """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message."""
+        """Fill the ``continue-chat`` reference in: the summary, the predecessors, the lanes, the user's message.
+
+        The summary travels inside the prompt, so the successor has its context before its first
+        tool call; the path stays beside it for a re-read and for the file's own readers.
+        """
         template = string.Template(self._deps.prompt_template_path.read_text())
         retiring = record.agents[-1]
         path = summary_path(self._deps.chat_files_root, record.chat_id, handoff.retiring_seq)
         match outcome:
             case SummaryOutcome.REUSED | SummaryOutcome.WRITTEN:
-                summary_line = f"Your predecessor's summary is at {path}; read it first."
+                summary = (
+                    f"Your predecessor's summary, also on disk at {path}:\n\n"
+                    f"<predecessor-summary>\n{path.read_text().strip()}\n</predecessor-summary>"
+                )
             case SummaryOutcome.MISSING:
-                summary_line = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
+                summary = "Your predecessor did not produce a summary; gather context from its transcript before anything else."
             case SummaryOutcome.SKIPPED:
                 raise HandoffStepError(f"the handoff of chat {record.chat_id} is a fresh start and takes no prompt")
             case _ as unreachable:
@@ -567,7 +574,7 @@ class HandoffRunner:
                 chat_id=record.chat_id,
                 predecessor_harness=HARNESS_LABEL[retiring.harness],
                 successor_harness=HARNESS_LABEL[handoff.target_harness],
-                summary_line=summary_line,
+                summary=summary,
                 predecessors=predecessors,
                 source_lane=retiring.lane,
                 target_lane=handoff.target_lane,

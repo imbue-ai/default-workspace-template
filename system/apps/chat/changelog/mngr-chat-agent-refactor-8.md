@@ -4,10 +4,10 @@ Phase 8 of the chat-agent split (`docs/system/blueprint/chat-agent-split/`): the
 
 - A chat that has had no user turn skips the dialog: picking another account switches it at once, with no summary and no handoff prompt, since there is nothing to hand over. The draft stays in the composer.
 
-- The handoff renders as one node in the transcript: "Handing off to Codex..." while it runs, "Handed off from Claude to Codex" once done, expandable to the summary turn, "Handoff called off" for a cancelled one. The "Asked for a handoff summary" chip and the "Switched from" chip are gone; held messages read "Sending..." like any send.
+- The handoff renders as one node in the transcript: "Handing off to Codex..." while it runs, "Handed off from Claude to Codex" once done, expandable to the summary turn and the handoff prompt, "Handoff called off" for a cancelled one. Once the switch has landed, a rule under the node marks where the successor's segment begins. The "Asked for a handoff summary" chip and the "Switched from" chip are gone; held messages read "Sending..." like any send.
 
 - `POST /api/chats/<chat-id>/handoff` takes `model` (model id, effort, fast); a rebind refuses one. The successor is created silent, the pick is applied through the harness's own switch path before its first message, then the handoff prompt goes to it through the send path, then the held messages. A pick the successor cannot take fails the switch at that step (`failed_step: model` on the snapshot's `handoff`): the page reads "Could not set the model on Codex", and a retry on the same account reruns only the pick and the deliveries, adopting the successor under its pre-minted id. `POST /api/chats/create` takes `model` too, for a new chat started from the dialog.
 
 - `GET /api/accounts/<account-id>/model-options` answers what a new agent on that account could run on: the catalog for a static harness, the options the account's last agent was offered for codex.
 
-- The handoff prompt the successor starts with shows as a collapsed "Handoff prompt" chip in its transcript rather than as the user's own bubble.
+- The handoff prompt the successor starts with carries the predecessor's summary in full, with the path it is kept at, rather than only the path, so the successor has its context before its first tool call. In the transcript it shows as a collapsed "Handoff prompt" chip inside the handoff node, after the summary turn, rather than as the user's own bubble at the top of the successor's segment.
