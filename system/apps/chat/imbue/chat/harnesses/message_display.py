@@ -17,12 +17,10 @@ Order of decision (:func:`classify_user_message`):
 1. An explicit detector matches (stop hook, fleet, task-notification, skill, /welcome,
    model-bar traffic, a latchkey resolution) -> that decision. Explicit detectors WIN over
    ``is_meta`` -- Stop-hook feedback is ``is_meta`` yet deliberately surfaces as a chip.
-2. else ``is_compact_summary`` (claude's flag on the record injected after
-   auto-compaction) -> a labelled chip; keyed off the structural flag, not the summary
-   text, so wording changes never break it.
-3. else ``is_meta`` (claude's flag for a framework-injected, model-only message) ->
-   hidden. One rule hides the whole family, present and future.
-4. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
+2. else ``is_meta`` (a framework-injected, model-only message) -> hidden. One rule hides the
+   whole family, present and future.
+3. else -> no decision (a genuine human turn; the parser emits no ``display`` field).
+
 """
 
 import re
@@ -35,9 +33,10 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 
-# Cross-layer contract: the sentinel the agentic browser fleet wraps its agent-facing
-# nudges in before sending them via ``mngr message``. The wrapping side is
-# ``system/apps/browser/src/browser/session.py`` (``_SYSTEM_MESSAGE_TAG``); keep in sync.
+# Cross-layer contract: the sentinel an automated in-workspace sender (today the agentic
+# browser fleet's wake-ups) wraps its agent-facing nudges in. The wrapping side is
+# ``system/scripts/message_chat.py --system`` (``SYSTEM_MESSAGE_TAG``), which posts through
+# this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
 _SKILL_EXPANSION_PREFIX = "Base directory for this skill:"
@@ -73,9 +72,6 @@ _BASH_OUTPUT_RE = re.compile(r"<bash-(?:stdout|stderr)>([\s\S]*?)</bash-(?:stdou
 _BASH_ANY_OPEN = ("<bash-input>", "<bash-stdout>", "<bash-stderr>")
 _BASH_INPUT_LABEL = "Bash"
 _BASH_OUTPUT_LABEL = "Output"
-
-# Chip label for the post-auto-compaction summary.
-_COMPACTION_SUMMARY_LABEL = "Summary of earlier conversation"
 
 # The composer appends a "See attachment(s) here:" block to a message it sends with
 # uploads (see frontend/src/models/attachments.ts -- keep the two in step). Detectors run
@@ -252,7 +248,7 @@ _DETECTORS = (
 
 @pure
 def classify_user_message(
-    content: str, *, is_meta: bool = False, is_compact_summary: bool = False
+    content: str, *, is_meta: bool = False
 ) -> MessageDisplay | None:
     """The render decision for one user message, or ``None`` for a genuine human turn.
 
@@ -266,8 +262,6 @@ def classify_user_message(
         decision = detect(visible)
         if decision is not None:
             break
-    if decision is None and is_compact_summary:
-        decision = MessageDisplay(display=DisplayKind.CHIP, display_label=_COMPACTION_SUMMARY_LABEL)
     if decision is None and is_meta:
         decision = MessageDisplay(display=DisplayKind.HIDDEN)
     if decision is None:
@@ -280,7 +274,7 @@ def classify_user_message(
 
 
 def stamp_user_message_display(
-    event: dict[str, Any], content: str, *, is_meta: bool = False, is_compact_summary: bool = False
+    event: dict[str, Any], content: str, *, is_meta: bool = False
 ) -> None:
     """Stamp the wire's render-decision fields onto one ``user_message`` event.
 
@@ -288,11 +282,12 @@ def stamp_user_message_display(
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
     """
-    decision = classify_user_message(content, is_meta=is_meta, is_compact_summary=is_compact_summary)
+    decision = classify_user_message(content, is_meta=is_meta)
     if decision is not None:
         decision.apply_to(event)
     if is_non_turn_tail(content, is_meta=is_meta):
         event["non_turn_tail"] = True
+
 
 
 @pure

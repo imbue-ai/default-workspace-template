@@ -95,7 +95,7 @@ export function renderTranscriptSegments(rows: RowDescriptor[], segments: Window
  * measureRows can read its height.
  */
 function buildRows(
-  agentId: string,
+  chatId: string,
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
 ): RowDescriptor[] {
@@ -125,7 +125,7 @@ function buildRows(
             items: section.items,
             trailing_reply: section.trailing_reply,
             toolResults,
-            agentId,
+            chatId,
           }),
       });
       continue;
@@ -140,7 +140,7 @@ function buildRows(
             key: event.event_id,
             estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
             anchorEventId: event.event_id,
-            render: () => renderAssistantMessage(event, toolResults, agentId),
+            render: () => renderAssistantMessage(event, toolResults, chatId),
           });
         }
       } else if (item.kind === "permission") {
@@ -155,7 +155,7 @@ function buildRows(
           anchorEventId: permissionEvent.event_id,
           // Pass the row key as the DOM id so the measured height is cached under
           // the same key the window math looks up (see renderPermissionItem).
-          render: () => renderPermissionItem(permissionEvent, toolResults, agentId, resolutionsByRequestId, permKey),
+          render: () => renderPermissionItem(permissionEvent, toolResults, chatId, resolutionsByRequestId, permKey),
         });
       } else if (item.kind === "chip") {
         const chipEvent = item.event;
@@ -174,7 +174,7 @@ function buildRows(
         key: event.event_id,
         estimate: ESTIMATED_ASSISTANT_HEIGHT_PX,
         anchorEventId: event.event_id,
-        render: () => renderAssistantMessage(event, toolResults, agentId),
+        render: () => renderAssistantMessage(event, toolResults, chatId),
       });
     }
   }
@@ -189,7 +189,7 @@ function buildRows(
  * from the transcript walk.
  */
 export function buildConversationRows(
-  agentId: string,
+  chatId: string,
   events: TranscriptEvent[],
   agentIsIdle: boolean,
 ): RowDescriptor[] {
@@ -197,7 +197,7 @@ export function buildConversationRows(
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, agentIsIdle);
-  return buildRows(agentId, sections, toolResults);
+  return buildRows(chatId, sections, toolResults);
 }
 
 /**

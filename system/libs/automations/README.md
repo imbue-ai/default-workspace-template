@@ -19,7 +19,9 @@ The pieces, each invoked from cron by absolute path:
 - `run_automation.sh` -- wakes a singleton "automation agent" for one run:
   creates it on the first run (labelled `automation=<skill>`, default create
   template `automation`), and on later runs clears its chat and re-sends
-  `/<skill>` so each run starts fresh. The agent runs on the workspace's default
+  `/<skill>` so each run starts fresh (through the chat app, via
+  `system/scripts/message_chat.py`, which addresses the agent's chat by id and
+  falls back to `mngr message` when the chat app cannot take the message). The agent runs on the workspace's default
   provider account and its harness, which the chat app keeps in
   `.mngr/settings.local.toml` for every unqualified `mngr create`; `--type
   <harness>` names a harness explicitly (and gets no account unless the default
