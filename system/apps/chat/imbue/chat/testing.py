@@ -7,7 +7,7 @@ Houses deterministic stand-ins for outside-world dependencies that
 rather than being copy-pasted into each test module.
 
 Also houses `build_test_state`, the test-side composition root: it builds a
-`ChatState` with fakes for whichever collaborators a test overrides and cheap real
+`ChatAppState` with fakes for whichever collaborators a test overrides and cheap real
 instances for the rest, mirroring `main.build_production_state` without ever starting
 the agent manager.
 """
@@ -66,8 +66,9 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -195,8 +196,8 @@ class RecordingShell(MutableModel):
     def connected_client_ids(self) -> list[str]:
         return list(self.client_ids)
 
-    def open_chat(self, agent_id: str, client_id: str) -> bool:
-        self.opens.append((agent_id, client_id))
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
+        self.opens.append((chat_id, client_id))
         return client_id not in self.refused_client_ids
 
 
@@ -232,8 +233,8 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
-) -> ChatState:
-    """Build a `ChatState` for tests, injecting fakes where provided.
+) -> ChatAppState:
+    """Build a `ChatAppState` for tests, injecting fakes where provided.
 
     Every collaborator left unset gets a cheap default production instance;
     pass one to substitute a fake. The agent manager is built but never started,
@@ -245,7 +246,7 @@ def build_test_state(
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
         # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
@@ -518,7 +519,7 @@ class RunningWorkspace(FrozenModel):
     agent_info: AgentInfo = Field(description="The fixture chat's agent")
     session_file: Path = Field(description="The fixture chat's session file, appended to for streaming tests")
     state_dir: Path = Field(description="The shell's state directory")
-    chat_state: ChatState = Field(description="The chat app's state, for the manager behind its routes")
+    chat_state: ChatAppState = Field(description="The chat app's state, for the manager behind its routes")
     stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when offered")
     stub_url: str | None = Field(description="The stub app's loopback URL, when offered")
 
