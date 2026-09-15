@@ -1,0 +1,1 @@
+The repair-command test follows the chat app's create command builder, which now takes the chat's id beside the agent's (phase 2 of the chat-agent split, `docs/system/blueprint/chat-agent-split/`). No behavior change in the shell.

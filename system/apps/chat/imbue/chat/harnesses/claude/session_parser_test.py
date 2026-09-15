@@ -222,8 +222,8 @@ _CUSTOM_COMMAND_EXPANSION = (
     "<command-args>origin/main</command-args>"
 )
 _BUILTIN_COMMAND_EXPANSION = (
-    "<command-name>/compact</command-name>\n"
-    "            <command-message>compact</command-message>\n"
+    "<command-name>/clear</command-name>\n"
+    "            <command-message>clear</command-message>\n"
     "            <command-args></command-args>"
 )
 
@@ -246,12 +246,13 @@ def test_slash_command_expansion_normalized_to_typed_text() -> None:
 
 def test_slash_command_expansion_with_empty_args_drops_trailing_space() -> None:
     """A no-argument command (built-in tag order, indented, empty args) yields
-    just '/compact' -- the rebuilt text carries no dangling whitespace around the
+    just '/clear' -- the rebuilt text carries no dangling whitespace around the
     (absent) args."""
     lines = [_make_user_line("uuid-1", "2026-01-01T00:00:00Z", _BUILTIN_COMMAND_EXPANSION)]
     events = parse_lines(lines)
     assert len(events) == 1
-    assert events[0]["content"] == "/compact"
+    assert events[0]["content"] == "/clear"
+
 
 
 def test_queued_slash_command_expansion_normalized() -> None:
@@ -721,10 +722,9 @@ def test_genuine_user_message_has_no_display_decision() -> None:
     assert "is_meta" not in events[0]
 
 
-def test_compaction_summary_user_message_emitted_as_chip() -> None:
-    """Claude Code's post-auto-compaction record (``isCompactSummary``, NOT ``isMeta``) is
-    a real, visible message whose text is the carried-over summary. It arrives as a
-    labelled chip decision rather than a raw flag the frontend must interpret.
+def test_compaction_summary_user_message_emitted_as_status() -> None:
+    """Claude Code's post-auto-compaction record (``isCompactSummary``) is
+    emitted as a subtle status message ("Context was compacted") with display=status.
     """
     line = json.dumps(
         {
@@ -746,18 +746,33 @@ def test_compaction_summary_user_message_emitted_as_chip() -> None:
     events = parse_lines([line])
     assert len(events) == 1
     assert events[0]["type"] == "user_message"
-    assert events[0]["display"] == "chip"
-    assert events[0]["display_label"] == "Summary of earlier conversation"
-    # The summary is a genuine anchor for the continuing conversation, not model-bar
-    # traffic, so it is not marked non-turn.
+    assert events[0]["display"] == "status"
+    assert events[0]["content"] == "Context was compacted"
+    assert (
+        events[0]["display_body"]
+        == "This session is being continued from a previous conversation that ran out of context."
+    )
+    assert events[0]["role"] == "system"
+    assert events[0]["non_turn_tail"] is True
     assert "is_meta" not in events[0] and "is_compact_summary" not in events[0]
 
 
-def test_genuine_user_message_has_no_compact_summary_flag() -> None:
-    """A real human turn carries no ``is_compact_summary`` key."""
-    events = parse_lines([_make_user_line("uuid-h2", "2026-01-01T00:00:00Z", "hello there")])
-    assert len(events) == 1
-    assert "is_compact_summary" not in events[0]
+def test_compaction_command_and_output_dropped() -> None:
+    """The /compact command and <local-command-stdout> compaction output are dropped."""
+    cmd_line = _make_user_line(
+        "uuid-cmd",
+        "2026-01-01T00:00:00Z",
+        "<command-name>/compact</command-name>\n<command-message>compact</command-message>",
+    )
+    plain_cmd_line = _make_user_line("uuid-cmd2", "2026-01-01T00:00:01Z", "/compact")
+    out_line = _make_user_line(
+        "uuid-out",
+        "2026-01-01T00:00:02Z",
+        "<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m</local-command-stdout>",
+    )
+    events = parse_lines([cmd_line, plain_cmd_line, out_line])
+    assert len(events) == 0
+
 
 
 def test_synthetic_model_assistant_message_not_emitted() -> None:
@@ -849,6 +864,70 @@ def test_api_error_flagged_only_on_synthetic_messages() -> None:
     real_event = parse_lines([real])[0]
     assert real_event["is_api_error"] is False
     assert real_event["is_provider_fault"] is False
+
+
+def test_a_limit_notice_reaches_the_wire_as_an_error() -> None:
+    """A verbatim spend-limit record: the failure is stated in the record's own stamp, not
+    in its prose, and the wire fields the frontend styles from must carry it either way."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "uuid-limit",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "isApiErrorMessage": True,
+            "apiErrorStatus": 429,
+            "error": "rate_limit",
+            "message": {
+                "role": "assistant",
+                "model": _SYNTHETIC_MODEL,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "You've hit your monthly spend limit · raise it at "
+                            "claude.ai/settings/usage?from=cc_cli_limit_message"
+                        ),
+                    }
+                ],
+                "stop_reason": "stop_sequence",
+                "usage": {},
+            },
+        }
+    )
+    event = parse_lines([line])[0]
+    assert event["is_api_error"] is True
+    assert event["api_error_kind"] == "rate_limit"
+    assert event["is_provider_fault"] is False
+    assert event["is_auth_error"] is False
+
+
+def test_a_stamped_login_failure_reaches_the_wire_as_an_auth_error() -> None:
+    """A verbatim `Login expired` record. Its wording is invisible to the auth vocabulary --
+    only the stamp says the credential is the problem -- and the sign-in action hangs off
+    `is_auth_error`, so without this the user is told to retry a turn that cannot succeed
+    until they sign in. `is_api_error` must stay off: the two surfaces would otherwise offer
+    contradictory next steps on one message."""
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "uuid": "uuid-login",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "isApiErrorMessage": True,
+            "error": "authentication_failed",
+            "message": {
+                "role": "assistant",
+                "model": _SYNTHETIC_MODEL,
+                "content": [{"type": "text", "text": "Login expired · Please run /login"}],
+                "stop_reason": "stop_sequence",
+                "usage": {},
+            },
+        }
+    )
+    event = parse_lines([line])[0]
+    assert event["is_auth_error"] is True
+    assert event["is_api_error"] is False
+    assert event["api_error_kind"] is None
+    assert event["is_provider_fault"] is False
 
 
 def test_tk_transition_is_stamped_resident() -> None:
