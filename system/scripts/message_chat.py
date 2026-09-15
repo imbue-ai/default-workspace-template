@@ -322,7 +322,7 @@ def send_through_chat_app(
     sleep: Callable[[float], None],
 ) -> SendResult:
     """Post the message to the chat app's send route, retrying the not-ready answers, and report how it ended."""
-    path = f"/api/agents/{urllib.parse.quote(chat_id, safe='')}/message"
+    path = f"/api/chats/{urllib.parse.quote(chat_id, safe='')}/message"
     body = {"message": text, "message_id": message_id}
     answer = _post_until_answered(base_url, path, body, clock, sleep)
     if isinstance(answer, SendResult):

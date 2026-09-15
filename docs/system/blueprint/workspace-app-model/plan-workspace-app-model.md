@@ -344,7 +344,7 @@ While the create runs the page shows the composer over an empty transcript (a me
 A provisional instance is `referenced`, so one whose tab is closed before the agent exists is deleted by the shell like any other unreferenced instance.
 A subagent view is a chat instance too, keyed `<chat-id>.<agent-id>.<session-id>` (the chat, the agent of it whose harness session the subagent ran under, the session), `referenced`, created on demand by the `subagent` action when the user opens one from the parent chat's page, which then docks it with `shell:open`; agents and sub-agents are just chats.
 Provider accounts live under `~/.minds/accounts`: chats bind to them by absolute paths in their env files and credential symlinks, and the store is chat-owned state whatever its path.
-The chat app serves every `/api/chats/...` route (and its `/api/agents/...` alias) at its own origin; the shell serves a plain `/api/health` for probes.
+The chat app serves every `/api/chats/...` route at its own origin (the `/api/agents/...` aliases were dropped in phase 7 of the chat-agent split); the shell serves a plain `/api/health` for probes.
 The first-chat claim and `/welcome` are the chat app's; the shell creates nothing.
 The chat app's manifest declares `critical = true` and `priority = "chat"`, a band in `oom_priority.bands` sitting below the shell and above every chat agent.
 Worker agents that chats spawn are listed as instances too; they are chats with a different origin label.

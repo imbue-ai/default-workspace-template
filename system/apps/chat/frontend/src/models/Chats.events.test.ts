@@ -98,6 +98,25 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getChatById("agent-1")?.chat_id).toBe("agent-1");
   });
 
+  it("tells the active-agent listeners when a chat runs on a different agent than before", () => {
+    const changes: [string, string, string][] = [];
+    manager.addActiveAgentChangedListener((chatId, previous, current) => changes.push([chatId, previous, current]));
+    push({ type: "chats_updated", chats: [chat("agent-1", { active_agent: { agent_id: "agent-1" } })] });
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1", { active_agent: { agent_id: "agent-1", state: "STOPPED" } })],
+    });
+    expect(changes).toEqual([]);
+    push({ type: "chats_updated", chats: [chat("agent-1", { active_agent: { agent_id: "agent-2" } })] });
+    expect(changes).toEqual([["agent-1", "agent-1", "agent-2"]]);
+    // A chat seen for the first time has no previous agent to compare against.
+    push({
+      type: "chats_updated",
+      chats: [chat("agent-1", { active_agent: { agent_id: "agent-2" } }), chat("agent-9")],
+    });
+    expect(changes).toHaveLength(1);
+  });
+
   it("resolves at once for a chat the app already lists", async () => {
     push({ type: "chats_updated", chats: [chat("agent-1")] });
     await expect(manager.whenChatRegistered("agent-1")).resolves.toBeUndefined();

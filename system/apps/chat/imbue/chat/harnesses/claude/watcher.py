@@ -36,7 +36,6 @@ or the queue-snapshot callback.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 from typing import Callable
@@ -47,6 +46,9 @@ from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.chat.harnesses.claude.session_files import PROJECTS_DIRNAME
+from imbue.chat.harnesses.claude.session_files import SESSION_ID_HISTORY_FILENAME
+from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import QueueSignal
 from imbue.chat.harnesses.claude.session_parser import QueueSignalKind
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
@@ -191,7 +193,7 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
 
     def _discover_main_sessions_from_history_locked(self) -> None:
         """Register any not-yet-known main sessions listed in claude_session_id_history."""
-        history_file = self._agent_state_dir / "claude_session_id_history"
+        history_file = self._agent_state_dir / SESSION_ID_HISTORY_FILENAME
         if not history_file.exists():
             return
         try:
@@ -287,15 +289,7 @@ class ClaudeTranscriptLoader(StoreBackedTranscriptLoader):
                 self._subagent_tool_use_id[sub_id] = tool_use_id
 
     def _find_session_file(self, session_id: str) -> Path | None:
-        """Search for a session JSONL file under the Claude projects directory."""
-        projects_dir = self._claude_config_dir / "projects"
-        if not projects_dir.exists():
-            return None
-        target_name = f"{session_id}.jsonl"
-        for root, _dirs, files in os.walk(str(projects_dir)):
-            if target_name in files:
-                return Path(root) / target_name
-        return None
+        return find_session_file(self._claude_config_dir / PROJECTS_DIRNAME, session_id)
 
     # -- consumption ----------------------------------------------------------------------
 
@@ -515,7 +509,7 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
     def _watch_paths(self) -> tuple[Path, ...]:
         # The projects tree (recursive: every session file and subagent dir under it wakes
         # the loop, including ones created later) plus the history file's directory.
-        return (self._claude_config_dir / "projects", self._agent_state_dir / "claude_session_id_history")
+        return (self._claude_config_dir / PROJECTS_DIRNAME, self._agent_state_dir / SESSION_ID_HISTORY_FILENAME)
 
     def _before_broadcast(self) -> None:
         # A3b ordering: a Queued->Delivered message leaves the queue and appears as a

@@ -19,8 +19,11 @@ from app_instances.testing import RecordingNudger
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 
+from imbue.chat.accounts import Account
+from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
@@ -28,14 +31,17 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _build_observe_command_argv
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
+from imbue.chat.chat_rebinds import RebindCancelledError
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import InMemoryChatRecordStore
@@ -65,6 +71,7 @@ from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SummaryOutcome
+from imbue.chat.models import TransitionKind
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
@@ -72,6 +79,7 @@ from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingShell
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import write_recording_mngr_binary
@@ -1387,20 +1395,19 @@ def test_create_chat_counts_in_flight_creates_as_taken(
     assert created.display_name == "Chat 2"
 
 
-def test_create_chat_numbers_each_harness_under_its_own_word(
+def test_create_chat_numbers_every_harness_under_the_one_chat_word(
     agent_manager: AgentManager,
     tmp_path: Path,
 ) -> None:
-    """A codex chat is "Codex 1", not "Chat 2": the fleets number independently.
+    """A codex chat is "Chat 2", not "Codex 1": one word for every harness and lane.
 
-    The harness comes from the bound account, so the codex one is named by signing in
-    rather than by asking for it -- which is the point: a caller cannot name a harness
-    that disagrees with the credential the chat will actually run on.
+    A chat can move to another harness after it is named, so a name that said which
+    harness it started on would be wrong the moment it moved; the provider row of the
+    model bar is where the harness shows.
     """
     # The plain chat is created first, while there is nothing signed in, so it lands on
     # the workspace login as claude. Signing in afterwards is what makes the second one
-    # codex -- and note it would also make an unbound THIRD chat codex, since the most
-    # recently used account is the default.
+    # codex -- the harness comes from the bound account, never from the name.
     chat = agent_manager.create_chat("")
     codex_account_id, _ = mint_account_dir()
     commit_account(codex_account_id, "openai", "OpenAI")
@@ -1408,7 +1415,7 @@ def test_create_chat_numbers_each_harness_under_its_own_word(
     agent_manager.stop()
 
     assert chat.display_name == "Chat 1"
-    assert codex.display_name == "Codex 1"
+    assert codex.display_name == "Chat 2"
 
 
 def test_create_chat_rejects_an_explicit_name_that_collides(
@@ -3323,7 +3330,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
         # The stand-in already carries its archival name; the snapshot still says what the chat is called.
         assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
-        with pytest.raises(ChatConvergingError):
+        with pytest.raises(ChatConvergingError, match="switch to Codex can no longer be called off"):
             manager.cancel_handoff(chat_id)
         # The trigger already rides the stored prompt: a retried send with its id is not held again.
         assert (
@@ -3424,16 +3431,270 @@ def test_a_handoff_is_refused_for_the_wrong_targets(broadcaster: WebSocketBroadc
     try:
         with pytest.raises(HandoffError, match="already runs on account"):
             manager.begin_handoff(ChatId(first), anthropic_id, "hi", "m-1", HeldSendOrigin.CLIENT)
-        other_anthropic, _ = mint_account_dir()
-        commit_account(other_anthropic, "anthropic", "Anthropic")
-        with pytest.raises(HandoffError, match="not supported yet"):
-            manager.begin_handoff(ChatId(first), other_anthropic, "hi", "m-1", HeldSendOrigin.CLIENT)
         with pytest.raises(HandoffError):
             manager.begin_handoff(ChatId(first), "acct-missing", "hi", "m-1", HeldSendOrigin.CLIENT)
+        # A row naming a lane this build no longer has is refused by name, not as "no such account".
+        retired_lane_id, _ = mint_account_dir()
+        commit_account(retired_lane_id, "lane-this-build-lacks", "Elsewhere")
+        with pytest.raises(HandoffError, match="lane this build does not have"):
+            manager.begin_switch(ChatId(first), retired_lane_id, "hi", "m-1", HeldSendOrigin.CLIENT)
         with pytest.raises(HandoffError, match="no active agent"):
             manager.begin_handoff(
                 ChatId(f"agent-{uuid4().hex}"), _openai_account(), "hi", "m-1", HeldSendOrigin.CLIENT
             )
         assert sent == []
+    finally:
+        manager.stop()
+
+
+# The rebind: changing a chat's account in place (``chat_rebinds.py`` runs it; these cover the manager's side).
+
+
+def _anthropic_account(display: str = "Anthropic") -> str:
+    account_id, _ = mint_account_dir()
+    commit_account(account_id, "anthropic", display)
+    return account_id
+
+
+def _rebind_manager(
+    broadcaster: WebSocketBroadcaster,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sent: list[tuple[str, str, str]],
+) -> tuple[AgentManager, InMemoryChatRecordStore, Path, str, str, str]:
+    """A manager over the test's own host dir, tracking a claude chat bound to one Anthropic account with a second
+    signed in; returns it with the record store, the mngr argv log, the agent id, and the two account ids."""
+    host_dir = tmp_path / "host"
+    monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first_account, second_account = _anthropic_account(), _anthropic_account()
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
+    state_dir = host_dir / "agents" / agent_id
+    state_dir.mkdir(parents=True)
+    (state_dir / "env").write_text(f"MNGR_AGENT_ID={agent_id}\nCLAUDE_CONFIG_DIR={account_dir(first_account)}\n")
+    (state_dir / "claude_session_id_history").write_text("session-one\n")
+    project_dir = account_dir(first_account) / "projects" / "-home-user-workspace"
+    project_dir.mkdir(parents=True)
+    (project_dir / "session-one.jsonl").write_text('{"type":"user"}\n')
+    return manager, store, argv_log, agent_id, first_account, second_account
+
+
+def test_a_switch_to_an_account_on_the_chats_own_lane_rebinds_the_agent_in_place(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    try:
+        kind, phase, block = manager.begin_switch(
+            chat_id, second_account, "Carry on here", "m-1", HeldSendOrigin.CLIENT
+        )
+        assert (kind, phase, block) == (TransitionKind.REBIND, HandoffPhase.RESTARTING, "queued text")
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+
+        # stop, relabel, start: the agent stayed the chat's, on the new account.
+        argv = argv_log.read_text().splitlines()
+        assert argv == [
+            "stop Chat-1",
+            f"label {agent_id} --label account={second_account}",
+            "start Chat-1 --no-resume",
+        ]
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.handoff is None
+        assert snapshot.active_agent.account_id == second_account and snapshot.agent_ids == (agent_id,)
+        assert snapshot.active_agent.state == "WAITING"
+        # The env line and the session files followed the agent to the new account's folder.
+        env_text = (tmp_path / "host" / "agents" / agent_id / "env").read_text()
+        assert env_text == f"MNGR_AGENT_ID={agent_id}\nCLAUDE_CONFIG_DIR={account_dir(second_account)}\n"
+        assert (account_dir(second_account) / "projects" / "-home-user-workspace" / "session-one.jsonl").exists()
+        # The confirming message went through the ordinary send path once the agent was back; the
+        # one-agent record is gone again, and the target became the most recently used account.
+        assert sent == [(agent_id, "Carry on here", "m-1")]
+        assert store.read(chat_id) is None
+        assert read_index().mru == second_account
+    finally:
+        manager.stop()
+
+
+def test_the_switch_target_rule_keeps_the_agent_only_for_its_own_harness_and_lane() -> None:
+    claude = AgentStateItem(id="agent-1", name="c", state="RUNNING", labels={"account": "acct-a"}, work_dir=None)
+    anthropic_2 = Account(id="acct-a2", lane="anthropic", seq=2, display="Anthropic")
+    openrouter = Account(id="acct-r", lane="openrouter", seq=1, display="OpenRouter")
+    opencode_go = Account(id="acct-g", lane="opencode-go", seq=1, display="Opencode Go")
+    first_anthropic, _ = mint_account_dir()
+    commit_account(first_anthropic, "anthropic", "Anthropic")
+    first_openrouter, _ = mint_account_dir()
+    commit_account(first_openrouter, "openrouter", "OpenRouter")
+    bound_claude = claude.model_copy_update(to_update(claude.field_ref().labels, {"account": first_anthropic}))
+    pi = AgentStateItem(
+        id="agent-2",
+        name="p",
+        state="RUNNING",
+        labels={"account": first_openrouter},
+        work_dir=None,
+        harness=HarnessType.PI_CODING,
+    )
+
+    def target(account: Account, harness: HarnessType) -> _SwitchTarget:
+        return _SwitchTarget(account=account, harness=harness, label=account.display)
+
+    assert is_rebind_target(bound_claude, target(anthropic_2, HarnessType.CLAUDE)) is True
+    assert is_rebind_target(bound_claude, target(openrouter, HarnessType.PI_CODING)) is False
+    # Two lanes on one harness: a move between them replaces the agent.
+    assert is_rebind_target(pi, target(opencode_go, HarnessType.PI_CODING)) is False
+    assert (
+        is_rebind_target(
+            pi,
+            target(
+                openrouter.model_copy_update(to_update(openrouter.field_ref().id, "acct-r2")), HarnessType.PI_CODING
+            ),
+        )
+        is True
+    )
+    # An agent whose account label names a deleted account has no lane to match.
+    assert is_rebind_target(claude, target(anthropic_2, HarnessType.CLAUDE)) is False
+    unscoped = AgentStateItem(
+        id="agent-3", name="o", state="RUNNING", labels={}, work_dir=None, harness=HarnessType.OPENCODE
+    )
+    assert is_rebind_target(unscoped, target(anthropic_2, HarnessType.OPENCODE)) is False
+
+
+def test_a_retry_on_an_unwired_manager_leaves_the_failed_phase_as_it_is(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The refusal comes before anything is written: the page keeps its failed notice and its retry."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, mngr_binary=mngr_binary)
+    first_account, second_account = _anthropic_account(), _anthropic_account()
+    agent_id = f"agent-{uuid4().hex}"
+    chat_id = ChatId(agent_id)
+    seed_agent_state(manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": first_account})
+    failed = make_chat_rebind_record(agent_id=agent_id, phase=HandoffPhase.FAILED, target_account_id=second_account)
+    store.write(
+        ChatRecord(
+            chat_id=chat_id,
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+            rebind=failed,
+        )
+    )
+    manager.refresh_chat_records()
+    try:
+        with pytest.raises(HandoffError, match="not wired"):
+            manager.retry_handoff(chat_id, second_account)
+        assert store.read(chat_id) == ChatRecord(
+            chat_id=chat_id,
+            agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+            rebind=failed,
+        )
+    finally:
+        manager.stop()
+
+
+def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_lane(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    try:
+        store.write(
+            ChatRecord(
+                chat_id=chat_id,
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+                rebind=make_chat_rebind_record(
+                    agent_id=agent_id,
+                    phase=HandoffPhase.FAILED,
+                    target_account_id=second_account,
+                    error="mngr start exited with code 1",
+                ),
+            )
+        )
+        manager.refresh_chat_records()
+        state = manager.get_handoff_state(chat_id)
+        assert state is not None and state.kind is TransitionKind.REBIND and state.phase is HandoffPhase.FAILED
+        assert state.target_label == "Anthropic 2 (Claude Code)"
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.status.value == "error"
+
+        with pytest.raises(ChatConvergingError, match="cannot be called off"):
+            manager.cancel_handoff(chat_id)
+        assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
+        with pytest.raises(ChatConvergingError, match="switch to Anthropic 2 \\(Claude Code\\) failed; retry"):
+            manager.stop_chat(chat_id)
+        with pytest.raises(HandoffError, match="same harness and lane"):
+            manager.retry_handoff(chat_id, _openai_account())
+
+        assert manager.retry_handoff(chat_id, second_account) is HandoffPhase.RESTARTING
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        # The agent is seeded running, so the retry stops it before relabelling and starting; both
+        # held sends follow once it is back.
+        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "label", "start"]
+        assert sent == [(agent_id, "Carry on on the other account", "trigger-1"), (agent_id, "and this", "m-2")]
+        assert store.read(chat_id) is None
+    finally:
+        manager.stop()
+
+
+def test_a_failed_rebind_retries_on_its_lane_even_after_the_failed_target_was_signed_out(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The relabel runs before the start, so the agent's label names the failed target; deleting that account must
+    not stop a retry on another account of the lane."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, argv_log, agent_id, first_account, second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    chat_id = ChatId(agent_id)
+    third_account = _anthropic_account()
+    try:
+        seed_agent_state(
+            manager, agent_id, name="Chat-1", labels={"display_name": "Chat 1", "account": second_account}
+        )
+        store.write(
+            ChatRecord(
+                chat_id=chat_id,
+                agents=(make_chat_agent_entry(1, agent_id, is_archived=False, account_id=first_account),),
+                rebind=make_chat_rebind_record(
+                    agent_id=agent_id,
+                    phase=HandoffPhase.FAILED,
+                    target_account_id=second_account,
+                    error="mngr start exited with code 1",
+                ),
+            )
+        )
+        manager.refresh_chat_records()
+        delete_account(second_account)
+
+        assert manager.retry_handoff(chat_id, third_account) is HandoffPhase.RESTARTING
+        wait_for(lambda: manager.get_handoff_state(chat_id) is None, timeout=15.0)
+        assert f"label {agent_id} --label account={third_account}" in argv_log.read_text().splitlines()
+        snapshot = manager.get_chat_snapshot(agent_id)
+        assert snapshot is not None and snapshot.active_agent.account_id == third_account
+        assert sent == [(agent_id, "Carry on on the other account", "trigger-1")]
+    finally:
+        manager.stop()
+
+
+def test_the_rebind_runners_record_callbacks_raise_its_own_cancelled_error(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runner catches only ``RebindCancelledError`` as the quiet stop, so a record that no longer carries the
+    rebind must reach it as that, from the held-send pop as much as from the record update."""
+    sent: list[tuple[str, str, str]] = []
+    manager, _store, _argv_log, agent_id, _first_account, _second_account = _rebind_manager(
+        broadcaster, tmp_path, monkeypatch, sent
+    )
+    try:
+        deps = manager._rebind_runner()._deps
+        with pytest.raises(RebindCancelledError):
+            deps.take_next_held_send(ChatId(agent_id), "rebind-gone")
+        with pytest.raises(RebindCancelledError):
+            deps.update_record(ChatId(agent_id), "rebind-gone", lambda record: record)
     finally:
         manager.stop()

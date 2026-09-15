@@ -106,23 +106,24 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
 }
 
 /**
- * Open a new chat on `accountId` beside this one. The combo card's provider rows call this:
- * a chat binds to its account when it is created and nothing rebinds it, so "switch
- * provider" can only mean "start a chat on that one". A chat started inside a project
- * carries that project's id in its label; the shell files its tab when it docks the page.
+ * Open a new chat on `accountId` beside this one, with ``message`` as its first message when
+ * given. The switch confirm's "Start a new chat instead" calls this with the typed message,
+ * and the failed-switch notice with none. A chat started inside a project carries that
+ * project's id in its label; the shell files its tab when it docks the page.
  */
-export async function startChatOnAccount(accountId: string): Promise<void> {
+export async function startChatOnAccount(accountId: string, message: string = ""): Promise<boolean> {
   const viewId = shellViewId();
   const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
   let created: CreatedChat;
   try {
-    created = await createChat(projectId, accountId);
+    created = await createChat(projectId, accountId, message);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
-    return;
+    return false;
   }
   connection?.open(chatAddress(created.chatId));
   m.redraw();
+  return true;
 }
 
 /**

@@ -210,7 +210,7 @@ UI (by `mngr message` or another agent), which the frontend never reports.
 
 Re-tagging is event-driven plus a slow sweep (`SWEEP_INTERVAL_SECONDS`, 60s). The
 events -- each presence report the chat page posts on tab-presence changes
-(`POST /api/agents/<agent_id>/presence`), each message sent through the chat
+(`POST /api/chats/<chat_id>/presence`), each message sent through the chat
 app, and each lifecycle change from the observe stream --
 cover everything that changes a chat's engagement. The sweep exists solely because
 staleness is the one input that changes with nothing to announce it: a chat
