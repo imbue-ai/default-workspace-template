@@ -291,16 +291,6 @@ def _transcript_events(
     )
 
 
-def _user_message_line(timestamp: str) -> str:
-    """One common-transcript user step, as the fallback ranking reads it."""
-    return (
-        json.dumps(
-            {"type": "step", "source": "user", "timestamp": timestamp, "message": "hi"}
-        )
-        + "\n"
-    )
-
-
 def _write_stub_scan_gate(
     scan_gate_dir: Path, *, exit_code: int, stderr: str = "", stdout: str = ""
 ) -> None:
