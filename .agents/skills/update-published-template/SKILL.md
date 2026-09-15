@@ -167,14 +167,16 @@ Then confirm the published repo does not carry this mind's own history. A
 template published on the wrong base -- an `update-self:` merge commit instead of
 its upstream parent -- shipped everything the mind had built before that update,
 in its tree and in its history. The published base is the newest commit under
-the `template:` snapshots, and it must not descend from this workspace's
-`Initial workspace commit` (being that commit is fine):
+the `template:` snapshots, and it must not descend from this workspace's own
+`Initial workspace commit` (being that commit is fine). Only the NEWEST marker is
+the workspace's own: a mind created from a published template also carries the
+source mind's marker further down, and a correct base descends from that one:
 
 ```bash
 PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
     | awk '$2 != "template:" {print $1; exit}')"
 git log --first-parent --format='%H %s' HEAD \
-    | awk '$0 ~ /^[^ ]+ Initial workspace commit$/ {print $1}' \
+    | awk '$0 ~ /^[^ ]+ Initial workspace commit$/ {print $1; exit}' \
     | while read -r initial; do
         [ "$initial" != "$PUBLISHED_BASE" ] \
             && git merge-base --is-ancestor "$initial" "$PUBLISHED_BASE" \
