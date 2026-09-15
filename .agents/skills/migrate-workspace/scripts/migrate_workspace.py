@@ -416,10 +416,9 @@ def find_template_base(first_parent_log: Sequence[str]) -> str | None:
     cannot be migrated automatically.
     """
     for line in first_parent_log:
-        stripped = line.strip()
-        if not stripped:
+        if not line.strip():
             continue
-        sha, parents, subject = stripped.split("\t", 2)
+        sha, parents, subject = line.split("\t", 2)
         if subject == _TEMPLATE_BASE_SUBJECT:
             return sha
         parent_shas = parents.split()

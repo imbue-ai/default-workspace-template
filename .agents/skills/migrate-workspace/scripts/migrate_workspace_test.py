@@ -288,6 +288,12 @@ def test_find_template_base_skips_an_update_self_subject_that_merged_nothing() -
     assert migrate_workspace.find_template_base(log) == "bbb2222"
 
 
+def test_find_template_base_reads_past_an_empty_subject_commit() -> None:
+    # `git commit --allow-empty-message` leaves nothing after the last tab.
+    log = ["aaa1111\tbbb2222\t", "bbb2222\tccc3333\tInitial workspace commit"]
+    assert migrate_workspace.find_template_base(log) == "bbb2222"
+
+
 # --- parse_baseline_diff ---------------------------------------------------
 
 
