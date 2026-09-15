@@ -163,6 +163,32 @@ actual published version) before any update. (The shipped ledger records the
 source sha, not the published snapshot sha, so this version-and-shape check is
 the integrity gate in place of a recorded-snapshot-sha comparison.)
 
+Then confirm the published repo does not carry this mind's own history. A
+template published on the wrong base -- an `update-self:` merge commit instead of
+its upstream parent -- shipped everything the mind had built before that update,
+in its tree and in its history. The published base is the newest commit under
+the `template:` snapshots, and it must not descend from this workspace's
+`Initial workspace commit` (being that commit is fine):
+
+```bash
+PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
+    | awk '$2 != "template:" {print $1; exit}')"
+git log --first-parent --format='%H %s' HEAD \
+    | awk '$0 ~ /^[^ ]+ Initial workspace commit$/ {print $1}' \
+    | while read -r initial; do
+        [ "$initial" != "$PUBLISHED_BASE" ] \
+            && git merge-base --is-ancestor "$initial" "$PUBLISHED_BASE" \
+            && echo "CONTAINS $initial"
+    done
+```
+
+If it prints anything, **STOP and tell the user plainly**: the published repo
+contains this workspace's own commits (other apps and anything else committed
+before its base), and an update cannot remove them -- a new commit on top leaves
+the history in place. The remedy is theirs to choose: make the repo private or
+delete it, then publish afresh with `publish-template`. Do not update,
+force-push, or rewrite the repo yourself.
+
 **2c. Read the recipe** out of the fetched tip -- the `include` /
 `data_include` paths, the `exclude` list, and the `modification_rules`. These are
 the update's inputs: the paths whose changes are eligible, and the rules to
@@ -189,7 +215,8 @@ v(n). NEVER diff the workspace against the published repo: the published tree ha
 had personal data stripped and modifications applied, so a workspace-vs-published
 diff would try to re-add exactly the things the recipe deliberately removed. Also
 note the **base delta**: compare the ledger's recorded base against the current
-resolved base (`publish-template` §2's marker walk). If `BASE_REF` moved, the
+resolved base (`uv run .agents/shared/scripts/resolve_template_base.py`, as in
+`publish-template` §2). If `BASE_REF` moved, the
 template substrate advanced too -- report it, but an app-delta update re-publishes
 on the existing published base; re-cutting on a newer base is a separate, larger
 operation (surface it as an option, default to not doing it).

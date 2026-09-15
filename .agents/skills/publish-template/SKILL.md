@@ -236,32 +236,38 @@ dispatch anyway, handle it in place:
 
 ## 2. Resolve `BASE_REF` and `SOURCE_SHA` (in-repo, no network)
 
-`BASE_REF` is this workspace's **template base** -- the template state the
-mind started from (or last updated itself to). Resolve it deterministically as
-the NEWEST first-parent commit that is a template-state marker:
+`BASE_REF` is this workspace's **template base** -- the pristine template
+commit the mind started from (or last updated itself to). Resolve it with the
+shared script, never by hand:
 
 ```bash
-BASE_REF=$(git log --first-parent --format='%H %s' HEAD \
-    | awk '{h=$1; sub(/^[^ ]+ /,""); if ($0 ~ /^update-self:/ || $0 == "Initial workspace commit") {print h; exit}}')
+BASE_REF=$(uv run .agents/shared/scripts/resolve_template_base.py)
 ```
 
-Two marker kinds; the newest one on the first-parent chain wins:
+It walks HEAD's first-parent history for the NEWEST template-state marker:
 
-- **`update-self: ...`** -- the mind pulled a newer template version after
-  creation (the same subject convention `update-self` / `assist` rely on).
+- **an `update-self: ...` merge** -- the mind pulled a newer template version
+  after creation (the same subject convention `update-self` / `assist` rely
+  on). The base is the merge's **second parent**, the upstream template commit
+  it merged. **Never the merge commit itself**: its tree is the upstream
+  template merged with everything the mind had built by then, and its
+  first-parent history is the mind's own. Using it as the base once shipped a
+  whole other app, and the mind's full pre-update history, inside a template
+  the user meant to hold one app.
 - **`Initial workspace commit`** -- written by bootstrap on the mind's very
   first boot (always present -- it is created `--allow-empty` by
   `system/libs/bootstrap` -- and it snapshots exactly what the workspace started
   from, including any uncommitted source state a dev-flow clone carried).
-  This is the normal answer for a mind that never ran `update-self`.
+  The marker itself is the base. This is the normal answer for a mind that
+  never ran `update-self`.
 
 This is NOT a judgment call -- do not go hunting for an older "clean template"
 commit past the marker. A full-history clone's first-parent ancestry reaches
 ancient template commits that have nothing to do with this mind; the marker is
-the mind's actual base.
+what names the mind's actual base.
 
-**Fallback (only if NO marker exists** -- a hand-made or pre-bootstrap repo):
-the **first-parent root**:
+**Fallback (only if the script exits 1 because NO marker exists** -- a
+hand-made or pre-bootstrap repo): the **first-parent root**:
 
 ```bash
 git rev-list --first-parent HEAD | tail -1
@@ -295,14 +301,17 @@ ask the user) rather than launching the worker -- this catches the wrong-root an
 too-old-base problems in seconds instead of a full worker round-trip.
 `build_template.sh` re-validates all three conditions itself and exits 5 with
 a clear message (see §5), but that is a backstop, not a substitute for the
-pre-check.
+pre-check. It also exits 5 for a base that descends from this workspace's
+`Initial workspace commit` -- the merge commit itself, `HEAD`, or any other
+commit carrying the mind's own work.
 
-(The same marker walk seeds the version ledger's `## Workspace` origin line in
+(The same markers seed the version ledger's `## Workspace` origin line in
 §8 step 4 below (and in the update apply's `_origin_line`, in `update-self`'s
-`scripts/update_self.py`) -- with one deliberate difference: the
+`scripts/update_self.py`) -- with two deliberate differences: the
 origin-line walk takes the OLDEST marker (where the mind started) where this
-section takes the NEWEST (the base the mind is on now). This `BASE_REF` bash is
-the primary; keep the two in step if either ever changes.)
+section takes the NEWEST (the base the mind is on now), and it reads the marker
+commit itself rather than resolving a merge to its upstream parent. Keep them
+in step if the marker convention ever changes.)
 
 **Also capture `SOURCE_SHA` -- the source commit the snapshot is cut from.**
 The worker's worktree branches off `/home/user/workspace`'s current `HEAD`, so that commit is
@@ -703,9 +712,10 @@ stderr. What each exit means, and what you do:
   in the repo, or its tree is not a bootable template: it lacks
   `pyproject.toml`, `system/supervisord.conf`, and/or `system/supervisord.conf.d`
   (e.g. a parallel subtree root was
-  picked instead of the real seed). Nothing was committed; re-resolve
-  `BASE_REF` per
-  §2 (its pre-check should have caught this before launch) and relaunch.
+  picked instead of the real seed). Or it descends from the workspace's
+  `Initial workspace commit`, so it carries the mind's own work (e.g. an
+  `update-self:` merge commit was passed instead of its upstream parent).
+  Nothing was committed; re-resolve `BASE_REF` with §2's script and relaunch.
 
 Every one of these is a "fix the input and relaunch the worker" situation,
 never a "publish something smaller instead" situation -- see the "MUST BE
@@ -726,6 +736,22 @@ mechanism. Present the proposal to the user ONCE, in plain language:
   say in the same breath that the template ships under the **MIT license**,
   so the licensing consequence is in front of them at the moment they make the
   choice rather than after;
+- **what the template contains** beyond the template base, read from the
+  assembled commit rather than from the include set you intended:
+
+  ```bash
+  git -C "$WT" diff --name-only <BASE_REF> HEAD | cut -d/ -f1-3 | sort -u
+  ```
+
+  Check EVERY entry before writing the message. Each must be covered by an
+  include or data path the user confirmed in §1 (equal to it, inside it, or
+  containing it), or be a file the assembly generates: `template.md`,
+  `template.toml`, `template.svg`, `README.md`, `.agents/skills/welcome`, and
+  the removed `docs/VERSION_HISTORY.md`. Anything else -- another app, skill,
+  service, or data path -- means the base or the include set is wrong: do NOT
+  present the publish; re-resolve `BASE_REF` per §2, fix the include set, and
+  reassemble. Otherwise name the apps and features the template holds, in plain
+  terms, so the user can confirm nothing else is in it;
 - **what it will install** -- the `[environment]` declarations from
   `template.toml`, in plain language ("adopting this also installs
   poppler-utils"), or that it needs nothing beyond the stock environment. An
@@ -1198,7 +1224,8 @@ retried step must be a no-op, never a duplicate. Inputs: `SLUG=<slug>`,
   "the workspace template">  <7-char sha>`, note padded to width 26 but never
   fewer than two spaces before the sha (`created from minds-v0.3.NN` is exactly
   26 chars, so a bare pad-to-26 would land the sha flush). (This is the
-  OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick.)
+  OLDEST-marker end of §2's `BASE_REF` walk -- same markers, opposite pick, and
+  the marker commit itself rather than a merge's upstream parent.)
 
 - **Append the template entry.** Create the heading `### <slug>  --  <repo-url>`
   under `## Templates` if this slug has none yet. Then append one line under
@@ -1350,8 +1377,9 @@ What it does, in order (see the script for the exact commands):
 
 1. Validates that the `--base-ref` tree names `pyproject.toml`,
    `system/supervisord.conf`, and `system/supervisord.conf.d` (a bootable
-   template base); exits 5 with a clear
-   message otherwise, before touching the worktree (see §5).
+   template base) and does not descend from the workspace's `Initial workspace
+   commit`; exits 5 with a clear message otherwise, before touching the
+   worktree (see §5).
 2. Stages the selected paths out of the worker's checkout into a scratch dir
    (preserving relative paths) BEFORE resetting.
 3. Resets the worktree to the clean base with

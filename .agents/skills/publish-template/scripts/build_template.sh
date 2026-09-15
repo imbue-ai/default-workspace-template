@@ -36,8 +36,9 @@
 # Exit codes: 0 = success; 1 = secret scan hit OR a required scanner was
 # missing/errored; 2 = usage error; 3 = nothing to publish beyond the base;
 # 4 = boot smoke-check failed; 5 = --base-ref does not resolve to a bootable
-# template tree; 6 = the generated manifest failed validation, or a declared
-# apt package does not resolve in the pinned snapshot mirror.
+# template tree, or carries the workspace's own history; 6 = the generated
+# manifest failed validation, or a declared apt package does not resolve in the
+# pinned snapshot mirror.
 
 set -euo pipefail
 
@@ -209,6 +210,21 @@ if [ -n "$base_missing" ]; then
     echo "build_template.sh: '${BASE_REF}' does not look like a bootable default-workspace-template base (a wrong root commit from a subtree merge?) -- pass the real DEFAULT_WORKSPACE_TEMPLATE seed commit as --base-ref" >&2
     exit 5
 fi
+
+# The base must be template state, never a commit carrying the workspace's own
+# work: step 2 resets to its tree and step 10 publishes its history. Everything
+# the workspace committed descends from its Initial workspace commit -- including
+# an update-self merge, whose upstream (second) parent is the real base.
+BASE_COMMIT="$(git rev-parse "${BASE_REF}^{commit}")"
+while IFS=' ' read -r marker_sha marker_subject; do
+    if [ "$marker_subject" = "Initial workspace commit" ] \
+        && [ "$marker_sha" != "$BASE_COMMIT" ] \
+        && git merge-base --is-ancestor "$marker_sha" "$BASE_COMMIT"; then
+        echo "build_template.sh: BASE REF INVALID: '${BASE_REF}' descends from this workspace's Initial workspace commit (${marker_sha}), so its tree and history carry the workspace's own work, not just the template" >&2
+        echo "build_template.sh: resolve the base with .agents/shared/scripts/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
+        exit 5
+    fi
+done < <(git log --first-parent --format='%H %s' HEAD)
 
 # --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----
 
@@ -748,7 +764,7 @@ README_EOF
 # docs/VERSION_HISTORY.md is WORKSPACE-only, never part of a template: it records
 # where a mind came from and every template it has published (slugs, repo
 # URLs, source commits). None of that belongs in a published template -- and
-# after an update-self, BASE_REF's tree can carry an accumulated copy of it --
+# the template base can carry the shipped starter copy of it --
 # so drop it from the snapshot entirely. A mind created from this template
 # grows its OWN ledger when it first runs update-self or publishes (update-self
 # and publish-template write the starter on demand if the file is absent), so

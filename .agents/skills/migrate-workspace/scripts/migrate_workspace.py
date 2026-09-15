@@ -20,11 +20,12 @@ so all of these take the ``--ssh-*`` options):
     has no version marker on disk at all.
 
 ``baseline-diff``
-    Resolve the source's own template base -- the NEWEST first-parent
-    template-state marker (``update-self:`` or ``Initial workspace commit``) --
-    and diff the source's checked-out tree against it. That yields what the user
-    authored in that workspace and excludes template-version drift by
-    construction. No resolvable base means no automation.
+    Resolve the source's own template base -- named by the NEWEST first-parent
+    template-state marker (an ``update-self:`` merge's upstream parent, or the
+    ``Initial workspace commit``) -- and diff the source's checked-out tree
+    against it. That yields what the user authored in that workspace and
+    excludes template-version drift by construction. No resolvable base means no
+    automation.
 
 ``list-agents``
     Enumerate the source's agents from ``<host_dir>/agents/*/data.json`` and
@@ -391,30 +392,39 @@ def rewrite_legacy_references(text: str) -> tuple[str, list[Substitution]]:
 _TEMPLATE_BASE_SUBJECT = "Initial workspace commit"
 _TEMPLATE_BASE_PREFIX = "update-self:"
 
+# Tab-separated so a subject containing spaces parses unambiguously.
+FIRST_PARENT_LOG_FORMAT = "%H%x09%P%x09%s"
+
 
 def find_template_base(first_parent_log: Sequence[str]) -> str | None:
-    """Return the NEWEST template-state marker commit in a first-parent log.
+    """Return the template base named by the NEWEST marker in a first-parent log.
 
-    ``first_parent_log`` is ``git log --first-parent --format='%H %s'`` output,
-    newest first. The newest marker is the template state the source last
-    updated itself to, so diffing the working tree against it yields what the
-    user authored *since* that state -- and excludes template-version drift by
-    construction. (The update apply's origin seed -- ``_origin_line`` in
-    ``update-self``'s ``scripts/update_self.py`` -- walks the same markers but
-    takes the OLDEST, because it wants where the mind started; the difference
-    is load-bearing.) Returns ``None`` when no marker exists, which means the source
+    ``first_parent_log`` is ``git log --first-parent --format=<FIRST_PARENT_LOG_FORMAT>``
+    output, newest first. An ``Initial workspace commit`` is its own base; an
+    ``update-self:`` merge's base is its second parent, the upstream template
+    commit it merged -- the merge itself already holds everything the user built
+    before the update, so diffing against it would drop that work. A subject
+    that starts ``update-self:`` on anything but a two-parent merge merged nothing
+    and is not a marker. Diffing the working tree against the base yields what
+    the user authored and excludes template-version drift by construction.
+
+    The shared ``.agents/shared/scripts/resolve_template_base.py`` applies the
+    same rule to a local repo; change both together. (The update apply's origin
+    seed -- ``_origin_line`` in ``update-self``'s ``scripts/update_self.py`` --
+    walks the same markers but takes the OLDEST, because it wants where the mind
+    started.) Returns ``None`` when no marker exists, which means the source
     cannot be migrated automatically.
     """
     for line in first_parent_log:
         stripped = line.strip()
         if not stripped:
             continue
-        sha, _, subject = stripped.partition(" ")
-        subject = subject.strip()
-        if subject == _TEMPLATE_BASE_SUBJECT or subject.startswith(
-            _TEMPLATE_BASE_PREFIX
-        ):
+        sha, parents, subject = stripped.split("\t", 2)
+        if subject == _TEMPLATE_BASE_SUBJECT:
             return sha
+        parent_shas = parents.split()
+        if subject.startswith(_TEMPLATE_BASE_PREFIX) and len(parent_shas) == 2:
+            return parent_shas[1]
     return None
 
 
@@ -1202,7 +1212,9 @@ def _cmd_baseline_diff(args: argparse.Namespace) -> int:
         return 0
     target = _ssh_target(args)
     log_lines = _remote_git(
-        target, args.repo_root, "log --first-parent --format='%H %s' HEAD"
+        target,
+        args.repo_root,
+        f"log --first-parent --format='{FIRST_PARENT_LOG_FORMAT}' HEAD",
     ).splitlines()
     base = find_template_base(log_lines)
     if base is None:

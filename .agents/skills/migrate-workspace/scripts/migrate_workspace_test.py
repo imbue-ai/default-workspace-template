@@ -241,29 +241,33 @@ def test_rewrite_legacy_references_leaves_ambiguous_prefixes_for_the_agent() -> 
 # --- find_template_base ----------------------------------------------------
 
 
-def test_find_template_base_takes_the_newest_marker() -> None:
+def test_find_template_base_resolves_an_update_self_merge_to_its_upstream() -> None:
     log = [
-        "aaa1111 Add the email triage app",
-        "bbb2222 update-self: merge minds-v0.3.9",
-        "ccc3333 Tweak the welcome skill",
-        "ddd4444 update-self: merge minds-v0.3.6",
-        "eee5555 Initial workspace commit",
+        "aaa1111\tbbb2222\tAdd the email triage app",
+        "bbb2222\tccc3333 up09999\tupdate-self: merge upstream template (minds-v0.3.9)",
+        "ccc3333\tddd4444\tTweak the welcome skill",
+        "ddd4444\teee5555 up06666\tupdate-self: merge upstream template (minds-v0.3.6)",
+        "eee5555\tfff6666\tInitial workspace commit",
     ]
-    # The NEWEST marker is the template state the source last updated to, so the
-    # diff against it is exactly the user's own work since then. (update-self's
-    # origin-line walk takes the OLDEST from the same markers.)
-    assert migrate_workspace.find_template_base(log) == "bbb2222"
+    # The merge's own tree already holds everything the user built before the
+    # update, so a diff against it would drop that work; its upstream parent is
+    # the template state alone. (update-self's origin-line walk takes the OLDEST
+    # marker instead.)
+    assert migrate_workspace.find_template_base(log) == "up09999"
 
 
 def test_find_template_base_accepts_a_bootstrap_only_history() -> None:
-    log = ["aaa1111 Build a dashboard", "bbb2222 Initial workspace commit"]
+    log = [
+        "aaa1111\tbbb2222\tBuild a dashboard",
+        "bbb2222\tccc3333\tInitial workspace commit",
+    ]
     assert migrate_workspace.find_template_base(log) == "bbb2222"
 
 
 def test_find_template_base_returns_none_without_a_marker() -> None:
     assert migrate_workspace.find_template_base([]) is None
     assert (
-        migrate_workspace.find_template_base(["aaa1111 Initial commit", "", "  "])
+        migrate_workspace.find_template_base(["aaa1111\t\tInitial commit", "", "  "])
         is None
     )
 
@@ -271,8 +275,17 @@ def test_find_template_base_returns_none_without_a_marker() -> None:
 def test_find_template_base_ignores_a_marker_that_is_not_the_subject_prefix() -> None:
     # A commit merely *mentioning* update-self is not a template-state marker;
     # only the `update-self:` subject prefix is.
-    log = ["aaa1111 Fix the update-self skill's conflict triage"]
+    log = ["aaa1111\tbbb2222\tFix the update-self skill's conflict triage"]
     assert migrate_workspace.find_template_base(log) is None
+
+
+def test_find_template_base_skips_an_update_self_subject_that_merged_nothing() -> None:
+    # Without a second parent there is no upstream commit to be the base.
+    log = [
+        "aaa1111\tbbb2222\tupdate-self: survive cross-version launches",
+        "bbb2222\tccc3333\tInitial workspace commit",
+    ]
+    assert migrate_workspace.find_template_base(log) == "bbb2222"
 
 
 # --- parse_baseline_diff ---------------------------------------------------

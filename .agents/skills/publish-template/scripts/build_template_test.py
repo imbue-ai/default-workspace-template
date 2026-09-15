@@ -9,6 +9,7 @@ human browsing GitHub reads the generated README.
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,22 +19,29 @@ _REPO_ROOT = _SCRIPTS_DIR.parents[3]
 _SCHEMA = (
     _REPO_ROOT / "system/services/env_converge/src/env_converge/template_manifest.py"
 )
+_RESOLVE_TEMPLATE_BASE = _REPO_ROOT / ".agents/shared/scripts/resolve_template_base.py"
 # The scan is a hard gate with no fallback: both binaries are baked into the
 # workspace image, so their absence means a dev box rather than a real failure.
 _SCANNERS = ("betterleaks", "kingfisher")
 
-pytestmark = pytest.mark.skipif(
+_needs_scanners = pytest.mark.skipif(
     any(shutil.which(tool) is None for tool in _SCANNERS),
     reason=f"needs the workspace image's secret scanners ({', '.join(_SCANNERS)})",
 )
 
 
-def _git(*args: str, cwd: Path) -> None:
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def _make_source_repo(root: Path) -> tuple[Path, str]:
-    """A minimal bootable workspace with one app to publish; returns (repo, base)."""
+    """A minimal bootable workspace with one app to publish; returns (repo, base).
+
+    The template is its own commit with bootstrap's `Initial workspace commit`
+    on top, as in a real workspace; that marker is the base.
+    """
     source = root / "source"
     source.mkdir()
     _git("init", "-q", ".", cwd=source)
@@ -75,20 +83,44 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
         )
     shutil.copy(_SCHEMA, source / "system/services/env_converge/src/env_converge")
     _git("add", "-A", cwd=source)
-    _git("commit", "-qm", "Initial workspace commit", cwd=source)
-    base_ref = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=source,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    _git("commit", "-qm", "Template release one", cwd=source)
+    _git("commit", "-q", "--allow-empty", "-m", "Initial workspace commit", cwd=source)
+    base_ref = _git("rev-parse", "HEAD", cwd=source)
 
     (source / "system/apps/demo").mkdir(parents=True)
     (source / "system/apps/demo/main.py").write_text("x = 1\n")
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "the app being published", cwd=source)
     return source, base_ref
+
+
+def _update_self(source: Path, base_ref: str) -> None:
+    """Build a second app, then land an update-self merge of a new template release.
+
+    Afterwards the published app changes again, so it has work on both sides of
+    the update -- the shape a user publishing one app out of several has.
+    """
+    (source / "system/apps/music_scout").mkdir(parents=True)
+    (source / "system/apps/music_scout/main.py").write_text("scout = 1\n")
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Build music scout", cwd=source)
+    _git("checkout", "-q", "-b", "upstream", f"{base_ref}^", cwd=source)
+    (source / "system/release_two.md").write_text("two\n")
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Template release two", cwd=source)
+    _git("checkout", "-q", "-", cwd=source)
+    _git(
+        "merge",
+        "-q",
+        "--no-ff",
+        "upstream",
+        "-m",
+        "update-self: merge upstream template (minds-v0.0.2)",
+        cwd=source,
+    )
+    (source / "system/apps/demo/main.py").write_text("x = 20\n")
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Improve the app being published", cwd=source)
 
 
 def _assemble(cwd: Path, base_ref: str) -> subprocess.CompletedProcess[str]:
@@ -146,6 +178,7 @@ def test_assembly_refuses_to_run_outside_a_throwaway_worktree(tmp_path: Path) ->
     assert (source / "data/important.db").read_text() == "PRECIOUS USER DATA"
 
 
+@_needs_scanners
 def test_the_manifest_trio_is_written(built_snapshot: Path) -> None:
     # The three files an adopter's tooling looks for. Absence of the TOML is
     # what marks a repo as the older v1 format, so a missing one is not a
@@ -155,6 +188,7 @@ def test_the_manifest_trio_is_written(built_snapshot: Path) -> None:
     assert (built_snapshot / "template.svg").is_file()
 
 
+@_needs_scanners
 def test_the_readme_is_regenerated_to_describe_this_template(
     built_snapshot: Path,
 ) -> None:
@@ -172,6 +206,7 @@ def test_the_readme_is_regenerated_to_describe_this_template(
     assert "MINDS_TEMPLATE_REPO_URL" in readme
 
 
+@_needs_scanners
 def test_the_generated_welcome_replaces_the_base_one(built_snapshot: Path) -> None:
     # A mind created from a template must open by naming THAT template, not
     # with the generic greeting the base workspace ships.
@@ -182,8 +217,51 @@ def test_the_generated_welcome_replaces_the_base_one(built_snapshot: Path) -> No
     assert "template.md" in welcome
 
 
+@_needs_scanners
 def test_the_version_history_never_ships(built_snapshot: Path) -> None:
     # docs/VERSION_HISTORY.md is the SOURCE workspace's ledger -- it records
     # what that mind published, which is nobody else's business and wrong in an
     # adopter's tree.
     assert not (built_snapshot / "docs/VERSION_HISTORY.md").exists()
+
+
+def test_assembly_refuses_an_update_self_merge_as_the_base(tmp_path: Path) -> None:
+    """The merge's tree and history hold the whole pre-update workspace.
+
+    The script must refuse it before the reset, whatever the caller resolved.
+    """
+    source, base_ref = _make_source_repo(tmp_path)
+    _update_self(source, base_ref)
+    merge = _git("rev-parse", "HEAD^", cwd=source)
+    worktree = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+
+    completed = _assemble(worktree, merge)
+
+    assert completed.returncode == 5, completed.stdout + completed.stderr
+    assert "Initial workspace commit" in completed.stderr
+    assert (worktree / "system/apps/music_scout/main.py").is_file()
+
+
+@_needs_scanners
+def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) -> None:
+    source, base_ref = _make_source_repo(tmp_path)
+    _update_self(source, base_ref)
+    music_scout_commit = _git("rev-parse", "HEAD~2", cwd=source)
+    resolved = subprocess.run(
+        [sys.executable, str(_RESOLVE_TEMPLATE_BASE), "--repo", str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    worktree = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+
+    completed = _assemble(worktree, resolved)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (worktree / "system/apps/demo/main.py").read_text() == "x = 20\n"
+    assert (worktree / "system/release_two.md").is_file()
+    assert not (worktree / "system/apps/music_scout").exists()
+    history = _git("rev-list", "HEAD", cwd=worktree).splitlines()
+    assert music_scout_commit not in history
