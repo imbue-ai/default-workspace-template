@@ -132,6 +132,13 @@ def _resolve_base(source: Path) -> str:
     ).stdout.strip()
 
 
+def _linked_worktree(source: Path, root: Path) -> Path:
+    """A throwaway linked worktree of the source's HEAD, where assembly may run."""
+    worktree = root / "wt"
+    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+    return worktree
+
+
 def _assemble(cwd: Path, base_ref: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -159,8 +166,7 @@ def built_snapshot(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A template assembled by the real script, in a real linked worktree."""
     root = tmp_path_factory.mktemp("publish")
     source, base_ref = _make_source_repo(root)
-    worktree = root / "wt"
-    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+    worktree = _linked_worktree(source, root)
 
     completed = _assemble(worktree, base_ref)
 
@@ -242,8 +248,7 @@ def test_assembly_refuses_an_update_self_merge_as_the_base(tmp_path: Path) -> No
     source, base_ref = _make_source_repo(tmp_path)
     _update_self(source, base_ref)
     merge = _git("rev-parse", "HEAD^", cwd=source)
-    worktree = tmp_path / "wt"
-    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+    worktree = _linked_worktree(source, tmp_path)
 
     completed = _assemble(worktree, merge)
 
@@ -258,8 +263,7 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
     _update_self(source, base_ref)
     music_scout_commit = _git("rev-parse", "HEAD~2", cwd=source)
     resolved = _resolve_base(source)
-    worktree = tmp_path / "wt"
-    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+    worktree = _linked_worktree(source, tmp_path)
 
     completed = _assemble(worktree, resolved)
 
@@ -295,8 +299,7 @@ def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) ->
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "Remix the adopted app", cwd=source)
     resolved = _resolve_base(source)
-    worktree = tmp_path / "wt"
-    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+    worktree = _linked_worktree(source, tmp_path)
 
     completed = _assemble(worktree, resolved)
 
