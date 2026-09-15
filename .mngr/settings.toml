@@ -307,7 +307,7 @@ check_installation = false
 #   web_search / experimental_request_user_input / update_plan, and `write_stdin` there is
 #   silently ignored (verified -- the bypass still worked). With this flag the model reports
 #   "`write_stdin` does not exist in the available exec tools", ordinary shell calls still run
-#   AND still fire their hook. Cost: the interactive-tty affordance, which Minds does not use.
+#   AND still fire their hook. Cost: the interactive-tty affordance, which Mind does not use.
 #   (The older spelling `experimental_use_unified_exec_tool` is deprecated in 0.147.0.)
 # - features.goals = false, and tools.{update_plan, experimental_request_user_input,
 #   web_search}.enabled = false: turn off codex surfaces the chat does not use -- codex's own
@@ -325,7 +325,7 @@ Run every shell command as its own `exec_command`. Do NOT start a long-lived int
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
-### Welcome to Minds
+### Welcome to Mind
 
 I'm an AI operating system built to extend *you* — so you can do your best work.
 
@@ -372,7 +372,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 If the user's message is exactly `/welcome`, your entire response is the message below, copied verbatim. Do NOT call any tool, do NOT read any file, do NOT look at the codebase, and do NOT add anything before or after it -- not a preamble, not a summary, not a note about what you are doing.
 
-### Welcome to Minds
+### Welcome to Mind
 
 I'm an AI operating system built to extend *you* — so you can do your best work.
 

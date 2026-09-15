@@ -8,7 +8,7 @@ same ordered, append-only file (a normal message is a JSON string, so the two ne
 * ``{"minds_interrupt": true}`` -- the shoulder-tap FLUSH: interrupt the running turn and
   resubmit the parked steers as one merged turn.
 * ``{"minds_interrupt_retract": true}`` -- the stop-button RETRACT: interrupt the running turn
-  and DISCARD the parked steers (Minds hands the queued messages back to the composer).
+  and DISCARD the parked steers (Mind hands the queued messages back to the composer).
 
 Kept in sync with the extension (mngr_pi_coding/resources/mngr_pi_lifecycle.ts), which owns the
 matching ``INTERRUPT_KEY`` / ``RETRACT_KEY`` constants.

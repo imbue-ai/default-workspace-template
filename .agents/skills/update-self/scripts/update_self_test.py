@@ -1075,7 +1075,7 @@ def test_held_back_is_false_when_the_users_own_override_picked_the_older_tag() -
     """The bug this flag exists to prevent: blaming the app for the user's choice.
 
     `--override minds-v0.3.6` under a `minds-v0.3.9` ceiling leaves `ref` below
-    `latest_available`, so an eyeball comparison would tell the user their Minds
+    `latest_available`, so an eyeball comparison would tell the user their Mind
     app held the update back when they picked the older tag themselves.
     """
     assert (
@@ -6415,7 +6415,7 @@ def test_wait_and_open_chat_tab_gives_up_at_the_deadline() -> None:
     assert calls == 4
 
 
-# --- run-status (the Minds app's status contract) --------------------------
+# --- run-status (the Mind app's status contract) --------------------------
 
 
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:

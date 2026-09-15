@@ -120,7 +120,7 @@ export function isFiledPermissionRequest(toolCall: ToolCall, toolResult: ToolRes
 }
 
 /**
- * Ask the outer Minds app to open its permission-request modal. The chat UI
+ * Ask the outer Mind app to open its permission-request modal. The chat UI
  * runs inside an iframe, so we hand the request id to the embedding chrome
  * via the embed contract rather than rendering the modal ourselves.
  */
@@ -271,7 +271,7 @@ const GENERIC_PERMISSION_TITLE = "Permission request";
 
 /** The card title: what's being asked for, in a few words. "Local files" for a
  *  file-sharing request; "Other machines" for a workspace request (acting on the
- *  user's other Minds workspaces); "Device accounts" for an accounts request;
+ *  user's other Mind workspaces); "Device accounts" for an accounts request;
  *  the friendly service name for a predefined request once the gateway catalog
  *  resolves (the raw scope until then); null when nothing named the subject, so
  *  each caller decides whether a generic stand-in beats no row at all. The
