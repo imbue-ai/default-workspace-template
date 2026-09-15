@@ -104,7 +104,10 @@ def test_only_a_method_whose_credential_is_copied_says_a_re_key_reaches_new_chat
     with _client() as client:
         lanes = client.get("/api/lanes").get_json()["lanes"]
     new_chats_only = {
-        (lane["id"], method["id"]) for lane in lanes for method in lane["methods"] if method["is_reauth_new_chats_only"]
+        (lane["id"], method["id"])
+        for lane in lanes
+        for method in lane["methods"]
+        if method["is_reauth_new_chats_only"]
     }
     assert new_chats_only == {("google", "api_key")}
 
