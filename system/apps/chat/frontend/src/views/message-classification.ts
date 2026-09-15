@@ -108,8 +108,6 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
-export { isHandoffPromptChip } from "../models/handoffPrompt";
-
 export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
   return KIND_SPEC[classifyUserMessage(event).kind].rail !== Rail.User;
 }

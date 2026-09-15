@@ -74,10 +74,10 @@ import type {
   ToolResultEvent,
   ToolCall,
 } from "../models/Response";
+import { isHandoffPromptChip } from "../models/handoffPrompt";
 import type { PermissionResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import {
-  isHandoffPromptChip,
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
   isSystemChipUserMessage,
