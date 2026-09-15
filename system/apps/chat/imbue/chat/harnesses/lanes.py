@@ -82,6 +82,10 @@ class PasteSink(StrEnum):
     PI_AUTH_JSON = "pi_auth_json"
     # codex's own 0600 auth.json, holding a raw key in API-key mode.
     CODEX_AUTH_JSON = "codex_auth_json"
+    # A 0600 dotenv file holding a Gemini key, plus the settings.json flag that makes agy read
+    # it. Two files rather than one because agy's key mode is an environment variable and its
+    # own config says whether to use one.
+    ANTIGRAVITY_GEMINI_ENV = "antigravity_gemini_env"
 
 
 class Scrape(FrozenModel):
@@ -334,6 +338,10 @@ LANE_OPENAI = Lane(
 # --- antigravity ------------------------------------------------------------------------
 # No auth subcommand at all: bare `agy` prompts on first launch. The menu is a blind
 # keystroke script, which is exactly why `expect_before_keys` exists.
+#
+# Pasting a Gemini key skips the terminal entirely, and is the only method on this lane that
+# can be driven with nobody at a browser. It is not the primary one: someone who has opened
+# the chooser is at a UI and has a Google account, and the subscription is what they came for.
 
 _AGY_URL_CHARSET: Final = r"[A-Za-z0-9%&=?_.~/:+#-]"
 _AGY_URL_SCRAPE = Scrape(
@@ -368,6 +376,19 @@ LANE_GOOGLE = Lane(
             # agy drops straight into its chat TUI on success and prints no success line.
             frame_marker=None,
         ),
+        PasteMethod(
+            id="api_key",
+            label="Use a Gemini API key",
+            # The second sentence is on this screen because this screen is also where a re-key
+            # happens: mngr copies the key into an agent's own environment when the chat is
+            # created, so a chat already running cannot pick up a new one.
+            description=(
+                "Paste an AI Studio key to run on Gemini models with no browser. A chat that is "
+                "already running keeps the key it started with, so a new key reaches new chats only."
+            ),
+            sink=PasteSink.ANTIGRAVITY_GEMINI_ENV,
+            signup_url="https://aistudio.google.com/apikey",
+        ),
         PtyMethod(
             id="gcloud",
             label="Use a Google Cloud project",
@@ -383,6 +404,12 @@ LANE_GOOGLE = Lane(
             failures=_AGY_FAILURES,
             frame_marker=None,
         ),
+    ),
+    # One provider, so the modal renders a single field with this hint rather than a picker --
+    # the same shape the OpenRouter lane gets. The display noun names the key path apart from
+    # the two browser ones, which all mint accounts on this same lane.
+    key_providers=(
+        KeyProvider(provider_id="google", display="Google Gemini", env_var="GEMINI_API_KEY", hint="AIza..."),
     ),
 )
 

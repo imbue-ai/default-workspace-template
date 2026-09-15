@@ -7,15 +7,23 @@ shares a login. Binding changes what they point at, and nothing else.
 The binding has to happen INSIDE `mngr create`, not after it. `mngr create` writes the agent
 env file, provisions, starts the agent, waits for readiness -- destroying the agent if that
 times out -- and delivers the first message, all before it returns. A repoint afterwards
-would land after the first turn had already run on the wrong credential. Two flags already
-land at the right moments:
+would land after the first turn had already run on the wrong credential. Four of mngr's own
+flags land at the right moments:
 
     --env KEY=VALUE              written to <state>/env BEFORE provisioning
+    --env-file PATH              read on this host, merged into <state>/env, same moment
+    --setting KEY=VALUE          a config override, so it reaches provisioning too
     --extra-provision-command    run AFTER provisioning, BEFORE start
 
 So claude binds through the env file (its launch command carries no inline `env`, so the
 sourced value wins), and the other three bind by replacing the credential symlink that
 provisioning just created -- the same `ln -sfn` mngr itself used, one step later.
+
+An agy account signed in with a pasted Gemini key is the one binding that is a COPY rather
+than a pointer: mngr flattens `--env-file` into the agent's own env file at create, and writes
+the per-agent settings.json once, at provision. So re-keying such an account reaches chats
+created afterwards; the chats already on it keep the key they were created with, even across
+the `mngr start --restart` a re-auth runs, until they are recreated.
 
 A create that names no account gets the same binding from the workspace's own mngr config:
 the account store writes the default account's harness and binding into
@@ -35,6 +43,9 @@ from imbue.chat.accounts import choose_default_account
 from imbue.chat.accounts import harness_for
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.account_scope import agent_credential_path
+from imbue.chat.harnesses.antigravity.auth import GEMINI_MODE_SETTING
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import has_gemini_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
 from imbue.mngr_claude.claude_config import ensure_chat_cancel_tap_keybinding
@@ -95,6 +106,17 @@ def create_args(harness: HarnessType, account_dir: Path, agent_state_dir: Path) 
         # script that shells claude. Binding claude some other way would silently sign every
         # worker out. See `binding_test.py`.
         return ["--env", f"CLAUDE_CONFIG_DIR={account_dir}"]
+
+    if harness is HarnessType.ANTIGRAVITY and has_gemini_api_key(account_dir):
+        # agy's key mode is an environment variable plus a flag in its own settings.json, so
+        # there is no credential file to link. `--env-file` is read on the host running mngr
+        # and its contents are merged into the agent's env file before provisioning; the
+        # setting reaches the per-agent settings.json mngr writes at the same moment.
+        #
+        # The oauth-token symlink mngr provisions anyway is left dangling, which is what it
+        # already is for any account that has never completed a browser sign-in: in key mode
+        # agy never reads it.
+        return ["--env-file", str(gemini_env_path(account_dir)), "--setting", GEMINI_MODE_SETTING]
 
     source = account_credential_path(harness, account_dir)
     dest = agent_credential_path(harness, agent_state_dir)

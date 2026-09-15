@@ -103,6 +103,35 @@ const PI_KEY_LANE = lane({
   ],
 });
 
+// The google lane's shape: two browser methods plus a paste, and one key provider. Both halves
+// are generic -- a mixed lane files its non-primary methods under "other ways to sign in", and a
+// single provider makes the key form one field rather than a picker -- so this is here to keep
+// them that way.
+const MIXED_LANE = lane({
+  id: "google",
+  provider_name: "Google",
+  harness: "antigravity",
+  methods: [
+    {
+      id: "oauth",
+      label: "Continue with Google",
+      description: "Sign in with your Google account.",
+      signup_url: "",
+      shape: "url_then_code",
+      is_primary: true,
+    },
+    {
+      id: "api_key",
+      label: "Use a Gemini API key",
+      description: "Paste an AI Studio key.",
+      signup_url: "https://aistudio.google.com/apikey",
+      shape: "paste",
+      is_primary: false,
+    },
+  ],
+  key_providers: [{ provider_id: "google", display: "Google Gemini", env_var: "GEMINI_API_KEY", hint: "AIza..." }],
+});
+
 beforeEach(() => {
   state.lanes = [lane()];
   state.accounts = [];
@@ -202,6 +231,31 @@ describe("the provider chooser", () => {
     expect(text).toContain("Anthropic");
     expect(text).toContain("Google");
     expect(text).toContain("API key");
+  });
+
+  it("offers a lane's paste method beside its browser ones", async () => {
+    state.lanes = [MIXED_LANE];
+    const root = document.createElement("div");
+    const draw = () => m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    draw();
+
+    (root.querySelector('[data-e2e="lane-google"]') as HTMLElement).click();
+    // The lane spawns a CLI, so it renders a spinner until `startFlow` settles.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // The primary renders inline; the alternates, the paste among them, get their own rows.
+    expect(root.textContent).toContain("Other ways to sign in");
+    expect(root.querySelector('[data-e2e="method-api_key"]')).not.toBeNull();
+
+    (root.querySelector('[data-e2e="method-api_key"]') as HTMLElement).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    draw();
+
+    // One provider, so the form is a single field carrying that provider's hint -- no picker.
+    const field = root.querySelector('[data-e2e="api-key-input"]') as HTMLInputElement;
+    expect(field.placeholder).toBe("AIza...");
+    expect(root.textContent).toContain("Saved as GEMINI_API_KEY for this mind.");
   });
 
   it("renders a live flow's spinner", () => {

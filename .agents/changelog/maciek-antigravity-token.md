@@ -1,0 +1,1 @@
+The AI-integration skill's credentialing reference now covers Antigravity accounts signed in with a pasted Gemini API key: agy reads no credential file in that mode, so the key rides in the chat's own environment as `GEMINI_API_KEY` rather than living in the account folder the chat points at.
