@@ -10,7 +10,10 @@ the recreate argv and its labels, port reconciliation, and the audit patterns.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _MODULE_PATH = Path(__file__).with_name("migrate_workspace.py")
 _spec = importlib.util.spec_from_file_location("migrate_workspace", _MODULE_PATH)
@@ -446,6 +449,124 @@ def test_parse_supervisord_ports_reads_the_forward_port_call() -> None:
     assert ports[0].found_in == "supervisord.conf"
 
 
+# The manifest form the build-app scaffold and every built-in write: no --name,
+# the app's name is the program's. Alongside it, a --name call with its flags in
+# the other order, and a registration line in a comment that names no port.
+_MANIFEST_SUPERVISORD_SNIPPET = """
+# The file viewer registers its manifest via forward_port.py, then execs dufs.
+[program:files]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py files bash -c "python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300 && exec dufs --port 8300"
+
+[program:inbox-status]
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/inbox_status/app.toml --url http://localhost:8091 && inbox-status"
+
+[program:docs-viewer]
+command=bash -c "python3 system/scripts/forward_port.py --name docs-viewer --url http://localhost:8092 --no-icon && jupyter notebook --port 8092"
+
+[eventlistener:oom-tag-backstop]
+command=python3 system/services/oom_priority/bin/oom_tag_backstop.py
+"""
+
+
+def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program() -> (
+    None
+):
+    ports = migrate_workspace.parse_supervisord_ports(_MANIFEST_SUPERVISORD_SNIPPET)
+    assert [(port.name, port.port) for port in ports] == [
+        ("files", 8300),
+        ("inbox-status", 8091),
+        ("docs-viewer", 8092),
+    ]
+
+
+def test_parse_supervisord_ports_reads_the_real_template_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read through the scan's own file list rather than a copy of it, so this checks the parser
+    # against the config the scan is actually given: the main file plus its drop-ins, which is
+    # where every program now lives. A hand-rolled list would keep passing if the scan itself
+    # stopped finding the drop-ins. The list is relative to the workspace root, hence the chdir.
+    monkeypatch.chdir(Path(__file__).resolve().parents[4])
+    ports = [
+        port
+        for conf in migrate_workspace._local_supervisord_configs(Path())
+        for port in migrate_workspace.parse_supervisord_ports(
+            conf.read_text(encoding="utf-8")
+        )
+    ]
+    # The chat, the terminal and the files app register from inside their own processes
+    # (the registry scan covers them), so the config itself names the other two.
+    assert {(port.name, port.port) for port in ports} >= {
+        ("system_interface", 8000),
+        ("browser", 8081),
+    }
+    assert not {port.name for port in ports} & {"terminal", "files", "chat"}
+    assert [port.name for port in ports].count("system_interface") == 1
+
+
+def _write_dropin_workspace(root: Path) -> Path:
+    """A workspace with two drop-ins, a directory named like one, and a decoy directory beside them.
+
+    ``archive.conf/`` is what the listing must skip (it lists regular files only), and
+    ``programs.d/`` holds a program no reader of this template is meant to find: the drop-in
+    directory is fixed, not read out of the config.
+    """
+    dropins = root / "system" / "supervisord.conf.d"
+    dropins.mkdir(parents=True)
+    for program in ("alpha", "beta"):
+        (dropins / f"{program}.conf").write_text(f"[program:{program}]\ncommand={program}-app\n")
+    (dropins / "archive.conf").mkdir()
+    (root / "system" / "programs.d").mkdir()
+    (root / "system" / "programs.d" / "ghost.conf").write_text("[program:ghost]\ncommand=ghost-app\n")
+    conf = root / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n")
+    return conf
+
+
+def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
+    """What the listing shell prints for that config, through a real shell instead of over SSH.
+
+    Run from the filesystem root, which is neither the workspace nor the config's directory: the
+    login shell this really runs in is not ours to choose.
+    """
+    command = migrate_workspace._supervisord_dropin_listing_command(str(supervisord_conf))
+    listing = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(supervisord_conf.anchor),
+        timeout=60,
+    ).stdout
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
+@pytest.mark.parametrize("directory_name", ["workspace", "with space", "amp&and"])
+def test_remote_dropin_listing_names_every_regular_file_in_the_dropin_directory(
+    tmp_path: Path, directory_name: str
+) -> None:
+    """The listing is the source's ``system/supervisord.conf.d/*.conf`` and nothing else.
+
+    The source's path is interpolated into the shell, so one holding a space or an ``&`` has to
+    stay one path: splitting it costs the listing every drop-in at once, which is the same empty
+    answer a source with none gives, so every real app's port is reported free.
+    """
+    conf = _write_dropin_workspace(tmp_path / directory_name)
+
+    assert _run_dropin_listing(conf) == [
+        str(tmp_path / directory_name / "system/supervisord.conf.d/alpha.conf"),
+        str(tmp_path / directory_name / "system/supervisord.conf.d/beta.conf"),
+    ]
+
+
+def test_remote_dropin_listing_is_empty_for_a_source_predating_the_split(tmp_path: Path) -> None:
+    (tmp_path / "system").mkdir()
+    conf = tmp_path / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[program:todo]\ncommand=todo-app\n")
+
+    assert _run_dropin_listing(conf) == []
+
+
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
     current = migrate_workspace.parse_apps_registry(
         '[[apps]]\nname = "dashboard"\nurl = "http://localhost:8091"\n'
@@ -456,6 +577,21 @@ def test_parse_apps_registry_accepts_both_registry_vintages() -> None:
     assert [(port.name, port.port) for port in current] == [("dashboard", 8091)]
     assert [(port.name, port.port) for port in legacy] == [("dashboard", 8091)]
     assert "applications" in legacy[0].found_in
+
+
+def test_parse_apps_registry_reports_a_distinct_instances_url_port_too() -> None:
+    ports = migrate_workspace.parse_apps_registry(
+        '[[apps]]\nname = "terminal"\nurl = "http://localhost:7681"\n'
+        'instances_url = "http://127.0.0.1:7682"\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\n'
+        'instances_url = "http://localhost:8081"\n'
+    )
+
+    assert [(port.name, port.port, port.found_in) for port in ports] == [
+        ("terminal", 7681, "registry [[apps]] url"),
+        ("terminal", 7682, "registry [[apps]] instances_url"),
+        ("browser", 8081, "registry [[apps]] url"),
+    ]
 
 
 def test_parse_apps_registry_skips_an_entry_with_no_parseable_port() -> None:
@@ -644,7 +780,9 @@ def test_read_command_recovers_files_without_trailing_newline() -> None:
     assert recovered["/b/data.json"].rstrip("\n") == '{"id": "b"}'
     import json as _json
 
-    assert {_json.loads(recovered[p])["id"] for p in ("/a/data.json", "/b/data.json")} == {
+    assert {
+        _json.loads(recovered[p])["id"] for p in ("/a/data.json", "/b/data.json")
+    } == {
         "a",
         "b",
     }

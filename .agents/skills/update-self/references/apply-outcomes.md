@@ -60,7 +60,12 @@ REFUSED --detail "<what failed, one plain line>"`.
 
 Because the rollback is a forward revert, the merge stays in history while its
 content does not, and re-running the apply of that same merge is refused. A
-retry means a fresh worker pass off the current `HEAD`.
+retry means a fresh worker pass off the current `HEAD`, and that pass must
+revert the rollback commit before it merges (the worker reference says how):
+git counts the reverted content as already merged, so a plain re-merge of the
+same target lands only what the target gained since the failed attempt. The
+apply refuses such a merge ref (exit 1, nothing changed), naming the rollback
+commit to revert.
 
 ## Exit 3 -- emergency
 

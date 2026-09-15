@@ -110,8 +110,9 @@ def build_wrapper_html(inner_service: str, title: str) -> str:
     // Every service origin is <name>.<workspace-host> (the same prefix rule
     // locally and on shares), so the wrapper at <wrapper>.<workspace-host>
     // reaches the inner service by swapping its own leading label.
-    // The origin scheme is owned by deriveServiceOrigin in system_interface's
-    // frontend/src/origin.ts; if it changes, this sibling-swap must change too.
+    // The origin scheme is owned by deriveAppOrigin in
+    // system/libs/workspace_ui/src/origin.ts; if it changes, this sibling-swap
+    // must change too.
     var previewService = {service_literal};
     var host = location.host;
     var innerHost = previewService + host.slice(host.indexOf("."));

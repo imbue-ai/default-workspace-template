@@ -10,8 +10,8 @@ metadata:
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
 the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
-`Dockerfile`, `system/supervisord.conf`, the system interface, the vendored
-`mngr`.
+`Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
+the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace, so this flow never mutates the
 live tree from an unverified state: an isolated **worker** does the merge and
@@ -199,7 +199,7 @@ is best-effort, and a failure is not a reason to stop:
 
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
-    surface-chat-tab --name "$MNGR_AGENT_NAME"
+    surface-chat-tab --chat-id "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"
 ```
 
 Open a tracking ticket (note the id it prints), then `tk start <ticket-id>` as
@@ -211,16 +211,17 @@ tk create "update-self" -t task \
     --acceptance "worker launched; conflicts triaged; validated; branch applied"
 ```
 
-Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_NAME`
+Write the task file: an **unquoted** frontmatter heredoc so `$MNGR_AGENT_ID`
 and `$REF` expand, then a **quoted** body. The `lead_agent` line must stay:
 this prose runs cross-version, and an older workspace's launcher may not stamp
-it at launch.
+it at launch. It is the lead's agent id, not its name: a rename of the lead's
+chat mid-update would otherwise strand the worker's report.
 
 ```bash
 {
 cat << FRONTMATTER_EOF
 ---
-lead_agent: $MNGR_AGENT_NAME
+lead_agent: $MNGR_AGENT_ID
 finish_report_path: data/.tasks/update-self/reports/report.md
 target_ref: $REF
 ---
@@ -294,7 +295,8 @@ uv run .agents/skills/launch-task/scripts/create_worker.py await \
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
 `question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. Either way: reply via `mngr message`, consume the
+the third reaches the user. Either way: reply via `create_worker.py reply
+--task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default
@@ -382,9 +384,12 @@ container build/launch parameter a running container cannot adopt: say it
 stays inert until a recreate). A genuinely breaking case takes the migration
 path below instead.
 
-**When the update touches `system/apps/system_interface/` at all**, also take
-the `editing service system_interface` lease through the apply, as
-`update-system-interface` does: check `tk ready` for a foreign one (surface
+**When the update touches `system/apps/system_interface/`,
+`system/apps/chat/frontend/`, `system/libs/workspace_ui/`, or
+`system/package.json` / `system/package-lock.json` at all** (the trees the
+shell's bundle is stamped over, the same set `update-system-interface`'s
+freshness check names), also take the `editing service system_interface` lease
+through the apply, as `update-system-interface` does: check `tk ready` for a foreign one (surface
 instead of proceeding), then `tk create "editing service system_interface" -t
 chore` and `tk start` it, each as its own command. Release it afterwards.
 
@@ -397,18 +402,29 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
     --merge-ref mngr/update-self --ff-only --target-ref "$REF"
 ```
 
-When the report names the worker's **built system-interface bundle**, append
-`--worker-bundle <that path>` so the exact build the worker validated is
-installed instead of a live build.
+When the report names the worker's **built frontend bundles** (the shell's
+`static/` and the chat app's), append `--worker-bundle system_interface=<path>
+--worker-bundle chat=<path>` so the exact builds the worker validated are
+installed instead of a live build; the apply installs them only as a pair (one
+`npm run build` emits both), and builds live when either is missing or stale.
 
 That one command is the whole landing: it fast-forwards the worker's
 `update-self:` merge commit, snapshots the pre-apply state, refreshes the
 affected environments, re-runs `system/scripts/setup_system.sh` when a file it
-reads changed, pre-flights the merged backend, installs or builds the frontend
-bundle, restarts the services agent (every apply), probes the live UI, refreshes
-every open view, writes the `docs/VERSION_HISTORY.md` entry, and runs `uv run
-env-converge upgrade` -- reverting the entire merge and restoring the
-snapshots on any failure. Exit codes:
+reads changed, pre-flights the merged backend (the shell, and the chat app in its
+side-effect-free `--preflight` mode, since the chat is the process that imports
+mngr and the harness plugins), installs or builds the frontend
+bundle, runs the workspace layout migration
+(`system/scripts/migrate_workspace_layouts.py`, a warning-only step: a failure
+there is reported and left to the next boot's run), restarts the services
+agent (every apply; the fresh supervisord it brings up reads the merged program
+table, so a program the update adds starts on its own), probes the shell's health
+route and the instances API of every critical app that serves one (the chat, the
+terminal; each at the URL its manifest or its fresh registry row names), probes the
+live UI, refreshes every open view, writes the
+`docs/VERSION_HISTORY.md` entry, and runs `uv run env-converge upgrade` --
+reverting the entire merge and restoring the snapshots on any other failure.
+Exit codes:
 
 - **`0` -- applied.** Read the closing stderr lines: a UI that was already
   broken beforehand still exits 0 naming the breakage (report it separately);
@@ -422,8 +438,10 @@ snapshots on any failure. Exit codes:
 - **`3` -- emergency.** Even the rollback could not restore health; escalate,
   with the kept pre-apply copies under `data/.state/update-apply/snapshots/`.
 - **`1` -- precondition; nothing changed** (dirty tree, `HEAD` moved under the
-  pass, another apply in flight, or this merge already landed and rolled
-  back). Re-dispatch a fresh worker pass off the current `HEAD`.
+  pass, another apply in flight, this merge already landed and rolled back, or
+  a re-merge of a rolled-back target that does not revert the rollback commit
+  first). Re-dispatch a fresh worker pass off the current `HEAD`; the refusal
+  names the commit to revert.
 
 What each outcome means for the user, the `provision-incomplete` and
 `emergency.json` records, an interrupted apply (re-run the same command; it
@@ -463,9 +481,13 @@ If a stray system-interface preview is registered (an older pass may have left
 one; `update-system-interface` refuses its next pass while one is):
 
 ```bash
-python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 python3 system/scripts/layout.py close si-preview
+python3 .agents/skills/update-system-interface/scripts/reveal_system_interface.py unpreview --slug update-self
 ```
+
+The close goes first: an op addressed to an app the registry no longer holds is refused,
+so once `unpreview` has deregistered the row there is nothing left to close (the tab is
+pruned on its own when the app leaves the inventory).
 
 **The rest is only for a successful apply (exit 0).** After a rollback the
 worker's branch, worktree and report are the retry path: keep them until the

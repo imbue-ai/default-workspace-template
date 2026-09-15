@@ -12,20 +12,25 @@ agent_ready_timeout = 45.0
 
 # --- Command defaults ---
 
-# Default create command settings -- apply to all mngr create from this repo
+# Default create command settings -- apply to all mngr create from this repo.
+#
+# No default `type` here, on purpose. The agent type a create resolves to when it
+# names none -- and the provider account it runs on -- come from the git-ignored
+# `.mngr/settings.local.toml`, which the chat app writes from the account store
+# (system/apps/chat/imbue/chat/create_defaults.py): the pinned default account,
+# else the most recently used one, as `type` plus its binding (`env__extend` for
+# claude, an `extra_provision_command__extend` credential link for the others)
+# plus an `account=<id>` label. That file is the one place a workspace's default
+# harness lives, so a create with no account fails rather than launching a claude
+# that cannot take a turn; see [pre_command_scripts] below for the message it fails
+# with. Every creator that wants a specific harness says so with `--type`.
 [commands.create]
-type = "claude"
 connect = false
 ensure_clean = false
 pass_env__extend = ["REMOTE_SERVICE_CONNECTOR_URL", "LATCHKEY_GATEWAY"]
 host_env__extend = [
     "IS_SANDBOX=1",
     "IS_AUTONOMOUS=1",
-    # Vestigial: fast mode for Opus 4.7 was deprecated 2026-06-25 and removed
-    # 2026-07-24, and this workspace runs Opus 4.8 (agent_types.claude model
-    # below), so this gates nothing. Kept only so a pinned Claude Code older
-    # than the removal keeps behaving as before; drop it on the next version bump.
-    "CLAUDE_CODE_ENABLE_OPUS_4_7_FAST_MODE=1",
     # Skip Claude Code's org-level fast-mode eligibility check. Agents sign in
     # with a Claude Max subscription that supports fast mode, but the session
     # resolves under an organization whose org check otherwise reports fast
@@ -91,6 +96,27 @@ worktree_base_folder = "/home/user/worktrees/"
 disable_plugin__extend = ["recursive", "ttyd", "claude_subagent_proxy"]
 yes = true
 
+# Runs before every `mngr create` from this project root. Inside the workspace,
+# with no provider account signed in, there is no settings.local.toml naming a
+# default type, and mngr's own refusal ("No agent type provided", with a hint to
+# set one in config) sends the user after the wrong fix; the script refuses with
+# "sign in first" instead. It gates on the create's project root being the work
+# dir of the agent running it, so the create of the workspace itself -- run on the
+# user's machine from a clone of this template that is nobody's work dir -- is
+# never refused. The shell test in front spares a plain user shell the python3
+# (macOS's stub would prompt to install the Command Line Tools), but not an mngr
+# agent on that machine, which has MNGR_AGENT_ID like any other; see the script's
+# docstring for what that means when working on this repo from a Mac.
+[pre_command_scripts]
+create = ["[ -z \"$MNGR_AGENT_ID\" ] || python3 system/scripts/require_create_account.py"]
+
+# A worker's worktree carries no settings.local.toml of its own (the file is
+# git-ignored), so a create run from inside one -- a worker launching a worker --
+# would name no type and no account. Sharing the workspace's copy by symlink keeps
+# every checkout of the workspace on the same default account.
+[work_dir_extra_paths]
+".mngr/settings.local.toml" = "SHARE"
+
 # --- Agent types ---
 
 # Agent type defaults -- apply to all claude agents created from this repo
@@ -121,18 +147,21 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # speed -- every claude role (caretaker, automation, worker) resolves to this
 # type, so they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
-# User-facing chat agents override it per create:
-# the system interface and the bootstrap both pass
-# `-S agent_types.claude.settings_overrides.fastMode=<bool>`, resolved from the
-# workspace's fast-mode decision (see system_interface's fast_mode_policy.py).
+# Every other chat gets this default too: the chat app's create passes no launch
+# settings. Only the workspace's first chat launches fast, through the
+# `agent_types.claude.settings_overrides.fastMode=true` setting that
+# `[create_templates.first]` (below) stacks on its create; a running chat then
+# toggles it with `/fast`, which the chat app's harnesses/claude/model.py writes
+# into that agent's own settings file.
 #
-# That override targets `claude` rather than `chat` because a `-S` is parsed as
-# its own config layer, without the `parent_type = "claude"` this file gives
-# `chat` -- so `chat` resolves against the base agent config, which has no
+# That setting targets `claude` rather than `chat` because a create-time setting
+# (a template's `setting__extend` entry, or a `-S` flag) is parsed as its own
+# config layer, without the `parent_type = "claude"` this file gives `chat` --
+# so `chat` resolves against the base agent config, which has no
 # `settings_overrides` field, and the create is rejected. `claude` is registered
 # by the claude plugin, whose config class declares it. A chat create resolves
 # its own config, so overriding the base there never reaches a worker create.
-# This is the canonical explanation; the two create paths and the CLI-contract
+# This is the canonical explanation; the `first` template and the CLI-contract
 # test point here rather than repeating it.
 #
 # skipDangerousModePermissionPrompt suppresses Claude Code's bypass-permissions
@@ -140,6 +169,9 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # It must ride the mngr-managed --settings overlay because nothing provisions the
 # shared ~/.claude/settings.json: in shared config-dir mode mngr writes nothing
 # into the shared dir, and claude itself only creates it lazily.
+# feedbackSurveyRate = 0 and feedbackDrafts = "off" silence Claude Code's session quality
+# survey and feedback drafts: both prompt a human mid-session, which garbles an unattended
+# chat's automated input and output. Same overlay reasoning as skipDangerousModePermissionPrompt.
 # tui = "fullscreen" pins the input bar and any dialog to the pane instead of letting them
 # scroll out of view, so what mngr captures at send time is what is actually holding the
 # input. tmux here runs with `alternate-screen off` (see the tmux.conf written below), so
@@ -156,7 +188,7 @@ cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,Tod
 # their model sets are per-account (codex: by ChatGPT tier) or per-provider (pi, opencode),
 # so a pin there is a slug that some accounts cannot use, which fails as a hard 400 AND as
 # an empty model bar.
-settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, tui = "fullscreen"}
+settings_overrides__extend = {model = "opus[1m]", fastMode = false, skipDangerousModePermissionPrompt = true, feedbackSurveyRate = 0, feedbackDrafts = "off", tui = "fullscreen"}
 # Launch every claude agent through the OOM band wrapper instead of `claude`
 # directly. The wrapper (system/services/oom_priority/bin/agent_oom_launch.py) sets its own
 # oom_score_adj to the user- or worker-agent band, records its pid in the
@@ -173,14 +205,13 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.227"
-# Do not provision a per-agent Claude config dir: every claude in the workspace
-# shares one config dir so auth, plugins, marketplaces, and sessions are
-# configured exactly once. CLAUDE_CONFIG_DIR is deliberately left UNSET
-# everywhere (no agent env, no host env), so every claude -- mngr-launched
-# agents and a bare `claude` in a workspace terminal alike -- resolves claude's
-# own default: ~/.claude for the config dir and ~/.claude.json for the global
-# config beside it.
+version = "2.1.269"
+# Do not provision a per-agent Claude config dir. A claude is bound to a
+# provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
+# account's folder under ~/.minds/accounts (the chat app's own creates, and the
+# [commands.create] env default in .mngr/settings.local.toml for every other
+# create), so auth and sessions live per account; nothing sets the variable in
+# the host env, and ~/.claude holds no credential.
 isolate_local_config_dir = false
 # Claude-only instructions, appended to every claude agent's system prompt.
 append_system_prompt__extend = ["""# Claude-specific instructions
@@ -203,8 +234,9 @@ Use your built-in memory system. Your memory directory is `data/memories/` (conf
 # Because it is not a claude agent, mngr does no claude provisioning for it --
 # in particular it gets no per-agent CLAUDE_CONFIG_DIR in its env, so
 # supervisord services (and any `mngr create` they run) inherit an environment
-# with the var unset and every claude in the workspace lands on the shared
-# ~/.claude (see [agent_types.claude] above). Nothing from the invoking user's
+# with the var unset, and a create they run binds through the workspace's
+# create defaults in .mngr/settings.local.toml (see [commands.create] above)
+# rather than through anything inherited. Nothing from the invoking user's
 # ~/.claude/ or ~/.mngr/ leaks into the workspace: the repo at the requested
 # git ref is the canonical workspace definition, and command agents sync no
 # user-local claude state at all.
@@ -213,8 +245,8 @@ parent_type = "command"
 command = "sleep infinity"
 
 # the "codex" agent type -- OpenAI Codex CLI as a peer harness to claude. It is
-# its own base type (registered by the vendored imbue-mngr-codex plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. Auto-approve
+# its own base type (registered by the vendored imbue-mngr-codex plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. Auto-approve
 # + auto-dismiss so the container agent runs unattended, matching
 # agent_types.claude's posture (auto_allow_permissions sets codex
 # approval_policy="never"). The codex binary is baked into the image
@@ -353,8 +385,8 @@ Already have something in mind? Tell me what you'd like to work on below. If not
 Then stop. If the user's next message asks for suggestions or says they are not sure, follow the rest of `.agents/skills/welcome/SKILL.md`."""]
 
 # the "opencode" agent type -- OpenCode CLI as a peer harness to claude/codex. It
-# is its own base type (registered by the vendored imbue-mngr-opencode plugin via
-# `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type. The
+# is its own base type (registered by the vendored imbue-mngr-opencode plugin, installed
+# with the mngr tool by system/scripts/build_workspace.sh), so no parent_type. The
 # opencode binary is baked into the image (system/scripts/setup_system.sh,
 # OPENCODE_VERSION), so check_installation is off -- do not reinstall/verify at
 # provision.
@@ -385,7 +417,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 
 # the "antigravity" agent type -- Google's Antigravity CLI (agy) as a peer harness to
 # claude/codex. Its own base type (registered by the vendored imbue-mngr-antigravity
-# plugin via `mngr plugin add` in system/scripts/build_workspace.sh), so no parent_type.
+# plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
 # version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
@@ -447,6 +479,13 @@ isolate_host_volumes = true
 host_dir = "/home/user/.mngr"
 volume_mount_path = "/home/user"
 host_log_dir = "/var/log/mngr"
+# Publish each workspace container's sshd on loopback only. The minds desktop
+# client always talks to a local daemon and connects to 127.0.0.1, so nothing
+# needs the container reachable from the machine's LAN. This is also mngr's
+# default for a local daemon; it is pinned here so the workspace's exposure does
+# not depend on that default. (Requires the vendored mngr to know the field:
+# an older `system/vendor/mngr` rejects it as an unknown provider setting.)
+ssh_bind_address = "127.0.0.1"
 # No `docker_runtime` is set here, so containers use Docker's default runtime
 # (runc), which is available everywhere -- notably macOS, where gVisor's `runsc`
 # is not. The gVisor-hardened runtime is selected per-create by stacking the
@@ -461,8 +500,10 @@ host_log_dir = "/var/log/mngr"
 # socket inode. supervisord installs its control socket via a hard link, so on a
 # gofer-backed /run it wedges ("Unlinking stale socket") and never starts
 # system_interface -- the workspace then sits on the "Loading workspace" loader
-# forever. A tmpfs /run makes the hard link work. Mirrors the tmpfs /run that the
-# aws-<region> provider start args and the ovh/vultr/imbue_cloud host setup apply.
+# forever. A tmpfs /run makes the hard link work. The same two mounts are applied
+# by the aws-<region> provider start args and by the imbue_cloud slice bake's
+# per-box `-S providers.imbue_cloud_slice.default_start_args` overrides (gen-2
+# slices run under runsc from the bake).
 # /tmp is tmpfs for the same reason as /run: nothing in an ephemeral dir may
 # persist or ride a backup.
 default_start_args = ["--tmpfs", "/run", "--tmpfs", "/tmp"]
@@ -495,9 +536,13 @@ host_log_dir = "/var/log/mngr"
 # Pin the Lima guest to the same Debian release the docker image uses (trixie),
 # so setup_system.sh provisions an identical toolchain everywhere. Set here
 # (dwt-side) rather than bumping mngr_lima's bookworm default, which outside
-# mngr users keep.
-default_image_url_aarch64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://cloud.debian.org/images/cloud/trixie/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+# mngr users keep. Served from imbue's artifact mirror rather than
+# cloud.debian.org, which prunes old releases: the same image release the
+# gen-2 cloud slices boot (mngr's apps/minds_admin/.../slices/mirror_artifacts.py
+# is the manifest; bump both together, uploading the new release with
+# `minds-admin artifacts upload` before landing the bump here).
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
@@ -1665,7 +1710,7 @@ append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for 
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"chat:$MNGR_AGENT_NAME\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the tab does not pop up empty), silently surface your own chat tab by running: python3 system/scripts/layout.py open \"app:chat?instance=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --view it lands in the view the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from
@@ -1690,6 +1735,16 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # `harden-worker`, which the crystallize / update / heal creation lifecycle
 # relies on. (The venv converge that used to sit here now runs for every agent
 # from [commands.create], and lands before this.)
+#
+# claude_update_plugin.sh installs the code-guardian plugin (and the other
+# .claude/settings.json plugins) for the worker's worktree path BEFORE its
+# claude starts. Claude Code resolves the plugin set at session startup, so the
+# SessionStart-hook install that chat agents rely on lands too late for a
+# worker's single session -- it would start with no /autofix or
+# /verify-architecture at all, and the harden contract mandates both. It runs
+# WITHOUT --strict on purpose: a plugin or marketplace outage must never make a
+# worker undeployable, so an install failure is a warning in the provision
+# output (and the worker reports the missing gate) rather than a failed launch.
 [create_templates.worker]
 transfer = "git-worktree"
 extra_window__extend = ["reviewer_settings='system/scripts/create_reviewer_settings.sh $REVIEWER_AUTOFIX_ENABLE $REVIEWER_CI_ENABLE $REVIEWER_VERIFY_CONVERSATION_ENABLE $REVIEWER_AUTOFIX_MINOR $REVIEWER_VERIFY_ARCHITECTURE_ENABLE $REVIEWER_STOP_HOOK_ENABLE'"]
@@ -1703,7 +1758,7 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # sync belongs here, not on the `[agent_types.worker]` legacy shim (which only re-resolves
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
-extra_provision_command__extend = ["uv sync --all-packages", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
+extra_provision_command__extend = ["uv sync --all-packages", "bash system/scripts/claude_update_plugin.sh", "bash .agents/shared/scripts/install_worker_skills.sh .agents/skills"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Shims for agents created before roles moved to create templates: their persisted

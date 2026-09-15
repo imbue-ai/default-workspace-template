@@ -8,7 +8,7 @@ metadata:
 # Changing an existing app or service
 
 Both apps and background services run as a `[program:<name>]` under
-supervisord (see `system/supervisord.conf`). They differ only in whether
+supervisord (one program per file under `system/supervisord.conf.d/`). They differ only in whether
 there's a tab to refresh:
 
 - **App** -- the user opens it as a tab rendering at the service's own
@@ -27,7 +27,7 @@ If you're doing something *other* than editing an existing app or service:
 
 - **Creating a new app** -> `build-app`.
 - **Changing the workspace UI itself** (`system/apps/system_interface` -- the
-  dockview shell, chat panels, progress view) -> `update-system-interface`
+  dockview shell, the sidebar, the New Tab launcher) -> `update-system-interface`
   (it never edits the served tree directly; it previews in isolation and
   applies only when known-good).
 - **Rearranging tabs** (split/move/focus/rename/close) -> `manage-layout`.
@@ -142,12 +142,29 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
+- **Dependency or entry-point change to an app** (its `pyproject.toml`):
+  an app with an `app.toml` manifest runs from its own uv tool environment,
+  an editable install of `system/apps/<package>/` that picks up source
+  edits on its own but not a new dependency or console script. Reinstall
+  the tool, then restart (an app with no `app.toml` runs from the root
+  venv: for it, only the `uv sync --all-packages` below is needed):
+
+  ```bash
+  uv tool install -e system/apps/<package> --reinstall
+  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
+  supervisorctl restart <name>
+  ```
+
+  (Background services under `system/services/` run from the root venv
+  instead: `uv sync --all-packages`, then restart.)
+
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
   markup. Skip straight to the refresh.
 
 - **Change to the service *definition*** (its port, its `command`, its log
-  config, or adding/removing a program): edit `system/supervisord.conf`, then
+  config, or adding/removing a program): edit the program's own
+  `system/supervisord.conf.d/<name>.conf`, then
   `supervisorctl reread && supervisorctl update`. The full program schema,
   the add/remove/inspect mechanics, and the `forward_port.py` wiring live
   in [`.agents/shared/references/service-processes.md`](../../shared/references/service-processes.md).
@@ -172,10 +189,10 @@ python3 system/scripts/layout.py refresh <name>
 ```
 
 `refresh` reloads every iframe for the service. If no tab is open yet and
-the change is ready to show, surface it instead by opening it on each named
-layout -- `open` requires `--layout` and only applies on clients with that
-layout active, so the layout the user is not on fails fast and harmlessly:
-`python3 system/scripts/layout.py open <name>`.
+the change is ready to show, surface it instead with
+`python3 system/scripts/layout.py open <name>`: with no `--view` it lands in
+the view the user is looking at, and `--view <name>` targets one view (it
+fails fast and harmlessly when no client has that view active).
 For any other tab manipulation, see `manage-layout`. Background daemons have
 no tab -- skip the tab refresh, but not the rest of this step.
 

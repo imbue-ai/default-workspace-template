@@ -19,9 +19,9 @@ import contextlib
 import json
 import os
 import socket
-import urllib.request
 import threading
 import time
+import urllib.request
 from typing import Any
 
 import pytest
@@ -70,7 +70,7 @@ async def _create_running(manager: "bsession.BrowserSessionManager", name: str |
 
 @_SKIP_REAL_CHROMIUM_IN_GH_CI
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent``: skip the real ``mngr message`` subprocess in tests."""
+    """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
 
 
 def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: str = "alex-smith") -> bsession.LiveBrowser:
@@ -259,7 +259,9 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     # launch) and returns 200, NOT 503.
     monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
 
-    async def fake_create(self: bsession.BrowserSessionManager, name: str | None = None) -> bsession.LiveBrowser:
+    async def fake_create(
+        self: bsession.BrowserSessionManager, name: str | None = None, start_url: str | None = None
+    ) -> bsession.LiveBrowser:
         created = bsession.LiveBrowser(browser_id=name or "morgan-lee")
         self._browsers[created.browser_id] = created
         return created

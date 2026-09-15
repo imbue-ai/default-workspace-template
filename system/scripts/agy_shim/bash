@@ -15,7 +15,7 @@
 # WHAT IT ENFORCES. The same four blockers claude runs, in claude's order, by feeding them the
 # claude-shaped payload they already parse -- so the guard logic and its wording stay
 # single-sourced across claude, codex and agy. The policies themselves are stated in
-# system/apps/system_interface/imbue/system_interface/harnesses/core-contracts/tool-call-policies.md.
+# system/apps/chat/imbue/chat/harnesses/core-contracts/tool-call-policies.md.
 #
 # WHAT IT ENFORCES ONLY HALFWAY. The require-a-step nudge (#5) DOES run here, but it can only
 # ever see the shell half of the agent's work: agy's own editing tools (write_to_file,

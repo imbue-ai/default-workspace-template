@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Minds Apps Homepage: a grid of shared app tiles with a recipient badge and an A-H layout switcher">
+  <!-- Bespoke thumbnail: App Store-style squircle grid + share badge + A-H design-switcher. -->
+  <rect width="240" height="160" rx="14" fill="#f2efe7"/>
+  <rect x="0.75" y="0.75" width="238.5" height="158.5" rx="13.25" fill="none" stroke="#e0dacb" stroke-width="1.5"/>
+
+  <!-- header -->
+  <text x="22" y="23" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#4a4034">Shared apps</text>
+  <circle cx="212" cy="19" r="3.2" fill="#2ec26b"/>
+
+  <!-- row 1 tiles -->
+  <rect x="22" y="36" width="40" height="40" rx="11" fill="#4a49e6"/>
+  <rect x="74" y="36" width="40" height="40" rx="11" fill="#f6334f"/>
+  <rect x="126" y="36" width="40" height="40" rx="11" fill="#12b5a5"/>
+  <rect x="178" y="36" width="40" height="40" rx="11" fill="#f5a623"/>
+  <!-- row 2 tiles -->
+  <rect x="22" y="88" width="40" height="40" rx="11" fill="#7c5cff"/>
+  <rect x="74" y="88" width="40" height="40" rx="11" fill="#2ec26b"/>
+  <rect x="126" y="88" width="40" height="40" rx="11" fill="#2d9cff"/>
+  <rect x="178" y="88" width="40" height="40" rx="11" fill="#ff5ea8"/>
+
+  <!-- T1 mail glyph -->
+  <rect x="31" y="48" width="22" height="16" rx="2.5" fill="#ffffff"/>
+  <path d="M31 49 L42 57 L53 49" fill="none" stroke="#4a49e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- T2 fanned cards -->
+  <g transform="rotate(-14 94 56)"><rect x="85" y="46" width="14" height="20" rx="2.5" fill="#ffffff" opacity="0.5"/></g>
+  <g transform="rotate(0 94 56)"><rect x="87" y="45" width="14" height="20" rx="2.5" fill="#ffffff" opacity="0.8"/></g>
+  <g transform="rotate(14 94 56)"><rect x="89" y="46" width="14" height="20" rx="2.5" fill="#ffffff"/></g>
+  <!-- T3 workspace grid -->
+  <rect x="137" y="45" width="8" height="8" rx="2" fill="#ffffff"/>
+  <rect x="150" y="45" width="8" height="8" rx="2" fill="#ffffff"/>
+  <rect x="137" y="59" width="8" height="8" rx="2" fill="#ffffff"/>
+  <rect x="150" y="59" width="8" height="8" rx="2" fill="#ffffff"/>
+  <!-- T4 play -->
+  <path d="M193 48 L193 64 L207 56 Z" fill="#ffffff"/>
+  <!-- T5 document -->
+  <rect x="33" y="98" width="18" height="22" rx="2.5" fill="#ffffff"/>
+  <rect x="37" y="103" width="10" height="2" rx="1" fill="#7c5cff"/>
+  <rect x="37" y="108" width="10" height="2" rx="1" fill="#7c5cff"/>
+  <rect x="37" y="113" width="7" height="2" rx="1" fill="#7c5cff"/>
+  <!-- T6 check -->
+  <path d="M85 108 L92 115 L104 101" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- T7 bars -->
+  <rect x="138" y="112" width="5" height="8" rx="1.5" fill="#ffffff"/>
+  <rect x="146" y="107" width="5" height="13" rx="1.5" fill="#ffffff"/>
+  <rect x="154" y="102" width="5" height="18" rx="1.5" fill="#ffffff"/>
+  <!-- T8 star -->
+  <path d="M198 97 L200.6 104.4 L208.5 104.6 L202.3 109.4 L204.5 116.9 L198 112.5 L191.5 116.9 L193.7 109.4 L187.5 104.6 L195.4 104.4 Z" fill="#ffffff"/>
+
+  <!-- recipient / share badge on T1 -->
+  <circle cx="60" cy="38" r="9" fill="#ffffff" stroke="#4a49e6" stroke-width="2"/>
+  <circle cx="60" cy="35.6" r="2.3" fill="#4a49e6"/>
+  <path d="M56.2 41.8 a3.8 3.8 0 0 1 7.6 0 Z" fill="#4a49e6"/>
+
+  <!-- A-H design switcher -->
+  <rect x="22" y="136" width="196" height="13" rx="6.5" fill="#e5e0d2"/>
+  <rect x="23" y="137" width="22.5" height="11" rx="5.5" fill="#4a4034"/>
+  <line x1="46.5" y1="138.5" x2="46.5" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="71" y1="138.5" x2="71" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="95.5" y1="138.5" x2="95.5" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="120" y1="138.5" x2="120" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="144.5" y1="138.5" x2="144.5" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="169" y1="138.5" x2="169" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <line x1="193.5" y1="138.5" x2="193.5" y2="146.5" stroke="#d3ccbb" stroke-width="1"/>
+  <g font-family="Helvetica, Arial, sans-serif" font-size="7" font-weight="600" text-anchor="middle">
+    <text x="34.25" y="145" fill="#ffffff">A</text>
+    <text x="58.75" y="145" fill="#8a8172">B</text>
+    <text x="83.25" y="145" fill="#8a8172">C</text>
+    <text x="107.75" y="145" fill="#8a8172">D</text>
+    <text x="132.25" y="145" fill="#8a8172">E</text>
+    <text x="156.75" y="145" fill="#8a8172">F</text>
+    <text x="181.25" y="145" fill="#8a8172">G</text>
+    <text x="205.75" y="145" fill="#8a8172">H</text>
+  </g>
+</svg>
