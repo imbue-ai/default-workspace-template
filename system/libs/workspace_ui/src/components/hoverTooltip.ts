@@ -301,10 +301,10 @@ const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
  * behavior; pass ``"right"`` only for the rail's exception (see the module
  * doc comment).
  *
- * ``text`` is ``null`` for no tooltip. Pass that rather than spreading ``{}``
- * instead of these attrs: mithril patches the same element across redraws and
- * runs only the current vnode's hooks, so attrs that disappear leave the
- * listeners, and the text they were created with, on the element.
+ * ``text`` is ``null`` for no tooltip; pass that rather than swapping these
+ * attrs for ``{}``. Mithril patches the same element across redraws and runs
+ * only the current vnode's hooks, so attrs that disappear leave the listeners,
+ * and the text they were created with, on the element.
  */
 export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
   return {
