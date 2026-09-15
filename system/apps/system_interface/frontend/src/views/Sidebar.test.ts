@@ -12,7 +12,7 @@ import { Sidebar, effectiveShortcuts, nextGlyphIndex, nextProjectName, placeMenu
 import type { SidebarAttrs, SidebarTabRow } from "./Sidebar";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
 import { appRecord, instanceRecord, projectRecord } from "../testing/records";
-import { hoverTooltipText } from "../testing/tooltip";
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 
 function app(name: string, overrides: Partial<AppRecord> = {}): AppRecord {
   return appRecord(name, {

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { appRecord, catalogTemplateRecord } from "../testing/records";
-import { hoverTooltipText } from "../testing/tooltip";
+import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 import type { TemplateCatalog, TemplateCatalogState } from "../models/TemplateCatalog";
 import {
   NewTabLauncher,

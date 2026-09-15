@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { hoverTooltipAttrs, placeTooltip } from "./hoverTooltip";
+import { hoverTooltipText } from "../testing/tooltip";
 
 const VIEWPORT = { width: 1000, height: 800 };
 const BUBBLE = { width: 100, height: 20 };
@@ -98,28 +99,15 @@ describe("hoverTooltipAttrs", () => {
     return root.firstElementChild as HTMLElement;
   }
 
-  /** Hover past the hover-intent delay and return the bubble's text, or null when none came up. */
-  function hoverText(element: HTMLElement): string | null {
-    element.dispatchEvent(new MouseEvent("mouseenter"));
-    vi.runAllTimers();
-    const bubble = document.querySelector<HTMLElement>(".hover-tooltip");
-    const text =
-      bubble !== null && bubble.style.visibility === "visible" && bubble.style.display !== "none"
-        ? bubble.textContent
-        : null;
-    element.dispatchEvent(new MouseEvent("mouseleave"));
-    return text;
-  }
-
   it("follows its text to and from null across redraws of the same element", () => {
     vi.useFakeTimers();
     const button = renderButton(null);
-    expect(hoverText(button)).toBeNull();
+    expect(hoverTooltipText(button)).toBeNull();
 
     expect(renderButton("Start")).toBe(button);
-    expect(hoverText(button)).toBe("Start");
+    expect(hoverTooltipText(button)).toBe("Start");
 
     expect(renderButton(null)).toBe(button);
-    expect(hoverText(button)).toBeNull();
+    expect(hoverTooltipText(button)).toBeNull();
   });
 });

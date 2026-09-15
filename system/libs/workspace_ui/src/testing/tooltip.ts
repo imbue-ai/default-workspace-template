@@ -1,7 +1,9 @@
 /**
  * Reading a hover tooltip in a view test. The workspace's tooltip is one shared bubble on
  * <body>, put up after a hover-intent delay and hidden inline, so a test reaches it through the
- * clock and the bubble's own styling rather than through the element it belongs to.
+ * clock and the bubble's own styling rather than through the element it belongs to. It lives
+ * beside `hoverTooltip.ts` because the marker class and the inline styling it reads are that
+ * module's own, and every app's view tests read them the same way.
  */
 import { vi } from "vitest";
 
