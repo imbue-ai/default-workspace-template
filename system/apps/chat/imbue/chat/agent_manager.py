@@ -540,7 +540,7 @@ class AgentManager:
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
-    # Runs periodic context compaction checks (mngr autocompact check) for active chats.
+    # Runs periodic context compaction checks (mngr autocompact run) for active chats.
     _autocompactor: ChatAutoCompactor
     # Tells the shell that the chat app's instance list changed (contracts.md section 5):
     # every broadcast of the agent list is a change of that list or of a status in it, so the

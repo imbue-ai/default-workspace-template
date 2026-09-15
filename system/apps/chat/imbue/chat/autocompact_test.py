@@ -1,9 +1,10 @@
 import threading
-from typing import Sequence
+from collections.abc import Sequence
 
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.utils.polling import poll_until
+from imbue.chat.autocompact import DEFAULT_CHECK_CONCURRENCY
 from imbue.chat.autocompact import ChatAutoCompactor
 
 
@@ -23,6 +24,12 @@ def _make_finished_process(
     )
 
 
+def test_default_check_concurrency() -> None:
+    compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: [])
+    assert compactor._max_concurrency == DEFAULT_CHECK_CONCURRENCY
+    assert DEFAULT_CHECK_CONCURRENCY == 4
+
+
 def test_check_agent_success() -> None:
     recorded_commands: list[list[str]] = []
 
@@ -39,7 +46,7 @@ def test_check_agent_success() -> None:
 
     assert result is not None
     assert result.returncode == 0
-    assert recorded_commands == [["mngr-custom", "autocompact", "check", "chat-1"]]
+    assert recorded_commands == [["mngr-custom", "autocompact", "run", "chat-1"]]
 
 
 def test_check_agent_nonzero_exit_handled_gracefully() -> None:
@@ -80,9 +87,11 @@ def test_check_agent_process_setup_error_handled_gracefully() -> None:
 
 def test_sweep_checks_all_running_chat_agents() -> None:
     recorded_commands: list[list[str]] = []
+    lock = threading.Lock()
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        recorded_commands.append(list(command))
+        with lock:
+            recorded_commands.append(list(command))
         return _make_finished_process(command=command, returncode=0)
 
     running_chats = ["chat-alpha", "chat-beta", "chat-gamma"]
@@ -94,11 +103,27 @@ def test_sweep_checks_all_running_chat_agents() -> None:
     results = compactor.sweep()
 
     assert len(results) == 3
-    assert recorded_commands == [
-        ["mngr", "autocompact", "check", "chat-alpha"],
-        ["mngr", "autocompact", "check", "chat-beta"],
-        ["mngr", "autocompact", "check", "chat-gamma"],
+    assert sorted(recorded_commands) == [
+        ["mngr", "autocompact", "run", "chat-alpha"],
+        ["mngr", "autocompact", "run", "chat-beta"],
+        ["mngr", "autocompact", "run", "chat-gamma"],
     ]
+
+
+def test_sweep_runs_concurrently() -> None:
+    barrier = threading.Barrier(3)
+
+    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
+        barrier.wait(timeout=2.0)
+        return _make_finished_process(command=command, returncode=0)
+
+    compactor = ChatAutoCompactor.build(
+        list_running_chat_agent_names=lambda: ["chat-1", "chat-2", "chat-3"],
+        runner=fake_runner,
+        max_concurrency=3,
+    )
+    results = compactor.sweep()
+    assert len(results) == 3
 
 
 def test_sweep_stops_early_if_stop_event_set() -> None:
@@ -115,11 +140,12 @@ def test_sweep_stops_early_if_stop_event_set() -> None:
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: running_chats,
         runner=fake_runner,
+        max_concurrency=1,
     )
     results = compactor.sweep()
 
     assert len(results) == 1
-    assert recorded_commands == [["mngr", "autocompact", "check", "chat-1"]]
+    assert recorded_commands == [["mngr", "autocompact", "run", "chat-1"]]
 
 
 def test_start_and_stop_lifecycle() -> None:
