@@ -185,7 +185,8 @@ de facto "no with notes" (the merge commit's subject names the worker and
 milestone, so the target is easy to find).
 
 ```bash
-mngr message <WORKER_NAME> -m "<why the milestone was reverted, in the user's voice>"
+uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
 ```
 
 The reverted commits remain ancestors of HEAD, so any later merge from that
