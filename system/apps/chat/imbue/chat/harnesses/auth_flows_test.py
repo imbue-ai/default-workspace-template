@@ -734,6 +734,14 @@ def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_
         # whitespace as far as `str.isspace` is concerned.
         ("AIzaSy—Valid", "single ASCII token"),
         ("AIzaSy​Valid", "single ASCII token"),
+        # python-dotenv interpolates an unquoted value, so this key would be read back as
+        # something else -- and as something else again in the agent, whose environment is not
+        # the one it was checked against.
+        ("AIzaSy${HOME}Valid", "single ASCII token"),
+        # mngr quotes an env-file value only when it holds whitespace or quotes, and the agent
+        # launcher sources that file, so these run on every agent start.
+        ("AIzaSy`id`Valid", "single ASCII token"),
+        ("AIzaSy$(id)Valid", "single ASCII token"),
         ("", "Paste a Gemini API key"),
     ),
     ids=(
@@ -742,16 +750,19 @@ def test_settings_agy_wrote_that_cannot_be_merged_fail_the_flow_rather_than_the_
         "a trailing newline",
         "an em-dash",
         "a zero-width space",
+        "an interpolation",
+        "a backquoted command",
+        "a substituted command",
         "nothing",
     ),
 )
-def test_a_gemini_key_that_would_not_fit_one_dotenv_line_is_refused(
+def test_a_gemini_key_that_would_not_survive_what_carries_it_is_refused(
     service: AuthFlowService, tmp_path: Path, pasted: str, message: str
 ) -> None:
-    """mngr merges the whole key file into every agent bound to the account, so a value with a
-    line break in it would define variables of its own there -- and the promote probe sends the
-    key as an HTTP header, which only carries ASCII. An empty paste gets its own message, or it
-    is answered with one about spaces it does not have."""
+    """The key is a dotenv value mngr interpolates and folds into an env file the agent launcher
+    sources, and the promote probe sends it as an HTTP header -- so a character any of those three
+    acts on rather than carries is refused at the field. An empty paste gets its own message, or
+    it is answered with one about characters it does not have."""
     started = service.start("google", "api_key")
 
     with pytest.raises(FlowError, match=message):
