@@ -2,11 +2,10 @@
   mngr-internal monorepo) is gone; mngr and its plugins are installed as Python
   packages from the public mngr repo, https://github.com/imbue-ai/mngr, at the
   one commit `pyproject.toml` pins under `[tool.uv.sources]`.
-  `system/scripts/build_workspace.sh` derives the `mngr` and `system-interface`
-  tools (`system/scripts/build_mngr_tools.sh`, one `uv tool install` each so
-  uv resolves the whole set at one commit) and the workspace venv from that pin;
-  `system/config/mngr_plugins.toml` lists each plugin's package and repo
-  subdirectory.
+  `system/scripts/build_workspace.sh` derives the `mngr` tool
+  (`system/scripts/install_mngr.py`), each app's tool, and the workspace venv
+  from that pin; `system/config/mngr_plugins.toml` lists each plugin's package
+  and repo subdirectory.
 
 - The few non-Python files the workspace needs from mngr (the embed contract and
   service icons the UI bundles, the terminal's ttyd client) are fetched at build

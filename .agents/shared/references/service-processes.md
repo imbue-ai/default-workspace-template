@@ -6,8 +6,10 @@ program. Reach for this from any service flow (`update-app`,
 `build-app`) when a change touches *how a service runs* (its port,
 command, logs) or adds/removes a program, rather than only its code.
 
-Background services are defined as `[program:<name>]` sections in
-`system/supervisord.conf` at the repo root. `uv run bootstrap` runs first-boot
+Background services are defined as `[program:<name>]` sections, one program
+per file under `system/supervisord.conf.d/`, pulled in by an `[include]` glob
+in `system/supervisord.conf` at the repo root (which otherwise holds only the
+daemon's own config). `uv run bootstrap` runs first-boot
 setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
 tmux window); supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
@@ -39,21 +41,26 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --url http://localhost:8090 --name foo --icon-file system/apps/foo/icon.svg --program foo && uv run foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
   (see below) -- keep it as the outermost command, in front of any `bash -c`
-  wrapper. The `forward_port.py --name` is the service name and becomes the
-  leading label of the service's origin hostname
-  (`http://<name>.<workspace-host>/`), so it must be DNS-safe: lowercase
-  letters/digits with single hyphens (underscores are tolerated only for
-  legacy names like `system_interface`), not `localhost`, and not starting
-  with `host-` or `agent-`. The `--program` names the supervisord program
-  running the app (program-name-equals-service-name, so pass the app's own
-  name); its presence on the registry entry is what lets the workspace offer
-  Stop/Start for the app, so pass it for every supervised app and never for
-  unsupervised instances (previews, isolated test servers).
+  wrapper. `forward_port.py --manifest` reads the app's `app.toml` (its
+  registered name, display name, icon, and the supervisord `program` that
+  runs it, which is what lets the workspace offer Stop/Start for the app) and
+  registers the app at `--url`. The manifest's `name` becomes the leading
+  label of the app's origin hostname (`http://<name>.<workspace-host>/`), so
+  it must be DNS-safe: lowercase letters/digits with single hyphens
+  (underscores are tolerated only for legacy names like `system_interface`),
+  not `localhost`, and not starting with `host-` or `agent-`. The app then
+  runs as its own tool's entry point (`foo`, installed by
+  `uv tool install -e system/apps/foo`), never through `uv run`: every Python
+  app has its own uv tool environment, and the root venv is for background
+  services. A registration with no app directory (a preview, an isolated test
+  server, the owner-exec service) keeps the manifest-less
+  `forward_port.py --name <name> --url <url>` form with `--internal` or
+  `--no-icon`, and never passes `--program`.
 - `directory=/home/user/workspace` -- run from the repo root, so cwd-relative paths
   (`data/...`, `system/scripts/...`) resolve. Set this on every program.
 - `autostart=true` -- start when supervisord boots.
@@ -73,8 +80,10 @@ Key fields:
 Services inherit the agent environment (`MNGR_AGENT_STATE_DIR`,
 `MNGR_HOST_DIR`, `LATCHKEY_*`, ...) from the bootstrap shell
 that launched supervisord -- you do not need a per-program `environment=`.
-(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: every claude
-in the workspace uses claude's own default `~/.claude`.)
+(`CLAUDE_CONFIG_DIR` is deliberately NOT in that environment: a claude is bound
+to a provider account on its `mngr create`, and a create that names no account
+gets the workspace's default one from `.mngr/settings.local.toml`, which the
+chat app maintains; `~/.claude` holds no credential.)
 
 ## OOM priority (memory-pressure shedding)
 
@@ -97,7 +106,7 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Adding a service
 
-1. Add a new `[program:<name>]` section to `system/supervisord.conf`.
+1. Write a new `[program:<name>]` section to its own `system/supervisord.conf.d/<name>.conf`.
 2. Apply it:
 
    ```bash
@@ -110,18 +119,18 @@ than ~1s later, and it keeps the command self-documenting.
 
 ## Removing a service
 
-1. Delete the `[program:<name>]` section from `system/supervisord.conf`.
+1. Delete the program's `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` -- supervisord stops and
    forgets the removed program.
 
 For an app, also drop its `data/.state/apps.toml` entry with
-`python3 system/scripts/forward_port.py --name <name> --remove`; for a scaffolded
-web lib, `build-app`'s `cleanup.md` reference covers the full
-teardown (reverting the lib and the root `pyproject.toml` edits).
+`python3 system/scripts/forward_port.py --name <name> --remove` and its tool
+environment with `uv tool uninstall <name>`; for a scaffolded web lib,
+`build-app`'s `cleanup.md` reference covers the full teardown.
 
 ## Modifying a service
 
-1. Change the program's `command` (or other fields) in `system/supervisord.conf`.
+1. Change the program's `command` (or other fields) in its `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
    without editing its config, use `supervisorctl restart <name>`.
@@ -143,8 +152,9 @@ Or read the log files directly under `/var/log/supervisor/`.
   letters/digits with single hyphens, underscores only for legacy names,
   not `localhost`, not starting with `host-` or `agent-`) because it becomes
   the leading label of the service's origin hostname.
-- supervisord only manages the programs in `system/supervisord.conf`; it does not touch
-  the main agent window or other tmux windows.
+- supervisord only manages the programs declared under
+  `system/supervisord.conf.d/`; it does not touch the main agent window or
+  other tmux windows.
 - If you need a one-off command, just run it directly rather than adding a
   program.
 - For standing up a new app (Flask lib or wrapping a third-party

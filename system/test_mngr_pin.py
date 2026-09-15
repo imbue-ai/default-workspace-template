@@ -186,8 +186,14 @@ def test_this_checkout_pins_rather_than_pointing_at_a_local_tree() -> None:
 _IMPORT = re.compile(r"^\s*(?:from|import)\s+(imbue\.[A-Za-z0-9_.]+)", re.MULTILINE)
 
 
+def _own_imbue_namespaces() -> set[str]:
+    """The ``imbue.<name>`` packages this tree provides itself (``system/**/imbue/<name>/``)."""
+    return {f"imbue.{path.name}" for path in (_REPO_ROOT / "system").glob("*/*/imbue/*") if path.is_dir()}
+
+
 def _imported_mngr_modules() -> list[str]:
     """Every ``imbue.*`` module the tree imports that is not one of its own packages."""
+    own = _own_imbue_namespaces()
     tracked = subprocess.run(
         ["git", "ls-files", "--", "*.py"], cwd=_REPO_ROOT, check=True, capture_output=True, text=True
     ).stdout.split()
@@ -195,7 +201,7 @@ def _imported_mngr_modules() -> list[str]:
         match
         for path in tracked
         for match in _IMPORT.findall((_REPO_ROOT / path).read_text(errors="replace"))
-        if not match.startswith("imbue.system_interface")
+        if not any(match == name or match.startswith(f"{name}.") for name in own)
     }
     return sorted(modules)
 

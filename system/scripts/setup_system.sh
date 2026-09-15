@@ -45,8 +45,8 @@ fi
 : "${TTYD_VERSION:=1.7.7}"
 : "${UV_VERSION:=0.11.7}"
 : "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.227}"
-: "${CODEX_VERSION:=0.147.0}"
+: "${CLAUDE_CODE_VERSION:=2.1.269}"
+: "${CODEX_VERSION:=0.154.0}"
 : "${PI_VERSION:=0.83.0}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
 : "${OPENCODE_VERSION:=1.18.19}"
@@ -319,10 +319,19 @@ agy --version >/dev/null
 # copies the npm tree into the real ~/.pi/agent at first boot (a ~1s local copy
 # instead of a ~60s networked npm install -- the harness ships with its tools).
 # Keep the pins in sync with seed_home_skeleton.sh.
+#
+# `pi install` shells out to npm, so npm's flags are unreachable from here and
+# the equivalent npm_config_* env vars are how audit/fund get turned off.
+# npm_config_audit=false: the audit is a per-install round trip to the registry
+# that cannot affect the outcome here -- the versions are pinned just above --
+# and when the registry's audit endpoint is slow it stalls each of these
+# installs for minutes. npm_config_fund=false: funding output is noise in a
+# build log. `npm install -g` never audits, so the global installs above need
+# no equivalent.
 : "${PI_SUBAGENTS_VERSION:=0.45.0}"
 : "${PI_WEB_ACCESS_VERSION:=0.19.0}"
-PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-subagents@${PI_SUBAGENTS_VERSION}"
-PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-web-access@${PI_WEB_ACCESS_VERSION}"
+npm_config_audit=false npm_config_fund=false PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-subagents@${PI_SUBAGENTS_VERSION}"
+npm_config_audit=false npm_config_fund=false PI_CODING_AGENT_DIR=/opt/pi-extensions pi install "npm:pi-web-access@${PI_WEB_ACCESS_VERSION}"
 test -d /opt/pi-extensions/npm/node_modules
 
 # apt Post-Invoke capture hook: after EVERY apt/dpkg operation at runtime, the

@@ -1,7 +1,9 @@
 import ast
+import io
 import os
 import re
 import subprocess
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -22,12 +24,11 @@ _SELF_EXCLUSION: tuple[str, ...] = ("test_meta_ratchets.py",)
 pytestmark = pytest.mark.xdist_group(name="meta_ratchets")
 
 
-# system_interface runs its own pytest config (the root config ignores it) and
-# carries the mngr-monorepo-style test_ratchets.py rather than the dwt-standard
-# test_<name>_ratchets.py set, so it is exempt from the meta checks here --
-# exactly as it was when it lived under apps/ (which the old scan never
-# visited).
-_META_EXEMPT_PROJECTS = frozenset({"system_interface"})
+# system_interface and chat run their own pytest config (the root config ignores
+# them) and carry the mngr-monorepo-style test_ratchets.py rather than the
+# dwt-standard test_<name>_ratchets.py set, so they are exempt from the meta
+# checks here.
+_META_EXEMPT_PROJECTS = frozenset({"system_interface", "chat"})
 
 
 def _get_all_project_dirs() -> list[Path]:
@@ -305,7 +306,17 @@ def _live_prose_files() -> list[Path]:
     committed tree, which is identical to a filesystem walk in CI checkouts.
     """
     tracked = subprocess.run(
-        ["git", "ls-files", "--", "README.md", "CLAUDE.md", ".agents", "docs", "data"],
+        [
+            "git",
+            "ls-files",
+            "--",
+            "README.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".agents",
+            "docs",
+            "data",
+        ],
         cwd=_REPO_ROOT,
         capture_output=True,
         text=True,
@@ -386,5 +397,106 @@ def test_prevent_application_terminology() -> None:
     ]
     assert len(violations) <= snapshot(3), (
         "Retired 'application' terminology in live prose:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+# --- Apps are apps, not services ---
+#
+# The shell is a window manager over apps; "service" is a background program
+# with no tab. The shell's own code, its frontend, and the frontend library the
+# shell and the chat page share call an app an app, and this counts the
+# identifiers that still say "service" so the count never grows.
+# Identifiers only, never prose: Python names come from the tokenizer (so
+# docstrings and comments do not count), TypeScript names from the source with
+# its comments and string literals blanked. The remainder is the minds embed
+# contract's own vocabulary, which the shell speaks but does not own: the
+# ``serviceName`` payload key of ``minds:open-share-settings`` (its vendored
+# declaration file is skipped whole), and one HTTP status name.
+
+_SHELL_IDENTIFIER_SCAN_ROOTS = (
+    Path("system/apps/system_interface/imbue/system_interface"),
+    Path("system/apps/system_interface/frontend/src"),
+    Path("system/libs/workspace_ui/src"),
+)
+
+_SERVICE_IDENTIFIER_EXEMPT_TOKENS = frozenset({"HTTP_SERVICE_UNAVAILABLE"})
+
+_SERVICE_IDENTIFIER_EXEMPT_FILENAMES = frozenset({"embed-contract.d.ts"})
+
+_TYPESCRIPT_COMMENT_OR_STRING = re.compile(
+    r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`",
+    re.DOTALL,
+)
+
+_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+
+
+def _is_test_source(path: Path) -> bool:
+    return (
+        path.name.endswith("_test.py")
+        or path.name.startswith("test_")
+        or path.name.endswith(".test.ts")
+    )
+
+
+def _python_identifiers(path: Path) -> list[tuple[int, str]]:
+    """Every NAME token in a Python file with its line: identifiers, keywords,
+    attribute names, and nothing from strings or comments."""
+    names: list[tuple[int, str]] = []
+    with io.StringIO(path.read_text()) as source:
+        for token in tokenize.generate_tokens(source.readline):
+            if token.type == tokenize.NAME:
+                names.append((token.start[0], token.string))
+    return names
+
+
+def _typescript_identifiers(path: Path) -> list[tuple[int, str]]:
+    """Every identifier-shaped token in a TypeScript file with its line, after
+    comments and string literals are blanked (their newlines kept, so lines
+    still count)."""
+    blanked = _TYPESCRIPT_COMMENT_OR_STRING.sub(
+        lambda match: "\n" * match.group(0).count("\n"), path.read_text()
+    )
+    return [
+        (blanked.count("\n", 0, match.start()) + 1, match.group(0))
+        for match in _IDENTIFIER.finditer(blanked)
+    ]
+
+
+def _find_service_identifiers_in_the_shell() -> list[str]:
+    violations: list[str] = []
+    for root in _SHELL_IDENTIFIER_SCAN_ROOTS:
+        for path in sorted((_REPO_ROOT / root).rglob("*")):
+            if path.suffix not in {".py", ".ts"} or not path.is_file():
+                continue
+            if _PRUNED_DIR_NAMES.intersection(path.relative_to(_REPO_ROOT).parts):
+                continue
+            if (
+                _is_test_source(path)
+                or path.name in _SERVICE_IDENTIFIER_EXEMPT_FILENAMES
+            ):
+                continue
+            identifiers = (
+                _python_identifiers(path)
+                if path.suffix == ".py"
+                else _typescript_identifiers(path)
+            )
+            for lineno, name in identifiers:
+                if (
+                    "service" in name.lower()
+                    and name not in _SERVICE_IDENTIFIER_EXEMPT_TOKENS
+                ):
+                    violations.append(
+                        f"{path.relative_to(_REPO_ROOT)}:{lineno}: {name}"
+                    )
+    return violations
+
+
+def test_prevent_service_identifiers_in_the_shell() -> None:
+    """The shell, its frontend, and the shared frontend library call an app an app: no new identifier may say 'service'."""
+    violations = _find_service_identifiers_in_the_shell()
+    assert len(violations) <= snapshot(1), (
+        "Identifiers naming an app a 'service' in the shell's code:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )

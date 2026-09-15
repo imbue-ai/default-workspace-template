@@ -72,9 +72,14 @@ COPY system/libs/bootstrap/pyproject.toml /home/user/workspace/system/libs/boots
 COPY system/services/share_gateway/pyproject.toml /home/user/workspace/system/services/share_gateway/pyproject.toml
 COPY system/libs/github_sync/pyproject.toml /home/user/workspace/system/libs/github_sync/pyproject.toml
 COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/apps/system_interface/pyproject.toml
+COPY system/apps/chat/pyproject.toml /home/user/workspace/system/apps/chat/pyproject.toml
 
-# Frontend npm manifest (lockfile + package.json) -- install needs only these.
-COPY system/apps/system_interface/frontend/package.json system/apps/system_interface/frontend/package-lock.json /home/user/workspace/system/apps/system_interface/frontend/
+# Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
+# package.json) -- install needs only these.
+COPY system/package.json system/package-lock.json /home/user/workspace/system/
+COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/workspace_ui/
+COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
+COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies

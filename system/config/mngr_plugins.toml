@@ -1,40 +1,44 @@
 # The mngr plugins this workspace registers, and which tool environment each
-# one goes into. Read at image build by system/scripts/build_workspace.sh and
-# again by the update-self apply after a merge, so a release that ships a new
-# plugin registers it in the workspace being updated rather than only in
-# freshly built images.
+# one goes into: ``mngr`` is the mngr CLI's tool; any other entry is an app's
+# manifest name (``system/apps/<package>/app.toml``), whose own tool environment
+# gets the plugin as an extra. Read at image build by
+# system/scripts/build_workspace.sh and again by the update-self apply after a
+# merge, so a release that ships a new plugin registers it in the workspace
+# being updated rather than only in freshly built images.
 #
-# Every plugin is installed from the public mngr repo at the ONE commit pinned in
-# pyproject.toml ([tool.uv.sources] imbue-mngr); uv refuses to mix commits across
-# packages from the same repo. Each entry names the package and its subdirectory
-# in that repo. mngr_modal is intentionally not registered
+# Every plugin is installed from wherever pyproject.toml's [tool.uv.sources]
+# points imbue-mngr -- the public mngr repo at ONE pinned commit (uv refuses to
+# mix commits across packages from the same repo), or the local tree at
+# system/vendor/mngr. Each entry names the package and its subdirectory in the
+# mngr repo. mngr_modal is intentionally not registered
 # (providers.modal.is_enabled=false).
 
 [[plugins]]
 package = "imbue-mngr-claude"
 subdirectory = "libs/mngr_claude"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 package = "imbue-mngr-codex"
 subdirectory = "libs/mngr_codex"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 package = "imbue-mngr-pi-coding"
 subdirectory = "libs/mngr_pi_coding"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 package = "imbue-mngr-opencode"
 subdirectory = "libs/mngr_opencode"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "chat"]
 
 [[plugins]]
 package = "imbue-mngr-antigravity"
 subdirectory = "libs/mngr_antigravity"
-tools = ["mngr", "system-interface"]
+tools = ["mngr", "chat"]
 
+# The wait plugin only adds a CLI command, so no app's tool has a use for it.
 [[plugins]]
 package = "imbue-mngr-wait"
 subdirectory = "libs/mngr_wait"

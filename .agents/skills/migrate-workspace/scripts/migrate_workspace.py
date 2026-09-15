@@ -679,23 +679,58 @@ class AppPort(NamedTuple):
 # The forward_port.py call every app's supervisord program block chains before
 # its own start command. Reading the block rather than only the registry file
 # matters: the registry is runtime state that a stopped workspace's app may never
-# have written, while the block is committed.
-_FORWARD_PORT_RE = re.compile(
-    r"forward_port\.py\s+--url\s+(?P<url>http://localhost:(?P<port>\d+))\s+--name\s+(?P<name>[\w-]+)"
-)
+# have written, while the block is committed. The call's flags run to the next
+# ``&&`` or line end.
+_PROGRAM_HEADER_RE = re.compile(r"^\[program:(?P<program>[^\]]+)\]", re.MULTILINE)
+_FORWARD_PORT_CALL_RE = re.compile(r"forward_port\.py(?P<flags>[^\n&]*)")
+_URL_FLAG_RE = re.compile(r"--url\s+(?P<url>http://localhost:(?P<port>\d+))")
+_NAME_FLAG_RE = re.compile(r"--name\s+(?P<name>[\w-]+)")
+
+
+def _forward_port_calls_in(block: str, program: str | None) -> list[AppPort]:
+    ports: list[AppPort] = []
+    for call in _FORWARD_PORT_CALL_RE.finditer(block):
+        flags = call.group("flags")
+        url_match = _URL_FLAG_RE.search(flags)
+        name_match = _NAME_FLAG_RE.search(flags)
+        name = name_match.group("name") if name_match is not None else program
+        if url_match is None or name is None:
+            continue
+        # A program line that registers the same name at one port twice is one row here.
+        if any(
+            port.name == name and port.port == int(url_match.group("port"))
+            for port in ports
+        ):
+            continue
+        ports.append(
+            AppPort(
+                name=name,
+                port=int(url_match.group("port")),
+                url=url_match.group("url"),
+                found_in="supervisord.conf",
+            )
+        )
+    return ports
 
 
 def parse_supervisord_ports(text: str) -> list[AppPort]:
-    """Extract each app's name and port from ``forward_port.py`` calls in a supervisord config."""
-    return [
-        AppPort(
-            name=match.group("name"),
-            port=int(match.group("port")),
-            url=match.group("url"),
-            found_in="supervisord.conf",
+    """Extract each app's name and port from ``forward_port.py`` calls in a supervisord config.
+
+    A call names its app with ``--name``, or registers through the app's manifest
+    (``--manifest system/apps/<package>/app.toml``), in which case the name is the
+    enclosing ``[program:<name>]``: an app's supervisord program is its registered
+    name, and a program name is exactly the wiring a collision is about.
+    """
+    headers = list(_PROGRAM_HEADER_RE.finditer(text))
+    ports = _forward_port_calls_in(
+        text[: headers[0].start()] if headers else text, None
+    )
+    for index, header in enumerate(headers):
+        end = headers[index + 1].start() if index + 1 < len(headers) else len(text)
+        ports.extend(
+            _forward_port_calls_in(text[header.start() : end], header.group("program"))
         )
-        for match in _FORWARD_PORT_RE.finditer(text)
-    ]
+    return ports
 
 
 # The registry's array-of-tables key: ``applications`` pre-rename, ``apps``
@@ -710,25 +745,36 @@ def parse_apps_registry(toml_text: str) -> list[AppPort]:
     Accepts both the current ``[[apps]]`` shape and the pre-rename
     ``[[applications]]`` one. An entry whose URL carries no parseable port is
     skipped -- it is a registration the migration cannot act on mechanically, and
-    the supervisord scan is the authoritative source anyway.
+    the supervisord scan is the authoritative source anyway. A row whose
+    ``instances_url`` names a second port (an app serving its instances API
+    beside a wrapped server, such as the terminal's 7682) reports that port too:
+    it is listening just as surely, and only the registry knows about it.
     """
     parsed = tomllib.loads(toml_text)
     ports: list[AppPort] = []
+    seen: set[tuple[str, int]] = set()
     for key in _REGISTRY_KEYS:
         for entry in parsed.get(key, []):
             name = entry.get("name")
-            url = entry.get("url", "")
-            match = re.search(r":(\d+)", url)
-            if not name or match is None:
+            if not name:
                 continue
-            ports.append(
-                AppPort(
-                    name=name,
-                    port=int(match.group(1)),
-                    url=url,
-                    found_in=f"registry [[{key}]]",
+            for url_key in ("url", "instances_url"):
+                url = entry.get(url_key, "")
+                match = re.search(r":(\d+)", url)
+                if match is None:
+                    continue
+                port = int(match.group(1))
+                if (name, port) in seen:
+                    continue
+                seen.add((name, port))
+                ports.append(
+                    AppPort(
+                        name=name,
+                        port=port,
+                        url=url,
+                        found_in=f"registry [[{key}]] {url_key}",
+                    )
                 )
-            )
     return ports
 
 
@@ -1007,6 +1053,27 @@ def _read_file_command(path: str) -> str:
         f"if [ -f {quoted} ]; then "
         f"echo {_shell_quote(_FILE_SENTINEL + ' ' + path)}; cat {quoted}; echo; fi"
     )
+
+
+def _supervisord_dropin_listing_command(supervisord_conf: str) -> str:
+    """Shell that prints, one per line, every regular file in ``<supervisord_conf>.d/``.
+
+    That directory is the template's convention for where every program lives (pinned by
+    ``system/test_supervisord_layout.py``), so it is assumed rather than read out of the config.
+    The glob is the shell's own, against the quoted path, so a source path holding a space stays
+    one path and a source with no drop-in directory prints nothing.
+
+    A builder rather than an inline argument so it can be run against a real shell without an SSH
+    target, the way :func:`_read_file_command` is.
+    """
+    quoted = _shell_quote(supervisord_conf)
+    return f"for path in {quoted}.d/*.conf; do [ -f \"$path\" ] || continue; printf '%s\\n' \"$path\"; done"
+
+
+def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+    """The SOURCE's drop-in paths, or [] when it has none (a source predating the split)."""
+    listing = run_remote(target, _supervisord_dropin_listing_command(supervisord_conf))
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
 
 
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
@@ -1315,6 +1382,13 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
             "runtime/applications.toml",
         )
     ]
+    # The source's programs live one per file under system/supervisord.conf.d/, so the fixed
+    # list above would find none of them. Enumerate the drop-ins first (one extra round trip)
+    # and read them in the same batched pass; a source predating the split declares its
+    # programs in the main config, which is already listed.
+    remote_paths.extend(
+        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf")
+    )
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
     for path, text in sorted(remote_files.items()):
@@ -1341,13 +1415,32 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    supervisord = Path("system/supervisord.conf")
-    if supervisord.is_file():
-        ports.extend(parse_supervisord_ports(supervisord.read_text(encoding="utf-8")))
+    # Every program lives in its own drop-in, so scanning only the main config would see
+    # no ports at all and report every real app as free -- collisions would surface as two
+    # programs bound to the same port after the migration, not here.
+    for conf in _local_supervisord_configs(Path()):
+        ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
         ports.extend(parse_apps_registry(registry.read_text(encoding="utf-8")))
     return ports
+
+
+def _local_supervisord_configs(repo_root: Path) -> list[Path]:
+    """This workspace's supervisord config files: the main one plus every drop-in beside it.
+
+    The drop-in directory is ``system/supervisord.conf.d/`` by convention (pinned by
+    ``system/test_supervisord_layout.py``), the same directory the source-side listing assumes.
+    """
+    main = repo_root / "system/supervisord.conf"
+    if not main.is_file():
+        return []
+    dropins = sorted(
+        path
+        for path in (repo_root / "system/supervisord.conf.d").glob("*.conf")
+        if path.is_file()
+    )
+    return [main] + dropins
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> int:

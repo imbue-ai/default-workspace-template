@@ -1,161 +1,128 @@
 /**
- * The New Tab launcher: a full-page panel replacing both the "+" dropdown and
- * the empty-state overlay.
+ * The New Tab launcher: a full-page panel answering two questions about this pane -- what do you
+ * want in it, and what could you start. From the top: a search field; "Open new" (the apps'
+ * primary actions as tiles, four to a row, the built-in four first in a fixed order and every
+ * other app after them); "In this project" (the active view's tab set, omitted when empty); then, under a
+ * dashed rule, the two offers of things to start: "Start something" (hardcoded intents, each a
+ * chat seeded with a prompt) and "Start from a template" (the published catalog, by category, in
+ * sideways rails). Typing in the search field swaps the sections for results: the machine's
+ * instances and actions, the matching intents, the matching templates.
  *
- * It answers one question -- what do you want in this pane -- in three parts:
- * "Open new" starts something from scratch, "In this project" jumps to
- * something the active view already shows, and "On this machine" reaches
- * everything else the machine holds, whether it is filed in other projects or
- * in none at all.
+ * Nothing here knows what any app is: the tables carry the apps' own names and icons, the kind
+ * filter is by app, the tiles lead with the apps that declare a ``launcher_rank`` in their
+ * manifests, and a seeded prompt goes to whichever app declares an action with a ``message`` param
+ * (contracts.md sections 2 and 3). The list building, filtering, and ordering are exported as pure
+ * functions so they can be tested without a DOM. The template cards and their rails are
+ * ``TemplateShelves.ts``, and the card's detail dialog ``TemplateDetailModal.ts``.
  *
- * Opening a row from "On this machine" ADDS it to the active project and takes
- * it from nowhere: a project is a view, membership is many-to-many, and the
- * same object may be shown by any number of projects at once. The launcher does
- * not perform that itself -- it only reports which half of the split the row
- * came from, and the caller shares it in (``shareMember``) before opening the
- * panel, because the caller is the one that owns panel creation. That is also
- * why nothing here knows about dockview: every input arrives as an attr and
- * every action leaves as a callback (the same idiom as Sidebar and
- * AllAppsPicker).
- *
- * Everything is the unfiltered view, so it has no member list to split against:
- * there, "In this project" would be the whole machine and "On this machine"
- * would be empty. The launcher renders the single machine-wide table instead
- * (see buildLauncherSections), and opening a row from it changes no membership.
- *
- * The list building, kind filtering and recency ordering are exported as pure
- * functions above the component so they can be tested without a DOM, and so the
- * machine enumeration stays shared with the sidebar (buildLauncherRows is built
- * on Projects' buildEverythingMembers, and the member rows arrive from the same
- * source as the rail's tab list -- see buildLauncherSections).
+ * Every marker an e2e suite finds the page by is kept: ``.new-tab-launcher``,
+ * ``.new-tab-launcher-tile[data-launch]``, ``.new-tab-launcher-row[data-address]``, and
+ * ``.new-tab-launcher-section[data-section]``.
  */
 
 import m from "mithril";
-import { buildEverythingMembers, partitionByMembership, serviceNameFromRef } from "../models/Projects";
-import { getApps } from "../models/AgentManager";
-import { appStoppedDetail, stoppedAppForServiceName } from "../models/appLiveness";
-import type { MachineInventory, MemberKind } from "../models/Projects";
-import { serviceIconMarkup } from "./appIcon";
-import { getAccounts, getSelectedAccount, openProviderChooser, selectAccount } from "../models/Providers";
-import { Portal } from "./portal";
-import { accountRow, emptyAccountRowState } from "./accountRow";
-import * as css from "./modelCardStyles";
-import { hoverTooltipAttrs } from "./hoverTooltip";
-import { icon } from "./icons";
-import { SHORTCUT_TOOLTIPS } from "./Sidebar";
+import type { AppAction, AppRecord, InstanceStatus } from "../models/Inventory";
+import type { CatalogTemplate, TemplateCatalogState } from "../models/TemplateCatalog";
+import { resolveShelves, searchTemplates } from "../models/TemplateCatalog";
+import { matchesQuery } from "../models/search";
+import { appIconMarkupByName } from "./components/appIcon";
+import {
+  START_OPTIONS,
+  START_PAGE_SIZE,
+  hasMoreStartOptions,
+  nextStartCount,
+  searchStartOptions,
+  startGlyph,
+  visibleStartOptions,
+} from "./startSomething";
+import type { StartOption } from "./startSomething";
+import { TemplateDetailModal } from "./TemplateDetailModal";
+import { TemplateCard, TemplateShelves } from "./TemplateShelves";
+import { HOVER_GLYPH_GROUP, HOVER_SHADOW_SELF } from "./hoverLift";
+import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { menuCardClass, menuDividerClass, menuRowClass } from "@imbue/workspace-ui/src/components/menu";
+import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
 
-/** What one "Open new" tile starts, as data rather than as an encoded name.
- *
- *  A chat tile carries only the account it launches on, which comes from the
- *  provider picker below the tiles rather than from the tile itself: there is
- *  one Chat tile now, and which provider it starts on is a separate choice the
- *  user makes once and rarely changes. Not the harness -- the server derives
- *  that from the account, so naming it here could only ever contradict the
- *  credential the chat will run on. An empty `accountId` means nothing is
- *  signed in, which the server reads as the workspace's own login.
- *
- *  Distinct from MemberKind: "files" has no member ref yet (nothing backs it),
- *  and the tiles never start a URL tab. */
-export type LaunchTarget = { kind: "chat"; accountId: string } | { kind: "files" | "browser" | "terminal" };
-
-/** One "Open new" tile: what it starts, and what it is called. */
+/** One "Open new" tile: an app and the action it runs. */
 export interface LaunchTile {
-  target: LaunchTarget;
-  label: string;
+  app: AppRecord;
+  action: AppAction;
 }
 
-/** One object the launcher can open. */
+/** One instance the launcher can open. */
 export interface LauncherRow {
-  ref: string;
-  kind: MemberKind;
+  address: string;
+  appName: string;
+  appDisplayName: string;
   label: string;
-  // Epoch milliseconds of the object's last activity, or null when the machine
-  // reports none (a terminal nobody has touched since boot). Nulls sort last
-  // and render as a dash rather than as "just now".
+  status: InstanceStatus;
+  // Epoch milliseconds of the instance's last activity, or null when its app reports none.
   lastActiveMs: number | null;
 }
 
-/** The two tables the launcher renders. The key is stable per table so the
- *  per-table kind filter keeps its checkboxes across redraws. */
 export type LauncherSectionKey = "in-project" | "on-machine";
 
 export interface LauncherSection {
   key: LauncherSectionKey;
   title: string;
-  // Every row the table holds, before the kind filter and the recency sort.
   rows: LauncherRow[];
-  // Whether opening a row from here has to file it into the active project
-  // first. True only for the "on this machine" half of a project's split:
-  // rows the view already shows are already members, and Everything has no
-  // member list to add to.
-  filesIntoProject: boolean;
 }
 
 const OPEN_NEW_TITLE = "Open new";
 const IN_PROJECT_TITLE = "In this project";
 const ON_MACHINE_TITLE = "On this machine";
+const START_SOMETHING_TITLE = "Start something";
+const TEMPLATES_TITLE = "Start from a template";
+const SEARCH_TEMPLATES_TITLE = "Templates";
+const SEE_MORE_LABEL = "See more";
+const SEARCH_PLACEHOLDER = "Search apps, chats, and templates";
+const TEMPLATES_LOADING_MESSAGE = "Loading templates…";
+const TEMPLATES_FAILED_MESSAGE = "Failed to load templates.";
+const NO_CHAT_APP_REASON = "No app on this machine can start a chat";
+const TEMPLATES_NOT_OFFERED_REASON = "No template catalog is configured on this machine";
 
-// The small-caps heading over each block. Uppercasing is the stylesheet's job,
-// so the titles stay readable as text (and as test assertions).
-const SECTION_HEADING_CLASS = "text-text-faint text-[11px] font-semibold tracking-wider uppercase";
+const SECTION_HEADING_CLASS = "type-section text-faint";
 
-/** The order kinds are offered in, in the filter menu and in kindsInRows. */
-const KIND_ORDER: readonly MemberKind[] = ["chat", "browser", "terminal", "app", "url"];
+// The create param a seeded prompt rides: an action declaring it takes a first message
+// (contracts.md section 2, the chat manifest row declares one on ``new``).
+export const MESSAGE_PARAM = "message";
 
-/** What each kind is called in the launcher's kind column. */
-export const LAUNCHER_KIND_LABELS: Readonly<Record<MemberKind, string>> = {
-  chat: "Chat",
-  browser: "Browser",
-  terminal: "Terminal",
-  app: "App",
-  url: "Page",
-};
+/** Adopt a template into this machine: the first message of the chat "Make it mine" starts. */
+export function adoptTemplateMessage(template: CatalogTemplate): string {
+  return `/use-template ${template.repository_url}`;
+}
 
-/** The filter menu names kinds in the plural -- each row toggles a whole group
- *  of rows, not one object. */
-export const LAUNCHER_KIND_PLURAL_LABELS: Readonly<Record<MemberKind, string>> = {
-  chat: "Chats",
-  browser: "Browsers",
-  terminal: "Terminals",
-  app: "Apps",
-  url: "Pages",
-};
+/** Have a new machine made from a template: the first message of the chat that action starts. */
+export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
+  return (
+    `Please create a new Minds machine for me from the template at ${template.repository_url} ` +
+    "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
+    "or accounts, and tell me when it is ready."
+  );
+}
 
-/**
- * Flatten the machine into launcher rows.
- *
- * Built on buildEverythingMembers so the "On this machine" table and
- * Everything's tab list enumerate the machine through one function, in one
- * order, and cannot drift apart. The projects showing each ref are dropped:
- * membership is many-to-many, so who else shows an object changes nothing about
- * opening it here. `lastActiveMsByRef` decorates the rows it has an entry for;
- * a ref missing from it simply has no known recency.
- */
-export function buildLauncherRows(
-  inventory: MachineInventory,
-  lastActiveMsByRef: Readonly<Record<string, number>>,
-): LauncherRow[] {
-  return buildEverythingMembers(inventory, {}).map((member) => ({
-    ref: member.ref,
-    kind: member.kind,
-    label: member.label,
-    lastActiveMs: lastActiveMsByRef[member.ref] ?? null,
-  }));
+/** The tiles in display order: the apps that declare a ``launcher_rank``, lowest first (registry
+ *  order breaks a tie), then every other app in registry order. */
+export function orderLaunchTiles(tiles: readonly LaunchTile[]): LaunchTile[] {
+  const ranked = tiles.filter((tile) => tile.app.launcher_rank !== null);
+  const leading = [...ranked].sort((left, right) => (left.app.launcher_rank ?? 0) - (right.app.launcher_rank ?? 0));
+  return [...leading, ...tiles.filter((tile) => tile.app.launcher_rank === null)];
+}
+
+/** Where a seeded prompt goes: the first app (in tile order) with an action that takes a ``message``. */
+export function promptTargetOfTiles(tiles: readonly LaunchTile[]): LaunchTile | null {
+  for (const tile of tiles) {
+    const action = tile.app.actions.find((candidate) => candidate.params.includes(MESSAGE_PARAM));
+    if (action !== undefined) return { app: tile.app, action };
+  }
+  return null;
 }
 
 /**
- * Assemble the launcher's tables.
- *
- * A project's "In this project" table IS its member list, in member order: the
- * rows arrive already built from the same source as the rail's tab list, so a
- * backgrounded member the machine reports no live signal for still shows here
- * and the two surfaces cannot disagree. "On this machine" is the rest of the
- * machine -- the machine-wide rows minus the members, deduped by ref; opening
- * one of those adds it here without taking it from anywhere. Everything shows
- * all of the machine, so the split would degenerate into a full table beside
- * an empty one -- it gets the single machine-wide table instead. Input order
- * is preserved within each table (the recency sort is applied at render, per
- * table, after the kind filter).
+ * Assemble the launcher's tables. A project's "In this project" table IS its tab set, in tab
+ * order; "On this machine" is the rest of the machine, deduped by address. Everything gets the
+ * single machine-wide table.
  */
 export function buildLauncherSections(
   machineRows: readonly LauncherRow[],
@@ -163,38 +130,54 @@ export function buildLauncherSections(
   isEverything: boolean,
 ): LauncherSection[] {
   if (isEverything) {
-    return [{ key: "on-machine", title: ON_MACHINE_TITLE, rows: [...machineRows], filesIntoProject: false }];
+    return [{ key: "on-machine", title: ON_MACHINE_TITLE, rows: [...machineRows] }];
   }
-  const onMachine = partitionByMembership(
-    machineRows,
-    memberRows.map((row) => row.ref),
-  ).onMachine;
+  const members = new Set(memberRows.map((row) => row.address));
   return [
-    { key: "in-project", title: IN_PROJECT_TITLE, rows: [...memberRows], filesIntoProject: false },
-    { key: "on-machine", title: ON_MACHINE_TITLE, rows: onMachine, filesIntoProject: true },
+    { key: "in-project", title: IN_PROJECT_TITLE, rows: [...memberRows] },
+    { key: "on-machine", title: ON_MACHINE_TITLE, rows: machineRows.filter((row) => !members.has(row.address)) },
   ];
 }
 
 /**
- * Drop the rows whose kind the user unchecked in this table's filter.
- *
- * The state is the set of HIDDEN kinds rather than shown ones, so the resting
- * state is the empty set -- everything shows -- and a kind that only appears on
- * the machine later starts visible instead of being silently filtered out by a
- * set that was captured before it existed.
+ * The tables the RESTING page shows: the project's own tab set (or the whole machine under
+ * Everything), and only when it holds something -- a brand-new project goes straight from
+ * "Open new" to the offers. The rest of the machine is reached through search.
  */
-export function filterRowsByKind(rows: readonly LauncherRow[], hiddenKinds: ReadonlySet<MemberKind>): LauncherRow[] {
-  return rows.filter((row) => !hiddenKinds.has(row.kind));
+export function restingSections(
+  machineRows: readonly LauncherRow[],
+  memberRows: readonly LauncherRow[],
+  isEverything: boolean,
+): LauncherSection[] {
+  const [first] = buildLauncherSections(machineRows, memberRows, isEverything);
+  return first.rows.length === 0 ? [] : [first];
 }
 
-/**
- * Order rows most-recently-active first.
- *
- * Rows with no known recency go last: they are the least likely thing to be
- * reaching for, and ranking them as "epoch" would scatter them through the
- * list. Ties keep the order the machine listed them in (Array.sort is stable),
- * so a fleet of terminals with no recency at all stays in its natural order.
- */
+/** The machine's instances a query finds: by title or by the app they belong to. */
+export function searchLauncherRows(rows: readonly LauncherRow[], query: string): LauncherRow[] {
+  return rows.filter((row) => matchesQuery(query, row.label, row.appDisplayName, row.appName));
+}
+
+/** What a tile reads as when a search restates it as a row: "Open new terminal". */
+export function actionRowLabel(tile: LaunchTile): string {
+  return `Open new ${tile.app.display_name.toLowerCase()}`;
+}
+
+/** The "Open new" tiles a query finds, as the actions a search can answer with: by the row text the
+ *  match renders as, the app's names, or the action's own label. */
+export function searchTiles(tiles: readonly LaunchTile[], query: string): LaunchTile[] {
+  return tiles.filter((tile) =>
+    matchesQuery(query, actionRowLabel(tile), tile.app.display_name, tile.app.name, tile.action.label),
+  );
+}
+
+/** Drop the rows whose app the user unchecked in this table's filter. The state is the set of
+ *  HIDDEN apps, so an app that appears later starts visible. */
+export function filterRowsByApp(rows: readonly LauncherRow[], hiddenApps: ReadonlySet<string>): LauncherRow[] {
+  return rows.filter((row) => !hiddenApps.has(row.appName));
+}
+
+/** Order rows most-recently-active first; rows with no known recency go last, ties keep order. */
 export function sortRowsByRecency(rows: readonly LauncherRow[]): LauncherRow[] {
   return [...rows].sort((left, right) => {
     if (left.lastActiveMs === right.lastActiveMs) return 0;
@@ -204,19 +187,27 @@ export function sortRowsByRecency(rows: readonly LauncherRow[]): LauncherRow[] {
   });
 }
 
-/** The kinds present in a table, in KIND_ORDER. The filter menu is built from
- *  this rather than from every kind that exists, so a project with no browsers
- *  does not offer to hide browsers. */
-export function kindsInRows(rows: readonly LauncherRow[]): MemberKind[] {
-  const present = new Set(rows.map((row) => row.kind));
-  return KIND_ORDER.filter((kind) => present.has(kind));
+/** The apps present in a table, in first-seen order, with the name each is displayed under. */
+export function appsInRows(rows: readonly LauncherRow[]): { name: string; displayName: string }[] {
+  const seen = new Map<string, string>();
+  for (const row of rows) {
+    if (!seen.has(row.appName)) seen.set(row.appName, row.appDisplayName);
+  }
+  return Array.from(seen, ([name, displayName]) => ({ name, displayName }));
 }
 
-/** Re-check everything in one table's filter: emptying the hidden set is the
- *  whole reset, since the resting state is "nothing hidden" (see
- *  filterRowsByKind). */
-export function resetHiddenKinds(hiddenKinds: Set<MemberKind>): void {
-  hiddenKinds.clear();
+/** The apps a table's filter can uncheck: every app the table shows, once each, in table order --
+ *  the action rows' apps (they render first), then the instance rows'. */
+export function appsInSection(
+  rows: readonly LauncherRow[],
+  actionTiles: readonly LaunchTile[],
+): { name: string; displayName: string }[] {
+  const apps = actionTiles.map((tile) => ({ name: tile.app.name, displayName: tile.app.display_name }));
+  const seen = new Set(apps.map((app) => app.name));
+  for (const app of appsInRows(rows)) {
+    if (!seen.has(app.name)) apps.push(app);
+  }
+  return apps;
 }
 
 const MINUTE_MS = 60_000;
@@ -224,14 +215,7 @@ const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
 
-/**
- * The recency column's text: coarse and relative, since the exact minute an
- * object was last touched is never what the launcher is being read for.
- *
- * A future timestamp reads as "just now" rather than as a negative age -- the
- * machine's clock and the browser's can disagree by a little, and the launcher
- * is not the surface to surface that on.
- */
+/** The recency column's text: coarse and relative. A future timestamp reads as "just now". */
 export function formatRecency(lastActiveMs: number | null, nowMs: number): string {
   if (lastActiveMs === null) return "—";
   const age = nowMs - lastActiveMs;
@@ -245,29 +229,14 @@ export function formatRecency(lastActiveMs: number | null, nowMs: number): strin
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
-// Inner markup for the launcher's own glyphs, on the same 24x24 Feather grid as
-// `icons.ts`, which has no entry for any of them. The rail draws four of the
-// same shapes (see Sidebar's QUICK_ADD_PATHS) -- they belong in the shared
-// table once something other than these two views wants them. A URL row is the
-// one kind `icons.ts` already covers, so it uses `icon()` below.
 const LAUNCHER_PATHS = {
-  chat:
-    '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7' +
-    'a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
-  files: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
-  browser:
-    '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>' +
-    '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
-  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
   filter:
     '<line x1="4" y1="7" x2="20" y2="7"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="17" x2="14" y2="17"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
 } as const;
 
-/** Full <svg> string for one launcher glyph. */
 function launcherIcon(glyph: keyof typeof LAUNCHER_PATHS, size: number): string {
-  // Every chat tile wears the chat bubble whatever harness it starts, which is
-  // free now that they all share the "chat" kind.
   return (
     `<svg xmlns="${XMLNS}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" ` +
     `stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
@@ -275,276 +244,56 @@ function launcherIcon(glyph: keyof typeof LAUNCHER_PATHS, size: number): string 
   );
 }
 
-// The size every glyph in the launcher is drawn at: the tiles, the row glyphs
-// and the filter funnel.
 const GLYPH_SIZE = 15;
+const START_GLYPH_SIZE = 24;
 
-/** The glyph for a row, by what the object is. */
-function kindIconMarkup(kind: MemberKind): string {
-  switch (kind) {
-    case "chat":
-      return launcherIcon("chat", GLYPH_SIZE);
-    case "browser":
-      return launcherIcon("browser", GLYPH_SIZE);
-    case "terminal":
-      return launcherIcon("terminal", GLYPH_SIZE);
-    case "app":
-      return launcherIcon("app", GLYPH_SIZE);
-    case "url":
-      return icon("external-link", { size: GLYPH_SIZE });
-  }
+/** The glyph one row (or tile) wears: the app's own icon, or its monogram. */
+function appGlyph(appName: string): string {
+  return appIconMarkupByName(appName, GLYPH_SIZE, launcherIcon("app", GLYPH_SIZE));
 }
 
-/** The glyph one table row wears: a registered app's own icon when it has one,
- *  and the kind's built-in glyph otherwise. */
-function rowIconMarkup(row: LauncherRow): string {
-  const fallback = kindIconMarkup(row.kind);
-  if (row.kind !== "app") return fallback;
-  return serviceIconMarkup(serviceNameFromRef(row.ref), GLYPH_SIZE, fallback);
-}
-
-/** One chat tile: the harness it starts, and whether it stacks `first`. */
-/** The tile list. One Chat tile, whose provider comes from the picker beside it.
- *
- *  One tile rather than one per harness: "which harness" is a real user-facing choice and
- *  belongs to the provider picker, and the `first` create template belongs to the workspace's
- *  own first run rather than to a tile.
- *
- *  Exported so the harness a chat starts on can be asserted without a DOM: it
- *  is the value that reaches ``mngr create --type``, and a target naming
- *  something mngr does not call itself is rejected before the create ever runs. */
-export function openNewTiles(): readonly LaunchTile[] {
-  // No opencode row, deliberately: the harness is registered (so an opencode agent
-  // created from a terminal is identified as itself rather than mistaken for claude,
-  // and its mngr plugin stays on the shared launch contract) but it has no transcript
-  // watcher and is not planned to get one, so offering it would promise a chat that
-  // always renders blank.
-  const account = getSelectedAccount();
-  return [
-    // "Chat", not "New chat": the section above already says OPEN NEW, and the other three are
-    // bare nouns. The shorter label is also what lets this tile take an equal share of the row.
-    { target: { kind: "chat", accountId: account?.id ?? "" }, label: "Chat" },
-    { target: { kind: "files" }, label: "File viewer" },
-    { target: { kind: "browser" }, label: "Browser" },
-    { target: { kind: "terminal" }, label: "Terminal" },
-  ];
-}
-
-// Shown on the files tile only where no "files" app is registered (a workspace
-// from before the dufs service shipped): the tile is present but cannot act.
-// It is marked aria-disabled rather than `disabled`: a disabled button
-// receives no pointer events in Chromium, which would swallow the very hover
-// that explains why it does nothing.
-const FILE_VIEWER_TOOLTIP = "A file viewer is coming — no app backs it yet";
-
-// Replaces the "Open new" heading while a create this pane asked for is in
-// flight. The heading carries it rather than a spinner over the tiles: the
-// tiles are already visibly stood down, and what the user needs to know is
-// that the click landed.
 const STARTING_TITLE = "Starting…";
 
-/** Whether a registered app backs the File viewer tile. A workspace built
- *  before the dufs "files" service shipped has none, and the tile renders
- *  disabled there rather than pretending to work. */
-function isFileViewerBacked(): boolean {
-  return getApps().some((app) => app.name === "files");
-}
-
 export interface NewTabLauncherAttrs {
-  // Everything the machine holds, already flattened (see buildLauncherRows).
+  tiles: readonly LaunchTile[];
+  // Everything the machine holds.
   rows: readonly LauncherRow[];
-  // The active view's members as rows, in member order, open or backgrounded --
-  // built from the same source as the rail's tab list, so "In this project"
-  // and the rail cannot disagree. The machine list is deduped against these.
-  // Ignored when isEverything is set -- the unfiltered view has no member list.
+  // The active project's tab set as rows, in tab order. Ignored when isEverything is set.
   memberRows: readonly LauncherRow[];
-  // Whether the active view is Everything, which renders the single
-  // machine-wide table instead of the split.
   isEverything: boolean;
-  // "Now" for the recency column. Defaults to the wall clock; passed in by
-  // tests so the rendered ages are deterministic.
+  // The template catalog, as the page's shared fetch stands.
+  catalog: TemplateCatalogState;
   nowMs?: number;
-  // Whether this pane is waiting on a create it already asked for. The tiles
-  // stand down and say so: `mngr create` takes seconds, and a launcher that
-  // looked untouched invited a second click that started a second object.
+  // Whether this pane is waiting on an action it already ran: the tiles stand down and say so.
   isAwaitingCreate?: boolean;
-  // Start a new object of this kind in this pane. Fired for "files" only
-  // where a registered app backs the tile.
-  onOpenNew: (target: LaunchTarget) => void;
-  // Open an object the active view already shows. Membership does not change.
-  onOpenMember: (row: LauncherRow) => void;
-  // Open an object the active view does not show yet. The caller shares it into
-  // the active project first (shareMember, which adds it here and takes it from
-  // nowhere) and then opens it. Never fired in Everything.
-  onOpenFromMachine: (row: LauncherRow) => void;
+  // Run an app's action in this pane, with the create's params (a seeded chat's message).
+  onRunAction: (app: AppRecord, actionId: string, params: Readonly<Record<string, string>>) => void;
+  // Open an instance into this pane (the workspace files it into the project when it is not there yet).
+  onOpenRow: (row: LauncherRow) => void;
 }
 
-/** The provider half of the New chat control.
- *
- *  Attached to the button rather than sitting on its own row, because the two are one
- *  decision: this is WHICH new chat the button starts. Separated, the picker read as a
- *  setting that happened to be nearby, and nothing said the button obeyed it.
- *
- *  Cross-PROVIDER switching mid-chat is not supported yet, which is exactly why the choice
- *  belongs here, before the chat exists.
- *
- *  A menu, not a native `<select>`: the OS dropdown cannot carry the per-row sign-out the
- *  chat card's provider list has, renders differently on every platform, and looked nothing
- *  like the rest of the app. It shares that card's row classes so the two ARE the same list.
- */
-function ProviderPicker(): m.Component<{ onOpenNew: (target: LaunchTarget) => void }> {
-  let open = false;
-  let anchor: DOMRect | null = null;
-  // The rows' own transient state -- an armed "Remove?", an open rename field. See the model
-  // card's copy of this.
-  const rowState = emptyAccountRowState();
+// Marks a section's filter toggle, so the menu's outside-press listener leaves the toggle's
+// own press to the click that follows it.
+const FILTER_TOGGLE_ATTR = "data-launcher-filter-toggle";
 
-  function resetRows(): void {
-    rowState.confirmingRemoval = null;
-    rowState.renamingId = null;
-    rowState.renameDraft = "";
-  }
-
-  function close(): void {
-    open = false;
-    anchor = null;
-    resetRows();
-  }
-
-  /** A click outside the trigger and the menu closes it -- and only a click. See the combo
-   *  card's copy of this: `closest` rather than cached element references, because a stale
-   *  reference makes an inside click read as an outside one and the menu vanishes on mousedown
-   *  before the click it was meant to act on ever lands. */
-  function handleOutsideMousedown(event: MouseEvent): void {
-    if (!open) return;
-    if ((event.target as Element | null)?.closest?.(`[${PICKER_ATTR}]`) != null) return;
-    close();
-    m.redraw();
-  }
-
-  /** Below the trigger when there is room, above it when there is not. */
-  function placement(rect: DOMRect): string {
-    const margin = 8;
-    const left = Math.min(Math.max(rect.left, margin), Math.max(margin, window.innerWidth - margin - PICKER_WIDTH));
-    const below = window.innerHeight - rect.bottom - margin;
-    const vertical =
-      below >= PICKER_MIN_HEIGHT
-        ? `top: ${rect.bottom + 4}px; max-height: ${below - 4}px;`
-        : `bottom: ${window.innerHeight - rect.top + 4}px; max-height: ${Math.max(0, rect.top - margin - 4)}px;`;
-    return `left: ${left}px; ${vertical} width: ${PICKER_WIDTH}px;`;
-  }
-
-  return {
-    oninit() {
-      document.addEventListener("mousedown", handleOutsideMousedown);
-    },
-    onremove() {
-      document.removeEventListener("mousedown", handleOutsideMousedown);
-    },
-    view(vnode) {
-      const selected = getSelectedAccount();
-      const accounts = getAccounts();
-      const trigger = m(
-        "button",
-        {
-          type: "button",
-          class:
-            "text-text-secondary hover:bg-bg-hover hover:text-text-primary flex min-w-0 max-w-[190px] " +
-            "cursor-pointer items-center gap-1 truncate bg-transparent py-0 pr-2 pl-3 text-[13px] focus:outline-none",
-          "aria-label": "Provider for the new chat",
-          "aria-expanded": open ? "true" : "false",
-          [PICKER_ATTR]: "trigger",
-          onclick: (event: MouseEvent) => {
-            // The picker sits inside the New-chat tile, whose own click starts a chat.
-            event.stopPropagation();
-            if (open) {
-              close();
-              return;
-            }
-            open = true;
-            anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
-            resetRows();
-          },
-        },
-        [
-          m("span", { class: "min-w-0 truncate" }, selected?.label ?? "No provider yet"),
-          m("span", { class: "shrink-0 text-text-faint" }, m.trust(icon("chevron-down", { size: 14 }))),
-        ],
-      );
-
-      if (!open || anchor === null) return trigger;
-
-      const menu = m(
-        "div",
-        {
-          class: css.FLYOUT,
-          [PICKER_ATTR]: "menu",
-          style: placement(anchor),
-        },
-        [
-          m(
-            "div",
-            { class: css.FLYOUT_SCROLL },
-            accounts.length === 0
-              ? [m("div", { class: css.FLYOUT_EMPTY }, "No providers yet.")]
-              : accounts.map((candidate) =>
-                  accountRow({
-                    row: candidate,
-                    isCurrent: candidate.id === selected?.id,
-                    rowClass: candidate.id === selected?.id ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
-                    onSelect: () => {
-                      selectAccount(candidate.id);
-                      close();
-                    },
-                    state: rowState,
-                  }),
-                ),
-          ),
-          m(
-            "button",
-            {
-              type: "button",
-              class: css.FLYOUT_ADD,
-              onclick: (event: MouseEvent) => {
-                event.stopPropagation();
-                close();
-                // Adding a provider from the new-tab screen opens a chat on it: this picker
-                // exists to choose what the next chat runs on, so signing in IS choosing.
-                openProviderChooser({
-                  onSignedIn: (accountId) => vnode.attrs.onOpenNew({ kind: "chat", accountId }),
-                });
-              },
-            },
-            "+ Add a provider",
-          ),
-        ],
-      );
-
-      // Portalled: the launcher sits inside a dockview panel that clips its overflow.
-      return [trigger, m(Portal, { children: menu })];
-    },
-  };
-}
-
-/** Marks the trigger and its menu as one stack, for the outside-click test. */
-const PICKER_ATTR = "data-provider-picker";
-
-/** The picker's own width, and the shortest it is worth opening downward. */
-const PICKER_WIDTH = 260;
-const PICKER_MIN_HEIGHT = 120;
+const ROW_CLASS =
+  "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
+  "text-(length:--font-size-row) hover:bg-fill-hover ";
 
 export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
-  // Per table, the kinds the user unchecked. Hidden rather than shown so a kind
-  // that appears later starts visible (see filterRowsByKind).
-  const hiddenKindsBySection: Record<LauncherSectionKey, Set<MemberKind>> = {
+  const hiddenAppsBySection: Record<LauncherSectionKey, Set<string>> = {
     "in-project": new Set(),
     "on-machine": new Set(),
   };
-  // Which table's filter menu is open, at most one at a time.
   let openFilterFor: LauncherSectionKey | null = null;
-  // The open menu's element, so the outside-pointerdown listener can tell a
-  // click inside the menu from one that dismisses it.
   let menuElement: HTMLElement | null = null;
+  let query = "";
+  let startShownCount = START_PAGE_SIZE;
+  let detailTemplate: CatalogTemplate | null = null;
+  // Set by the "Start from a template" tile; the templates section scrolls itself into view on
+  // its next create or update and clears it (from search, the section mounts only after the
+  // click empties the query).
+  let isScrollToTemplatesPending = false;
 
   const closeFilterMenu = (): void => {
     openFilterFor = null;
@@ -552,7 +301,10 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
   };
 
   const onDocumentPointerDown = (event: Event): void => {
-    if (menuElement !== null && event.target instanceof Node && menuElement.contains(event.target)) return;
+    if (!(event.target instanceof Node)) return closeFilterMenu();
+    if (menuElement !== null && menuElement.contains(event.target)) return;
+    // A press on a toggle is the click that follows: it closes, or moves, the menu itself.
+    if (event.target instanceof Element && event.target.closest(`[${FILTER_TOGGLE_ATTR}]`) !== null) return;
     closeFilterMenu();
   };
 
@@ -560,19 +312,82 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     if (event.key === "Escape") closeFilterMenu();
   };
 
-  /** One checkbox row of the funnel menu. The input is real -- appearance-none
-   *  with a styled box painted over it -- so assistive tech and the keyboard
-   *  see an ordinary checkbox. The check overlay is rendered from the same
-   *  state the input reads, not peer-selectors, since a redraw follows every
-   *  toggle anyway. */
-  function filterMenuRow(section: LauncherSection, kind: MemberKind): m.Vnode {
-    const hidden = hiddenKindsBySection[section.key];
-    const isShown = !hidden.has(kind);
+  function isSearching(): boolean {
+    return query.trim() !== "";
+  }
+
+  /** Whether anything that starts a seeded chat (a prompt tile, the detail dialog's actions) stands
+   *  down right now, and the reason a tooltip gives when there is one to give: no app on the
+   *  machine takes a first message, or this pane is already waiting on a create (which the page
+   *  says under "Open new", so it needs no tooltip). */
+  function promptStartDisabling(attrs: NewTabLauncherAttrs): { isDisabled: boolean; reason: string | null } {
+    if (promptTargetOfTiles(attrs.tiles) === null) return { isDisabled: true, reason: NO_CHAT_APP_REASON };
+    return { isDisabled: attrs.isAwaitingCreate === true, reason: null };
+  }
+
+  function startChat(attrs: NewTabLauncherAttrs, message: string): void {
+    const target = promptTargetOfTiles(attrs.tiles);
+    if (target === null) return;
+    attrs.onRunAction(target.app, target.action.id, { [MESSAGE_PARAM]: message });
+  }
+
+  // ---------- the search field ----------
+
+  function searchField(): m.Vnode {
+    return m(
+      "div",
+      {
+        class:
+          "new-tab-launcher-search group flex h-9 items-center gap-2 rounded-lg border border-default bg-surface " +
+          "px-2.5 focus-within:border-accent",
+      },
+      [
+        m("span", { class: "flex shrink-0 items-center text-faint" }, m.trust(icon("search", { size: 14 }))),
+        m("input", {
+          type: "text",
+          "aria-label": SEARCH_PLACEHOLDER,
+          placeholder: SEARCH_PLACEHOLDER,
+          value: query,
+          class:
+            "min-w-0 flex-1 bg-transparent text-(length:--font-size-body) text-primary outline-none " +
+            "placeholder:text-faint",
+          oninput: (event: InputEvent) => {
+            query = (event.target as HTMLInputElement).value;
+          },
+          onkeydown: (event: KeyboardEvent) => {
+            if (event.key === "Escape") query = "";
+          },
+        }),
+        query === ""
+          ? null
+          : m(
+              Button,
+              {
+                variant: "ghost",
+                icon: true,
+                xs: true,
+                "aria-label": "Clear search",
+                extra: "new-tab-launcher-search-clear",
+                onclick: () => {
+                  query = "";
+                },
+              },
+              m.trust(icon("close", { size: 14 })),
+            ),
+      ],
+    );
+  }
+
+  // ---------- the tables ----------
+
+  function filterMenuRow(section: LauncherSection, app: { name: string; displayName: string }): m.Vnode {
+    const hidden = hiddenAppsBySection[section.key];
+    const isShown = !hidden.has(app.name);
     return m(
       "label",
       {
-        key: kind,
-        class: "flex h-8 cursor-pointer items-center gap-2 px-3 text-[13px] text-text-primary hover:bg-bg-hover",
+        key: app.name,
+        class: menuRowClass({ extra: "text-(length:--font-size-row) text-primary" }),
       },
       [
         m("span", { class: "relative flex h-4 w-4 shrink-0 items-center justify-center" }, [
@@ -580,15 +395,15 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
             type: "checkbox",
             checked: isShown,
             onchange: () => {
-              if (hidden.has(kind)) {
-                hidden.delete(kind);
+              if (hidden.has(app.name)) {
+                hidden.delete(app.name);
               } else {
-                hidden.add(kind);
+                hidden.add(app.name);
               }
             },
             class:
               "absolute inset-0 m-0 h-4 w-4 cursor-pointer appearance-none rounded border " +
-              (isShown ? "border-accent bg-accent" : "border-border bg-surface"),
+              (isShown ? "border-accent bg-accent" : "border-default bg-surface"),
           }),
           isShown
             ? m(
@@ -598,26 +413,19 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
               )
             : null,
         ]),
-        m(
-          "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
-          m.trust(kindIconMarkup(kind)),
-        ),
-        LAUNCHER_KIND_PLURAL_LABELS[kind],
+        m("span", { class: "text-faint flex w-5 shrink-0 items-center justify-center" }, m.trust(appGlyph(app.name))),
+        app.displayName,
       ],
     );
   }
 
-  /** The funnel menu for one table: one checkbox row per kind the table holds,
-   *  then a reset row that re-checks everything. */
-  function filterMenu(section: LauncherSection): m.Vnode {
-    const hidden = hiddenKindsBySection[section.key];
+  function filterMenu(section: LauncherSection, actionTiles: readonly LaunchTile[]): m.Vnode {
+    const hidden = hiddenAppsBySection[section.key];
     const isPristine = hidden.size === 0;
     return m(
       "div",
       {
-        class:
-          "absolute top-full right-0 z-30 mt-1 min-w-[170px] rounded-lg border border-border bg-surface py-1 shadow-lg",
+        class: menuCardClass("absolute top-full right-0 mt-1 min-w-[170px]"),
         oncreate: (vnode: m.VnodeDOM) => {
           menuElement = vnode.dom as HTMLElement;
           document.addEventListener("pointerdown", onDocumentPointerDown);
@@ -630,19 +438,17 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
         },
       },
       [
-        kindsInRows(section.rows).map((kind) => filterMenuRow(section, kind)),
-        m("div", { class: "my-1 border-t border-border" }),
-        // Muted like a secondary action either way; only clickable (and only
-        // wearing the rows' hover) while a filter is actually on.
+        appsInSection(section.rows, actionTiles).map((app) => filterMenuRow(section, app)),
+        m("div", { class: menuDividerClass() }),
         m(
           "button",
           {
             type: "button",
             disabled: isPristine,
             class:
-              "flex h-8 w-full items-center px-3 text-left text-[13px] " +
-              (isPristine ? "text-text-faint cursor-default" : "text-text-secondary cursor-pointer hover:bg-bg-hover"),
-            onclick: () => resetHiddenKinds(hidden),
+              "flex h-8 w-full items-center px-3 text-left text-(length:--font-size-row) " +
+              (isPristine ? "text-faint cursor-default" : "text-secondary cursor-pointer hover:bg-fill-hover"),
+            onclick: () => hidden.clear(),
           },
           "Reset filters",
         ),
@@ -650,51 +456,74 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
     );
   }
 
-  /** One row: kind glyph, label, kind column, recency column. A stopped app's
-   *  row stays clickable (opening it shows the stopped state) but reads dimmed,
-   *  with the tooltip saying why it is not answering. */
   function memberRow(row: LauncherRow, nowMs: number, onOpen: (row: LauncherRow) => void): m.Vnode {
-    const stoppedApp = row.kind === "app" ? stoppedAppForServiceName(getApps(), serviceNameFromRef(row.ref)) : null;
+    const isStopped = row.status === "stopped";
     return m(
       "button",
       {
-        key: row.ref,
+        key: row.address,
         type: "button",
-        class:
-          "new-tab-launcher-row flex h-9 w-full cursor-pointer items-center gap-3 rounded-md px-2 text-left " +
-          "text-[13px] hover:bg-bg-hover " +
-          (stoppedApp !== null ? "new-tab-launcher-row-stopped text-text-faint opacity-60" : "text-text-primary"),
-        ...(stoppedApp !== null ? hoverTooltipAttrs(`${row.label} — ${appStoppedDetail(stoppedApp)}`) : {}),
+        "data-address": row.address,
+        class: ROW_CLASS + (isStopped ? "new-tab-launcher-row-stopped text-faint opacity-60" : "text-primary"),
         onclick: () => onOpen(row),
       },
       [
         m(
           "span",
-          { class: "text-text-faint flex w-5 shrink-0 items-center justify-center" },
-          m.trust(rowIconMarkup(row)),
+          { class: "text-faint flex w-5 shrink-0 items-center justify-center" },
+          m.trust(appGlyph(row.appName)),
         ),
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
-        m("span", { class: "text-text-faint w-24 shrink-0 truncate" }, LAUNCHER_KIND_LABELS[row.kind]),
-        m(
-          "span",
-          { class: "text-text-faint w-28 shrink-0 truncate text-right" },
-          formatRecency(row.lastActiveMs, nowMs),
-        ),
+        m("span", { class: "text-faint w-24 shrink-0 truncate" }, row.appDisplayName),
+        m("span", { class: "text-faint w-28 shrink-0 truncate text-right" }, formatRecency(row.lastActiveMs, nowMs)),
       ],
     );
   }
 
-  function sectionView(section: LauncherSection, attrs: NewTabLauncherAttrs, nowMs: number): m.Vnode {
-    const visible = sortRowsByRecency(filterRowsByKind(section.rows, hiddenKindsBySection[section.key]));
-    const onOpen = section.filesIntoProject ? attrs.onOpenFromMachine : attrs.onOpenMember;
-    // Distinguish "there is nothing here" from "your filter hid all of it" --
-    // the fix for each is different.
-    const nothingHere = section.filesIntoProject
-      ? "Nothing else is running on this machine."
-      : "Nothing is in this project yet.";
-    const emptyMessage = section.rows.length === 0 ? nothingHere : "No tabs match this filter.";
+  /** An "Open new <app>" row in a search's machine table: the tile restated as a row, with a "+" for
+   *  a glyph, since the point of the row is that the thing does not exist yet. */
+  function actionRow(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
+    const isDisabled = attrs.isAwaitingCreate === true;
+    return m(
+      "button",
+      {
+        key: `${tile.app.name}:${tile.action.id}`,
+        type: "button",
+        "data-launch": `${tile.app.name}:${tile.action.id}`,
+        "aria-disabled": isDisabled ? "true" : undefined,
+        class:
+          "new-tab-launcher-action-row " + ROW_CLASS + (isDisabled ? "text-faint cursor-not-allowed" : "text-primary"),
+        onclick: isDisabled ? undefined : () => attrs.onRunAction(tile.app, tile.action.id, {}),
+      },
+      [
+        m(
+          "span",
+          { class: "text-faint flex w-5 shrink-0 items-center justify-center" },
+          m.trust(launcherIcon("plus", GLYPH_SIZE)),
+        ),
+        m("span", { class: "min-w-0 flex-1 truncate" }, actionRowLabel(tile)),
+        m("span", { class: "text-faint w-24 shrink-0 truncate" }, tile.app.display_name),
+        m("span", { class: "w-28 shrink-0" }),
+      ],
+    );
+  }
 
-    return m("section", { key: section.key, class: "new-tab-launcher-section mt-6", "data-section": section.key }, [
+  function sectionView(
+    section: LauncherSection,
+    attrs: NewTabLauncherAttrs,
+    nowMs: number,
+    actionTiles: readonly LaunchTile[],
+  ): m.Vnode {
+    const hiddenApps = hiddenAppsBySection[section.key];
+    const visible = sortRowsByRecency(filterRowsByApp(section.rows, hiddenApps));
+    // The action rows follow the same filter: an unchecked app hides what it could open too.
+    const visibleActions = actionTiles.filter((tile) => !hiddenApps.has(tile.app.name));
+    const nothingHere =
+      section.key === "on-machine" ? "Nothing else is running on this machine." : "Nothing is in this project yet.";
+    const emptyMessage =
+      section.rows.length === 0 && actionTiles.length === 0 ? nothingHere : "No tabs match this filter.";
+
+    return m("section", { class: "new-tab-launcher-section mt-6", "data-section": section.key }, [
       m("div", { class: "relative mb-1 flex h-6 items-center justify-between px-2" }, [
         m("h2", { class: SECTION_HEADING_CLASS }, section.title),
         m(
@@ -702,112 +531,319 @@ export function NewTabLauncher(): m.Component<NewTabLauncherAttrs> {
           {
             type: "button",
             "aria-expanded": openFilterFor === section.key ? "true" : "false",
-            class:
-              "text-text-faint flex h-6 w-6 cursor-pointer items-center justify-center rounded " +
-              "hover:bg-bg-hover hover:text-text-primary",
+            [FILTER_TOGGLE_ATTR]: "",
+            class: buttonClass("ghost", { icon: true, xs: true }),
             onclick: () => {
               openFilterFor = openFilterFor === section.key ? null : section.key;
             },
-            ...hoverTooltipAttrs("Filter by kind"),
+            ...hoverTooltipAttrs("Filter by app"),
           },
           m.trust(launcherIcon("filter", GLYPH_SIZE)),
         ),
-        openFilterFor === section.key ? filterMenu(section) : null,
+        openFilterFor === section.key ? filterMenu(section, actionTiles) : null,
       ]),
-      visible.length === 0
-        ? m("p", { class: "text-text-faint px-2 py-1 text-[13px]" }, emptyMessage)
-        : visible.map((row) => memberRow(row, nowMs, onOpen)),
+      visibleActions.map((tile) => actionRow(tile, attrs)),
+      visible.length === 0 && visibleActions.length === 0
+        ? m("p", { class: "text-faint px-2 py-1 text-(length:--font-size-row)" }, emptyMessage)
+        : visible.map((row) => memberRow(row, nowMs, attrs.onOpenRow)),
     ]);
+  }
+
+  // ---------- "Open new" ----------
+
+  /** One tile: a quarter of the row (four to a row, less the three 8px gaps between them), so the
+   *  built-in four fill the first row and any further app wraps under them at the same size. */
+  function tileView(tile: LaunchTile, attrs: NewTabLauncherAttrs): m.Vnode {
+    const isDisabled = attrs.isAwaitingCreate === true;
+    const run = (): void => attrs.onRunAction(tile.app, tile.action.id, {});
+    return m(
+      "div",
+      {
+        key: `${tile.app.name}:${tile.action.id}`,
+        // Four to a row, then three, then two as the pane narrows. The subtrahend has to follow
+        // the count: gap-2 (8px) times one fewer than the tiles in the row.
+        //
+        // Two-up holds to 260px, far past the sections below, because these labels are one or two
+        // short words and still fit there; stepping down with the rest would leave half the row
+        // empty.
+        class:
+          "border-default flex h-9 shrink-0 items-stretch overflow-hidden rounded-lg border " +
+          "w-[calc((100%-24px)/4)] @max-[760px]:w-[calc((100%-16px)/3)] " +
+          "@max-[620px]:w-[calc((100%-8px)/2)] @max-[260px]:w-full" +
+          (isDisabled ? " text-faint" : " text-primary"),
+      },
+      [
+        m(
+          "button",
+          {
+            type: "button",
+            "aria-disabled": isDisabled ? "true" : undefined,
+            "data-launch": `${tile.app.name}:${tile.action.id}`,
+            class:
+              "new-tab-launcher-tile flex min-w-0 flex-1 items-center justify-center gap-2 px-4 " +
+              "text-(length:--font-size-row) font-medium " +
+              (isDisabled ? "cursor-not-allowed" : "hover:bg-fill-hover cursor-pointer"),
+            onclick: isDisabled ? undefined : run,
+            ...(isDisabled ? {} : hoverTooltipAttrs(tile.action.label)),
+          },
+          [
+            m("span", { class: "text-faint flex shrink-0 items-center" }, m.trust(appGlyph(tile.app.name))),
+            m("span", { class: "min-w-0 truncate" }, tile.app.display_name),
+          ],
+        ),
+      ],
+    );
+  }
+
+  function openNewSection(attrs: NewTabLauncherAttrs): m.Vnode {
+    return m("section", { class: "new-tab-launcher-open-new" }, [
+      m(
+        "h2",
+        { class: `${SECTION_HEADING_CLASS} mb-2 px-2` },
+        attrs.isAwaitingCreate === true ? STARTING_TITLE : OPEN_NEW_TITLE,
+      ),
+      attrs.tiles.length === 0
+        ? m(
+            "p",
+            { class: "text-faint px-2 py-1 text-(length:--font-size-row)" },
+            "No apps are registered on this machine yet.",
+          )
+        : m(
+            "div",
+            { class: "new-tab-launcher-tiles flex flex-wrap gap-2 px-2" },
+            orderLaunchTiles(attrs.tiles).map((tile) => tileView(tile, attrs)),
+          ),
+    ]);
+  }
+
+  // ---------- "Start something" ----------
+
+  function startTile(option: StartOption, attrs: NewTabLauncherAttrs): m.Vnode {
+    const isCatalogOffered = attrs.catalog.kind !== "disabled";
+    const promptStart = promptStartDisabling(attrs);
+    const isDisabled = option.prompt === null ? !isCatalogOffered : promptStart.isDisabled;
+    const disabledReason = option.prompt === null ? TEMPLATES_NOT_OFFERED_REASON : promptStart.reason;
+    const pick = (): void => {
+      if (option.prompt === null) {
+        query = "";
+        isScrollToTemplatesPending = true;
+        return;
+      }
+      startChat(attrs, option.prompt);
+    };
+    return m(
+      "button",
+      {
+        key: option.key,
+        type: "button",
+        "data-start": option.key,
+        "aria-disabled": isDisabled ? "true" : undefined,
+        // A pickable tile is the ``group`` that grows its glyph. The shadow alone is its hover
+        // answer -- a fill behind it only mutes the shadow -- and a disabled tile stays flat, so
+        // the page never offers to open what it cannot.
+        class:
+          "new-tab-start-tile flex h-full flex-col rounded-xl border border-default bg-surface p-4 text-left " +
+          (isDisabled ? "cursor-not-allowed text-faint" : `${HOVER_SHADOW_SELF} group cursor-pointer text-primary`),
+        onclick: isDisabled ? undefined : pick,
+        ...(isDisabled && disabledReason !== null ? hoverTooltipAttrs(disabledReason) : {}),
+      },
+      [
+        // The wrapper colours only the standing-down glyph; a tinted one carries its own tones. It
+        // is also what grows on hover, so the movement is the glyph's and not the whole tile's.
+        m(
+          "span",
+          {
+            class: "flex shrink-0 items-center" + (isDisabled ? " text-faint" : ` ${HOVER_GLYPH_GROUP}`),
+          },
+          m.trust(startGlyph(option, START_GLYPH_SIZE, !isDisabled)),
+        ),
+        m("span", { class: "type-label mt-3 block" }, option.title),
+        // The sentence steps up to the title's colour under the pointer, on the lift's own timing
+        // so the tile reads as one piece.
+        m(
+          "span",
+          {
+            class:
+              "type-helper mt-1 block " +
+              (isDisabled
+                ? "text-faint"
+                : "text-secondary transition-colors duration-300 ease-out group-hover:text-primary"),
+          },
+          option.description,
+        ),
+      ],
+    );
+  }
+
+  function startGrid(options: readonly StartOption[], attrs: NewTabLauncherAttrs): m.Vnode {
+    return m(
+      "div",
+      // Three to a row, then two, then one: a 760px pane leaves a three-up tile about 230px, under
+      // what a title and three lines of sentence want.
+      { class: "grid grid-cols-3 gap-3 px-2 @max-[760px]:grid-cols-2 @max-[480px]:grid-cols-1" },
+      options.map((option) => startTile(option, attrs)),
+    );
+  }
+
+  /** The section around a grid of intent tiles, with ``footer`` (the "See more" control) under the grid. */
+  function startSomethingSection(
+    options: readonly StartOption[],
+    attrs: NewTabLauncherAttrs,
+    footer: m.Vnode | null,
+  ): m.Vnode {
+    return m("section", { class: "new-tab-start-something mt-6" }, [
+      m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, START_SOMETHING_TITLE),
+      startGrid(options, attrs),
+      footer,
+    ]);
+  }
+
+  /** The resting page's intents: a page at a time, with "See more" until every tile is shown. */
+  function pagedStartSomethingSection(attrs: NewTabLauncherAttrs): m.Vnode {
+    const seeMore = hasMoreStartOptions(startShownCount, START_OPTIONS.length)
+      ? m("div", { class: "mt-2 flex justify-end px-2" }, [
+          m(
+            Button,
+            {
+              variant: "ghost",
+              sm: true,
+              extra: "new-tab-start-more",
+              onclick: () => {
+                startShownCount = nextStartCount(startShownCount, START_OPTIONS.length);
+              },
+            },
+            SEE_MORE_LABEL,
+          ),
+        ])
+      : null;
+    return startSomethingSection(visibleStartOptions(START_OPTIONS, startShownCount), attrs, seeMore);
+  }
+
+  // ---------- "Start from a template" ----------
+
+  function openDetail(template: CatalogTemplate): void {
+    detailTemplate = template;
+  }
+
+  function templatesStatus(message: string): m.Vnode {
+    return m("p", { class: "new-tab-templates-status text-faint px-2 py-1 text-(length:--font-size-row)" }, message);
+  }
+
+  function templatesSection(catalog: TemplateCatalogState): m.Vnode | null {
+    if (catalog.kind === "disabled") return null;
+    let body: m.Children;
+    switch (catalog.kind) {
+      case "loading":
+        body = templatesStatus(TEMPLATES_LOADING_MESSAGE);
+        break;
+      case "failed":
+        body = templatesStatus(TEMPLATES_FAILED_MESSAGE);
+        break;
+      case "loaded":
+        body = m(TemplateShelves, { shelves: resolveShelves(catalog.catalog), onPick: openDetail });
+        break;
+    }
+    return m(
+      "section",
+      {
+        class: "new-tab-templates mt-10",
+        oncreate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
+        onupdate: (vnode: m.VnodeDOM) => scrollToTemplatesIfPending(vnode.dom as HTMLElement),
+      },
+      [m("h2", { class: `${SECTION_HEADING_CLASS} px-2` }, TEMPLATES_TITLE), body],
+    );
+  }
+
+  function scrollToTemplatesIfPending(section: HTMLElement): void {
+    if (!isScrollToTemplatesPending) return;
+    isScrollToTemplatesPending = false;
+    section.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ---------- search results ----------
+
+  function searchResults(attrs: NewTabLauncherAttrs, nowMs: number): m.Children {
+    const trimmed = query.trim();
+    const actionTiles = searchTiles(attrs.tiles, trimmed);
+    const rows = searchLauncherRows(attrs.rows, trimmed);
+    const starts = searchStartOptions(START_OPTIONS, trimmed);
+    const templates = attrs.catalog.kind === "loaded" ? searchTemplates(attrs.catalog.catalog.templates, trimmed) : [];
+
+    if (actionTiles.length === 0 && rows.length === 0 && starts.length === 0 && templates.length === 0) {
+      return m("p", { class: "new-tab-launcher-no-matches mt-6 px-2 type-body text-secondary" }, [
+        "Nothing matches “",
+        m("span", { class: "text-primary" }, trimmed),
+        "”.",
+      ]);
+    }
+
+    return [
+      actionTiles.length === 0 && rows.length === 0
+        ? null
+        : sectionView({ key: "on-machine", title: ON_MACHINE_TITLE, rows }, attrs, nowMs, actionTiles),
+      starts.length === 0 ? null : startSomethingSection(starts, attrs, null),
+      templates.length === 0
+        ? null
+        : m("section", { class: "new-tab-templates mt-6" }, [
+            m("h2", { class: `${SECTION_HEADING_CLASS} mb-2 px-2` }, SEARCH_TEMPLATES_TITLE),
+            m(
+              "div",
+              { class: "grid grid-cols-4 gap-6 px-2" },
+              templates.map((template) =>
+                m(TemplateCard, { key: template.slug, template, isFill: true, onPick: openDetail }),
+              ),
+            ),
+          ]),
+    ];
+  }
+
+  // ---------- the page ----------
+
+  function restingPage(attrs: NewTabLauncherAttrs, nowMs: number): m.Children {
+    return [
+      openNewSection(attrs),
+      restingSections(attrs.rows, attrs.memberRows, attrs.isEverything).map((section) =>
+        sectionView(section, attrs, nowMs, []),
+      ),
+      // The page's one real break: above it is what you already have, below it is what you could start.
+      m("div", { class: "new-tab-launcher-rule mt-6 border-t border-dashed border-default" }),
+      pagedStartSomethingSection(attrs),
+      templatesSection(attrs.catalog),
+    ];
   }
 
   return {
     view(vnode) {
       const attrs = vnode.attrs;
       const nowMs = attrs.nowMs ?? Date.now();
-      const sections = buildLauncherSections(attrs.rows, attrs.memberRows, attrs.isEverything);
+      const promptStart = promptStartDisabling(attrs);
 
-      return m("div", { class: "new-tab-launcher bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
-        m("div", { class: "mx-auto w-full max-w-4xl" }, [
-          m(
-            "h2",
-            { class: `${SECTION_HEADING_CLASS} mb-2 px-2` },
-            attrs.isAwaitingCreate === true ? STARTING_TITLE : OPEN_NEW_TITLE,
-          ),
-          m(
-            "div",
-            { class: "flex gap-2 px-2" },
-            openNewTiles().map((tile) => {
-              // A tile stands down while this pane is starting something --
-              // both so a second click cannot start a second object, and so
-              // the wait is visible at all. The files tile additionally stands
-              // down when no app backs it (a workspace from before the dufs
-              // service shipped).
-              const isUnbackedFilesTile = tile.target.kind === "files" && !isFileViewerBacked();
-              const isChatTile = tile.target.kind === "chat";
-              const isDisabled = isUnbackedFilesTile || attrs.isAwaitingCreate === true;
-              return m(
-                "div",
-                {
-                  key: tile.label,
-                  // The frame belongs to the whole chat control, so the provider picker sits
-                  // INSIDE it: same height, border, radius and type size as the other three,
-                  // with one hairline divider between the two halves.
-                  //
-                  // It takes 1.7 shares because it holds TWO things. At an equal share the
-                  // account name -- the wider half -- wins the space and truncates the label to
-                  // a letter or two.
-                  class:
-                    "border-border flex h-9 items-stretch overflow-hidden rounded-lg border " +
-                    (isChatTile ? "min-w-0 flex-[1.7]" : "min-w-0 flex-1") +
-                    (isDisabled ? " text-text-faint" : " text-text-primary"),
-                },
-                [
-                  m(
-                    "button",
-                    {
-                      type: "button",
-                      "aria-disabled": isDisabled ? "true" : undefined,
-                      class:
-                        "new-tab-launcher-tile flex min-w-0 flex-1 items-center justify-center gap-2 px-4 " +
-                        "text-[13px] font-medium " +
-                        (isDisabled ? "cursor-not-allowed" : "hover:bg-bg-hover cursor-pointer"),
-                      onclick: isDisabled ? undefined : () => attrs.onOpenNew(tile.target),
-                      // Every idle tile explains what it starts (the rail's own
-                      // copy for the same four kinds), except the unbacked file
-                      // viewer, whose tooltip says why it cannot act instead. No
-                      // tooltip at all while a create is in flight: every tile is
-                      // down then, and neither message would be the reason.
-                      //
-                      // On the BUTTON rather than the tile, which is a container on this
-                      // branch: the chat tile also holds the provider picker, and a tooltip
-                      // on the wrapper would follow the pointer onto the picker and describe
-                      // the wrong control.
-                      ...(attrs.isAwaitingCreate === true
-                        ? {}
-                        : hoverTooltipAttrs(
-                            isUnbackedFilesTile ? FILE_VIEWER_TOOLTIP : SHORTCUT_TOOLTIPS[tile.target.kind],
-                          )),
-                    },
-                    [
-                      m(
-                        "span",
-                        { class: "text-text-faint flex shrink-0 items-center" },
-                        m.trust(launcherIcon(tile.target.kind, GLYPH_SIZE)),
-                      ),
-                      // Truncates rather than wrapping: a second line would change
-                      // the tile's height and break the row of tiles out of its
-                      // rhythm, and the label is the only part that can overflow.
-                      m("span", { class: "min-w-0 truncate" }, tile.label),
-                    ],
-                  ),
-                  isChatTile ? m("span", { class: "bg-border w-px self-stretch" }) : null,
-                  isChatTile ? m(ProviderPicker, { onOpenNew: attrs.onOpenNew }) : null,
-                ],
-              );
-            }),
-          ),
-          sections.map((section) => sectionView(section, attrs, nowMs)),
+      // ``@container``, not a media query, and every step below is a PANE width: this page is a
+      // dock panel that can be split to a sliver while the window stays wide, so a media query
+      // would keep the tiles four-up the whole way down.
+      return m("div", { class: "new-tab-launcher @container bg-surface h-full w-full overflow-y-auto px-6 py-5" }, [
+        m("div", { class: "mx-auto w-full max-w-4xl pb-12" }, [
+          m("div", { class: "mb-6 px-2" }, searchField()),
+          isSearching() ? searchResults(attrs, nowMs) : restingPage(attrs, nowMs),
         ]),
+        detailTemplate === null
+          ? null
+          : m(TemplateDetailModal, {
+              template: detailTemplate,
+              isStartDisabled: promptStart.isDisabled,
+              startDisabledReason: promptStart.reason,
+              onClose: () => {
+                detailTemplate = null;
+              },
+              onAdopt: (template: CatalogTemplate) => {
+                detailTemplate = null;
+                startChat(attrs, adoptTemplateMessage(template));
+              },
+              onCreateMachine: (template: CatalogTemplate) => {
+                detailTemplate = null;
+                startChat(attrs, createMachineFromTemplateMessage(template));
+              },
+            }),
       ]);
     },
   };
