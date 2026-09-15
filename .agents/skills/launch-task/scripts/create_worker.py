@@ -54,8 +54,8 @@ worker side:
     ``.agents/shared/references/lead-proxy.md``. Callers run this in the
     *background* and then **end the turn**: the completion wakes the agent and
     carries the report, so sleeping against it only adds the gap between the
-    report landing and the sleep expiring (see ``lead-proxy.md``, "Never sleep
-    on a worker"). Re-invoke it once per gate cycle. The archive step is what
+    report landing and the sleep expiring (see the "Never sleep on a worker"
+    section of ``lead-proxy.md``). Re-invoke it once per gate cycle. The archive step is what
     makes re-invocation safe: ``launch`` refuses to start while anything sits at
     ``finish_report_path`` (or an unconsumed milestone beside it), so a relaunch
     after a gate would otherwise trip that guard until the lead moved the file

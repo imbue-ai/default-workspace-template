@@ -788,8 +788,10 @@ extra_provision_command__extend = [
 # Short-timeout overlay for the workspaces an eval run creates. Always stacked on top
 # of `modal` (`--template modal --template modal_eval`), mirroring how `docker_runsc`
 # overlays `docker`: it reuses the entire `modal` body and only shortens the sandbox
-# timeout to 4h10m (14910 + the provider's 90s shutdown buffer = 15000s, which is what
-# the roadmap case's two 80m+ steps and their evidence phases need). An eval trial
+# timeout to 15000s (14910 + the provider's 90s shutdown buffer). minds-evals sets
+# that number, not an observation: a stepped case needs timeout_seconds + steps *
+# (verification_timeout_seconds + 1500) to fit under it, and the roadmap case needs
+# 12000 + 2 * (600 + 300 + 600). Recompute from that if either input moves. An eval trial
 # tears its own workspaces down when it finishes, so this timeout is the backstop for
 # the case where the driver dies without doing so -- which is why it bounds how long a
 # stepped case's steps may run together, and why raising it costs only a longer leak in

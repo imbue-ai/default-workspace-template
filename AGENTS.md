@@ -239,7 +239,7 @@ The upstream is defined in `system/config/parent.toml`.
 
   For non-skill contract-bearing files (hook scripts, this file) there is no worker pipeline -- apply the live change carefully and add manual rigor at turn-end (real fixtures, end-to-end exercise of new code paths).
 
-- **A change to hardened code carries its tests.** When you change code a harden pass already covered, extend that code's tests in the same commit. Code that was tested and now is not is a regression even when it works.
+- **A change to hardened code carries its tests.** When you change code a harden pass already covered, extend that code's tests in the same commit. Code a change leaves untested is a regression even when it works.
 
 # Apps and services
 

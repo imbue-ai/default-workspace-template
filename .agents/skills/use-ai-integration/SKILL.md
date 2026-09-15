@@ -15,7 +15,7 @@ how.
 
 Code reaches Claude in one of two ways, depending on whether an
 `ANTHROPIC_API_KEY` is configured for the workspace: with a key, call `litellm`
-directly; without one, use the `claude -p` helper in this skill's own
+directly; without one, use the `claude -p` helper in this skill's
 `scripts/claude_p.py`.
 
 Credentials live in a provider account under `~/.minds/accounts/<id>/`, written

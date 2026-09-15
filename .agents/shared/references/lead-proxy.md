@@ -33,20 +33,17 @@ liveness" below.
 
 ### Never sleep on a worker
 
-Arming the poll is half of it; what you do next is the other half. Once the poll
-is armed, **end your turn**. The command's completion wakes you within seconds
-and carries the report. Do not issue `sleep N` against a worker: it is a guess at
-someone else's finishing time, and every second between the report landing and
-your sleep expiring is dead time on the critical path. Ending your turn here is
-safe -- a worker with a live sub-worker of its own never counts as idle, so the
-liveness check below will not mistake you for a wedged one.
+Once the poll is armed, **end your turn**: its completion wakes you with the
+report in seconds, while a `sleep N` is a guess at someone else's finishing time
+and every second between the report landing and the sleep expiring is dead time
+on the critical path. Ending your turn is safe -- a worker with a live
+sub-worker of its own never counts as idle, so the liveness check below will not
+mistake you for a wedged one.
 
-This is a rule about waiting, not about one command: **a worker's report is never
-polled.** The only sanctioned wait on a sibling is an armed `await` plus ending
-the turn. Sleeping on a `find` over its reports directory, on `mngr list`, or on
-`tmux capture-pane` against its pane is the same blind guess wearing a different
-command, and it costs the same dead time -- `await` already watches exactly those
-files and returns the moment one lands.
+**A worker's report is never polled.** Sleeping on a `find` over its reports
+directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
+same guess in a different command; an armed `await` plus ending the turn is the
+only sanctioned wait on a sibling.
 
 With several workers out, arm one poll per worker before ending the turn. Each
 completion wakes you separately, so you act on whichever reports first and merge
@@ -181,13 +178,13 @@ git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <
 
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
 is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
-its tab refreshed. You do that refresh -- never hand it to the user as a step
-they have to take. The calling skill's end-of-pass work (post-crystallize
-migration, closing the ticket) still waits for `done`.
+its tab refreshed. You do that refresh -- never hand it to the user. The calling
+skill's end-of-pass work (post-crystallize migration, closing the ticket) still
+waits for `done`.
 
 Tell the user in one line and in non-technical language what's been updated. The
-report body you just read is written for you, not for them: say what they can
-now do, never what was tested, found or fixed.
+report body you just read is written for you, not them -- say what they can now
+do, never what was tested, found or fixed:
   "Added a reusable skill."
   "Created an MVP app, using it now while it continues to be improved."
 

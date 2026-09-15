@@ -53,8 +53,8 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 import tempfile
+import time
 import tomllib
 import uuid
 from pathlib import Path
@@ -595,13 +595,15 @@ def _remove_abandoned_clones(work_repo_parent: Path) -> None:
 
     The clone is torn down in the test's ``finally``, which covers a pass and a
     failure but not an interrupt -- a Ctrl-C, a pytest timeout kill, or an OOM shed
-    leaves the whole clone behind. That debris is not inert: it is a full copy of
-    the tree under the repo root, so the next run's ``system/test_meta_ratchets.py``
-    counts every pattern twice and fails with nothing in its output pointing at the
-    cause.
+    leaves the whole clone behind, vendored subtree included. ``norecursedirs``
+    and the ratchets' own prune list now keep a bare ``uv run pytest`` off it, so
+    this sweep is about disk rather than a broken suite -- and it runs only on a
+    deliberate run of this test, since the marker below skips the body.
 
-    Only clones older than this test's own timeout are removed, so a run that is
-    still in flight is never touched.
+    Only clones whose directory mtime -- in practice their creation time, since
+    the work happens in subdirectories -- predates this test's own timeout are
+    removed. That the cutoff and the pytest timeout share a constant is what
+    makes an in-flight run safe.
     """
     cutoff = time.time() - _TEST_TIMEOUT_SECONDS
     for candidate in work_repo_parent.glob(f"{_CLONE_DIR_PREFIX}*"):
@@ -663,7 +665,7 @@ def _clone_repo_at_head(
 # `uv run pytest` inside a workspace, which is what a harden pass runs, executed it
 # in full. Skipping unconditionally makes that asymmetry explicit; drop this marker
 # to run it deliberately.
-@pytest.mark.skip(reason="requires claude and credentials")
+@pytest.mark.skip(reason="expensive live test; drop this marker to run it deliberately")
 @pytest.mark.timeout(_TEST_TIMEOUT_SECONDS, func_only=False)
 def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -922,11 +924,6 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
 def test_an_abandoned_clone_is_removed_but_a_live_one_is_left_alone(
     tmp_path: Path,
 ) -> None:
-    """The interrupt case: debris older than the timeout goes, anything else stays.
-
-    An interrupted run is the only way a clone outlives the test, so this is the
-    path that actually matters -- and the one the ``finally`` block cannot cover.
-    """
     abandoned = tmp_path / f"{_CLONE_DIR_PREFIX}aaaaaaaaaaaa"
     in_flight = tmp_path / f"{_CLONE_DIR_PREFIX}bbbbbbbbbbbb"
     unrelated = tmp_path / "something-else"

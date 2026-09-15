@@ -2,7 +2,7 @@
 
 - The crystallize worker may split a harden pass across sibling sub-workers and
   merge them itself.
-- Splitting is now the worker's own size-based call rather than a standing order
+- Splitting is now the worker's own call rather than a standing order
   in every crystallize task file. The call is made on the parts a user would name
   separately -- the code that reads the data, the server, a front end with
   several views -- rather than on how much code each already holds, because a

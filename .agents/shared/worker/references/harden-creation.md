@@ -98,13 +98,12 @@ the scope file's `context` and is counted as inside the footprint.
 ## Splitting the pass across sub-workers
 
 Split the pass across sibling sub-workers when the creation has two or more
-parts a user would name separately -- the code that reads the data, the server,
-a front end with several views, one of two unrelated features -- and each has
-enough in it to keep a worker busy; otherwise harden it yourself, since every
-sibling pays a venv converge and a plugin install before it does any work. A
-page with three views over an ingested export splits: the interface is one
-worker's job and the ingestion is another's. A single page whose backend only
-serves it does not, nor do a few small files or a script.
+parts a user would name separately and each is a whole job once tested;
+otherwise harden it yourself, since every sibling pays a venv converge and a
+plugin install before it does any work. A page with three views over an ingested
+export splits: the interface is one worker's job and the ingestion is another's.
+Two unrelated features split too. A single page whose backend only serves it
+does not, nor do a few small files or a script.
 
 Launch each sibling with the launch-task skill exactly as a chat agent would
 (`.agents/skills/launch-task/SKILL.md`). Name each sibling with your own worker
@@ -129,7 +128,7 @@ a stuck one, and await it with `--timeout 60m`.
   immediately (`mngr message`) rather than let it find out at merge time.
 - Merge the siblings in a fixed order and resolve any conflicts yourself. Then
   run exactly the verification a direct pass runs -- the "Review gates" section
-  below, scoped to your own footprint rather than any sibling's -- once on the
+  below, against your own scope file, not a sibling's -- once on the
   merged result, and report `done` with the same body a direct pass would.
 
 ## Testing and hardening contract

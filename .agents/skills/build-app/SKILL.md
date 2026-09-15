@@ -76,8 +76,7 @@ against real data.
 If you were **not** sent here and the app reads records that come from outside
 itself -- an upload, an export, an API, a third-party service -- stop and run
 `fetch-process-show` first; come back with its confirmed sample. Reading and
-normalizing those records is its job, and where fresh batches keep arriving it
-routes on to `data-pipeline-builder`. An app whose ingestion you wrote here
+normalizing those records is its job. An app whose ingestion you wrote here
 instead has no entry point anyone can re-run when the next batch lands.
 
 ## Step 0: Clarify and plan (business terms only)
@@ -332,8 +331,8 @@ If your service renders HTML that a person will look at (anything
 beyond a pure JSON API, a webhook receiver, or a transparent proxy of
 a third-party tool), you must invoke the `frontend-design:frontend-design`
 skill **before** writing the markup. Always do this before working on UI,
-regardless of the scope of the work. It ships as a plugin, so the bare name
-`frontend-design` does not resolve -- the `plugin:skill` form is the whole name.
+regardless of the scope of the work. It ships as a plugin: the bare name
+`frontend-design` does not resolve.
 
 Skip this step for routes that emit only JSON, only redirects, or that
 serve an existing third-party UI through the escape hatch below --

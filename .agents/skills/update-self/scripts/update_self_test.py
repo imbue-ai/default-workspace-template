@@ -1737,7 +1737,9 @@ _APP_TOOLS = update_classification.read_app_tools(_WORKSPACE_ROOT)
 
 # What a change to a *shared* manifest has to fan out to. Read off the tree
 # rather than spelled out, because a workspace accumulates apps the user built:
-# naming the template's five here would make every new app fail this file.
+# spelling the template's apps out here would make every app the user adds fail
+# these four cases. The sibling cases below still name single apps literally, so
+# an _APP_TOOLS that silently lost an entry still fails the file.
 _EVERY_APP_TOOL = {app.tool_name for app in _APP_TOOLS}
 
 
