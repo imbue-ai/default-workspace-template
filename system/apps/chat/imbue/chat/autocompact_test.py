@@ -1,10 +1,11 @@
+import inspect
 import threading
 from collections.abc import Sequence
 
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.mngr.utils.polling import poll_until
-from imbue.chat.autocompact import DEFAULT_CHECK_CONCURRENCY
+from imbue.chat.autocompact import _DEFAULT_CHECK_CONCURRENCY
 from imbue.chat.autocompact import ChatAutoCompactor
 
 
@@ -26,8 +27,8 @@ def _make_finished_process(
 
 def test_default_check_concurrency() -> None:
     compactor = ChatAutoCompactor.build(list_running_chat_agent_names=lambda: [])
-    assert compactor._max_concurrency == DEFAULT_CHECK_CONCURRENCY
-    assert DEFAULT_CHECK_CONCURRENCY == 4
+    assert compactor._max_concurrency == _DEFAULT_CHECK_CONCURRENCY
+    assert _DEFAULT_CHECK_CONCURRENCY == 4
 
 
 def test_check_agent_success() -> None:
@@ -37,7 +38,9 @@ def test_check_agent_success() -> None:
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         recorded_commands.append(list(command))
         recorded_kwargs.update(kwargs)
-        return _make_finished_process(command=command, returncode=0, stdout="No agents require compaction.")
+        return _make_finished_process(
+            command=command, returncode=0, stdout="No agents require compaction."
+        )
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-1"],
@@ -53,7 +56,9 @@ def test_check_agent_success() -> None:
 
 
 def test_check_agent_nonzero_exit_handled_gracefully() -> None:
-    def fake_runner(command: Sequence[str], is_checked: bool = True, **kwargs: object) -> FinishedProcess:
+    def fake_runner(
+        command: Sequence[str], is_checked: bool = True, **kwargs: object
+    ) -> FinishedProcess:
         res = _make_finished_process(
             command=command,
             returncode=1,

@@ -7,7 +7,6 @@ from typing import Final
 from loguru import logger
 
 from imbue.concurrency_group.errors import ProcessError
-from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 
@@ -68,11 +67,11 @@ class ChatAutoCompactor:
         self._thread = thread
         thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self) -> None:
         """Signal the background sweep to stop and wait for thread termination."""
         self._stop_event.set()
         if self._thread is not None:
-            self._thread.join(timeout=timeout)
+            self._thread.join(timeout=self._command_timeout_seconds + 5)
             self._thread = None
 
     def sweep(self) -> list[FinishedProcess | None]:
@@ -105,7 +104,7 @@ class ChatAutoCompactor:
                 is_checked=True,
                 timeout=self._command_timeout_seconds,
             )
-        except (ProcessError, ProcessSetupError, OSError) as e:
+        except (ProcessError, OSError) as e:
             logger.warning("Failed to run autocompact for {}: {}", agent_name, e)
             return None
 
