@@ -461,7 +461,7 @@ def test_queued_message_group_renders_with_actions(tmp_path: Path, page: Page) -
 def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page) -> None:
     """A chat whose transcript fetch failed recovers on Refresh, without reloading the page."""
     with _running_e2e_server(tmp_path) as server:
-        events_url = "**/api/agents/*/events"
+        events_url = "**/api/chats/*/events"
         page.route(
             events_url,
             lambda route: route.fulfill(status=503, content_type="text/plain", body="Backend not yet available"),

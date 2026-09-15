@@ -32,6 +32,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -94,7 +95,12 @@ _TEXT_PLACEHOLDERS = {
     "<BODY_FILE>": "data/.tasks/launch-task/demo/body.md",
     "$FINISH_REPORT_PATH": "data/.tasks/launch-task/demo/reports/report.md",
 }
-_LEAD_NAME = "lead-demo"
+# The launching agent's own mngr id: what ``launch`` stamps as ``lead_agent``
+# and labels the worker with, so neither survives a rename of the lead's chat.
+_LEAD_ID = "agent-lead0000000000000000000000000demo"
+# What ``mngr create --format jsonl`` prints, naming the worker's own id.
+_WORKER_ID = "agent-0000000000000000000000000worker"
+_CREATED_EVENT = '{"event": "created", "agent_id": "%s"}\n' % _WORKER_ID
 
 
 @dataclass
@@ -120,7 +126,9 @@ class _RecordingRunner(create_worker.Runner):
     The two real git probes launch makes before it creates anything are
     answered here: ``git status --porcelain`` reads as a clean tree, and ``git
     rev-parse --show-toplevel`` names ``repo_root`` -- the temporary directory
-    each test runs the prose in, standing in for the lead's checkout.
+    each test runs the prose in, standing in for the lead's checkout. The create
+    answers with its ``created`` event, as the live CLI does, so the task message
+    is addressed by the worker's id.
     """
 
     repo_root: Path
@@ -130,6 +138,8 @@ class _RecordingRunner(create_worker.Runner):
         self.calls.append(_RecordedCall(argv=list(argv), kwargs=kwargs))
         if list(argv)[:2] == ["git", "rev-parse"]:
             return _CleanResult(stdout=f"{self.repo_root}\n")
+        if list(argv)[:2] == ["mngr", "create"]:
+            return _CleanResult(stdout=_CREATED_EVENT)
         return _CleanResult()
 
 
@@ -285,7 +295,7 @@ def _run_task_block(dispatcher: _Dispatcher, cwd: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     env = {
         **_PLACEHOLDER_ENV,
-        "MNGR_AGENT_NAME": _LEAD_NAME,
+        "MNGR_AGENT_ID": _LEAD_ID,
         "PATH": os.environ["PATH"],
     }
     block = _substitute(dispatcher.task_block)
@@ -354,7 +364,7 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     and the launcher stamps (and labels) the lead's address and stamps the task
     file's own path, so the worker's parse sees both."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("MNGR_AGENT_NAME", _LEAD_NAME)
+    monkeypatch.setenv("MNGR_AGENT_ID", _LEAD_ID)
     task_file = _run_task_block(dispatcher, tmp_path)
     runner = _RecordingRunner(repo_root=tmp_path)
     launch_argv = [_substitute(word) for word in dispatcher.launch_argv]
@@ -377,9 +387,9 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
         "--uncommitted-changes=clobber",
     ] in argvs
     assert argvs[-1] == [
-        "mngr",
-        "message",
-        worker_name,
+        sys.executable,
+        str(create_worker._repo_root() / "system" / "scripts" / "message_chat.py"),
+        _WORKER_ID,
         "--message-file",
         str(task_file.relative_to(tmp_path)),
     ]
@@ -393,7 +403,7 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
     # itself used: the lead that will poll for the report, and the very path
     # the task file was messaged from (repo-relative -- tmp_path stands in for
     # the lead's checkout root).
-    assert frontmatter["lead_agent"] == _LEAD_NAME
+    assert frontmatter["lead_agent"] == _LEAD_ID
     assert frontmatter["task_file"] == dispatcher.launch_option("--task-file")
     create_argv = next(argv for argv in argvs if argv[:2] == ["mngr", "create"])
     labels = dict(
@@ -401,7 +411,7 @@ def test_launch_on_the_real_task_file_syncs_runtime_dir_and_addresses_the_worker
         for i in range(len(create_argv) - 1)
         if create_argv[i] == "--label"
     )
-    assert labels["lead_agent"] == _LEAD_NAME
+    assert labels["lead_agent"] == _LEAD_ID
     # The runtime dir the prose synced is the one the worker's record names,
     # repo-relative, so a later destroy can pull it out of the lead's tree.
     assert labels["runtime_dir"] == runtime_dir.rstrip("/")

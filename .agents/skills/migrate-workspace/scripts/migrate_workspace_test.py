@@ -10,7 +10,10 @@ the recreate argv and its labels, port reconciliation, and the audit patterns.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _MODULE_PATH = Path(__file__).with_name("migrate_workspace.py")
 _spec = importlib.util.spec_from_file_location("migrate_workspace", _MODULE_PATH)
@@ -476,9 +479,21 @@ def test_parse_supervisord_ports_names_a_manifest_registration_after_its_program
     ]
 
 
-def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
-    conf = Path(__file__).resolve().parents[4] / "system" / "supervisord.conf"
-    ports = migrate_workspace.parse_supervisord_ports(conf.read_text(encoding="utf-8"))
+def test_parse_supervisord_ports_reads_the_real_template_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read through the scan's own file list rather than a copy of it, so this checks the parser
+    # against the config the scan is actually given: the main file plus its drop-ins, which is
+    # where every program now lives. A hand-rolled list would keep passing if the scan itself
+    # stopped finding the drop-ins. The list is relative to the workspace root, hence the chdir.
+    monkeypatch.chdir(Path(__file__).resolve().parents[4])
+    ports = [
+        port
+        for conf in migrate_workspace._local_supervisord_configs(Path())
+        for port in migrate_workspace.parse_supervisord_ports(
+            conf.read_text(encoding="utf-8")
+        )
+    ]
     # The chat, the terminal and the files app register from inside their own processes
     # (the registry scan covers them), so the config itself names the other two.
     assert {(port.name, port.port) for port in ports} >= {
@@ -487,6 +502,69 @@ def test_parse_supervisord_ports_reads_the_real_template_config() -> None:
     }
     assert not {port.name for port in ports} & {"terminal", "files", "chat"}
     assert [port.name for port in ports].count("system_interface") == 1
+
+
+def _write_dropin_workspace(root: Path) -> Path:
+    """A workspace with two drop-ins, a directory named like one, and a decoy directory beside them.
+
+    ``archive.conf/`` is what the listing must skip (it lists regular files only), and
+    ``programs.d/`` holds a program no reader of this template is meant to find: the drop-in
+    directory is fixed, not read out of the config.
+    """
+    dropins = root / "system" / "supervisord.conf.d"
+    dropins.mkdir(parents=True)
+    for program in ("alpha", "beta"):
+        (dropins / f"{program}.conf").write_text(f"[program:{program}]\ncommand={program}-app\n")
+    (dropins / "archive.conf").mkdir()
+    (root / "system" / "programs.d").mkdir()
+    (root / "system" / "programs.d" / "ghost.conf").write_text("[program:ghost]\ncommand=ghost-app\n")
+    conf = root / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n")
+    return conf
+
+
+def _run_dropin_listing(supervisord_conf: Path) -> list[str]:
+    """What the listing shell prints for that config, through a real shell instead of over SSH.
+
+    Run from the filesystem root, which is neither the workspace nor the config's directory: the
+    login shell this really runs in is not ours to choose.
+    """
+    command = migrate_workspace._supervisord_dropin_listing_command(str(supervisord_conf))
+    listing = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(supervisord_conf.anchor),
+        timeout=60,
+    ).stdout
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
+@pytest.mark.parametrize("directory_name", ["workspace", "with space", "amp&and"])
+def test_remote_dropin_listing_names_every_regular_file_in_the_dropin_directory(
+    tmp_path: Path, directory_name: str
+) -> None:
+    """The listing is the source's ``system/supervisord.conf.d/*.conf`` and nothing else.
+
+    The source's path is interpolated into the shell, so one holding a space or an ``&`` has to
+    stay one path: splitting it costs the listing every drop-in at once, which is the same empty
+    answer a source with none gives, so every real app's port is reported free.
+    """
+    conf = _write_dropin_workspace(tmp_path / directory_name)
+
+    assert _run_dropin_listing(conf) == [
+        str(tmp_path / directory_name / "system/supervisord.conf.d/alpha.conf"),
+        str(tmp_path / directory_name / "system/supervisord.conf.d/beta.conf"),
+    ]
+
+
+def test_remote_dropin_listing_is_empty_for_a_source_predating_the_split(tmp_path: Path) -> None:
+    (tmp_path / "system").mkdir()
+    conf = tmp_path / "system" / "supervisord.conf"
+    conf.write_text("[supervisord]\nnodaemon=true\n\n[program:todo]\ncommand=todo-app\n")
+
+    assert _run_dropin_listing(conf) == []
 
 
 def test_parse_apps_registry_accepts_both_registry_vintages() -> None:

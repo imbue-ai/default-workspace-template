@@ -18,3 +18,7 @@ footprint:`. The `type-skill.md` side is the reverse lookup: a skill that calls
 an app's routes, CLI, or store checks `app-manifest references --for-path` and
 adds the missing entry to the app's manifest as part of its own change. The two
 code-guardian gates stay parked: no loaded reference names their invocations.
+The `update-self` worker's impact analysis reads those declarations too, so a
+template update that changes a file an app claims -- or that brings new
+declaration machinery with it -- no longer slips past a grep of code and
+skills.

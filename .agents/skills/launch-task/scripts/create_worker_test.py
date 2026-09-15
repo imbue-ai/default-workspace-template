@@ -28,6 +28,13 @@ import pytest
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 _SCRIPT = Path(__file__).parent / "create_worker.py"
+_MESSAGE_CHAT_SCRIPT = (
+    Path(__file__).resolve().parents[4] / "system" / "scripts" / "message_chat.py"
+)
+_WORKER_ID = "agent-00000000000000000000000000abcdef"
+_CREATED_EVENT = (
+    json.dumps({"event": "created", "agent_id": _WORKER_ID, "host_id": "host-1"}) + "\n"
+)
 _spec = importlib.util.spec_from_file_location("create_worker", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 create_worker_mod = importlib.util.module_from_spec(_spec)
@@ -62,13 +69,19 @@ class _RecordingRunner(create_worker_mod.Runner):
     def run(self, argv: Sequence[str], **kwargs):
         argv_list = list(argv)
         self.calls.append(_RecordedCall(argv=argv_list, kwargs=kwargs))
+        # A create answers with its ``created`` event by default, as the live CLI does.
+        default = (
+            _StubResult(stdout=_CREATED_EVENT)
+            if tuple(argv_list[:2]) == ("mngr", "create")
+            else _StubResult()
+        )
         canned = next(
             (
                 self._responses[prefix]
                 for prefix in sorted(self._responses, key=len, reverse=True)
                 if tuple(argv_list[: len(prefix)]) == prefix
             ),
-            _StubResult(),
+            default,
         )
         if isinstance(canned, BaseException):
             raise canned
@@ -85,6 +98,12 @@ def _unique(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
 
 
+def _agent_id(name: str) -> str:
+    """The agent id a record for ``name`` carries, so a test can name an agent
+    once and have both its id and the label pointing at it stay consistent."""
+    return f"agent-{name}"
+
+
 def _agent_record(
     name: str,
     state: str,
@@ -95,17 +114,20 @@ def _agent_record(
 ) -> dict[str, object]:
     """One ``mngr list --format jsonl`` agent record, in mngr's own shape.
 
-    Mirrors ``AgentDetails``: ``resource_type``/``name``/``state``, the optional
-    ``labels`` map, and ``work_dir``.
+    Mirrors ``AgentDetails``: ``resource_type``/``id``/``name``/``state``, the
+    optional ``labels`` map, and ``work_dir``. ``lead_agent`` is given as the
+    lead's *name* for readability and stored as the id the launcher labels with,
+    which is what the dispatch tree is keyed on.
     """
     record: dict[str, object] = {
         "resource_type": "agent",
+        "id": _agent_id(name),
         "name": name,
         "state": state,
     }
     labels: dict[str, str] = {}
     if lead_agent is not None:
-        labels["lead_agent"] = lead_agent
+        labels["lead_agent"] = _agent_id(lead_agent)
     if runtime_dir is not None:
         labels["runtime_dir"] = runtime_dir
     if archived:
@@ -155,13 +177,43 @@ def _write_task(task: Path, source_artifacts_dir: str | None) -> None:
     task.write_text(f"---\n{fm}---\n\nbody\n")
 
 
+def _task_message_argv(task: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(_MESSAGE_CHAT_SCRIPT),
+        _WORKER_ID,
+        "--message-file",
+        str(task),
+    ]
+
+
+def _create_argv(runtime: Path, lead: str = "lead") -> list[str]:
+    """The `mngr create` argv launch builds: the OOM band, the lead edge and the
+    runtime dir as labels, and the jsonl format that names the worker's id."""
+    return [
+        "mngr",
+        "create",
+        "demo-worker",
+        "-t",
+        "worker",
+        "--label",
+        "agent_created=true",
+        "--format",
+        "jsonl",
+        "--label",
+        f"lead_agent={lead}",
+        "--label",
+        f"runtime_dir={runtime}",
+    ]
+
+
 def test_happy_path_no_artifacts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime, task, _ = _make_layout(tmp_path)
     # Outside an mngr agent the file's own `lead_agent: lead` is the resolved
     # lead, and that is what the label must carry.
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -178,19 +230,7 @@ def test_happy_path_no_artifacts(
         ["git", "status", "--porcelain"],
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
-        [
-            "mngr",
-            "create",
-            "demo-worker",
-            "-t",
-            "worker",
-            "--label",
-            "agent_created=true",
-            "--label",
-            "lead_agent=lead",
-            "--label",
-            f"runtime_dir={runtime}",
-        ],
+        _create_argv(runtime),
         [
             "mngr",
             "rsync",
@@ -198,8 +238,37 @@ def test_happy_path_no_artifacts(
             f"demo-worker:{runtime}/",
             "--uncommitted-changes=clobber",
         ],
-        ["mngr", "message", "demo-worker", "--message-file", str(task)],
+        _task_message_argv(task),
     ]
+    # The worker's id is read back from the create and stamped for ``reply``.
+    assert f"worker_agent_id: {_WORKER_ID}" in task.read_text()
+
+
+def test_launch_falls_back_to_mngr_message_by_name_when_the_create_reports_no_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runtime, task, _ = _make_layout(tmp_path)
+    runner = _RecordingRunner()
+    runner.respond(("mngr", "create"), _StubResult(stdout="not an event\n"))
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=runner,
+    )
+
+    assert rc == 0
+    assert runner.calls[-1].argv == [
+        "mngr",
+        "message",
+        "demo-worker",
+        "--message-file",
+        str(task),
+    ]
+    assert "worker_agent_id" not in task.read_text()
+    assert "reported no agent id" in capsys.readouterr().err
 
 
 def test_source_artifacts_dir_synced_after_runtime(tmp_path: Path) -> None:
@@ -250,7 +319,7 @@ def test_emitted_mngr_argv_accepted_by_live_cli(
     """
     runtime, task, artifacts = _make_layout(tmp_path)
     _write_task(task, str(artifacts))
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -263,18 +332,19 @@ def test_emitted_mngr_argv_accepted_by_live_cli(
 
     assert rc == 0
     mngr_calls = [c.argv for c in runner.calls if c.argv[:1] == ["mngr"]]
-    # Vacuity guard: the full lifecycle is create + two rsyncs + message, so we
-    # know the loop below actually validates four real invocations rather than
-    # passing on an empty list. This counts steps; it deliberately does NOT pin
-    # the subcommand names (that would re-introduce the hand-mirrored
-    # expectation this test exists to replace) -- assert_mngr_argv_valid is what
-    # confronts each argv with the live CLI.
-    assert len(mngr_calls) == 5
+    # Vacuity guard: the mngr half of the lifecycle is the pre-launch listing,
+    # create and two rsyncs (the task message goes through the chat messenger,
+    # not mngr), so we know the loop below actually validates four real
+    # invocations rather than passing on an empty list. This counts steps; it
+    # deliberately does NOT pin the subcommand names (that would re-introduce the
+    # hand-mirrored expectation this test exists to replace) --
+    # assert_mngr_argv_valid is what confronts each argv with the live CLI.
+    assert len(mngr_calls) == 4
     # Vacuity guard for the two argv details this launch newly depends on: the
     # lead label and the clobber sync mode have to be *in* what we validate,
     # or the loop below would prove nothing about either.
     flat = [word for argv in mngr_calls for word in argv]
-    assert "lead_agent=real-lead" in flat
+    assert "lead_agent=agent-real0000000000000000000000000lead" in flat
     assert "--uncommitted-changes=clobber" in flat
     for argv in mngr_calls:
         assert_mngr_argv_valid(argv)
@@ -417,7 +487,7 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
         ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
-        ["mngr", "message"],
+        [sys.executable, str(_MESSAGE_CHAT_SCRIPT)],
     ]
 
 
@@ -528,11 +598,11 @@ def test_malformed_frontmatter_does_not_abort_launch(tmp_path: Path) -> None:
 def test_lead_agent_stamped_from_env_over_literal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A literal, unexpanded ``$MNGR_AGENT_NAME`` is replaced with the launching
-    agent's real name so the worker has a valid address to send its report to."""
+    """A literal, unexpanded ``$MNGR_AGENT_ID`` is replaced with the launching
+    agent's real id so the worker has a valid address to send its report to."""
     runtime, task, _ = _make_layout(tmp_path)
-    task.write_text("---\nlead_agent: $MNGR_AGENT_NAME\n---\n\nbody\n")
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    task.write_text("---\nlead_agent: $MNGR_AGENT_ID\n---\n\nbody\n")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -545,31 +615,63 @@ def test_lead_agent_stamped_from_env_over_literal(
 
     assert rc == 0
     body = task.read_text()
-    assert "lead_agent: real-lead" in body
-    assert "$MNGR_AGENT_NAME" not in body
-    assert [
-        "mngr",
-        "create",
-        "demo-worker",
-        "-t",
-        "worker",
-        "--label",
-        "agent_created=true",
-        "--label",
-        "lead_agent=real-lead",
-        "--label",
-        f"runtime_dir={runtime}",
-    ] in [c.argv for c in runner.calls]
+    assert "lead_agent: agent-real0000000000000000000000000lead" in body
+    assert "$MNGR_AGENT_ID" not in body
+    assert _create_argv(runtime, "agent-real0000000000000000000000000lead") in [
+        c.argv for c in runner.calls
+    ]
+
+
+def test_lead_work_dir_stamped_from_env_beside_the_lead_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lead's work dir is stamped with its id, so the worker can write its report
+    straight into the lead's checkout; without it in the environment the field is left
+    alone (a manual launch outside an agent)."""
+    runtime, task, _ = _make_layout(tmp_path)
+    task.write_text("---\nfinish_report_path: reports/report.md\n---\n\nbody\n")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", "/home/user/.mngr/worktrees/lead")
+
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=_RecordingRunner(),
+    )
+
+    assert rc == 0
+    body = task.read_text()
+    assert "lead_agent: agent-real0000000000000000000000000lead" in body
+    assert "lead_work_dir: /home/user/.mngr/worktrees/lead" in body
+    assert "finish_report_path: reports/report.md" in body
+
+    monkeypatch.delenv("MNGR_AGENT_WORK_DIR")
+    task.write_text("---\nfinish_report_path: reports/report.md\n---\n\nbody\n")
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime,
+        task_file=task,
+        runner=_RecordingRunner(),
+    )
+    assert rc == 0
+    # Anchored on the frontmatter key: the stamped `task_file` path carries the
+    # test's own name, which contains this string.
+    assert "\nlead_work_dir:" not in task.read_text()
 
 
 def test_lead_agent_env_overrides_resolved_file_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The launcher's own identity is authoritative: even a plain, resolved
-    file value is overwritten with MNGR_AGENT_NAME (the agent that polls for the
-    report). The file value is never trusted when the env names the launcher."""
+    file value is overwritten with MNGR_AGENT_ID (the agent that polls for the
+    report). The file value is never trusted when the env names the launcher, and
+    the id is what is stamped -- never the launcher's name, which a rename changes."""
     runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -581,7 +683,8 @@ def test_lead_agent_env_overrides_resolved_file_value(
     )
 
     assert rc == 0
-    assert "lead_agent: real-lead" in task.read_text()
+    assert "lead_agent: agent-real0000000000000000000000000lead" in task.read_text()
+    assert "real-lead" not in task.read_text()
 
 
 def test_lead_agent_injected_when_field_absent(
@@ -591,7 +694,7 @@ def test_lead_agent_injected_when_field_absent(
     the environment -- authors no longer need to set it."""
     runtime, task, _ = _make_layout(tmp_path)
     task.write_text("---\nfinish_report_path: r/report.md\n---\n\nbody\n")
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -604,19 +707,19 @@ def test_lead_agent_injected_when_field_absent(
 
     assert rc == 0
     body = task.read_text()
-    assert "lead_agent: real-lead" in body
+    assert "lead_agent: agent-real0000000000000000000000000lead" in body
     assert "finish_report_path: r/report.md" in body  # sibling field preserved
 
 
 def test_unresolved_lead_agent_without_env_is_fatal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """If the launcher cannot name itself (no MNGR_AGENT_NAME) and the file value
+    """If the launcher cannot name itself (no MNGR_AGENT_ID) and the file value
     is unresolved, fail before provisioning rather than launch an unaddressable
     worker."""
     runtime, task, _ = _make_layout(tmp_path)
-    task.write_text("---\nlead_agent: $MNGR_AGENT_NAME\n---\n\nbody\n")
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    task.write_text("---\nlead_agent: $MNGR_AGENT_ID\n---\n\nbody\n")
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -637,10 +740,10 @@ def test_unresolved_lead_agent_without_env_is_fatal(
 def test_resolved_lead_agent_used_as_fallback_without_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Outside an mngr agent (no MNGR_AGENT_NAME), a plain author-set value is
+    """Outside an mngr agent (no MNGR_AGENT_ID), a plain author-set value is
     accepted as a fallback so manual/test invocations still work."""
     runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -818,11 +921,11 @@ def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The label names the agent that will actually poll for the report: when
-    the launcher can name itself, its identity beats whatever the task file
-    said -- the same precedence the stamped `lead_agent` follows, resolved once
-    and used for both."""
+    the launcher can identify itself, its id beats whatever the task file said
+    -- the same precedence the stamped `lead_agent` follows, resolved once and
+    used for both."""
     runtime, task, _ = _make_layout(tmp_path)  # lead_agent: lead
-    monkeypatch.setenv("MNGR_AGENT_NAME", "outer-worker")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-outer000000000000000000000worker")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -835,10 +938,12 @@ def test_lead_agent_label_carries_the_resolved_lead_not_the_file_value(
 
     assert rc == 0
     create_argv = next(c.argv for c in runner.calls if c.argv[:2] == ["mngr", "create"])
-    assert _labels(create_argv)["lead_agent"] == "outer-worker"
+    assert (
+        _labels(create_argv)["lead_agent"] == "agent-outer000000000000000000000worker"
+    )
     # The label and the stamp agree, so a worker's own record and its task file
     # never name different leads.
-    assert "lead_agent: outer-worker" in task.read_text()
+    assert "lead_agent: agent-outer000000000000000000000worker" in task.read_text()
 
 
 def test_no_lead_label_when_the_task_file_has_no_frontmatter(
@@ -848,7 +953,7 @@ def test_no_lead_label_when_the_task_file_has_no_frontmatter(
     so the create carries no lead label rather than an invented one."""
     runtime, task, _ = _make_layout(tmp_path)
     task.write_text("no frontmatter here, just a body\n")
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -988,7 +1093,7 @@ def test_common_transcript_flushed_before_message_send(
     """When state_dir has the converter, launch flushes it right before the message."""
     runtime, task, _ = _make_layout(tmp_path)
     state_dir = _make_state_dir_with_converter(tmp_path)
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runner = _RecordingRunner()
 
     rc = create_worker_mod.launch(
@@ -1007,19 +1112,7 @@ def test_common_transcript_flushed_before_message_send(
         ["git", "status", "--porcelain"],
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         ["git", "rev-parse", "--show-toplevel"],
-        [
-            "mngr",
-            "create",
-            "demo-worker",
-            "-t",
-            "worker",
-            "--label",
-            "agent_created=true",
-            "--label",
-            "lead_agent=lead",
-            "--label",
-            f"runtime_dir={runtime}",
-        ],
+        _create_argv(runtime),
         [
             "mngr",
             "rsync",
@@ -1028,7 +1121,7 @@ def test_common_transcript_flushed_before_message_send(
             "--uncommitted-changes=clobber",
         ],
         [expected_script, "--single-pass"],
-        ["mngr", "message", "demo-worker", "--message-file", str(task)],
+        _task_message_argv(task),
     ]
 
 
@@ -1096,13 +1189,7 @@ def test_common_transcript_failure_does_not_abort_launch(
 
     assert rc == 0
     # The subsequent message send must still run.
-    assert [c.argv for c in runner.calls][-1] == [
-        "mngr",
-        "message",
-        "demo-worker",
-        "--message-file",
-        str(task),
-    ]
+    assert [c.argv for c in runner.calls][-1] == _task_message_argv(task)
     err = capsys.readouterr().err
     assert "common_transcript.sh" in err
     assert "exited 2" in err
@@ -1459,7 +1546,7 @@ def test_a_relaunch_after_an_awaited_gate_is_not_blocked_by_that_report(
     """The point of the archive: after a gate report is awaited, relaunching the
     worker on the same task file succeeds instead of tripping launch's
     stale-report guard (which would exit 2 without creating anything)."""
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
@@ -1922,7 +2009,9 @@ def test_dispatch_subtree_is_post_order_and_excludes_the_root() -> None:
 
     names = [
         r["name"]
-        for r in create_worker_mod._dispatch_subtree(root, [*records, unrelated])
+        for r in create_worker_mod._dispatch_subtree(
+            _agent_id(root), [*records, unrelated]
+        )
     ]
 
     # A shared name prefix without the lead chain does not make an agent kin.
@@ -1941,7 +2030,9 @@ def test_dispatch_subtree_survives_a_cycle_and_a_nameless_record() -> None:
         {"resource_type": "agent", "state": "RUNNING", "labels": {"lead_agent": a}},
     ]
 
-    names = [r["name"] for r in create_worker_mod._dispatch_subtree(root, records)]
+    names = [
+        r["name"] for r in create_worker_mod._dispatch_subtree(_agent_id(root), records)
+    ]
 
     assert names == [b, a]
 
@@ -2314,7 +2405,7 @@ def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
     runs from the root or a subdirectory, so ``destroy`` running from any
     lead's root pulls the same path."""
     runtime, task, _ = _make_layout(tmp_path)
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     for cwd, given in (
         (tmp_path, Path("data/.tasks/launch-task/demo")),
         (tmp_path / "data", Path(".tasks/launch-task/demo")),
@@ -2360,12 +2451,15 @@ def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
     expected event: refused up front with the holder's state and lead and the
     remedy, before the task file is stamped and before mngr is asked."""
     runtime, task, _ = _make_layout(tmp_path)
-    monkeypatch.setenv("MNGR_AGENT_NAME", "real-lead")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real0000000000000000000000000lead")
     runner = _RecordingRunner()
     runner.respond(
         ("mngr", "list"),
         _listing(
-            _agent_record("demo-worker", "STOPPED", lead_agent="lead", archived=True)
+            _agent_record("demo-worker", "STOPPED", lead_agent="lead", archived=True),
+            # The lead's own record: the holder is labelled with its id, and the
+            # refusal resolves that back to a name the reader can act on.
+            _agent_record("lead", "WAITING"),
         ),
     )
 
@@ -2510,7 +2604,7 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     # repeatedly with the same task file -- hence the same report path -- must not
     # be blocked by its own previous report. So launch_sync moves the collected
     # report aside into consumed/ (archived, not deleted) once it is collected.
-    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
     runtime, task, _ = _make_layout(tmp_path)
     report = runtime / "reports" / "report.md"
     report.parent.mkdir(parents=True)
@@ -2549,21 +2643,7 @@ def test_launch_sync_consumes_report_so_a_repeated_call_is_not_blocked(
     second = _RecordingRunner()
     assert _run_once(second) == 0
     create_calls = [c.argv for c in second.calls if c.argv[:2] == ["mngr", "create"]]
-    assert create_calls == [
-        [
-            "mngr",
-            "create",
-            "demo-worker",
-            "-t",
-            "worker",
-            "--label",
-            "agent_created=true",
-            "--label",
-            "lead_agent=lead",
-            "--label",
-            f"runtime_dir={runtime}",
-        ]
-    ]
+    assert create_calls == [_create_argv(runtime)]
     # The second run's report is archived under a disambiguated name -- the first
     # archive is not overwritten, so both are retained.
     assert not report.exists()
@@ -2743,7 +2823,7 @@ def test_main_launch_sync_emits_result_json(tmp_path: Path) -> None:
     class _WorkerRespondsRunner(_RecordingRunner):
         def run(self, argv: Sequence[str], **kwargs):
             result = super().run(argv, **kwargs)
-            if list(argv)[:2] == ["mngr", "message"]:
+            if list(argv)[:2] == [sys.executable, str(_MESSAGE_CHAT_SCRIPT)]:
                 report.write_text("---\ntype: status\nname: done\n---\n\ndone\n")
             return result
 
@@ -2806,19 +2886,21 @@ def test_a_refused_mngr_create_is_reported_not_raised(
     assert rc == 2
     argvs = [c.argv for c in runner.calls]
     assert not any(argv[:2] == ["mngr", "rsync"] for argv in argvs)
-    assert not any(argv[:2] == ["mngr", "message"] for argv in argvs)
+    assert not any(
+        argv[:2] == [sys.executable, str(_MESSAGE_CHAT_SCRIPT)] for argv in argvs
+    )
     assert "`mngr create demo-worker` failed" in capsys.readouterr().err
 
 
 # --- report subcommand: the worker's side of the contract -------------------
 
 
-def _write_worker_task(task: Path, report_path: str, lead_agent: str | None) -> None:
+def _write_worker_task(task: Path, report_path: str, lead_work_dir: str | None) -> None:
     """Write the task file a worker holds: where its report goes, and (usually)
-    who to send it to."""
-    lead_line = "" if lead_agent is None else f"lead_agent: {lead_agent}\n"
+    which checkout to put it in."""
+    dir_line = "" if lead_work_dir is None else f"lead_work_dir: {lead_work_dir}\n"
     task.write_text(
-        f"---\n{lead_line}finish_report_path: {report_path}\n"
+        f"---\n{dir_line}finish_report_path: {report_path}\n"
         f"task_file: {task.name}\n---\n\ndo the thing\n"
     )
 
@@ -2849,17 +2931,18 @@ def _report_argv(task: Path, body: Path, extra: Sequence[str] = ()) -> list[str]
     ]
 
 
-def test_report_writes_the_report_and_pushes_its_directory_to_the_lead(
+def test_report_writes_the_report_and_copies_it_into_the_leads_checkout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The happy path: the report lands at the task file's own
     finish_report_path inside the worker's tree, in the frontmatter shape the
-    lead parses, and its *parent directory* is pushed to the lead -- which is
-    what makes the file arrive at the lead's finish_report_path."""
+    lead parses, and the same relative path under ``lead_work_dir`` -- which is
+    the exact file the lead's await polls for. No agent command is involved:
+    both checkouts hang off one repo on one host."""
     monkeypatch.chdir(tmp_path)
     task, report_rel, body = _worker_tree(tmp_path)
-    lead = _unique("lead")
-    _write_worker_task(task, report_rel, lead)
+    lead_work_dir = tmp_path / "leads" / _unique("lead")
+    _write_worker_task(task, report_rel, str(lead_work_dir))
     runner = _RecordingRunner()
 
     rc = create_worker_mod.main(_report_argv(task, body), runner=runner)
@@ -2869,19 +2952,12 @@ def test_report_writes_the_report_and_pushes_its_directory_to_the_lead(
         "---\ntype: status\nname: done\n---\n\n"
         "Committed on branch `mngr/demo`. Ready to merge.\n"
     )
-    report_dir = "data/.tasks/launch-task/demo/reports/"
-    assert [c.argv for c in runner.calls] == [
-        [
-            "mngr",
-            "rsync",
-            f"./{report_dir}",
-            f"{lead}:{report_dir}",
-            "--uncommitted-changes=clobber",
-        ]
-    ]
+    delivered = lead_work_dir / report_rel
+    assert delivered.read_text() == Path(report_rel).read_text()
+    assert runner.calls == []
     # The destination actually used is printed, so a worker's transcript records
     # where its report went.
-    assert capsys.readouterr().out == f"{lead}:{report_dir}\n"
+    assert capsys.readouterr().out == f"{delivered}\n"
 
 
 def test_the_written_report_is_what_the_lead_parses_back(
@@ -2892,7 +2968,7 @@ def test_the_written_report_is_what_the_lead_parses_back(
     monkeypatch.chdir(tmp_path)
     task, report_rel, body = _worker_tree(tmp_path)
     body.write_text("I could not build it because: the venv is broken.\n")
-    _write_worker_task(task, report_rel, _unique("lead"))
+    _write_worker_task(task, report_rel, str(tmp_path / "leads" / _unique("lead")))
 
     rc = create_worker_mod.report_to_lead(
         task_file=task,
@@ -2910,17 +2986,32 @@ def test_the_written_report_is_what_the_lead_parses_back(
     assert parsed.body == "I could not build it because: the venv is broken."
 
 
-def test_report_push_argv_is_accepted_by_the_live_cli(
+def test_report_fallback_argv_is_accepted_by_the_live_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The push the worker emits must stay valid against the real mngr CLI, the
-    same guard the launch-side argvs carry."""
+    """The one mngr invocation the worker can emit -- the fallback's listing --
+    must stay valid against the real mngr CLI, the same guard the launch-side
+    argvs carry."""
     monkeypatch.chdir(tmp_path)
     task, report_rel, body = _worker_tree(tmp_path)
-    _write_worker_task(task, report_rel, _unique("lead"))
+    _write_worker_task(task, report_rel, None)
+    worker = _unique("worker")
+    lead = _unique("lead")
     runner = _RecordingRunner()
+    runner.respond(
+        ("mngr", "list"),
+        _listing(
+            _agent_record(worker, "RUNNING", lead_agent=lead),
+            _agent_record(lead, "WAITING", work_dir=str(tmp_path / "leads" / lead)),
+        ),
+    )
 
-    assert create_worker_mod.main(_report_argv(task, body), runner=runner) == 0
+    assert (
+        create_worker_mod.main(
+            _report_argv(task, body, ["--worker-name", worker]), runner=runner
+        )
+        == 0
+    )
 
     mngr_calls = [c.argv for c in runner.calls if c.argv[:1] == ["mngr"]]
     assert len(mngr_calls) == 1  # vacuity guard: there is an argv to validate
@@ -2928,25 +3019,21 @@ def test_report_push_argv_is_accepted_by_the_live_cli(
         assert_mngr_argv_valid(argv)
 
 
-def test_report_falls_back_to_the_leads_work_dir_when_the_push_fails(
+def test_report_falls_back_to_the_listing_when_the_task_file_names_no_work_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """When the push fails, the worker resolves its own ``lead_agent`` label out
-    of ``mngr list``, then that lead's ``work_dir``, and writes the report
-    straight into the lead's checkout at the same relative path -- which is the
-    exact file the lead's await polls for."""
+    """A task file from a launcher that predates the ``lead_work_dir`` stamp has
+    no destination in it, so the worker resolves its own ``lead_agent`` label out
+    of ``mngr list``, then the record with that id, then its ``work_dir`` -- and
+    writes the report there at the same relative path, with a note saying why."""
     monkeypatch.chdir(tmp_path)
     task, report_rel, body = _worker_tree(tmp_path)
     worker = _unique("worker")
     lead = _unique("lead")
-    _write_worker_task(task, report_rel, lead)
+    _write_worker_task(task, report_rel, None)
     lead_work_dir = tmp_path / "leads" / lead
     monkeypatch.setenv("MNGR_AGENT_NAME", worker)
     runner = _RecordingRunner()
-    runner.respond(
-        ("mngr", "rsync"),
-        subprocess.CalledProcessError(returncode=1, cmd=["mngr", "rsync"]),
-    )
     runner.respond(
         ("mngr", "list"),
         _listing(
@@ -2962,38 +3049,7 @@ def test_report_falls_back_to_the_leads_work_dir_when_the_push_fails(
     assert delivered.read_text() == Path(report_rel).read_text()
     captured = capsys.readouterr()
     assert captured.out == f"{delivered}\n"
-    assert "pushing the report" in captured.err
-
-
-def test_report_skips_the_push_entirely_when_the_task_file_names_no_lead(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """With no ``lead_agent`` there is no address to rsync to, so no push is
-    even attempted -- the listing fallback runs directly, with a note saying
-    why."""
-    monkeypatch.chdir(tmp_path)
-    task, report_rel, body = _worker_tree(tmp_path)
-    worker = _unique("worker")
-    lead = _unique("lead")
-    _write_worker_task(task, report_rel, None)
-    lead_work_dir = tmp_path / "leads" / lead
-    runner = _RecordingRunner()
-    runner.respond(
-        ("mngr", "list"),
-        _listing(
-            _agent_record(worker, "RUNNING", lead_agent=lead),
-            _agent_record(lead, "WAITING", work_dir=str(lead_work_dir)),
-        ),
-    )
-
-    rc = create_worker_mod.main(
-        _report_argv(task, body, ["--worker-name", worker]), runner=runner
-    )
-
-    assert rc == 0
-    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
-    assert (lead_work_dir / report_rel).is_file()
-    assert "no `lead_agent`" in capsys.readouterr().err
+    assert "no `lead_work_dir`" in captured.err
 
 
 def _fallback_failure(
@@ -3075,8 +3131,8 @@ def test_report_fails_loudly_when_the_labelled_lead_has_no_record(
 
     assert rc == 2
     err = capsys.readouterr().err
-    assert "no agent record named" in err
-    assert lead in err
+    assert "no agent record with id" in err
+    assert _agent_id(lead) in err
 
 
 def test_report_fails_loudly_when_the_lead_record_has_no_work_dir(
@@ -3502,6 +3558,116 @@ def test_launch_sync_collects_the_terminal_report_despite_a_milestone(
         out=io.StringIO(),
     )
     assert second_rc == 0
+
+
+# --- reply ------------------------------------------------------------------
+
+
+def test_reply_goes_through_the_chat_messenger_by_the_stamped_worker_id(
+    tmp_path: Path,
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text(
+        f"---\nlead_agent: agent-lead\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n"
+    )
+    runner = _RecordingRunner()
+    runner.respond(
+        (sys.executable, str(_MESSAGE_CHAT_SCRIPT)), _StubResult(returncode=7)
+    )
+
+    rc = create_worker_mod.reply(
+        task_file=task, message="-continue", message_file=None, name=None, runner=runner
+    )
+
+    # The messenger's exit status (mngr message's codes) is passed through.
+    assert rc == 7
+    assert [c.argv for c in runner.calls] == [
+        [sys.executable, str(_MESSAGE_CHAT_SCRIPT), _WORKER_ID, "--message=-continue"],
+    ]
+
+
+def test_reply_takes_a_message_file(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+    answer = tmp_path / "answer.md"
+    answer.write_text("yes, do that")
+    runner = _RecordingRunner()
+
+    rc = create_worker_mod.reply(
+        task_file=task, message=None, message_file=answer, name=None, runner=runner
+    )
+
+    assert rc == 0
+    assert runner.calls[0].argv == [
+        sys.executable,
+        str(_MESSAGE_CHAT_SCRIPT),
+        _WORKER_ID,
+        "--message-file",
+        str(answer),
+    ]
+
+
+def test_reply_falls_back_to_mngr_message_by_name_for_a_task_file_without_the_stamp(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    task = tmp_path / "task.md"
+    task.write_text("---\nlead_agent: lead\n---\n\nbody\n")
+    runner = _RecordingRunner()
+
+    assert (
+        create_worker_mod.reply(
+            task_file=task, message="hi", message_file=None, name=None, runner=runner
+        )
+        == 2
+    )
+    assert runner.calls == []
+    assert "no worker_agent_id" in capsys.readouterr().err
+
+    rc = create_worker_mod.reply(
+        task_file=task,
+        message="hi",
+        message_file=None,
+        name="demo-worker",
+        runner=runner,
+    )
+
+    assert rc == 0
+    [fallback_argv] = [c.argv for c in runner.calls]
+    assert fallback_argv == ["mngr", "message", "demo-worker", "--message=hi"]
+    assert_mngr_argv_valid(fallback_argv)
+
+
+def test_main_reply_requires_exactly_one_message_source(tmp_path: Path) -> None:
+    task = tmp_path / "task.md"
+    task.write_text(f"---\nworker_agent_id: {_WORKER_ID}\n---\n\nbody\n")
+
+    with pytest.raises(SystemExit):
+        create_worker_mod.main(
+            ["reply", "--task-file", str(task)], runner=_RecordingRunner()
+        )
+
+    runner = _RecordingRunner()
+    rc = create_worker_mod.main(
+        ["reply", "--task-file", str(task), "-m", "go"], runner=runner
+    )
+    assert rc == 0
+    assert runner.calls[0].argv[-1] == "--message=go"
+
+
+@pytest.mark.parametrize(
+    "stdout, expected",
+    [
+        (_CREATED_EVENT, _WORKER_ID),
+        ('{"event": "progress", "x": 1}\n' + _CREATED_EVENT, _WORKER_ID),
+        ("Done.\n", None),
+        ("", None),
+        ('{"event": "created"}\n', None),
+    ],
+)
+def test_created_agent_id_reads_the_created_event(
+    stdout: str, expected: str | None
+) -> None:
+    assert create_worker_mod._created_agent_id(stdout) == expected
 
 
 # --- the git bookkeeping a provisional milestone merge relies on ---------------

@@ -21,32 +21,32 @@ import { setFastMode } from "./ModelSettings";
 
 export const FAST_MODE_ANSWERED_LABEL = "fast_mode_prompt_answered";
 
-// The agent whose conversation raised the prompt, or null when none is showing.
-// Also the agent the answer is applied to live, since it is the one being used.
-let promptingAgentId: string | null = null;
-// Agents answered this session -- the immediate suppressor while the label write
+// The chat whose conversation raised the prompt, or null when none is showing.
+// Also the chat the answer is applied to live, since it is the one being used.
+let promptingChatId: string | null = null;
+// Chats answered this session -- the immediate suppressor while the label write
 // propagates through the observe relist.
-const answeredAgentIds = new Set<string>();
+const answeredChatIds = new Set<string>();
 
-export function getFastModePromptAgentId(): string | null {
-  return promptingAgentId;
+export function getFastModePromptChatId(): string | null {
+  return promptingChatId;
 }
 
 /** Whether this agent's prompt has been answered -- by the durable label or in
  *  this session while the label write is still propagating. */
-export function isFastModePromptAnswered(agentId: string, labels: Record<string, string> | undefined): boolean {
-  return answeredAgentIds.has(agentId) || labels?.[FAST_MODE_ANSWERED_LABEL] === "true";
+export function isFastModePromptAnswered(chatId: string, labels: Record<string, string> | undefined): boolean {
+  return answeredChatIds.has(chatId) || labels?.[FAST_MODE_ANSWERED_LABEL] === "true";
 }
 
-/** Raise the prompt on behalf of `agentId`. The first conversation to claim it
+/** Raise the prompt on behalf of `chatId`. The first conversation to claim it
  *  keeps it until it is answered: every mounted ChatPanel re-runs its check on
  *  every render, so letting a second agent take over would flip the owner (and
  *  schedule a redraw) on every frame while both are waiting. */
-export function openFastModePrompt(agentId: string): void {
-  if (promptingAgentId !== null) {
+export function openFastModePrompt(chatId: string): void {
+  if (promptingChatId !== null) {
     return;
   }
-  promptingAgentId = agentId;
+  promptingChatId = chatId;
   m.redraw();
 }
 
@@ -59,27 +59,27 @@ export function openFastModePrompt(agentId: string): void {
  * anyone with a bill.
  */
 export function resolveFastModePrompt(isFastModeEnabled: boolean): void {
-  const agentId = promptingAgentId;
-  promptingAgentId = null;
-  if (agentId === null) {
+  const chatId = promptingChatId;
+  promptingChatId = null;
+  if (chatId === null) {
     return;
   }
   // Latch in-session immediately so the prompt cannot re-fire while the label
   // write is in flight (or if it fails -- re-asking after a reload beats
   // re-asking on the next render).
-  answeredAgentIds.add(agentId);
+  answeredChatIds.add(chatId);
   m.redraw();
 
   if (!isFastModeEnabled) {
     // Only a switch to standard speed needs sending: the agent is already fast.
     // Dispatches through the agent's own harness resolver on the backend.
-    setFastMode(agentId, false);
+    setFastMode(chatId, false);
   }
 
   void m
     .request({
       method: "POST",
-      url: apiUrl(`/api/agents/${encodeURIComponent(agentId)}/fast-mode-answered`),
+      url: apiUrl(`/api/chats/${encodeURIComponent(chatId)}/fast-mode-answered`),
     })
     .catch((error) => {
       // The live agent still got the change; only the durable latch is lost, so

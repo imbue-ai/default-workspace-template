@@ -150,7 +150,7 @@ section say exactly what you ran there and what you have not.
 ## Success criteria
 - The creation is committed on your branch, tested, and passes the review gates.
 - For a reconstructed skill: the user approved the outline (Gate 1) and the
-  final creation (Gate 2), each via a pushed report.
+  final creation (Gate 2), each via a delivered report.
 BODY_EOF
 } > data/.tasks/harden/crystallize-$NAME/task.md
 ```

@@ -36,7 +36,7 @@
 - A worker that launches a sub-worker uses launch-task exactly as a chat agent does. Its `MNGR_AGENT_NAME` becomes the sub-worker's `lead_agent` (stamped and labelled), the sub-worker's runtime dir lives in the intermediate lead's worktree, and the sub-worker's report lands in that worktree. Paths never collide across levels because every path is exact.
 - A lead's `await` treats its worker as busy while the worker has a live child: an agent labelled `lead_agent=<worker>` whose state is RUNNING or WAITING and that has no pending OOM shed. Only when no such child exists does the idle count run.
 - Merge is a strict tree: a sub-worker's branch `mngr/<sub>` is merged only into its direct lead's branch, with `--no-ff` and the sub-worker named in the merge commit message. The top-level lead sees one merged branch and does not need to know sub-workers existed.
-- An intermediate lead destroys neither its sub-workers nor itself; they stay stopped in place after merge, so their transcripts and pushed reports remain where a later capture resolves them.
+- An intermediate lead destroys neither its sub-workers nor itself; they stay stopped in place after merge, so their transcripts and delivered reports remain where a later capture resolves them.
 - An intermediate lead awaits its sub-workers with `--timeout 60m`, inside the top-level lead's 90m.
 
 **Parallel harden pass**

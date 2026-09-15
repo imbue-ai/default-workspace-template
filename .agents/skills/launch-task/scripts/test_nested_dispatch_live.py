@@ -301,10 +301,10 @@ def _reporting_section(worker_name: str) -> str:
     return f"""## Reporting back
 
 Follow `.agents/shared/references/worker-reporting.md` for the full report
-procedure: parse this task's frontmatter for `TASK_FILE` / `LEAD_AGENT` /
+procedure: parse this task's frontmatter for `TASK_FILE` / `LEAD_WORK_DIR` /
 `FINISH_REPORT_PATH`, then write your report body to a file and deliver it with
-the launcher's `report` subcommand, which writes the report and pushes it to the
-lead for you:
+the launcher's `report` subcommand, which writes the report and copies it into
+the lead's checkout for you:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py report \\
@@ -317,8 +317,9 @@ uv run .agents/skills/launch-task/scripts/create_worker.py report \\
 Valid `name:` values: `question` (a mid-flight gate, valid at any point of any
 run), `done` / `stuck` (terminal).
 
-For a mid-flight `question` gate, stop your turn after reporting -- the lead
-replies via `mngr message` and you resume. For terminal statuses, the run ends.
+For a mid-flight `question` gate, stop your turn after reporting -- the lead's
+reply arrives as a message in your chat and you resume. For terminal statuses,
+the run ends.
 A `done` body names the branch, e.g. "Committed on branch `mngr/{worker_name}`.
 Ready to merge."
 """
@@ -669,7 +670,7 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
 
     try:
         # The top-level lead: a `command` agent running in place, so its work dir IS the
-        # clone and the outer worker's report push lands where this harness polls.
+        # clone and the outer worker's report copy lands where this harness polls.
         _run_mngr(
             [
                 "create",
@@ -692,10 +693,19 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
             _outer_task_file_text(outer_name, inner_name), encoding="utf-8"
         )
 
+        # The id mngr gave the top-level agent: what the launcher stamps as the
+        # outer worker's `lead_agent` and labels it with, read off the live
+        # listing rather than invented, so the assertions below confront the real
+        # value.
+        top_record = _record_named(_agent_records(env, clone), top_name)
+        assert top_record is not None, f"{top_name} is missing from `mngr list`"
+        top_id = top_record["id"]
+        assert isinstance(top_id, str) and top_id
+
         # The in-process launcher calls run real subprocesses, so they need the same
-        # isolation the direct mngr calls above got -- plus MNGR_AGENT_NAME, which is
-        # what makes this harness the top-level lead the outer worker is stamped and
-        # labelled with.
+        # isolation the direct mngr calls above got -- plus the agent identity that
+        # makes this harness the top-level lead the outer worker is stamped and
+        # labelled with, and the work dir its report is written into.
         for key in list(os.environ):
             if key.startswith("MNGR_"):
                 monkeypatch.delenv(key, raising=False)
@@ -703,6 +713,8 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
         monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
         monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
         monkeypatch.setenv("MNGR_AGENT_NAME", top_name)
+        monkeypatch.setenv("MNGR_AGENT_ID", top_id)
+        monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(clone))
         # Relative paths, deliberately: `rsync_dir` addresses the worker endpoint with
         # the same repo-relative string, so an absolute runtime dir would push the
         # runtime outside the worker's worktree.
@@ -772,12 +784,18 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
                 f"{subjects[:20]}. Report:\n{report_text}"
             )
 
+        # The inner worker's lead is the outer worker, named by the id mngr gave
+        # it -- the same value the launcher stamped into the inner task file.
+        outer_record = _record_named(_agent_records(env, clone), outer_name)
+        assert outer_record is not None, f"{outer_name} is missing from `mngr list`"
+        outer_id = outer_record["id"]
+
         inner_marker = _run_git(
             ["show", f"{outer_branch}:poc/markers/inner.txt"], clone
         )
         assert inner_marker.strip().splitlines() == [
             inner_name,
-            outer_name,
+            outer_id,
             _GATE_ANSWER,
         ], (
             f"the inner worker's marker does not name itself, its lead, and the "
@@ -787,7 +805,7 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
         outer_marker = _run_git(
             ["show", f"{outer_branch}:poc/markers/outer.txt"], clone
         )
-        assert outer_marker.strip().splitlines() == [outer_name, top_name], (
+        assert outer_marker.strip().splitlines() == [outer_name, top_id], (
             f"the outer worker's marker does not name itself and its lead: "
             f"{outer_marker!r}. Report:\n{report_text}"
         )
@@ -817,10 +835,8 @@ def test_live_nested_dispatch_merges_both_levels_after_a_gate_round_trip(
         # The labels the outer level was created with, read back off the live
         # listing: its lead, and the runtime dir the top-level destroy below
         # excludes from its pull.
-        outer_record = _record_named(_agent_records(env, clone), outer_name)
-        assert outer_record is not None, f"{outer_name} is missing from `mngr list`"
-        assert _label(outer_record, "lead_agent") == top_name, (
-            f"{outer_name} should be labelled with its lead {top_name!r}, got "
+        assert _label(outer_record, "lead_agent") == top_id, (
+            f"{outer_name} should be labelled with its lead's id {top_id!r}, got "
             f"{_label(outer_record, 'lead_agent')!r}"
         )
         assert _label(outer_record, "runtime_dir") == outer_runtime_dir.as_posix(), (

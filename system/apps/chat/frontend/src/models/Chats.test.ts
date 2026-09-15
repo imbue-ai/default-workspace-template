@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildAgentTerminalUrl } from "./AgentManager";
+import { buildAgentTerminalUrl } from "./Chats";
 
 describe("buildAgentTerminalUrl", () => {
   function stubPage(terminalLabel: string | null): void {

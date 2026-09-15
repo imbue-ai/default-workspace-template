@@ -262,13 +262,13 @@ description of what changed for the changelog entry.
 Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
-1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `FINISH_REPORT_PATH`) per
-   `.agents/shared/references/worker-reporting.md`, from the exact task-file path
-   `data/.tasks/launch-task/<slug>/task.md` -- before any reset that could
-   remove the task file. Deliver the report itself by hand at the end, per
-   `publish-template` §3's `mngr rsync` block and for the same reason: the reset
-   leaves your checkout at the published tip, whose launcher may predate the
-   `report` subcommand.
+1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` /
+   `FINISH_REPORT_PATH`) per `.agents/shared/references/worker-reporting.md`,
+   from the exact task-file path `data/.tasks/launch-task/<slug>/task.md` --
+   before any reset that could remove the task file. Deliver the report itself
+   by hand at the end, per `publish-template` §3's copy and for the same reason:
+   the reset leaves your checkout at the published tip, whose launcher may
+   predate the `report` subcommand.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
@@ -332,7 +332,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
 8. **Boot smoke-check** the result -- validate `system/supervisord.conf` via the
    supervisor lib (`ServerOptions().realize()` / `process_config()`), NEVER
    `supervisord -t` (which launches the daemon), the same method
-   `build_template.sh` step 9 uses. If it fails, report `stuck`. Then run
+   `build_template.sh` step 9 uses. Like step 9, a clean parse is not enough:
+   `configroot.supervisord.process_group_configs` must be non-empty, since every
+   program lives in a `supervisord.conf.d` drop-in and an `[include]` glob that
+   matches nothing yields a valid config with no services. If it fails, report
+   `stuck`. Then run
    `.agents/skills/publish-template/scripts/validate_template.py` (per
    that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
    disagreement introduced by the version bump and re-resolves every declared

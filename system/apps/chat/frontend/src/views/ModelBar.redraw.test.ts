@@ -19,8 +19,8 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: unknown } = { agent: null };
-vi.mock("../models/AgentManager", () => ({ getAgentById: () => agentState.agent }));
+const agentState: { agent: ChatSnapshot | null } = { agent: null };
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", () => ({
@@ -60,6 +60,8 @@ vi.mock("../shell", () => ({ startChatOnAccount: () => undefined, openSubagentTa
 
 import m from "mithril";
 
+import type { ChatSnapshot } from "../models/Chats";
+import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ModelBar } from "./ModelBar";
 
 const OPUS = {
@@ -114,7 +116,7 @@ beforeEach(() => {
   chooserOpens.length = 0;
   deleted.length = 0;
   renamed.length = 0;
-  agentState.agent = { id: "a1", harness: "claude", labels: { account: "acct-1" } };
+  agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
   catalogState.catalog = {
     switch_mode: "eager_then_reconcile",
     picker_mode: "list",
@@ -127,7 +129,7 @@ beforeEach(() => {
   // MOUNTED, not rendered: this is what gives handlers in the main tree their auto-redraw,
   // and what the portal has to reproduce for the handlers inside it.
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(ModelBar as never, { agentId: "a1" }),
+    view: () => m(ModelBar as never, { chatId: "a1" }),
   });
 });
 

@@ -15,7 +15,7 @@ is not where worker bugs get fixed.
   not implement what the task file asked for.
 - User rejected the worker's Gate 2 proposal and the worker stopped instead
   of iterating.
-- The worker's pushed report -- at its `finish_report_path`, e.g.
+- The worker's delivered report -- at its `finish_report_path`, e.g.
   `data/.tasks/harden/<slug>/reports/report.md` for a harden worker -- has
   frontmatter `type: status, name: stuck`, or the 30m poll timeout tripped
   without any report arriving. The first case is the worker explicitly giving

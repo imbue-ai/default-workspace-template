@@ -47,7 +47,7 @@ const mocks = vi.hoisted(() => {
     openProviderChooser: vi.fn(),
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
-    whenAgentRegistered: vi.fn(async (_agentId: string) => {}),
+    whenChatRegistered: vi.fn(async (_chatId: string) => {}),
     listeners,
     agent,
   };
@@ -116,9 +116,9 @@ vi.mock("../models/HarnessCatalog", () => {
     },
   };
 });
-vi.mock("../models/AgentManager", () => ({
-  getAgentById: () => mocks.agent,
-  whenAgentRegistered: (agentId: string) => mocks.whenAgentRegistered(agentId),
+vi.mock("../models/Chats", () => ({
+  getChatById: () => ({ active_agent: mocks.agent }),
+  whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 
@@ -229,8 +229,8 @@ function findByAttr(node: unknown, attr: string, value: string): AnyVnode | unde
 }
 
 /** Render the composer for one agent, type `text`, then press the send button. */
-async function typeAndSend(component: m.Component<{ agentId: string | null }>, agentId: string, text: string) {
-  const render = () => component.view!({ attrs: { agentId } } as never);
+async function typeAndSend(component: m.Component<{ chatId: string | null }>, chatId: string, text: string) {
+  const render = () => component.view!({ attrs: { chatId } } as never);
   const textarea = findByTag(render(), "textarea");
   const oninput = textarea?.attrs?.oninput as ((event: unknown) => void) | undefined;
   oninput?.({ target: { value: text, style: {}, scrollHeight: 10 } });
@@ -262,7 +262,7 @@ describe("MessageInput send guard", () => {
   it("keeps the typed message so it is not lost", async () => {
     const component = MessageInput();
     await typeAndSend(component, "agent-1", "/status");
-    const textarea = findByTag(component.view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.value).toBe("/status");
   });
 
@@ -294,7 +294,7 @@ describe("MessageInput send guard", () => {
     expect(escapeGuard, "notice should hand the shell an Escape guard").toBeTypeOf("function");
     escapeGuard!();
 
-    const reRendered = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    const reRendered = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(reRendered)).not.toContain("can't be sent from chat");
   });
 
@@ -341,7 +341,7 @@ describe("MessageInput send guard", () => {
     const after = await typeAndSend(component, "agent-1", "/status");
     expect(renderedText(after)).toContain("can't be sent from chat");
 
-    const switched = component.view!({ attrs: { agentId: "agent-2" } } as never);
+    const switched = component.view!({ attrs: { chatId: "agent-2" } } as never);
     expect(renderedText(switched)).not.toContain("can't be sent from chat");
   });
 });
@@ -353,13 +353,13 @@ describe("MessageInput placeholder", () => {
   });
 
   it("shows the base wording while the agent is idle", () => {
-    const textarea = findByTag(MessageInput().view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type a message...");
   });
 
   it("teaches queueing while the agent has a turn in flight", () => {
     mocks.agent.activity_state = "THINKING";
-    const textarea = findByTag(MessageInput().view!({ attrs: { agentId: "agent-1" } } as never), "textarea");
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
   });
 });
@@ -374,17 +374,17 @@ describe("MessageInput stop-to-composer handback", () => {
     localStorage.clear();
   });
 
-  function typeDraft(component: m.Component<{ agentId: string | null }>, agentId: string, text: string): void {
-    const render = () => component.view!({ attrs: { agentId } } as never);
+  function typeDraft(component: m.Component<{ chatId: string | null }>, chatId: string, text: string): void {
+    const render = () => component.view!({ attrs: { chatId } } as never);
     const textarea = findByTag(render(), "textarea");
     (textarea?.attrs?.oninput as (event: unknown) => void)?.({ target: { value: text, style: {}, scrollHeight: 10 } });
   }
 
   async function clickStop(
-    component: m.Component<{ agentId: string | null }>,
-    agentId: string,
+    component: m.Component<{ chatId: string | null }>,
+    chatId: string,
   ): Promise<AnyVnode | undefined> {
-    const render = () => component.view!({ attrs: { agentId } } as never);
+    const render = () => component.view!({ attrs: { chatId } } as never);
     // The label states what the press will do; with nothing queued (this mock
     // agent has no queued_messages) it reads as a plain interrupt.
     const stopButton = findByAttr(render(), "aria-label", "Interrupt agent");
@@ -428,12 +428,12 @@ describe("MessageInput send to a chat still being created", () => {
   });
 
   afterEach(() => {
-    mocks.whenAgentRegistered.mockImplementation(async (_agentId: string) => {});
+    mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
   });
 
   it("holds the send until the agent registers, then sends it", async () => {
     let release: () => void = () => {};
-    mocks.whenAgentRegistered.mockImplementationOnce(
+    mocks.whenChatRegistered.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           release = resolve;
@@ -447,13 +447,13 @@ describe("MessageInput send to a chat still being created", () => {
     await sending;
 
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
-    const [calledAgentId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
-    expect(calledAgentId).toBe("agent-1");
+    const [calledChatId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
+    expect(calledChatId).toBe("agent-1");
     expect(calledText).toContain("hello");
   });
 
   it("returns the message to the composer with the reason when the create fails", async () => {
-    mocks.whenAgentRegistered.mockRejectedValueOnce("mngr create exited with code 3");
+    mocks.whenChatRegistered.mockRejectedValueOnce("mngr create exited with code 3");
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 
@@ -495,7 +495,7 @@ describe("MessageInput send failure notice", () => {
     const okButton = findByClass(after, "notice-dismiss");
     expect(okButton, "the notice should offer an OK button").toBeTruthy();
     (okButton!.attrs!.onclick as () => void)();
-    const dismissed = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    const dismissed = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(dismissed)).not.toContain("Couldn't send your message");
   });
 
@@ -503,7 +503,7 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();
     await typeAndSend(component, "agent-1", "hello");
-    const otherAgent = component.view!({ attrs: { agentId: "agent-2" } } as never);
+    const otherAgent = component.view!({ attrs: { chatId: "agent-2" } } as never);
     expect(renderedText(otherAgent)).not.toContain("Couldn't send your message");
   });
 
@@ -637,7 +637,7 @@ describe("MessageInput send failure notice", () => {
     (force!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    const shown = component.view!({ attrs: { agentId: "agent-1" } } as never);
+    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(shown)).toContain("restart refused");
   });
 });
