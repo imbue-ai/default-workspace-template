@@ -776,7 +776,10 @@ export function Sidebar(): m.Component<SidebarAttrs> {
   }
 
   function renameRow(row: SidebarTabRow, attrs: SidebarAttrs): m.Vnode {
-    return m("div", { key: row.address, class: `${ROW_CLASS} pr-1` }, [
+    // Same tag and key as the row it stands in for, so mithril patches that element rather than
+    // replacing it: the tooltip has to be handed its null here, or the row's old explanation
+    // hangs beside the name being typed.
+    return m("div", { key: row.address, class: `${ROW_CLASS} pr-1`, ...hoverTooltipAttrs(null, "right") }, [
       m("span", { class: ICON_BOX_CLASS }, m.trust(appGlyph(getApp(row.appName), ROW_ICON_SIZE))),
       m("input", {
         type: "text",
