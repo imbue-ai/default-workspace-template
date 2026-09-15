@@ -138,10 +138,11 @@ prose that no test failure surfaces -- read the merged entries and grep the
 workspace for every name they retire (an environment variable, a port, a
 command).
 
-1. **Enumerate the consumer universe** up front: every `system/supervisord.conf`
-   program (and what its `command` invokes), every app or service under
-   `system/services/` and `system/apps/`, every workspace-added skill under
-   `.agents/skills/`, and any cron or scheduled runners.
+1. **Enumerate the consumer universe** up front: every
+   `system/supervisord.conf.d/` program (and what its `command` invokes), every
+   app or service under `system/services/` and `system/apps/`, every
+   workspace-added skill under `.agents/skills/`, and any cron or scheduled
+   runners.
 2. **Search for dependents of each changed file**: its path, basename, and
    importable module name; follow each service's code into the shared
    scripts and libs it calls; check skills' `SKILL.md` and scripts.
