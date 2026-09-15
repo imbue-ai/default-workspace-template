@@ -2185,14 +2185,14 @@ def test_create_chat_refuses_a_message_beside_a_reserved_id(
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
     _register_agent(app, "agent-123", "primary", "RUNNING")
     agent_manager: AgentManager = state_of(app).agent_manager
-    reserved = agent_manager.reserve_chat(message="Teach me about Minds")
+    reserved = agent_manager.reserve_chat(message="Teach me about Mind")
 
     response = client.post("/api/agents/create-chat", json={"agent_id": reserved.chat_id, "message": "other"})
 
     assert response.status_code == 400
     assert "first message" in response.get_json()["detail"]
     reserved_proto = agent_manager.get_provisional_chat(reserved.chat_id)
-    assert reserved_proto is not None and reserved_proto.message == "Teach me about Minds"
+    assert reserved_proto is not None and reserved_proto.message == "Teach me about Mind"
 
 
 def test_create_chat_relaunches_a_failed_chat_under_its_id(
