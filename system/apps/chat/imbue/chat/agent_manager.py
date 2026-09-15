@@ -280,8 +280,10 @@ def _build_chat_create_command(
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
-    # A successor agent's membership (``chat_id``, ``chat_seq``), which the first agent of a
-    # chat only gets at its first handoff.
+    # What this create carries beyond what the builder knows: a successor agent's membership
+    # (``chat_id``, ``chat_seq``), which the first agent of a chat only gets at its first
+    # handoff, and an outside caller's own labels (``auto_open``, to have the shell open the
+    # chat's tab), which ``create_chat`` screens against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
     for setting in settings:
