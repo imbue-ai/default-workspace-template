@@ -11,9 +11,9 @@ from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 
-DEFAULT_SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
-DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
-DEFAULT_CHECK_CONCURRENCY: Final[int] = 4
+_DEFAULT_SWEEP_INTERVAL_SECONDS: Final[float] = 60.0
+_DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 30.0
+_DEFAULT_CHECK_CONCURRENCY: Final[int] = 4
 _DEFAULT_MNGR_BINARY: Final[str] = "mngr"
 
 
@@ -40,9 +40,9 @@ class ChatAutoCompactor:
         list_running_chat_agent_names: Callable[[], Sequence[str]],
         runner: Callable[..., FinishedProcess] = run_local_command_modern_version,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
-        interval_seconds: float = DEFAULT_SWEEP_INTERVAL_SECONDS,
-        command_timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
-        max_concurrency: int = DEFAULT_CHECK_CONCURRENCY,
+        interval_seconds: float = _DEFAULT_SWEEP_INTERVAL_SECONDS,
+        command_timeout_seconds: float = _DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        max_concurrency: int = _DEFAULT_CHECK_CONCURRENCY,
     ) -> "ChatAutoCompactor":
         instance = cls.__new__(cls)
         instance._list_running_chat_agent_names = list_running_chat_agent_names
