@@ -214,16 +214,19 @@ fi
 # The base must be template state, never a commit carrying the workspace's own
 # work: step 2 resets to its tree and step 10 publishes its history. Everything
 # the workspace committed descends from its Initial workspace commit -- including
-# an update-self merge, whose upstream (second) parent is the real base.
+# an update-self merge, whose upstream (second) parent is the real base. Only the
+# NEWEST marker is this workspace's own: a mind created from a published template
+# also carries the source mind's marker, and its correct base descends from that.
 BASE_COMMIT="$(git rev-parse "${BASE_REF}^{commit}")"
 while IFS=' ' read -r marker_sha marker_subject; do
-    if [ "$marker_subject" = "Initial workspace commit" ] \
-        && [ "$marker_sha" != "$BASE_COMMIT" ] \
+    [ "$marker_subject" = "Initial workspace commit" ] || continue
+    if [ "$marker_sha" != "$BASE_COMMIT" ] \
         && git merge-base --is-ancestor "$marker_sha" "$BASE_COMMIT"; then
         echo "build_template.sh: BASE REF INVALID: '${BASE_REF}' descends from this workspace's Initial workspace commit (${marker_sha}), so its tree and history carry the workspace's own work, not just the template" >&2
         echo "build_template.sh: resolve the base with .agents/shared/scripts/resolve_template_base.py (for an update-self: merge it is the merge's second parent)" >&2
         exit 5
     fi
+    break
 done < <(git log --first-parent --format='%H %s' HEAD)
 
 # --- 1. stage the selected paths out of the LIVE worktree BEFORE the reset ----

@@ -265,3 +265,41 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
     assert not (worktree / "system/apps/music_scout").exists()
     history = _git("rev-list", "HEAD", cwd=worktree).splitlines()
     assert music_scout_commit not in history
+
+
+@_needs_scanners
+def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) -> None:
+    """Its history carries the source mind's Initial workspace commit too.
+
+    The published snapshot is parented on the source's marker and the adopter
+    clones it with full history, so only the adopter's own, newest marker may
+    decide whether a base carries workspace work.
+    """
+    source, source_base = _make_source_repo(tmp_path)
+    snapshot = _git(
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        source_base,
+        "-m",
+        "template: demo",
+        cwd=source,
+    )
+    _git("reset", "-q", "--hard", snapshot, cwd=source)
+    _git("commit", "-q", "--allow-empty", "-m", "Initial workspace commit", cwd=source)
+    (source / "system/apps/demo/main.py").write_text("x = 30\n")
+    _git("add", "-A", cwd=source)
+    _git("commit", "-qm", "Remix the adopted app", cwd=source)
+    resolved = subprocess.run(
+        [sys.executable, str(_RESOLVE_TEMPLATE_BASE), "--repo", str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    worktree = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
+
+    completed = _assemble(worktree, resolved)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert (worktree / "system/apps/demo/main.py").read_text() == "x = 30\n"
