@@ -302,6 +302,12 @@ class AuthFlowService:
                 accounts.save_reauth_backup(account_id, session.cleared_credentials, self._home)
                 for path in session.cleared_credentials:
                     path.unlink(missing_ok=True)
+                # The workspace's create defaults name the files this just unlinked, and a
+                # create that names no account reads them. `--env-file` on a path that is not
+                # there fails the create outright, so the defaults are rewritten for the window
+                # -- an account with no key binds agy's credential symlink instead, which is
+                # the dangling-link degradation every other harness already has here.
+                accounts.regenerate_create_defaults(self._home)
 
             if isinstance(method, PasteMethod):
                 # Nothing to drive; the caller supplies the credential on submit. It still
@@ -627,6 +633,9 @@ class AuthFlowService:
             _restore_credentials(session.cleared_credentials)
         session.cleared_credentials = {}
         accounts.clear_reauth_backup(session.account_id, self._home)
+        # Every ending comes through here -- abort, expiry, rejection, commit -- so this is
+        # where the create defaults go back to describing what the folder now holds.
+        accounts.regenerate_create_defaults(self._home)
 
     def _commit_locked(self, session: _Session, display: str) -> FlowStatus:
         # The sign-in wrote a new credential over the cleared one, so there is nothing to

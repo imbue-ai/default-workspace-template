@@ -14,6 +14,7 @@ import pytest
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
+from imbue.chat.create_defaults import create_defaults_path
 from imbue.chat.harnesses.account_scope import account_credential_path
 from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
 from imbue.chat.harnesses.antigravity.auth import gemini_env_path
@@ -738,3 +739,27 @@ def test_a_gemini_key_that_would_not_fit_one_dotenv_line_is_refused(
         service.submit_key(started.flow_id, pasted, "google")
 
     assert not list((tmp_path / ".minds" / "accounts").glob("*/gemini.env"))
+
+
+def _create_defaults_text() -> str:
+    path = create_defaults_path()
+    return path.read_text() if path.is_file() else ""
+
+
+def test_an_open_key_re_auth_leaves_no_create_default_naming_a_file_that_is_gone(tmp_path: Path) -> None:
+    """A create that names no account reads the workspace's defaults, and `--env-file` on a
+    missing path fails the create outright -- where the credential symlink the other harnesses
+    bind by just dangles. The window lasts as long as the flow."""
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    started = service.start("google", "api_key")
+    service.submit_key(started.flow_id, "AIzaSyGood", "google")
+    (account,) = read_index(tmp_path).accounts
+    assert "gemini.env" in _create_defaults_text()
+
+    again = service.start("google", "api_key", account_id=account.id)
+
+    assert "gemini.env" not in _create_defaults_text()
+
+    service.abort(again.flow_id)
+
+    assert "gemini.env" in _create_defaults_text()
