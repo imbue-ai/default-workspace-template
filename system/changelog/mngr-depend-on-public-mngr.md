@@ -21,5 +21,6 @@
 - `system/test_mngr_pin.py` pins the shape: public repo, full commit, every locked
   mngr package at the pin, nothing tracked under `system/vendor/mngr`.
 
-- `pull_upstreams.sh` / `push_upstreams.sh` refuse the mngr leg; mngr changes are
-  their own PR on the mngr repo.
+- `system/scripts/pull_upstreams.sh` and `push_upstreams.sh` are gone: they existed to
+  split vendored-mngr edits from workspace edits, and there is no vendored mngr to
+  split. mngr changes are their own PR on the mngr repo.
