@@ -143,11 +143,34 @@ describe("appendEvents and the optimistic bubbles", () => {
         role: "user",
         content: 'You are continuing the chat "X" (chat id a). Hi',
         display: "chip",
+        display_label: "Handoff prompt",
       },
     ]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["first", "second"]);
     appendEvents(chat, [makeEvent("turn")]);
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["second"]);
+  });
+
+  it("stands a bubble down by id when the switch marker carrying its message lands", () => {
+    const chat = `chat-${Math.random()}`;
+    addOutgoing(chat, "Carry on", "m-trigger");
+    addOutgoing(chat, "and this", "m-2");
+    appendEvents(chat, [
+      {
+        timestamp: "2026-01-01T00:00:01Z",
+        type: "agent_switch",
+        event_id: "sw1",
+        source: "chat",
+        from_agent_id: "agent-a",
+        to_agent_id: "agent-b",
+        from_harness: "claude",
+        to_harness: "codex",
+        seq: 1,
+        message_id: "m-trigger",
+        message: "Carry on",
+      },
+    ]);
+    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
   });
 
   it("tells whether a switch marker on the transcript carries a message by its send-time id", () => {

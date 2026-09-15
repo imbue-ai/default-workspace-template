@@ -7,7 +7,7 @@ import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveProjectId, getClientId, getDeviceKind } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
-import { noteBackendArrivals } from "./OutgoingMessages";
+import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
@@ -664,6 +664,14 @@ export function appendEvents(chatId: string, newEvents: TranscriptEvent[]): void
   if (userEventIds.length > 0) {
     noteBackendArrivals(chatId, userEventIds);
   }
+  // A switch marker is the real form of the message it carries (the successor's opening
+  // bubble), so it stands that message's bubble down by id: a bubble the switch's end
+  // brought back before the marker landed goes here, and one the marker preceded is
+  // never brought back (``trackBackendArrivals``).
+  const carriedMessageIds = newEvents.flatMap((event) =>
+    event.type === "agent_switch" && event.message_id !== null ? [event.message_id] : [],
+  );
+  dropOutgoingByMessageId(chatId, carriedMessageIds);
 }
 
 export function prependEvents(chatId: string, olderEvents: TranscriptEvent[], offset?: number, total?: number): void {

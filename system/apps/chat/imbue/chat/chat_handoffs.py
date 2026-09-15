@@ -793,10 +793,11 @@ class HandoffRunner:
     ) -> None:
         """Make the tracked successor the chat's agent: append its entry to the record and emit the chip.
 
-        The entry keeps the message the user switched with when the prompt folded it in (a
-        fresh start delivers it as a turn of its own instead), so the chip can show it.
+        The entry keeps the message the user switched with when a prompt was built, which is
+        what folded it in (a fresh start builds none and delivers the message as a turn of its
+        own), so the chip can show it.
         """
-        is_message_folded = not handoff.is_fresh_start and bool(handoff.trigger_text)
+        is_message_folded = handoff.prompt is not None and bool(handoff.trigger_text)
         successor = ChatAgentEntry(
             seq=handoff.next_seq,
             agent_id=handoff.next_agent_id,

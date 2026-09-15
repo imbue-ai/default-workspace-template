@@ -812,8 +812,10 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         assert snapshot is not None and snapshot.handoff is None
         # The typed message rode inside the successor's prompt, so the switch marker shows it as the
         # successor's opening bubble, and the held bubble that stood in for it is gone.
-        expect(chat.locator(".message-list .message-content", has_text="Carry on in Codex")).to_be_visible()
-        expect(chat.locator(".held-send")).to_have_count(0)
+        opening = chat.locator('.message-list .message-user[id$=":message"]')
+        expect(opening).to_have_count(1)
+        expect(opening).to_contain_text("Carry on in Codex")
+        expect(chat.locator(".outgoing-message")).to_have_count(0)
         assert snapshot.active_agent.harness.value == "codex"
         assert snapshot.active_agent.account_id == server.account_ids[1]
         assert len(snapshot.agent_ids) == 2
