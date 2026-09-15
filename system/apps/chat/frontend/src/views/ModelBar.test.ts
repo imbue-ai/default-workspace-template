@@ -64,6 +64,7 @@ import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { getPendingAccountId, setPendingAccount } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const ROOT = () => document.getElementById("root") as HTMLElement;
@@ -124,6 +125,7 @@ beforeEach(() => {
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
+  setPendingAccount("a1", null);
 });
 
 describe("the combo card", () => {
@@ -327,9 +329,8 @@ describe("the combo card", () => {
     expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.value).toBe("0");
   });
 
-  it("asks before launching a new chat on another provider, and launches only on Launch", () => {
-    // A chat binds to its account when it is CREATED and nothing rebinds it, so pressing
-    // another account's row can only mean a new chat on it -- asked, never done by surprise.
+  it("makes an account on another harness the pending lane, shown as next, and takes it back on a second press", () => {
+    // The chat's next send switches it there (spec 5.1); nothing happens until then.
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", label: "Google (Antigravity CLI)" },
@@ -339,28 +340,62 @@ describe("the combo card", () => {
     click('[data-card-row="providers"]');
     const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Google"));
     expect(rows).toHaveLength(1);
-    expect(rows[0].getAttribute("aria-disabled")).toBeNull();
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    expect(screenText()).toContain("Launch a new chat?");
-    expect(screenText()).toContain("Google (Antigravity CLI)");
+    expect(getPendingAccountId("a1")).toBe("acct-2");
     expect(started).toEqual([]);
-
-    // Cancel keeps the flyout up and starts nothing.
-    click(".notice-dismiss");
     expect(screenText()).not.toContain("Launch a new chat?");
-    expect(started).toEqual([]);
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    // The menu closes on the choice, and the Provider row names what comes next.
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain(
+      "next: Google (Antigravity CLI)",
+    );
 
-    // Launch starts the chat on that account and takes the card down.
+    // Reopened, the pending row wears its badge; pressing it again takes the choice back.
+    click('[data-card-row="providers"]');
+    const flyout = document.querySelector('[data-model-popover="flyout"]');
+    const badged = [...(flyout?.querySelectorAll("button") ?? [])].find((b) =>
+      (b.textContent ?? "").includes("Google"),
+    );
+    expect(badged?.querySelector(".account-row-badge")?.textContent).toBe("next");
+    badged?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).not.toContain("next:");
+
+    // So does pressing the account the chat already runs on: staying put is the choice then.
+    setPendingAccount("a1", "acct-2");
+    click('[data-card-row="providers"]');
+    const own = [...document.querySelectorAll('[data-model-popover="flyout"] button')].find((b) =>
+      (b.textContent ?? "").includes("Anthropic"),
+    );
+    if (own === undefined) throw new Error("no row for the chat's own account");
+    own.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    render();
+    expect(getPendingAccountId("a1")).toBeNull();
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(started).toEqual([]);
+  });
+
+  it("makes an account on the chat's own harness the pending lane too, now that a chat can change account in place", () => {
+    providerState.accounts = [
+      ACCOUNT,
+      { ...ACCOUNT, id: "acct-2", provider: "Anthropic 2", label: "Anthropic 2 (Claude Code)" },
+    ];
+    render();
+    click(".model-selector-trigger");
+    click('[data-card-row="providers"]');
+    const rows = [...document.querySelectorAll("button")].filter((b) => (b.textContent ?? "").includes("Anthropic 2"));
+    expect(rows).toHaveLength(1);
     rows[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
     render();
-    const launch = [...document.querySelectorAll("button")].find((b) => b.textContent === "Launch");
-    if (launch === undefined) throw new Error("no Launch button");
-    launch.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    render();
-    expect(started).toEqual(["acct-2"]);
-    expect(document.querySelector('[data-model-popover="card"]')).toBeNull();
+    expect(getPendingAccountId("a1")).toBe("acct-2");
+    expect(started).toEqual([]);
+    expect(screenText()).not.toContain("Launch a new chat?");
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-card-row="providers"]')?.textContent).toContain(
+      "next: Anthropic 2 (Claude Code)",
+    );
   });
 
   it("stars the default account and pins another on a press of its star", () => {

@@ -71,24 +71,58 @@ class ChatAgentEntry(FrozenModel):
     )
 
 
-class ChatHandoffRecord(FrozenModel):
+class ChatTransitionRecord(FrozenModel):
+    """What a handoff and a rebind share while a chat converges: the phase, the target, and the sends held.
+
+    Both persist on the record so a chat-app restart at any point resumes by reconciling
+    against mngr's state rather than replaying steps (spec 5.11); the two subclasses add what
+    each sequence needs beyond this.
+    """
+
+    phase: HandoffPhase = Field(description="Which step of the switch the chat is in")
+    started_at: datetime = Field(description="When the switch was confirmed")
+    target_lane: str = Field(description="The lane the chat is moving to")
+    target_account_id: str = Field(description="The account the chat is moving to")
+    target_harness: HarnessType = Field(description="The harness the target account runs, fixed when the switch began")
+    trigger_message_id: str = Field(
+        description="The id of the message that confirmed the switch, the first the agent receives after it"
+    )
+    trigger_text: str = Field(
+        description=(
+            "The confirming message's text, kept here even once it leaves the held list, so the page can keep "
+            "showing it until its turn appears in the transcript"
+        )
+    )
+    held_sends: tuple[HeldSend, ...] = Field(
+        default=(), description="The sends received while converging, in order; delivered once the switch is done"
+    )
+    returned_block: str = Field(
+        default="", description="The queued text draining took off the agent, for the composer"
+    )
+    error: str | None = Field(default=None, description="Why the agent could not be started, in the failed phase")
+
+    @property
+    def transition_id(self) -> str:
+        """The id minted for this switch; a runner that finds another id stops (the switch was called off)."""
+        raise NotImplementedError
+
+    def held_send_for(self, message_id: str) -> HeldSend | None:
+        return next((held for held in self.held_sends if held.message_id == message_id), None)
+
+    def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
+        """The held sends other than the confirming message, in order."""
+        return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
+
+
+class ChatHandoffRecord(ChatTransitionRecord):
     """The in-progress handoff a record carries while the chat converges on a new agent.
 
-    Everything a resumed handoff needs to pick up where it stopped lives here (spec 5.11): the
-    phase, the target, the pre-minted successor id, the sends held for it, the summary's
-    outcome, and the prompt the successor is created with, so a chat-app restart at any point
-    reconciles against mngr's state rather than replaying steps.
+    Beyond the shared transition state: the pre-minted successor id, the summary's outcome,
+    and the prompt the successor is created with.
     """
 
     handoff_id: str = Field(
         description="Minted per handoff; a runner that finds another id stops (the handoff was cancelled)"
-    )
-    phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
-    started_at: datetime = Field(description="When the handoff was confirmed")
-    target_lane: str = Field(description="The lane the chat is moving to")
-    target_account_id: str = Field(description="The account the chat is moving to")
-    target_harness: HarnessType = Field(
-        description="The harness the target account runs, fixed when the handoff began"
     )
     retiring_seq: int = Field(ge=1, description="The sequence number of the agent the chat is leaving")
     next_agent_id: str = Field(
@@ -98,39 +132,74 @@ class ChatHandoffRecord(FrozenModel):
     chat_name: str = Field(description="The chat's canonical mngr name, which the successor takes over")
     chat_title: str = Field(description="The name the user sees, kept for the archival display name and the prompt")
     project_label: str = Field(default="", description="The retiring agent's project label, carried to the successor")
-    trigger_message_id: str = Field(
-        description="The id of the message that confirmed the handoff, the successor's first"
-    )
-    held_sends: tuple[HeldSend, ...] = Field(
-        default=(), description="The sends received while converging, in order; delivered to the successor"
-    )
-    returned_block: str = Field(
-        default="", description="The queued text draining took off the retiring agent, for the composer"
-    )
     summary_outcome: SummaryOutcome | None = Field(
         default=None, description="How summarizing ended; None before it has"
     )
     prompt: str | None = Field(
         default=None, description="The successor's first message, built once and resent verbatim"
     )
-    error: str | None = Field(default=None, description="Why the successor's create failed, in the failed phase")
 
-    def held_send_for(self, message_id: str) -> HeldSend | None:
-        return next((held for held in self.held_sends if held.message_id == message_id), None)
+    @property
+    def transition_id(self) -> str:
+        return self.handoff_id
+
+
+class ChatRebindRecord(ChatTransitionRecord):
+    """The in-progress rebind a record carries while the chat's agent restarts on another account (spec 6).
+
+    Beyond the shared transition state: which agent is rebound, what it ran on before, and the
+    words the page names the new account by.
+    """
+
+    rebind_id: str = Field(description="Minted per rebind; a runner that finds another id stops")
+    agent_id: str = Field(description="The agent being rebound: the chat's active agent, which stays its agent")
+    previous_account_id: str = Field(description="The account the agent ran on before ('' when it carried no label)")
+    previous_lane: str = Field(description="The lane the agent ran on before ('' when unknown)")
+    target_label: str = Field(description="The account's label as the picker shows it, for the page and the 409s")
+    claude_sessions_config_dir: str | None = Field(
+        default=None,
+        description=(
+            "For claude, the config dir the agent's session files are under while the rebind runs: the dir it ran "
+            "under before, recorded before the env file is rewritten, then the target once the files have moved, so "
+            "a resume or a retry on another account still knows where to look"
+        ),
+    )
+    restarted_account_id: str | None = Field(
+        default=None,
+        description=(
+            "The account the agent's restart landed on, written once mngr start succeeded; None until then, and so "
+            "in the failed phase. A resume that finds it naming the target has only the delivery left to do"
+        ),
+    )
+
+    @property
+    def transition_id(self) -> str:
+        return self.rebind_id
 
 
 class ChatRecord(FrozenModel):
-    """A multi-agent chat: its agents in order, and its handoff state."""
+    """A multi-agent chat: its agents in order, and its handoff or rebind state."""
 
     version: int = Field(default=RECORD_VERSION, description="The on-disk shape this record was written with")
     chat_id: ChatId = Field(description="The chat's id: its first agent's id")
     agents: tuple[ChatAgentEntry, ...] = Field(min_length=1, description="The chat's agents, in order")
     handoff: ChatHandoffRecord | None = Field(default=None, description="The in-progress handoff, or None")
+    rebind: ChatRebindRecord | None = Field(default=None, description="The in-progress rebind, or None")
 
     @model_validator(mode="after")
     def _check_agents_are_the_chats_in_order(self) -> Self:
         """The record's own claims about its agents hold: the first is the chat's namesake, every
-        ``seq`` is its position, no agent appears twice, and only the last can still be running."""
+        ``seq`` is its position, no agent appears twice, only the last can still be running, and a
+        rebind names that running agent."""
+        if self.handoff is not None and self.rebind is not None:
+            raise InvalidChatRecordError(f"chat {self.chat_id} carries both a handoff and a rebind")
+        if self.rebind is not None:
+            last = self.agents[-1]
+            if self.rebind.agent_id != last.agent_id or last.ended_at is not None:
+                raise InvalidChatRecordError(
+                    f"chat {self.chat_id}: the rebind names agent {self.rebind.agent_id}, but the chat's active agent "
+                    f"is {last.agent_id if last.ended_at is None else 'none'}"
+                )
         if self.agents[0].agent_id != self.chat_id:
             raise InvalidChatRecordError(
                 f"chat {self.chat_id}'s first agent is {self.agents[0].agent_id}, but a chat's id is its first agent's"
@@ -181,6 +250,25 @@ class ChatRecord(FrozenModel):
 
     def entry_for(self, agent_id: str) -> ChatAgentEntry | None:
         return next((entry for entry in self.agents if entry.agent_id == agent_id), None)
+
+    @property
+    def converging(self) -> ChatHandoffRecord | ChatRebindRecord | None:
+        """The switch in progress, whichever kind, or None while the chat is not converging."""
+        return self.handoff if self.handoff is not None else self.rebind
+
+    def with_converging(self, transition: ChatHandoffRecord | ChatRebindRecord | None) -> "ChatRecord":
+        """The record carrying ``transition`` as its one switch in progress (None clears whichever it had)."""
+        if isinstance(transition, ChatHandoffRecord):
+            return self.model_copy_update(
+                to_update(self.field_ref().handoff, transition), to_update(self.field_ref().rebind, None)
+            )
+        if isinstance(transition, ChatRebindRecord):
+            return self.model_copy_update(
+                to_update(self.field_ref().handoff, None), to_update(self.field_ref().rebind, transition)
+            )
+        return self.model_copy_update(
+            to_update(self.field_ref().handoff, None), to_update(self.field_ref().rebind, None)
+        )
 
     def names_agent(self, agent_id: str) -> bool:
         """Whether the agent is this chat's: a member, or the successor its handoff is still making.

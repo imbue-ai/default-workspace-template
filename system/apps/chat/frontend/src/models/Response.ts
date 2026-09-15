@@ -915,15 +915,20 @@ export function removeMessageSentListener(listener: (chatId: string) => void): v
   messageSentListeners.delete(listener);
 }
 
+/** Tell the send listeners a message just went out for ``chatId`` (the switch route's send calls this too). */
+export function announceMessageSent(chatId: string): void {
+  for (const listener of messageSentListeners) {
+    listener(chatId);
+  }
+}
+
 export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<string> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
     return id;
   }
-  for (const listener of messageSentListeners) {
-    listener(chatId);
-  }
+  announceMessageSent(chatId);
 
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents

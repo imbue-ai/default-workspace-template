@@ -39,8 +39,23 @@ const mocks = vi.hoisted(() => {
     harness: "claude",
     activity_state: undefined,
   };
+  // The chat's in-progress switch and the account its next send switches it to, both null at rest.
+  const switching: {
+    handoff: unknown;
+    target: { id: string; harness: string; label: string } | null;
+    kind: "handoff" | "rebind";
+  } = {
+    handoff: null,
+    target: null,
+    kind: "handoff",
+  };
   return {
     sendMessage: vi.fn(async () => {}),
+    switchChat: vi.fn(async () => ({ kind: "handoff", phase: "summarizing", returned_block: "" })),
+    startChatOnAccount: vi.fn(async (_accountId: string, _message: string) => true),
+    setPendingAccount: vi.fn(),
+    cancelHandoff: vi.fn(async () => ({ returned_block: "" })),
+    switching,
     drainToComposer: vi.fn(async () => ({ block: "" })),
     getComposerAttachments: vi.fn(() => [] as unknown[]),
     interruptAgent: vi.fn(async () => {}),
@@ -57,7 +72,15 @@ vi.mock("../models/Response", () => ({
   sendMessage: mocks.sendMessage,
   drainToComposer: mocks.drainToComposer,
   interruptAgent: mocks.interruptAgent,
+  mintMessageId: () => `m-${Math.random().toString(36).slice(2)}`,
 }));
+vi.mock("../models/Handoffs", () => ({ switchChat: mocks.switchChat, cancelHandoff: mocks.cancelHandoff }));
+vi.mock("../models/PendingLane", () => ({
+  pendingSwitchTarget: () => mocks.switching.target,
+  setPendingAccount: mocks.setPendingAccount,
+  switchKind: () => mocks.switching.kind,
+}));
+vi.mock("../shell", () => ({ startChatOnAccount: mocks.startChatOnAccount }));
 vi.mock("../models/ComposerAttachments", () => ({
   clearComposerAttachments: vi.fn(),
   getComposerAttachments: mocks.getComposerAttachments,
@@ -116,12 +139,14 @@ vi.mock("../models/HarnessCatalog", () => {
     },
   };
 });
-vi.mock("../models/Chats", () => ({
-  getChatById: () => ({ active_agent: mocks.agent }),
+vi.mock("../models/Chats", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Chats")>()),
+  getChatById: () => ({ active_agent: mocks.agent, handoff: mocks.switching.handoff }),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
 vi.mock("../models/Providers", () => ({ openProviderChooser: mocks.openProviderChooser }));
 
+import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { MessageInput } from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
@@ -268,12 +293,12 @@ describe("MessageInput send guard", () => {
 
   it("still sends an ordinary message", async () => {
     await typeAndSend(MessageInput(), "agent-1", "hello there");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello there");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello there", expect.stringMatching(/^m-/));
   });
 
   it("still sends a slash command that does not take over the input box", async () => {
     await typeAndSend(MessageInput(), "agent-1", "/clear");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/clear");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/clear", expect.stringMatching(/^m-/));
   });
 
   it("does not send /exit either, with the same notice", async () => {
@@ -303,7 +328,7 @@ describe("MessageInput send guard", () => {
     // is not on it, so for a codex agent it goes through with no notice.
     mocks.agent.harness = "codex";
     const after = await typeAndSend(MessageInput(), "agent-1", "/status");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/status");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "/status", expect.stringMatching(/^m-/));
     expect(renderedText(after)).not.toContain("can't be sent from chat");
   });
 
@@ -608,7 +633,7 @@ describe("MessageInput send failure notice", () => {
     const retry = findButton(after, "Retry");
     (retry!.attrs!.onclick as () => void)();
     await flushAsync();
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
   });
 
   it("force restarts the agent before sending, in that order", async () => {
@@ -623,7 +648,7 @@ describe("MessageInput send failure notice", () => {
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
   });
 
   it("does not send when the restart itself fails", async () => {
@@ -639,5 +664,182 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(shown)).toContain("restart refused");
+  });
+});
+
+describe("MessageInput switching harness", () => {
+  const TARGET = { id: "acct-openai", harness: "codex", label: "OpenAI (Codex)" };
+
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.switchChat.mockClear();
+    mocks.switchChat.mockResolvedValue({ kind: "handoff", phase: "summarizing", returned_block: "" });
+    mocks.startChatOnAccount.mockClear();
+    mocks.startChatOnAccount.mockResolvedValue(true);
+    mocks.setPendingAccount.mockClear();
+    mocks.switching.kind = "handoff";
+    mocks.cancelHandoff.mockClear();
+    mocks.cancelHandoff.mockResolvedValue({ returned_block: "" });
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    mocks.switching.handoff = null;
+    mocks.switching.target = null;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.switching.handoff = null;
+    mocks.switching.target = null;
+  });
+
+  function typeDraft(component: m.Component<{ chatId: string | null }>, chatId: string, text: string): unknown {
+    const render = () => component.view!({ attrs: { chatId } } as never);
+    const textarea = findByTag(render(), "textarea");
+    (textarea?.attrs?.oninput as (event: unknown) => void)?.({ target: { value: text, style: {}, scrollHeight: 10 } });
+    return render();
+  }
+
+  /** Press a rendered button (a notice's action or the composer's own). */
+  function press(button: AnyVnode | undefined): void {
+    expect(button, "the button should be rendered").toBeTruthy();
+    (button!.attrs!.onclick as () => void)();
+  }
+
+  /** Press the Switch and send pill on ``rendered`` and return the view with the confirm up. */
+  function openSwitchConfirm(component: m.Component<{ chatId: string | null }>, rendered: unknown): unknown {
+    press(findByAttr(rendered, "aria-label", "Switch and send"));
+    return component.view!({ attrs: { chatId: "agent-1" } } as never);
+  }
+
+  it("reads Switch and send while a lane is pending, and asks before switching", async () => {
+    mocks.switching.target = TARGET;
+    const component = MessageInput();
+    const rendered = typeDraft(component, "agent-1", "Carry on in Codex");
+    expect(findByAttr(rendered, "aria-label", "Send message")).toBeUndefined();
+    expect(renderedText(findByAttr(rendered, "aria-label", "Switch and send"))).toContain("Switch and send");
+
+    const withConfirm = openSwitchConfirm(component, rendered);
+    const text = renderedText(withConfirm);
+    expect(text).toContain("Switch to Codex?");
+    expect(text).toContain("Claude wraps up what it is doing and stops.");
+    expect(text).toContain("The conversation continues on OpenAI (Codex), starting with your message.");
+    // Nothing has gone out yet, and the draft is still in the box.
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(findByTag(withConfirm, "textarea")?.attrs?.value).toBe("Carry on in Codex");
+
+    // Cancel closes the dialog and keeps the pending lane (the button still offers the switch).
+    press(findButton(withConfirm, "Cancel"));
+    const afterCancel = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(afterCancel)).not.toContain("Switch to Codex?");
+    expect(findByAttr(afterCancel, "aria-label", "Switch and send")).toBeTruthy();
+  });
+
+  it("confirming posts the switch with the message and puts the returned queue back in the composer", async () => {
+    mocks.switching.target = TARGET;
+    mocks.switchChat.mockResolvedValueOnce({ kind: "handoff", phase: "summarizing", returned_block: "queued one" });
+    const component = MessageInput();
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
+    press(findButton(withConfirm, "Switch and send"));
+    await flushAsync();
+
+    expect(mocks.switchChat).toHaveBeenCalledTimes(1);
+    const [chatId, accountId, message, messageId] = mocks.switchChat.mock.calls[0] as unknown as string[];
+    expect([chatId, accountId, message]).toEqual(["agent-1", "acct-openai", "Carry on in Codex"]);
+    expect(messageId).toMatch(/^m-/);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(after)).not.toContain("Switch to Codex?");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("queued one");
+  });
+
+  it("puts the message back and says why when the switch is refused", async () => {
+    mocks.switching.target = TARGET;
+    mocks.switchChat.mockRejectedValueOnce(new Error("Chat already runs on account acct-openai"));
+    const component = MessageInput();
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
+    press(findButton(withConfirm, "Switch and send"));
+    await flushAsync();
+
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(after)).toContain("Couldn't switch to Codex");
+    expect(renderedText(after)).toContain("Chat already runs on account acct-openai");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("Carry on in Codex");
+  });
+
+  it("offers Cancel switch instead of Stop while the switch can still be called off, and returns the trigger", async () => {
+    mocks.agent.activity_state = "THINKING";
+    mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+    mocks.cancelHandoff.mockResolvedValueOnce({ returned_block: "Carry on in Codex" });
+    const component = MessageInput();
+    const rendered = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeUndefined();
+    expect(findByTag(rendered, "textarea")?.attrs?.placeholder).toBe(
+      "Type a message; it is delivered once Codex is ready…",
+    );
+    const cancel = findByAttr(rendered, "aria-label", "Cancel switch");
+    expect(renderedText(cancel)).toContain("Cancel switch");
+    (cancel?.attrs?.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.cancelHandoff).toHaveBeenCalledWith("agent-1");
+    expect(findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea")?.attrs?.value).toBe(
+      "Carry on in Codex",
+    );
+  });
+
+  it("offers neither Stop nor Cancel switch once the old agent is being replaced", () => {
+    mocks.agent.activity_state = "THINKING";
+    mocks.switching.handoff = handoffStateFixture({ phase: "switching" });
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeUndefined();
+    expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+  });
+
+  it("asks in one line when the account is on the chat's own harness and lane, since the agent restarts in place", () => {
+    mocks.switching.target = { id: "acct-anthropic-2", harness: "claude", label: "Anthropic 2 (Claude Code)" };
+    mocks.switching.kind = "rebind";
+    const component = MessageInput();
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on here"));
+    const text = renderedText(withConfirm);
+    expect(text).toContain("Switch to Anthropic 2 (Claude Code)?");
+    expect(text).toContain("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation.");
+    expect(text).not.toContain("wraps up what it is doing");
+    expect(findButton(withConfirm, "Switch and send")).toBeTruthy();
+    expect(findButton(withConfirm, "Start a new chat instead")).toBeTruthy();
+  });
+
+  it("starts a new chat on the account with the message instead, leaving this chat and clearing the lane", async () => {
+    mocks.switching.target = TARGET;
+    const component = MessageInput();
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
+    press(findButton(withConfirm, "Start a new chat instead"));
+    await flushAsync();
+
+    expect(mocks.startChatOnAccount).toHaveBeenCalledWith("acct-openai", "Carry on in Codex");
+    expect(mocks.switchChat).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.setPendingAccount).toHaveBeenCalledWith("agent-1", null);
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(renderedText(after)).not.toContain("Switch to Codex?");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("puts the message back when the new chat could not be started", async () => {
+    mocks.switching.target = TARGET;
+    mocks.startChatOnAccount.mockResolvedValueOnce(false);
+    const component = MessageInput();
+    const withConfirm = openSwitchConfirm(component, typeDraft(component, "agent-1", "Carry on in Codex"));
+    press(findButton(withConfirm, "Start a new chat instead"));
+    await flushAsync();
+    const after = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("Carry on in Codex");
+  });
+
+  it("sends ordinarily, with the send-time id, when no lane is pending", async () => {
+    await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    const [, text, messageId] = mocks.sendMessage.mock.calls[0] as unknown as string[];
+    expect(text).toBe("hello");
+    expect(messageId).toMatch(/^m-/);
   });
 });

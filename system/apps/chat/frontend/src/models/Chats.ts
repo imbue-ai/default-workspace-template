@@ -38,15 +38,40 @@ export interface ActiveAgent {
   shoulder_tap_available: boolean;
 }
 
-export type HandoffPhase = "draining" | "summarizing" | "switching" | "failed";
+/** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
+export type HandoffPhase = "draining" | "summarizing" | "switching" | "restarting" | "failed";
 
-/** The in-progress handoff a chat carries while it converges on a new agent. */
+/** What a converging chat is doing: moving to another harness on a new agent, or changing account in place. */
+export type TransitionKind = "handoff" | "rebind";
+
+/** One message the chat app holds while the chat switches (the backend's ``HeldSendSnapshot``).
+ *  Rendered from the snapshot until it lands in the transcript. */
+export interface HeldSend {
+  // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
+  message_id: string;
+  text: string;
+}
+
+/** The in-progress switch a chat carries while it converges: a handoff or a rebind (spec 5, 6). */
 export interface HandoffState {
+  kind: TransitionKind;
   phase: HandoffPhase;
   target_lane: string;
   target_account_id: string;
-  // Why the new agent could not be started, in the failed phase; null otherwise.
+  // The harness the chat is moving to (a rebind keeps its own), for the phase text.
+  target_harness: string;
+  // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
+  target_label: string;
+  // The messages held for after the switch, the confirming one first.
+  held_sends: HeldSend[];
+  // Why the agent could not be started, in the failed phase; null otherwise.
   error: string | null;
+}
+
+/** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
+ *  a rebind never, since the agent restarts as soon as the switch is confirmed (spec 6). */
+export function isHandoffCancellable(handoff: HandoffState): boolean {
+  return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
@@ -111,6 +136,11 @@ export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
  * state (it just appeared, or its state was untracked).
  */
 export type ChatActivityListener = (chatId: string, previous: string | null, current: string | null) => void;
+/**
+ * Notified when a chat runs on a different agent than in the previous ``chats_updated`` snapshot
+ * (a handoff completed). Per-agent state a view holds (an optimistic model pick) is stale then.
+ */
+export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
 let chats: ChatSnapshot[] = [];
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
@@ -124,6 +154,7 @@ let replayedProvisionalIds: Set<string> | null = null;
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
+let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
@@ -191,6 +222,7 @@ function handleEvent(event: WsEvent): void {
       // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
+      const previousAgentIdById = new Map(chats.map((c) => [c.chat_id, c.active_agent.agent_id]));
       chats = event.chats;
       // A provisional chat the list now names is an agent, whatever order the pushes came in.
       const registeredIds = new Set(chats.map((c) => c.chat_id));
@@ -216,6 +248,12 @@ function handleEvent(event: WsEvent): void {
         if (previous !== current) {
           for (const listener of chatActivityListeners) {
             listener(chat.chat_id, previous, current);
+          }
+        }
+        const previousAgentId = previousAgentIdById.get(chat.chat_id);
+        if (previousAgentId !== undefined && previousAgentId !== chat.active_agent.agent_id) {
+          for (const listener of chatActiveAgentListeners) {
+            listener(chat.chat_id, previousAgentId, chat.active_agent.agent_id);
           }
         }
       }
@@ -337,6 +375,14 @@ export function removeChatActivityListener(listener: ChatActivityListener): void
   chatActivityListeners = chatActivityListeners.filter((l) => l !== listener);
 }
 
+export function addActiveAgentChangedListener(listener: ChatActiveAgentListener): void {
+  chatActiveAgentListeners.push(listener);
+}
+
+export function removeActiveAgentChangedListener(listener: ChatActiveAgentListener): void {
+  chatActiveAgentListeners = chatActiveAgentListeners.filter((l) => l !== listener);
+}
+
 /** The terminal app's origin, where the chat's terminal back face is served from: derived
  *  from the label the chat app read out of the registry into the page. */
 export function getTerminalUrl(): string {
@@ -368,11 +414,12 @@ export interface CreatedChat {
  * The create returns as soon as the chat has an id: its agent is still starting (the chat
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
- * any project. Throws with the server's detail on rejection.
+ * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
+ * Throws with the server's detail on rejection.
  */
-export function createChat(projectId: string, accountId: string = ""): Promise<CreatedChat> {
+export function createChat(projectId: string, accountId: string = "", message: string = ""): Promise<CreatedChat> {
   // No harness: the account decides it. An empty account_id takes the most recently used account.
-  return postCreateChat({ project_id: projectId, account_id: accountId });
+  return postCreateChat({ project_id: projectId, account_id: accountId, message });
 }
 
 /**

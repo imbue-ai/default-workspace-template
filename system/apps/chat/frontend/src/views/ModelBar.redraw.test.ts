@@ -62,6 +62,7 @@ import m from "mithril";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
+import { getPendingAccountId, setPendingAccount } from "../models/PendingLane";
 import { ModelBar } from "./ModelBar";
 
 const OPUS = {
@@ -301,20 +302,23 @@ describe("the card without a hand-cranked redraw", () => {
     expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
   });
 
-  it("ignores a press on a locked provider, without closing anything", async () => {
+  it("makes a press on another harness's account the pending lane and closes the menu, keeping the card", async () => {
     providerState.accounts = [
       ACCOUNT,
       { ...ACCOUNT, id: "acct-2", provider: "Google", harness: "antigravity", harness_label: "Antigravity CLI" },
     ];
     await press(".model-selector-trigger");
     await press('[data-card-row="providers"]');
-    const locked = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
-    if (locked === undefined) throw new Error("no locked row");
-    locked.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    locked.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const other = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes("Google"));
+    if (other === undefined) throw new Error("no row for the other account");
+    other.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    other.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await settle();
 
-    expect(document.querySelector('[data-model-popover="flyout"]')).not.toBeNull();
+    expect(getPendingAccountId("a1")).toBe("acct-2");
+    expect(document.querySelector('[data-model-popover="flyout"]')).toBeNull();
+    expect(document.querySelector('[data-model-popover="card"]')).not.toBeNull();
+    setPendingAccount("a1", null);
   });
 
   it("closes the whole stack on a click outside, and only on a click", async () => {

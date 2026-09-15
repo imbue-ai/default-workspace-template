@@ -204,13 +204,13 @@ class AgentStopError(RuntimeError):
 
 
 class ChatConvergingError(RuntimeError):
-    """Raised when a verb is refused because the chat is in the middle of a handoff (a 409)."""
+    """Raised when a verb is refused because the chat is in the middle of a switch, a handoff or a rebind (a 409)."""
 
     ...
 
 
 class HandoffError(ValueError):
-    """Raised when a handoff cannot begin, be cancelled, or be retried as asked (a 400)."""
+    """Raised when a switch (a handoff or a rebind) cannot begin, be cancelled, or be retried as asked (a 400)."""
 
     ...
 
@@ -286,12 +286,25 @@ class AgentStateItem(FrozenModel):
 
 
 class HandoffPhase(LowerCaseStrEnum):
-    """Where a chat that is moving to another harness stands (``null`` on the wire while it is not)."""
+    """Where a chat that is moving to another agent or account stands (``null`` on the wire while it is not).
+
+    A handoff runs draining, summarizing, switching; a rebind runs draining, restarting. Both
+    end in failed when the agent the chat continues on (the successor, or the rebound one)
+    cannot be started.
+    """
 
     DRAINING = auto()
     SUMMARIZING = auto()
     SWITCHING = auto()
+    RESTARTING = auto()
     FAILED = auto()
+
+
+class TransitionKind(LowerCaseStrEnum):
+    """What a converging chat is doing: moving to another harness, or changing account in place."""
+
+    HANDOFF = auto()
+    REBIND = auto()
 
 
 class SummaryOutcome(LowerCaseStrEnum):
@@ -316,7 +329,7 @@ class HeldSendOrigin(LowerCaseStrEnum):
 
 
 class HeldSend(FrozenModel):
-    """One message the chat app accepted while converging and will deliver to the successor."""
+    """One message the chat app accepted while converging and will deliver once the switch is done."""
 
     message_id: str = Field(description="The sender's stable send-time id (contract A4)")
     text: str = Field(description="The message, verbatim")
@@ -324,18 +337,37 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HandoffState(FrozenModel):
-    """The in-progress handoff a chat snapshot carries while the chat is converging."""
+class HeldSendSnapshot(FrozenModel):
+    """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
-    phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
+    message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
+    text: str = Field(description="The message, verbatim")
+
+
+class HandoffState(FrozenModel):
+    """The in-progress switch a chat snapshot carries while the chat is converging: a handoff or a rebind."""
+
+    kind: TransitionKind = Field(description="A handoff (another harness) or a rebind (another account, same agent)")
+    phase: HandoffPhase = Field(description="Which step of the switch the chat is in")
     target_lane: str = Field(description="The lane the chat is moving to")
     target_account_id: str = Field(description="The account the chat is moving to")
-    error: str | None = Field(default=None, description="Why the successor could not be started, in the failed phase")
+    target_harness: HarnessType = Field(description="The harness the chat is moving to, for the page's phase text")
+    target_label: str = Field(
+        description="What the phase text names the destination by: the harness for a handoff, the account for a rebind"
+    )
+    held_sends: tuple[HeldSendSnapshot, ...] = Field(
+        default=(),
+        description=(
+            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
+            "too) keeps showing them until they land in the transcript"
+        ),
+    )
+    error: str | None = Field(default=None, description="Why the agent could not be started, in the failed phase")
 
 
 class SwitchChatRequest(SendMessageRequest):
-    """Request body for POST /api/chats/{id}/handoff: a send (the new agent's first message, with the
-    sender's client fields) plus the account the chat moves to."""
+    """Request body for POST /api/chats/{id}/handoff: a send (the first message the chat sends after the
+    switch, with the sender's client fields) plus the account the chat moves to."""
 
     account_id: str = Field(description="The signed-in account the chat moves to")
 
@@ -343,10 +375,11 @@ class SwitchChatRequest(SendMessageRequest):
 class SwitchChatResponse(FrozenModel):
     """Response from POST /api/chats/{id}/handoff."""
 
-    status: str = Field(description="'converging' once the handoff has begun")
+    status: str = Field(description="'converging' once the switch has begun")
+    kind: TransitionKind = Field(description="Whether the target made the switch a handoff or a rebind")
     phase: HandoffPhase = Field(description="The phase the chat is in when the route answers")
     returned_block: str = Field(
-        description="The queued text taken off the retiring agent, for the composer ('' for none)"
+        description="The queued text draining took off the agent the chat was on, for the composer ('' for none)"
     )
 
 
@@ -365,7 +398,8 @@ class HandoffCancelResponse(FrozenModel):
 
 
 class HandoffRetryRequest(FrozenModel):
-    """Request body for POST /api/chats/{id}/handoff/retry: try the successor's create again on an account."""
+    """Request body for POST /api/chats/{id}/handoff/retry: run a failed switch's last step again on an account
+    (a handoff's create, or a rebind's restart)."""
 
     account_id: str = Field(description="The signed-in account to try; may differ from the failed attempt's")
 
@@ -430,8 +464,8 @@ class CreateChatRequest(FrozenModel):
 
     name: str = Field(
         default="",
-        description="Display name for the new chat agent; empty mints the first free "
-        '"<word> N" for the account\'s harness server-side ("Chat 1", "Codex 2", ...)',
+        description='Display name for the new chat agent; empty mints the first free "Chat N" server-side, '
+        "whatever harness the account runs on",
     )
     account_id: str = Field(
         default="",
@@ -517,15 +551,6 @@ class CreateChatResponse(FrozenModel):
     """Response from POST /api/chats/create."""
 
     chat_id: str = Field(description="The chat's id (its first agent's id, minted before the create)")
-    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
-    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
-
-
-class CreateAgentResponse(FrozenModel):
-    """Response from the agent-keyed create alias, POST /api/agents/create-chat."""
-
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    agent_id: str = Field(description="The chat's id, under the alias's field name")
     name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 

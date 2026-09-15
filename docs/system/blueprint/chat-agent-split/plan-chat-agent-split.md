@@ -138,6 +138,12 @@ Each decision below was settled during design, with the rationale given at the t
 27. **No mngr code change is required.**
     The chat app edits an agent's env file directly for a rebind, which is what the file exists for.
     The one mngr change the arc depends on landed separately before it started: mngr PR 908 made a local `[commands.create]` add to the project's defaults instead of replacing them, which is what lets `.mngr/settings.local.toml` carry the default account (section 4.5).
+28. **Phase 7 dropped every `/api/agents/...` alias at once**, with no release of overlap.
+    No shipped template ever had them (phases 1 through 7 ship together), and the one caller that could run a stale copy of the messenger, a worker's worktree cut before an update, only ever messages another worker, which is its own chat, so its 404 fallback to `mngr message` lands on the right agent anyway.
+29. **`GET /api/agents` stays.** It is the plain listing of every mngr agent, not an alias: it is how loopback callers (the evals bridge, the deployment tests) see background agents beside the chats, and `/api/chats` lists chats only.
+30. **One auto-name word, "Chat"**, for every harness and lane (4.3); chats named before phase 7 keep the names on their agents.
+31. **A browser is owned by a chat**, not by the agent that claimed it: the fleet CLI sends `MINDS_CHAT_ID`, with `MNGR_AGENT_ID` as the fallback for a background agent, so the daemon's wake-ups reach the chat through the chat app whichever agent runs it.
+32. **The paired minds branch merges after the template is tagged**, as the app-model arc's did: the evals bridge clones the template's `main`, which has no `/api/chats` until the whole arc lands there.
 
 ## 4. The model
 
@@ -209,6 +215,33 @@ The `handoff` entry:
 
 `summary_outcome` becomes `reused`, `written`, or `missing` once summarizing ends; `prompt` is filled when switching begins (5.8); `error` is set in the failed phase (5.10).
 
+The `rebind` entry (section 6) sits in the same place, and a record carries at most one of the two:
+
+```json
+{
+  "rebind_id": "...",
+  "phase": "restarting",
+  "started_at": "...",
+  "target_lane": "anthropic",
+  "target_account_id": "...",
+  "target_harness": "claude",
+  "target_label": "Anthropic 2 (Claude Code)",
+  "agent_id": "agent-<the active agent>",
+  "previous_account_id": "...",
+  "previous_lane": "anthropic",
+  "claude_sessions_config_dir": "/home/user/.minds/accounts/<previous, then the target once the files moved>",
+  "restarted_account_id": null,
+  "trigger_message_id": "...",
+  "trigger_text": "the user's message",
+  "held_sends": [{"message_id": "...", "text": "...", "origin": "client"}],
+  "returned_block": "",
+  "error": null
+}
+```
+
+The two entries share their common fields (`ChatTransitionRecord` in code): the phase, the target, the confirming message, the held sends, the returned queue, and the error.
+A rebind changes no membership; when it completes on a chat of one agent the record is dropped again, so a record still exists only for a chat that has had a handoff.
+
 The own-chat rule: when listing instances, every non-primary agent that appears in no record as a non-first member is a chat of its own.
 Archived agents are excluded from the instance list because the record names them, not because of the `archived_at` label.
 A bare `mngr list` does not hide `archived_at` agents (only `--active` excludes them), so the chat app must never rely on mngr's listing to filter them.
@@ -227,7 +260,7 @@ The rename happens after `mngr stop`, so no tmux session carries the archival na
 Chat rename updates the active agent only, exactly as today's rename does, and leaves archived agents alone.
 The taken-names check (`_taken_names_locked`) treats an archived name as taken, which it is.
 
-The auto-name word stays per lane or harness until phase 7, when it becomes a lane-neutral "Chat N", since a chat that has switched harness would otherwise be called after a harness it no longer runs.
+Since phase 7 every auto-minted name is a lane-neutral "Chat N" (`naming.py`'s one `AUTO_NAME_WORD`), whatever harness or lane the chat starts on, since a chat that has switched harness would otherwise be called after a harness it no longer runs; the names chats were given before that ("Codex 1", "Pi 2") stay on their agents, and new numbers skip every taken name.
 
 ### 4.4 Status, stop, start, destroy, rename
 
@@ -241,6 +274,7 @@ The auto-name word stays per lane or harness until phase 7, when it becomes a la
 - The re-auth restart (`restart_agents_on_account`) is filtered to active agents so a stopped archived agent is never revived by a sign-in.
   The filter is load-bearing, not defensive: since the workspace's create defaults landed, every agent bound to an account carries the `account` label (workers, automations, and the minds app's chats included, not only chats this app created), and an archived agent keeps the label it was created with.
 - Every verb but destroy answers 409 with the handoff phase while the chat is converging.
+  The answer's `detail` names the destination (the harness for a handoff, the account for a rebind) and the phase in plain words ("This chat is switching to Codex and is summarizing; wait for the switch to finish, then try again.", "This chat is switching to Anthropic 2 (Claude Code) and is restarting; ..."), since the shell's tab menu and the chat page both show it to the user as is; nothing greys those controls out first.
 
 ### 4.5 Addressing a chat from inside the workspace
 
@@ -298,7 +332,9 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
   "status": "working",
   "labels": {"...": "..."},
   "agent_ids": ["agent-...", "agent-..."],
-  "handoff": {"phase": "summarizing", "target_lane": "openai", "target_account_id": "..."},
+  "handoff": {"kind": "handoff", "phase": "summarizing", "target_lane": "openai", "target_account_id": "...",
+              "target_harness": "codex", "target_label": "Codex",
+              "held_sends": [{"message_id": "...", "text": "the confirming message"}], "error": null},
   "active_agent": {
     "agent_id": "agent-...",
     "name": "Chat-2",
@@ -314,13 +350,14 @@ The chat app pushes one `ChatSnapshot` per chat on its WebSocket (`chats_updated
 ```
 
 - `active_agent` is what the frontend renders the terminal back face (`name`), the model bar (`harness`, `model_choice`), the popups (`harness`), the queue chips, and the tap button from.
-  It carries no `lane`: the lane is the account's, and nothing renders it before phase 5, which adds it if the provider row needs it.
+  It carries no `lane`: the lane is the account's, and the page reads it off the account row it already holds for `account_id`, which is all the switch rule needs (5.1: any account but the chat's own is a switch; the kind, a rebind or a handoff, is read by harness and lane, since two lanes can share one harness).
   The frontend never calls an agent-keyed route.
-- `handoff` is `null` except while converging (section 5.4).
+- `handoff` is `null` except while converging (section 5.4, section 6): one shape for both kinds of switch, since the page renders them the same way.
+  While set it carries `kind` (`handoff` or `rebind`), the phase (`restarting` is the rebind's), the target lane, account, and harness, `target_label` (what the phase text and the 409s name the destination by: the harness for a handoff, the account for a rebind), the messages held for after the switch (the confirming message first, so a reloaded page keeps showing them until they land in the transcript; the record keeps the confirming text as `trigger_text` once it leaves the held list), and the failed phase's `error`.
 - The Flask state holder currently named `ChatState` is renamed (to `ChatAppState`) so the name is free for chat-level state.
 
-Routes move to `/api/chats/<chat_id>/...` and `/api/chats/create`, with every `/api/agents/...` route kept as an alias that resolves the path parameter as a chat id, until phase 7 drops the aliases.
-The `agent_id` field of the create request keeps its name in the alias and is `chat_id` in the new route.
+Routes are `/api/chats/<chat_id>/...` and `/api/chats/create`; every `/api/agents/...` route was kept as an alias that resolved the path parameter as a chat id until phase 7 dropped the aliases (`GET /api/agents`, the plain listing of every mngr agent, is not one and stays).
+The create request's minted-id field is `chat_id`.
 The subagent routes take the three-part key.
 
 ### 4.7 The transcript
@@ -363,12 +400,30 @@ The auto-open reactor fires for an agent that appears carrying an `auto_open` or
 - Cancel remains available on the page until the old agent is stopped (section 5.6).
 - The transcript shows the switch chip once the new agent is active.
 
+As landed in phase 5:
+
+- Pressing an account on another harness in the provider menu sets the pending lane and closes the menu; the row wears a "next" badge, the Provider row reads "Claude Code, next: OpenAI (Codex)", and pressing the row again, or the account the chat runs on, takes the choice back.
+  Since phase 6 every account but the chat's own is a switch target: one on the chat's own harness and lane makes the next send a rebind (section 6), any other a handoff; a sign-in from the menu's "+ Add a provider" sets the lane the same way, and the confirm offers "Start a new chat instead" for the sibling chat the retired "Launch a new chat?" prompt used to open.
+  The pending lane is spent once the chat runs on that account, or on a new agent at all (a failed switch retried on another account lands there); a cancelled switch keeps it.
+- The send button becomes a text pill reading "Switch and send" while a lane is pending; it appears, like the plain send button, only once there is something to send.
+  Enter does the same as the button.
+- The confirm is the workspace's notice dialog: "Switch to Codex?", then "Claude wraps up what it is doing and stops." and "The conversation continues on OpenAI (Codex), starting with your message."
+  Cancel keeps the pending lane; Switch and send posts the handoff with the attachment-expanded text, a send-time `message_id`, and the client fields, and puts the `returned_block` back in the composer.
+- The typed message is painted as the page's own not-yet-real bubble carrying its `message_id`, which stands down the moment the snapshot lists the send under `handoff.held_sends`; from then on the held messages render from the snapshot with the phase as their caption ("Wrapping up with Claude...", "Claude is writing a summary...", "Starting Codex...", "Could not start Codex").
+  When the switch ends they come back as the page's bubbles until their turns arrive in the successor's transcript; a cancelled switch's confirming message goes back to the composer instead.
+  Every send while converging carries its `message_id` too and is shown the same way.
+- The activity strip shows the phase instead of the retiring agent's turn; the composer's placeholder says a message typed now is delivered once the new harness is ready.
+- The Stop button is replaced by "Cancel switch" while the switch can still be called off (draining and summarizing) and hidden afterwards; a cancel puts the returned confirming message back in the composer.
+- The failed page (5.10) is a notice over the composer: "Could not start Codex", mngr's reason, a picker of every signed-in account defaulting to the failed target, and "Try again"; a refused retry shows its reason under the picker.
+- The controls a converging chat refuses (the Stop agent row, the shoulder tap, the model picker, and the shell's stop, start, and rename) stay live and show the 409's detail through their existing alerts and notices (4.4).
+- An optimistic model pick made for the old agent is forgotten when the chat's active agent changes, so the bar shows the new harness's own choice (5.12).
+
 ### 5.2 Trigger and preconditions
 
-One switch route (`POST /api/chats/<chat_id>/handoff`, body `account_id`, `message`, `message_id`, and the client fields a send carries) takes the chat id, the target account, and the message, and dispatches on the target account's harness: the active agent's own harness means a rebind (section 6), any other harness means a handoff.
-Two lanes can share a harness (Opencode Go and OpenRouter both run on pi), which is why the dispatch keys on harness rather than lane.
+One switch route (`POST /api/chats/<chat_id>/handoff`, body `account_id`, `message`, `message_id`, and the client fields a send carries) takes the chat id, the target account, and the message, and dispatches on the target account's harness and lane: the active agent's own harness and lane, on a harness listed in `harnesses/binding.py`'s `REBIND_VERIFIED_HARNESSES`, means a rebind (section 6); anything else means a handoff.
+Two lanes can share a harness (Opencode Go and OpenRouter both run on pi) with different model sets, and a rebind keeps the model settings (principle 24), so a move between them replaces the agent rather than restarting it under a model the new provider may not serve; the first draft of this section keyed the dispatch on harness alone, which phase 6 changed for that reason.
+The answer's `kind` says which it was.
 The route refuses with 409 when the chat is already converging (the failed phase included, which retries through its own route), with 404 when the chat has no active agent (a provisional chat, or an id that names no chat), and with 400 when the target account is unknown or is the active agent's own account.
-Until phase 6 lands the rebind, a target on the active agent's own harness is refused with 400 too.
 The route runs draining on the request's thread and answers 202 with the phase the chat is then in and the queued text draining returned for the composer; the remaining phases run on a thread of the chat app's.
 Cancel is `POST .../handoff/cancel` and the retry of a failed create `POST .../handoff/retry` with an `account_id`.
 
@@ -493,17 +548,24 @@ A harness handoff resets model, effort, and fast mode to the new harness's defau
 
 ## 6. Rebind
 
-A rebind is the same gesture applied to an account on the active agent's own harness.
+A rebind is the same gesture applied to an account on the active agent's own harness and lane (5.2): the agent stays the chat's, and restarts on the new account.
 
-- Sequence: `mngr stop` the agent; rewrite the binding directly in the agent's state dir (the `CLAUDE_CONFIG_DIR` line of the env file for claude, the credential symlink for codex, pi, and antigravity, exactly what `binding.create_args` writes at create, from the per-harness tables in `harnesses/account_scope.py`); `mngr label account=<new account id>`; `mngr start --no-resume`.
-  The edit lands while the agent is down so the restart sources it, which is why `--restart` is not used.
-  No mngr command is added for the edit; the env file is the interface.
-- The transcript, the tk steps, and the model settings carry over.
-- The confirm dialog's rebind variant says only that the agent restarts on the new account.
-- Feasibility per harness is unverified: whether each harness resumes its session cleanly under a swapped credential is tested in phase 6, and a harness that does not falls back to a handoff, which the dialog then says.
-- Before the stop: the bounded wait for an in-flight send, the queue returned to the composer, and any live connection closed, as in a handoff's draining and switching.
-- The trigger message is held through the restart and delivered through the normal send path once the agent is ready, shown with the same phased placeholder.
-- A rebind is persisted on the record too (a `rebind` entry with the target account and the held sends), and resumes the same way: stopped, repointed, relabeled, started, each step re-checked.
+- Sequence (`chat_rebinds.py`), on the record's `rebind` entry: `draining` returns the queue to the composer through the stop button's interrupt (the bounded wait for an in-flight send included), on the request's thread as a handoff's does; `restarting` then runs on a thread of the chat app's: `mngr stop` the agent, rewrite the binding in its own state dir, drop its resident watcher (only once the new binding is on disk, so a read that rebuilt it meanwhile is dropped too), `mngr label <agent> --label account=<new id>`, `mngr start <agent> --no-resume`, then deliver the held sends (the confirming message first) through the normal send path and clear the entry.
+  The binding rewrite is `binding.rebind_agent`: the `CLAUDE_CONFIG_DIR=` line of the state dir's `env` file for claude (mngr sources that file into the tmux session on every start and never rewrites it), the credential link in the state dir for codex, pi, and antigravity (`account_scope`'s tables, the same link `create_args` repoints at create); each write lands whole, by a temp file or link renamed into place.
+  No mngr command is added for the edit; the env file is the interface (principle 27).
+- Claude keeps a chat's session files under the config dir it runs with, at `<account>/projects/<encoded work dir>/<session id>.jsonl` with the subagents under `<session id>/` beside it, and both mngr's resume chain and the chat app's watcher look them up under the current config dir.
+  So before the env line changes, the rebind moves the agent's sessions (the ids in the state dir's `claude_session_id_history`, plus the agent's own uuid) from the previous account's tree to the new account's, keeping their place under `projects/` (`harnesses/claude/session_files.py`), and tracks the dir the files are under on the `rebind` entry (`claude_sessions_config_dir`: the previous config dir, recorded before the rewrite, then the target once they moved), so a resume after the rewrite, or a retry on a third account after a failed start, still knows where the files are and moves them on.
+  The other harnesses keep sessions in the agent's state dir, so only the credential moves.
+- The transcript, the tk steps, and the model settings carry over: the transcript because the watcher is rebuilt against the same files under the new dir, the model settings because every harness keeps its launch settings per agent (claude's in mngr's managed settings overlay in the state dir).
+- The trigger message and anything sent meanwhile are held on the record and delivered once the agent is up, shown with the same phased placeholder; mngr's own send waits for a claude or antigravity TUI to be ready before it pastes, pi's send is an inbox append its extension drains once running, and codex's session retries while its daemon comes up, so the first send after the restart lands on every harness.
+- The confirm dialog's rebind variant is one line ("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation."), the phase text reads "Restarting Claude on Anthropic 2 (Claude Code)...", and the 409s name the account.
+- There is no cancel: draining runs on the request's thread and the stop follows at once, so the confirm is the last chance; the cancel route answers 409 with a detail that says so, and the page never shows "Cancel switch" for a rebind.
+- A start that fails leaves the chat in the `failed` phase with mngr's output, the binding and the label already at the new account; the page's retry offers the accounts of the same harness and lane (the agent stays the chat's) and reruns the restart, every step finding its work done; "Start a new chat instead" is the way out to anywhere else, and destroy remains available.
+- Feasibility per harness: `REBIND_VERIFIED_HARNESSES` lists every harness with an account scope (claude, codex, pi, antigravity), and a same-lane target on a harness outside the list falls back to a handoff, which is the spec's fallback for a harness that cannot resume under a swapped credential; the hand test with two real accounts per harness is the user's, and a harness that fails it is dropped from the list.
+- Every step is idempotent and re-checked on resume (`_resume_handoffs` spawns the rebind runner beside the handoff runner): a stopped agent is not stopped again, a moved session file is not moved again, the env line and the link are rewritten to the same value, `mngr label` merges, and `mngr start` is a no-op for a running agent.
+  The entry records the account the start landed on (`restarted_account_id`, written in the same update that moves the active entry), so a resume that finds it naming the target has only the delivery left; the active entry cannot serve as that marker, since it names the previous account until the start lands and a retry may name the previous account as its target.
+- A rebind on a chat of one agent gets its first record like a first handoff does, and the record is dropped again when the rebind completes; on a multi-agent chat the active entry's `account_id` and `lane` are updated in place.
+  The target becomes the most recently used account, as a launch does.
 
 ## 7. The template's side: AGENTS.md and the summary skill
 
@@ -587,43 +649,53 @@ Where the minds repo is touched, the paired branch is named.
 
 ### Phase 5: the handoff, UI
 
-- The pending lane on the provider row, "Switch and send", the two-line confirm, the phased placeholder text, the switch chip, the failed page with retry on another lane, the model bar reset, and the 409 handling for stop, start, and rename while converging (5.1).
-- Exit check: the two-account e2e drives the whole flow through the browser, including cancel during summarizing and a retry on a third lane after a forced failure.
+- The user's side of the handoff as section 5.1 records it: the pending lane on the provider menu (cross-harness accounts only; same-harness accounts keep the new-chat prompt until phase 6), "Switch and send" with the two-line confirm, the held messages rendered from the snapshot with the phase as their caption, the activity strip's phase text, "Cancel switch" in place of Stop, the failed page with a retry on any signed-in account, and the model bar following the new agent with any optimistic pick forgotten.
+- The wire (4.6): `handoff` gained `target_harness` and `held_sends`; the record gained `trigger_text`.
+  The 409 every refused verb answers names the target harness and the phase in plain words (4.4), and the refused controls show it as is rather than being greyed out first.
+- Tests: vitest for the pending lane, the composer's switch, cancel, and placeholder, the held bubbles and their bookkeeping across the switch's end, the activity strip, the failed notice, and the active-agent listener; and three Playwright release tests in `test_e2e.py` that drive the whole flow through the browser against the recording `mngr` (the switch, a cancel during summarizing, and a forced create failure retried on a third account).
+- Exit check, as met: the browser flow runs deterministically against the recording `mngr` in the e2e suite; the two-account release test (`test_handoff_release.py`) stays API-driven until CI has an OpenRouter key.
 
 ### Phase 6: rebind
 
-- The rebind sequence (section 6), the dialog variant, per-harness verification, the fallback to a handoff.
-- Independent of phases 4 and 5 once phase 3 is in; it never creates a new agent.
-- Exit check: one e2e per harness that has a second account available.
+- The rebind as section 6 records it: `chat_rebinds.py` (the runner, its phases `draining` and `restarting` on the record's `rebind` entry, the failed phase and its same-lane retry), `binding.rebind_agent` and `REBIND_VERIFIED_HARNESSES`, the claude session-file move, the dispatch by harness and lane in the switch route (5.2), and the wire's `kind` and `target_label` (4.6).
+- The page: every account but the chat's own sets the pending lane (the "Launch a new chat?" prompt is retired), the confirm's rebind variant, "Start a new chat instead" on the confirm and on the failed page (a new chat on the account, with the typed message from the confirm), the rebind's phase text, and no "Cancel switch" for a rebind.
+- Tests: `chat_rebinds_test.py` drives the runner through every phase against a recording `mngr` (the claude move, a symlink harness, a failed start and its retry, a refused relabel, a resume after the env was rewritten, a gone agent or account, a refused held send); `agent_manager_test.py` and `server_test.py` cover the dispatch, the 202, the 409s, the cancel refusal, and the retry rule; vitest covers the lane rule, the confirm, the new-chat action, the phase text, and the failed page; one Playwright release test in `test_e2e.py` drives a rebind through the browser against the recording `mngr`.
+- Exit check, as met: the browser flow runs deterministically against the recording `mngr`; the per-harness hand test with two real accounts is the user's, with `REBIND_VERIFIED_HARNESSES` as the switch for any harness that fails it.
 
 ### Phase 7: cleanup
 
-- Drop the `/api/agents/*` aliases; retarget the in-workspace messaging script (`system/scripts/message_chat.py`, which posts to the aliased send route so that it still reaches a chat app from before the rename during an update), and, in the paired minds branch, the minds_evals bridge, the minds deployment tests, and the e2e runner, which merges after this template is tagged, as the app-model arc did.
-- The lane-neutral auto-name word.
-- Remove the phase 2 `CLEANUP` bridges, update the minds docs and glossary, and record the settled decisions.
+- The `/api/agents/...` aliases are gone: the per-chat routes, `/api/chats/create`, and the subagent reads answer under `/api/chats` alone, `CreateAgentResponse` went with the create alias, and `GET /api/agents` stays as the plain listing (principle 29).
+  `system/scripts/message_chat.py` posts to `/api/chats/<chat_id>/message`; its 404 backoff to `mngr message` is unchanged, and still right for a chat app from before the rename, which has no `/api/chats` routes and no handoffs either.
+- One auto-name word, "Chat" (4.3): `naming.py`'s `AUTO_NAME_WORD` replaces the per-harness table and `lanes.py`'s per-lane overrides.
+- The browser fleet addresses the chat that holds a browser (principle 31): the fleet CLI's owner id is `MINDS_CHAT_ID`, else `MNGR_AGENT_ID`, and the daemon's wake-ups and nudges reach that chat through the messenger.
+- The paired minds branch retargets the minds_evals bridge (`/api/chats/create` answering `chat_id`, `/api/chats/<chat_id>/message`, `/events`, and `/model`) and the deployment test that creates a chat; the e2e runner keys on the URL shape and is unchanged. It merges after this template is tagged (principle 32).
+- Docs: the chat README, the workspace app model's section 7.4, its mngr-side note, the oom_priority README's presence route, the minds glossary and the minds_evals README; the per-phase specs and older plans keep their historical route names.
+- Not removed, on purpose: the `${MINDS_CHAT_ID:-$MNGR_AGENT_ID}` fallbacks across the skills and `layout.py` (they serve agents created outside the chat app, which never get the variable), and the `CLEANUP` marks of other arcs.
 
 ## 9. External callers and compatibility
 
 | Caller | Today | After phase 2 | After phase 7 |
 |---|---|---|---|
 | minds e2e runner (`e2e_workspace_runner.py`) | finds the chat frame by `/agent-<hex>/` | unchanged (chat ids keep the prefix) | unchanged |
-| minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events` | served by the aliases | retargeted to `/api/chats/...` |
-| minds deployment tests | `/api/agents/...` | aliases | retargeted |
+| minds_evals bridge (`minds_bridge.py`) | `/api/agents/create-chat`, `/api/agents/<id>/message`, `/events`, `/model` | served by the aliases | `/api/chats/create` (answering `chat_id`), `/api/chats/<chat_id>/...`; the `/api/agents` listing as before |
+| minds deployment tests (`test_litellm_via_workspace.py`) | `/api/agents/create-chat` | the alias | `/api/chats/create` |
 | minds assist and update-self chats | a bare `mngr create --template chat` inside the workspace, bound to the default account and harness through `.mngr/settings.local.toml`, carrying `account=<default>` | own chats, no `MINDS_CHAT_ID`; then, after phase 4, created through the chat app by `message_chat.py --create` (4.5), so they are chat-app chats with `MINDS_CHAT_ID` | unchanged |
 | the `automation` template prompt | `app:chat?instance=$MNGR_AGENT_ID` | `$MINDS_CHAT_ID` with fallback | unchanged |
 | the shell | instance keys, addresses, `/api/client-activity` keys | chat ids, which equal today's keys | unchanged |
 | the minds chrome's permission routing | request `agent_id` = chat frame URL | chat id | unchanged |
 | the minds latchkey handlers' resolution nudge (`mngr message <agent_id>`) | the request's `agent_id` | unchanged (the chat id is the live agent's id until phase 3); phase 4's paired minds branch routes the nudge through the chat app by chat id (4.5) | unchanged |
+| the browser fleet's owner id and wake-ups (`fleet.py`, `session.py`) | `MNGR_AGENT_ID`, messaged with `mngr message` | the messenger, still keyed by the claiming agent's id | `MINDS_CHAT_ID`, else `MNGR_AGENT_ID` (principle 31) |
 
 ## 10. Open questions and things to verify
 
 - Settled for phase 4 (4.3): the archival rename follows `mngr stop`, so tmux never carries the archival session name; only an archived agent started by hand would test it.
 - Settled for phase 4: the minds desktop client's latchkey auto-registration follows every newly discovered agent, so a successor needs no registration step of the handoff's.
 - Settled for phase 2 (4.5): the minds side treats a permission request's `agent_id` purely as a routing key (the gateway checks its shape, the chrome routes by workspace and matches the card by `request_id`), so the request carries the chat id alone; the resolution nudge moves to the chat in phase 4.
-- Per-harness session resumption under a swapped credential for the rebind (phase 6).
+- Settled for phase 6 (section 6): claude's session files move with the agent between account folders, so `claude --resume` and the watcher find them; the other harnesses keep sessions per agent. Whether every harness then resumes cleanly under the swapped credential is verified by hand per harness, and `REBIND_VERIFIED_HARNESSES` drops any that does not.
 - Settled for phase 2 (4.5): the report is written into the lead's checkout, `lead_work_dir` when the launcher stamped it and the repo's main worktree otherwise; the id-addressed `mngr rsync` delivery is gone.
 - Settled for phase 4 (section 7): the `AGENTS.md` section and the summary skill's content rules, as landed.
-- Enabling the two-account e2e in CI: it needs an OpenRouter key beside the Anthropic one in the CI secrets (phase 5).
+- Enabling the two-account e2e in CI: it needs an OpenRouter key beside the Anthropic one in the CI secrets.
+  Phase 5's browser exit check runs against the recording `mngr` instead; the real two-account test stays API-driven until the key exists.
 
 ## 11. Documents this plan revises
 

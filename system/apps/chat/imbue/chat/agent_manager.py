@@ -23,6 +23,7 @@ from pydantic import Field
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import account_label_for
 from imbue.chat.accounts import claim_first_chat
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import release_first_chat
@@ -48,10 +49,17 @@ from imbue.chat.chat_handoffs import HandoffCancelledError
 from imbue.chat.chat_handoffs import HandoffDeps
 from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
+from imbue.chat.chat_handoffs import cancel_refused_detail
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import deliver_held_send
 from imbue.chat.chat_handoffs import failure_notice
+from imbue.chat.chat_rebinds import RebindCancelledError
+from imbue.chat.chat_rebinds import RebindDeps
+from imbue.chat.chat_rebinds import RebindRunner
+from imbue.chat.chat_rebinds import rebind_cancel_refused_detail
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
+from imbue.chat.chat_records import ChatRebindRecord
 from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import ChatRecordError
 from imbue.chat.chat_records import ChatRecordStore
@@ -60,6 +68,7 @@ from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.harnesses.activity import HarnessActivityTracker
 from imbue.chat.harnesses.binding import BindingError
 from imbue.chat.harnesses.binding import create_args as binding_create_args
+from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.codex.live_user_turns import drop_live_user_turns
 from imbue.chat.harnesses.codex.live_user_turns import note_live_user_turn
@@ -68,7 +77,7 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
-from imbue.chat.harnesses.lanes import AUTO_NAME_WORD_BY_LANE
+from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import read_model_identity
@@ -102,10 +111,12 @@ from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
-from imbue.chat.naming import AUTO_NAME_WORD_BY_HARNESS
+from imbue.chat.models import TransitionKind
+from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_name_conflict
@@ -455,6 +466,11 @@ class _ResolvedChat(FrozenModel):
     def handoff(self) -> ChatHandoffRecord | None:
         return None if self.record is None else self.record.handoff
 
+    @property
+    def transition(self) -> ChatHandoffRecord | ChatRebindRecord | None:
+        """The switch in progress, a handoff or a rebind, or None."""
+        return None if self.record is None else self.record.converging
+
 
 @pure
 def _stand_in_active_agent_id(record: ChatRecord) -> str | None:
@@ -477,15 +493,16 @@ def _lane_of_account_label(account_label: str) -> str:
         return ""
 
 
-class _HandoffTarget(FrozenModel):
-    """The account a handoff moves a chat to, with the harness its lane runs."""
+class _SwitchTarget(FrozenModel):
+    """The account a switch moves a chat to, with the harness its lane runs and the label the picker shows."""
 
     account: Account = Field(description="The signed-in account the chat moves to")
     harness: HarnessType = Field(description="The harness the account's lane runs")
+    label: str = Field(description="The account as the picker shows it, for the page's words and the 409s")
 
 
-def _resolve_handoff_target(account_id: str) -> _HandoffTarget:
-    """The account a handoff names. Raises ``HandoffError`` when it is unknown or on a lane this build lacks."""
+def _resolve_switch_target(account_id: str) -> _SwitchTarget:
+    """The account a switch names. Raises ``HandoffError`` when it is unknown or on a lane this build lacks."""
     try:
         account = resolve_account(account_id)
     except AccountError as e:
@@ -493,24 +510,83 @@ def _resolve_handoff_target(account_id: str) -> _HandoffTarget:
     harness = harness_for(account)
     if harness is None:
         raise HandoffError(f"Account {account_id} is on a lane this build does not have")
-    return _HandoffTarget(account=account, harness=harness)
+    # Numbered among the accounts on lanes this build has, so the lane check comes first.
+    try:
+        label = account_label_for(account_id)
+    except AccountError as e:
+        raise HandoffError(str(e)) from e
+    return _SwitchTarget(account=account, harness=harness, label=label)
 
 
 @pure
-def _handoff_state_of(record: ChatRecord | None) -> HandoffState | None:
-    if record is None or record.handoff is None:
+def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
+    """The switch in progress as the wire carries it (one shape for a handoff and a rebind), or None."""
+    transition = None if record is None else record.converging
+    if transition is None:
         return None
+    # The confirming message leads the list for as long as the switch lasts: a handoff folds it
+    # into the successor's prompt, a rebind delivers it first, and either way the page keeps
+    # showing it until its turn appears in the transcript.
+    others = transition.held_sends_after_trigger()
     return HandoffState(
-        phase=record.handoff.phase,
-        target_lane=record.handoff.target_lane,
-        target_account_id=record.handoff.target_account_id,
-        error=record.handoff.error,
+        kind=TransitionKind.REBIND if isinstance(transition, ChatRebindRecord) else TransitionKind.HANDOFF,
+        phase=transition.phase,
+        target_lane=transition.target_lane,
+        target_account_id=transition.target_account_id,
+        target_harness=transition.target_harness,
+        target_label=_target_label_of(transition),
+        held_sends=(
+            HeldSendSnapshot(message_id=transition.trigger_message_id, text=transition.trigger_text),
+            *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others),
+        ),
+        error=transition.error,
     )
 
 
 @pure
+def _target_label_of(transition: ChatHandoffRecord | ChatRebindRecord) -> str:
+    """What the page and the 409s name a switch's destination by: the harness for a handoff, the account for a rebind."""
+    if isinstance(transition, ChatRebindRecord):
+        return transition.target_label
+    return HARNESS_LABEL[transition.target_harness]
+
+
+@pure
+def _converging_detail_of(transition: ChatHandoffRecord | ChatRebindRecord) -> str:
+    """The 409's ``detail`` for a chat converging on ``transition``."""
+    return converging_detail(transition.phase, _target_label_of(transition))
+
+
+def is_rebind_target(agent_state: AgentStateItem, target: _SwitchTarget) -> bool:
+    """Whether a switch to ``target`` keeps the agent (a rebind, spec 6) rather than replacing it (a handoff).
+
+    The same harness and the same lane: two lanes can share a harness (Opencode Go and
+    OpenRouter both run on pi) with different model sets, and a rebind keeps the model settings
+    (principle 24), so only a same-lane account can take the agent as it is. A harness that
+    cannot be rebound falls back to a handoff.
+    """
+    if agent_state.harness is not target.harness or not is_rebind_supported(target.harness):
+        return False
+    return _lane_of_account_label(agent_state.labels.get("account", "")) == target.account.lane
+
+
+@pure
+def _is_rebind_retry_target(rebind: ChatRebindRecord, target: _SwitchTarget) -> bool:
+    """Whether a failed rebind may be retried on ``target``: an account of the lane the rebind runs on.
+
+    Read off the record rather than the agent's ``account`` label: the relabel runs before the
+    start, so after a failed start the label names the failed target, which the user may have
+    signed out since; the record's target lane is the agent's own (a rebind is only opened for
+    a same-lane target) and does not dangle.
+    """
+    if target.harness is not rebind.target_harness or not is_rebind_supported(target.harness):
+        return False
+    return target.account.lane == rebind.target_lane
+
+
+@pure
 def _converging_status(phase: HandoffPhase) -> InstanceStatus:
-    """A converging chat is ``working`` whatever its retiring agent does, and ``error`` once the create failed (spec 5.4)."""
+    """A converging chat is ``working`` whatever its agent does, and ``error`` once the start failed (spec 5.4)."""
     return InstanceStatus.ERROR if phase is HandoffPhase.FAILED else InstanceStatus.WORKING
 
 
@@ -531,17 +607,18 @@ def chat_snapshot_for_active_agent(
     in may already carry its archival name.
     """
     handoff = chat.handoff
+    transition = chat.transition
     return ChatSnapshot(
         chat_id=chat.chat_id,
         title=handoff.chat_title if handoff is not None else (agent.labels.get("display_name") or agent.name),
         name=handoff.chat_name if handoff is not None else agent.name,
         project=agent.labels.get("project"),
-        status=_converging_status(handoff.phase)
-        if handoff is not None
+        status=_converging_status(transition.phase)
+        if transition is not None
         else chat_status_for_agent(agent.state, agent.activity_state, is_permission_pending),
         labels=agent.labels,
         agent_ids=chat.member_agent_ids,
-        handoff=_handoff_state_of(chat.record),
+        handoff=_transition_state_of(chat.record),
         active_agent=ActiveAgentSnapshot(
             agent_id=agent.id,
             name=agent.name,
@@ -1181,38 +1258,56 @@ class AgentManager:
                 return False
             return bool(self._pending_permission_ids_by_agent.get(chat.active_agent_id))
 
-    # Chat-level: handoffs (moving a chat to another harness; ``chat_handoffs.py`` runs the steps).
+    # Chat-level: switches (moving a chat to another harness or account; ``chat_handoffs.py`` and
+    # ``chat_rebinds.py`` run the steps).
 
     def set_handoff_capabilities(self, capabilities: HandoffCapabilities) -> None:
-        """Install what a handoff needs from the app state.
+        """Install what a handoff or a rebind needs from the app state.
 
         ``create_application`` calls this once, where the routes are; a manager built without
-        the app (a test that never assembles it) refuses every handoff.
+        the app (a test that never assembles it) refuses every switch.
         """
         self._handoff_capabilities = capabilities
 
     def get_handoff_state(self, chat_id: ChatId) -> HandoffState | None:
-        """The chat's in-progress handoff as the wire carries it, or None while it is not converging."""
+        """The chat's in-progress switch (a handoff or a rebind) as the wire carries it, or None while it is not converging."""
         with self._lock:
-            return _handoff_state_of(self._chat_record_by_id.get(chat_id))
+            return _transition_state_of(self._chat_record_by_id.get(chat_id))
+
+    def begin_switch(
+        self, chat_id: ChatId, account_id: str, message: str, message_id: str, origin: HeldSendOrigin
+    ) -> tuple[TransitionKind, HandoffPhase, str]:
+        """Continue a chat on ``account_id``: a rebind when the account is on the chat's own harness and
+        lane and that harness can be rebound, else a handoff (spec 5.2).
+
+        Returns which it was, the phase the chat is in once draining is done, and the queued
+        text draining returned for the composer. Raises ``ChatConvergingError`` for a chat
+        already converging and ``HandoffError`` for a chat with no active agent, an unknown
+        account, or the chat's own account.
+        """
+        target = _resolve_switch_target(account_id)
+        with self._lock:
+            agent_state = self._movable_agent_locked(chat_id, target)
+        if is_rebind_target(agent_state, target):
+            phase, returned_block = self.begin_rebind(chat_id, account_id, message, message_id, origin)
+            return TransitionKind.REBIND, phase, returned_block
+        phase, returned_block = self.begin_handoff(chat_id, account_id, message, message_id, origin)
+        return TransitionKind.HANDOFF, phase, returned_block
 
     def begin_handoff(
         self, chat_id: ChatId, account_id: str, message: str, message_id: str, origin: HeldSendOrigin
     ) -> tuple[HandoffPhase, str]:
-        """Start moving a chat to ``account_id``: write the handoff, drain the retiring agent, and run the rest.
+        """Start moving a chat to ``account_id`` on a new agent: write the handoff, drain the retiring agent,
+        and run the rest.
 
         Returns the phase the chat is in once draining is done and the queued text draining
         returned for the composer. ``message`` is the successor's first message, held from
         this moment. Raises ``ChatConvergingError`` for a chat already converging and
-        ``HandoffError`` when the chat has no active agent, the account is unknown or the
-        chat's own, or the target runs the chat's current harness (a rebind, not yet
-        supported).
+        ``HandoffError`` when the chat has no active agent or the account is unknown or the
+        chat's own. ``begin_switch`` decides between this and a rebind.
         """
         runner = self._handoff_runner()
-        converging = self.get_handoff_state(chat_id)
-        if converging is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({converging.phase.value})")
-        target = _resolve_handoff_target(account_id)
+        target = _resolve_switch_target(account_id)
         now = datetime.now(timezone.utc)
         with self._lock:
             agent_state = self._movable_agent_locked(chat_id, target)
@@ -1236,30 +1331,68 @@ class AgentManager:
         self._spawn_handoff(chat_id, handoff.handoff_id, runner)
         return HandoffPhase.SUMMARIZING, returned_block
 
-    def _movable_agent_locked(self, chat_id: ChatId, target: _HandoffTarget) -> AgentStateItem:
-        """The tracked agent a chat may be moved off, or the refusal (spec 5.2). Lock held."""
+    def begin_rebind(
+        self, chat_id: ChatId, account_id: str, message: str, message_id: str, origin: HeldSendOrigin
+    ) -> tuple[HandoffPhase, str]:
+        """Start moving a chat's agent to ``account_id`` in place (spec 6): write the rebind, drain the agent,
+        and restart it on its own thread.
+
+        Returns the phase the chat is in once draining is done and the queued text draining
+        returned for the composer. Raises ``ChatConvergingError`` and ``HandoffError`` as
+        ``begin_handoff`` does, plus ``HandoffError`` when the account is not one the agent can be
+        rebound to (another harness or lane, or a harness that cannot be).
+        """
+        runner = self._rebind_runner()
+        target = _resolve_switch_target(account_id)
+        now = datetime.now(timezone.utc)
+        with self._lock:
+            agent_state = self._movable_agent_locked(chat_id, target)
+            if not is_rebind_target(agent_state, target):
+                raise HandoffError(
+                    f"Chat '{chat_id}' cannot change to account {target.account.id} in place; "
+                    "it is on another harness or lane"
+                )
+            rebind = self._open_rebind_locked(chat_id, agent_state, target, message, message_id, origin, now)
+        self._broadcast_chats_updated()
+        # Launching on an account makes it the most recently used one, as a create does; a
+        # convenience, so a store that refuses is logged rather than failing the switch.
+        try:
+            set_mru(target.account.id)
+        except AccountError as e:
+            _loguru_logger.warning("Could not record {} as most-recently-used: {}", target.account.id, e)
+        _loguru_logger.info(
+            "Chat {} is moving agent {} from account {} to account {}",
+            chat_id,
+            agent_state.id,
+            rebind.previous_account_id or "(none)",
+            target.account.id,
+        )
+        try:
+            returned_block = runner.drain(chat_id, rebind.rebind_id)
+        except RebindCancelledError:
+            return HandoffPhase.DRAINING, ""
+        self._spawn_rebind(chat_id, rebind.rebind_id, runner)
+        return HandoffPhase.RESTARTING, returned_block
+
+    def _movable_agent_locked(self, chat_id: ChatId, target: _SwitchTarget) -> AgentStateItem:
+        """The tracked agent a chat may be moved off (or rebound), or the refusal (spec 5.2). Lock held."""
         chat = self._resolve_chat_locked(chat_id)
         agent_state = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
         if chat is None or agent_state is None:
             raise HandoffError(f"Chat '{chat_id}' has no active agent to move")
-        if chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is already moving ({chat.handoff.phase.value})")
+        if chat.transition is not None:
+            raise ChatConvergingError(_converging_detail_of(chat.transition))
         if is_primary_agent(agent_state):
             raise HandoffError("The workspace's services agent is not a chat")
         if agent_state.labels.get("account") == target.account.id:
             raise HandoffError(f"Chat '{chat_id}' already runs on account {target.account.id}")
-        if agent_state.harness is target.harness:
-            raise HandoffError(
-                f"Chat '{chat_id}' already runs on {target.harness.value}; switching accounts within one "
-                "harness is not supported yet"
-            )
         return agent_state
 
     def _open_handoff_locked(
         self,
         chat_id: ChatId,
         agent_state: AgentStateItem,
-        target: _HandoffTarget,
+        target: _SwitchTarget,
         message: str,
         message_id: str,
         origin: HeldSendOrigin,
@@ -1284,13 +1417,47 @@ class AgentManager:
             chat_title=agent_state.labels.get("display_name") or agent_state.name,
             project_label=agent_state.labels.get("project", ""),
             trigger_message_id=message_id,
+            trigger_text=message,
             held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
         )
-        self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, handoff)))
+        self._write_record_locked(record.with_converging(handoff))
         return handoff
 
+    def _open_rebind_locked(
+        self,
+        chat_id: ChatId,
+        agent_state: AgentStateItem,
+        target: _SwitchTarget,
+        message: str,
+        message_id: str,
+        origin: HeldSendOrigin,
+        now: datetime,
+    ) -> ChatRebindRecord:
+        """Write the chat's rebind entry in the draining phase, with the trigger message as its first held
+        send; a chat that is still its one agent gets its record here. Lock held."""
+        existing = self._chat_record_by_id.get(chat_id)
+        record = existing if existing is not None else self._first_record_locked(chat_id, agent_state, now)
+        previous_account_id = agent_state.labels.get("account", "")
+        rebind = ChatRebindRecord(
+            rebind_id=uuid4().hex,
+            phase=HandoffPhase.DRAINING,
+            started_at=now,
+            target_lane=target.account.lane,
+            target_account_id=target.account.id,
+            target_harness=target.harness,
+            target_label=target.label,
+            agent_id=agent_state.id,
+            previous_account_id=previous_account_id,
+            previous_lane=_lane_of_account_label(previous_account_id),
+            trigger_message_id=message_id,
+            trigger_text=message,
+            held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+        )
+        self._write_record_locked(record.with_converging(rebind))
+        return rebind
+
     def _first_record_locked(self, chat_id: ChatId, agent_state: AgentStateItem, now: datetime) -> ChatRecord:
-        """The record a chat gets at its first handoff: its one agent so far, as seq 1. Lock held."""
+        """The record a chat gets at its first switch: its one agent so far, as seq 1. Lock held."""
         account_label = agent_state.labels.get("account", "")
         details = self._agent_details_by_id.get(agent_state.id)
         return ChatRecord(
@@ -1314,22 +1481,23 @@ class AgentManager:
         chat is its one agent again), the message that confirmed the switch is returned for
         the composer, and every other held send is delivered to the agent the chat stays on.
         Raises ``HandoffError`` when the chat is not converging and ``ChatConvergingError``
-        once switching has begun, the point of no return.
+        once switching has begun, the point of no return, or when the switch is a rebind, which
+        has no window to call it off in.
         """
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
-            handoff = record.handoff if record is not None else None
-            if record is None or handoff is None:
+            transition = record.converging if record is not None else None
+            if record is None or transition is None:
                 raise HandoffError(f"Chat '{chat_id}' is not moving to another agent")
-            if handoff.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
-                raise ChatConvergingError(f"Chat '{chat_id}' can no longer go back ({handoff.phase.value})")
-            trigger = handoff.held_send_for(handoff.trigger_message_id)
-            others = tuple(held for held in handoff.held_sends if held.message_id != handoff.trigger_message_id)
+            if isinstance(transition, ChatRebindRecord):
+                raise ChatConvergingError(rebind_cancel_refused_detail(transition.target_label))
+            if transition.phase in (HandoffPhase.SWITCHING, HandoffPhase.FAILED):
+                raise ChatConvergingError(cancel_refused_detail(transition.target_harness))
+            others = transition.held_sends_after_trigger()
             if len(record.agents) == 1:
-                self._chat_record_store.delete(chat_id)
-                self._chat_record_by_id.pop(chat_id, None)
+                self._delete_record_locked(chat_id)
             else:
-                self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, None)))
+                self._write_record_locked(record.with_converging(None))
             retiring_id = record.agents[-1].agent_id
         self._broadcast_chats_updated()
         _loguru_logger.info("Chat {} stays on agent {}: its handoff was cancelled", chat_id, retiring_id)
@@ -1340,7 +1508,7 @@ class AgentManager:
                 name=f"handoff-cancel-{str(chat_id)[:14]}",
                 is_checked=False,
             )
-        return trigger.text if trigger is not None else ""
+        return transition.trigger_text
 
     def _deliver_held_sends(self, chat_id: ChatId, agent_id: str, held_sends: tuple[HeldSend, ...]) -> None:
         """Hand the sends a cancelled handoff held to the agent the chat stayed on, in order."""
@@ -1353,65 +1521,85 @@ class AgentManager:
             deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
 
     def retry_handoff(self, chat_id: ChatId, account_id: str) -> HandoffPhase:
-        """Run a failed handoff's create again, on ``account_id`` (any signed-in account; spec 5.10).
+        """Run a failed switch's last step again on ``account_id`` (spec 5.10, and spec 6 for a rebind).
 
-        The stored prompt is resent verbatim; only the target changes. Raises ``HandoffError``
-        when the chat is not in the failed phase or the account is unknown.
+        A failed handoff reruns its successor's create on any signed-in account, the stored
+        prompt resent verbatim; a failed rebind reruns its restart on an account of the same
+        harness and lane (its agent stays the chat's). Raises ``HandoffError`` when the chat is
+        not in the failed phase, the account is unknown, or it is not one a rebind can move to.
         """
-        runner = self._handoff_runner()
-        target = _resolve_handoff_target(account_id)
+        # Refused before anything is written, so an unwired manager leaves the failed phase as it is.
+        self._require_switch_capabilities()
+        target = _resolve_switch_target(account_id)
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
-            handoff = record.handoff if record is not None else None
-            if record is None or handoff is None or handoff.phase is not HandoffPhase.FAILED:
-                raise HandoffError(f"Chat '{chat_id}' has no failed handoff to retry")
-            retried = handoff.model_copy_update(
-                to_update(handoff.field_ref().phase, HandoffPhase.SWITCHING),
-                to_update(handoff.field_ref().error, None),
-                to_update(handoff.field_ref().target_lane, target.account.lane),
-                to_update(handoff.field_ref().target_account_id, target.account.id),
-                to_update(handoff.field_ref().target_harness, target.harness),
-            )
-            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, retried)))
+            transition = record.converging if record is not None else None
+            if record is None or transition is None or transition.phase is not HandoffPhase.FAILED:
+                raise HandoffError(f"Chat '{chat_id}' has no failed switch to retry")
+            if isinstance(transition, ChatRebindRecord):
+                if transition.agent_id not in self._agents:
+                    raise HandoffError(f"Chat '{chat_id}' no longer has the agent its switch was restarting")
+                if not _is_rebind_retry_target(transition, target):
+                    raise HandoffError(
+                        f"Chat '{chat_id}' can only retry its switch on an account of the same harness and lane; "
+                        "start a new chat to move it elsewhere"
+                    )
+                retried_rebind = transition.model_copy_update(
+                    to_update(transition.field_ref().phase, HandoffPhase.RESTARTING),
+                    to_update(transition.field_ref().error, None),
+                    to_update(transition.field_ref().target_lane, target.account.lane),
+                    to_update(transition.field_ref().target_account_id, target.account.id),
+                    to_update(transition.field_ref().target_label, target.label),
+                )
+                self._write_record_locked(record.with_converging(retried_rebind))
+            else:
+                retried_handoff = transition.model_copy_update(
+                    to_update(transition.field_ref().phase, HandoffPhase.SWITCHING),
+                    to_update(transition.field_ref().error, None),
+                    to_update(transition.field_ref().target_lane, target.account.lane),
+                    to_update(transition.field_ref().target_account_id, target.account.id),
+                    to_update(transition.field_ref().target_harness, target.harness),
+                )
+                self._write_record_locked(record.with_converging(retried_handoff))
         self._broadcast_chats_updated()
-        _loguru_logger.info("Retrying the handoff of chat {} on account {}", chat_id, target.account.id)
-        self._spawn_handoff(chat_id, retried.handoff_id, runner)
+        _loguru_logger.info("Retrying the switch of chat {} on account {}", chat_id, target.account.id)
+        if isinstance(transition, ChatRebindRecord):
+            self._spawn_rebind(chat_id, transition.rebind_id)
+            return HandoffPhase.RESTARTING
+        self._spawn_handoff(chat_id, transition.handoff_id)
         return HandoffPhase.SWITCHING
 
     def hold_send(self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin) -> HandoffPhase | None:
-        """Hold a send for the successor while the chat converges; None when the chat is not converging.
+        """Hold a send while the chat converges; None when the chat is not converging.
 
         Idempotent on ``message_id``: a caller that retries after a 202 does not queue the
-        message twice, the trigger message included once summarizing has folded it into the
-        prompt and taken it off the held list. Atomic with the runner's completion under the
-        manager's lock, so a send can never land on a handoff that has just finished.
+        message twice, the trigger message included once it has left the held list. Atomic
+        with the runner's completion under the manager's lock, so a send can never land on a
+        switch that has just finished.
         """
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
-            handoff = record.handoff if record is not None else None
-            if record is None or handoff is None:
+            transition = record.converging if record is not None else None
+            if record is None or transition is None:
                 return None
-            is_already_held = message_id == handoff.trigger_message_id or handoff.held_send_for(message_id) is not None
+            is_already_held = (
+                message_id == transition.trigger_message_id or transition.held_send_for(message_id) is not None
+            )
             if not is_already_held:
                 held = HeldSend(
                     message_id=message_id, text=text, origin=origin, received_at=datetime.now(timezone.utc)
                 )
                 self._write_record_locked(
-                    record.model_copy_update(
-                        to_update(
-                            record.field_ref().handoff,
-                            handoff.model_copy_update(
-                                to_update(handoff.field_ref().held_sends, (*handoff.held_sends, held))
-                            ),
+                    record.with_converging(
+                        transition.model_copy_update(
+                            to_update(transition.field_ref().held_sends, (*transition.held_sends, held))
                         )
                     )
                 )
-            return handoff.phase
+            return transition.phase
 
     def _handoff_runner(self) -> HandoffRunner:
-        capabilities = self._handoff_capabilities
-        if capabilities is None:
-            raise HandoffError("This chat app cannot move a chat between agents: handoffs are not wired")
+        capabilities = self._require_switch_capabilities()
         deps = HandoffDeps(
             mngr_binary=self._mngr_binary,
             host_dir=self._host_dir,
@@ -1440,6 +1628,33 @@ class AgentManager:
         )
         return HandoffRunner.build(deps)
 
+    def _rebind_runner(self) -> RebindRunner:
+        capabilities = self._require_switch_capabilities()
+        deps = RebindDeps(
+            mngr_binary=self._mngr_binary,
+            shutdown_event=self._shutdown_event,
+            read_record=self._read_chat_record,
+            update_record=self._update_record_for_rebind,
+            take_next_held_send=self._take_next_held_send_for_rebind,
+            get_agent_state=self.get_agent_by_id,
+            get_agent_info=self.get_agent_info_by_id,
+            resolve_account=resolve_account,
+            account_dir=account_dir,
+            deliver=capabilities.deliver,
+            drain_to_composer=capabilities.drain_to_composer,
+            stop_agent=self.stop_agent_process,
+            evict_watcher=self._evict_watcher,
+            note_agent_relabeled=self._note_agent_relabeled,
+            note_agent_alive=self.note_agent_alive,
+        )
+        return RebindRunner.build(deps)
+
+    def _require_switch_capabilities(self) -> HandoffCapabilities:
+        capabilities = self._handoff_capabilities
+        if capabilities is None:
+            raise HandoffError("This chat app cannot move a chat between agents or accounts: switches are not wired")
+        return capabilities
+
     def _pause(self, seconds: float) -> None:
         """A wait paced by the shutdown event, so a stop interrupts a handoff's summary wait at once."""
         self._shutdown_event.wait(timeout=seconds)
@@ -1454,19 +1669,34 @@ class AgentManager:
             is_checked=False,
         )
 
+    def _spawn_rebind(self, chat_id: ChatId, rebind_id: str, runner: RebindRunner | None = None) -> None:
+        """Run the rebind's remaining phases on their own thread (the creation group's, like a create)."""
+        active_runner = runner if runner is not None else self._rebind_runner()
+        self._creation_cg.start_new_thread(
+            target=active_runner.run,
+            args=(chat_id, rebind_id),
+            name=f"rebind-{str(chat_id)[:14]}",
+            is_checked=False,
+        )
+
     def _resume_handoffs(self) -> None:
-        """Pick every unfinished handoff up where the last process left it (spec 5.11)."""
+        """Pick every unfinished switch up where the last process left it (spec 5.11, spec 6)."""
         if self._handoff_capabilities is None:
             return
         with self._lock:
             unfinished = [
-                (chat_id, record.handoff.handoff_id, record.handoff.phase)
+                (chat_id, record.converging)
                 for chat_id, record in self._chat_record_by_id.items()
-                if record.handoff is not None and record.handoff.phase is not HandoffPhase.FAILED
+                if record.converging is not None and record.converging.phase is not HandoffPhase.FAILED
             ]
-        for chat_id, handoff_id, phase in unfinished:
-            _loguru_logger.info("Resuming the handoff of chat {} from the {} phase", chat_id, phase.value)
-            self._spawn_handoff(chat_id, handoff_id)
+        for chat_id, transition in unfinished:
+            if transition is None:
+                continue
+            _loguru_logger.info("Resuming the switch of chat {} from the {} phase", chat_id, transition.phase.value)
+            if isinstance(transition, ChatRebindRecord):
+                self._spawn_rebind(chat_id, transition.rebind_id)
+            else:
+                self._spawn_handoff(chat_id, transition.handoff_id)
 
     def _read_chat_record(self, chat_id: ChatId) -> ChatRecord | None:
         with self._lock:
@@ -1477,9 +1707,16 @@ class AgentManager:
         self._chat_record_store.write(record)
         self._chat_record_by_id[record.chat_id] = record
 
-    def _require_handoff_locked(self, record: ChatRecord | None, chat_id: ChatId, handoff_id: str) -> ChatRecord:
-        if record is None or record.handoff is None or record.handoff.handoff_id != handoff_id:
-            raise HandoffCancelledError(f"chat {chat_id} no longer carries handoff {handoff_id}")
+    def _delete_record_locked(self, chat_id: ChatId) -> None:
+        """Drop a record from the store and from what the manager resolves by: the chat is its one agent again. Lock held."""
+        self._chat_record_store.delete(chat_id)
+        self._chat_record_by_id.pop(chat_id, None)
+
+    def _require_transition_locked(self, record: ChatRecord | None, chat_id: ChatId, transition_id: str) -> ChatRecord:
+        """The record still carrying the switch ``transition_id`` names; raises the switch's own cancelled error otherwise."""
+        transition = record.converging if record is not None else None
+        if record is None or transition is None or transition.transition_id != transition_id:
+            raise HandoffCancelledError(f"chat {chat_id} no longer carries switch {transition_id}")
         return record
 
     def _update_record_for_handoff(
@@ -1487,28 +1724,61 @@ class AgentManager:
     ) -> ChatRecord:
         """Replace the record from its current state, under the lock the message route appends held sends under."""
         with self._lock:
-            record = self._require_handoff_locked(self._chat_record_by_id.get(chat_id), chat_id, handoff_id)
+            record = self._require_transition_locked(self._chat_record_by_id.get(chat_id), chat_id, handoff_id)
             updated = apply(record)
             self._write_record_locked(updated)
         self._broadcast_chats_updated()
         return updated
 
-    def _take_next_held_send(self, chat_id: ChatId, handoff_id: str) -> HeldSend | None:
-        """Pop the oldest held send, or finish the handoff (clear its entry) and return None once none remain."""
+    def _update_record_for_rebind(
+        self, chat_id: ChatId, rebind_id: str, apply: Callable[[ChatRecord], ChatRecord]
+    ) -> ChatRecord:
+        """``_update_record_for_handoff`` for a rebind, raising the rebind runner's own cancelled error."""
+        try:
+            return self._update_record_for_handoff(chat_id, rebind_id, apply)
+        except HandoffCancelledError as e:
+            raise RebindCancelledError(str(e)) from e
+
+    def _take_next_held_send_for_rebind(self, chat_id: ChatId, rebind_id: str) -> HeldSend | None:
+        """``_take_next_held_send`` for a rebind, raising the rebind runner's own cancelled error."""
+        try:
+            return self._take_next_held_send(chat_id, rebind_id)
+        except HandoffCancelledError as e:
+            raise RebindCancelledError(str(e)) from e
+
+    def _take_next_held_send(self, chat_id: ChatId, transition_id: str) -> HeldSend | None:
+        """Pop the oldest held send, or finish the switch (clear its entry) and return None once none remain.
+
+        A finished rebind on a chat of one agent takes its record with it: a record exists only
+        for a chat that has had a handoff, and the agent's ``account`` label is the truth again.
+        """
         with self._lock:
-            record = self._require_handoff_locked(self._chat_record_by_id.get(chat_id), chat_id, handoff_id)
-            handoff = record.handoff
-            assert handoff is not None, "_require_handoff_locked returned a record with a handoff"
-            if handoff.held_sends:
-                held = handoff.held_sends[0]
-                remaining = handoff.model_copy_update(
-                    to_update(handoff.field_ref().held_sends, handoff.held_sends[1:])
+            record = self._require_transition_locked(self._chat_record_by_id.get(chat_id), chat_id, transition_id)
+            transition = record.converging
+            assert transition is not None, "_require_transition_locked returned a record with a switch"
+            if transition.held_sends:
+                held = transition.held_sends[0]
+                remaining = transition.model_copy_update(
+                    to_update(transition.field_ref().held_sends, transition.held_sends[1:])
                 )
-                self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, remaining)))
+                self._write_record_locked(record.with_converging(remaining))
                 return held
-            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().handoff, None)))
+            if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
+                self._delete_record_locked(chat_id)
+            else:
+                self._write_record_locked(record.with_converging(None))
         self._broadcast_chats_updated()
         return None
+
+    def _note_agent_relabeled(self, agent_id: str, labels: Mapping[str, str]) -> None:
+        """Reflect labels a switch wrote before the observe stream relists the agent."""
+        with self._lock:
+            agent_state = self._agents.get(agent_id)
+            if agent_state is not None:
+                self._agents[agent_id] = agent_state.model_copy_update(
+                    to_update(agent_state.field_ref().labels, {**agent_state.labels, **labels})
+                )
+        self._broadcast_chats_updated()
 
     def stop_agent_process(self, agent_info: AgentInfo) -> None:
         """``mngr stop`` one agent and reflect the stop at once: its session's live state is reaped and its
@@ -1642,8 +1912,8 @@ class AgentManager:
         with self._lock:
             chat = self._resolve_chat_locked(chat_id)
             agent_state = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
-        if chat is not None and chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_id}' is moving to another agent ({chat.handoff.phase.value})")
+        if chat is not None and chat.transition is not None:
+            raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
             raise AgentStopError(f"Chat '{chat_id}' has no agent to stop")
         self._run_mngr_stop(agent_state.name)
@@ -1820,8 +2090,8 @@ class AgentManager:
             provisional = self._provisional_chats.get(parsed) if parsed is not None else None
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
-        if chat is not None and chat.handoff is not None:
-            raise ChatConvergingError(f"Chat '{chat_ref}' is moving to another agent ({chat.handoff.phase.value})")
+        if chat is not None and chat.transition is not None:
+            raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
             if provisional is not None and provisional.name != display_name:
                 raise AgentRenameError(
@@ -1989,9 +2259,7 @@ class AgentManager:
         """
         chat_id = ChatId(str(AgentId()))
         with self._lock:
-            display_name = first_free_numbered_name(
-                AUTO_NAME_WORD_BY_HARNESS[DEFAULT_HARNESS], self._taken_names_locked()
-            )
+            display_name = first_free_numbered_name(AUTO_NAME_WORD, self._taken_names_locked())
             provisional = ProvisionalChat(
                 chat_id=chat_id,
                 name=display_name,
@@ -2036,10 +2304,10 @@ class AgentManager:
 
         Returns the chat's id (its first agent's, minted before the create) together with the
         chat's name pair: the human-readable display name and its canonical true name (see
-        ``imbue.chat.naming``). An empty ``requested_name`` mints the
-        first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
-        server-side, under the same lock that registers the in-flight create --
-        so two simultaneous creates cannot both mint "Chat 1".
+        ``imbue.chat.naming``). An empty ``requested_name`` mints the first free "Chat N"
+        here, whatever harness the account runs on, server-side, under the same lock that
+        registers the in-flight create -- so two simultaneous creates cannot both mint
+        "Chat 1".
 
         ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
         failed): it is launched under that id and keeps the name and project it was minted
@@ -2124,12 +2392,7 @@ class AgentManager:
                         )
                     display_name = explicit_name
                 else:
-                    # The lane's word where it has one, else the harness's. Two lanes can share a
-                    # harness -- Opencode Go and OpenRouter both run on pi -- and naming those tabs
-                    # after the harness made both fleets count as "Pi N", so the strip could not
-                    # say which provider a chat was spending.
-                    word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
-                    display_name = first_free_numbered_name(word, taken_names)
+                    display_name = first_free_numbered_name(AUTO_NAME_WORD, taken_names)
 
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,

@@ -48,6 +48,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
 from imbue.chat.config import Config
@@ -87,7 +88,6 @@ from imbue.chat.models import AttachmentUploadResponse
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatListResponse
 from imbue.chat.models import ChatSegmentInfo
-from imbue.chat.models import CreateAgentResponse
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import CreateChatResponse
 from imbue.chat.models import CreatedChat
@@ -99,6 +99,7 @@ from imbue.chat.models import HandoffCancelResponse
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffRetryRequest
 from imbue.chat.models import HandoffRetryResponse
+from imbue.chat.models import HandoffState
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import HeldSendResponse
 from imbue.chat.models import InterruptAgentResponse
@@ -163,9 +164,9 @@ def _agent_list_not_known_response() -> Response:
     return json_response(failure.model_dump(), status_code=503)
 
 
-def _converging_response(chat_id: str, phase: str) -> Response:
+def _converging_response(handoff: HandoffState) -> Response:
     return json_response(
-        {"detail": f"Chat '{chat_id}' is moving to another agent ({phase}); try again once it has", "phase": phase},
+        {"detail": converging_detail(handoff.phase, handoff.target_label), "phase": handoff.phase.value},
         status_code=409,
     )
 
@@ -178,7 +179,7 @@ def _refuse_while_converging(chat_id: str) -> Response | None:
     handoff = get_state().agent_manager.get_handoff_state(parsed)
     if handoff is None:
         return None
-    return _converging_response(chat_id, handoff.phase.value)
+    return _converging_response(handoff)
 
 
 # Default number of events for tail-first loading
@@ -1043,13 +1044,12 @@ def _drain_to_composer_endpoint(chat_id: str) -> Response:
 
 
 def _switch_chat_endpoint(chat_id: str) -> Response:
-    """Continue the chat on another account: the handoff (spec 5.2).
+    """Continue the chat on another account: a handoff to a new agent, or a rebind of the same one (spec 5.2, 6).
 
     The route runs draining synchronously, so its answer carries the queued text taken off
-    the retiring agent for the composer, and the remaining phases run in the background.
-    Answers 409 while the chat is already converging, 404 when it has no active agent, and 400
-    when the account is unknown or the chat's own, or the target runs the same harness (a
-    rebind, which a later phase adds).
+    the agent for the composer, and the remaining phases run in the background. Answers 409
+    while the chat is already converging, 404 when it has no active agent, and 400 when the
+    account is unknown or the chat's own.
     """
     agent_manager: AgentManager = get_state().agent_manager
     if not agent_manager.is_agent_list_known():
@@ -1066,7 +1066,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     try:
-        phase, returned_block = agent_manager.begin_handoff(
+        kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
             switch_request.account_id,
             switch_request.message,
@@ -1079,14 +1079,15 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return json_response(ErrorResponse(detail=str(e)).model_dump(), status_code=400)
     _record_client_message_activity(ChatId(chat_id), switch_request)
     agent_manager.record_message_sent(ChatId(chat_id))
-    response = SwitchChatResponse(status="converging", phase=phase, returned_block=returned_block)
+    response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
     return json_response(response.model_dump(mode="json"), status_code=202)
 
 
 def _cancel_handoff_endpoint(chat_id: str) -> Response:
     """Call the chat's handoff off (spec 5.6); the confirming message comes back for the composer.
 
-    Answers 400 for a chat that is not converging and 409 once switching has begun.
+    Answers 400 for a chat that is not converging and 409 once switching has begun, or when
+    the switch is a rebind, which has no window to call it off in (spec 6).
     """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
@@ -1102,7 +1103,11 @@ def _cancel_handoff_endpoint(chat_id: str) -> Response:
 
 
 def _retry_handoff_endpoint(chat_id: str) -> Response:
-    """Run a failed handoff's create again on an account (spec 5.10). 400 unless the chat is in the failed phase."""
+    """Run a failed switch's last step again on an account: a handoff's create (spec 5.10) or a rebind's restart (spec 6).
+
+    400 unless the chat is in the failed phase, and for a rebind when the account is not on the
+    agent's own harness and lane.
+    """
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
         return _chat_not_found_response(chat_id)
@@ -1174,24 +1179,6 @@ def _stream_subagent_events(chat_id: str, agent_id: str, subagent_session_id: st
     )
 
 
-def _get_subagent_events_alias(chat_id: str, subagent_session_id: str) -> Response:
-    """The agent-keyed subagent route: the session belongs to the chat's active agent."""
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
-    return _get_subagent_events(chat_id, agent_info.id, subagent_session_id)
-
-
-def _stream_subagent_events_alias(chat_id: str, subagent_session_id: str) -> Response:
-    """The agent-keyed subagent stream: the session belongs to the chat's active agent."""
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    agent_info = _find_active_agent(chat_id)
-    if agent_info is None:
-        return _chat_not_found_response(chat_id)
-    return _stream_subagent_events(chat_id, agent_info.id, subagent_session_id)
-
-
 def _get_screen_capture(chat_id: str) -> Response:
     """Capture the tmux pane content for an agent.
 
@@ -1224,7 +1211,7 @@ def _get_screen_capture(chat_id: str) -> Response:
     return json_response({"screen": result.stdout})
 
 
-def _run_create_chat(chat_id_field: str) -> CreatedChat | Response:
+def _run_create_chat() -> CreatedChat | Response:
     """Create a new chat, as an agent in the primary agent's work directory.
 
     One endpoint for every harness: the ``chat`` role is the same, and the account the
@@ -1234,12 +1221,12 @@ def _run_create_chat(chat_id_field: str) -> CreatedChat | Response:
     whose create failed -- under that id, keeping the name it was minted with.
 
     The chat's display name is minted here (server-side) when the request names
-    none: the first free "<word> N" for the harness, counted against every name
-    on the machine -- agents and in-flight creates -- so simultaneous creates
-    cannot both mint "Chat 1". An
-    explicitly requested name that collides answers 409 so the caller can retry
-    with another. The response carries the resulting name pair (canonical
-    ``name`` + human-readable ``display_name``) beside the agent id.
+    none: the first free "Chat N", whatever harness the account runs on, counted
+    against every name on the machine -- agents and in-flight creates -- so
+    simultaneous creates cannot both mint "Chat 1". An explicitly requested name
+    that collides answers 409 so the caller can retry with another. The response
+    carries the resulting name pair (canonical ``name`` + human-readable
+    ``display_name``) beside the chat's id.
 
     A chat created inside a project carries that project's id in the agent's
     ``project`` label, which records where it was started (mngr propagates the
@@ -1247,9 +1234,6 @@ def _run_create_chat(chat_id_field: str) -> CreatedChat | Response:
     list, which the shell writes when it docks the chat. ``project_id`` rides
     beside the request model rather than inside it for that reason: it is a
     label on the created agent, not part of the chat's identity.
-
-    ``chat_id_field`` names the body field that carries a minted chat's id: ``chat_id`` on the
-    chat route, ``agent_id`` on its agent-keyed alias.
 
     With ``should_wait`` the answer comes once the create has finished: the chat's identity
     as before when it landed, a 500 carrying the create's own reason when it failed, and a
@@ -1263,9 +1247,7 @@ def _run_create_chat(chat_id_field: str) -> CreatedChat | Response:
     if isinstance(body, Response):
         return body
     project_id = str(body.get("project_id") or "")
-    request_fields = {key: value for key, value in body.items() if key not in ("project_id", chat_id_field)}
-    if chat_id_field in body:
-        request_fields["chat_id"] = body[chat_id_field]
+    request_fields = {key: value for key, value in body.items() if key != "project_id"}
 
     try:
         create_request = CreateChatRequest.model_validate(request_fields)
@@ -1300,20 +1282,10 @@ def _run_create_chat(chat_id_field: str) -> CreatedChat | Response:
 
 def _create_chat() -> Response:
     """``POST /api/chats/create``: the created chat's id and name pair, or the refusal."""
-    created = _run_create_chat("chat_id")
+    created = _run_create_chat()
     if isinstance(created, Response):
         return created
     response = CreateChatResponse(chat_id=created.chat_id, name=created.name, display_name=created.display_name)
-    return json_response(response.model_dump(), status_code=201)
-
-
-def _create_chat_alias() -> Response:
-    """``POST /api/agents/create-chat``: the same create, with the chat's id under the alias's ``agent_id`` field."""
-    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
-    created = _run_create_chat("agent_id")
-    if isinstance(created, Response):
-        return created
-    response = CreateAgentResponse(agent_id=created.chat_id, name=created.name, display_name=created.display_name)
     return json_response(response.model_dump(), status_code=201)
 
 
@@ -1580,9 +1552,7 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         ws_broadcaster.unregister(client_queue)
 
 
-# Every per-chat route, as ``(suffix, view, methods)``: served at ``/api/chats/<chat_id>/<suffix>``
-# and, until phase 7 of the chat-agent split, at the agent-keyed alias ``/api/agents/<chat_id>/<suffix>``,
-# whose path parameter is a chat id too.
+# Every per-chat route, as ``(suffix, view, methods)``, served at ``/api/chats/<chat_id>/<suffix>``.
 _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...]], ...]] = (
     ("destroy", _destroy_chat, ("POST",)),
     ("start", _start_chat, ("POST",)),
@@ -1610,11 +1580,7 @@ _PER_CHAT_ROUTES: Final[tuple[tuple[str, Callable[..., Response], tuple[str, ...
 def _add_chat_route(
     application: Flask, suffix: str, view_func: Callable[..., Response], methods: tuple[str, ...]
 ) -> None:
-    """Register one per-chat route under ``/api/chats/`` and its agent-keyed alias, on one view function."""
     application.add_url_rule(f"/api/chats/<chat_id>/{suffix}", view_func=view_func, methods=list(methods))
-    # CLEANUP: drop the alias in phase 7 of the chat-agent split, once every caller (the minds
-    # evals bridge, the deployment tests, the e2e runner) targets /api/chats/.
-    application.add_url_rule(f"/api/agents/<chat_id>/{suffix}", view_func=view_func, methods=list(methods))
 
 
 def create_application(state: ChatAppState) -> Flask:
@@ -1648,7 +1614,6 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
-    application.add_url_rule("/api/agents/create-chat", view_func=_create_chat_alias, methods=["POST"])
     application.add_url_rule("/api/harnesses", view_func=_get_harnesses_endpoint, methods=["GET"])
     application.add_url_rule("/api/uploads", view_func=_upload_attachment, methods=["POST"])
     application.add_url_rule("/api/uploads/<path:relative_path>", view_func=_serve_attachment, methods=["GET"])
@@ -1668,16 +1633,6 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule(
         "/api/chats/<chat_id>/agents/<agent_id>/subagents/<subagent_session_id>/stream",
         view_func=_stream_subagent_events,
-        methods=["GET"],
-    )
-    application.add_url_rule(
-        "/api/agents/<chat_id>/subagents/<subagent_session_id>/events",
-        view_func=_get_subagent_events_alias,
-        methods=["GET"],
-    )
-    application.add_url_rule(
-        "/api/agents/<chat_id>/subagents/<subagent_session_id>/stream",
-        view_func=_stream_subagent_events_alias,
         methods=["GET"],
     )
     auth_endpoints.register_routes(application)

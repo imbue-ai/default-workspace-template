@@ -14,15 +14,16 @@ agent's driving is to foreground the tab it is acting on, so pixelflux shows it 
 human sees exactly what the agent does and vice versa.
 
 Ownership is a small per-browser state machine, and it is the heart of this
-module. Many agents (a chat agent plus its sub-agents, each a distinct
-``MNGR_AGENT_ID``) share one fleet; any single browser is controlled by exactly
-one party at a time: a specific agent, or the human. Every control change goes
+module. Many chats (a user's chats plus the background agents they launch, each
+its own chat) share one fleet; any single browser is controlled by exactly one
+party at a time: a specific chat, or the human. Every control change goes
 through the single writer :meth:`LiveBrowser._write_control_locked`, called only
 under ``_control_lock`` with a compare-and-set guard, so there is no bespoke
 ordering anywhere and "single asyncio process" actually means atomic. The state:
 
 * ``controller`` -- ``"human"`` or ``"agent"``.
-* ``owner_agent_id`` -- which agent holds it (when ``controller == "agent"``).
+* ``owner_agent_id`` -- which chat holds it (when ``controller == "agent"``): the
+  chat id the fleet CLI sends, which is the agent's own id for a background agent.
 * ``human_pinned`` -- the human explicitly took control; agents are locked out
   until the human hands back. (Idle ``human`` with ``human_pinned`` false is
   the resting state: human-drivable and agent-acquirable.)
@@ -384,9 +385,9 @@ def _repo_root() -> Path:
     return Path.cwd()
 
 
-# The in-workspace chat messenger (see `_message_agent`): a chat is addressed by its agent
-# id through the chat app, which knows which agent is taking the chat's messages, and the
-# script falls back to `mngr message` itself when the chat app cannot take the message. Its
+# The in-workspace chat messenger (see `_message_agent`): the owner recorded on a browser is
+# a chat id, and the chat app knows which agent is taking that chat's messages; the script
+# falls back to `mngr message` itself when the chat app cannot take the message. Its
 # `--system` flag wraps the fleet's nudges in the sentinel the chat transcript renders as a
 # collapsed system chip instead of a bare user bubble.
 _MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
@@ -1264,7 +1265,7 @@ class LiveBrowser(MutableModel):
         These are automated, non-human nudges, so they go with ``--system``: the transcript
         UI renders them as a collapsed system chip instead of a bare user bubble. This is
         display-only -- the agent still receives the message and resumes its turn exactly
-        as before. The chat is addressed by the agent's id, never its name."""
+        as before. The chat is addressed by its chat id, never by an agent's name."""
         try:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,

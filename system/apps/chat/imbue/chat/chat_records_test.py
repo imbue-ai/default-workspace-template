@@ -16,6 +16,7 @@ from imbue.chat.chat_records import RECORD_VERSION
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
 from imbue.chat.testing import make_two_member_chat_record as two_member_record
 from imbue.imbue_common.model_update import to_update
 
@@ -84,6 +85,34 @@ def test_a_records_handoff_must_retire_its_last_agent_and_name_a_new_successor()
         )
     assert handoff.held_send_for(handoff.trigger_message_id) is not None
     assert handoff.held_send_for("no-such-message") is None
+
+
+def test_a_records_rebind_names_its_running_agent_and_never_sits_beside_a_handoff() -> None:
+    first, second = _agent_id(), _agent_id()
+    archived_first = make_chat_agent_entry(1, first, is_archived=True)
+    live_second = make_chat_agent_entry(2, second, is_archived=False)
+    rebind = make_chat_rebind_record(agent_id=second)
+
+    record = ChatRecord(chat_id=ChatId(first), agents=(archived_first, live_second), rebind=rebind)
+    assert record.converging is rebind and record.converging.transition_id == "rebind-1"
+    assert record.with_converging(None).converging is None
+    handoff = make_chat_handoff_record(retiring_seq=2, next_agent_id=_agent_id())
+    swapped = record.with_converging(handoff)
+    assert swapped.handoff is handoff and swapped.rebind is None and swapped.converging is handoff
+    assert swapped.with_converging(rebind).handoff is None
+
+    with pytest.raises(ValidationError, match="active agent"):
+        ChatRecord(
+            chat_id=ChatId(first), agents=(archived_first, live_second), rebind=make_chat_rebind_record(agent_id=first)
+        )
+    with pytest.raises(ValidationError, match="active agent"):
+        ChatRecord(
+            chat_id=ChatId(first),
+            agents=(archived_first, make_chat_agent_entry(2, second, is_archived=True)),
+            rebind=rebind,
+        )
+    with pytest.raises(ValidationError, match="both a handoff and a rebind"):
+        ChatRecord(chat_id=ChatId(first), agents=(archived_first, live_second), handoff=handoff, rebind=rebind)
 
 
 def test_a_file_store_round_trips_a_record_and_deletes_its_folder(tmp_path: Path) -> None:
