@@ -1,7 +1,7 @@
 # Type: app
 
-An app -- a scaffolded Flask lib under `system/apps/<package>/`, registered in
-`system/supervisord.conf`, served at its own browser origin
+An app -- a scaffolded Flask lib under `system/apps/<package>/`, registered by
+its own `system/supervisord.conf.d/<name>.conf`, served at its own browser origin
 (`http://<name>.<workspace-host>/`, routed straight to the app's registered
 port). This reference describes what an app *is*; for how to
 run and test a web frontend in isolation, see
@@ -12,9 +12,10 @@ run and test a web frontend in isolation, see
 - The scaffolded lib: `system/apps/<package>/src/<package>/runner.py` (the Flask app
   and routes), plus its `pyproject.toml`, `README.md`, and
   `test_<package>_ratchets.py`.
-- The app's program entry in `system/supervisord.conf` and the matching root
-  `pyproject.toml` workspace wiring -- you normally do not touch these; the
-  scaffold created them.
+- The app's program entry at `system/supervisord.conf.d/<name>.conf` -- you
+  normally do not touch it; the scaffold created it. The root `pyproject.toml`
+  needs no entry at all: the `system/apps/*` workspace member glob picks the
+  package up and `uv sync --all-packages` installs it.
 - A background service co-owned by the app (a `<app>-<role>` program) also
   lives in the app's folder; treat it as part of the app.
 

@@ -6,10 +6,14 @@ user-bubble / turn-abort sourcing, and the self-contained web-search expansion.
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+import pytest
 
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
 from imbue.chat.harnesses.codex.session_parser import _labelled_tool_call
+from imbue.chat.harnesses.codex.session_parser import codex_user_turn_event_id
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
 from imbue.chat.harnesses.codex.session_parser import parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_reasoning_detail
@@ -89,6 +93,26 @@ def test_old_and_new_user_forms_share_one_event_id() -> None:
     old = parse_lines(_user_line("how we doin'"), {})[0]["event_id"]
     new = parse_lines(_item_user_line("how we doin'"), {})[0]["event_id"]
     assert old == new
+
+
+@pytest.mark.parametrize("item_format", [False, True], ids=["codex-0.147", "codex-0.154"])
+def test_saved_user_message_keeps_the_live_commit_identity(item_format: bool) -> None:
+    """Shapes verified by submitting the same tagged message to both stock binaries.
+
+    The app-server uses clientId on both versions; both rollout formats use client_id.
+    Identical text sent twice must remain two messages, while each live/file pair dedups.
+    """
+    ids = []
+    for client_id in ["first-send", "second-send"]:
+        line = _item_user_line("same text") if item_format else _user_line("same text")
+        target = line["payload"]["item"] if item_format else line["payload"]
+        target["client_id"] = client_id
+        event = parse_lines(line, 0, {})[0]
+        assert event["content"] == "same text"
+        assert event["event_id"] == codex_user_turn_event_id(client_id, None, "same text")
+        assert parse_lines(line, 999, {})[0] == event
+        ids.append(event["event_id"])
+    assert len(set(ids)) == 2
 
 
 def test_empty_item_user_message_is_skipped() -> None:
@@ -268,6 +292,59 @@ def test_tk_command_is_stamped_resident() -> None:
     }
     tc = parse_lines(call, {})[0]["tool_calls"][0]
     assert tc["tk_command"] == "tk start wor-step-abc"
+
+
+def test_tk_commands_after_other_work_are_stamped_without_hiding_the_batch() -> None:
+    js = (
+        'text(await tools.exec_command({cmd: "cat README.md"}));\n'
+        "text(await tools.exec_command({cmd: 'uv run tk start wor-step-abc'}));\n"
+        'text(await tools.exec_command({cmd: "tk close wor-step-abc"}));'
+    )
+    tc = _labelled_tool_call("c1", CODE_MODE_TOOL_NAME, js)
+    assert tc["tk_command"] == "uv run tk start wor-step-abc\ntk close wor-step-abc"
+    assert "display" not in tc
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_command_result_envelopes_preserve_task_titles_and_raw_detail(wrapped: bool) -> None:
+    outputs = [
+        "Created wor-step-abc: Inspect the messages\n",
+        "Updated wor-step-abc -> in_progress\ntk-step wor-step-abc title: Inspect the messages\n",
+        "Updated wor-step-abc -> closed\ntk-step wor-step-abc title: Inspect the messages\n"
+        "tk-step wor-step-abc summary: Checked both chats\n",
+    ]
+    text = "".join(
+        json.dumps({"chunk_id": str(i), "output": output}) if wrapped else output for i, output in enumerate(outputs)
+    )
+    raw = "Script completed\nWall time 0.2 seconds\nOutput:\n" + text
+    line = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
+    }
+    event = parse_lines(line, 0, {"c1": "exec"})[0]
+    assert event["tk_stamp"] == "".join(outputs).rstrip()
+    assert event["output_chars"] == len(raw)
+    assert parse_line_detail(line, 0)["codex-result-c1"]["output"] == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"output":"Created wor-step-abc: Not a command result"}',
+        '{"chunk_id":"c", "output":',
+        '{"chunk_id":"c", "output":42}',
+        '{"chunk_id":"c", "output":"Created wor-step-abc: Partial"} trailing prose',
+    ],
+)
+def test_unrecognized_output_is_not_unwrapped_into_task_lines(raw: str) -> None:
+    line = {
+        "timestamp": "t",
+        "type": "response_item",
+        "payload": {"type": "custom_tool_call_output", "call_id": "c1", "output": raw},
+    }
+    event = parse_lines(line, 0, {"c1": "exec"})[0]
+    assert not event.get("tk_stamp", "").startswith("Created ")
 
 
 def test_detail_reconstructs_the_full_input_and_output() -> None:

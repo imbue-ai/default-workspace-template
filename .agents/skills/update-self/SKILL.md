@@ -10,8 +10,8 @@ metadata:
 This repo was created from a template repo and stays connected to it via a git
 remote (`system/config/parent.toml` has the URL and branch). Upstream carries
 the shared infrastructure: skills, scripts, `CLAUDE.md` scaffolding,
-`Dockerfile`, `system/supervisord.conf`, the system interface, the vendored
-`mngr`.
+`Dockerfile`, `system/supervisord.conf` and its `supervisord.conf.d/` drop-ins,
+the system interface, the vendored `mngr`.
 
 Merging upstream can break the live workspace, so this flow never mutates the
 live tree from an unverified state: an isolated **worker** does the merge and
