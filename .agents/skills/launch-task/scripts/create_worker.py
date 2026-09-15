@@ -12,18 +12,22 @@ at the top, or a worker that dispatches work of its own. Nothing here depends
 on which level the launching agent sits at, so a worker launches a sub-worker
 with exactly the commands a chat agent uses.
 
-Two stamps in the task file's frontmatter make that work without any path or
+Three stamps in the task file's frontmatter make that work without any path or
 address being re-derived downstream:
 
 ``lead_agent``
-    The launching agent's own name (its ``MNGR_AGENT_NAME``), so the worker
-    knows exactly which agent to push its report to. The same value is also
-    attached to the worker's agent as a ``--label lead_agent=<lead>``, so a
-    lead can find its own workers -- and its workers' workers -- in
-    ``mngr list`` without consulting any task file. A second label,
-    ``runtime_dir=<repo-relative runtime dir>``, records where the worker's
-    task file and reports live, so ``destroy`` can carry a descendant's runtime
-    dir upward without opening any task file either.
+    The launching agent's own mngr id (its ``MNGR_AGENT_ID``), which is whose
+    transcript the worker reads. The same id is attached to the worker's agent
+    as a ``--label lead_agent=<id>``, so a lead can find its own workers -- and
+    its workers' workers -- in ``mngr list`` without consulting any task file.
+    An id, not a name: renaming a chat changes its mngr name and would orphan
+    every worker beneath it mid-dispatch.
+
+``lead_work_dir``
+    The launching agent's own checkout (``MNGR_AGENT_WORK_DIR``), where the
+    worker writes its report. A worker's worktree hangs off the same repo, so
+    its lead's checkout is a plain local path for it whether that lead is a
+    chat agent or a worker one level up.
 
 ``task_file``
     The task file's own path, relative to the repo root. The worker receives
@@ -32,7 +36,11 @@ address being re-derived downstream:
     keep nesting unambiguous: two levels of dispatch can use the same
     directory names without colliding.
 
-Five subcommands cover the lead-side lifecycle, and one (``report``) the
+A fourth label, ``runtime_dir=<repo-relative runtime dir>``, records where the
+worker's task file and reports live, so ``destroy`` can carry a descendant's
+runtime dir upward without opening any task file.
+
+Six subcommands cover the lead-side lifecycle, and one (``report``) the
 worker side:
 
 ``launch``
@@ -64,9 +72,10 @@ worker side:
 
 ``report``
     The worker side of the same contract: writes ``report.md`` beside the task
-    file's ``finish_report_path`` in the *worker's own* tree and delivers it to
-    the lead. A worker never re-derives the rsync invocation or the fallback in
-    prose; it calls this and gets either a delivery or a loud failure.
+    file's ``finish_report_path`` in the *worker's own* tree and copies it to
+    the same relative path under the lead's ``lead_work_dir``. A worker never
+    re-derives the destination or the fallback in prose; it calls this and gets
+    either a delivery or a loud failure.
 
 ``launch-sync``
     The blocking one-call path for non-interactive callers (services): launch,
@@ -76,6 +85,13 @@ worker side:
     that JSON to a caller-named file as the machine-readable contract.
     ``--keep-agent`` skips the destroy; a timeout never destroys (the report may
     still be coming).
+
+``reply``
+    Sends the lead's answer to a worker's gate (or any nudge) to the worker's
+    chat, through the chat app (``system/scripts/message_chat.py``), addressed
+    by the ``worker_agent_id`` that ``launch`` stamped into the task file. A
+    task file from before that stamp is reached by ``mngr message <name>``
+    instead, with the worker's name given through ``reply --name``.
 
 ``destroy``
     Destroys the worker agent and, by default, every worker underneath it (the
@@ -122,17 +138,28 @@ and syncs the directory alongside the runtime dir -- no extra CLI flag.
 Launch lifecycle commands:
 
     mngr create <NAME> -t <TEMPLATE> --label agent_created=true
-                                     --label lead_agent=<LEAD>
+                                     --label lead_agent=<LEAD_ID>
                                      --label runtime_dir=<RUNTIME_DIR>
+                                     --format jsonl   (its ``created`` event names the worker's id)
     mngr rsync  ./<RUNTIME_DIR>/   <NAME>:<RUNTIME_DIR>/   --uncommitted-changes=clobber
     mngr rsync  ./<ARTIFACTS_DIR>/ <NAME>:<ARTIFACTS_DIR>/ --uncommitted-changes=clobber
                 (when frontmatter declares it)
-    mngr message <NAME> --message-file <TASK_FILE>
+    python3 system/scripts/message_chat.py <WORKER_ID> --message-file <TASK_FILE>
 
-Report delivery (the worker's side, run by ``report``):
+The task message goes through the chat app by the worker's id rather than
+through ``mngr message`` by its name: a chat is addressed by id (a rename
+changes the name; see ``docs/system/blueprint/chat-agent-split/``), and the
+script falls back to ``mngr message`` itself when the chat app cannot take the
+message. The id is read back from the create's ``created`` event and stamped
+into the task frontmatter as ``worker_agent_id`` so ``reply`` can address the
+worker later without a lookup.
 
-    mngr rsync  ./<REPORT_DIR>/ <LEAD>:<REPORT_DIR>/ --uncommitted-changes=clobber
-    mngr list   --format jsonl --on-error continue    (fallback resolution only)
+Report delivery (the worker's side, run by ``report``) needs no agent command
+at all -- every worktree in a dispatch hangs off one repo on one host, so the
+lead's checkout is a local path:
+
+    cp <REPORT_DIR>/report.md <LEAD_WORK_DIR>/<FINISH_REPORT_PATH>
+    mngr list --format jsonl --on-error continue    (fallback resolution only)
 
 Teardown commands (``destroy`` and ``stop``; the subtree comes from one
 ``mngr list``):
@@ -156,7 +183,7 @@ stash stack is shared by every worktree of the repo: two dispatches syncing at
 once (a lead and one of its workers, or two siblings) would pop each other's
 entries and corrupt both trees.
 
-Why ``mngr message`` *after* the syncs (instead of using ``mngr create
+Why the task message goes *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
 dir sync lands in its worktree, the task file's ``finish_report_path`` will
 resolve to nothing. Sending the task as a follow-up message guarantees the
@@ -189,6 +216,13 @@ from typing import Callable, Mapping, NamedTuple, Sequence, TextIO
 import yaml
 
 _COMMON_TRANSCRIPT_REL = Path("commands/common_transcript.sh")
+
+# The in-workspace chat messenger, relative to the repo root (see ``_repo_root``).
+_MESSAGE_CHAT_SCRIPT_REL = Path("system") / "scripts" / "message_chat.py"
+
+_LEAD_AGENT_FIELD = "lead_agent"
+_LEAD_WORK_DIR_FIELD = "lead_work_dir"
+_WORKER_AGENT_ID_FIELD = "worker_agent_id"
 
 _DEFAULT_TIMEOUT = "30m"
 _DEFAULT_POLL_INTERVAL = "5s"
@@ -349,38 +383,51 @@ class _LeadResolution(NamedTuple):
 
     Exactly one of the two fields carries the answer: ``exit_code`` is set when
     the lead could not be resolved at all (launch must abort with it), and
-    ``lead_name`` is set when it could. Both are ``None`` in the one benign
-    case where there is nothing to stamp and nothing to fail on -- a task file
-    with no frontmatter block at all, which launch tolerates (schema validation
-    is the worker's job) and which simply yields no lead label.
+    ``lead_id`` is set when it could. Both are ``None`` in the one benign case
+    where there is nothing to stamp and nothing to fail on -- a task file with
+    no frontmatter block at all, which launch tolerates (schema validation is
+    the worker's job) and which simply yields no lead label.
     """
 
-    lead_name: str | None
+    lead_id: str | None
     exit_code: int | None
 
 
 def _ensure_lead_agent(task_file: Path) -> _LeadResolution:
-    """Stamp the launching agent as the report recipient in the task file.
+    """Stamp the launching agent, and its work dir, as the report recipient in the task file.
 
     The agent running ``launch`` *is* the lead that polls for the worker's
-    report, so its own ``MNGR_AGENT_NAME`` is the authoritative ``lead_agent`` --
+    report, so its own ``MNGR_AGENT_ID`` is the authoritative ``lead_agent`` --
     we fill it in (overwriting whatever the file holds) from the environment
     rather than trusting the task file. That frees task-file authors from setting
     the field at all and eliminates a silent-failure class: a literal,
-    unexpanded ``$MNGR_AGENT_NAME`` (or a stale/omitted value) used to leave the
-    worker with no valid address, so it could not rsync its report back and the
+    unexpanded ``$MNGR_AGENT_ID`` (or a stale/omitted value) used to leave the
+    worker with no valid address, so its report never reached the lead and the
     lead's poll waited forever.
 
-    When ``MNGR_AGENT_NAME`` is unset -- i.e. ``launch`` is running outside an
+    The id, not the name: ``mngr transcript`` accepts either, and a user can
+    rename the lead's chat mid-task, which changes its mngr name and leaves a
+    name-addressed worker reading an agent that no longer exists. It is the
+    dispatching *agent*, not its chat: a chat is the chat app's notion, and mngr
+    (whose transcript the worker reads) knows only agents. The field keeps its
+    ``lead_agent`` key so older workers and task files still parse.
+
+    ``lead_work_dir`` (``MNGR_AGENT_WORK_DIR``, the lead's own checkout) is what
+    the worker writes its report into: the worker's worktree hangs off the same
+    repo, so the lead's work dir is a plain local path for it. Stamped only when
+    the environment names it; a worker without it falls back to the repo's main
+    worktree, which is the lead's work dir for every chat agent.
+
+    When ``MNGR_AGENT_ID`` is unset -- i.e. ``launch`` is running outside an
     mngr agent, as in a manual invocation or a test -- the file's existing value
     is used as a fallback; an unresolved value (missing, blank, or an unexpanded
     ``$...``) in that case is fatal (exit 2) rather than launching an
     unaddressable worker.
 
-    Returns the resolved lead's name, which launch also attaches to the worker
-    as a ``lead_agent`` label -- the launcher resolves it once and both uses
-    read the same answer. On unrecoverable misconfiguration the returned
-    ``exit_code`` is ``2`` instead.
+    Returns the resolved lead's id, which launch also attaches to the worker as
+    a ``lead_agent`` label -- the launcher resolves it once, and the task file,
+    the label and the dispatch tree all key on the same durable value. On
+    unrecoverable misconfiguration the returned ``exit_code`` is ``2`` instead.
     """
     text = task_file.read_text(encoding="utf-8")
     # Invalid frontmatter YAML has already raised in launch's preflight
@@ -388,29 +435,81 @@ def _ensure_lead_agent(task_file: Path) -> _LeadResolution:
     # is allowed to propagate.
     frontmatter, _body = _split_frontmatter(text)
     if frontmatter is None:
-        return _LeadResolution(lead_name=None, exit_code=None)
-    current = frontmatter.get("lead_agent")
-    lead_name = os.environ.get("MNGR_AGENT_NAME")
-    if lead_name:
-        if current != lead_name:
-            task_file.write_text(
-                _set_frontmatter_field(text, "lead_agent", lead_name), encoding="utf-8"
-            )
-            print(
-                f"create_worker: set lead_agent to {lead_name!r} (was {current!r})",
-                file=sys.stderr,
-            )
-        return _LeadResolution(lead_name=lead_name, exit_code=None)
+        return _LeadResolution(lead_id=None, exit_code=None)
+    current = frontmatter.get(_LEAD_AGENT_FIELD)
+    stamped = text
+    lead_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR")
+    if lead_work_dir and frontmatter.get(_LEAD_WORK_DIR_FIELD) != lead_work_dir:
+        stamped = _set_frontmatter_field(stamped, _LEAD_WORK_DIR_FIELD, lead_work_dir)
+        print(
+            f"create_worker: set {_LEAD_WORK_DIR_FIELD} to {lead_work_dir!r}",
+            file=sys.stderr,
+        )
+    lead_id = os.environ.get("MNGR_AGENT_ID")
+    if lead_id and current != lead_id:
+        stamped = _set_frontmatter_field(stamped, _LEAD_AGENT_FIELD, lead_id)
+        print(
+            f"create_worker: set {_LEAD_AGENT_FIELD} to {lead_id!r} (was {current!r})",
+            file=sys.stderr,
+        )
+    if stamped != text:
+        task_file.write_text(stamped, encoding="utf-8")
+    if lead_id:
+        return _LeadResolution(lead_id=lead_id, exit_code=None)
     # No launcher identity in the environment: fall back to the file's own value.
     if isinstance(current, str) and current.strip() and "$" not in current:
-        return _LeadResolution(lead_name=current, exit_code=None)
+        return _LeadResolution(lead_id=current, exit_code=None)
     print(
-        "create_worker: lead_agent is unresolved "
-        f"({current!r}) and MNGR_AGENT_NAME is unset -- the worker would have no "
+        f"create_worker: {_LEAD_AGENT_FIELD} is unresolved "
+        f"({current!r}) and MNGR_AGENT_ID is unset -- the worker would have no "
         "address to send its report to.",
         file=sys.stderr,
     )
-    return _LeadResolution(lead_name=None, exit_code=2)
+    return _LeadResolution(lead_id=None, exit_code=2)
+
+
+def _created_agent_id(create_stdout: str) -> str | None:
+    """The worker's agent id from ``mngr create --format jsonl``'s ``created`` event, or None."""
+    for line in create_stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "created":
+            agent_id = event.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                return agent_id
+    return None
+
+
+def _stamp_worker_agent_id(task_file: Path, agent_id: str) -> None:
+    """Record the worker's id in the task frontmatter, where ``reply`` reads it back."""
+    text = task_file.read_text(encoding="utf-8")
+    task_file.write_text(
+        _set_frontmatter_field(text, _WORKER_AGENT_ID_FIELD, agent_id), encoding="utf-8"
+    )
+
+
+def _repo_root() -> Path:
+    """The template repo root: the ancestor of this file that holds ``system/scripts``.
+
+    Found by walking up rather than counting a fixed number of parent directories,
+    so the lookup keeps working if this script is ever relocated within the repo.
+    Raises ``RuntimeError`` if no ancestor qualifies: the script only makes sense
+    inside the template repo, so that is a real misconfiguration.
+    """
+    for ancestor in Path(__file__).resolve().parents:
+        if (ancestor / "system" / "scripts").is_dir():
+            return ancestor
+    raise RuntimeError(
+        f"could not locate the template repo root above {Path(__file__).resolve()}"
+        " -- the launch-task script must run from within the template repo"
+    )
+
+
+def _message_chat_argv(chat_id: str) -> list[str]:
+    """The messenger invocation for one chat; the caller appends the message source."""
+    return [sys.executable, str(_repo_root() / _MESSAGE_CHAT_SCRIPT_REL), chat_id]
 
 
 class Runner:
@@ -548,10 +647,9 @@ def rsync_dir(
 ) -> None:
     """Rsync ``source_dir`` into agent ``name``'s worktree at the same path.
 
-    Nothing here is specific to the *direction* of a dispatch: ``launch`` uses
-    it to push the runtime dir down to a worker, and ``report`` uses it to push
-    the report dir back up to a lead. Both sides address the same repo-relative
-    path (``_rsync_endpoints``), which is what makes one helper serve both.
+    Nothing here is specific to which level of a dispatch is launching: a chat
+    agent and a worker launching a sub-worker push the runtime dir down the same
+    way, addressing the same repo-relative path (``_rsync_endpoints``).
 
     ``--uncommitted-changes=clobber`` rather than ``merge``: every directory
     synced this way is a runtime dir under gitignored ``data/``, so there is
@@ -770,11 +868,12 @@ def launch(
     # failure keeps its name on purpose (see ``stop``), so this is an expected
     # event with a known remedy. An unreadable listing never blocks; the create
     # surfaces its own refusal then.
-    existing = _record_named(_agent_records(runner), name)
+    records = _agent_records(runner)
+    existing = _record_named(records, name)
     if existing is not None:
         print(
             f"create_worker: refusing to launch {name}: "
-            f"{_agent_phrase(name, existing)} already exists. Destroy it with "
+            f"{_agent_phrase(name, existing, records)} already exists. Destroy it with "
             f"`create_worker.py destroy --name {name}` or pick another name.",
             file=sys.stderr,
         )
@@ -804,13 +903,19 @@ def launch(
         # subprocesses) under memory pressure.
         "--label",
         "agent_created=true",
+        # The ``created`` event on stdout names the worker's agent id,
+        # which is how the task message and every later ``reply``
+        # address it. mngr's progress output stays on stderr.
+        "--format",
+        "jsonl",
     ]
-    if lead.lead_name is not None:
-        # The same lead the task file now names, as a label on the agent
+    if lead.lead_id is not None:
+        # The same lead id the task file now names, as a label on the agent
         # itself: it makes the lead/worker edge visible in ``mngr list``, so a
         # lead can see its own workers (and, at any depth, whether one of them
-        # is waiting on children of its own) without opening a task file.
-        create_argv += ["--label", f"{_LEAD_AGENT_LABEL}={lead.lead_name}"]
+        # is waiting on children of its own) without opening a task file. An id
+        # rather than a name so a rename mid-dispatch cannot orphan a subtree.
+        create_argv += ["--label", f"{_LEAD_AGENT_LABEL}={lead.lead_id}"]
     # Where the worker's task file and reports live, relative to the repo root,
     # so ``destroy`` can carry this worker's runtime dir up into the destroying
     # lead's tree without opening the task file.
@@ -819,7 +924,7 @@ def launch(
         f"{_RUNTIME_DIR_LABEL}={_repo_relative_path(runtime_dir, toplevel)}",
     ]
     try:
-        runner.run(create_argv, check=True)
+        created = runner.run(create_argv, check=True, stdout=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as exc:
         # mngr's own refusals (a dirty tree, a failed provisioning command) are
         # printed by mngr itself; the launch reports the failure in its own
@@ -832,25 +937,89 @@ def launch(
         )
         return 2
 
+    worker_agent_id = _created_agent_id(getattr(created, "stdout", "") or "")
+    if worker_agent_id is not None:
+        _stamp_worker_agent_id(task_file, worker_agent_id)
+    else:
+        print(
+            f"create_worker: warning: `mngr create {name}` reported no agent id; "
+            "the task goes to the worker by name and `reply` needs --name",
+            file=sys.stderr,
+        )
+
     rsync_dir(name, runtime_dir, runner, toplevel)
     if artifacts_dir is not None:
         rsync_dir(name, artifacts_dir, runner, toplevel)
 
     _flush_common_transcript(state_dir, runner)
 
-    runner.run(
-        [
-            "mngr",
-            "message",
-            name,
-            "--message-file",
-            str(task_file),
-        ],
-        check=True,
-    )
+    if worker_agent_id is not None:
+        runner.run(
+            [*_message_chat_argv(worker_agent_id), "--message-file", str(task_file)],
+            check=True,
+        )
+    else:
+        runner.run(
+            ["mngr", "message", name, "--message-file", str(task_file)],
+            check=True,
+        )
 
-    print(f"create_worker: worker {name} launched and runtime synced")
+    print(
+        f"create_worker: worker {name} launched and runtime synced"
+        + (f" (agent id {worker_agent_id})" if worker_agent_id is not None else "")
+    )
     return 0
+
+
+def reply(
+    task_file: Path,
+    message: str | None,
+    message_file: Path | None,
+    name: str | None,
+    runner: Runner | None = None,
+) -> int:
+    """Send the lead's reply to the worker's chat. Returns the process exit code.
+
+    Addressed by the ``worker_agent_id`` ``launch`` stamped into the task file,
+    through the chat app; a task file without it (a worker launched before the
+    stamp existed) is reached by ``mngr message`` with ``--name``, and is a usage
+    error without one. The messenger's exit status (``mngr message``'s codes) is
+    passed through.
+    """
+    runner = runner or Runner()
+    if (message is None) == (message_file is None):
+        print(
+            "create_worker: reply takes exactly one of -m/--message or --message-file",
+            file=sys.stderr,
+        )
+        return 2
+    if not task_file.is_file():
+        print(f"create_worker: --task-file not found: {task_file}", file=sys.stderr)
+        return 2
+    # ``--message=<text>`` rather than ``-m <text>``: the messenger parses with argparse,
+    # which reads a separate dash-initial value (a reply that is a markdown bullet, or
+    # ``-continue``) as an option and rejects it.
+    source = (
+        ["--message-file", str(message_file)]
+        if message_file is not None
+        else [f"--message={message}"]
+    )
+    worker_agent_id = _read_frontmatter_field(task_file, _WORKER_AGENT_ID_FIELD)
+    if worker_agent_id is not None:
+        argv = [*_message_chat_argv(worker_agent_id), *source]
+    elif name:
+        # CLEANUP: drop this name-addressed fallback once no in-flight worker
+        # predates the ``worker_agent_id`` stamp (a template release after this one).
+        argv = ["mngr", "message", name, *source]
+    else:
+        print(
+            f"create_worker: {task_file} has no {_WORKER_AGENT_ID_FIELD} (launched before "
+            "it was stamped?); pass --name to reach the worker by its mngr name.",
+            file=sys.stderr,
+        )
+        return 2
+    result = runner.run(argv, check=False)
+    return int(getattr(result, "returncode", 0) or 0)
 
 
 def _oom_priority_src() -> Path:
@@ -858,22 +1027,18 @@ def _oom_priority_src() -> Path:
 
     ``oom_priority`` is a first-party, stdlib-only package that the OOM Claude
     hooks reach by adding its ``src`` dir to ``sys.path`` (it is not a declared
-    dependency anywhere); this script does the same. We locate ``src`` by
-    walking up to the repo root -- the ancestor that contains
-    ``system/services/oom_priority/src`` -- rather than counting a fixed number of parent
-    directories, so the lookup keeps working if this script is ever relocated
-    within the repo. Raises ``RuntimeError`` if it can't be found, since the
+    dependency anywhere); this script does the same. ``src`` is resolved under
+    ``_repo_root()``. Raises ``RuntimeError`` if it is not there, since the
     package is always present in the repo and its absence is a real
     misconfiguration, not a condition to paper over.
     """
-    for ancestor in Path(__file__).resolve().parents:
-        candidate = ancestor / "system" / "services" / "oom_priority" / "src"
-        if candidate.is_dir():
-            return candidate
-    raise RuntimeError(
-        f"could not locate system/services/oom_priority/src above {Path(__file__).resolve()}"
-        " -- the launch-task script must run from within the template repo"
-    )
+    candidate = _repo_root() / "system" / "services" / "oom_priority" / "src"
+    if not candidate.is_dir():
+        raise RuntimeError(
+            f"{candidate} is not a directory -- the launch-task script must run "
+            "from within the template repo"
+        )
+    return candidate
 
 
 def _worker_has_pending_shed(worker_name: str) -> bool:
@@ -953,6 +1118,13 @@ def _record_named(
     return next((r for r in records if r.get("name") == name), None)
 
 
+def _record_with_id(
+    records: Sequence[Mapping[str, object]], agent_id: str
+) -> Mapping[str, object] | None:
+    """The agent record whose ``id`` is ``agent_id``, or ``None`` if absent."""
+    return next((r for r in records if r.get("id") == agent_id), None)
+
+
 def _record_field(record: Mapping[str, object], key: str) -> str | None:
     """A record's ``key`` as a non-empty string, or ``None``."""
     value = record.get(key)
@@ -968,6 +1140,15 @@ def _record_name(record: Mapping[str, object]) -> str:
     return name
 
 
+def _record_id(record: Mapping[str, object]) -> str:
+    """The record's agent id. Only for records ``_dispatch_subtree`` yielded or
+    ``_record_with_id`` found -- both guarantee one, so a missing id here is a
+    bug, not input."""
+    agent_id = _record_field(record, "id")
+    assert agent_id is not None
+    return agent_id
+
+
 def _record_label(record: Mapping[str, object], key: str) -> str | None:
     """A record's ``labels.<key>`` as a non-empty string, or ``None``."""
     labels = record.get("labels")
@@ -977,11 +1158,23 @@ def _record_label(record: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _agent_phrase(name: str, record: Mapping[str, object]) -> str:
+def _agent_phrase(
+    name: str, record: Mapping[str, object], records: Sequence[Mapping[str, object]]
+) -> str:
+    """One human sentence about an agent: its name, its state, and its lead.
+
+    The lead is labelled by id, so it is resolved back to a name through the
+    same listing the record came from -- an id in a refusal message tells the
+    reader nothing they can act on. An id with no record left falls back to
+    itself.
+    """
     state = _record_field(record, "state") or "unknown"
     lead = _record_label(record, _LEAD_AGENT_LABEL)
-    lead_text = f" (a worker of {lead})" if lead is not None else ""
-    return f"an agent named {name!r} in state {state}{lead_text}"
+    if lead is None:
+        return f"an agent named {name!r} in state {state}"
+    lead_record = _record_with_id(records, lead)
+    lead_text = lead if lead_record is None else _record_name(lead_record)
+    return f"an agent named {name!r} in state {state} (a worker of {lead_text})"
 
 
 def _leftover_record_hint(name: str, runner: Runner) -> str:
@@ -993,11 +1186,12 @@ def _leftover_record_hint(name: str, runner: Runner) -> str:
     STOPPED record that makes the *next* launch of the same name fail on the
     name alone.
     """
-    record = _record_named(_agent_records(runner), name)
+    records = _agent_records(runner)
+    record = _record_named(records, name)
     if record is None:
         return ""
     return (
-        f" The failed create left {_agent_phrase(name, record)} behind; run "
+        f" The failed create left {_agent_phrase(name, record, records)} behind; run "
         f"`create_worker.py destroy --name {name}` before relaunching."
     )
 
@@ -1013,8 +1207,8 @@ def _worker_is_idle(
     its own turn, so its state alone reads as idle -- and a lead that trusted
     that would abandon a perfectly healthy nested dispatch with
     ``_AWAIT_IDLE_RC``. So a worker with a live child is never idle: any agent
-    labelled ``lead_agent=<worker_name>`` whose state is RUNNING or WAITING and
-    which has no pending OOM shed keeps its parent counted as busy.
+    labelled with this worker's own agent id whose state is RUNNING or WAITING
+    and which has no pending OOM shed keeps its parent counted as busy.
 
     The shed check is what keeps that from becoming a hang in the other
     direction: a child shed by the OOM daemon stays in a live-looking state
@@ -1030,8 +1224,9 @@ def _worker_is_idle(
     own = _record_named(records, worker_name)
     if own is None or _record_field(own, "state") not in _IDLE_STATES:
         return False
+    own_id = _record_field(own, "id")
     for record in records:
-        if _record_label(record, _LEAD_AGENT_LABEL) != worker_name:
+        if own_id is None or _record_label(record, _LEAD_AGENT_LABEL) != own_id:
             continue
         if _record_field(record, "state") not in _LIVE_CHILD_STATES:
             continue
@@ -1300,10 +1495,10 @@ def await_report(
                 "daemon to relieve memory pressure -- its agent process was shed "
                 "and its background tasks (including its own report poll) were "
                 "cancelled, so it will NOT report until it is revived. Revive it "
-                f"with: mngr start {worker_name} --restart  (a plain `mngr message` "
+                f"with: mngr start {worker_name} --restart  (a plain message "
                 "or `mngr start` will not relaunch a shed agent), then nudge it to "
-                f"continue (mngr message {worker_name} -m continue). You do not "
-                "need to resend the task -- it survives in the worker's "
+                "continue (create_worker.py reply --task-file <task file> -m "
+                "continue). You do not need to resend the task -- it survives in the worker's "
                 "conversation history, and a SessionStart hook already tells the "
                 "revived worker it was paused, so it re-checks state before "
                 "continuing.",
@@ -1326,8 +1521,8 @@ def await_report(
                     f"--format jsonl` for {worker_name} -- under the report's "
                     "relative path, and copy it to the path above), or it stopped "
                     "without reporting (read its transcript: "
-                    f"mngr transcript {worker_name}; nudge it with mngr message "
-                    f"{worker_name} -m 'deliver your report per "
+                    f"mngr transcript {worker_name}; nudge it with create_worker.py "
+                    "reply --task-file <task file> -m 'deliver your report per "
                     "worker-reporting.md'). Not waiting out the remaining timeout.",
                     file=sys.stderr,
                 )
@@ -1344,35 +1539,57 @@ def await_report(
 
 
 def _dispatch_subtree(
-    root_name: str, records: Sequence[Mapping[str, object]]
+    root_id: str, records: Sequence[Mapping[str, object]]
 ) -> tuple[Mapping[str, object], ...]:
-    """Every agent whose ``lead_agent`` chain reaches ``root_name``, in
-    post-order (each agent after all of its own workers), excluding the root.
+    """Every agent whose ``lead_agent`` chain reaches ``root_id``, in post-order
+    (each agent after all of its own workers), excluding the root.
 
-    The order is what lets a teardown work deepest-first: a descendant is
-    handled while its lead -- whose worktree holds the descendant's runtime dir
-    -- still exists. Records without a ``name`` are skipped, and a mislabelled
+    The chain is walked by agent id because that is what ``launch`` labels each
+    worker with: a rename anywhere in the tree would otherwise sever it, and a
+    severed subtree is one a teardown silently leaves running. The order is what
+    lets a teardown work deepest-first: a descendant is handled while its lead
+    -- whose worktree holds the descendant's runtime dir -- still exists.
+    Records without both an ``id`` and a ``name`` are skipped, and a mislabelled
     cycle cannot loop it.
     """
     children: dict[str, list[Mapping[str, object]]] = {}
     for record in records:
         lead = _record_label(record, _LEAD_AGENT_LABEL)
-        if lead is not None and _record_field(record, "name") is not None:
+        if (
+            lead is not None
+            and _record_field(record, "name") is not None
+            and _record_field(record, "id") is not None
+        ):
             children.setdefault(lead, []).append(record)
     ordered: list[Mapping[str, object]] = []
-    visited = {root_name}
+    visited = {root_id}
 
     def _visit(lead: str) -> None:
         for child in children.get(lead, ()):
-            child_name = _record_name(child)
-            if child_name in visited:
+            child_id = _record_id(child)
+            if child_id in visited:
                 continue
-            visited.add(child_name)
-            _visit(child_name)
+            visited.add(child_id)
+            _visit(child_id)
             ordered.append(child)
 
-    _visit(root_name)
+    _visit(root_id)
     return tuple(ordered)
+
+
+def _subtree_of(
+    name: str, records: Sequence[Mapping[str, object]]
+) -> tuple[Mapping[str, object], ...]:
+    """``_dispatch_subtree`` for the agent called ``name``.
+
+    The CLI addresses a teardown by name (that is what a lead has to hand), so
+    the name is resolved to the id the dispatch tree is keyed on. An agent the
+    listing does not know has no discoverable subtree: the teardown still runs
+    on the named agent itself, and mngr reports its own verdict on it.
+    """
+    root = _record_named(records, name)
+    root_id = None if root is None else _record_field(root, "id")
+    return () if root_id is None else _dispatch_subtree(root_id, records)
 
 
 # Where every flow keeps its runtime dirs (``data/.tasks/<flow>/<slug>/``, per
@@ -1525,7 +1742,7 @@ def destroy(
     """
     runner = runner or Runner()
     records = _agent_records(runner)
-    subtree = _dispatch_subtree(name, records)
+    subtree = _subtree_of(name, records)
     toplevel = _repo_toplevel(runner)
     flags = ["--force", "-b"] if delete_branches else ["--force"]
     outcomes: list[_LifecycleOutcome] = []
@@ -1558,7 +1775,7 @@ def stop(name: str, runner: Runner | None = None, recursive: bool = True) -> int
     subtree's worktrees are still there to read.
     """
     runner = runner or Runner()
-    subtree = _dispatch_subtree(name, _agent_records(runner))
+    subtree = _subtree_of(name, _agent_records(runner))
     outcomes: list[_LifecycleOutcome] = []
     if not recursive:
         _orphan_warning(name, subtree, "stopped")
@@ -1574,10 +1791,10 @@ def stop(name: str, runner: Runner | None = None, recursive: bool = True) -> int
     return _print_outcomes(outcomes)
 
 
-# Exit code for a report that could not be delivered at all: neither pushed to
-# the lead nor resolved to the lead's work dir through ``mngr list``. Shares
-# ``launch``'s "unusable inputs" code -- from the caller's side both mean the
-# command did nothing useful and needs a human.
+# Exit code for a report that could not be delivered at all: the task file named
+# no lead work dir and ``mngr list`` could not supply one. Shares ``launch``'s
+# "unusable inputs" code -- from the caller's side both mean the command did
+# nothing useful and needs a human.
 _REPORT_UNDELIVERABLE_RC = 2
 
 
@@ -1603,14 +1820,14 @@ def _deliver_report_through_listing(
 ) -> int:
     """Copy the report into the lead's work dir, resolved through ``mngr list``.
 
-    The rsync push is the normal delivery; this is the fallback for when it
-    cannot be attempted (the task file names no ``lead_agent``) or it failed.
+    The fallback for a task file that names no ``lead_work_dir`` -- one written
+    by a launcher that predates the stamp, or launched from outside an agent.
     Two lookups in one listing give a real destination on disk without either
     agent's cooperation: the worker's own agent record carries the
-    ``lead_agent`` label ``launch`` attached at create time, and that lead's
-    record carries its ``work_dir``. Because ``finish_report_path`` is
-    repo-relative, joining it onto the lead's work dir is the same file the
-    lead's ``await`` is polling for.
+    ``lead_agent`` label ``launch`` attached at create time (the lead's agent
+    id), and the record with that id carries its ``work_dir``. Because
+    ``finish_report_path`` is repo-relative, joining it onto the lead's work dir
+    is the same file the lead's ``await`` is polling for.
 
     Every way this can fail names the piece that was missing and returns
     ``_REPORT_UNDELIVERABLE_RC``.
@@ -1628,24 +1845,24 @@ def _deliver_report_through_listing(
         return _report_undeliverable(
             report_path, f"`mngr list` has no agent record named {worker_name!r}"
         )
-    lead_name = _record_label(own_record, _LEAD_AGENT_LABEL)
-    if lead_name is None:
+    lead_id = _record_label(own_record, _LEAD_AGENT_LABEL)
+    if lead_id is None:
         return _report_undeliverable(
             report_path,
             f"the agent record for {worker_name!r} carries no `lead_agent` "
             "label, so its lead is unknown",
         )
-    lead_record = _record_named(records, lead_name)
+    lead_record = _record_with_id(records, lead_id)
     if lead_record is None:
         return _report_undeliverable(
             report_path,
-            f"`mngr list` has no agent record named {lead_name!r}, the lead "
+            f"`mngr list` has no agent record with id {lead_id!r}, the lead "
             f"{worker_name!r} is labelled with",
         )
     work_dir = _record_field(lead_record, "work_dir")
     if work_dir is None:
         return _report_undeliverable(
-            report_path, f"the agent record for {lead_name!r} carries no `work_dir`"
+            report_path, f"the agent record with id {lead_id!r} carries no `work_dir`"
         )
     if report_path.is_absolute():
         # Joining an absolute path onto the work dir yields the path itself, so
@@ -1680,17 +1897,18 @@ def report_to_lead(
     ``finish_report_path`` *within the worker's own tree* -- that path is
     repo-relative, so the same string names the file on both sides -- carrying
     the ``type``/``name`` frontmatter ``parse_report`` reads. Delivery then
-    pushes the report's parent directory to the lead with ``rsync_dir``'s
-    conventions (``mngr rsync`` moves directories, not single files), so the
-    file lands at the lead's ``finish_report_path`` and its poll returns.
+    copies it to the same relative path under the lead's ``lead_work_dir``,
+    which is where the lead's poll is looking.
 
-    The push is the ready signal, so it only ever runs on a fully written
-    report. When it cannot run (no ``lead_agent`` in the task file) or fails,
-    delivery falls back to resolving the lead's work dir from ``mngr list`` and
-    copying the file there. When neither works the command fails loudly with
-    ``_REPORT_UNDELIVERABLE_RC``: from the lead's side, a worker that finished
-    but could not say so is indistinguishable from a hung one, so a silent
-    non-delivery is the one outcome this must never produce.
+    A plain copy rather than a push to a named agent: every worktree in a
+    dispatch hangs off one repo on one host, so the lead's checkout is a local
+    path for the worker at any depth, and nothing has to be addressed or stay
+    named. When the task file carries no ``lead_work_dir`` (a launcher that
+    predates the stamp), delivery falls back to resolving the lead's work dir
+    from ``mngr list`` by the ``lead_agent`` id. When neither works the command
+    fails loudly with ``_REPORT_UNDELIVERABLE_RC``: from the lead's side, a
+    worker that finished but could not say so is indistinguishable from a hung
+    one, so a silent non-delivery is the one outcome this must never produce.
 
     ``worker_name`` (the worker's own ``MNGR_AGENT_NAME``) is only needed by the
     fallback, which looks the worker up to read its ``lead_agent`` label.
@@ -1703,33 +1921,37 @@ def report_to_lead(
     # file, so let it raise with a full traceback (as ``await`` does) rather than
     # degrading into a terse message about a file the worker cannot fix.
     report_path = _read_finish_report_path(task_file)
-    lead_agent = _read_frontmatter_field(task_file, "lead_agent")
+    lead_work_dir = _read_frontmatter_field(task_file, _LEAD_WORK_DIR_FIELD)
 
     body = body_file.read_text(encoding="utf-8").strip("\n")
     report_text = f"---\ntype: {report_type}\nname: {name}\n---\n\n{body}\n"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_text, encoding="utf-8")
 
-    if lead_agent is None:
+    if lead_work_dir is None:
         print(
-            "create_worker: the task file names no `lead_agent`, so there is no "
-            "address to push the report to; resolving the lead through `mngr "
-            "list` instead.",
+            f"create_worker: the task file names no `{_LEAD_WORK_DIR_FIELD}`, so "
+            "there is no path to deliver the report to; resolving the lead "
+            "through `mngr list` instead.",
+            file=sys.stderr,
+        )
+    elif report_path.is_absolute():
+        # An absolute path joined onto the work dir is the path itself, so the
+        # copy would "deliver" the report to the one already in this worker's
+        # tree and return success -- the silent non-delivery this must never
+        # produce. The listing fallback refuses it for the same reason.
+        print(
+            "create_worker: `finish_report_path` is absolute, so it cannot be "
+            f"resolved against the lead's work dir ({lead_work_dir}); resolving "
+            "the lead through `mngr list` instead.",
             file=sys.stderr,
         )
     else:
-        try:
-            rsync_dir(lead_agent, report_path.parent, runner)
-        except subprocess.CalledProcessError as exc:
-            print(
-                f"create_worker: pushing the report to {lead_agent} failed with "
-                f"exit code {exc.returncode}; resolving the lead's work dir "
-                "through `mngr list` instead.",
-                file=sys.stderr,
-            )
-        else:
-            print(f"{lead_agent}:{_normalize_dir(str(report_path.parent))}")
-            return 0
+        destination = Path(lead_work_dir) / report_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(report_text, encoding="utf-8")
+        print(str(destination))
+        return 0
     return _deliver_report_through_listing(
         report_text, report_path, worker_name, runner
     )
@@ -1941,6 +2163,16 @@ def _run_stop(args: argparse.Namespace, runner: Runner | None) -> int:
     return stop(args.name, runner, recursive=not args.no_recursive)
 
 
+def _run_reply(args: argparse.Namespace, runner: Runner | None) -> int:
+    return reply(
+        task_file=args.task_file,
+        message=args.message,
+        message_file=args.message_file,
+        name=args.name,
+        runner=runner,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser.
 
@@ -2064,8 +2296,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     report_parser = subparsers.add_parser(
         "report",
-        help="Worker side: write this run's report and deliver it to the lead "
-        "(push, with a `mngr list` fallback). Fails loudly if neither lands.",
+        help="Worker side: write this run's report and copy it into the lead's "
+        "work dir (with a `mngr list` fallback). Fails loudly if neither lands.",
     )
     report_parser.add_argument(
         "--task-file",
@@ -2073,7 +2305,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="This worker's own task file (the `task_file` path stamped in the "
         "frontmatter it was sent); its `finish_report_path` says where the "
-        "report goes and its `lead_agent` who to send it to.",
+        "report goes and its `lead_work_dir` which checkout to put it in.",
     )
     report_parser.add_argument(
         "--type",
@@ -2133,6 +2365,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop only this agent; warn about each descendant left running.",
     )
 
+    reply_parser = subparsers.add_parser(
+        "reply",
+        help="Send the lead's reply (a gate answer, a nudge) to the worker's chat, "
+        "through the chat app, addressed by the id launch stamped into the task file.",
+    )
+    reply_parser.add_argument(
+        "--task-file",
+        required=True,
+        type=Path,
+        help="Same task file as launch; its frontmatter `worker_agent_id` names the worker.",
+    )
+    reply_source = reply_parser.add_mutually_exclusive_group(required=True)
+    reply_source.add_argument("-m", "--message", help="The reply text.")
+    reply_source.add_argument(
+        "--message-file", type=Path, help="A file whose contents are the reply."
+    )
+    reply_parser.add_argument(
+        "--name",
+        help="Worker name, used only when the task file predates the `worker_agent_id` stamp.",
+    )
+
     return parser
 
 
@@ -2150,6 +2403,8 @@ def main(argv: Sequence[str] | None = None, runner: Runner | None = None) -> int
         return _run_destroy(args, runner)
     if args.command == "stop":
         return _run_stop(args, runner)
+    if args.command == "reply":
+        return _run_reply(args, runner)
     return _run_await(args)
 
 

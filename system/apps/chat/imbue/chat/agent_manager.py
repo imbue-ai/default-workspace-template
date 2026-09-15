@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from app_instances.data_types import InstanceStatus
 from app_instances.interfaces import InstanceNudgerInterface
 from app_instances.nudge import SilentNudger
 from loguru import logger as _loguru_logger
@@ -60,13 +61,15 @@ from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
-from imbue.chat.models import CreatedChatAgent
+from imbue.chat.models import ChatSnapshot
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
@@ -76,6 +79,10 @@ from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_name_conflict
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceState
+from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import chat_id_of_first_agent
+from imbue.chat.primitives import first_agent_id_of_chat
+from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.concurrency_group import InvalidConcurrencyGroupStateError
@@ -155,6 +162,7 @@ def _chat_project_label(primary_labels: dict[str, str], project_id: str) -> str:
 def _build_chat_create_command(
     mngr_binary: str,
     name: str,
+    chat_id: ChatId,
     agent_id: str,
     primary_labels: dict[str, str],
     harness: HarnessType,
@@ -163,13 +171,15 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
 ) -> list[str]:
-    """Build the ``mngr create`` argv for a chat agent on a given harness.
+    """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
     The harness is selected with ``--type <harness>`` (which resolves
     ``[agent_types.<harness>]`` directly), and the `chat` role template supplies
     everything else -- the shared work directory and the output style. Every harness
     shares this one builder: adding a harness means passing a different name here, not
     writing another near-identical builder, and not adding a per-harness create template.
+    ``MINDS_CHAT_ID`` names the chat the agent belongs to in its env file, so the agent and
+    every skill it runs can address the chat rather than themselves.
 
     Pure: argv assembly only, so the repo<->mngr CLI contract is testable against the
     live CLI without constructing an ``AgentManager`` or running a subprocess (see
@@ -197,6 +207,8 @@ def _build_chat_create_command(
         # the workspace's own surfaces show.
         "--label",
         f"display_name={name}",
+        "--env",
+        f"MINDS_CHAT_ID={chat_id}",
         "--no-connect",
     ]
     # The project the chat starts out filed in: the one it was created inside
@@ -349,6 +361,59 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
     )
 
 
+@pure
+def chat_status_for_agent(
+    lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
+) -> InstanceStatus:
+    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn."""
+    if is_lifecycle_dead(lifecycle_state):
+        return InstanceStatus.STOPPED
+    if is_permission_pending:
+        return InstanceStatus.ATTENTION
+    if activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING):
+        return InstanceStatus.WORKING
+    return InstanceStatus.IDLE
+
+
+@pure
+def chat_snapshot_for_agent(
+    agent: AgentStateItem, is_permission_pending: bool, shoulder_tap_available: bool
+) -> ChatSnapshot:
+    """The chat one agent is the whole of, under the own-chat rule.
+
+    ``project`` and the title are lifted out of the labels because they are what the
+    workspace UI reads on every chat it lists: the project the chat was created in (mngr
+    propagates the label to the agent's own children), and the name the user typed, whose
+    canonical form is the mngr ``name`` the chat is still addressed by in mngr's own terms.
+    """
+    return ChatSnapshot(
+        chat_id=chat_id_of_first_agent(agent.id),
+        title=agent.labels.get("display_name") or agent.name,
+        name=agent.name,
+        project=agent.labels.get("project"),
+        status=chat_status_for_agent(agent.state, agent.activity_state, is_permission_pending),
+        labels=agent.labels,
+        agent_ids=(agent.id,),
+        handoff=None,
+        active_agent=ActiveAgentSnapshot(
+            agent_id=agent.id,
+            name=agent.name,
+            harness=agent.harness,
+            account_id=agent.labels.get("account"),
+            state=agent.state,
+            activity_state=agent.activity_state,
+            model_choice=agent.model_choice,
+            queued_messages=agent.queued_messages,
+            shoulder_tap_available=shoulder_tap_available,
+        ),
+    )
+
+
+@pure
+def is_primary_agent(agent: AgentStateItem) -> bool:
+    return agent.labels.get("is_primary") == "true"
+
+
 class _CreationOutputTail(MutableModel):
     """Keeps the last lines a ``mngr create`` printed, for the notice a failed create shows.
 
@@ -395,11 +460,15 @@ def _assert_special_kinds_declared(harness: HarnessType, events: list[dict[str, 
 
 
 class AgentManager:
-    """Manages agent lifecycle detection, per-agent activity and model tracking, and agent creation.
+    """The chat app's model of its chats and the agents behind them.
 
-    Runs mngr observe as a subprocess for event-driven agent lifecycle detection.
-    Handles agent creation via local mngr create calls, and nudges the shell whenever
-    the agent list (the chat app's instance list) changes.
+    Its chat-level duties (the ``chat-level`` sections below) are what the pages, the shell,
+    and the loopback callers see: naming, provisional chats, the chat snapshots and their
+    broadcast, presence and message stamps, and the create/destroy/stop/rename verbs. Its
+    agent-level duties are how those are kept true: the ``mngr observe`` stream, the mngr
+    commands, and the per-agent trackers, sessions, and model watchers. Every chat is one
+    agent today (the own-chat rule), so the two are joined by ``chat_id_of_first_agent`` and
+    ``first_agent_id_of_chat`` wherever one crosses into the other.
     """
 
     _broadcaster: WebSocketBroadcaster
@@ -421,8 +490,8 @@ class AgentManager:
     # paths that mutate _agents without a discovery event (creation/refresh) skip
     # it, and a miss in get_agent_matches_by_id just falls back to discovery.
     _match_by_agent_id: dict[str, AgentMatch]
-    # The chats minted here that mngr does not know yet, by the id they will carry.
-    _proto_agents: dict[str, ProvisionalChat]
+    # The chats minted here whose first agent mngr does not know yet, by chat id.
+    _provisional_chats: dict[ChatId, ProvisionalChat]
     _own_agent_id: str
     _own_work_dir: str
     _shutdown_event: ShutdownEvent
@@ -465,14 +534,14 @@ class AgentManager:
     # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: page presence and
     # messages (via ``record_presence`` and ``record_message_sent``, from the chat app's
     # presence and send routes),
-    # lifecycle changes (via ``record_running_agents``, from the observe stream),
+    # lifecycle changes (via ``record_running_chats``, from the observe stream),
     # and elapsed idle time (via its own slow sweep, started in ``start``). A chat
     # is protected while engaged and climbs past the worker band once it has been
     # left alone long enough.
     _oom_prioritizer: ChatOomPrioritizer
     # Tells the shell that the chat app's instance list changed (contracts.md section 5):
     # every broadcast of the agent list is a change of that list or of a status in it, so the
-    # nudge rides ``_broadcast_agents_updated``. ``SilentNudger`` until ``main`` installs the
+    # nudge rides ``_broadcast_chats_updated``. ``SilentNudger`` until ``main`` installs the
     # real one, so a manager built by a test posts nothing to the workspace shell.
     _nudger: InstanceNudgerInterface
     # Surfaces the tab of a chat created from outside with an auto-open label (the Minds
@@ -532,7 +601,7 @@ class AgentManager:
         manager._agent_details_by_id = {}
         manager._agents = {}
         manager._match_by_agent_id = {}
-        manager._proto_agents = {}
+        manager._provisional_chats = {}
         manager._own_agent_id = os.environ.get("MNGR_AGENT_ID", "")
         manager._own_work_dir = os.environ.get("MNGR_AGENT_WORK_DIR", "")
         manager._shutdown_event = ShutdownEvent.build_root()
@@ -561,13 +630,15 @@ class AgentManager:
         )
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
-        # Built last: its ``list_chat_agent_ids`` / ``resolve_process_started_at``
-        # callbacks read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
+        # Built last: its ``list_chat_ids`` / ``resolve_process_started_at`` callbacks
+        # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
-            list_chat_agent_ids=manager.get_chat_agent_ids,
-            resolve_pid=lookup_pid_by_agent_id,
+            list_chat_ids=manager.get_chat_ids,
+            resolve_pid=lambda chat_id: lookup_pid_by_agent_id(first_agent_id_of_chat(chat_id)),
             set_adj=set_oom_score_adj,
-            resolve_process_started_at=manager._read_agent_process_started_at,
+            resolve_process_started_at=lambda chat_id: manager._read_agent_process_started_at(
+                first_agent_id_of_chat(chat_id)
+            ),
         )
         return manager
 
@@ -629,7 +700,7 @@ class AgentManager:
     def broadcaster(self) -> WebSocketBroadcaster:
         """The WebSocketBroadcaster this manager owns. Primarily useful to
         callers that need to reuse the same broadcaster across related
-        application state (``ChatState.broadcaster`` reads it here, so a manager
+        application state (``ChatAppState.broadcaster`` reads it here, so a manager
         a test injects brings its broadcaster with it)."""
         return self._broadcaster
 
@@ -651,10 +722,12 @@ class AgentManager:
         """Fire the installed nudger: the instance list changed with no agent-list broadcast to carry it."""
         self._nudger.nudge()
 
-    def _broadcast_agents_updated(self) -> None:
-        """Push the agent list to every WebSocket client, then nudge the shell about the instance list."""
-        self._broadcaster.broadcast_agents_updated(self.get_agents_serialized())
+    def _broadcast_chats_updated(self) -> None:
+        """Push every chat's snapshot to every WebSocket client, then nudge the shell about the instance list."""
+        self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots())
         self._nudger.nudge()
+
+    # Agent-level: the tracked agents.
 
     def get_agents(self) -> list[AgentStateItem]:
         """Return current agent list."""
@@ -665,6 +738,64 @@ class AgentManager:
         """Look up a single agent by ID."""
         with self._lock:
             return self._agents.get(agent_id)
+
+    # Chat-level: the chats and their snapshots.
+
+    def get_chat_snapshots(self) -> list[ChatSnapshot]:
+        """Every chat as the pages and the instances API see it: one per non-primary agent.
+
+        The agent snapshot is copied out under ``_lock``, but ``shoulder_tap_available``
+        is computed AFTER releasing it: that call descends into the harness session's
+        own queue-tracker lock, and a queue tracker's mutating methods publish back into
+        this manager (``update_queued_messages``) while still holding THEIR lock. Calling
+        into the session while still holding ``_lock`` here would let one thread hold
+        ``_lock`` and wait on the queue tracker's lock while another holds that lock and
+        waits on ``_lock`` -- a lock-order-inversion deadlock that once wedged every
+        request needing ``_lock`` (including chat creation) behind a single stuck
+        shoulder-tap check.
+        """
+        with self._lock:
+            agents = [agent for agent in self._agents.values() if not is_primary_agent(agent)]
+            pending_by_agent = {
+                agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent in agents
+            }
+        return [
+            chat_snapshot_for_agent(agent, pending_by_agent[agent.id], self._shoulder_tap_available(agent))
+            for agent in agents
+        ]
+
+    def get_chat_snapshot(self, chat_id: str) -> ChatSnapshot | None:
+        """One chat's snapshot, or None when no listed chat has that id (a provisional chat included)."""
+        parsed = parse_chat_ref(chat_id)
+        agent = self.get_agent_by_id(first_agent_id_of_chat(parsed)) if parsed is not None else None
+        if agent is None or is_primary_agent(agent):
+            return None
+        return chat_snapshot_for_agent(
+            agent, self.has_pending_permission(chat_id), self._shoulder_tap_available(agent)
+        )
+
+    def get_active_agent_info(self, chat_id: str) -> AgentInfo | None:
+        """The agent a chat currently runs on (with its resolved dirs), or None for an id that names no chat."""
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
+            return None
+        return self.get_agent_info_by_id(first_agent_id_of_chat(parsed))
+
+    def get_chat_ids(self) -> list[ChatId]:
+        """Ids of the chats the OOM prioritizer manages: user-facing chats only.
+
+        Excludes workers (``agent_created=true``) and the primary services agent
+        (``is_primary=true``); those keep their launch bands -- workers maximally
+        expendable, the primary pinned -- so no UI activity moves their score.
+        Remote agents are left in (they have no local pid, so the prioritizer's
+        pid lookup skips them harmlessly).
+        """
+        with self._lock:
+            return [
+                chat_id_of_first_agent(agent.id)
+                for agent in self._agents.values()
+                if agent.labels.get("agent_created") != "true" and not is_primary_agent(agent)
+            ]
 
     def restart_agents_on_account_in_background(self, account_id: str) -> None:
         """Kick off `restart_agents_on_account` on its own thread and return at once.
@@ -727,42 +858,32 @@ class AgentManager:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
-    def get_chat_agent_ids(self) -> list[str]:
-        """Ids of the agents the OOM prioritizer manages: chat agents only.
-
-        Excludes workers (``agent_created=true``) and the primary services agent
-        (``is_primary=true``); those keep their launch bands -- workers maximally
-        expendable, the primary pinned -- so no UI activity moves their score.
-        Remote agents are left in (they have no local pid, so the prioritizer's
-        pid lookup skips them harmlessly).
-        """
-        with self._lock:
-            return [
-                agent.id
-                for agent in self._agents.values()
-                if agent.labels.get("agent_created") != "true" and agent.labels.get("is_primary") != "true"
-            ]
-
-    def record_presence(self, agent_id: str, client_id: str, state: PresenceState) -> None:
+    def record_presence(self, chat_id: ChatId, client_id: str, state: PresenceState) -> None:
         """Feed one chat page's presence report to the OOM prioritizer (re-tags chats)."""
-        self._oom_prioritizer.record_presence(agent_id, client_id, state)
+        self._oom_prioritizer.record_presence(chat_id, client_id, state)
 
-    def record_message_sent(self, agent_id: str) -> None:
+    def record_message_sent(self, chat_id: ChatId) -> None:
         """Stamp a chat as just-messaged for the OOM prioritizer's recency ranking (and on disk, for the next restart)."""
-        self._oom_prioritizer.record_message(agent_id)
-        self._message_stamps.record(agent_id)
+        self._oom_prioritizer.record_message(chat_id)
+        self._message_stamps.record(chat_id)
 
-    def has_pending_permission(self, agent_id: str) -> bool:
-        """Whether a permission request the agent filed is still awaiting the user's verdict."""
+    def has_pending_permission(self, chat_id: str) -> bool:
+        """Whether a permission request the chat's agent filed is still awaiting the user's verdict."""
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
+            return False
         with self._lock:
-            return bool(self._pending_permission_ids_by_agent.get(agent_id))
+            return bool(self._pending_permission_ids_by_agent.get(first_agent_id_of_chat(parsed)))
 
-    def destroy_chat_agent(self, agent_id: str) -> None:
-        """Run ``mngr destroy --force`` for a tracked agent and drop it from the tracked state at once.
+    # Chat-level: the verbs (destroy, stop, rename, create).
+
+    def destroy_chat(self, chat_id: ChatId) -> None:
+        """Run ``mngr destroy --force`` for a chat's agent and drop it from the tracked state at once.
 
         Raises ``AgentDestroyError`` when mngr refuses or fails; the caller has already
         refused the primary services agent, which is never a chat.
         """
+        agent_id = first_agent_id_of_chat(chat_id)
         agent_state = self.get_agent_by_id(agent_id)
         if agent_state is None:
             raise AgentDestroyError(f"Agent '{agent_id}' not found")
@@ -777,13 +898,14 @@ class AgentManager:
         # Reflect the destruction immediately rather than waiting for mngr observe.
         self.remove_agent(agent_id)
 
-    def stop_chat_agent(self, agent_id: str) -> None:
-        """Run ``mngr stop`` for a tracked agent: the reversible counterpart to a destroy.
+    def stop_chat(self, chat_id: ChatId) -> None:
+        """Run ``mngr stop`` for a chat's agent: the reversible counterpart to a destroy.
 
         The agent keeps its transcript and name; a message or the start route brings it back.
         The observe stream reports the STOPPED state on its own. Raises ``AgentStopError`` when
         mngr refuses or fails; the caller has already refused the primary services agent.
         """
+        agent_id = first_agent_id_of_chat(chat_id)
         agent_state = self.get_agent_by_id(agent_id)
         if agent_state is None:
             raise AgentStopError(f"Agent '{agent_id}' not found")
@@ -865,7 +987,7 @@ class AgentManager:
             if agent_state is None or not is_lifecycle_dead(agent_state.state):
                 return
             self._agents[agent_id] = agent_state.model_copy_update(to_update(agent_state.field_ref().state, "WAITING"))
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -898,8 +1020,7 @@ class AgentManager:
             self._agents.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
             self._pending_permission_ids_by_agent.pop(agent_id, None)
-        self._oom_prioritizer.forget_agent(agent_id)
-        self._message_stamps.forget(agent_id)
+        self._forget_chat(chat_id_of_first_agent(agent_id))
 
         self._stop_activity_tracking(agent_id)
         self._stop_model_tracking(agent_id)
@@ -907,13 +1028,13 @@ class AgentManager:
         # and so does the codex live-user-turn record keyed by its id.
         self._evict_watcher(agent_id)
         drop_live_user_turns(agent_id)
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
-    def rename_chat_agent(self, agent_ref: str, display_name: str) -> None:
-        """Give a chat agent the name the user just typed, keeping its name pair matched.
+    def rename_chat(self, chat_ref: str, display_name: str) -> None:
+        """Give a chat the name the user just typed, keeping its active agent's name pair matched.
 
-        ``agent_ref`` is an agent id (what the chat app's rename route and the
-        instance key carry) or an agent name, so both are resolved here. The display name's canonical form becomes the
+        ``chat_ref`` is a chat id (what the chat app's rename route and the instance key
+        carry) or an agent name, so both are resolved here. The display name's canonical form becomes the
         agent's true name and the typed form its ``display_name`` label, the same
         pairing ``mngr create`` establishes. When the canonical form is already
         the agent's name (a display-only change, e.g. "chat 2" -> "Chat 2"),
@@ -936,20 +1057,21 @@ class AgentManager:
         if not canonical_agent_name(display_name):
             raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
 
+        parsed = parse_chat_ref(chat_ref)
         with self._lock:
-            agent_state = self._agents.get(agent_ref) or next(
-                (agent for agent in self._agents.values() if agent.name == agent_ref), None
-            )
-            proto_agent = self._proto_agents.get(agent_ref)
+            agent_state = self._agents.get(first_agent_id_of_chat(parsed)) if parsed is not None else None
+            if agent_state is None:
+                agent_state = next((agent for agent in self._agents.values() if agent.name == chat_ref), None)
+            provisional = self._provisional_chats.get(parsed) if parsed is not None else None
             taken_names = () if agent_state is None else tuple(self._taken_names_locked(agent_state.id))
 
         if agent_state is None:
-            if proto_agent is not None and proto_agent.name != display_name:
+            if provisional is not None and provisional.name != display_name:
                 raise AgentRenameError(
-                    f"Chat '{agent_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
+                    f"Chat '{chat_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
                 )
-            if proto_agent is None:
-                _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", agent_ref)
+            if provisional is None:
+                _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", chat_ref)
             return
 
         # The services agent runs the workspace itself; its name is the minds
@@ -990,7 +1112,7 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
     def _start_session_sweep(self) -> None:
         """Start the background sweep that connects tracked agents' live backends once they come up."""
@@ -1039,54 +1161,6 @@ class AgentManager:
             # follows this one, so a bar that just became resolvable would stay unrendered.
             self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
-    def get_agents_serialized(self) -> list[dict[str, Any]]:
-        """Return agent list serialized for JSON.
-
-        ``project`` is lifted out of the labels because it is the chat-to-project
-        linkage the workspace UI reads on every agent it lists (see
-        ``_chat_project_label``); null means the chat was created inside no
-        project, which Everything lists all the same.
-
-        ``display_name`` is lifted for the same reason: it is the human-readable
-        name mngr holds for the agent, and ``name`` is its canonical form, so the
-        UI can show what the user typed while still addressing the agent by
-        ``name``. Null means mngr has no such label and ``name`` is all there is.
-
-        The agent snapshot is copied out under ``_lock``, but ``shoulder_tap_available``
-        is computed AFTER releasing it: that call descends into the harness session's
-        own queue-tracker lock, and a queue tracker's mutating methods publish back into
-        this manager (``update_queued_messages``) while still holding THEIR lock. Calling
-        into the session while still holding ``_lock`` here would let one thread hold
-        ``_lock`` and wait on the queue tracker's lock while another holds that lock and
-        waits on ``_lock`` -- a lock-order-inversion deadlock that once wedged every
-        request needing ``_lock`` (including chat creation) behind a single stuck
-        shoulder-tap check.
-        """
-        with self._lock:
-            agents = list(self._agents.values())
-        return [
-            {
-                "id": a.id,
-                "name": a.name,
-                "state": a.state,
-                "labels": a.labels,
-                "project": a.labels.get("project"),
-                "display_name": a.labels.get("display_name"),
-                "work_dir": a.work_dir,
-                "harness": a.harness,
-                "activity_state": a.activity_state,
-                "model_choice": a.model_choice.model_dump() if a.model_choice else None,
-                "queued_messages": [queued.model_dump() for queued in a.queued_messages],
-                # Backend-computed shoulder-tap availability (contract Shoulder-tap): available
-                # iff something is queued AND no send is in flight. Derived here from the
-                # authoritative live state rather than stored on the item, so it can never go
-                # stale against it. The frontend renders/greys the button from this alone -- it
-                # computes nothing and there is no error path.
-                "shoulder_tap_available": self._shoulder_tap_available(a),
-            }
-            for a in agents
-        ]
-
     def _shoulder_tap_available(self, agent_state: AgentStateItem) -> bool:
         """Whether the shoulder-tap button is offered for ``agent_state`` (contract Shoulder-tap).
 
@@ -1094,7 +1168,7 @@ class AgentManager:
         live-connection session (codex) reads its own ledger, which also GREYS the button
         through the interrupt+resend of a tap (the re-sent chips are Sending). No session yet
         (tracking not started) means nothing queued and nothing to tap. Called WITHOUT
-        ``_lock`` held (see ``get_agents_serialized``): ``_session_by_agent`` is read via a
+        ``_lock`` held (see ``get_chat_snapshots``): ``_session_by_agent`` is read via a
         single ``dict.get``, safe without the lock, and the session's own reads are
         leaf-locked under its own lock, never this one.
         """
@@ -1103,14 +1177,19 @@ class AgentManager:
             return False
         return session.is_tap_available(has_queued=bool(agent_state.queued_messages))
 
-    def get_proto_agents(self) -> list[ProvisionalChat]:
+    # Chat-level: provisional chats and naming.
+
+    def get_provisional_chats(self) -> list[ProvisionalChat]:
         """The provisional chats: minted here and not yet agents, in every phase."""
         with self._lock:
-            return list(self._proto_agents.values())
+            return list(self._provisional_chats.values())
 
-    def get_proto_agent(self, agent_id: str) -> ProvisionalChat | None:
+    def get_provisional_chat(self, chat_id: str) -> ProvisionalChat | None:
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
+            return None
         with self._lock:
-            return self._proto_agents.get(agent_id)
+            return self._provisional_chats.get(parsed)
 
     def get_own_agent_id(self) -> str:
         """Return this server's own agent ID from the environment."""
@@ -1133,72 +1212,75 @@ class AgentManager:
             display_label = agent.labels.get("display_name")
             if display_label:
                 taken.append(display_label)
-        for proto_agent_id, proto in self._proto_agents.items():
-            if proto_agent_id == exclude_agent_id:
+        for provisional_chat_id, provisional in self._provisional_chats.items():
+            if first_agent_id_of_chat(provisional_chat_id) == exclude_agent_id:
                 continue
-            if proto.name:
-                taken.append(proto.name)
+            if provisional.name:
+                taken.append(provisional.name)
         return taken
 
-    def reserve_chat(self, project_id: str = "", message: str = "") -> CreatedChatAgent:
+    def reserve_chat(self, project_id: str = "", message: str = "") -> CreatedChat:
         """Mint a chat with nothing to launch it on yet.
 
-        The instance exists from this moment (the shell docks its page under the id mngr
-        will give it), in the awaiting-account phase: the page shows the provider chooser,
-        and a sign-in launches it through ``create_chat_agent`` with this id. The name is
-        the first free "Chat N", counted like a launch's, so the reservation holds it.
-        ``message`` is kept on the reservation and sent by that launch, so a chat seeded
+        The instance exists from this moment (the shell docks its page under the chat's id,
+        which mngr will give its first agent), in the awaiting-account phase: the page shows
+        the provider chooser, and a sign-in launches it through ``create_chat`` with this id.
+        The name is the first free "Chat N", counted like a launch's, so the reservation holds
+        it. ``message`` is kept on the reservation and sent by that launch, so a chat seeded
         with a prompt still opens on it after the sign-in it had to wait for.
         """
-        agent_id = str(AgentId())
+        chat_id = chat_id_of_first_agent(str(AgentId()))
         with self._lock:
             display_name = first_free_numbered_name(
                 AUTO_NAME_WORD_BY_HARNESS[DEFAULT_HARNESS], self._taken_names_locked()
             )
-            proto = ProvisionalChat(
-                agent_id=agent_id,
+            provisional = ProvisionalChat(
+                chat_id=chat_id,
                 name=display_name,
                 project_id=project_id,
                 message=message,
                 phase=ProvisionalChatPhase.AWAITING_ACCOUNT,
             )
-            self._proto_agents[agent_id] = proto
-        self._broadcaster.broadcast_proto_agent_created(proto)
+            self._provisional_chats[chat_id] = provisional
+        self._broadcaster.broadcast_provisional_chat_created(provisional)
         self._nudger.nudge()
-        return CreatedChatAgent(agent_id=agent_id, name=canonical_agent_name(display_name), display_name=display_name)
+        return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
-    def discard_provisional_chat(self, agent_id: str) -> bool:
+    def discard_provisional_chat(self, chat_id: str) -> bool:
         """Drop a provisional chat that is not being created: one awaiting an account, or one
         whose create failed. Returns whether anything was dropped; a create in flight cannot be
         taken back and is left alone."""
+        parsed = parse_chat_ref(chat_id)
+        if parsed is None:
+            return False
         with self._lock:
-            proto = self._proto_agents.get(agent_id)
-            if proto is None or proto.phase is ProvisionalChatPhase.CREATING:
+            provisional = self._provisional_chats.get(parsed)
+            if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
-            del self._proto_agents[agent_id]
-        self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=False, error=None)
+            del self._provisional_chats[parsed]
+        self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._nudger.nudge()
         return True
 
-    def create_chat_agent(
+    def create_chat(
         self,
         requested_name: str,
         extra_role_templates: tuple[str, ...] = (),
         project_id: str = "",
         account_id: str = "",
-        agent_id: str = "",
+        chat_id: str = "",
         message: str = "",
-    ) -> CreatedChatAgent:
-        """Create a chat agent in the primary agent's work dir on the given harness.
+    ) -> CreatedChat:
+        """Create a chat, as an agent in the primary agent's work dir on the given harness.
 
-        Returns the pre-generated agent ID together with the chat's name pair: the
-        human-readable display name and its canonical true name (see
+        Returns the chat's id (its first agent's, minted before the create) together with the
+        chat's name pair: the human-readable display name and its canonical true name (see
         ``imbue.chat.naming``). An empty ``requested_name`` mints the
         first free "<word> N" for the harness ("Chat 1", "Codex 2", ...) here,
         server-side, under the same lock that registers the in-flight create --
         so two simultaneous creates cannot both mint "Chat 1".
 
-        ``agent_id`` names a chat minted earlier (``reserve_chat``, or one whose create
+        ``chat_id`` names a chat minted earlier (``reserve_chat``, or one whose create
         failed): it is launched under that id and keeps the name and project it was minted
         with, so the tab the shell docked for it becomes the chat. Any other id is refused,
         and so is a ``requested_name`` or ``project_id`` beside it, which the reservation
@@ -1223,7 +1305,7 @@ class AgentManager:
         create --message`` after the harness signals readiness (the path ``/welcome`` takes).
         A seeded chat does not claim the workspace's first chat: the ``first`` template and its
         ``/welcome`` still go to the first plain chat. A reserved chat keeps the message it was
-        minted with, so a launch that names one beside ``agent_id`` is refused like a name.
+        minted with, so a launch that names one beside ``chat_id`` is refused like a name.
         """
         try:
             account = resolve_binding(account_id)
@@ -1235,14 +1317,14 @@ class AgentManager:
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
-        if agent_id and (explicit_name or project_id or message):
+        if chat_id and (explicit_name or project_id or message):
             raise AgentCreationError(
-                f"Chat {agent_id} keeps the name, project, and first message it was minted with; "
+                f"Chat {chat_id} keeps the name, project, and first message it was minted with; "
                 "a launch cannot rename, refile, or reseed it"
             )
 
-        # Name resolution and proto registration happen under one lock hold, so a
-        # concurrent create sees this one's name as taken (and vice versa).
+        # Name resolution and the provisional record's registration happen under one lock
+        # hold, so a concurrent create sees this one's name as taken (and vice versa).
         with self._lock:
             work_dir = self._resolve_agent_work_dir(self._own_agent_id)
             if work_dir is None:
@@ -1250,15 +1332,16 @@ class AgentManager:
             primary = self._agents.get(self._own_agent_id)
             primary_labels = dict(primary.labels) if primary else {}
 
-            if agent_id:
-                reserved = self._proto_agents.get(agent_id)
+            if chat_id:
+                reserved = self._provisional_chats.get(ChatId(chat_id))
                 if reserved is None or reserved.phase is ProvisionalChatPhase.CREATING:
-                    raise AgentCreationError(f"Chat {agent_id} is not waiting to be launched")
+                    raise AgentCreationError(f"Chat {chat_id} is not waiting to be launched")
+                launched_chat_id = reserved.chat_id
                 display_name = reserved.name
                 project_id = reserved.project_id
                 message = reserved.message
             else:
-                agent_id = str(AgentId())
+                launched_chat_id = chat_id_of_first_agent(str(AgentId()))
                 taken_names = self._taken_names_locked()
                 if explicit_name:
                     if is_name_conflict(explicit_name, taken_names):
@@ -1274,26 +1357,28 @@ class AgentManager:
                     word = AUTO_NAME_WORD_BY_LANE.get(account.lane, AUTO_NAME_WORD_BY_HARNESS[harness])
                     display_name = first_free_numbered_name(word, taken_names)
 
-            proto = ProvisionalChat(
-                agent_id=agent_id,
+            provisional = ProvisionalChat(
+                chat_id=launched_chat_id,
                 name=display_name,
                 project_id=project_id,
                 account_id=account.id,
                 message=message,
                 phase=ProvisionalChatPhase.CREATING,
             )
-            self._proto_agents[agent_id] = proto
+            self._provisional_chats[launched_chat_id] = provisional
+        # The chat's first agent carries the chat's id.
+        agent_id = first_agent_id_of_chat(launched_chat_id)
 
         # Launching on an account makes it the most recently used one, which is what the
         # next launch picks. Set here rather than by the page so a chat started from the
         # rail's shortcut counts the same.
         #
         # Best-effort, and deliberately so: the mru is a convenience, not an input to
-        # correctness. It runs AFTER the proto agent is registered and outside the try that
-        # converts AccountError above, so an account deleted in this window would otherwise
-        # escape as a 500 before the creation thread starts -- leaving a proto entry nothing
-        # ever pops, its name burned forever and every new socket replaying a chat stuck at
-        # "creating".
+        # correctness. It runs AFTER the provisional chat is registered and outside the try
+        # that converts AccountError above, so an account deleted in this window would
+        # otherwise escape as a 500 before the creation thread starts -- leaving a provisional
+        # record nothing ever pops, its name burned forever and every new socket replaying a
+        # chat stuck at "creating".
         try:
             set_mru(account.id)
         except AccountError as e:
@@ -1326,6 +1411,7 @@ class AgentManager:
         cmd = _build_chat_create_command(
             self._mngr_binary,
             display_name,
+            launched_chat_id,
             agent_id,
             primary_labels,
             harness,
@@ -1335,7 +1421,7 @@ class AgentManager:
             initial_message=message,
         )
 
-        self._broadcaster.broadcast_proto_agent_created(proto)
+        self._broadcaster.broadcast_provisional_chat_created(provisional)
         self._nudger.nudge()
 
         # Mirror the labels the created mngr agent will carry (see
@@ -1349,7 +1435,7 @@ class AgentManager:
         canonical_name = canonical_agent_name(display_name)
         self._launch_creation_thread(agent_id, canonical_name, cmd, Path(work_dir), labels, harness, is_first_chat)
 
-        return CreatedChatAgent(agent_id=agent_id, name=canonical_name, display_name=display_name)
+        return CreatedChat(chat_id=launched_chat_id, name=canonical_name, display_name=display_name)
 
     def _launch_creation_thread(
         self,
@@ -1392,13 +1478,14 @@ class AgentManager:
 
         This thread is started with ``is_checked=False``, so any exception that escaped here
         would be silently swallowed -- and the chat's page would wait forever, because the
-        ``proto_agent_completed`` broadcast never fired. The whole body runs inside a single
+        ``provisional_chat_completed`` broadcast never fired. The whole body runs inside a single
         catch-all so that no matter what the subprocess, its callbacks, or the calls below
         throw, the provisional chat ends up either an agent or failed with a reason.
         """
         success = False
         error: str | None = None
         output_tail = _CreationOutputTail()
+        chat_id = chat_id_of_first_agent(agent_id)
 
         try:
             _loguru_logger.info("mngr create: [cwd: {}] {}", work_dir, shlex.join(cmd))
@@ -1426,7 +1513,7 @@ class AgentManager:
 
             with self._lock:
                 if success:
-                    self._proto_agents.pop(agent_id, None)
+                    self._provisional_chats.pop(chat_id, None)
                     self._agents[agent_id] = AgentStateItem(
                         id=agent_id,
                         name=agent_name,
@@ -1436,13 +1523,13 @@ class AgentManager:
                         harness=harness,
                     )
                 else:
-                    self._mark_creation_failed_locked(agent_id, _failure_notice(error, output_tail.text()))
+                    self._mark_creation_failed_locked(chat_id, _failure_notice(error, output_tail.text()))
         except Exception as e:
             # Force-demote success: the happy path sets success=True before
             # constructing AgentStateItem, so if pydantic validation (or
             # anything else after the subprocess returned 0) raises, success
             # would still be True while _agents was never populated. That
-            # would broadcast a contradictory proto_agent_completed(success=
+            # would broadcast a contradictory provisional_chat_completed(success=
             # True, error="Unexpected ..."). The catch-all's contract is
             # "something unexpected happened, surface it as a clean
             # failure", so force success=False regardless of prior state.
@@ -1453,34 +1540,40 @@ class AgentManager:
                 release_first_chat()
             try:
                 with self._lock:
-                    self._mark_creation_failed_locked(agent_id, error)
+                    self._mark_creation_failed_locked(chat_id, error)
             except (OSError, RuntimeError) as cleanup_exc:
                 _loguru_logger.opt(exception=cleanup_exc).error("Failed to settle the provisional chat {}", agent_id)
 
         if success:
             self._ensure_activity_tracking(agent_id)
             self._ensure_model_tracking(agent_id)
-            self._broadcast_agents_updated()
+            self._broadcast_chats_updated()
         else:
             # The provisional record changed phase with no agent-list broadcast to carry the
             # change (a success nudges through the broadcast above).
             self._nudger.nudge()
             # The pages show what the record holds: the reason and the output behind it.
-            failed = self.get_proto_agent(agent_id)
+            failed = self.get_provisional_chat(chat_id)
             if failed is not None and failed.error is not None:
                 error = failed.error
-        self._broadcaster.broadcast_proto_agent_completed(agent_id=agent_id, success=success, error=error)
+        self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
-    def _mark_creation_failed_locked(self, agent_id: str, error: str) -> None:
+    def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
         try again on the same account. Must be called with the lock held."""
-        proto = self._proto_agents.get(agent_id)
-        if proto is None:
+        provisional = self._provisional_chats.get(chat_id)
+        if provisional is None:
             return
-        self._proto_agents[agent_id] = proto.model_copy_update(
-            to_update(proto.field_ref().phase, ProvisionalChatPhase.FAILED),
-            to_update(proto.field_ref().error, error),
+        self._provisional_chats[chat_id] = provisional.model_copy_update(
+            to_update(provisional.field_ref().phase, ProvisionalChatPhase.FAILED),
+            to_update(provisional.field_ref().error, error),
         )
+
+    def _forget_chat(self, chat_id: ChatId) -> None:
+        """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the auto-open ledger entry."""
+        self._oom_prioritizer.forget_chat(chat_id)
+        self._message_stamps.forget(chat_id)
+        self._auto_open.forget(chat_id)
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""
@@ -1498,7 +1591,9 @@ class AgentManager:
                     )
                     self._agents[agent_info.id] = agent_state
                 self._is_agent_list_known = True
-            self._auto_open.seed_at_startup({agent_info.id: agent_info.labels for agent_info in agents})
+            self._auto_open.seed_at_startup(
+                {chat_id_of_first_agent(agent_info.id): agent_info.labels for agent_info in agents}
+            )
 
             for agent_info in agents:
                 self._ensure_activity_tracking(agent_info.id)
@@ -1533,7 +1628,7 @@ class AgentManager:
                 self._stop_activity_tracking(agent_id)
                 self._stop_model_tracking(agent_id)
 
-            self._broadcast_agents_updated()
+            self._broadcast_chats_updated()
 
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Agent refresh failed")
@@ -1746,21 +1841,19 @@ class AgentManager:
             self._evict_watcher(agent_id)
             with self._lock:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
-            self._oom_prioritizer.forget_agent(agent_id)
-            self._message_stamps.forget(agent_id)
-            self._auto_open.forget(agent_id)
+            self._forget_chat(chat_id_of_first_agent(agent_id))
 
         # The first listing seeds the reactor (what a workspace already had is judged against
         # the ledger); after that, every agent that appears is a candidate.
         if not was_agent_list_known:
             self._auto_open.seed_at_startup(
-                {agent_id: dict(agent.labels) for agent_id, agent in details_by_id.items()}
+                {chat_id_of_first_agent(agent_id): dict(agent.labels) for agent_id, agent in details_by_id.items()}
             )
         else:
             for agent_id in added_agent_ids:
                 added = details_by_id.get(agent_id)
                 if added is not None:
-                    self._auto_open.note_appeared(agent_id, dict(added.labels))
+                    self._auto_open.note_appeared(chat_id_of_first_agent(agent_id), dict(added.labels))
 
         # Re-derive activity for persisting agents whose lifecycle state changed,
         # so a RUNNING -> STOPPED transition (e.g. a process dying) re-gates the
@@ -1781,7 +1874,7 @@ class AgentManager:
         for agent_id in newly_dead_ids:
             self._evict_watcher(agent_id)
 
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
         # Hand the OOM prioritizer the current mid-turn set. This is its only view
         # of a chat messaged outside the workspace UI (by mngr or another agent):
@@ -1789,14 +1882,18 @@ class AgentManager:
         # and it keeps a chat exempt from its staleness climb for the turn's
         # duration. After the broadcast because it writes to /proc, which the UI
         # update should not wait on.
-        self._oom_prioritizer.record_running_agents(
-            [agent_id for agent_id, agent in new_agents.items() if agent.state in RUNNING_LIFECYCLE_STATES]
+        self._oom_prioritizer.record_running_chats(
+            [
+                chat_id_of_first_agent(agent_id)
+                for agent_id, agent in new_agents.items()
+                if agent.state in RUNNING_LIFECYCLE_STATES
+            ]
         )
 
     def _get_agent_state_dir(self, agent_id: str) -> Path:
         """Return the per-agent state directory under the local mngr host dir.
 
-        Mirrors ``server._find_agent`` so the readiness-hook marker files and
+        Mirrors ``server._find_active_agent`` so the readiness-hook marker files and
         the activity tracker agree on the same path.
         """
         return self._host_dir / "agents" / agent_id
@@ -1842,7 +1939,7 @@ class AgentManager:
 
         The session is QUIESCED (its live backend reaped), not destroyed: a transient
         discovery blip must not lose the Sending records an in-flight send is holding --
-        the same lifetime the watcher registry has (``ChatState.watchers`` is
+        the same lifetime the watcher registry has (``ChatAppState.watchers`` is
         never popped either). Terminal teardown happens in :meth:`stop`.
         """
         with self._lock:
@@ -1870,7 +1967,7 @@ class AgentManager:
             harness=harness,
             state_dir=state_dir,
             send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
-            notify_agents_changed=self._broadcast_agents_updated,
+            notify_agents_changed=self._broadcast_chats_updated,
             is_tracked=lambda: self.is_activity_tracked(agent_id),
             on_queue_snapshot=lambda snapshot: self.update_queued_messages(agent_id, snapshot),
             on_user_turn=lambda event: self._broadcast_codex_user_turn(agent_id, event),
@@ -1933,7 +2030,7 @@ class AgentManager:
             self._agents[agent_id] = agent_state.model_copy_update(
                 to_update(agent_state.field_ref().queued_messages, ())
             )
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
     def set_transcript_broadcaster(self, broadcaster: Callable[[str, list[dict[str, Any]]], None]) -> None:
         """Wire the transcript-event fan-out (the composition root calls this once).
@@ -2034,7 +2131,7 @@ class AgentManager:
         # otherwise broadcast and stick. ``broadcast_on_change=False`` keeps the single
         # broadcast below authoritative -- it carries the post-sweep state.
         self._recompute_activity_state(agent_id, broadcast_on_change=False)
-        self._broadcast_agents_updated()
+        self._broadcast_chats_updated()
 
     def _ensure_model_tracking(self, agent_id: str) -> None:
         """Watch the agent's live model-state file once its state dir exists.
@@ -2115,7 +2212,7 @@ class AgentManager:
                 to_update(agent_state.field_ref().model_choice, choice)
             )
         if broadcast_on_change:
-            self._broadcast_agents_updated()
+            self._broadcast_chats_updated()
 
     def refresh_model_choice(self, agent_id: str) -> None:
         """Force one authoritative model-choice broadcast (bypassing the no-op guard).
@@ -2170,7 +2267,7 @@ class AgentManager:
 
         If the derived state differs from the previously cached state, the
         ``_agents`` entry is updated and (when ``broadcast_on_change`` is True)
-        an ``agents_updated`` event is broadcast.
+        a ``chats_updated`` event is broadcast.
 
         Quietly does nothing when the agent is not being tracked for activity
         (e.g. a remote agent) or is no longer in ``_agents``.
@@ -2257,13 +2354,13 @@ class AgentManager:
                     )
 
         if broadcast_on_change:
-            self._broadcast_agents_updated()
+            self._broadcast_chats_updated()
 
     def update_session_events(self, agent_id: str, events: list[dict[str, Any]]) -> None:
         """Fold a batch of transcript events into the agent's activity signals.
 
         Called with exactly the events the :class:`AgentSessionWatcher` just
-        parsed -- the ``on_events`` fan-out in ``ChatState`` -- plus once at
+        parsed -- the ``on_events`` fan-out in ``ChatAppState`` -- plus once at
         watcher build with the whole primed backlog (the seed). The tracker is
         incremental, so it never needs the full transcript again. Cheap to
         call: the tracker short circuits when none of its derived signals
@@ -2285,7 +2382,7 @@ class AgentManager:
         if is_activity_changed:
             self._recompute_activity_state(agent_id, broadcast_on_change=True)
         if is_permission_state_changed:
-            # No agents_updated carries the verdict (it is transcript-only), so the instance
+            # No chats_updated carries the verdict (it is transcript-only), so the instance
             # list's ``attention`` status changes with nothing else to announce it.
             self._nudger.nudge()
 

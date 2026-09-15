@@ -17,9 +17,12 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
+from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 
 DEFAULT_STAMPS_PATH: Final[Path] = Path("data/.apps/chat/last_messaged.json")
+# The on-disk key predates the chat-versus-agent split: its entries are keyed by chat id, which
+# is the first agent's id, so the historical name still reads every existing file.
 _STAMPS_KEY: Final[str] = "last_messaged_at_by_agent_id"
 
 
@@ -28,12 +31,12 @@ class MessageStampStore(MutableModel):
 
     path: Path | None = Field(frozen=True, description="The stamps file, or None for memory only (tests)")
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
-    _stamps: dict[str, float] = PrivateAttr(default_factory=dict)
+    _stamps: dict[ChatId, float] = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, context: object, /) -> None:
         self._stamps = self._load()
 
-    def _load(self) -> dict[str, float]:
+    def _load(self) -> dict[ChatId, float]:
         if self.path is None:
             return {}
         if not self.path.exists():
@@ -48,8 +51,8 @@ class MessageStampStore(MutableModel):
             logger.warning("Ignored a message-stamps file of the wrong shape at {}", self.path)
             return {}
         return {
-            str(agent_id): float(stamp)
-            for agent_id, stamp in stamps.items()
+            ChatId(str(chat_id)): float(stamp)
+            for chat_id, stamp in stamps.items()
             if isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
         }
 
@@ -64,19 +67,19 @@ class MessageStampStore(MutableModel):
         except OSError as e:
             logger.opt(exception=e).warning("Failed to write the message stamps at {}", self.path)
 
-    def record(self, agent_id: str, at: float | None = None) -> None:
+    def record(self, chat_id: ChatId, at: float | None = None) -> None:
         stamp = time.time() if at is None else at
         with self._lock:
-            self._stamps[agent_id] = stamp
+            self._stamps[chat_id] = stamp
             self._save_unlocked()
 
-    def forget(self, agent_id: str) -> None:
+    def forget(self, chat_id: ChatId) -> None:
         with self._lock:
-            if agent_id not in self._stamps:
+            if chat_id not in self._stamps:
                 return
-            del self._stamps[agent_id]
+            del self._stamps[chat_id]
             self._save_unlocked()
 
-    def read(self) -> dict[str, float]:
+    def read(self) -> dict[ChatId, float]:
         with self._lock:
             return dict(self._stamps)

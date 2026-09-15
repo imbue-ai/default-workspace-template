@@ -14,19 +14,26 @@ alongside it. At the start of your run, extract the lead's address with:
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
-`<TASK_FILE>` is the `task_file` value in the frontmatter you were sent --
-the launcher stamps this task file's own path there before sending it, so you
-always hold an exact path. `TASK_FILE` is that path; `LEAD_AGENT` is the `mngr`
-agent you push reports to (and whose transcript you read); `FINISH_REPORT_PATH`
-is the destination path on the lead's worktree where your report file must land
--- the lead polls for exactly this file. Any additional string fields the lead
-set in the frontmatter also become shell variables -- see your worker
-SKILL.md for which extras (if any) the calling flow stages.
+`<TASK_FILE>` is the `task_file` value in the frontmatter you were sent -- the
+launcher stamps this task file's own path there before sending it, so you always
+hold an exact path, and `TASK_FILE` is that path. `LEAD_AGENT` is the `mngr`
+agent id of the agent that dispatched you (an `agent-<hex>` value; older
+launchers stamped its name, which a rename of the lead's chat invalidates
+mid-task, so never resolve or copy it as a name). It is the agent whose
+transcript you read (`mngr transcript $LEAD_AGENT`): mngr knows agents, not
+chats, so it names the agent even though the lead's chat may have run on others
+before it. `LEAD_WORK_DIR` is the lead's own checkout, where your report must
+land, and `FINISH_REPORT_PATH` is the report's path relative to it -- the lead
+polls for exactly this file. Any additional string fields the lead set in the
+frontmatter also become shell variables -- see your worker SKILL.md for which
+extras (if any) the calling flow stages.
 
-`LEAD_AGENT` may legitimately be unset: a launcher that predates
-launch-time stamping does not write it (the parser warns instead of
-failing). That never blocks reporting -- the `report` subcommand below
-falls back to resolving your lead from your own agent's label.
+`LEAD_AGENT`, `LEAD_WORK_DIR` and `TASK_FILE` may legitimately be unset: a
+launcher that predates launch-time stamping does not write them, and a launch
+from outside an agent has no work dir to stamp (the parser warns about a missing
+`LEAD_AGENT` and passes the others through only when the frontmatter has them).
+That never blocks reporting -- the `report` subcommand below falls back to the
+lead's work dir as `mngr list` reports it.
 
 ## Reporting procedure
 
@@ -48,26 +55,27 @@ At each gate or terminal status:
    ```
 
    `--type` is `gate` or `status` and `--name` is one of the values your flow
-   allows (below). The subcommand reads `finish_report_path` and `lead_agent`
+   allows (below). The subcommand reads `finish_report_path` and `lead_work_dir`
    from your task file, writes `report.md` beside `finish_report_path` in your
-   own tree, and pushes that directory to the lead so it lands at the lead's
-   `FINISH_REPORT_PATH`. If that push fails, or `lead_agent` was never stamped,
-   it resolves your own `lead_agent` label and copies the report into that
-   lead's work dir instead.
+   own tree, and copies it to the same relative path under the lead's checkout,
+   which is where the lead polls. Your worktree hangs off the lead's own git
+   repo on the same host, so that is a plain local copy at any depth of
+   dispatch. If `lead_work_dir` was never stamped, it resolves the lead's work
+   dir from `mngr list` instead.
 
    If it can deliver the report nowhere it exits 2. That is a hard failure, not
    something to route around: never end a run with the report sitting only in
    your own worktree -- a finished worker that cannot say so looks identical to
    a hung one from the lead's side.
 
-3. Stop your turn. For gate reports, the lead sends the user's reply via
-   `mngr message` and you resume; for terminal reports, the lead acts on the
-   report and the run ends. Only gates and terminal statuses stop your turn:
-   the milestone reports below are non-blocking, and you keep working straight
+3. Stop your turn. For gate reports, the lead's reply arrives as a message in
+   your chat and you resume; for terminal reports, the lead acts on the report
+   and the run ends. Only gates and terminal statuses stop your turn: the
+   milestone reports below are non-blocking, and you keep working straight
    through one.
 
-The push is the ready signal -- it only happens once you are finished writing.
-Do not report a partial.
+The delivery is the ready signal -- it only happens once you are finished
+writing. Do not report a partial.
 
 ## Report shape
 
@@ -145,27 +153,19 @@ name is always yours to pick.
    at this exact commit. Name what you actually ran and its result, and say
    plainly what you have not run yet.
 
-3. **Sync the reports directory to the lead** -- the same push the `report`
-   subcommand makes, spelled out because a milestone has no subcommand yet:
+3. **Copy the milestone into the lead's checkout** -- the same delivery the
+   `report` subcommand makes, spelled out because a milestone has no subcommand
+   yet:
 
    ```bash
-   mngr rsync ./<RUNTIME_REPORTS_DIR>/ \
-       "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
-       --uncommitted-changes=clobber
-   ```
-
-   `clobber`, never `merge`: the destination is gitignored `data/`, and `merge`
-   would push onto the git stash every worktree of the repo shares (see
-   `lead-proxy.md`'s "`mngr rsync` rationale").
-
-   When `LEAD_AGENT` is unset/empty or the push fails, use the same-repo
-   fallback, copying into the lead's `milestones/` directory:
-
-   ```bash
-   LEAD_WORKTREE="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+   LEAD_WORKTREE="${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
    mkdir -p "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")/milestones"
    cp "$MILESTONE_FILE" "$LEAD_WORKTREE/$(dirname "$FINISH_REPORT_PATH")/milestones/"
    ```
+
+   `LEAD_WORK_DIR` is the lead's own checkout; without it, the repo's main
+   worktree is the lead's work dir for every chat agent. Delivery is a plain
+   copy because your worktree hangs off the lead's own repo on the same host.
 
 4. **Continue working.** Do not stop your turn or wait for the lead. Delivery
    is best-effort: if both the push and the fallback fail, keep going -- `done`

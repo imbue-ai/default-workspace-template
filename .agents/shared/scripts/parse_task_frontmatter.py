@@ -7,19 +7,20 @@
 
 Pins the required schema so workers can't silently consume a task file
 whose `finish_report_path` was missing, misspelled, or the wrong type.
-`lead_agent` is the report's push address and is normally stamped by
-`create_worker.py launch`; it is deliberately OPTIONAL here (absent ->
-warn on stderr, emit no `LEAD_AGENT` line) because a task file can be
-authored by a *newer* flow than the launcher that provisioned the worker
-(update-self stages the target version's prose for an older lead), and a
-worker that finished its task must never be structurally unable to say
-so -- with no address, the worker falls back to the same-repo delivery
-in `worker-reporting.md`. `task_file` -- the task file's own path,
-stamped by the same launch -- is optional on the same terms and for the
-same reason. Beyond those, any additional top-level string fields the
-lead sets are passed through to the worker -- so leads can attach
-flow-specific context (a ticket id, a feature flag, a list of staged
-inputs) without each new key requiring a parser change.
+`lead_agent` is the dispatching agent's mngr id (an `agent-<hex>` value; older
+launchers stamped the lead's name, which a rename invalidates), normally
+stamped by `create_worker.py launch`; it is deliberately OPTIONAL here (absent
+-> warn on stderr, emit no line) because a task file can be authored by a
+*newer* flow than the launcher that provisioned the worker (update-self stages
+the target version's prose for an older lead), and a worker that finished its
+task must never be structurally unable to say so -- the delivery in
+`worker-reporting.md` is a write into the lead's work dir, which the launcher
+also stamps as `lead_work_dir` and which reaches the worker here as
+`LEAD_WORK_DIR`. `task_file` -- the task file's own path, stamped by the same
+launch -- is optional on the same terms and for the same reason. Beyond those,
+any additional top-level string fields the lead sets are passed through to the
+worker -- so leads can attach flow-specific context (a ticket id, a feature
+flag, a list of staged inputs) without each new key requiring a parser change.
 
 The positional argument is an exact path to one task file -- no globs,
 no searching. A worker is handed its task file's exact path in the
@@ -33,7 +34,7 @@ stdout (values quoted via ``shlex.quote`` so whitespace and shell
 metacharacters survive). The well-known fields come first in fixed
 order; any extra string fields follow alphabetically:
 
-    LEAD_AGENT=crystallize-test
+    LEAD_AGENT=agent-0123456789abcdef0123456789abcdef
     TASK_FILE=data/.tasks/harden/update-foo/task.md
     FINISH_REPORT_PATH=data/.tasks/harden/update-foo/reports/report.md
     TICKET_ID=task-42
@@ -105,9 +106,9 @@ def parse(task_file: Path) -> dict[str, str]:
     ``task_file`` are validated the same way when present, but their *absence*
     is not fatal (see module docstring: a task file authored by a newer flow
     than the launcher may legitimately lack them). A missing ``lead_agent``
-    additionally warns on stderr, because the worker then has no push address
-    and must fall back to same-repo delivery; a missing ``task_file`` costs the
-    worker nothing it did not already have, so it passes quietly. Beyond those,
+    additionally warns on stderr, because the worker then cannot read its lead's
+    transcript; a missing ``task_file`` costs the worker nothing it did not
+    already have, so it passes quietly. Beyond those,
     all other top-level string-valued keys are passed through; non-string values
     are silently dropped. Extra keys must also be valid POSIX shell identifiers
     (``[A-Za-z_][A-Za-z0-9_]*``) so the downstream ``eval`` actually defines
@@ -124,9 +125,9 @@ def parse(task_file: Path) -> dict[str, str]:
             if field == _ADDRESS_FIELD:
                 print(
                     f"warning: task frontmatter has no `{_ADDRESS_FIELD}` (the "
-                    "launcher predates launch-time stamping?); report pushes "
-                    "cannot be addressed -- use the same-repo fallback delivery "
-                    "in worker-reporting.md.",
+                    "launcher predates launch-time stamping?); the lead's transcript "
+                    "cannot be read by id. Reporting is unaffected: write the report "
+                    "into the lead's work dir, per worker-reporting.md.",
                     file=sys.stderr,
                 )
             continue

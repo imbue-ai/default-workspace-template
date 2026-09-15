@@ -4,6 +4,12 @@ version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
 requires-python = ">=3.11"
 dependencies = [
+    # Built-in services that supervisord runs via `uv run <name>` must be listed
+    # here: a `uv sync` without --all-packages prunes members outside the root
+    # closure, deleting their console scripts, and the next spawn fails.
+    # Scaffolded creations are deliberately absent so adding one touches no
+    # shared file; they depend on mngr's restore and update scripts syncing
+    # with --all-packages (pinned in backup_workspace_scripts_test.py).
     "bootstrap",
     "app-watcher",
     "github-sync",

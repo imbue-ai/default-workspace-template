@@ -22,7 +22,7 @@ scripted; Step 4a is your recipe for it.
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
-Sets `LEAD_AGENT`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
+Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
 no `.venv`, `uv sync --all-packages` once. Ensure the ref is present:
 
 ```bash
@@ -138,13 +138,16 @@ prose that no test failure surfaces -- read the merged entries and grep the
 workspace for every name they retire (an environment variable, a port, a
 command).
 
-1. **Enumerate the consumer universe** up front: every `system/supervisord.conf`
-   program (and what its `command` invokes), every app or service under
-   `system/services/` and `system/apps/`, every workspace-added skill under
-   `.agents/skills/`, and any cron or scheduled runners.
+1. **Enumerate the consumer universe** up front: every
+   `system/supervisord.conf.d/` program (and what its `command` invokes), every
+   app or service under `system/services/` and `system/apps/`, every
+   workspace-added skill under `.agents/skills/`, and any cron or scheduled
+   runners.
 2. **Search for dependents of each changed file**: its path, basename, and
-   importable module name; follow each service's code into the shared
-   scripts and libs it calls; check skills' `SKILL.md` and scripts.
+   importable module name; follow each service's code into the shared scripts
+   and libs it calls; check skills' `SKILL.md` and scripts, and the paths an
+   app's `app.toml` claims in `[[references]]`. If the update adds reference-
+   or dependency-declaration machinery, write the declarations it expects.
 3. **Reason about interface-level coupling no grep finds**: an API surface (the
    system interface HTTP API, a shared data file's format, a script's CLI
    flags) has callers that reference no file of it.
@@ -237,21 +240,18 @@ Take the frontmatter parse, the report frontmatter, and the body shapes from
 
 Deliver the report **by hand**, not with that reference's `report` subcommand:
 this flow runs cross-version, and the launcher in your checkout is whatever
-release the workspace is still on, which may predate the subcommand. Write the
-file and push its directory yourself, using the `LEAD_AGENT` /
-`FINISH_REPORT_PATH` from the parse:
+release the workspace is still on, which may predate the subcommand. The
+delivery is a copy either way, so write the file and place it yourself:
 
 ```bash
 mkdir -p data/.tasks/update-self/reports
 # write the frontmatter + body to data/.tasks/update-self/reports/report.md, then:
-mngr rsync ./data/.tasks/update-self/reports/ \
-    "$LEAD_AGENT:$(dirname "$FINISH_REPORT_PATH")/" \
-    --uncommitted-changes=clobber
+cp data/.tasks/update-self/reports/report.md "$LEAD_WORK_DIR/$FINISH_REPORT_PATH"
 ```
 
-If the push fails or `LEAD_AGENT` is unset, copy the file straight to
-`$FINISH_REPORT_PATH` in the lead's worktree -- the main worktree of this same
-repo -- rather than ending the run with the report only in yours.
+If `LEAD_WORK_DIR` is unset, copy to `$FINISH_REPORT_PATH` under the main
+worktree of this same repo rather than ending the run with the report only in
+yours.
 
 Valid `name:` values:
 

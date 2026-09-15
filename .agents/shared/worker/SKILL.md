@@ -25,8 +25,9 @@ and `type` fields the lead set in frontmatter):
 eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
-This sets `TASK_FILE`, `LEAD_AGENT`, `FINISH_REPORT_PATH`, `OPERATION`, and
-`TYPE`, plus `SCOPE_FILE` and `DIFF_BASE` for a creation that has a footprint.
+This sets `TASK_FILE`, `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`,
+`OPERATION`, and `TYPE`, plus `SCOPE_FILE` and `DIFF_BASE` for a creation that
+has a footprint.
 Fail loudly if `OPERATION` or `TYPE` is unset -- the lead must supply both. When
 `TYPE` is `skill`, or `app` and the app has an `app.toml`, also fail loudly if
 `SCOPE_FILE` or `DIFF_BASE` is unset: `SCOPE_FILE` is where you write the

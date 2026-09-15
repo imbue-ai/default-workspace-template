@@ -11,7 +11,7 @@ vi.mock("mithril", () => ({
 }));
 
 import { loadSnapshotWithStream } from "./StreamingMessage";
-import { getConversationLoadState, getEventsForAgent, type TranscriptEvent } from "./Response";
+import { getConversationLoadState, getEventsForChat, type TranscriptEvent } from "./Response";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -68,7 +68,7 @@ afterEach(() => {
 
 describe("loadSnapshotWithStream", () => {
   it("does not drop an SSE delta that races the initial snapshot fetch", async () => {
-    const agentId = `agent-${agentCounter++}`;
+    const chatId = `agent-${agentCounter++}`;
     const snapshotEvent = makeEvent("snap-1", "from snapshot");
     const delta = makeEvent("delta-1", "live delta during fetch");
 
@@ -76,7 +76,7 @@ describe("loadSnapshotWithStream", () => {
     const snapshotRequest = deferred<{ events: TranscriptEvent[] }>();
     mockRequest.mockReturnValue(snapshotRequest.promise);
 
-    const loadPromise = loadSnapshotWithStream(agentId);
+    const loadPromise = loadSnapshotWithStream(chatId);
 
     // The stream is open and the snapshot is still in flight: a live event
     // arrives now. Without buffering, the snapshot replace below would drop it.
@@ -87,7 +87,7 @@ describe("loadSnapshotWithStream", () => {
     snapshotRequest.resolve({ events: [snapshotEvent] });
     await loadPromise;
 
-    const ids = getEventsForAgent(agentId).map((event) => event.event_id);
+    const ids = getEventsForChat(chatId).map((event) => event.event_id);
     expect(ids).toContain("snap-1");
     expect(ids).toContain("delta-1");
   });
@@ -100,9 +100,9 @@ describe("snapshot retry after reconnect", () => {
     // were silently missing forever (transcript desynchronized from the TUI).
     vi.useFakeTimers();
     try {
-      const agentId = `agent-${agentCounter++}`;
+      const chatId = `agent-${agentCounter++}`;
       mockRequest.mockResolvedValueOnce({ events: [makeEvent("initial", "before outage")] });
-      await loadSnapshotWithStream(agentId);
+      await loadSnapshotWithStream(chatId);
 
       // The stream dies; the error-path reconnect fires after its backoff, and
       // its snapshot refetch fails (the backend is still unreachable).
@@ -118,7 +118,7 @@ describe("snapshot retry after reconnect", () => {
       });
       await vi.advanceTimersByTimeAsync(6000);
 
-      const ids = getEventsForAgent(agentId).map((event) => event.event_id);
+      const ids = getEventsForChat(chatId).map((event) => event.event_id);
       expect(ids).toContain("missed");
     } finally {
       vi.useRealTimers();
@@ -132,18 +132,18 @@ describe("snapshot retry after reconnect", () => {
     // recoverable only by reloading the page.
     vi.useFakeTimers();
     try {
-      const agentId = `agent-${agentCounter++}`;
+      const chatId = `agent-${agentCounter++}`;
       mockRequest.mockRejectedValueOnce(Object.assign(new Error(String(null)), { code: 503, response: null }));
-      await expect(loadSnapshotWithStream(agentId)).rejects.toThrow();
-      expect(getConversationLoadState(agentId).error).toBe("request failed (HTTP 503)");
+      await expect(loadSnapshotWithStream(chatId)).rejects.toThrow();
+      expect(getConversationLoadState(chatId).error).toBe("request failed (HTTP 503)");
 
       mockRequest.mockResolvedValueOnce({ events: [makeEvent("after-recovery", "backend answered")] });
       const deadSource = FakeEventSource.instances[FakeEventSource.instances.length - 1];
       deadSource?.onerror?.();
       await vi.advanceTimersByTimeAsync(6000);
 
-      expect(getConversationLoadState(agentId)).toEqual({ phase: "idle", error: null });
-      expect(getEventsForAgent(agentId).map((event) => event.event_id)).toContain("after-recovery");
+      expect(getConversationLoadState(chatId)).toEqual({ phase: "idle", error: null });
+      expect(getEventsForChat(chatId).map((event) => event.event_id)).toContain("after-recovery");
     } finally {
       vi.useRealTimers();
     }

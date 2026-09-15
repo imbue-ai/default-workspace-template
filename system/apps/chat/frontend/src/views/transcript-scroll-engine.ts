@@ -150,8 +150,8 @@ export interface TranscriptScrollEngine {
   afterRender(element: HTMLElement): void;
   /** Tear down listeners/observers/timers. Call from onremove. */
   detach(): void;
-  /** Reset all state for a different agent, loading its persisted scroll state. */
-  setAgent(agentKey: string | null): void;
+  /** Reset all state for a different chat, loading its persisted scroll state. */
+  setChat(chatKey: string | null): void;
   /** The user submitted a message: snap back to following the tail. */
   noteMessageSent(): void;
   /** Viewport currently sits over a virtual end spacer (show the loading overlay). */
@@ -239,9 +239,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
 
   // --- fill -----------------------------------------------------------------
   let fillInFlight = false;
-  // Bumped by setAgent so a fill still in flight for the previous agent cannot
+  // Bumped by setChat so a fill still in flight for the previous chat cannot
   // apply its completion (clearing the single-flight guard out from under the
-  // new agent's fill, or landing the old agent's jump) after the switch.
+  // new chat's fill, or landing the old chat's jump) after the switch.
   let fillEpoch = 0;
   // A landed fill that changed nothing (a page fully deduped away, a failed
   // fetch, a stale cursor) must not be refired verbatim: the planner would loop
@@ -266,7 +266,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   let isAfterRenderQueued = false;
 
   // --- persistence / restore ------------------------------------------------
-  let persistAgentKey: string | null = null;
+  let persistChatKey: string | null = null;
   let pendingRestore: RestoredScrollState | null = null;
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -435,7 +435,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   // --- persistence ----------------------------------------------------------
 
   function schedulePersist(): void {
-    if (persistAgentKey === null || pendingRestore !== null) {
+    if (persistChatKey === null || pendingRestore !== null) {
       return;
     }
     if (persistTimer !== null) {
@@ -448,12 +448,12 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   function persistNow(): void {
-    if (persistAgentKey === null) {
+    if (persistChatKey === null) {
       return;
     }
     try {
       localStorage.setItem(
-        scrollStateStorageKey(persistAgentKey),
+        scrollStateStorageKey(persistChatKey),
         encodePersistedScrollState(positionState, currentAnchorEventIndex()),
       );
     } catch {
@@ -461,9 +461,9 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     }
   }
 
-  function loadPersisted(agentKey: string): RestoredScrollState {
+  function loadPersisted(chatKey: string): RestoredScrollState {
     try {
-      return decodePersistedScrollState(localStorage.getItem(scrollStateStorageKey(agentKey)));
+      return decodePersistedScrollState(localStorage.getItem(scrollStateStorageKey(chatKey)));
     } catch {
       return FOLLOW_RESTORED;
     }
@@ -735,7 +735,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       })
       .then(() => {
         if (fillEpoch !== epochAtDispatch) {
-          return; // setAgent reset everything; this completion is the old agent's
+          return; // setChat reset everything; this completion is the old chat's
         }
         fillInFlight = false;
         if (dataSource.getRenderVersion() === renderVersionAtDispatch) {
@@ -1380,13 +1380,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       }
     },
 
-    setAgent(agentKey: string | null): void {
+    setChat(chatKey: string | null): void {
       if (persistTimer !== null) {
         clearTimeout(persistTimer);
         persistTimer = null;
         persistNow();
       }
-      persistAgentKey = agentKey;
+      persistChatKey = chatKey;
       positionState = FOLLOW_STATE;
       scrollbarState = ELSEWHERE_STATE;
       heightByRowKey.clear();
@@ -1415,7 +1415,7 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       lastScrollbarFraction = null;
       frozenThumbSizeFraction = null;
       offscreenMeasurer.cancel();
-      pendingRestore = agentKey !== null ? loadPersisted(agentKey) : null;
+      pendingRestore = chatKey !== null ? loadPersisted(chatKey) : null;
       if (pendingRestore !== null && pendingRestore.state.kind === "USER_CONTROLLED") {
         // Steer the first fill toward the persisted location; validated once loaded.
         positionState = pendingRestore.state;
