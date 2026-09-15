@@ -32,9 +32,11 @@ def test_default_check_concurrency() -> None:
 
 def test_check_agent_success() -> None:
     recorded_commands: list[list[str]] = []
+    recorded_kwargs: dict[str, object] = {}
 
     def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
         recorded_commands.append(list(command))
+        recorded_kwargs.update(kwargs)
         return _make_finished_process(command=command, returncode=0, stdout="No agents require compaction.")
 
     compactor = ChatAutoCompactor.build(
@@ -47,15 +49,19 @@ def test_check_agent_success() -> None:
     assert result is not None
     assert result.returncode == 0
     assert recorded_commands == [["mngr-custom", "autocompact", "run", "chat-1"]]
+    assert recorded_kwargs.get("is_checked") is True
 
 
 def test_check_agent_nonzero_exit_handled_gracefully() -> None:
-    def fake_runner(command: Sequence[str], **kwargs: object) -> FinishedProcess:
-        return _make_finished_process(
+    def fake_runner(command: Sequence[str], is_checked: bool = True, **kwargs: object) -> FinishedProcess:
+        res = _make_finished_process(
             command=command,
             returncode=1,
             stderr="Agent 'chat-1' does not support context compaction",
         )
+        if is_checked:
+            res.check()
+        return res
 
     compactor = ChatAutoCompactor.build(
         list_running_chat_agent_names=lambda: ["chat-1"],
@@ -63,8 +69,7 @@ def test_check_agent_nonzero_exit_handled_gracefully() -> None:
     )
     result = compactor.check_agent("chat-1")
 
-    assert result is not None
-    assert result.returncode == 1
+    assert result is None
 
 
 def test_check_agent_process_setup_error_handled_gracefully() -> None:

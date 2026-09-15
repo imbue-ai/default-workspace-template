@@ -6,6 +6,7 @@ from typing import Final
 
 from loguru import logger
 
+from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.errors import ProcessSetupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -98,20 +99,15 @@ class ChatAutoCompactor:
         """Run `mngr autocompact run <agent_name>` for a single agent."""
         command = [self._mngr_binary, "autocompact", "run", agent_name]
         try:
-            result = self._runner(
+            return self._runner(
                 command=command,
                 cwd=None,
-                is_checked=False,
+                is_checked=True,
                 timeout=self._command_timeout_seconds,
             )
-            if result.returncode != 0:
-                logger.debug(
-                    "Autocompact run for {} exited {}: {}",
-                    agent_name,
-                    result.returncode,
-                    result.stderr.strip()[:300],
-                )
-            return result
+        except ProcessError as e:
+            logger.error("Failed to run autocompact for {}: {}", agent_name, e)
+            return None
         except (ProcessSetupError, OSError) as e:
             logger.warning("Failed to run autocompact for {}: {}", agent_name, e)
             return None
