@@ -1,6 +1,6 @@
 ---
 name: update-self
-description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Minds app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
+description: Safely pull updates from the upstream template repo (default target is the latest stable release the running Mind app supports). Use when you want to incorporate upstream skills, script fixes, or config improvements. For pushing local improvements back upstream, use the `submit-upstream-changes` skill instead.
 metadata:
   author: imbue
 ---
@@ -27,7 +27,7 @@ launch, while they are present) and an update that cannot keep something they
 built (the Step 4 hold).
 
 The default target is the **latest stable `minds-v*` tag**, never newer than
-the Minds app driving this workspace (the template ships the code that app
+the Mind app driving this workspace (the template ships the code that app
 talks to); see `references/version-ceiling.md`. Once the target is resolved,
 the pass **re-points itself at the target version's own copy of this skill**
 (Step 2a) and runs the rest -- lead and worker -- from the fixed staging path
@@ -71,7 +71,7 @@ UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
 
 then `tk start "$UPDATE_LEASE_ID"`.
 
-**Record the run for the Minds app** -- as soon as the lease is yours, so the
+**Record the run for the Mind app** -- as soon as the lease is yours, so the
 app can see a run is under way:
 
 ```bash
@@ -123,7 +123,7 @@ refusal's `error:` line as the last thing printed. The output carries `ref`,
 version you are updating to.
 
 **If the command exits non-zero, stop -- nothing is wrong with the workspace.**
-Its single `error:` line says why no target could be chosen (the Minds app
+Its single `error:` line says why no target could be chosen (the Mind app
 could not be reached or is too old to report its version; every release is
 newer than the app; the workspace is already on the release it may take).
 Relay that line in plain terms and offer the next step; never resolve a ref by
@@ -135,7 +135,7 @@ error names a release the workspace could still take).
 **`"exceeds_ceiling": true`** means the user's `--override` names a version
 this app cannot vouch for. Do not dispatch on it silently: tell them what it
 risks and get an explicit go-ahead, unless the message that started this pass
-already carries that confirmation (the Minds app's "Update to a specific
+already carries that confirmation (the Mind app's "Update to a specific
 version" prompt says so). If they decline, record `run-status verdict REFUSED
 --detail "<the version they asked for, and that they chose not to attempt
 it>"` and end the pass. Details in `references/version-ceiling.md`.
@@ -192,7 +192,7 @@ verdict REFUSED --detail "..."` as in Step 2.
 
 ### 3b. Launch
 
-Surface your own chat tab first (the Minds app sends the user into this
+Surface your own chat tab first (the Mind app sends the user into this
 workspace when it starts an update, and this conversation is where they should
 land). The command detaches a helper that retries until a client is there; it
 is best-effort, and a failure is not a reason to stop:
@@ -243,12 +243,13 @@ lead and synced into your worktree with this runtime dir) -- run *all* its
 this file's frontmatter (already fetched into `upstream`).
 
 ## Reporting back
-Per `.agents/shared/references/worker-reporting.md`. Valid `name:` values:
+Per §6 of the worker guide: the report shapes come from
+`.agents/shared/references/worker-reporting.md`, but you write and push the
+report by hand as §6 spells out -- not with the launcher's `report` subcommand,
+which this workspace's own launcher may predate. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the §4c
 review-gate escape hatch, or a §4b customization the update cannot keep),
-`done` / `stuck` (terminal). Substitutions:
-`<TASK_FILE_GLOB>` -> `data/.tasks/update-self/task.md`;
-`<RUNTIME_REPORTS_DIR>` -> `data/.tasks/update-self/reports`.
+`done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
@@ -271,7 +272,7 @@ mngr destroy update-self --force
 ```
 
 Launch with the plain `worker` template, record the hand-off (from here until
-the worker reports this chat is idle, and naming the worker lets the Minds app
+the worker reports this chat is idle, and naming the worker lets the Mind app
 read the worker's liveness instead of "waiting for you"), then background-poll:
 
 ```bash
