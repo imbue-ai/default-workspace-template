@@ -822,7 +822,10 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
     if proc is None:
         return None
     if proc.returncode != 0:
-        if OLD_FORMAT_TRANSCRIPT_ERROR in proc.stdout or OLD_FORMAT_TRANSCRIPT_ERROR in proc.stderr:
+        if (
+            OLD_FORMAT_TRANSCRIPT_ERROR in proc.stdout
+            or OLD_FORMAT_TRANSCRIPT_ERROR in proc.stderr
+        ):
             return fetch_pre_atif_transcript(target, timeout)
         return None
     return proc.stdout if proc.stdout.strip() else None
