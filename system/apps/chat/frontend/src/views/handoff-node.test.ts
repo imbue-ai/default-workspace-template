@@ -134,14 +134,14 @@ describe("the handoff node", () => {
     expect(ROOT().querySelector(".pv-handoff-rule")).not.toBeNull();
   });
 
-  it("expands on the prompt alone for a fresh start that asked for no summary", () => {
-    const fresh: HandoffNode = { key: "sw1", request: null, events: [], switch: SWITCH, prompt: PROMPT };
-    m.render(ROOT(), renderHandoffNode(fresh, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
+  it("expands on the prompt alone for a node the switch made, with no summary request in the window", () => {
+    const switchOnly: HandoffNode = { key: "sw1", request: null, events: [], switch: SWITCH, prompt: PROMPT };
+    m.render(ROOT(), renderHandoffNode(switchOnly, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
     expect(ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.disabled).toBe(false);
     ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.click();
-    m.render(ROOT(), renderHandoffNode(fresh, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
+    m.render(ROOT(), renderHandoffNode(switchOnly, "agent-a", new Map(), { isLast: true, expansionKey: "k2" }));
     expect(ROOT().textContent).toContain("Handoff prompt");
-    const bare: HandoffNode = { ...fresh, prompt: null };
+    const bare: HandoffNode = { ...switchOnly, prompt: null };
     m.render(ROOT(), renderHandoffNode(bare, "agent-a", new Map(), { isLast: true, expansionKey: "k3" }));
     expect(ROOT().querySelector<HTMLButtonElement>(".pv-tl-title")?.disabled).toBe(true);
   });
