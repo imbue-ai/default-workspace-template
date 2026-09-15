@@ -104,7 +104,7 @@ def build_production_state(
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=DEFAULT_STAMPS_PATH),
-        # The tab of a chat the Minds app starts is opened through the shell, and which chats
+        # The tab of a chat the Mind app starts is opened through the shell, and which chats
         # have had theirs is remembered beside the stamps so a restart never re-pops one.
         auto_open=AutoOpenReactor(
             ledger=AutoOpenLedger(path=DEFAULT_LEDGER_PATH), shell=ShellLayoutClient(shell_url=shell_base_url())

@@ -92,7 +92,7 @@ new chat on it. `system/scripts/migrate_claude_auth.py` imports this package fro
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
-harness and no account -- the chats the Minds app starts from outside, workers,
+harness and no account -- the chats the Mind app starts from outside, workers,
 automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
@@ -107,7 +107,7 @@ removed, and a create in the workspace is then refused by
 entry in `.mngr/settings.toml`) with a message that says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
-(the Minds app's update and help chats) has its tab surfaced by this app
+(the Mind app's update and help chats) has its tab surfaced by this app
 (`auto_open.py`): when the agent appears, the app asks the shell to open the
 chat's address in every connected client, holds the open until a client is
 connected if none is, and records the delivery under

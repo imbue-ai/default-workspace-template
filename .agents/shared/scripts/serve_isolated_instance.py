@@ -293,7 +293,9 @@ def up(
         sys.stderr.write(f"up: --cwd {cwd} is not a directory.\n")
         return 1
     preview_requested = preview_title is not None or preview_service_name is not None
-    if preview_requested and not (preview_title and preview_service_name and service_name):
+    if preview_requested and not (
+        preview_title and preview_service_name and service_name
+    ):
         sys.stderr.write(
             "up: a preview needs --service-name, --preview-service-name, and "
             "--preview-title together.\n"
@@ -559,9 +561,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Tear down an instance (kill the server(s), deregister service(s)). "
         "Idempotent.",
     )
-    down_parser.add_argument(
-        "--name", required=True, help="The name passed to 'up'."
-    )
+    down_parser.add_argument("--name", required=True, help="The name passed to 'up'.")
     _add_repo_root_arg(down_parser)
 
     args = parser.parse_args(argv)

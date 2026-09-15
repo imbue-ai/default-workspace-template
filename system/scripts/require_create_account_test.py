@@ -51,7 +51,7 @@ def test_a_create_outside_any_agent_passes(tmp_path: Path) -> None:
 def test_a_create_outside_any_agent_passes_on_a_python_without_tomllib(
     tmp_path: Path,
 ) -> None:
-    """The Minds app runs the workspace's own create from a clone of this template on the user's
+    """The Mind app runs the workspace's own create from a clone of this template on the user's
     machine, whose `python3` can be the 3.9 of macOS's Command Line Tools: the host-side exit must
     come before anything that needs a newer interpreter."""
     result = subprocess.run(

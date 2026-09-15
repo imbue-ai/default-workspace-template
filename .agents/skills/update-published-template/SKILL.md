@@ -262,9 +262,13 @@ description of what changed for the changelog entry.
 Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
-1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` / `FINISH_REPORT_PATH`) per
-   `.agents/shared/references/worker-reporting.md` -- before any reset that could
-   remove the task file.
+1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` /
+   `FINISH_REPORT_PATH`) per `.agents/shared/references/worker-reporting.md`,
+   from the exact task-file path `data/.tasks/launch-task/<slug>/task.md` --
+   before any reset that could remove the task file. Deliver the report itself
+   by hand at the end, per `publish-template` §3's copy and for the same reason:
+   the reset leaves your checkout at the published tip, whose launcher may
+   predate the `report` subcommand.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
@@ -432,7 +436,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
   A NON-fast-forward rejection means the published `main` moved since §2b's check
   (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
   the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
-  push-protection on the baked-in Minds Google OAuth client) exactly as
+  push-protection on the baked-in Mind Google OAuth client) exactly as
   `publish-template` §8's "Failure handling" list does.
 
 - **Move / create the version tag** (the design's `template/<slug>/v<n>` tag
