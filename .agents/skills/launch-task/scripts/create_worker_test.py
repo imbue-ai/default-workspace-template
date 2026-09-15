@@ -227,9 +227,9 @@ def test_happy_path_no_artifacts(
     assert rc == 0
     argvs = [c.argv for c in runner.calls]
     assert argvs == [
+        ["git", "rev-parse", "--show-toplevel"],
         ["git", "status", "--porcelain"],
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
-        ["git", "rev-parse", "--show-toplevel"],
         _create_argv(runtime),
         [
             "mngr",
@@ -482,9 +482,9 @@ def test_launch_proceeds_when_report_path_is_clear(tmp_path: Path) -> None:
 
     assert rc == 0
     assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "rev-parse"],
         ["git", "status"],
         ["mngr", "list"],
-        ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "rsync"],
         [sys.executable, str(_MESSAGE_CHAT_SCRIPT)],
@@ -733,7 +733,11 @@ def test_unresolved_lead_agent_without_env_is_fatal(
     assert rc == 2
     # Only the preflight probes ran (cleanliness, name free) -- no worker was
     # provisioned.
-    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
+    assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "rev-parse"],
+        ["git", "status"],
+        ["mngr", "list"],
+    ]
     assert "lead_agent is unresolved" in capsys.readouterr().err
 
 
@@ -1040,9 +1044,9 @@ def test_mngr_failure_is_fatal(tmp_path: Path) -> None:
     # Nothing past the create runs but the listing that looks for a record the
     # failed create left behind: no sync, no task message.
     assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "rev-parse"],
         ["git", "status"],
         ["mngr", "list"],
-        ["git", "rev-parse"],
         ["mngr", "create"],
         ["mngr", "list"],
     ]
@@ -1109,9 +1113,9 @@ def test_common_transcript_flushed_before_message_send(
     argvs = [c.argv for c in runner.calls]
     expected_script = str(state_dir / "commands" / "common_transcript.sh")
     assert argvs == [
+        ["git", "rev-parse", "--show-toplevel"],
         ["git", "status", "--porcelain"],
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
-        ["git", "rev-parse", "--show-toplevel"],
         _create_argv(runtime),
         [
             "mngr",
@@ -2444,6 +2448,126 @@ def test_launch_labels_the_runtime_dir_relative_to_the_repo_root(
         ) == 1
 
 
+# --- the sync sources have to be under data/ --------------------------------
+
+
+def _launch_from_repo_root(
+    tmp_path: Path, runtime_dir: Path, task: Path
+) -> tuple[int, _RecordingRunner]:
+    """Launch with the repo root resolved, so the ``data/`` check can judge."""
+    runner = _RecordingRunner()
+    runner.respond(("git", "rev-parse"), _toplevel_result(tmp_path))
+    rc = create_worker_mod.launch(
+        name="demo-worker",
+        template="worker",
+        runtime_dir=runtime_dir,
+        task_file=task,
+        runner=runner,
+    )
+    return rc, runner
+
+
+@pytest.mark.parametrize(
+    "given, expected_in_message",
+    [
+        # Tracked source: the sync would overwrite the worker's own checkout of
+        # it with the lead's copy, which is exactly what `clobber` assumes can
+        # never happen.
+        (Path("system/apps/demo"), "must be under data/"),
+        # Just outside, and named confusingly close to the real thing.
+        (Path("database/.tasks/launch-task/demo"), "must be under data/"),
+        # The repo root itself.
+        (Path("."), "must be under data/"),
+    ],
+)
+def test_launch_refuses_a_runtime_dir_outside_the_data_tree(
+    given: Path,
+    expected_in_message: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`clobber` is only safe because every sync destination is gitignored
+    runtime state, so a source that resolves anywhere else is refused before the
+    launch touches the task file or mngr -- not silently synced over the
+    worker's own tracked files."""
+    _runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / given).mkdir(parents=True, exist_ok=True)
+
+    rc, runner = _launch_from_repo_root(tmp_path, given, task)
+
+    assert rc == 2
+    assert expected_in_message in capsys.readouterr().err
+    # Nothing was created and nothing was stamped: the refusal is a pre-flight.
+    assert not any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
+    assert not any(c.argv[:2] == ["mngr", "rsync"] for c in runner.calls)
+    assert "task_file:" not in task.read_text()
+
+
+def test_launch_refuses_a_source_artifacts_dir_outside_the_data_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The artifacts sync is checked too: it comes from task frontmatter rather
+    than a CLI flag, so it is the easier one to get wrong."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "system" / "scripts").mkdir(parents=True, exist_ok=True)
+    _write_task(task, "system/scripts")
+
+    rc, runner = _launch_from_repo_root(tmp_path, runtime, task)
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "source_artifacts_dir must be under data/" in err
+    assert not any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
+
+
+def test_launch_refuses_a_sync_source_outside_the_repo_entirely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A path with no repo-relative form would go to the worker as an absolute
+    path, which mngr uses verbatim -- landing outside the worker's worktree, so
+    the worker would never find its own task file."""
+    _runtime, task, _ = _make_layout(tmp_path)
+    outside = tmp_path.parent / f"outside-{uuid4().hex[:8]}" / "data" / "runtime"
+    outside.mkdir(parents=True)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    rc, runner = _launch_from_repo_root(tmp_path, outside, task)
+
+    assert rc == 2
+    assert "is outside the repo" in capsys.readouterr().err
+    assert not any(c.argv[:2] == ["mngr", "create"] for c in runner.calls)
+
+
+def test_launch_accepts_a_data_dir_named_absolutely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check is on where the path lands *inside the repo*, not on how the
+    caller spelled it: an absolute path under the root passes, and the worker
+    still receives it repo-relative."""
+    runtime, task, _ = _make_layout(tmp_path)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    rc, runner = _launch_from_repo_root(tmp_path, runtime, task)
+
+    assert rc == 0
+    assert _rsync_argvs(runner) == [
+        [
+            "mngr",
+            "rsync",
+            f"{tmp_path}/data/.tasks/launch-task/demo/",
+            "demo-worker:data/.tasks/launch-task/demo/",
+            "--uncommitted-changes=clobber",
+        ]
+    ]
+
+
 def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -2472,7 +2596,11 @@ def test_a_taken_name_is_refused_before_anything_is_stamped_or_created(
     )
 
     assert rc == 2
-    assert [c.argv[:2] for c in runner.calls] == [["git", "status"], ["mngr", "list"]]
+    assert [c.argv[:2] for c in runner.calls] == [
+        ["git", "rev-parse"],
+        ["git", "status"],
+        ["mngr", "list"],
+    ]
     assert "task_file:" not in task.read_text()
     assert "lead_agent: lead" in task.read_text()
     err = capsys.readouterr().err
