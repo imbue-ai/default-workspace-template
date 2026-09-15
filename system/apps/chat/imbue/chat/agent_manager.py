@@ -102,6 +102,7 @@ from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
 from imbue.chat.models import ChatConvergingError
+from imbue.chat.models import ChatCreationOutcome
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import CreatedChat
@@ -150,6 +151,21 @@ from imbue.mngr.primitives import HostName
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
+
+# The ``-S`` that waves the claude version check for one create: the in-container mngr
+# refuses every claude create on a pin mismatch, including the update run that would fix
+# it, so the update's own create is the one that may ask for it.
+SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
+
+# The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
+# handoff's successor labels); a caller's extra labels may not restate them.
+APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
+    {"user_created", "display_name", "account", "project", "first", "chat_id", "chat_seq"}
+)
+
+# How long a create the caller waits on may run before the wait answers on its own. A
+# create that takes this long has hung past every readiness budget in the template.
+CHAT_CREATION_WAIT_TIMEOUT_SECONDS: Final[float] = 300.0
 
 _DEFAULT_MNGR_BINARY = "mngr"
 # The production messenger: a stateless, frozen value whose discover/send are the
@@ -209,6 +225,7 @@ def _build_chat_create_command(
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
     message_file: Path | None = None,
+    settings: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -263,10 +280,14 @@ def _build_chat_create_command(
     # readiness and delivers the first message before returning, so a repoint afterwards
     # lands after the first turn has already run on the wrong credential.
     cmd.extend(account_args)
-    # A successor agent's membership (``chat_id``, ``chat_seq``), which the first agent of a
-    # chat only gets at its first handoff.
+    # What this create carries beyond what the builder knows: a successor agent's membership
+    # (``chat_id``, ``chat_seq``), which the first agent of a chat only gets at its first
+    # handoff, and an outside caller's own labels (``auto_open``, to have the shell open the
+    # chat's tab), which ``create_chat`` screens against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
+    for setting in settings:
+        cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness, exactly as the ``first`` template's ``/welcome``
     # does (a CLI ``--message`` takes precedence over a template's). A handoff prompt is long
@@ -703,6 +724,11 @@ class AgentManager:
     _observe_cg: ConcurrencyGroup | None
     _observe_process: RunningProcess | None
     _creation_cg: ConcurrencyGroup
+    # Set once a chat's creation thread has settled its record, whichever way; what
+    # ``wait_for_chat_creation`` waits on. Dropped once waited on, with the record, or with
+    # the chat, so what is held is bounded by the chats the workspace has rather than by
+    # every chat it has ever created (nothing waits on most of them).
+    _creation_settled_by_chat: dict[ChatId, threading.Event]
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
@@ -827,6 +853,7 @@ class AgentManager:
         manager._observe_process = None
         manager._creation_cg = ConcurrencyGroup(name="agent-creation")
         manager._creation_cg.__enter__()
+        manager._creation_settled_by_chat = {}
         manager._mngr_binary = mngr_binary
         manager._host_dir = get_host_dir()
         manager._activity_tracked_agents = set()
@@ -2261,6 +2288,7 @@ class AgentManager:
             if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
                 return False
             del self._provisional_chats[parsed]
+            self._creation_settled_by_chat.pop(parsed, None)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._nudger.nudge()
         return True
@@ -2273,6 +2301,8 @@ class AgentManager:
         account_id: str = "",
         chat_id: str = "",
         message: str = "",
+        labels: Mapping[str, str] | None = None,
+        is_installation_check_skipped: bool = False,
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
 
@@ -2309,7 +2339,15 @@ class AgentManager:
         A seeded chat does not claim the workspace's first chat: the ``first`` template and its
         ``/welcome`` still go to the first plain chat. A reserved chat keeps the message it was
         minted with, so a launch that names one beside ``chat_id`` is refused like a name.
+
+        ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
+        that wants the chat's tab opened (``auto_open``); one that restates a label the app
+        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. ``is_installation_check_skipped``
+        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Both are
+        kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
+        page's "Try again") creates on the same terms and refuses new ones.
         """
+        extra_labels = dict(labels or {})
         try:
             account = resolve_binding(account_id)
         except (AccountError, BindingError) as e:
@@ -2320,11 +2358,14 @@ class AgentManager:
         explicit_name = requested_name.strip()
         if explicit_name and not canonical_agent_name(explicit_name):
             raise AgentCreationError(f"Chat name '{explicit_name}' contains no usable characters")
-        if chat_id and (explicit_name or project_id or message):
+        if chat_id and (explicit_name or project_id or message or extra_labels or is_installation_check_skipped):
             raise AgentCreationError(
                 f"Chat {chat_id} keeps the name, project, and first message it was minted with; "
-                "a launch cannot rename, refile, or reseed it"
+                "a launch cannot rename, refile, reseed, or relabel it"
             )
+        owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
+        if owned_keys:
+            raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
 
         # Name resolution and the provisional record's registration happen under one lock
         # hold, so a concurrent create sees this one's name as taken (and vice versa).
@@ -2343,6 +2384,8 @@ class AgentManager:
                 display_name = reserved.name
                 project_id = reserved.project_id
                 message = reserved.message
+                extra_labels = dict(reserved.labels)
+                is_installation_check_skipped = reserved.is_installation_check_skipped
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 taken_names = self._taken_names_locked()
@@ -2361,6 +2404,8 @@ class AgentManager:
                 project_id=project_id,
                 account_id=account.id,
                 message=message,
+                labels=extra_labels,
+                is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
             )
             self._provisional_chats[launched_chat_id] = provisional
@@ -2409,6 +2454,8 @@ class AgentManager:
             project_id,
             account_args,
             initial_message=message,
+            extra_labels=[f"{key}={value}" for key, value in extra_labels.items()],
+            settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
         self._broadcaster.broadcast_provisional_chat_created(provisional)
@@ -2417,17 +2464,43 @@ class AgentManager:
         # Mirror the labels the created mngr agent will carry (see
         # ``_build_chat_create_command``), so the pre-observe AgentStateItem below
         # renders exactly like the observed agent will.
-        labels: dict[str, str] = {"user_created": "true", "display_name": display_name}
+        labels: dict[str, str] = {"user_created": "true", "display_name": display_name, **extra_labels}
         project_label = _chat_project_label(primary_labels, project_id)
         if project_label:
             labels["project"] = project_label
         labels["account"] = account.id
         canonical_name = canonical_agent_name(display_name)
+        with self._lock:
+            self._creation_settled_by_chat[launched_chat_id] = threading.Event()
         self._launch_creation_thread(
             launched_chat_id, agent_id, canonical_name, cmd, Path(work_dir), labels, harness, is_first_chat
         )
 
         return CreatedChat(chat_id=launched_chat_id, name=canonical_name, display_name=display_name)
+
+    def wait_for_chat_creation(self, chat_id: ChatId, timeout: float) -> ChatCreationOutcome | None:
+        """Wait for the ``mngr create`` behind ``create_chat`` to finish and say how it ended.
+
+        None when it is still running at ``timeout``, or when no create was ever started
+        for ``chat_id`` here. A settled create is an agent this manager lists, or a
+        provisional record in the failed phase carrying the reason; a record that is
+        neither (destroyed meanwhile) reads as a failure with no reason.
+        """
+        with self._lock:
+            settled = self._creation_settled_by_chat.get(chat_id)
+        if settled is None:
+            return None
+        if not settled.wait(timeout):
+            with self._lock:
+                self._creation_settled_by_chat.pop(chat_id, None)
+            return None
+        with self._lock:
+            self._creation_settled_by_chat.pop(chat_id, None)
+            if str(chat_id) in self._agents:
+                return ChatCreationOutcome(is_created=True)
+            provisional = self._provisional_chats.get(chat_id)
+        error = provisional.error if provisional is not None and provisional.error is not None else ""
+        return ChatCreationOutcome(is_created=False, error=error)
 
     def _launch_creation_thread(
         self,
@@ -2549,6 +2622,10 @@ class AgentManager:
             failed = self.get_provisional_chat(chat_id)
             if failed is not None and failed.error is not None:
                 error = failed.error
+        with self._lock:
+            settled = self._creation_settled_by_chat.get(chat_id)
+        if settled is not None:
+            settled.set()
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
@@ -2563,10 +2640,13 @@ class AgentManager:
         )
 
     def _forget_chat(self, chat_id: ChatId) -> None:
-        """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the auto-open ledger entry."""
+        """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the
+        auto-open ledger entry, the create's settled event."""
         self._oom_prioritizer.forget_chat(chat_id)
         self._message_stamps.forget(chat_id)
         self._auto_open.forget(chat_id)
+        with self._lock:
+            self._creation_settled_by_chat.pop(chat_id, None)
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""

@@ -30,6 +30,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -437,10 +438,118 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "project_id": "",
         "account_id": signed_in.id,
         "message": "",
+        "labels": {},
+        "is_installation_check_skipped": False,
         "phase": "creating",
         "error": None,
     }
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
+
+
+def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An update chat whose create failed on the claude pin is retried from the page with the same
+    waiver and labels, or the retry fails the same way; the record carries them like the message."""
+    (signed_in,) = read_index().accounts
+    with agent_manager._lock:
+        agent_manager._provisional_chats[ChatId("failed-2")] = ProvisionalChat(
+            chat_id=ChatId("failed-2"),
+            name="update-self-1a2b3c",
+            account_id=signed_in.id,
+            message="/update-self",
+            labels={"auto_open": "true"},
+            is_installation_check_skipped=True,
+            phase=ProvisionalChatPhase.FAILED,
+            error="mngr create exited with code 1",
+        )
+    q = broadcaster.register()
+
+    agent_manager.create_chat("", chat_id="failed-2", account_id=signed_in.id)
+    agent_manager.stop()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    pushed = json.loads(raw)
+    assert pushed["phase"] == "creating"
+    assert pushed["labels"] == {"auto_open": "true"}
+    assert pushed["is_installation_check_skipped"] is True
+    assert pushed["message"] == "/update-self"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentManager) -> None:
+    """``display_name`` and ``account`` are what the app derives the chat's identity and binding
+    from; a caller restating them would make the argv carry two answers."""
+    with pytest.raises(AgentCreationError, match="display_name"):
+        agent_manager.create_chat("x", labels={"display_name": "other", "auto_open": "true"})
+    assert agent_manager.get_provisional_chats() == []
+
+
+def test_create_chat_refuses_labels_and_the_waiver_beside_a_reserved_id(agent_manager: AgentManager) -> None:
+    reserved = agent_manager.reserve_chat()
+    with pytest.raises(AgentCreationError, match="relabel"):
+        agent_manager.create_chat("", chat_id=reserved.chat_id, labels={"auto_open": "true"})
+    with pytest.raises(AgentCreationError, match="relabel"):
+        agent_manager.create_chat("", chat_id=reserved.chat_id, is_installation_check_skipped=True)
+
+
+def test_a_waited_create_reports_the_failure_the_record_holds(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    false_binary: str,
+) -> None:
+    """A caller that waits on the create learns how it ended without polling: the reason is the
+    one the provisional record keeps for the page, and a chat never created here is unknown."""
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(broadcaster, mngr_binary=false_binary)
+    try:
+        created = manager.create_chat("Doomed chat")
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+
+        assert outcome is not None
+        assert outcome.is_created is False
+        assert outcome.error.startswith("mngr create exited with code 1")
+        failed = manager.get_provisional_chat(created.chat_id)
+        assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
+        assert manager.wait_for_chat_creation(ChatId("never-created"), timeout=0.0) is None
+        # The settled event is dropped once waited on; the record it settled stays for the page.
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=0.0) is None
+        assert manager.get_provisional_chat(created.chat_id) is not None
+    finally:
+        manager.stop()
+
+
+def test_a_waited_create_answers_once_the_agent_is_listed_with_the_callers_labels(
+    broadcaster: WebSocketBroadcaster,
+    git_work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    true_binary: str,
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_ID", "test-agent-id")
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(git_work_dir))
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(broadcaster, mngr_binary=true_binary)
+    try:
+        created = manager.create_chat("Assist chat", labels={"auto_open": "true", "assist": "true"})
+
+        outcome = manager.wait_for_chat_creation(created.chat_id, timeout=30.0)
+
+        assert outcome is not None and outcome.is_created is True and outcome.error == ""
+        agent = manager.get_agent_by_id(created.chat_id)
+        assert agent is not None
+        # The pre-observe state carries the caller's labels beside the app's own, as the
+        # observed agent will.
+        assert agent.labels["auto_open"] == "true"
+        assert agent.labels["assist"] == "true"
+        assert agent.labels["user_created"] == "true"
+    finally:
+        manager.stop()
 
 
 def test_discard_provisional_chat_drops_a_failed_chat(
@@ -980,6 +1089,19 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
     argv = _chat_create_argv()
     assert "-S" not in argv
     assert not any("fastMode" in token for token in argv)
+
+
+def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
+    """A create from outside the workspace (the Minds app's assist and update chats, through
+    ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
+    same argv the app's own creates use."""
+    argv = _chat_create_argv(
+        extra_labels=["auto_open=true", "assist=true"], settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
+    )
+    assert_mngr_argv_valid(argv)
+    labels = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--label"]
+    assert labels[-2:] == ["auto_open=true", "assist=true"]
+    assert argv[argv.index("-S") + 1] == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:

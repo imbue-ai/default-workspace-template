@@ -132,6 +132,22 @@ the agent list has been read from mngr once, like the instances API, so a send
 during the app's first seconds is retried rather than mistaken for an unknown
 chat. See `docs/system/blueprint/chat-agent-split/`.
 
+The create route is likewise how a chat is made from outside the chat page:
+`message_chat.py --create` posts to `/api/chats/create` (the Minds app's assist
+and update chats go through it, run inside the workspace by `mngr exec`). Beside
+`name`, `account_id`, and `message`, the request takes `labels` for the chat's
+agent (`auto_open=true` has the shell open its tab; the labels the app sets
+itself are refused), `is_installation_check_skipped` (the update run's waiver of
+the claude version check the in-container mngr would otherwise fail the create
+on), and `should_wait`, which holds the answer until `mngr create` has finished:
+the chat's identity when it landed, a 500 carrying the create's own reason when
+it failed, a 504 if it is still running at the wait's ceiling. The script falls
+back to a plain `mngr create --template chat` on the send's terms plus one of
+its own: a chat app that cannot be reached, one with no create route, and one
+whose create route predates these fields, which it tells apart by the 400 naming
+the field it does not know (a workspace that has taken a template update and has
+not restarted its chat app yet).
+
 ## Provider accounts
 
 Accounts live under `~/.minds/accounts` (`accounts.py`): one folder per
@@ -145,8 +161,9 @@ one; pressing another account in that menu makes it the chat's pending lane. `sy
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
-harness and no account -- the chats the Minds app starts from outside, workers,
-automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
+harness and no account -- workers, automations, the caretaker, and the bare
+create the Minds app's chats fall back to on a template whose script has no
+create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
 account's harness as `type`, its binding (`env__extend` for claude, an

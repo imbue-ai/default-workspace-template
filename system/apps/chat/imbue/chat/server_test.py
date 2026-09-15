@@ -2215,6 +2215,57 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id(
     )
 
 
+def test_create_chat_with_should_wait_answers_the_creates_own_failure(
+    config: Config,
+    signed_in_account: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    false_binary: str,
+) -> None:
+    """``should_wait`` holds the answer until ``mngr create`` has finished, so a caller outside
+    the workspace (``message_chat.py --create``) gets the create's own verdict rather than a
+    201 for a chat that then fails behind its back."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    state = build_test_state(
+        config=config, agent_manager=AgentManager.build(WebSocketBroadcaster(), mngr_binary=false_binary)
+    )
+    state.agent_manager.note_agent_list_known()
+    app = create_application(state)
+    # The primary's work dir has to exist for ``false`` to run there and fail as ``mngr create`` would.
+    state.agent_manager._agents["agent-123"] = AgentStateItem(
+        id="agent-123", name="primary", state="RUNNING", labels={}, work_dir=str(tmp_path)
+    )
+
+    response = app.test_client().post(
+        "/api/chats/create",
+        json={
+            "name": "assist-1a2b3c",
+            "message": "/assist it broke",
+            "labels": {"auto_open": "true"},
+            "should_wait": True,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.get_json()["detail"].startswith("mngr create exited with code 1")
+    [record] = state.agent_manager.get_provisional_chats()
+    assert record.phase is ProvisionalChatPhase.FAILED and record.name == "assist-1a2b3c"
+
+
+def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    response = client.post("/api/chats/create", json={"labels": {"account": "someone-else"}})
+
+    assert response.status_code == 400
+    assert "account" in response.get_json()["detail"]
+
+
 def test_create_chat_refuses_an_id_that_was_never_reserved(
     client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

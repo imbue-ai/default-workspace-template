@@ -480,6 +480,32 @@ class CreateChatRequest(FrozenModel):
         description="The first message the chat sends once it is running; empty sends none "
         "(a chat minted earlier keeps the message it was minted with)",
     )
+    labels: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra labels for the chat's agent (an ``auto_open`` that pops its tab, say); "
+        "the labels the app sets itself (``APP_OWNED_LABEL_KEYS``: ``user_created``, ``display_name``, "
+        "``account``, ``project``, ``first``, ``chat_id``, ``chat_seq``) are refused, and a chat minted "
+        "earlier keeps the ones it was minted with",
+    )
+    is_installation_check_skipped: bool = Field(
+        default=False,
+        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
+        "for a caller that is about to repair that (the update run); a chat minted earlier keeps its own",
+    )
+    should_wait: bool = Field(
+        default=False,
+        description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
+        "failed, instead of as soon as the create has started",
+    )
+
+
+class ChatCreationOutcome(FrozenModel):
+    """How a chat's ``mngr create`` ended, for a caller that waited for it."""
+
+    is_created: bool = Field(description="Whether the chat now runs on its agent")
+    error: str = Field(
+        default="", description="Why the create failed, as the provisional record holds it; '' on success"
+    )
 
 
 class ProvisionalChatPhase(LowerCaseStrEnum):
@@ -505,6 +531,10 @@ class ProvisionalChat(FrozenModel):
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
     account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
+    labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
+    is_installation_check_skipped: bool = Field(
+        default=False, description="Whether its create waves the claude version check"
+    )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
 

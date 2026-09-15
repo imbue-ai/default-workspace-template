@@ -19,7 +19,8 @@ Provisioning and utility scripts:
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
   layout ops), `message_chat.py` (send a message to a chat by its id through
   the chat app, with `mngr message` as the backoff; the in-workspace
-  replacement for `mngr message <agent>`), `require_create_account.py` (the
+  replacement for `mngr message <agent>`; `--create` makes a new chat there
+  the same way, with `mngr create` as the backoff), `require_create_account.py` (the
   create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration),
   `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent
