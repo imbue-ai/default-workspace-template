@@ -300,8 +300,13 @@ const tooltipsByElement = new WeakMap<Element, HoverTooltip>();
  * accessible name. ``placement`` defaults to the shared centered-below
  * behavior; pass ``"right"`` only for the rail's exception (see the module
  * doc comment).
+ *
+ * ``text`` is ``null`` for no tooltip. Pass that rather than spreading ``{}``
+ * instead of these attrs: mithril patches the same element across redraws and
+ * runs only the current vnode's hooks, so attrs that disappear leave the
+ * listeners, and the text they were created with, on the element.
  */
-export function hoverTooltipAttrs(text: string, placement: TooltipPlacement = "below"): m.Attributes {
+export function hoverTooltipAttrs(text: string | null, placement: TooltipPlacement = "below"): m.Attributes {
   return {
     oncreate: (vnode: m.VnodeDOM): void => {
       const tooltip = attachHoverTooltip(vnode.dom, placement);

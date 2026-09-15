@@ -203,6 +203,7 @@ describe("NewTabLauncher", () => {
   afterEach(() => {
     m.mount(root, null);
     root.remove();
+    vi.useRealTimers();
   });
 
   function mount(overrides: Partial<NewTabLauncherAttrs>): NewTabLauncherAttrs {
@@ -241,6 +242,19 @@ describe("NewTabLauncher", () => {
     )!;
     label.querySelector("input")!.dispatchEvent(new Event("change"));
     m.redraw.sync();
+  }
+
+  /** Point at an element past the tooltip's hover-intent delay (needs fake timers), and return the
+   *  text of the bubble that came up, or null when none did. */
+  function hoverTooltipText(element: HTMLElement): string | null {
+    element.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.runAllTimers();
+    const bubble = document.querySelector<HTMLElement>(".hover-tooltip");
+    const text = bubble !== null && bubble.style.visibility === "visible" && bubble.style.display !== "none"
+      ? bubble.textContent
+      : null;
+    element.dispatchEvent(new MouseEvent("mouseleave"));
+    return text;
   }
 
   it("runs a tile's action with no parameters, whichever app it is", () => {
@@ -351,6 +365,35 @@ describe("NewTabLauncher", () => {
     expect(buildTile.getAttribute("aria-disabled")).toBe("true");
     buildTile.click();
     expect(attrs.onRunAction).not.toHaveBeenCalled();
+  });
+
+  it("stops explaining a prompt tile's stand-down once the apps arrive", () => {
+    vi.useFakeTimers();
+    // Rendered before the inventory loads: no tiles yet, so no app can take a first message.
+    const attrs = mount({ tiles: [] });
+    const buildTile = root.querySelector<HTMLElement>('[data-start="build-app"]')!;
+    expect(buildTile.getAttribute("aria-disabled")).toBe("true");
+    expect(hoverTooltipText(buildTile)).toBe("No app on this machine can start a chat");
+
+    attrs.tiles = TILES;
+    m.redraw.sync();
+    // The same element carries on, now pickable: mithril patches it rather than replacing it.
+    expect(root.querySelector('[data-start="build-app"]')).toBe(buildTile);
+    expect(buildTile.getAttribute("aria-disabled")).toBeNull();
+    expect(hoverTooltipText(buildTile)).toBeNull();
+  });
+
+  it("stops naming an Open new tile's action while the tiles stand down for a create", () => {
+    vi.useFakeTimers();
+    const attrs = mount({});
+    const terminalTile = root.querySelector<HTMLElement>('.new-tab-launcher-tiles [data-launch="terminal:new"]')!;
+    expect(hoverTooltipText(terminalTile)).toBe("New terminal");
+
+    attrs.isAwaitingCreate = true;
+    m.redraw.sync();
+    expect(root.querySelector('.new-tab-launcher-tiles [data-launch="terminal:new"]')).toBe(terminalTile);
+    expect(terminalTile.getAttribute("aria-disabled")).toBe("true");
+    expect(hoverTooltipText(terminalTile)).toBeNull();
   });
 
   it("scrolls to the templates from the Start from a template tile, even when picked from search", () => {
