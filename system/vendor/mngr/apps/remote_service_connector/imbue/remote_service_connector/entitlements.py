@@ -43,6 +43,8 @@ QUOTA_ENTITLEMENT_NAMES: tuple[str, ...] = (
     "max_total_bucket_bytes",
     "monthly_llm_spend_usd",
     "max_active_synced_workspaces",
+    "max_active_machine_units",
+    "max_total_machine_disk_gb",
 )
 
 # Entitlement columns holding integer counts/bytes (everything except the
@@ -63,6 +65,12 @@ class PlanEntitlements(BaseModel):
     max_total_bucket_bytes: int = Field(description="Max total bytes across all the account's buckets")
     monthly_llm_spend_usd: float = Field(description="Monthly LLM spend cap in USD (rolling; 0 disables key minting)")
     max_active_synced_workspaces: int = Field(description="Max ACTIVE synced workspace records")
+    max_active_machine_units: int = Field(
+        description="Max machine units (1 unit = 1GiB guest RAM) summed across running remote machines"
+    )
+    max_total_machine_disk_gb: int = Field(
+        description="Max machine data-disk GB summed across running + stopped remote machines"
+    )
 
 
 PLAN_FREE = "free"
@@ -116,6 +124,8 @@ class AccountEntitlements(PlanEntitlements):
             max_total_bucket_bytes=self.max_total_bucket_bytes,
             monthly_llm_spend_usd=self.monthly_llm_spend_usd,
             max_active_synced_workspaces=self.max_active_synced_workspaces,
+            max_active_machine_units=self.max_active_machine_units,
+            max_total_machine_disk_gb=self.max_total_machine_disk_gb,
         )
 
 

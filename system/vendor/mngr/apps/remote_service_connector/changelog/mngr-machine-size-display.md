@@ -1,0 +1,1 @@
+Correct the migration numbers in this stack's earlier connector changelog entries after the stack's migrations were renumbered past main's newly-landed 031/032: the gen-2 schema migration is now 033 (was 031), wg_public_key is 034 (was 032), machine sizing is 035 (was 033), and the WireGuard column rename is 036 (was 034). Documentation-only; no schema or code changes.

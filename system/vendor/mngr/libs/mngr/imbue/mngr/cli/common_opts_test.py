@@ -23,6 +23,8 @@ from imbue.mngr.cli.common_opts import parse_output_options
 from imbue.mngr.cli.common_opts import restore_cli_list_values
 from imbue.mngr.cli.common_opts import save_cli_list_values_for_restoration
 from imbue.mngr.cli.common_opts import setup_command_context
+from imbue.mngr.cli.env_utils import resolve_env_vars
+from imbue.mngr.cli.env_utils import resolve_labels
 from imbue.mngr.config.agent_config_registry import resolve_agent_type
 from imbue.mngr.config.data_types import CommandDefaults
 from imbue.mngr.config.data_types import CommonCliOptions
@@ -272,6 +274,36 @@ def test_pipeline_cli_flag_extends_non_empty_config(mngr_test_prefix: str) -> No
     # No templates here, so apply_create_template would be a no-op.
     result = restore_cli_list_values(after_defaults, cli_values)
     assert result["env"] == ("X=5", "X=6")
+
+
+def test_pipeline_cli_flag_wins_over_a_config_default_for_the_same_key(mngr_test_prefix: str) -> None:
+    """A CLI ``--env``/``--label`` naming a key the config layer already set resolves to the CLI's value.
+
+    The list ordering above is only half the contract: both flags are folded into a map
+    afterwards, and it is the fold that decides which of two entries for one key an agent
+    actually gets. A workspace that keeps its default provider account as ``[commands.create]``
+    defaults relies on this to launch a chat on any *other* account -- without it, an explicit
+    account would silently lose to the workspace default, on a create that reports success.
+    """
+    ctx = _make_click_context(
+        params={"env": ("CLAUDE_CONFIG_DIR=/accounts/chosen",), "label": ("account=chosen",)},
+        source_by_param_name={"env": ParameterSource.COMMANDLINE, "label": ParameterSource.COMMANDLINE},
+    )
+    config = MngrConfig(
+        prefix=mngr_test_prefix,
+        commands={
+            "create": CommandDefaults(
+                defaults={"env": ["CLAUDE_CONFIG_DIR=/accounts/default"], "label": ["account=default"]}
+            )
+        },
+    )
+
+    after_defaults = apply_config_defaults(ctx, config, "create")
+    result = restore_cli_list_values(after_defaults, save_cli_list_values_for_restoration(ctx))
+
+    env_by_key = {env_var.key: env_var.value for env_var in resolve_env_vars((), result["env"])}
+    assert env_by_key["CLAUDE_CONFIG_DIR"] == "/accounts/chosen"
+    assert resolve_labels(result["label"]).labels["account"] == "chosen"
 
 
 def test_pipeline_cli_flag_extends_multiple_values(mngr_test_prefix: str) -> None:

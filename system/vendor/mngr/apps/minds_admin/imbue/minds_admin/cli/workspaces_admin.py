@@ -10,6 +10,8 @@ release chain (artifacts, slice VM, workspace record, row), in any lifecycle
 status -- the operator counterpart of the user's destroy.
 """
 
+from typing import Final
+
 import click
 
 from imbue.minds_admin.cli._tier_secrets import make_admin_connector_client
@@ -17,6 +19,13 @@ from imbue.minds_admin.cli.paid import paid_auth_options
 from imbue.minds_admin.cli.paid import resolve_admin_api_key
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.cli._common import handle_imbue_cloud_errors
+from imbue.mngr_imbue_cloud.wire_types import WorkspaceStopKind
+
+# The kinds an operator may stamp (specs/workspace-stop-kinds.md); ``owner`` is
+# the owner route's alone.
+_OPERATOR_STOP_KINDS: Final[tuple[str, ...]] = tuple(
+    kind.value for kind in (WorkspaceStopKind.MAINTENANCE, WorkspaceStopKind.IDLE, WorkspaceStopKind.SUSPENSION)
+)
 
 
 @click.group(name="workspaces")
@@ -26,17 +35,69 @@ def workspaces_admin() -> None:
 
 @workspaces_admin.command(name="stop")
 @click.argument("host_db_id")
+@click.option(
+    "--kind",
+    "kind",
+    type=click.Choice(_OPERATOR_STOP_KINDS),
+    required=True,
+    help=(
+        "Why the machine is stopped, which decides who may start it: 'maintenance' is a hold only an "
+        "operator start (or 'set-stop-kind idle') ends; 'idle' frees capacity and the user may start it; "
+        "'suspension' is the suspend fan-out's kind."
+    ),
+)
 @paid_auth_options
 @handle_imbue_cloud_errors
-def admin_stop_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
-    """Force-stop the workspace HOST_DB_ID (halt VM, upload artifact, free the slot).
+def admin_stop_workspace(host_db_id: str, kind: str, connector_url: str | None, api_key: str | None) -> None:
+    """Force-stop the workspace HOST_DB_ID (halt VM, upload artifact, free the slot) with a stop kind.
 
     The same data-preserving transition the owner's stop runs, without the
     ownership check: used for suspensions, migrations, and clearing a box.
-    Idempotent -- a workspace already stopping/stopped reports its status.
+    Idempotent on the transition -- a workspace already stopping/stopped
+    reports its status -- but the kind is always stamped, so an owner-stopped
+    workspace takes the hold too.
     """
     client = make_admin_connector_client(connector_url)
-    emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id))
+    emit_json(client.admin_stop_workspace(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind(kind)))
+
+
+@workspaces_admin.command(name="set-stop-kind")
+@click.argument("host_db_id")
+@click.argument("kind", type=click.Choice(_OPERATOR_STOP_KINDS))
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_set_workspace_stop_kind(host_db_id: str, kind: str, connector_url: str | None, api_key: str | None) -> None:
+    """Change the kind of the stopping/stopped workspace HOST_DB_ID's stop.
+
+    'idle' hands a held workspace back to its owner without a rollback (a
+    row the cutover has parked stays refused by the connector's parked-row
+    guard and needs `cutover rollback`); 'maintenance' holds a workspace the
+    owner stopped. Refused (409) for a
+    running workspace, which has no stop to describe.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(
+        client.admin_set_workspace_stop_kind(resolve_admin_api_key(api_key), host_db_id, WorkspaceStopKind(kind))
+    )
+
+
+@workspaces_admin.command(name="start")
+@click.argument("host_db_id")
+@paid_auth_options
+@handle_imbue_cloud_errors
+def admin_start_workspace(host_db_id: str, connector_url: str | None, api_key: str | None) -> None:
+    """Start the stopped workspace HOST_DB_ID regardless of owner (no quota check).
+
+    The owner's start transition without the ownership and quota checks: the
+    operator is bringing back a workspace its user already had running. Used
+    by the gen-2 cutover runbook to start every stopped gen-1 workspace before
+    the window so the drain can harvest it live. Idempotent -- a workspace
+    already running/starting reports its status; a row the cutover has parked
+    is refused as under maintenance. Ignores the stop's kind (this is how a
+    held workspace comes back) and clears it.
+    """
+    client = make_admin_connector_client(connector_url)
+    emit_json(client.admin_start_workspace(resolve_admin_api_key(api_key), host_db_id))
 
 
 @workspaces_admin.command(name="release")

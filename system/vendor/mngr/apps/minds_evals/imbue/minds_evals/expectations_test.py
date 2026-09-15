@@ -66,7 +66,7 @@ def test_parse_expectations_requires_outcome_prose() -> None:
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "why": "z"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "why": "z"}],
             },
             "unknown key",
         ),
@@ -84,9 +84,9 @@ def test_parse_expectations_rejects_an_unknown_deliverable_kind() -> None:
 
 
 def test_parse_expectations_rejects_a_flow_with_neither_steps_nor_script() -> None:
-    with pytest.raises(EvalConfigError, match="either 'steps' \\+ 'expect' or 'script'"):
+    with pytest.raises(EvalConfigError, match="either 'actions' \+ 'expect' or 'script'"):
         parse_expectations(
-            {"outcome": "x", "deliverable": {"kind": "minds-app"}, "ui_flows": [{"name": "f", "steps": "open it"}]},
+            {"outcome": "x", "deliverable": {"kind": "minds-app"}, "ui_flows": [{"name": "f", "actions": "open it"}]},
             "todo-app",
         )
 
@@ -97,7 +97,7 @@ def test_parse_expectations_rejects_a_flow_carrying_both_a_script_and_steps() ->
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "script": "flow.py"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "script": "flow.py"}],
             },
             "todo-app",
         )
@@ -123,7 +123,7 @@ def test_parse_expectations_still_accepts_a_natural_language_flow() -> None:
         {
             "outcome": "x",
             "deliverable": {"kind": "minds-app"},
-            "ui_flows": [{"name": "persistence", "steps": "Open the app. Add a task.", "expect": "still there"}],
+            "ui_flows": [{"name": "persistence", "actions": "Open the app. Add a task.", "expect": "still there"}],
         },
         "todo-app",
     )
@@ -213,8 +213,8 @@ def test_expand_expectations_turns_natural_language_flows_into_checks() -> None:
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
                 "ui_flows": [
-                    {"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."},
-                    {"name": "persistence", "steps": "Reload.", "expect": "It survived."},
+                    {"name": "add-complete-delete", "actions": "Add 'buy milk'.", "expect": "'buy milk' is visible."},
+                    {"name": "persistence", "actions": "Reload.", "expect": "It survived."},
                 ],
             },
             "todo",
@@ -235,7 +235,7 @@ def test_expand_expectations_refuses_to_expand_a_scripted_flow() -> None:
     expectations = Expectations(
         outcome="x",
         deliverable=parse_expectations({"outcome": "x", "deliverable": {"kind": "minds-app"}}, "todo").deliverable,
-        ui_flows=(UiFlow(name="scripted", steps="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
+        ui_flows=(UiFlow(name="scripted", actions="", expect="", script="flows/f.py", surface=FlowSurface.ORIGIN),),
         test_commands=(),
         is_fresh_env_enabled=False,
     )
@@ -253,8 +253,8 @@ def test_parse_expectations_rejects_two_flows_whose_names_collide() -> None:
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
                 "ui_flows": [
-                    {"name": "add-task", "steps": "s", "expect": "e"},
-                    {"name": "add_task", "steps": "s", "expect": "e"},
+                    {"name": "add-task", "actions": "s", "expect": "e"},
+                    {"name": "add_task", "actions": "s", "expect": "e"},
                 ],
             },
             "todo",
@@ -266,7 +266,7 @@ def test_parse_expectations_defaults_a_flow_to_the_forwarded_origin() -> None:
         {
             "outcome": "x",
             "deliverable": {"kind": "minds-app"},
-            "ui_flows": [{"name": "persistence", "steps": "s", "expect": "e"}],
+            "ui_flows": [{"name": "persistence", "actions": "s", "expect": "e"}],
         },
         "todo",
     )
@@ -283,7 +283,7 @@ def test_parse_expectations_rejects_the_minds_ui_surface_as_unimplemented() -> N
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "minds-ui"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "surface": "minds-ui"}],
             },
             "todo",
         )
@@ -296,7 +296,7 @@ def test_parse_expectations_rejects_an_unknown_surface() -> None:
             {
                 "outcome": "x",
                 "deliverable": {"kind": "minds-app"},
-                "ui_flows": [{"name": "f", "steps": "s", "expect": "e", "surface": "carrier-pigeon"}],
+                "ui_flows": [{"name": "f", "actions": "s", "expect": "e", "surface": "carrier-pigeon"}],
             },
             "todo",
         )

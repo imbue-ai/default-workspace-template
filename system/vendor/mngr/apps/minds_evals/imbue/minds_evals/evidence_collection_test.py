@@ -1,5 +1,7 @@
 import asyncio
 import json
+import shlex
+import subprocess
 import time
 from pathlib import Path
 
@@ -27,6 +29,7 @@ from imbue.minds_evals.mock_verification_agent_test import ScriptedVerificationA
 from imbue.minds_evals.mock_verification_agent_test import click_action
 from imbue.minds_evals.mock_verification_agent_test import done_action
 from imbue.minds_evals.mock_verification_agent_test import reading
+from imbue.minds_evals.resources.flow_step_protocol import StepReaction
 from imbue.minds_evals.testing import BOX_COMMON_TRANSCRIPT_PATH
 from imbue.minds_evals.testing import BOX_WORKSPACE_TRAJECTORY_PATH
 from imbue.minds_evals.testing import CHAT_WORK_DIR
@@ -170,7 +173,12 @@ def test_service_entries_find_a_grouped_supervisord_program() -> None:
     delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),)
 
     entries = evidence_collection.service_entries(
-        "app_registered", delivered, {"apps:todo": "RUNNING"}, {"todo": "todo"}, True
+        "app_registered",
+        delivered,
+        {"apps:todo": "RUNNING"},
+        {"todo": "todo"},
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
     )
 
     assert entries[0].status is CheckStatus.PASSED
@@ -276,9 +284,25 @@ def test_service_entries_flag_a_registered_app_whose_service_is_not_running() ->
     delivered = (RegisteredApp(name="todo", url="http://localhost:8081", is_preexisting=False, is_internal=False),)
 
     programs = {"todo": "todo"}
-    running = evidence_collection.service_entries("app_registered", delivered, {"todo": "RUNNING"}, programs, True)
-    crashed = evidence_collection.service_entries("app_registered", delivered, {"todo": "FATAL"}, programs, True)
-    unknown = evidence_collection.service_entries("app_registered", delivered, {}, programs, False)
+    running = evidence_collection.service_entries(
+        "app_registered",
+        delivered,
+        {"todo": "RUNNING"},
+        programs,
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
+    )
+    crashed = evidence_collection.service_entries(
+        "app_registered",
+        delivered,
+        {"todo": "FATAL"},
+        programs,
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
+    )
+    unknown = evidence_collection.service_entries(
+        "app_registered", delivered, {}, programs, is_services_readable=False, is_supervisord_conf_readable=True
+    )
 
     assert running[0].status is CheckStatus.PASSED
     assert crashed[0].status is CheckStatus.FAILED
@@ -348,6 +372,165 @@ def test_parse_supervised_registrations_stops_a_manifest_call_at_the_apps_own_co
     )
 
     assert evidence_collection.parse_supervised_registrations(conf) == {"notes": "notes"}
+
+
+def _write_main_supervisord_conf(root: Path, is_final_newline: bool = True) -> None:
+    """A main config that declares no program of its own, only the ``[include]`` reaching the rest."""
+    conf = "[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n"
+    (root / "system").mkdir(parents=True, exist_ok=True)
+    (root / "system/supervisord.conf").write_text(conf if is_final_newline else conf.rstrip("\n"))
+
+
+def _capture_supervisord_config(root: Path, cwd: Path | None = None) -> str:
+    """What the capture prints for the workspace at ``root``, run through a real shell."""
+    return subprocess.run(
+        ["bash", "-c", evidence_collection.supervisord_config_capture_command(shlex.quote(str(root)))],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
+    ).stdout
+
+
+def test_the_capture_reads_the_programs_a_template_declares_in_drop_ins(tmp_path: Path) -> None:
+    """The real shell, over a workspace whose programs live in drop-ins rather than the main config.
+
+    A template may declare each program in its own ``supervisord.conf.d/<name>.conf``, pulled in
+    by an ``[include]`` glob. Reading only the main config there finds no ``[program:*]`` at all,
+    and `supervisord_config_capture_command` says what an empty join costs.
+    """
+    root = tmp_path / "workspace"
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    _write_main_supervisord_conf(root)
+    (root / "system/supervisord.conf.d/system_interface.conf").write_text(
+        program_block("system_interface", ("system_interface", "http://localhost:8000"))
+    )
+    (root / "system/supervisord.conf.d/dashboard.conf").write_text(
+        program_block("dashboard", ("shop", "http://localhost:9000"), ("shop-admin", "http://localhost:9001"))
+    )
+
+    captured = _capture_supervisord_config(root)
+
+    assert evidence_collection.parse_supervised_registrations(captured) == {
+        "system_interface": "system_interface",
+        "shop": "dashboard",
+        "shop-admin": "dashboard",
+    }
+
+
+def test_the_capture_reads_a_config_with_no_drop_in_directory_at_all(tmp_path: Path) -> None:
+    """The shape every already-released template has: one config, every program in it.
+
+    Provisioning is tag-pinned, so an eval against any existing `minds-v<N>` template reads a
+    workspace with no `supervisord.conf.d/`. The drop-in glob has to match nothing there and leave
+    the main file's own programs alone, or every released template is misgraded.
+    """
+    root = tmp_path / "workspace"
+    (root / "system").mkdir(parents=True)
+    (root / "system/supervisord.conf").write_text(
+        "[supervisord]\nnodaemon=true\n\n"
+        + program_block("system_interface", ("system_interface", "http://localhost:8000"))
+        + program_block("dashboard", ("shop", "http://localhost:9000"))
+    )
+
+    captured = _capture_supervisord_config(root)
+
+    assert evidence_collection.parse_supervised_registrations(captured) == {
+        "system_interface": "system_interface",
+        "shop": "dashboard",
+    }
+
+
+def test_the_capture_reads_the_drop_ins_beside_the_config_not_the_shells_own_directory(tmp_path: Path) -> None:
+    """The exec's working directory is not the config's directory and is not ours to choose.
+
+    A `supervisord.conf.d/` there must be neither read in place of the workspace's nor added to it.
+    """
+    root = tmp_path / "workspace"
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    _write_main_supervisord_conf(root)
+    (root / "system/supervisord.conf.d/todo.conf").write_text(program_block("todo", ("todo", "http://localhost:8081")))
+    decoy = tmp_path / "elsewhere"
+    (decoy / "supervisord.conf.d").mkdir(parents=True)
+    (decoy / "supervisord.conf.d/ghost.conf").write_text(program_block("ghost", ("ghost", "http://localhost:8500")))
+
+    captured = _capture_supervisord_config(root, cwd=decoy)
+
+    assert evidence_collection.parse_supervised_registrations(captured) == {"todo": "todo"}
+
+
+def test_a_config_whose_last_line_is_unterminated_does_not_swallow_the_next_files_program(
+    tmp_path: Path,
+) -> None:
+    """A file boundary in the capture has to be a line boundary.
+
+    supervisord opens each file separately and never notices a missing final newline; a reader
+    that concatenates them does. A `[program:*]` header glued to the tail of the previous file is
+    not at the start of a line, so the block scan does not see it -- and a program nothing sees
+    cannot own the rows it registers.
+    """
+    root = tmp_path / "workspace"
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    _write_main_supervisord_conf(root, is_final_newline=False)
+    (root / "system/supervisord.conf.d/alpha.conf").write_text(
+        program_block("alpha", ("alpha", "http://localhost:8081")).rstrip("\n")
+    )
+    (root / "system/supervisord.conf.d/beta.conf").write_text(program_block("beta", ("beta", "http://localhost:8082")))
+
+    captured = _capture_supervisord_config(root)
+
+    assert evidence_collection.parse_supervised_registrations(captured) == {"alpha": "alpha", "beta": "beta"}
+
+
+@pytest.mark.parametrize("directory_name", ["with space", "amp&and"])
+def test_the_capture_survives_a_repo_root_the_shell_would_read_as_syntax(tmp_path: Path, directory_name: str) -> None:
+    """The root is interpolated into the shell and then globbed, so its own characters must not be
+    read as syntax: a space would split the path in two, and each half names no drop-in at all --
+    the empty answer an app-free workspace also gives."""
+    root = tmp_path / directory_name
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    _write_main_supervisord_conf(root)
+    (root / "system/supervisord.conf.d/app.conf").write_text(program_block("app", ("app", "http://localhost:8400")))
+
+    captured = _capture_supervisord_config(root)
+
+    assert evidence_collection.parse_supervised_registrations(captured) == {"app": "app"}
+
+
+def test_a_drop_ins_own_prose_is_not_read_as_the_previous_programs_registration() -> None:
+    # The capture is several files concatenated, and a block runs to the next section header, so a
+    # drop-in's leading comments land inside the last program of the file before it. Those comments
+    # routinely describe forward_port.py calls, and a described call is not a made one.
+    conf = (
+        "[program:terminal]\ncommand=terminal-app\n"
+        "\n"
+        "# The dashboard app. Registers with\n"
+        "#   python3 system/scripts/forward_port.py --url http://localhost:9000 --name shop\n"
+        "; and is shed before the built-in services.\n"
+        "[program:dashboard]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --manifest system/apps/dashboard/app.toml '
+        '--url http://localhost:9000 && dashboard"\n'
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {"dashboard": "dashboard"}
+
+
+def test_a_non_program_section_is_not_read_as_part_of_the_program_before_it() -> None:
+    # A program's block ends at the next section of any kind. The template ships an
+    # [eventlistener:*] drop-in in the middle of the read order, so with a program-scoped bound its
+    # body is scanned as the previous program's -- and anything registering there would be credited
+    # to a program that never ran it.
+    conf = (
+        "[program:host-backup]\ncommand=host-backup\n"
+        "\n"
+        "[eventlistener:oom-tag-backstop]\n"
+        "command=python3 system/scripts/forward_port.py --url http://localhost:9999 --name backstop\n"
+        "\n"
+        "[program:dashboard]\n"
+        'command=bash -c "python3 system/scripts/forward_port.py --url http://localhost:9000 --name shop"\n'
+    )
+
+    assert evidence_collection.parse_supervised_registrations(conf) == {"shop": "dashboard"}
 
 
 def test_the_config_half_names_only_the_apps_it_registers_itself() -> None:
@@ -500,7 +683,14 @@ def test_service_entries_fall_back_to_a_program_named_like_the_row() -> None:
         RegisteredApp(name="todo-list", url="http://localhost:8080", is_preexisting=False, is_internal=False),
     )
 
-    entries = evidence_collection.service_entries("app_registered", delivered, {"todo-list": "RUNNING"}, {}, True)
+    entries = evidence_collection.service_entries(
+        "app_registered",
+        delivered,
+        {"todo-list": "RUNNING"},
+        {},
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
+    )
 
     assert entries[0].status is CheckStatus.PASSED
 
@@ -536,11 +726,95 @@ def test_service_entries_flag_a_registry_row_no_program_supervises() -> None:
     delivered = (RegisteredApp(name="handmade", url="http://localhost:9000", is_preexisting=False, is_internal=False),)
 
     entries = evidence_collection.service_entries(
-        "app_registered", delivered, {"todo": "RUNNING"}, {"todo": "todo"}, True
+        "app_registered",
+        delivered,
+        {"todo": "RUNNING"},
+        {"todo": "todo"},
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
     )
 
     assert entries[0].status is CheckStatus.FAILED
     assert entries[0].reason == evidence_collection.REASON_NO_SUPERVISED_PROGRAM
+
+
+def test_a_config_the_capture_could_not_read_whole_makes_the_preexisting_set_unknown() -> None:
+    """supervisord runs what the config declares, so a status listing with no declared program is a
+    read that missed part of the config -- the shape a template layout the capture does not follow
+    has from here.
+
+    The config half has no fallback, so treating that as "the config registers nothing" drops a
+    template app that had not registered its port yet out of BOTH halves of the pre-existing set,
+    and the harness then scores it as the agent's own deliverable. Unknown is the honest answer.
+    """
+    main_config_only = "[supervisord]\nnodaemon=true\n\n[include]\nfiles = supervisord.conf.d/*.conf\n"
+    running = "system_interface RUNNING pid 7, uptime 0:01:00\nbrowser RUNNING pid 9, uptime 0:01:00\n"
+
+    output = workspace_state_output(_REGISTRY_TOML, services=running, supervisord=main_config_only)
+
+    assert evidence_collection.parse_registry_snapshot(output) is None
+
+
+def test_a_workspace_that_genuinely_supervises_nothing_still_reads_as_empty() -> None:
+    # The whole difficulty is that a broken read and an app-free workspace both produce an empty
+    # join. What tells them apart is supervisord's own status listing, so an empty one must stay a
+    # measurement rather than become an error.
+    assert not evidence_collection.is_supervisord_capture_broken("", {})
+    assert evidence_collection.is_supervisord_capture_broken("", {"system_interface": "RUNNING"})
+
+
+def test_a_config_that_declares_programs_registering_nothing_is_not_called_broken() -> None:
+    # Keyed on declared sections, not on forward_port.py calls: a template whose apps all register
+    # their ports from inside their own entry points declares programs and registers none of them,
+    # and that is a workspace the capture read correctly.
+    self_registering = "[program:terminal]\ncommand=terminal-app\n\n[program:chat]\ncommand=chat-app\n"
+
+    assert not evidence_collection.parse_supervised_registrations(self_registering)
+    assert not evidence_collection.is_supervisord_capture_broken(self_registering, {"terminal": "RUNNING"})
+
+
+def test_an_event_listener_alone_is_enough_to_show_the_config_was_read() -> None:
+    # supervisorctl lists event listeners alongside programs, so a config declaring only one has
+    # been read whole even though it declares no [program:*].
+    listener_only = "[eventlistener:oom-tag-backstop]\ncommand=oom-tag-backstop\n"
+
+    assert not evidence_collection.is_supervisord_capture_broken(listener_only, {"oom-tag-backstop": "RUNNING"})
+
+
+def test_service_entries_call_an_unreadable_config_an_error_not_an_unsupervised_app() -> None:
+    # "Nothing supervises this app" is a real shortfall of the minds-app contract and scores against
+    # the agent. A config the capture could not read whole cannot support that claim about any row,
+    # so it is the instrument failing, under the same rule as an unreadable registry.
+    #
+    # A multi-port app's extra origin row is the one that gets there: the same-name fallback carries
+    # a row whose program shares its name, but `shop-admin` is owned by `dashboard` and the config
+    # join is the only thing that knows it.
+    delivered = (
+        RegisteredApp(name="shop-admin", url="http://localhost:9001", is_preexisting=False, is_internal=False),
+    )
+
+    unreadable = evidence_collection.service_entries(
+        "app_registered",
+        delivered,
+        {"dashboard": "RUNNING"},
+        {},
+        is_services_readable=True,
+        is_supervisord_conf_readable=False,
+    )
+    read_whole = evidence_collection.service_entries(
+        "app_registered",
+        delivered,
+        {"dashboard": "RUNNING"},
+        {},
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
+    )
+
+    assert unreadable[0].status is CheckStatus.ERROR
+    assert unreadable[0].reason == evidence_collection.REASON_SUPERVISORD_CONF_UNREADABLE
+    # Same inputs, a config that was read: now the row really is unsupervised, and that is the agent's.
+    assert read_whole[0].status is CheckStatus.FAILED
+    assert read_whole[0].reason == evidence_collection.REASON_NO_SUPERVISED_PROGRAM
 
 
 def test_service_entries_resolve_a_program_named_differently_from_the_row() -> None:
@@ -549,7 +823,12 @@ def test_service_entries_resolve_a_program_named_differently_from_the_row() -> N
     )
 
     entries = evidence_collection.service_entries(
-        "app_registered", delivered, {"dashboard": "RUNNING"}, {"shop-admin": "dashboard"}, True
+        "app_registered",
+        delivered,
+        {"dashboard": "RUNNING"},
+        {"shop-admin": "dashboard"},
+        is_services_readable=True,
+        is_supervisord_conf_readable=True,
     )
 
     assert entries[0].status is CheckStatus.PASSED
@@ -1085,25 +1364,27 @@ def _worker_rules(
         ScriptedExecRule(
             "MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(worker_listing_output(listing_json)))]
         ),
+        ScriptedExecRule("mngr transcript {}".format(WORKER_AGENT_ID), [ok_result(mngr_exec_json(capture_output))]),
         ScriptedExecRule("mngr transcript {}".format(WORKER_NAME), [ok_result(mngr_exec_json(capture_output))]),
         *_collector_rules(transcript_capture=transcript_capture),
     ]
 
 
 def test_worker_capture_command_brings_out_the_document_stream_and_report() -> None:
-    command = evidence_collection.worker_capture_command(WORKER_NAME, CHAT_WORK_DIR, WORKER_TASK_FILE)
+    command = evidence_collection.worker_capture_command(WORKER_NAME, WORKER_AGENT_ID, CHAT_WORK_DIR, WORKER_TASK_FILE)
 
-    assert "mngr transcript crystallize-todo --headless --format atif --output" in command
-    assert "mngr transcript crystallize-todo --headless --format jsonl >" in command
-    # A destroyed worker's stream comes from the newest preserved directory of its name.
-    assert '/preserved/"crystallize-todo"--"*/' in command
+    assert "mngr transcript {} --preserved --headless --format atif --output".format(WORKER_AGENT_ID) in command
+    assert "mngr transcript {} --preserved --headless --format jsonl >".format(WORKER_AGENT_ID) in command
+    assert "/preserved/" not in command
+    # Each part retries without the flag, so an mngr too old to know it still answers.
+    assert "|| mngr transcript {} --headless --format atif --output".format(WORKER_AGENT_ID) in command
+    assert "|| mngr transcript {} --headless --format jsonl >".format(WORKER_AGENT_ID) in command
     # The report is read from the lead's side, at the path the task file's frontmatter names.
     assert "finish_report_path" in command
     assert "/home/user/workspace/data/.tasks/harden/crystallize-todo/task.md" in command
     assert (
         command.index("document_exit")
         < command.index("stream_exit")
-        < command.index("preserved")
         < command.index("report_path")
         < command.index("report_exit")
     )
@@ -1111,11 +1392,11 @@ def test_worker_capture_command_brings_out_the_document_stream_and_report() -> N
 
 
 def test_worker_capture_command_skips_the_report_when_the_launch_named_no_task_file() -> None:
-    assert "finish_report_path" not in evidence_collection.worker_capture_command("w", CHAT_WORK_DIR, "")
+    assert "finish_report_path" not in evidence_collection.worker_capture_command("w", "agent-w", CHAT_WORK_DIR, "")
 
 
 def test_worker_capture_command_reads_an_absolute_task_file_as_written() -> None:
-    command = evidence_collection.worker_capture_command("w", CHAT_WORK_DIR, "/home/user/tasks/task.md")
+    command = evidence_collection.worker_capture_command("w", "agent-w", CHAT_WORK_DIR, "/home/user/tasks/task.md")
 
     assert " /home/user/tasks/task.md " in command
     assert CHAT_WORK_DIR + "//" not in command
@@ -1148,13 +1429,8 @@ def test_parse_worker_listing_folds_every_lifecycle_state(raw_state: str, expect
     assert entries[1].state.value == expected
 
 
-def test_preserved_worker_id_reads_the_directory_basename() -> None:
-    assert evidence_collection.preserved_worker_id("/home/user/.mngr/preserved/w--agent-abc/", "w") == "agent-abc"
-    assert evidence_collection.preserved_worker_id("/home/user/.mngr/preserved/other--agent-abc/", "w") == ""
-
-
 def test_collector_captures_a_settled_worker_the_chat_agent_launched(tmp_path: Path) -> None:
-    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", WORKER_TASK_FILE, ""))
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", WORKER_TASK_FILE, ""))
 
     collector, environment = _run_collector(
         tmp_path, _case_config(_authored()), rules, downloadable_content_by_source=worker_trial_downloads()
@@ -1176,7 +1452,7 @@ def test_collector_captures_a_settled_worker_the_chat_agent_launched(tmp_path: P
     assert (worker_dir / "reports" / "report.md").read_text().startswith("# Report")
     # The capture was resolved against the lead's work dir, and the directory was pulled once.
     capture_command = next(
-        command for command in environment.exec_commands if "mngr transcript {}".format(WORKER_NAME) in command
+        command for command in environment.exec_commands if "mngr transcript {}".format(WORKER_AGENT_ID) in command
     )
     assert CHAT_WORK_DIR + "/" + WORKER_TASK_FILE in capture_command
     assert any("mngr rsync" in command and "verification/workers/" in command for command in environment.exec_commands)
@@ -1185,11 +1461,9 @@ def test_collector_captures_a_settled_worker_the_chat_agent_launched(tmp_path: P
     assert all("worker" not in entry.entry_id for entry in collector.manifest().entries)
 
 
-def test_collector_captures_a_destroyed_worker_from_its_preserved_stream(tmp_path: Path) -> None:
-    # No agent answers to the name any more: the document command fails, the live stream is empty,
-    # and the preserved directory supplies both the stream and the worker's id.
-    preserved = "/home/user/.mngr/preserved/{}--{}/".format(WORKER_NAME, WORKER_AGENT_ID)
-    listing_without_worker = json.dumps(
+def _listing_without_the_worker(**extra: object) -> str:
+    """A listing that names only the chat agent, so a launched worker is absent from it."""
+    return json.dumps(
         {
             "agents": [
                 {
@@ -1199,36 +1473,107 @@ def test_collector_captures_a_destroyed_worker_from_its_preserved_stream(tmp_pat
                     "state": "WAITING",
                     "work_dir": CHAT_WORK_DIR,
                 }
-            ]
+            ],
+            **extra,
         }
     )
-    rules = _worker_rules(
-        listing_without_worker, worker_capture_output("1", "1", preserved, WORKER_TASK_FILE, "no such agent")
-    )
+
+
+@pytest.mark.parametrize(
+    ("is_listing_complete", "is_stream_captured", "expected"),
+    [
+        (True, True, "destroyed"),
+        (True, False, "unknown"),
+        (False, True, "unknown"),
+        (False, False, "unknown"),
+    ],
+)
+def test_an_unlisted_worker_is_destroyed_only_on_a_complete_listing_with_a_stream(
+    is_listing_complete: bool, is_stream_captured: bool, expected: str
+) -> None:
+    state = evidence_collection._state_of_unlisted_worker(is_listing_complete, is_stream_captured)
+
+    assert state.value == expected
+
+
+@pytest.mark.parametrize(
+    ("listing_json", "expected"),
+    [
+        ('{"agents": [], "errors": []}', False),
+        ('{"agents": [], "errors": ["provider unreachable"]}', True),
+        # The bare-array shape `parse_worker_listing` also reads a listing in.
+        ("[]", False),
+        # Bodies that carry no agents at all: they cannot speak for an agent they do not name.
+        ("not json at all", True),
+        ("null", True),
+        ('"a string"', True),
+    ],
+)
+def test_listing_reports_errors_trusts_only_the_shapes_a_listing_is_read_in(listing_json: str, expected: bool) -> None:
+    assert evidence_collection.listing_reports_errors(listing_json) is expected
+
+
+@pytest.mark.parametrize(
+    "listing_output",
+    [
+        # mngr answered in part: --on-error continue reports the agents it reached and a non-zero exit.
+        worker_listing_output(_listing_without_the_worker(), list_exit="1"),
+        worker_listing_output(_listing_without_the_worker(errors=["provider unreachable"])),
+    ],
+)
+def test_collector_will_not_call_a_worker_destroyed_on_a_partial_listing(listing_output: str, tmp_path: Path) -> None:
+    rules = [
+        ScriptedExecRule("MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(listing_output))]),
+        ScriptedExecRule(
+            "mngr transcript {}".format(WORKER_NAME),
+            [ok_result(mngr_exec_json(worker_capture_output("0", "0", WORKER_TASK_FILE, "")))],
+        ),
+        *_collector_rules(transcript_capture=transcript_capture_output("0", "0", "")),
+    ]
 
     collector, _environment = _run_collector(
         tmp_path,
         _case_config(_authored()),
         rules,
-        downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
+        downloadable_content_by_source=worker_trial_downloads(),
+    )
+
+    # The worker is absent from a listing that could not see everything, which says nothing about it.
+    assert collector.worker_captures[0].state.value == "unknown"
+
+
+def test_collector_records_a_worker_missing_from_a_read_listing_as_destroyed(tmp_path: Path) -> None:
+    # A complete listing does not hold the worker, so the stream the preservation-aware capture
+    # still produced came from mngr's archive; the identity comes from the captured document.
+    rules = _worker_rules(_listing_without_the_worker(), worker_capture_output("0", "0", WORKER_TASK_FILE, ""))
+
+    collector, environment = _run_collector(
+        tmp_path,
+        _case_config(_authored()),
+        rules,
+        downloadable_content_by_source=worker_trial_downloads(),
     )
 
     capture = collector.worker_captures[0]
-    assert (capture.agent_id, capture.agent_type, capture.state.value) == (WORKER_AGENT_ID, "", "destroyed")
-    assert capture.document.failure_reason == evidence_collection.REASON_TRANSCRIPT_COMMAND_FAILED
-    assert "no such agent" in capture.document.failure_detail
+    assert (capture.agent_id, capture.agent_type, capture.state.value) == (WORKER_AGENT_ID, "claude", "destroyed")
+    assert capture.document.host_path is not None
     assert capture.stream.host_path is not None
     assert capture.report.host_path is not None
+    # No listed agent supplied an id, so the command resolved the launch name.
+    assert any(
+        "mngr transcript {} --preserved".format(WORKER_NAME) in command for command in environment.exec_commands
+    )
 
 
 def test_collector_captures_a_worker_by_name_when_the_listing_fails(tmp_path: Path) -> None:
-    # The bridge could not run the listing: the worker is still captured by name, with nothing the
-    # listing would have said about it, and its task file is resolved against the default repo root.
+    # The bridge could not run the listing: the worker is still captured by name, its identity and
+    # type come from the captured document instead, its state stays unknown because no listing could
+    # speak for it, and its task file is resolved against the default repo root.
     rules = [
         ScriptedExecRule("MINDS_EVALS_SECTION:list_exit", [failed_result()]),
         ScriptedExecRule(
             "mngr transcript {}".format(WORKER_NAME),
-            [ok_result(mngr_exec_json(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")))],
+            [ok_result(mngr_exec_json(worker_capture_output("0", "0", WORKER_TASK_FILE, "")))],
         ),
         *_collector_rules(),
     ]
@@ -1238,7 +1583,7 @@ def test_collector_captures_a_worker_by_name_when_the_listing_fails(tmp_path: Pa
     )
 
     capture = collector.worker_captures[0]
-    assert (capture.agent_id, capture.agent_type, capture.state.value) == ("", "", "unknown")
+    assert (capture.agent_id, capture.agent_type, capture.state.value) == (WORKER_AGENT_ID, "claude", "unknown")
     assert capture.document.host_path is not None
     assert capture.stream.host_path is not None
     capture_command = next(
@@ -1248,7 +1593,7 @@ def test_collector_captures_a_worker_by_name_when_the_listing_fails(tmp_path: Pa
 
 
 def test_collector_records_a_worker_the_transfer_could_not_bring_over(tmp_path: Path) -> None:
-    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", "", ""))
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", ""))
     # The transcript downloads are there, but nothing under the workers directory is.
     downloads = {
         BOX_COMMON_TRANSCRIPT_PATH: atif_stream_jsonl_with_worker_launch(),
@@ -1269,7 +1614,7 @@ def test_collector_records_a_report_that_was_named_but_not_there(tmp_path: Path)
     # The task file names a report path, but nothing is at it: the worker never reported.
     rules = _worker_rules(
         worker_listing_json("WAITING"),
-        worker_capture_output("0", "0", "", WORKER_TASK_FILE, "cp: cannot stat reports", report_exit="1"),
+        worker_capture_output("0", "0", WORKER_TASK_FILE, "cp: cannot stat reports", report_exit="1"),
     )
 
     collector, _environment = _run_collector(
@@ -1286,7 +1631,7 @@ def test_collector_records_a_worker_whose_directory_could_not_be_pulled(tmp_path
     # The file pulls succeed (the chat transcript comes out), only the workers directory rsync fails.
     rules = [
         ScriptedExecRule("mngr rsync ws-1:/tmp/minds-evals-verification/workers/ ", [failed_result()]),
-        *_worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", "", "")),
+        *_worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", "")),
     ]
 
     collector, _environment = _run_collector(
@@ -1299,7 +1644,7 @@ def test_collector_records_a_worker_whose_directory_could_not_be_pulled(tmp_path
 
 
 def test_collector_records_workers_as_timed_out_once_the_budget_is_gone(tmp_path: Path) -> None:
-    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", "", WORKER_TASK_FILE, ""))
+    rules = _worker_rules(worker_listing_json("WAITING"), worker_capture_output("0", "0", WORKER_TASK_FILE, ""))
 
     collector, environment = _run_collector(
         tmp_path,
@@ -1386,7 +1731,7 @@ def test_collector_records_a_launch_past_the_count_cap_once(tmp_path: Path) -> N
     collector, environment = _run_collector(
         tmp_path,
         _case_config(_authored()),
-        _capped_worker_rules(worker_capture_output("1", "0", "", "", "")),
+        _capped_worker_rules(worker_capture_output("1", "0", "", "")),
         downloadable_content_by_source=downloads,
     )
 
@@ -1410,7 +1755,7 @@ def test_collector_follows_a_workers_workers_to_the_round_cap(tmp_path: Path) ->
     collector, environment = _run_collector(
         tmp_path,
         _case_config(_authored()),
-        _capped_worker_rules(worker_capture_output("1", "0", "", "", "")),
+        _capped_worker_rules(worker_capture_output("1", "0", "", "")),
         downloadable_content_by_source=downloads,
     )
 
@@ -1457,7 +1802,9 @@ def test_the_oracle_flow_log_carries_every_record_kind() -> None:
     # so a reader path it never exercises is a path nothing green ever proves.
     case = _case_config(
         _authored(
-            ui_flows=[{"name": "add-complete-delete", "steps": "Add 'buy milk'.", "expect": "'buy milk' is visible."}]
+            ui_flows=[
+                {"name": "add-complete-delete", "actions": "Add 'buy milk'.", "expect": "'buy milk' is visible."}
+            ]
         )
     )
 
@@ -1484,11 +1831,15 @@ def test_oracle_evidence_inventory_satisfies_declared_file_globs() -> None:
 
 
 _FLOWS = [
-    {"name": "add-complete-delete", "steps": "Add 'buy milk'. Delete 'walk dog'.", "expect": "'buy milk' is visible."},
+    {
+        "name": "add-complete-delete",
+        "actions": "Add 'buy milk'. Delete 'walk dog'.",
+        "expect": "'buy milk' is visible.",
+    },
 ]
 _TWO_FLOWS = [
     *_FLOWS,
-    {"name": "persistence", "steps": "Add 'persist me'. Reload.", "expect": "'persist me' survived."},
+    {"name": "persistence", "actions": "Add 'persist me'. Reload.", "expect": "'persist me' survived."},
 ]
 _PAGE_SNAPSHOT = "- textbox 'Add a task'\n- button 'Add'"
 
@@ -1499,6 +1850,7 @@ def _step_result(
     detail: str = "",
     snapshot: str = _PAGE_SNAPSHOT,
     screenshot_path: str = "/logs/agent/verification/flows/add_complete_delete/step_000.png",
+    reaction: StepReaction = StepReaction.SETTLED,
 ) -> ExecResult:
     """What the box-side step script prints: one JSON object describing the step's outcome."""
     return ok_result(
@@ -1511,6 +1863,9 @@ def _step_result(
                 "title": "Todo",
                 "snapshot": snapshot,
                 "screenshot_path": screenshot_path,
+                # An action that never landed never got as far as watching the page, so the script
+                # cannot report a reaction whatever this stands in for.
+                "reaction": (reaction if is_ok else StepReaction.UNOBSERVED).value,
             }
         )
     )
@@ -1716,13 +2071,15 @@ def test_the_next_decision_is_told_when_an_action_changed_nothing(tmp_path: Path
     # click feedback is a CSS focus wash). Without the observed fact in its history, the agent has
     # re-tried such a click to the step cap, reasoning each time that it must have progressed.
     agent = ScriptedVerificationAgent(actions=[click_action(), click_action(), done_action()], readings=[reading()])
+    rules = _executor_rules(step=_step_result(reaction=StepReaction.NONE))
 
-    _collector, _environment = _run_flow_collector(tmp_path, agent)
+    _collector, _environment = _run_flow_collector(tmp_path, agent, rules)
 
-    # The default scripted step returns the same page every time, so the first click was a silent
-    # no-op and the second decision must be told so. It reaches the history inside the step's own
-    # entry, beside the prediction it is contradicting, rather than as a line of its own.
-    assert any(ui_flows.UNCHANGED_STATE_SUMMARY in entry for entry in agent.histories[1])
+    # The scripted step returns the same page every time and reports that the DOM never moved, so
+    # the first click was a dead control and the second decision must be told so. It reaches the
+    # history inside the step's own entry, beside the prediction it is contradicting, rather than
+    # as a line of its own.
+    assert any(ui_flows.NO_REACTION_SUMMARY in entry for entry in agent.histories[1])
 
 
 def test_a_step_that_changed_the_page_leaves_no_no_change_note(tmp_path: Path) -> None:
@@ -1738,7 +2095,7 @@ def test_a_step_that_changed_the_page_leaves_no_no_change_note(tmp_path: Path) -
 
 
 def test_collector_records_a_flow_that_ran_as_completed_whatever_the_app_showed(tmp_path: Path) -> None:
-    # Trial time records that the declared steps were carried out; whether the app ended up in the
+    # Trial time records that the declared actions were carried out; whether the app ended up in the
     # state the `expect` describes is the grade-time judge's call, from this evidence. Recording a
     # verdict here as well would be a second ruling on the same question, made with less to go on.
     agent = ScriptedVerificationAgent(actions=[done_action()], readings=[reading("the task never appeared")])
@@ -1787,7 +2144,7 @@ def test_collector_keeps_going_when_an_action_does_not_land(tmp_path: Path) -> N
     collector, environment = _run_flow_collector(tmp_path, agent, rules)
 
     entry = _flow_entries(collector)[0]
-    # The flow still carried out its declared steps, so it completed; what the failed action means
+    # The flow still carried out its declared actions, so it completed; what the failed action means
     # for the `expect` is for the judge, which reads the error the log records below.
     assert entry.status is CheckStatus.PASSED
     log = environment.uploaded_content_by_target["/logs/agent/verification/flows/add_complete_delete/log.jsonl"]

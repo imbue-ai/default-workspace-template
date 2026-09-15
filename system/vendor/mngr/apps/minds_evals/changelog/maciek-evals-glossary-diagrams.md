@@ -1,0 +1,3 @@
+Adds five mermaid diagrams to the minds-evals glossary (`apps/minds_evals/docs/glossary.md`), each placed at the top of the section whose terms it draws: a trial's timeline from bring-up through the conversation and evidence phase to the verifier, how eval config, dataset, job, trial and harness config nest, where each part of a trial runs (harbor process, box, nested workspace, verifier container) and the mechanisms between them, how the reward dimensions compose, and where each of the four kinds of "step" lives.
+
+The diagrams use the same mermaid theme and colour classes as the root README's diagrams, so they render on GitHub without any extra tooling.

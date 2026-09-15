@@ -15,9 +15,10 @@ collect_ignore = ["datasets", "jobs"]
 # The ROOT pytest run loads the conftests under this app too: `testpaths = ["apps/*"]` hands pytest
 # this directory as an explicit argument, and the root conftest's `collect_ignore_glob` stops it
 # from collecting the files below but not from descending the directories, so every conftest it
-# meets on the way is imported. The root venv has no harbor, and nearly every `imbue.minds_evals`
-# module imports it, so a conftest here may import from this package only through a stdlib-only
-# module such as `template_loading.py`; anything else aborts every root-level run at collection.
+# meets on the way is imported. So every import at the top of a conftest here must resolve in the
+# root venv, which has no harbor -- and nearly every `imbue.minds_evals` module imports harbor.
+# `imbue/minds_evals/conftest.py` states the full bar; an import that misses it aborts every
+# root-level run at collection.
 
 
 @pytest.fixture

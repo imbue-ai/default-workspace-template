@@ -7,6 +7,13 @@ verifier. It replaces a bespoke pre-harbor harness; every config that harness ac
 unchanged, and the schema is a superset of it: a config that adopts a goal entry (below) runs here
 only.
 
+The vocabulary this README uses (case, trial, arm, box, harbor step versus flow step, verifier
+versus verification agent, and the rest) is defined in the [glossary](docs/glossary.md). Keep it
+current in the same PR as the change: a new term gets an entry naming the module, class or key
+that carries it, a rename updates or retires its entry, and a word that acquires a second meaning
+goes into the glossary's collisions section. An entry marked *Earmarked* names a term already
+slated to change, so do not build new names on it.
+
 ## How a trial works
 
 1. The task's environment is a **box**: a full Minds computer (the adapted box Dockerfile plus a
@@ -75,11 +82,11 @@ on which the trial gave up.
   `ANTHROPIC_BASE_URL` alongside it to sign workspaces in against a proxy instead of the Anthropic
   API directly; under `--ak proxy=true` it is ignored, because the driver signs the workspace in
   against its own in-box proxy.
-- A run on another provider lane also needs that lane's own key --
-  `OPENROUTER_API_KEY` on the `openrouter` lane, `<PROVIDER>_API_KEY` on the `api-key` lane. See
-  [Harness and model arms](#harness-and-model-arms). `ANTHROPIC_API_KEY` stays required whatever the
-  arm, because the decider, the judges and the UI-flow agent call the Anthropic API on every trial;
-  the lane's key is the *workspace's*, and is a separate concern from the harness's own spend.
+- A run on another provider lane also needs that lane's own key -- `OPENAI_API_KEY` on the `openai`
+  lane, `OPENROUTER_API_KEY` on the `openrouter` lane, `<PROVIDER>_API_KEY` on the `api-key` lane.
+  See [Harness and model arms](#harness-and-model-arms). `ANTHROPIC_API_KEY` stays required whatever
+  the arm, because the decider, the judges and the UI-flow agent call the Anthropic API on every
+  trial; the lane's key is the *workspace's*, and is a separate concern from the harness's own spend.
 - Always invoke harbor as `uv run --project apps/minds_evals harbor` (from the monorepo root; or
   plain `uv run harbor` from inside this directory). harbor is a pinned dependency of this app,
   which both fixes the version and makes the driver import path resolvable. A bare `uvx harbor`
@@ -198,8 +205,10 @@ against a dataset shares its one image build and one generation.
 The harness follows the **provider lane** the workspace is signed in on, because that is how the
 product itself decides it; the model, effort and speed tier are then set through the product's own
 model endpoint before turn 1. The lanes that can be signed in without a human are `anthropic` (the
-claude harness) and `api-key`, `openrouter` and `opencode-go` (all pi-coding). The `openai` lane
-(codex) needs a device-auth flow on a PTY, so it is not available here.
+claude harness), `openai` (codex), and `api-key`, `openrouter` and `opencode-go` (all pi-coding).
+Each of them offers a pasted-key sign-in, which is the only kind a run can drive; the workspace's
+one other lane, `google` (antigravity), offers only browser flows on a PTY and so needs a person at
+it.
 
 | kwarg | meaning | default |
 |---|---|---|
@@ -223,7 +232,8 @@ because the in-box proxy can only meter that one; see
 **The default harness config** is a lane and its credentials and nothing else: no `model`, no
 `effort`, no `fast`. It makes no switch and changes no setting of the workspace, so the chat runs
 exactly as the product ships it -- on claude the pinned model in fast mode, on pi-coding the
-provider's default at standard speed (`claude-opus-4-8` on an Anthropic key). It still records
+provider's default at standard speed (`claude-opus-4-8` on an Anthropic key), and on codex the first
+entry its picker would show, which moves with the codex version the template pins. It still records
 everything below; it simply requests nothing. A run with no harness flags at all is the default
 harness config on the `anthropic` lane, on whichever pair the dataset was generated from.
 
@@ -236,9 +246,14 @@ Model ids are the workspace's **catalog ids**, not API model names, and they dif
 (measured 2026-09-08). claude offers `fable[1m]`, `opus[1m]`, `sonnet[1m]` and `haiku`, with efforts
 `low`, `medium`, `high`, `xhigh` and `max`. pi-coding offers `<provider>/<model>` tags gated by the
 account's key -- `anthropic/claude-haiku-4-5`, `openrouter/<vendor>/<model>` -- with thinking levels
-`off` through `max` per model. The driver validates none of these strings itself: the endpoint's own
-400 is the validation, and the trial's reason quotes its detail (to 300 characters), so a typo in
-a catalog id is legible from the trial listing.
+`off` through `max` per model. codex offers whatever its account's catalog lists, which on an API
+key is the one bundled into the codex release the template pins, and so changes with that pin
+(codex 0.154.0, read 2026-09-13): `gpt-6-astra`, `gpt-5.6-sol` and `gpt-5.6-terra` with efforts
+`low` through `ultra`, `gpt-5.6-luna` with `low` through `max`, then `gpt-5.5` and `gpt-5.2` with
+efforts `low`, `medium`, `high` and `xhigh`. Its `fast` axis is the `priority` service tier, which
+the catalog offers per model: every id above has one except `gpt-5.2`. The driver validates none of these
+strings itself: the endpoint's own 400 is the validation, and the trial's reason quotes its
+detail (to 300 characters), so a typo in a catalog id is legible from the trial listing.
 
 ```bash
 DS=/tmp/minds-evals/datasets/small
@@ -255,29 +270,40 @@ just minds-evals-run $DS pi-haiku 3 --ak lane=api-key --ak key_provider=anthropi
 # pi-coding on OpenRouter
 OPENROUTER_API_KEY=... just minds-evals-run $DS pi-gpt-5-mini 3 --ak lane=openrouter \
   --ak model=openrouter/openai/gpt-5-mini --ak effort=medium
+# codex on the 5.6 line's frontier model, at that model's own default effort
+OPENAI_API_KEY=... just minds-evals-run $DS codex-sol-low 3 --ak lane=openai \
+  --ak model=gpt-5.6-sol --ak effort=low
+# codex on the 5.6 line's everyday model, at that model's own default effort
+OPENAI_API_KEY=... just minds-evals-run $DS codex-terra 3 --ak lane=openai \
+  --ak model=gpt-5.6-terra --ak effort=medium
 ```
 
 One dataset serves every harness config, and each run needs its own job name, because harbor refuses
-to reuse one.
+to reuse one. The `openai` lane also needs a workspace template that offers it a pasted-key sign-in,
+which default-workspace-template `main` does from `ea2fbc2cd` (2026-09-09) on: a dataset pinned to an
+older template (the `dwt_branch` its [eval config](#eval-config) pins, or `--dwt-ref` at generation)
+gets its sign-in refused on every trial, naming the lane.
 
 **The named harness configs** live in `configs/harness_configs.json`: `default`, `haiku`,
-`pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash` and `opus-standard`, each a name, an `is_nightly`
-flag and the kwargs above. It is the list the [scheduled CI](#scheduled-ci) composes its cells from,
-and the place to look for a config that is known to work -- an entry's kwargs are exactly the flags
-to append to a `just minds-evals-run` line to drive the same arm locally, and the entry's own name
-is a job name that says which arm the run was.
+`pi-haiku`, `pi-gpt-5-mini`, `pi-glm-4.7-flash`, `codex-sol-low`, `codex-terra`, `codex-astra-low`
+and `opus-standard`, each a name, an `is_nightly` flag and the kwargs above. It is the list the
+[scheduled CI](#scheduled-ci) composes its cells from, and the place to look for a config that is
+known to work -- an entry's kwargs are exactly the flags to append to a `just minds-evals-run`
+line to drive the same arm locally, and the entry's own name is a job name that says which arm the
+run was.
 
 ### The lane's key
 
 The driver reads the workspace's key from the variable `key_env` names. Left unset, it derives one:
-`ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENROUTER_API_KEY` on the `openrouter` lane, and
-`<KEY_PROVIDER>_API_KEY` on the `api-key` lane, upper-cased with dashes turned into underscores
-(`OPENAI_API_KEY`, `OPENROUTER_API_KEY`). The derivation is a convenience, not a contract with the
-workspace template: the template names the variable per provider and does not always follow the
-pattern (`google` reads `GEMINI_API_KEY`), and `opencode-go` has no derived default at all. Name the
-variable with `key_env` in those two cases. A variable that is unset stops the run at construction,
-naming the variable and the lane; a lane outside the table above is refused there too, and no
-`key_env` makes one runnable.
+`ANTHROPIC_API_KEY` on the `anthropic` lane, `OPENAI_API_KEY` on the `openai` lane,
+`OPENROUTER_API_KEY` on the `openrouter` lane, and `<KEY_PROVIDER>_API_KEY` on the `api-key` lane,
+upper-cased with dashes turned into underscores (`key_provider=openrouter` derives
+`OPENROUTER_API_KEY`, and `key_provider=ant-ling` derives `ANT_LING_API_KEY`). The derivation is a
+convenience, not a contract with the workspace template: the template names the variable per
+provider and does not always follow the pattern (`google` reads `GEMINI_API_KEY`), and
+`opencode-go` has no derived default at all. Name the variable with `key_env` in those two cases. A
+variable that is unset stops the run at construction, naming the variable and the lane; a lane
+outside the table above is refused there too, and no `key_env` makes one runnable.
 
 `just minds-evals-run` still requires only `ANTHROPIC_API_KEY` and does not learn about the other
 variables; the decider and the judges need it on every arm, and the driver's own check is what
@@ -356,16 +382,32 @@ to run and what it was observed running:
   changed, or the trial never sent a turn) records no models either, logs a warning, and leaves
   `is_model_confirmed` `null` as any other silence does.
 - `is_model_confirmed` is `true` when exactly one model was observed and it is the requested one,
-  under the harness's own naming (`haiku` reports as `claude-haiku-4-5-20251001`, and
-  `anthropic/claude-haiku-4-5` as `claude-haiku-4-5`). A config that named no model has nothing to
-  confirm, so every default-config trial records `null`. A config whose catalog id the naming table
-  cannot translate into a reported name (only a claude-shaped id can be untranslatable, since a
-  `<provider>/<model>` tag reports as itself minus its first segment), and a trial that observed no
-  model at all (its transcript was never captured, or it gave up before a turn), leave it `null` as
-  well, never `false`: silence is not evidence of a wrong model. On
-  a proxied `anthropic` trial the proxy's `per_model` is the ground truth and the confirmation is
-  computed from that instead -- the requested model has to be there, and every other row has to be
-  the greeting's, since the proxy cannot tell which turn served which request.
+  under the naming of the lane's harness -- and the lane is what picks the rule, since a bare `haiku`
+  and a bare `gpt-5.5` are the same shape and mean different things. On `anthropic` a catalog id is
+  an alias that a four-entry table translates (`haiku` reports as `claude-haiku-4-5-20251001`), and
+  an id the table does not carry is untranslatable. On the pi lanes a `<provider>/<model>` tag
+  reports as itself minus its first segment (`anthropic/claude-haiku-4-5` as `claude-haiku-4-5`), and
+  an id with no `/` is untranslatable. On `openai` a codex id reports as itself, so nothing there is
+  untranslatable. The comparison follows the lane too: a claude or pi name is matched by prefix,
+  because the harness decorates it (claude appends a release date), while a codex name is matched
+  exactly -- a config asking for `gpt-5.5` must not be confirmed by a chat that answered as
+  `gpt-5.5-mini`. A config that named no model has nothing to confirm, so every default-config trial
+  records `null`. An untranslatable id, and a trial that observed no model at all (its transcript was
+  never captured, or it gave up before a turn), leave it `null` as well, never `false`: silence is
+  not evidence of a wrong model. On a proxied `anthropic` trial the proxy's `per_model` is the ground
+  truth and the confirmation is computed from that instead -- the requested model has to be there,
+  and every other row has to be the greeting's, since the proxy cannot tell which turn served which
+  request.
+
+**A codex trial observes no model at all.** mngr's codex transcript emitter writes no per-step
+`model_name`, so a trial on the `openai` lane records `observed_models: []`, an empty
+`welcome_model`, and `is_model_confirmed: null` however well the switch went. Read
+`model_choice_switch` on such a trial: `applied` means the endpoint took the model the config asked
+for, and it is the only thing the harness config says about it. The workspace's own message feed does
+name the model each codex turn ran on -- it is the token count beside it that is missing -- so the
+trial's conversation carries a second record the harness config does not read. Such a trial cannot
+account for its spend either, for a separate reason and with a separate owner (see
+[Token and cost accounting](#token-and-cost-accounting)).
 
 A trial that silently ran on the wrong model is the failure worth catching, so read
 `is_model_confirmed` before reading a comparison. [`check-run`](#checking-a-finished-run) fails a
@@ -376,11 +418,13 @@ loudly instead of skewing a comparison quietly.
 
 An arm changes the system under test, in either half. A run with `fast=false` is not comparable to
 a run that left the template's fast mode on -- which is what the default harness config does -- and
-a pi-coding run is not comparable to a claude run on any dimension but cost. Two arms that differ in
-both their pair and their harness config attribute nothing to either, so vary one at a time.
-Grading differs too: `harness_quality` is not scored on a harness other than claude, and the reward
-drops its share (see [Reward composition](#reward-composition)). Version or flag result sets at the
-arm, the same way they are versioned at the adoption of a goal entry.
+a pi-coding run is not comparable to a claude run on any dimension but cost. A codex run is not
+comparable on cost either: its spend is unknown rather than measured, so it belongs in no cost
+comparison at all (see [Token and cost accounting](#token-and-cost-accounting)). Two arms that
+differ in both their pair and their harness config attribute nothing to either, so vary one at a
+time. Grading differs too: `harness_quality` is not scored on a harness other than claude, and the
+reward drops its share (see [Reward composition](#reward-composition)). Version or flag result sets
+at the arm, the same way they are versioned at the adoption of a goal entry.
 
 ## Browsing results
 
@@ -508,10 +552,12 @@ workspace can provide it:
   usage source, and the [arm](#what-the-arm-records) the trial ran on.
 - Background workers the agent launched through the launch-task skill (`create_worker.py launch
   --name <x>`, a separate mngr agent in the same workspace) are discovered from the launch commands
-  in its own stream, captured one by one (`mngr transcript` for a worker still in place, mngr's
-  preserved copy of the stream for one destroyed after finishing), and embedded in `trajectory.json`
-  under the launching call as ATIF `subagent_trajectories` with `subagent_kind: "mngr"` and an
-  `extra.worker` block. Launches are followed three levels deep: the chat agent's workers, their
+  in its own stream, captured one by one with a preservation-aware `mngr transcript` lookup (which
+  reaches a worker destroyed after finishing, and retries without it on a workspace mngr too old to
+  know the flag), and embedded in `trajectory.json` under the launching call as ATIF
+  `subagent_trajectories` with `subagent_kind: "mngr"` and an `extra.worker` block. A worker a
+  complete listing no longer names, whose stream the capture still produced, is recorded as
+  destroyed; anything less conclusive is recorded as unknown. Launches are followed three levels deep: the chat agent's workers, their
   workers, and theirs. The report each worker pushed back to its lead is captured beside it.
 - `metadata.trajectory_source` (`workspace`, `hand_built`, or `none`) and
   `metadata.transcript_capture` say which shape the file has and, when the capture failed, why;
@@ -672,7 +718,7 @@ expectations, and a step's `min_reward` decides whether the trial may go on.
       "expectations": {
         "outcome": "The running roadmap reflects the updated export.",
         "deliverable": {"kind": "minds-app"},
-        "ui_flows": [{"name": "updated-content", "steps": "Open the roadmap.", "expect": "The new milestones are shown."}]
+        "ui_flows": [{"name": "updated-content", "actions": "Open the roadmap.", "expect": "The new milestones are shown."}]
       }
     }
   ]
@@ -960,7 +1006,7 @@ kinds of row:
   complete alone: the app registry as it actually stood (the only source that sees a template app
   registering its port from inside the program its supervisord entry runs -- its own entry point,
   or a launcher script -- as the terminal and the owner-exec and vm-exec daemons do), unioned with
-  the names the workspace's own `system/supervisord.conf` registers through its `forward_port.py`
+  the names the workspace's own supervisord config registers through its `forward_port.py`
   invocations (`--name`, or the block's own program name for a `--manifest` registration), which
   covers a template app whose service had not registered its port yet. Measuring beats a hand-maintained
   name list, so the set stays correct for a dwt fork or branch that ships extra apps. The manifest
@@ -980,10 +1026,30 @@ nothing). The registry and service capture still happens either way.
 
 A registry name is not a supervisord program name -- a multi-port app registers extra origin rows
 (`<name>-admin`) that no program owns. The service-health check joins a row to its program through
-the `forward_port.py` invocations inside each `[program:*]` block of `system/supervisord.conf`, and
-falls back to a program named exactly like the row, which covers a service that registers its port
-at runtime instead of from the config. A row with neither is recorded as `no_supervised_program`:
-the app was started by hand and would not survive a restart.
+the `forward_port.py` invocations inside each `[program:*]` block of the workspace's supervisord
+config, and falls back to a program named exactly like the row, which covers a service that
+registers its port at runtime instead of from the config. A row with neither is recorded as
+`no_supervised_program`: the app was started by hand and would not survive a restart.
+
+That config is `system/supervisord.conf` plus every `system/supervisord.conf.d/*.conf` beside it:
+the default template declares each program in its own drop-in there, and its layout test pins
+that directory as the one its `[include]` glob names, so the capture reads the directory by name
+rather than parsing the glob. Reading the main file alone finds no `[program:*]` at all, so the
+join is empty. The service-health check mostly survives that on its same-name fallback, but a multi-port
+app's extra origin rows (`<name>-admin`) own no program of their own and are recorded
+`no_supervised_program`. The costlier half is `resolve_preexisting_registrations`, which has no
+fallback: a template app whose service had not registered its port when the snapshot was taken
+then appears in neither half of the pre-existing set, so it is scored as something the agent
+delivered. An app-free workspace gives the same empty answer, so neither shortfall could be
+told from a true negative -- which is what the capture checks for separately. supervisord runs
+what its config declares, so a `supervisorctl status` listing that names programs while the
+captured config declares no `[program:*]` or `[eventlistener:*]` section at all is a read that
+missed part of the config. The pre-existing set is then **unknown** rather than one that
+silently omits a template app, and a row whose owning program could not be resolved is recorded
+`error` with reason `supervisord_conf_unreadable` rather than `no_supervised_program` -- an
+unmeasured row instead of one scored against the agent. The check keys on declared sections
+rather than on `forward_port.py` calls, so a template whose apps all register their ports at
+runtime, and whose config therefore registers nothing, is not mistaken for a broken read.
 
 ## UI flows
 
@@ -995,7 +1061,7 @@ end condition, and it is the only level that checks the actual promise in the pr
 "ui_flows": [
   {
     "name": "persistence",
-    "steps": "Open the app. Add a task named 'persist me'. Reload the page.",
+    "actions": "Open the app. Add a task named 'persist me'. Reload the page.",
     "expect": "'persist me' is still visible after the reload."
   }
 ]
@@ -1021,16 +1087,52 @@ origin, session cookie -- rather than under it. The browser is armed before its 
 with the trial's pre-auth cookie, scoped the way the proxy scopes its own: to the workspace's whole
 origin family, so a flow stays authenticated wherever under it the app sends the browser. Elements
 are addressed by ARIA role and accessible name, taken from Playwright's `aria_snapshot`, which is
-also what the flow log records verbatim for the judge.
+also what the flow log records verbatim for the judge. An element the tree lists with no name at all
+(a checkbox with no label, say) is addressed by the ref the snapshot prints for it (`[ref=e9]`); the
+step script checks the ref against a fresh snapshot of the page before acting on it and refuses one
+that no longer sits on the role the agent read, so a page that changed in between costs the flow one
+recorded step rather than a click on whatever inherited the number. Such a step carries the ref on
+its `log.jsonl` line as `target_ref`, and the judge's digest marks it and says what the mark means: a
+control with no accessible name is an accessibility defect of the delivered app, recorded for a
+measure of its own and, unless the declared actions or the `expect` call for accessibility, not
+counted against the flow.
+
+A decision the agent makes that cannot be acted on -- an action that does not exist, an element
+addressed by neither name nor ref -- ends the flow as an instrument error, with the decision's own
+words in the driver log, in the manifest entry's detail, and on a `(no usable action)` step in the
+flow log that shows the page the decision was made on.
 
 The verification agent's spend is reported as `metadata.verifier_agent_usage`, beside
 `decider_usage` and never folded into the agent's own cost fields. It runs on the decider's model by
 default; `--ak verifier_model=...` overrides it.
 
-**Trial time records completion, never achievement.** A flow whose declared steps the agent
+**Trial time records completion, never achievement.** A flow whose declared actions the agent
 carried out is `passed` whatever the page showed; nothing here evaluates the `expect`. A step that
 fails mid-flow -- an element that is not there, a click that hit nothing -- is recorded on that step
 and the flow carries on, because the page below shows the truth and the grade-time judge reads it.
+
+**A step waits for the page to react before it reads it.** After a click, a key press, typing or a
+scroll, the step script watches the DOM through a MutationObserver installed in an isolated world
+of its own (the way Playwright's own instrumentation runs: it shares the document but none of the
+page's JavaScript, so the app cannot see it), waits for the first mutation and then for the DOM to
+go quiet, and only then captures the ARIA tree and the screenshot. A render the app defers -- a
+framework batching updates -- is therefore captured by the step that caused it. A click or key
+press waits up to 3 s for the page to start reacting; typing and scrolling, which oblige the app to
+nothing, up to 1 s; a page that has started reacting gets 5 s to go quiet. What the watch saw is
+the step's `reaction` (`settled`, `none`, `still_changing`, or `unobserved` for the steps that do
+not watch: an `open` or a `reload`, which wait on the network instead, and an action that failed),
+recorded on the `log.jsonl` line beside the prose the agent reads. That prose tells a dead control
+(`nothing happened`) from one that acknowledged the gesture without a visible result (`the page
+reacted but shows nothing new`: a highlight, an armed state), which call for opposite next moves.
+A scroll is the one action whose own effect neither signal can show, so it reports `nothing
+happened` even when it worked; the agent's rules exempt it from the rule against repeating an
+action, since repeating a scroll is how it reaches further down a page.
+
+**The agent waits rather than reloads.** A `wait` action performs nothing and gives the page up to
+10 s to change, for a pending state such as a spinner or a "saving" notice. The agent reloads only
+where the declared actions say to; a reload the flow did not ask for is its last resort for an app
+that has stopped responding, and the judge's flow digest reads it as evidence against the app,
+since an app that needs a full reload to show its own state has already failed.
 
 **Grading a product with its own machinery cuts both ways**, so app failures and executor failures
 are kept apart. A flow is `failed`, and counts against the agent, when the workspace kept it from
@@ -1054,6 +1156,52 @@ drift. It diverges deliberately in two ways: it adds a chosen `--port` (`forward
 and it drops `--embedder-origin` and `--reverse`, which shape only how minds *embeds* the app
 (`forward_instance_test.py`).
 
+### The flow lab
+
+A flow can be driven against a **local app, with no box, no workspace and no proxy**: the same
+step script the box uploads and runs, exec'd one process per step under this project's own
+interpreter, against a headless Chromium launched here with the box's flags, on a static app served
+from a directory on a local port. What the lab drops is the box transport and the proxy in front of
+the app; everything below the loop is the code a trial runs, so an executor change measured here is
+measured on the instrument. It needs playwright's Chromium once:
+
+```bash
+cd apps/minds_evals && uv run python -m playwright install chromium
+```
+
+`flow_lab_apps/` holds the apps the lab's tests drive. `todo/` is a to-do list whose query string
+dials in the page behaviours a real app can have: `?latency=<ms>` applies every change that many
+milliseconds after the action (the shape of any framework that batches updates), `?pending=<ms>`
+answers every change with a "Saving..." status first and applies it that many milliseconds later
+(the shape of an app talking to a backend), `?arm_delete=1` makes delete a two-click control whose
+first click is acknowledged by a highlight and nothing else, `?dedupe=ci` drops a case-insensitive
+duplicate without saying so, `?ticker=1` keeps a clock repainting so the DOM never goes quiet, and
+`?unnamed=1` gives each task's checkbox no label association, so the tree lists it with no name and
+the ref is the only handle the page offers.
+Its "Start over" link is a real navigation, for the step that has to survive one -- immediately, or,
+under `?pending=<ms>`, only after the click has been acknowledged, which is the redirect that lands
+while the step is still watching the page it is about to lose. `test_flow_lab.py` pins what the
+step script, the flow loop and the state summariser report for each of those against a scripted
+agent; a test that documents a defect the executor still has is an expected failure naming the
+issue, and stays one until the executor catches up. An app taken out of a trial -- the
+deliverable bundle under `verification/`, checked out into a directory -- is driven the same way,
+which is how a flow that went wrong in a trial becomes a fixture.
+
+The real verification agent is run against a local app with:
+
+```bash
+uv run --project apps/minds_evals minds-evals flow-lab \
+  --app apps/minds_evals/flow_lab_apps/todo --page '?latency=300' \
+  --actions "Add a task named 'walk dog'. Mark it complete. Delete 'walk dog'." \
+  --expect "'walk dog' is gone" --output /tmp/flow-lab/todo
+```
+
+It prints each step as the agent's history would carry it, reports the agent's spend, and leaves
+`log.jsonl` and the step frames in `--output`, shaped as a trial's flow directory. `--model`
+selects the agent's model (the decider's default otherwise), and `ANTHROPIC_API_KEY` is required.
+The exit code says whether the flow completed its declared actions; whether the `expect` holds is not
+decided here, exactly as at trial time.
+
 ## Scoring
 
 All judging happens inside rewardkit, in the verifier container, over the recorded transcript and
@@ -1076,27 +1224,35 @@ claude harness ran; cases that declare `expectations` add `outcome`.
   likert judge (`main_harness_success` over the lead agent, `worker_harness_success` over every
   launched worker) and a programmatic criterion over the counted failure signatures
   (`main_harness_soundness`, `worker_harness_soundness`). `render_harness_report.py` holds what
-  counts as a failure and why the dimension is separate. Every criterion in every dimension is framed
-  so a higher number is a better outcome.
-  It is **scored on the claude harness only**. The report the judges score is built by claude-shaped
-  rules -- a skill invocation is the `Skill` tool, and two of the six signatures name claude's own
-  skill and plugin vocabulary -- so on a pi-coding trajectory it comes out thin because those rules
-  found nothing, not because the harness held, and
+  counts as a failure and why the dimension is separate. Every criterion in every dimension is
+  framed so a higher number is a better outcome. It is **scored on the claude harness only**. The
+  report the judges score is built by claude-shaped rules -- a skill invocation is the `Skill` tool,
+  and two of the six signatures name claude's own skill and plugin vocabulary -- so on a pi-coding
+  trajectory it comes out thin because those rules found nothing, not because the harness held, and
   the judge is told that a report with nothing in it is a 5: a false pass rather than a measurement.
-  (The shell-level signatures are harness-blind and still fire, which is why the reports themselves
-  are written whatever ran.) The verifier reads the harness off the graded trajectory: a captured
-  document's own `agent.name`, and otherwise -- the driver's hand-built fallback names the *driver*
-  there, and mngr writes `unknown` when it cannot resolve the agent -- the `harness` the
-  [arm block](#what-the-arm-records) recorded. A trajectory that says neither is graded as claude,
-  so a trial that merely lost its transcript keeps every dimension it always had. On any other
-  harness the judge is not called and the dimension is left out of the trial's scores. Every trial's
-  `reward-details.json` carries a `harness` block naming what ran and whether the dimension applied,
-  so a dimension missing from the scores reads as one that does not apply here rather than one that
-  failed to emit. The judges still see the conversation itself: what they grade it on is the agent's
-  own messages, which carry no harness's vocabulary. The one place the judged transcript does read a
-  harness's tool names is its executing-tool scan, which lists each harness's spelling of the shell
-  (`Bash` and `BashOutput` on claude, `bash` on pi-coding) so that what a command printed reaches
-  the progress timeline whatever ran it.
+  (The shell-level signatures are harness-blind in what they match, so they still fire on a
+  pi-coding or a codex trajectory, which is why the reports themselves are written whatever ran. On
+  codex the scanned shell output is the only way in: mngr's codex converter records every tool
+  result with `is_error` false, a failed code-mode program included.) The verifier reads the harness
+  off the graded trajectory: a captured document's own `agent.name`, and otherwise -- the driver's
+  hand-built fallback names the *driver* there, and mngr writes `unknown` when it cannot resolve the
+  agent -- the `harness` the [arm block](#what-the-arm-records) recorded. A trajectory that says
+  neither is graded as claude, so a trial that merely lost its transcript keeps every dimension it
+  always had. On any other harness the judge is not called and the dimension is left out of the
+  trial's scores. Every trial's `reward-details.json` carries a `harness` block naming what ran and
+  whether the dimension applied, so a dimension missing from the scores reads as one that does not
+  apply here rather than one that failed to emit. The judges still see the conversation itself: what
+  they grade it on is the agent's own messages, which carry no harness's vocabulary. The one place
+  the judged transcript does read a harness's tool names is its executing-tool scan, which lists
+  each harness's spelling of the shell (`Bash` and `BashOutput` on claude, `bash` on pi-coding, and
+  on codex the code-mode `exec` tool plus the `wait` that returns a still-running program's output)
+  so that what a command printed reaches the progress timeline whatever ran it. codex runs its shell
+  from inside a JavaScript program, so the command text that `progress_timeline_was_read`, the
+  `S1=$(tk create --step ...)` title fallback and worker discovery look for is a string literal
+  inside that program: the verifier and the host-side worker scan read it out of every
+  `tools.exec_command(...)` and `tools.shell_command(...)` call, in any of JavaScript's three string
+  forms. A command the program assembles from variables at run time is not a literal and cannot be
+  recovered that way; a template literal is read with its `${...}` placeholders left in.
 - **`outcome`** (expectation cases only; the generator omits the verifier's `outcome/` directory
   otherwise, so rewardkit never emits a partial score for it) -- one criterion per declared check
   class (`app_registered`, `http_expectations_met`, `files_expectations_met`,
@@ -1107,7 +1263,7 @@ claude harness ran; cases that declare `expectations` add `outcome`.
   graded against the evolved ask.
 
 `ui_flows_completed` scores COMPLETION: the fraction of measurable flows that carried out their
-declared steps. It does not score whether the app did what a flow's `expect` describes. That is the
+declared actions. It does not score whether the app did what a flow's `expect` describes. That is the
 judge's ruling, made from the step log and the screenshots. Trial time collects; grade time
 verifies.
 
@@ -1171,7 +1327,7 @@ re-run:
   it renders no progress blocks. Both the quality judge and the outcome judge read it.
 - `judge_flows_digest.txt` and a flat `judge_screenshots/` (from the flow evidence, which rewardkit
   cannot reach because it expands a listed directory exactly one level and never recurses). The
-  digest carries, per flow: the declared steps, the `expect` the judge is to rule on, the completion
+  digest carries, per flow: the declared actions, the `expect` the judge is to rule on, the completion
   status, the agent's own description of the final page (evidence, not a verdict), then every step's
   action, reasoning and page state. `judge_screenshots/` holds each flow's last four frames, up to
   24 in all, each under rewardkit's 1 MiB judge limit. Both are written unconditionally: rewardkit
@@ -1254,6 +1410,19 @@ Anthropic-only, so on any other [lane](#harness-and-model-arms) `--ak proxy=true
 construction rather than starting a proxy nothing would call. Non-Anthropic trials are priced from
 the transcript, which is the path above: their `is_speed_observed` stays `false` and their
 `is_cost_complete` follows the transcript rules.
+
+**A codex trial's cost is unknown, because there is nothing to price.** The workspace reports no
+token count for a codex turn: its chat app stamps `usage` on a claude message and leaves it null on
+a codex one, and this driver skips a message that reports no usage rather than counting it as zero.
+So the workspace agent's every token bucket in `usage.json` is `0` while its `cost_usd` is `null` --
+unknown, not free, which is the distinction that keeps a codex arm out of a cost comparison instead
+of dragging its average down. `is_cost_complete` is not the field that says so: it asks only whether
+delegated and worker traffic is accounted for, so it stays `true` on a codex trial. `cost_usd` being
+`null` is the whole signal, and a filter that reads `is_cost_complete` alone takes a codex trial for
+a complete measurement. Nothing in the trial is wrong, and the proxy that would meter the lane
+instead is refused there (see above). Read a codex trial for its conversation and its outcome
+scores, never for its spend. The decider's and the verification agent's own figures are unaffected:
+they call the Anthropic API directly and are metered by that client.
 
 **Fast mode changes the price, not the token counts.** Minds runs its claude chat agent in fast mode
 by default, and fast mode bills the same tokens at twice the standard rate. That default is what the
@@ -1366,8 +1535,10 @@ completion, gates, errored evidence, reward, judge scores, Modal environment, an
 SHAs. The `arm` cell holds the harness half of the arm, with the pair in the mngr and dwt columns
 beside it: the wrong-model reason when there is one, `-` when the trial recorded no arm at all, and
 otherwise the lane, the requested model (the word `default` when it asked for none) and, when one
-was requested, `confirmed` or `unconfirmed`: `anthropic haiku confirmed`,
-`api-key anthropic/claude-haiku-4-5 unconfirmed`, `anthropic default`. `--summary-json <path>` writes
+was requested, `confirmed` or `unconfirmed` -- or `not observable` on a lane whose harness names no
+model on a transcript step, where nothing could ever confirm one: `anthropic haiku confirmed`,
+`api-key anthropic/claude-haiku-4-5 unconfirmed`, `openai gpt-5.6-sol not observable`,
+`anthropic default`. `--summary-json <path>` writes
 the same rows as JSON with `is_passed`, `job_name`, `modal_environment_names` (exactly the list the
 cleanup below acts on), and the harness half as its own fields (`lane`, `requested_model`,
 `is_model_confirmed`, `wrong_model_reason`). An oracle run
@@ -1446,13 +1617,33 @@ nights is the pair of SHAs.
 
 `configs/harness_configs.json` is the checked-in list of named harness configs, and it is where the
 spend decision lives: every entry carries an `is_nightly` flag, and a schedule runs exactly the
-entries that set it. `default`, `haiku` and `pi-gpt-5-mini` are nightly; `pi-haiku`,
-`pi-glm-4.7-flash` and `opus-standard` are not, and run only when a dispatch names one. The file's
-order is the order the run's cells are decided in, and so the order of the grid's columns in the
-Slack report -- which is why arms worth reading against each other, `haiku` beside `pi-haiku`, are
-listed side by side. Everything else in an entry is one of the run line's own
-[kwargs](#harness-and-model-arms), with the same default an unset kwarg has, so `default` -- a lane
-and nothing more -- is the product exactly as it ships.
+entries that set it. `default`, `haiku`, `pi-gpt-5-mini`, `codex-sol-low` and `codex-terra` are
+nightly; `pi-haiku`, `pi-glm-4.7-flash`, `codex-astra-low` and `opus-standard` are not, and run only
+when a dispatch names one. The file's order is the order the run's cells are decided in, and so the
+order of the grid's columns in the Slack report -- which is why arms worth reading against each
+other, `haiku` beside `pi-haiku`, are listed side by side. Everything else in an entry is one of the
+run line's own [kwargs](#harness-and-model-arms), with the same default an unset kwarg has, so
+`default` -- a lane and nothing more -- is the product exactly as it ships.
+
+The codex configs name their model rather than leaving it unset, because codex has no fixed
+default: it sorts its catalog by the catalog's own priority and takes the first model the picker
+would show, so the model a config left unset would run on moves whenever the template's pinned
+codex version does (under codex 0.154.0 it is `gpt-6-astra`). Each then names the effort that
+model's own catalog entry defaults to, which is why they differ: `codex-sol-low` is `gpt-5.6-sol`
+at `low`, `codex-terra` is `gpt-5.6-terra` at `medium`, the same family's everyday model, and
+`codex-astra-low` is `gpt-6-astra` at `low`, the model and effort codex 0.154.0 picks for itself.
+The first two are nightly; `codex-astra-low` runs only when a dispatch names it. Each is the lane
+exercised at one price point, not a controlled comparison against the others: they differ in
+effort as well as model, and codex's effort ladder does not line up with claude's or pi-coding's
+rung for rung.
+
+Both nightly codex cells report on the **main** pair alone for as long as no release carries the
+template method they need. A nightly set is run against every pair, and the `openai` lane's
+pasted-key sign-in is newer than the `stable` channel's `minds-v<version>` tag, so a released-pair
+codex cell has its sign-in refused on every trial and reads as failed, naming the lane. It is the
+cell that fails and nothing else: the pair's other cells and the whole main pair are unaffected.
+Reading a red codex column on the released pair as a regression is the mistake to avoid until that
+tag carries [the template the lane needs](#harness-and-model-arms).
 
 A name matches `^[a-z0-9][a-z0-9.-]*$` (dots are in, because a model version is part of what names
 an arm), is at most 30 characters, is unique in the file and is never `oracle`: it labels a harbor
@@ -1638,8 +1829,9 @@ their own runs in; the staging Minds tier the box activates is reached over HTTP
 workspace is independent of it. A cell whose harness config reads its lane's key from another
 variable fetches `mngr/ci/<key_env>` on top of that, and only that cell does -- a lane's key is
 never exported into a cell that does not sign in on that lane. So the `pi-gpt-5-mini` cell needs
-`mngr/ci/OPENROUTER_API_KEY` to exist in Vault; without it that cell fails at the fetch step, before
-a box is built, and the other cells are unaffected.
+`mngr/ci/OPENROUTER_API_KEY` to exist in Vault, and the two codex cells need
+`mngr/ci/OPENAI_API_KEY`; without it such a cell fails at the fetch step, before a box is built,
+and the other cells are unaffected.
 
 ### CI environments and cleanup
 

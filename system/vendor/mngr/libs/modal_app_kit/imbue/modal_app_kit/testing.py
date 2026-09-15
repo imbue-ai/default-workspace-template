@@ -8,10 +8,15 @@ deployed container.
 """
 
 import ast
+import importlib.util
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+from pydantic import Field
+
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.modal_image_requirements import ImageRequirementsExportError
 from imbue.imbue_common.modal_image_requirements import image_requirements_export_command
 from imbue.imbue_common.modal_image_requirements import image_requirements_path
@@ -151,3 +156,129 @@ def modal_functions_missing_logging_bootstrap(path: Path) -> list[str]:
         and _is_modal_function(node)
         and not _first_statement_is_configure_logging(node)
     ]
+
+
+def _is_asgi_app_function(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether the function carries a ``@modal.asgi_app(...)`` decorator (the web-endpoint marker)."""
+    for decorator in node.decorator_list:
+        callee = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr == "asgi_app"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "modal"
+        ):
+            return True
+    return False
+
+
+def _app_function_decorator_keywords(node: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """The keyword names passed to the function's ``@app.function(...)`` decorator."""
+    for decorator in node.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        callee = decorator.func
+        if (
+            isinstance(callee, ast.Attribute)
+            and callee.attr == "function"
+            and isinstance(callee.value, ast.Name)
+            and callee.value.id == "app"
+        ):
+            return {keyword.arg for keyword in decorator.keywords if keyword.arg is not None}
+    return set()
+
+
+def web_functions_missing_region_pin(path: Path) -> list[str]:
+    """The names of the entrypoint's web functions whose ``@app.function`` passes no ``region``.
+
+    A web function (one decorated ``@modal.asgi_app``) serves user-facing
+    requests, so it must pin ``region=WEB_FUNCTION_REGION``; an unpinned one is
+    scheduled anywhere in Modal's fleet and every request pays the distance.
+    Crons and spawned workers are deliberately not checked.
+    """
+    tree = ast.parse(path.read_text())
+    return [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _is_asgi_app_function(node)
+        and "region" not in _app_function_decorator_keywords(node)
+    ]
+
+
+class ShippedImport(FrozenModel):
+    """One import statement reachable from a Modal app's shipped source, for the import-boundary tests."""
+
+    importer: str = Field(
+        description=(
+            "The shipped module that makes the import: its path relative to the mounted package's parent "
+            "directory for the app's own modules, or its dotted module name when reached through another "
+            "shipped package"
+        )
+    )
+    module_name: str = Field(description="The absolute module name imported")
+    is_target_mount_excluded: bool = Field(
+        description=(
+            "Whether the import names a module of a shipped package whose FILE the source-mount rule leaves out "
+            "(tests, testing.py, conftest.py, the entrypoint) -- importable locally, absent in the container"
+        )
+    )
+
+
+def _module_file_or_none(module_name: str) -> Path | None:
+    """The .py file behind a module name in the deploying interpreter (a package's __init__.py), or None."""
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        return None
+    if spec is None:
+        return None
+    if spec.submodule_search_locations:
+        init_path = Path(spec.submodule_search_locations[0]) / "__init__.py"
+        return init_path if init_path.exists() else None
+    if spec.origin is not None and spec.origin.endswith(".py"):
+        return Path(spec.origin)
+    return None
+
+
+def _shipped_package_root_or_none(module_name: str, shipped_packages: Sequence[str]) -> Path | None:
+    for package_name in shipped_packages:
+        if is_module_within_package(module_name, package_name):
+            spec = importlib.util.find_spec(package_name)
+            if spec is not None and spec.submodule_search_locations:
+                return Path(spec.submodule_search_locations[0])
+    return None
+
+
+def transitive_shipped_imports(package_dir: Path, shipped_packages: Sequence[str]) -> list[ShippedImport]:
+    """Every import reachable from the package's shipped modules, following imports INTO other shipped packages.
+
+    A shipped module may import another shipped package (``imbue.modal_app_kit``,
+    ``imbue.imbue_common``); whatever THAT module imports must also exist in the
+    container, so the walk resolves each such import to its file (via
+    ``importlib.util.find_spec`` in the deploying interpreter, the same resolution
+    the mount uses) and keeps going. Files the mount rule excludes are reported,
+    not followed: importing them works locally and fails in the container.
+    """
+    shipped_imports: list[ShippedImport] = []
+    visited: set[Path] = set()
+    pending = [(str(path.relative_to(package_dir.parent)), path) for path in shipped_module_files(package_dir)]
+    while pending:
+        importer, path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        for module_name in sorted(imported_module_names(path)):
+            is_target_mount_excluded = False
+            shipped_root = _shipped_package_root_or_none(module_name, shipped_packages)
+            target_path = _module_file_or_none(module_name) if shipped_root is not None else None
+            if shipped_root is not None and target_path is not None:
+                is_target_mount_excluded = shipped_python_source_ignore(target_path.relative_to(shipped_root))
+                if not is_target_mount_excluded:
+                    pending.append((module_name, target_path))
+            shipped_imports.append(
+                ShippedImport(
+                    importer=importer, module_name=module_name, is_target_mount_excluded=is_target_mount_excluded
+                )
+            )
+    return shipped_imports

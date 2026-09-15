@@ -39,6 +39,43 @@ _WORKER_LAUNCH_PATTERN: Final[re.Pattern[str]] = re.compile(
 _LAUNCH_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"--name(?:=|\s+)(?P<name>\S+)")
 _LAUNCH_TASK_FILE_PATTERN: Final[re.Pattern[str]] = re.compile(r"--task-file(?:=|\s+)(?P<task_file>\S+)")
 _MNGR_CREATE_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bmngr\s+create\s+(?P<name>[^\s-]\S*)")
+# codex runs its shell from inside "code mode": one tool call carries a whole JavaScript program that
+# reaches the real tools as `tools.<fn>({...})`, so the command is a string literal inside that
+# program rather than an argument of the call. One program may batch several calls, and the shell
+# function is spelled two ways -- `tools.exec_command({cmd})` or `tools.shell_command({command})`,
+# depending on the codex version and whether its unified exec is on -- so both are read. The
+# surrounding program is arbitrary JavaScript rather than JSON, which is why the literal is read out
+# with a regex instead of being parsed -- the same approach the chat app's own codex tool labels take.
+# This parse is mirrored by the CODE_MODE_* patterns and commands_in in
+# templates/tests/verifier/render_judge_transcript.py, which recovers the same command text inside the
+# verifier container. The two cannot be shared: that file runs on stdlib and rewardkit alone, with no
+# imbue package. Keep the two in step.
+_CODE_MODE_CALL_PATTERN: Final[re.Pattern[str]] = re.compile(r"tools\.([A-Za-z_]\w*)\s*\(")
+# Each shell function's own command key, followed by any of the three JavaScript string literal forms.
+# A call is read under its function's key only: the other key can appear inside the command text
+# itself (`python3 -c "print({'command': 'ls'})"`), and would match there. Each form consumes a
+# backslash escape as a unit, so a command containing an escaped quote is captured whole rather than
+# clipped there. A template literal keeps its `${...}` placeholders as written. The lookbehind keeps a
+# longer key that merely ends in `cmd` from matching.
+_CODE_MODE_COMMAND_PATTERN_BY_FUNCTION: Final[dict[str, re.Pattern[str]]] = {
+    function: re.compile(
+        r"(?<![\w$])[\"']?" + key + r"[\"']?\s*:\s*"
+        r"(?:\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'|`((?:\\.|[^`\\])*)`)"
+    )
+    for function, key in (("shell_command", "command"), ("exec_command", "cmd"))
+}
+# The JavaScript string escapes worth undoing in a captured command. An unknown escape keeps the
+# character after the backslash, which is harmless here and cannot raise the way a decode can.
+_JS_UNESCAPES: Final[dict[str, str]] = {
+    '"': '"',
+    "'": "'",
+    "`": "`",
+    "\\": "\\",
+    "/": "/",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+}
 # A `$NAME` or `${NAME}` anywhere in a value, and the `NAME=value` assignment earlier in the same
 # command that gives it its worth (the skill's snippet writes the name and the task-file path with
 # such a variable).
@@ -196,6 +233,13 @@ class EmbeddedWorker(FrozenModel):
 
     launch: WorkerLaunch = Field(description="The launch the worker answers to")
     document: dict[str, Any] = Field(description="The worker's ATIF document, as a JSON-shaped dict")
+    agent_id: str = Field(
+        description=(
+            "The mngr agent id the capture resolved, empty when it resolved none. Distinct from the "
+            "document's trajectory_id, which falls back to a launch-derived stand-in so an "
+            "unidentified worker's evidence is still embedded."
+        )
+    )
     state: WorkerState = Field(description="The worker's state at collection time")
     report_path: str = Field(description="Bundle-relative path of the captured reports directory, or empty")
 
@@ -362,12 +406,72 @@ def _launched_worker(command: str) -> tuple[str, str] | None:
 
 
 @pure
+def _unescaped_js_string(value: str) -> str:
+    """A captured JavaScript string literal with its escapes undone."""
+    if "\\" not in value:
+        return value
+    characters: list[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value):
+            characters.append(_JS_UNESCAPES.get(value[index + 1], value[index + 1]))
+            index += 2
+        else:
+            characters.append(value[index])
+            index += 1
+    return "".join(characters)
+
+
+@pure
+def _code_mode_commands(program: str) -> list[str]:
+    """Every shell command a code-mode program runs, in the order the program runs them.
+
+    Each call's arguments are read from the slice between its own ``tools.`` and the next one, so a
+    program that batches a shell call behind another tool's call reads the command belonging to the
+    shell call rather than the first command literal anywhere in the text.
+    """
+    calls = list(_CODE_MODE_CALL_PATTERN.finditer(program))
+    commands: list[str] = []
+    for index, call in enumerate(calls):
+        pattern = _CODE_MODE_COMMAND_PATTERN_BY_FUNCTION.get(call.group(1))
+        if pattern is None:
+            continue
+        end = calls[index + 1].start() if index + 1 < len(calls) else len(program)
+        match = pattern.search(program[call.end() : end])
+        if match is not None:
+            commands.append(_unescaped_js_string(next(group for group in match.groups() if group is not None)))
+    return commands
+
+
+@pure
+def _shell_commands_in_call(tool_call: Mapping[str, Any]) -> list[str]:
+    """The shell commands one tool call runs, whichever shape its harness uses.
+
+    claude and pi-coding pass the command as an argument of the call; codex passes a code-mode
+    program under ``_raw`` and runs the shell from inside it.
+    """
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return []
+    for key in ("command", "cmd"):
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return [value]
+    program = arguments.get("_raw")
+    return _code_mode_commands(program) if isinstance(program, str) else []
+
+
+@pure
 def scan_worker_launches(steps: Sequence[Mapping[str, Any]], depth: int, lead_name: str) -> list[WorkerLaunch]:
     """The workers an agent's steps launched, in launch order, one per name.
 
     Reads either a captured stream's ``step`` records or a document's ``steps``: both carry the
     agent's tool calls with their complete ``arguments``. A name launched twice yields one entry, for
     its first launch, since one agent answers to the name at collection time.
+
+    One call can launch several workers, because a codex code-mode program batches several shell
+    calls into one tool call. They all take that call's id, which is what the embedding step attaches
+    them by, and it holds a list of refs per result for exactly that reason.
     """
     launches: list[WorkerLaunch] = []
     seen_names: set[str] = set()
@@ -377,23 +481,20 @@ def scan_worker_launches(steps: Sequence[Mapping[str, Any]], depth: int, lead_na
         for tool_call in step.get("tool_calls") or []:
             if not isinstance(tool_call, Mapping):
                 continue
-            arguments = tool_call.get("arguments")
-            command = arguments.get("command") if isinstance(arguments, Mapping) else None
-            if not isinstance(command, str):
-                continue
-            launched = _launched_worker(command)
-            if launched is None or launched[0] in seen_names:
-                continue
-            seen_names.add(launched[0])
-            launches.append(
-                WorkerLaunch(
-                    name=launched[0],
-                    tool_call_id=str(tool_call.get("tool_call_id") or ""),
-                    task_file=launched[1],
-                    depth=depth,
-                    lead_name=lead_name,
+            for command in _shell_commands_in_call(tool_call):
+                launched = _launched_worker(command)
+                if launched is None or launched[0] in seen_names:
+                    continue
+                seen_names.add(launched[0])
+                launches.append(
+                    WorkerLaunch(
+                        name=launched[0],
+                        tool_call_id=str(tool_call.get("tool_call_id") or ""),
+                        task_file=launched[1],
+                        depth=depth,
+                        lead_name=lead_name,
+                    )
                 )
-            )
     return launches
 
 
@@ -472,7 +573,7 @@ def graft_worker_trajectories(document: Mapping[str, Any], workers: Sequence[Emb
                     "subagent_kind": MNGR_SUBAGENT_KIND,
                     "worker": {
                         "name": worker.launch.name,
-                        "agent_id": worker_id,
+                        "agent_id": worker.agent_id,
                         "state": worker.state.value,
                         "lead_agent_id": document.get("session_id"),
                         "launch_tool_call_id": worker.launch.tool_call_id,

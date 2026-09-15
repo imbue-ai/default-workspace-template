@@ -20,11 +20,14 @@ import pytest
 
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
+from imbue.minds.deployment_tests.helpers import LEASE_MAX_BOX_GENERATION
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
-_HTTP_TIMEOUT_SECONDS = 60.0
+# The storage recheck lists the account's R2 objects and rewrites Cloudflare
+# token policies inline; one such round trip exceeded 60s on 2026-09-13.
+_HTTP_TIMEOUT_SECONDS = 120.0
 
 # A comfortably-large max_total_bucket_bytes the grant-cycle test restores
 # the shared user's entitlement to (both mid-test and on any failure path).
@@ -123,6 +126,9 @@ def test_ally_plan_requires_partner_access(
 
 
 @pytest.mark.timeout(300)
+# Each recheck is a live Cloudflare round trip (object listing plus token policy
+# rewrites) whose latency the test does not control.
+@pytest.mark.flaky
 def test_storage_cleanup_grant_cycle(
     shared_env: Callable[[str], SharedEnvHandle],
     verified_user: VerifiedUserHandle,
@@ -211,6 +217,7 @@ def test_lease_quota_check_passes_through_for_under_quota_account(
                 "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderTestKeyForQuotaCheck",
                 "host_name": "quota-check-probe",
                 "attributes": {"cpus": 999999},
+                "max_box_generation": LEASE_MAX_BOX_GENERATION,
             },
         )
         if response.status_code == 200:

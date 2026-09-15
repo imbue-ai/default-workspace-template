@@ -43,6 +43,7 @@ from imbue.minds.desktop_client.api_v1 import create_api_v1_blueprint
 from imbue.minds.desktop_client.assist_chat import ASSIST_SKILL_NAME
 from imbue.minds.desktop_client.assist_chat import build_assist_chat_message
 from imbue.minds.desktop_client.auth import AuthStoreInterface
+from imbue.minds.desktop_client.backend_resolver import AgentDisplayInfo
 from imbue.minds.desktop_client.backend_resolver import BackendResolverInterface
 from imbue.minds.desktop_client.backend_resolver import MngrCliBackendResolver
 from imbue.minds.desktop_client.backup_env_store import read_canonical_env
@@ -52,6 +53,7 @@ from imbue.minds.desktop_client.cookie_manager import verify_session_cookie
 from imbue.minds.desktop_client.create_attempt_rows import CreateAttemptRow
 from imbue.minds.desktop_client.create_attempt_rows import derive_create_attempt_rows
 from imbue.minds.desktop_client.data_types import BackupAccessState
+from imbue.minds.desktop_client.data_types import CloudRowKeyState
 from imbue.minds.desktop_client.data_types import RemoteWorkspaceKind
 from imbue.minds.desktop_client.data_types import RemoteWorkspaceTile
 from imbue.minds.desktop_client.dek_store import is_account_unlocked
@@ -73,6 +75,7 @@ from imbue.minds.desktop_client.latchkey.handlers.predefined import LatchkeyPerm
 from imbue.minds.desktop_client.latchkey.machine_operations import MachineOperator
 from imbue.minds.desktop_client.latchkey.pending_requests import PendingRequestsInterface
 from imbue.minds.desktop_client.latchkey.response_events import RequestStatus
+from imbue.minds.desktop_client.machine_stop_kinds import MachineStopKindTracker
 from imbue.minds.desktop_client.mind_liveness import compute_mind_liveness_by_agent_id
 from imbue.minds.desktop_client.minds_config import DEFAULT_NOTIFICATION_STYLE
 from imbue.minds.desktop_client.minds_config import DEFAULT_UPDATE_WINDOW
@@ -89,6 +92,7 @@ from imbue.minds.desktop_client.responses import make_json_error_response
 from imbue.minds.desktop_client.responses import make_redirect_response
 from imbue.minds.desktop_client.responses import make_response
 from imbue.minds.desktop_client.responses import safe_local_redirect_path
+from imbue.minds.desktop_client.session_store import AccountSession
 from imbue.minds.desktop_client.session_store import MultiAccountSessionStore
 from imbue.minds.desktop_client.sharing_handler import delete_share_for_host
 from imbue.minds.desktop_client.skill_chat import SkillSupport
@@ -1178,6 +1182,9 @@ def _build_workspace_list(
     # (see ``_visible_create_attempt_rows``). A parameter -- not read from the app
     # state here -- so this builder stays callable outside a request context.
     create_attempt_rows: Sequence[CreateAttemptRow] | None = None,
+    # Why each stopped cloud machine is stopped (host id -> kind), from the
+    # stop-kind tracker; None (or an absent host) leaves the entry's kind empty.
+    stop_kind_by_host_id: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     """Build a JSON-serializable list of workspaces from the backend resolver.
 
@@ -1256,10 +1263,18 @@ def _build_workspace_list(
         if liveness is not None:
             entry["supports_shutdown"] = "true"
             entry["liveness"] = liveness.value
+            stop_kind = stop_kind_by_host_id.get(entry["host_id"]) if stop_kind_by_host_id is not None else None
+            if stop_kind is not None:
+                entry["stop_kind"] = stop_kind
         if session_store is not None:
             account = session_store.get_account_for_workspace(str(aid))
             if account is not None:
                 entry["account"] = account.email
+                # A cloud machine is listed on every device signed in to its
+                # account, but only opens from a device holding its SSH key.
+                key_state = _cloud_row_key_state(session_store.record_store, account, info)
+                if key_state is not None:
+                    entry["key_state"] = key_state.value
         workspaces.append(entry)
     # In-flight / interrupted / failed create attempts ride in the same list,
     # badged via ``create_attempt_state``, so they sit inline with the finished
@@ -1286,6 +1301,29 @@ def _build_workspace_list(
             remote_entry["account"] = owner.email
         workspaces.append(remote_entry)
     return workspaces
+
+
+def _cloud_row_key_state(
+    record_store: WorkspaceRecordStore | None,
+    account: AccountSession,
+    info: AgentDisplayInfo | None,
+) -> CloudRowKeyState | None:
+    """Why this device cannot open a live cloud row, or None when it can (or the row is not a cloud one)."""
+    if record_store is None or info is None or info.provider_name is None:
+        return None
+    if not is_cloud_provider_kind(str(info.provider_name)):
+        return None
+    key_path = record_store.imbue_cloud_host_ssh_key_path(str(account.email), str(info.host_id))
+    if key_path is None or key_path.is_file():
+        return None
+    user_id = str(account.user_id)
+    if is_account_unlocked(record_store.paths, user_id):
+        return CloudRowKeyState.SYNCING
+    # The same test the unlock banner runs, so the chip's "enter your master
+    # password" never shows without the banner to enter it in, or vice versa.
+    if user_id in record_store.locked_account_user_ids([user_id]):
+        return CloudRowKeyState.LOCKED
+    return CloudRowKeyState.UNAVAILABLE
 
 
 def _build_requests_payload(
@@ -1639,12 +1677,14 @@ def _ui_workspace_entry_from_legacy_dict(entry: Mapping[str, str]) -> UiWorkspac
         is_network_dependent=entry.get("is_network_dependent", "true") == "true",
         supports_shutdown=entry.get("supports_shutdown") == "true",
         liveness=entry.get("liveness", ""),
+        stop_kind=entry.get("stop_kind", ""),
         account=entry.get("account", ""),
         create_attempt_state=entry.get("create_attempt_state", ""),
         is_remote=entry.get("is_remote") == "true",
         remote_kind=entry.get("remote_kind", ""),
         location=entry.get("location", ""),
         backup_access=entry.get("backup_access", ""),
+        key_state=entry.get("key_state", ""),
     )
 
 
@@ -1668,6 +1708,7 @@ def _derive_ui_workspaces_message(
     backend_resolver: BackendResolverInterface,
     session_store: MultiAccountSessionStore | None,
     paths: InstallationPaths | None,
+    machine_stop_kind_tracker: MachineStopKindTracker | None,
 ) -> UiWorkspacesMessage:
     with app.app_context():
         rows = _build_workspace_list(
@@ -1675,6 +1716,9 @@ def _derive_ui_workspaces_message(
             session_store,
             tracker=get_state().system_interface_health_tracker,
             create_attempt_rows=_visible_create_attempt_rows(backend_resolver),
+            stop_kind_by_host_id=(
+                machine_stop_kind_tracker.stop_kind_by_host_id() if machine_stop_kind_tracker is not None else None
+            ),
         )
         restorable_ids = [str(aid) for aid in backend_resolver.list_restorable_workspace_ids()] + [
             str(hid) for hid in backend_resolver.list_restorable_workspace_host_ids()
@@ -1831,9 +1875,16 @@ class _LegacyUiStateDeriver(MutableModel):
     connectivity_detector: ConnectivityDetector | None = Field(
         frozen=True, description="This device's own connectivity condition"
     )
+    machine_stop_kind_tracker: MachineStopKindTracker | None = Field(
+        default=None,
+        frozen=True,
+        description="Why each stopped cloud machine is stopped, for the list's badge and band",
+    )
 
     def derive_workspaces(self) -> UiWorkspacesMessage:
-        return _derive_ui_workspaces_message(self.flask_app, self.backend_resolver, self.session_store, self.paths)
+        return _derive_ui_workspaces_message(
+            self.flask_app, self.backend_resolver, self.session_store, self.paths, self.machine_stop_kind_tracker
+        )
 
     def derive_accounts(self) -> UiAccountsMessage:
         return _derive_ui_accounts_message(self.flask_app, self.session_store)
@@ -2069,6 +2120,7 @@ def _create_ui_state_publisher(
     workspace_update_service: WorkspaceUpdateService | None,
     minds_config: MindsConfig | None,
     connectivity_detector: ConnectivityDetector | None,
+    machine_stop_kind_tracker: MachineStopKindTracker | None,
 ) -> UiStatePublisher:
     """Build the channel publisher from the same derivation helpers the legacy SSE uses."""
     deriver = _LegacyUiStateDeriver(
@@ -2081,6 +2133,7 @@ def _create_ui_state_publisher(
         workspace_update_service=workspace_update_service,
         minds_config=minds_config,
         connectivity_detector=connectivity_detector,
+        machine_stop_kind_tracker=machine_stop_kind_tracker,
     )
     return UiStatePublisher(
         broadcaster=broadcaster,
@@ -2155,6 +2208,7 @@ def create_desktop_client(
     mngr_caller: MngrCaller | None = None,
     sync_scheduler: WorkspaceSyncScheduler | None = None,
     connectivity_detector: ConnectivityDetector | None = None,
+    sleep_tracker: SleepTracker | None = None,
 ) -> Flask:
     """Create the bare-origin minds Flask application.
 
@@ -2222,6 +2276,14 @@ def create_desktop_client(
     ui_channel_broadcaster = UiChannelBroadcaster()
     resolved_mngr_host_dir = mngr_host_dir if mngr_host_dir is not None else Path.home() / ".mngr"
     workspace_operation_registry = InMemoryWorkspaceOperationRegistry()
+    # Why each stopped cloud machine is stopped, read from the connector: the
+    # badge and band decorate the state discovery reports with it, and the
+    # unattended dispatch asks it live before starting a machine.
+    machine_stop_kind_tracker = MachineStopKindTracker(
+        backend_resolver=backend_resolver,
+        session_store=session_store,
+        imbue_cloud_cli=imbue_cloud_cli,
+    )
     # Registered on the tracker's stuck edge below, once the state it reads
     # exists; built here because the update machinery's apply window hands an
     # expired window back to it.
@@ -2236,6 +2298,7 @@ def create_desktop_client(
             mngr_forward_port=mngr_forward_port,
             mngr_forward_preauth_cookie=mngr_forward_preauth_cookie,
             connectivity_detector=connectivity_detector,
+            read_cloud_lifecycle=machine_stop_kind_tracker.read_lifecycle,
             # An update's apply takes the services down on purpose; only the
             # apply window can tell that from a wedge.
             should_decline_dispatch=lambda agent_id: _is_recovery_declined_by_an_update(app, agent_id),
@@ -2271,7 +2334,10 @@ def create_desktop_client(
         workspace_update_service=workspace_update_service,
         minds_config=minds_config,
         connectivity_detector=connectivity_detector,
+        machine_stop_kind_tracker=machine_stop_kind_tracker,
     )
+    # The publisher exists only now; the tracker's changes re-derive the list through it.
+    machine_stop_kind_tracker.on_change = ui_publisher.notify_change
 
     # The durable notification feed behind the channel's notifications frame,
     # reconciled by the notifications derive on every publish tick. Its OS
@@ -2317,6 +2383,7 @@ def create_desktop_client(
         sync_scheduler=sync_scheduler,
         ui_channel_broadcaster=ui_channel_broadcaster,
         ui_publisher=ui_publisher,
+        machine_stop_kind_tracker=machine_stop_kind_tracker,
         notification_feed=notification_feed,
         workspace_operation_registry=workspace_operation_registry,
         workspace_update_service=workspace_update_service,
@@ -2330,6 +2397,9 @@ def create_desktop_client(
     # directly by their producers via publish_one_shot.
     if isinstance(backend_resolver, MngrCliBackendResolver):
         backend_resolver.add_on_change_callback(ui_publisher.notify_change)
+        # A cloud machine leaving RUNNING is the moment its kind starts to
+        # matter; the wake lists it at once rather than a poll later.
+        backend_resolver.add_on_change_callback(machine_stop_kind_tracker.request_refresh)
     if system_interface_health_tracker is not None:
         _health_tracker_for_ui = system_interface_health_tracker
 
@@ -2348,18 +2418,22 @@ def create_desktop_client(
         _health_tracker_for_ui.add_on_change_callback(_publish_ui_health_edge)
 
         if root_concurrency_group is not None:
-            # Both edges feed the refresher: the health one raises a refresh, and
-            # the connectivity one is what releases a refresh raised at a moment
-            # the reload it asks for could not have survived.
+            # Three edges feed the refresher: the health one raises a refresh,
+            # and the connectivity one and the wake each open the window that
+            # holds a refresh raised at a moment the reload it asks for could
+            # not have survived.
             workspace_view_refresher = WorkspaceViewRefresher(
                 publisher=ui_publisher,
                 backend_resolver=backend_resolver,
                 connectivity_detector=connectivity_detector,
+                sleep_tracker=sleep_tracker,
                 concurrency_group=root_concurrency_group,
             )
             _health_tracker_for_ui.add_on_recovery_callback(workspace_view_refresher)
             if connectivity_detector is not None:
                 connectivity_detector.add_on_recovery_callback(workspace_view_refresher.on_connectivity_recovered)
+            if sleep_tracker is not None:
+                sleep_tracker.add_on_wake_callback(workspace_view_refresher.on_wake)
             # The tracker fires its on-change callbacks before its stuck-edge ones,
             # so the band is already showing STUCK by the time this dispatches.
             assert unattended_recovery_dispatcher is not None, "built above from the same tracker and group"

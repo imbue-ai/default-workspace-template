@@ -92,3 +92,9 @@ class CiMatrixError(MindsEvalsError, ValueError):
     is not shaped as the resolve job writes it."""
 
     ...
+
+
+class FlowBrowserError(MindsEvalsError, RuntimeError):
+    """The flow lab's local Chromium never came to serve CDP, or exited before it did."""
+
+    ...

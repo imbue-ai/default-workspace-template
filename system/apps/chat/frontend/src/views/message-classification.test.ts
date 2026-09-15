@@ -4,10 +4,12 @@ import {
   isHiddenUserMessage,
   isNonBoundaryUserMessage,
   isSkillExpansionUserMessage,
+  isStatusUserMessage,
   isSystemChipUserMessage,
   resolutionOf,
   resolutionRequestIdOf,
 } from "./message-classification";
+
 import { UserMessageKind } from "./message-kinds";
 
 // The DETECTION cases (which content becomes which decision) live backend-side now, in
@@ -65,13 +67,35 @@ describe("classifyUserMessage", () => {
     });
     expect(c.kind).toBe(UserMessageKind.UserPrompt);
   });
+
+  it("maps display: status to StatusMessage with content as body", () => {
+    const c = classifyUserMessage({
+      content: "Context was compacted",
+      display: "status",
+    });
+    expect(c.kind).toBe(UserMessageKind.StatusMessage);
+    expect(c.body).toBe("Context was compacted");
+    expect(c.label).toBeNull();
+  });
+
+  it("maps display: status with display_body to StatusMessage with label and summary body", () => {
+    const c = classifyUserMessage({
+      content: "Context was compacted",
+      display: "status",
+      display_body: "Summary of earlier conversation",
+    });
+    expect(c.kind).toBe(UserMessageKind.StatusMessage);
+    expect(c.label).toBe("Context was compacted");
+    expect(c.body).toBe("Summary of earlier conversation");
+  });
 });
 
 describe("semantic helpers", () => {
-  it("isNonBoundaryUserMessage is true for every non-baseline kind", () => {
+  it("isNonBoundaryUserMessage is true for non-boundary kinds and false for prompt and status boundaries", () => {
     expect(isNonBoundaryUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(
       true,
     );
+    expect(isNonBoundaryUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isNonBoundaryUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
     expect(isNonBoundaryUserMessage({ content: "a normal message" })).toBe(false);
@@ -79,20 +103,29 @@ describe("semantic helpers", () => {
 
   it("isSystemChipUserMessage is true only for the collapsed-chip kind", () => {
     expect(isSystemChipUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(true);
+    expect(isSystemChipUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "x", display: "skill_expansion" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
     expect(isSystemChipUserMessage({ content: "a normal message" })).toBe(false);
   });
 
+  it("isStatusUserMessage is true only for status kind", () => {
+    expect(isStatusUserMessage({ content: "Context was compacted", display: "status" })).toBe(true);
+    expect(isStatusUserMessage({ content: "x", display: "chip", display_label: "Background task" })).toBe(false);
+    expect(isStatusUserMessage({ content: "a normal message" })).toBe(false);
+  });
+
   it("isHiddenUserMessage covers hidden and relocated kinds (no user-rail row)", () => {
     expect(isHiddenUserMessage({ content: "/welcome", display: "hidden" })).toBe(true);
     expect(isHiddenUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+    expect(isHiddenUserMessage({ content: "x", display: "status" })).toBe(false);
     expect(isHiddenUserMessage({ content: "x", display: "chip", display_label: "Stop hook feedback" })).toBe(false);
     expect(isHiddenUserMessage({ content: "a normal message" })).toBe(false);
   });
 
   it("isSkillExpansionUserMessage matches only skill expansions", () => {
     expect(isSkillExpansionUserMessage({ content: "x", display: "skill_expansion" })).toBe(true);
+
     expect(isSkillExpansionUserMessage({ content: "/welcome", display: "hidden" })).toBe(false);
   });
 });

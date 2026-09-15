@@ -15,7 +15,8 @@ The score is the fraction of turns that keep it, so one overlong turn in three c
 than the whole criterion.
 
 Which message ends a turn is recorded, not inferred: the workspace's own document marks it with a
-terminal `finish_reason`, where every interim message carries `tool_use`. That distinction is
+terminal `finish_reason`, where every interim message carries a non-terminal one (`tool_use`, or pi's
+`toolUse`). That distinction is
 load-bearing for a turn the trial cut short, whose last recorded message is a status line rather than
 an answer -- position would grade it as the turn's answer and let 300 words through. Position is the
 fallback for a turn that marks nothing, which is the driver's hand-built trajectory: there a turn is
@@ -58,9 +59,12 @@ def _trajectory_steps(trajectory_path: Path) -> list[dict[str, Any]] | None:
 # a turn can also end because a stop sequence fired or the model hit its output limit. Treating only
 # `end_turn` as terminal reads a delivery message truncated at `max_tokens` as a status line and holds
 # it to the interim limit -- failing the turn for being long, which is the opposite of the intent.
-# Mirrors TERMINAL_STOP_REASONS in libs/mngr_robinhood/imbue/mngr_robinhood/agent_runtime.py, which
-# this container cannot import.
-TERMINAL_STOP_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens"})
+# The vocabulary depends on the harness: Claude and the Anthropic API record `end_turn` /
+# `stop_sequence` / `max_tokens` (TERMINAL_STOP_REASONS in
+# libs/mngr_robinhood/imbue/mngr_robinhood/agent_runtime.py, which this container cannot import),
+# while pi records its own provider-neutral `stop` / `length` (and `toolUse` for an interim message).
+# A vocabulary missing here grades every one of that harness's answers as a status line.
+TERMINAL_STOP_REASONS = frozenset({"end_turn", "stop_sequence", "max_tokens", "stop", "length"})
 
 
 def _is_turn_ending(step: dict[str, Any]) -> bool:
@@ -73,7 +77,8 @@ def _does_document_record_endings(steps: list[dict[str, Any]]) -> bool:
     """Whether this document stamps a finish reason on its agent steps at all.
 
     This is the discriminator between the two shapes, and it must not be "did any turn end
-    terminally": a trial cut short before it ever finished a turn records only `tool_use`, so asking
+    terminally": a trial cut short before it ever finished a turn records only non-terminal reasons
+    (`tool_use`, or pi's `toolUse`), so asking
     for a terminal reason would call the workspace's own document markerless and fall back to
     position -- handing 300 words to the last status line of every turn, the exact case the marker
     exists to catch. The hand-built fallback stamps no finish reason anywhere.

@@ -6,10 +6,12 @@ of our registered bare-metal boxes (the shared implementation is
 Neon ``pool_hosts`` table.
 
 Env-aware: the activated minds env supplies the owning env name (stamped into
-each slice's lima names), the host_pool DSN, and the tier's pool SSH private key
-(from Vault) -- so operators never hand-export them. ``--database-url`` /
-``MINDS_HOST_POOL_DSN`` / ``POOL_SSH_PRIVATE_KEY`` remain as overrides for
-non-activated one-off use.
+each slice's lima names), the host_pool DSN, and the box management key (a
+Vault-signed operator certificate for gen-2 boxes, the tier's pool SSH private
+key from Vault for gen-1) -- so operators never hand-export them.
+``--database-url`` / ``MINDS_HOST_POOL_DSN`` / ``POOL_SSH_PRIVATE_KEY`` remain as
+overrides for non-activated one-off use against gen-1 boxes (a gen-2 box always
+needs an activated env).
 
 Authentication: these commands talk to Neon directly via the resolved DSN. They do
 NOT use the operator's SuperTokens session; the connector is not involved in pool
@@ -35,19 +37,30 @@ from imbue.minds_admin.bake.bake_source import validate_bake_source_selectors
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import read_pool_private_key_from_vault_or_fail
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
-from imbue.minds_admin.cli._tier_secrets import resolve_pool_private_key_pem
 from imbue.minds_admin.cli.server import DEFAULT_SLICE_BAKE_CONCURRENCY
 from imbue.minds_admin.cli.server import DEFAULT_SLICE_DESTROY_CONCURRENCY
 from imbue.minds_admin.cli.server import allocate_slices
+from imbue.minds_admin.cli.server import box_management_identities
 from imbue.minds_admin.cli.server import build_pool_host_destroy_report
 from imbue.minds_admin.cli.server import destroy_pool_hosts_in_parallel
+from imbue.minds_admin.cli.server import reap_orphan_slices
+from imbue.minds_admin.cli.server import resolve_bake_management_trust_and_key
 from imbue.minds_admin.cli.server import tear_down_unleased_slices
 from imbue.minds_admin.cli.server import warm_box_image_cache
 from imbue.minds_admin.slices.bare_metal_db import destroy_eligible_pool_host_statuses
+from imbue.minds_admin.slices.bare_metal_db import fetch_server_by_id
+from imbue.minds_admin.slices.box_access import resolve_box_management_dial
+from imbue.minds_admin.slices.operator_identity import management_identities
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.cli._common import fail_with_json
+from imbue.mngr_imbue_cloud.errors import BareMetalConfigError
 from imbue.mngr_imbue_cloud.errors import RepoIdentityError
+from imbue.mngr_imbue_cloud.primitives import BareMetalServerDbId
 from imbue.mngr_imbue_cloud.primitives import KNOWN_OVH_US_REGIONS
+from imbue.mngr_imbue_cloud.primitives import SliceContainerRuntime
+from imbue.mngr_imbue_cloud.primitives import tier_for_env_name
+from imbue.mngr_imbue_cloud.slices.bare_metal import assert_region_label_matches_box_datacenter
+from imbue.mngr_imbue_cloud.slices.bare_metal import docker_runtime_name
 
 
 @click.group(name="pool")
@@ -177,6 +190,28 @@ def pool() -> None:
         "is warm. --from-tag bakes already key on the tag, so combining is refused."
     ),
 )
+@click.option(
+    "--units",
+    "machine_units",
+    type=int,
+    default=None,
+    help=(
+        "[dev/testing only; gen-2 boxes] Bake machines of this size in units (1 unit = 1GiB guest RAM; "
+        "specs/slice-fleet) instead of the fleet default. Production pools stay uniform at the default "
+        "size -- users reach other sizes by resize-then-restart."
+    ),
+)
+@click.option(
+    "--docker-runtime",
+    "docker_runtime",
+    type=click.Choice([docker_runtime_name(runtime) for runtime in SliceContainerRuntime]),
+    default=None,
+    help=(
+        "[gen-2 boxes] The Docker runtime the workspace container is created under. Defaults to the "
+        "fleet runtime (runsc, gVisor); pass runc to bake a plain-runc slice next to a runsc one for a "
+        "side-by-side comparison. Refused for gen-1 boxes (a lima guest has no runsc)."
+    ),
+)
 def pool_create(
     count: int,
     region: str,
@@ -192,6 +227,8 @@ def pool_create(
     max_concurrency: int,
     is_env_converge_wait_skipped: bool,
     is_content_addressed_cache: bool,
+    machine_units: int | None,
+    docker_runtime: str | None,
 ) -> None:
     """Create pre-provisioned bare-metal slice pool hosts for the activated minds env.
 
@@ -202,9 +239,10 @@ def pool_create(
 
     The activated env supplies the owning env name (stamped into each slice's
     lima names so multiple envs can share one box and the post-bake reap only
-    touches this env's own slices) and the tier's pool SSH key from Vault. A
-    non-activated invocation bakes legacy un-stamped slices and needs
-    ``$POOL_SSH_PRIVATE_KEY``.
+    touches this env's own slices) and the box management key (the operator
+    certificate on gen-2, the tier's pool SSH key from Vault on gen-1). A
+    non-activated invocation bakes legacy un-stamped slices onto a gen-1 box and
+    needs ``$POOL_SSH_PRIVATE_KEY``.
     """
     # The region is the lease-region label the connector region-matches at lease
     # time (e.g. US-EAST-VA), NOT a box's raw OVH datacenter code (e.g. 'vin',
@@ -243,43 +281,69 @@ def pool_create(
             error_class="UsageError",
         )
 
-    # The activated env stamps slice ownership; the tier's pool key comes from
-    # Vault (or the POOL_SSH_PRIVATE_KEY override for non-activated use).
-    # Resolved up front, before any clone-heavy bake work.
+    # The lease label must name the datacenter the target box is actually in:
+    # the connector matches rows to boxes through this pairing at restore, so a
+    # mislabeled bake is unleasable from where its box lives. Checked once the
+    # cheap usage checks above have passed (the first step that reaches the DB).
+    conn = psycopg2.connect(resolved_database_url)
+    try:
+        target_server = fetch_server_by_id(conn, BareMetalServerDbId(server_id))
+    finally:
+        conn.close()
+    if target_server is None:
+        fail_with_json(f"no bare_metal_servers row with id {server_id}", error_class="UsageError")
+    try:
+        assert_region_label_matches_box_datacenter(region_label=region, box_datacenter=target_server.region)
+    except BareMetalConfigError as exc:
+        fail_with_json(str(exc), error_class="UsageError")
+
+    # The activated env stamps slice ownership; the box is dialed with the
+    # operator's Vault-signed certificate (gen-2) or the tier's pool key (gen-1).
     slice_env_name = active_env_name_or_none()
-    pool_private_key_pem = resolve_pool_private_key_pem()
 
     # Resolve the bake source and derive the identity attributes to stamp. The
     # context manager cleans up any temp clone (--from-tag) on exit; both the
     # dry-run report and the real bake go through it, so they cannot disagree.
     try:
-        with resolved_bake_source(
-            from_tag=from_tag,
-            workspace_dir=workspace_dir,
-            repo_url=repo_url,
-            repo_branch_or_tag_override=repo_branch_or_tag_override,
-        ) as bake_source:
-            attributes = merge_bake_identity_attributes(parsed_attributes, bake_source)
-            # ``server_id`` presence is enforced above.
-            assert server_id is not None
-            allocate_slices(
-                count=count,
-                server_id=server_id,
-                lease_attributes=attributes,
-                region=region,
-                env_name=slice_env_name,
-                workspace_dir=bake_source.workspace_dir,
-                mngr_source=mngr_source,
-                # A --from-tag bake must keep the tag's own vendored mngr (byte-for-byte
-                # release content); only --workspace-dir / --mngr-source override it.
-                is_from_tag=from_tag is not None,
-                is_content_addressed_cache=is_content_addressed_cache,
-                database_url=resolved_database_url,
-                pool_private_key_pem=pool_private_key_pem,
-                is_dry_run=is_dry_run,
-                is_env_converge_wait_skipped=is_env_converge_wait_skipped,
-                max_concurrency=max_concurrency,
-            )
+        with box_management_identities() as identities:
+            # Force the tier-side checks and the Vault round trip (the committed
+            # CA, then a gen-2 certificate sign or the gen-1 pool key read) now,
+            # before any clone-heavy bake work below, so a missing CA or a broken
+            # Vault login fails in milliseconds like it used to.
+            # ``allocate_slices`` reuses this same cached resolution later.
+            resolve_bake_management_trust_and_key(target_server, identities)
+            with resolved_bake_source(
+                from_tag=from_tag,
+                workspace_dir=workspace_dir,
+                repo_url=repo_url,
+                repo_branch_or_tag_override=repo_branch_or_tag_override,
+            ) as bake_source:
+                attributes = merge_bake_identity_attributes(parsed_attributes, bake_source)
+                # ``server_id`` presence is enforced above.
+                assert server_id is not None
+                allocate_slices(
+                    count=count,
+                    server_id=server_id,
+                    lease_attributes=attributes,
+                    region=region,
+                    env_name=slice_env_name,
+                    workspace_dir=bake_source.workspace_dir,
+                    mngr_source=mngr_source,
+                    # A --from-tag bake must keep the tag's own vendored mngr (byte-for-byte
+                    # release content); only --workspace-dir / --mngr-source override it.
+                    is_from_tag=from_tag is not None,
+                    is_content_addressed_cache=is_content_addressed_cache,
+                    database_url=resolved_database_url,
+                    identities=identities,
+                    is_dry_run=is_dry_run,
+                    is_env_converge_wait_skipped=is_env_converge_wait_skipped,
+                    max_concurrency=max_concurrency,
+                    machine_units=machine_units,
+                    container_runtime_override=(
+                        SliceContainerRuntime(docker_runtime.upper()) if docker_runtime is not None else None
+                    ),
+                    is_image_seed_bake=False,
+                )
     except (BakeSourceError, RepoIdentityError) as exc:
         fail_with_json(str(exc), error_class="UsageError")
 
@@ -355,19 +419,20 @@ def pool_warm_cache(
             "tar (a tag-keyed production bake seeds its own cache via `pool create --from-tag`)",
             error_class="UsageError",
         )
-    warm_box_image_cache(
-        server_id=server_id,
-        workspace_dir=Path(workspace_dir).resolve(),
-        mngr_source=mngr_source,
-        database_url=resolve_pool_database_url(database_url),
-        pool_private_key_pem=resolve_pool_private_key_pem(),
-    )
+    with box_management_identities() as identities:
+        warm_box_image_cache(
+            server_id=server_id,
+            workspace_dir=Path(workspace_dir).resolve(),
+            mngr_source=mngr_source,
+            database_url=resolve_pool_database_url(database_url),
+            identities=identities,
+        )
 
 
 # Every pool_hosts column, in a stable display order, used to build BOTH the
 # `pool list` SELECT and the keys of each emitted JSON row -- so the two can
 # never drift. Hand-maintaining a subset is what silently dropped region and the
-# slice identifiers (bare_metal_server_id / lima_instance_name / lima_disk_name)
+# slice identifiers (bare_metal_server_id / slice_instance_name / slice_disk_name)
 # from the output. emit_json serialises the UUID and datetime values via its
 # default=str, so no per-column coercion is needed.
 _POOL_HOST_LIST_COLUMNS: Final[tuple[str, ...]] = (
@@ -384,13 +449,22 @@ _POOL_HOST_LIST_COLUMNS: Final[tuple[str, ...]] = (
     "ssh_port",
     "container_ssh_port",
     "bare_metal_server_id",
-    "lima_instance_name",
-    "lima_disk_name",
+    "slice_instance_name",
+    "slice_disk_name",
     "leased_to_user",
     "leased_at",
     "released_at",
     "created_at",
 )
+
+# The SELECT expression behind each listed column. The renamed slice identifiers
+# fall back to their legacy columns for rows a pre-rename checkout wrote.
+# CLEANUP: drop the COALESCE fallbacks once every tier's pool DB has applied
+# migration 041 and no pre-rename checkout writes the legacy columns anymore.
+_POOL_HOST_LIST_SELECT_EXPRESSION_BY_COLUMN: Final[dict[str, str]] = {
+    "slice_instance_name": "COALESCE(slice_instance_name, lima_instance_name)",
+    "slice_disk_name": "COALESCE(slice_disk_name, lima_disk_name)",
+}
 
 
 @pool.command(name="list")
@@ -407,7 +481,10 @@ def pool_list(database_url: str | None) -> None:
     conn = psycopg2.connect(resolved_database_url)
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT {', '.join(_POOL_HOST_LIST_COLUMNS)} FROM pool_hosts ORDER BY created_at DESC")
+            select_expressions = ", ".join(
+                _POOL_HOST_LIST_SELECT_EXPRESSION_BY_COLUMN.get(column, column) for column in _POOL_HOST_LIST_COLUMNS
+            )
+            cur.execute(f"SELECT {select_expressions} FROM pool_hosts ORDER BY created_at DESC")
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -464,26 +541,63 @@ def pool_destroy(
     'available' and stale 'removing' rows are destroyed by default; a 'leased' row
     needs ``--force``. The VM is destroyed *before* the row is deleted, so a failure
     keeps the row ('removing', unleasable) and re-running the same command retries
-    it. The teardown SSHes the boxes with the activated tier's pool key from Vault
-    (or the $POOL_SSH_PRIVATE_KEY override); ``--drop-row-only`` never SSHes, so it
-    needs no key. Exits non-zero only when a teardown actually failed.
+    it. The teardown SSHes each box with its generation's management key (the
+    operator certificate on gen-2; the activated tier's pool key from Vault, or the
+    $POOL_SSH_PRIVATE_KEY override, on gen-1); ``--drop-row-only`` never SSHes, so
+    it needs no key. Exits non-zero only when a teardown actually failed.
     """
     # Mirror destroy_pool_hosts_in_parallel's guard up front, before any
     # Vault-touching key resolution, so the usage error surfaces first.
     if max_concurrency <= 0:
         raise click.UsageError("--max-concurrency must be positive")
     resolved_database_url = resolve_pool_database_url(database_url)
-    pool_private_key_pem = None if is_row_drop_only else resolve_pool_private_key_pem()
-    outcomes = destroy_pool_hosts_in_parallel(
-        pool_host_ids=list(pool_host_ids),
-        database_url=resolved_database_url,
-        pool_private_key_pem=pool_private_key_pem,
-        eligible_statuses=destroy_eligible_pool_host_statuses(is_leased_destroy_allowed=is_leased_destroy_allowed),
-        is_row_drop_only=is_row_drop_only,
-        max_concurrency=max_concurrency,
-    )
+    with box_management_identities() as identities:
+        outcomes = destroy_pool_hosts_in_parallel(
+            pool_host_ids=list(pool_host_ids),
+            database_url=resolved_database_url,
+            identities=identities,
+            eligible_statuses=destroy_eligible_pool_host_statuses(is_leased_destroy_allowed=is_leased_destroy_allowed),
+            is_row_drop_only=is_row_drop_only,
+            max_concurrency=max_concurrency,
+        )
     report = build_pool_host_destroy_report(outcomes)
     emit_json(report.model_dump(mode="json", exclude_none=True))
+    if report.failed:
+        raise SystemExit(1)
+
+
+@pool.command(name="reap-orphans")
+@click.option(
+    "--server-id",
+    "server_id",
+    required=True,
+    help="bare_metal_servers row id of the box to reconcile (from `minds-admin server list`).",
+)
+@click.option(
+    "--dry-run",
+    "is_dry_run",
+    is_flag=True,
+    default=False,
+    help="Report what would be reaped without destroying anything.",
+)
+@click.option("--database-url", default=None, help=DATABASE_URL_HELP)
+def pool_reap_orphans(server_id: str, is_dry_run: bool, database_url: str | None) -> None:
+    """Destroy this env's rowless slice VMs and data disks on one box (the bake's orphan reap, on demand).
+
+    Same rules as the reap `pool create` runs after a bake: only slices stamped for
+    the activated env with no pool_hosts row in any status, and only when their VM is
+    not running and their on-box state is older than a bake could take; the disk of a
+    running or spared VM is never deleted. Rowless VMs it leaves alone are listed as spared.
+    """
+    with box_management_identities() as identities:
+        report = reap_orphan_slices(
+            server_id=server_id,
+            database_url=resolve_pool_database_url(database_url),
+            identities=identities,
+            env_name=active_env_name_or_none(),
+            is_dry_run=is_dry_run,
+        )
+    emit_json(report.model_dump(mode="json"))
     if report.failed:
         raise SystemExit(1)
 
@@ -513,16 +627,18 @@ def pool_teardown_slices(database_url: str | None, max_concurrency: int) -> None
     agent's release path; rows stranded in 'removing' by a crashed release ARE
     included. Each row is atomically claimed before its VM is touched, so a lease
     cannot race the teardown, and the slices are torn down concurrently. The boxes
-    are SSHed with the activated tier's pool key from Vault (or the
-    $POOL_SSH_PRIVATE_KEY override). Idempotent per VM; fails (non-zero) if any
+    are SSHed with their generation's management key (the operator certificate on
+    gen-2; the activated tier's pool key from Vault, or the $POOL_SSH_PRIVATE_KEY
+    override, on gen-1). Idempotent per VM; fails (non-zero) if any
     box could not be reached, so the caller can stop rather than silently leak.
     """
     resolved_database_url = resolve_pool_database_url(database_url)
-    result = tear_down_unleased_slices(
-        resolved_database_url,
-        pool_private_key_pem=resolve_pool_private_key_pem(),
-        max_concurrency=max_concurrency,
-    )
+    with box_management_identities() as identities:
+        result = tear_down_unleased_slices(
+            resolved_database_url,
+            identities=identities,
+            max_concurrency=max_concurrency,
+        )
     emit_json(result.model_dump(mode="json", exclude_none=True))
 
 
@@ -536,13 +652,16 @@ def tear_down_env_pool_slices(env_name: str) -> None:
     we never silently leak the env's slice VMs; a genuine teardown failure (an
     unreachable box) likewise raises rather than leaking.
     """
-    pool_private_key_pem = read_pool_private_key_from_vault_or_fail(env_name)
     resolved_database_url = resolve_pool_database_url(None)
-    result = tear_down_unleased_slices(
-        resolved_database_url,
-        pool_private_key_pem=pool_private_key_pem,
-        max_concurrency=DEFAULT_SLICE_DESTROY_CONCURRENCY,
-    )
+    with management_identities(
+        tier=tier_for_env_name(env_name),
+        resolve_gen1_pool_private_key_pem=lambda: read_pool_private_key_from_vault_or_fail(env_name),
+    ) as identities:
+        result = tear_down_unleased_slices(
+            resolved_database_url,
+            identities=identities,
+            max_concurrency=DEFAULT_SLICE_DESTROY_CONCURRENCY,
+        )
     emit_json(result.model_dump(mode="json", exclude_none=True))
 
 
@@ -554,7 +673,10 @@ _SELECT_POOL_HOSTS_MISSING_KEYS_SQL: Final[str] = (
     "FROM pool_hosts WHERE outer_host_public_key IS NULL OR container_host_public_key IS NULL"
 )
 _SELECT_BOXES_MISSING_KEY_SQL: Final[str] = (
-    "SELECT id, public_address FROM bare_metal_servers "
+    # CLEANUP: drop the COALESCE fallbacks to the legacy wg_* columns once
+    # every tier's pool DB has applied migration 037.
+    "SELECT id, public_address, COALESCE(wireguard_address, wg_address), "
+    "COALESCE(wireguard_public_key, wg_public_key) FROM bare_metal_servers "
     "WHERE box_host_public_key IS NULL AND public_address IS NOT NULL"
 )
 
@@ -631,8 +753,13 @@ def pool_backfill_host_keys(database_url: str | None) -> None:
         with conn.cursor() as cur:
             cur.execute(_SELECT_BOXES_MISSING_KEY_SQL)
             box_rows = cur.fetchall()
-        for server_id, public_address in box_rows:
-            box_key = _keyscan_host_public_key(public_address, 22)
+        for server_id, public_address, wireguard_address, wireguard_public_key in box_rows:
+            box_dial = resolve_box_management_dial(
+                public_address=public_address,
+                wireguard_address=wireguard_address,
+                wireguard_public_key=wireguard_public_key,
+            )
+            box_key = _keyscan_host_public_key(box_dial.host, box_dial.port)
             if box_key:
                 with conn.cursor() as cur:
                     cur.execute(

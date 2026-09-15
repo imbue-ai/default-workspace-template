@@ -97,6 +97,13 @@ class UiWorkspaceEntry(FrozenModel):
     liveness: str = Field(
         default="", description="RUNNING / STOPPED / STOPPING / STARTING / UNKNOWN when supports_shutdown, else empty"
     )
+    stop_kind: str = Field(
+        default="",
+        description=(
+            "Why a cloud machine's current stop happened: owner / maintenance / idle / suspension, 'unknown' for a "
+            "kind this build does not recognize, empty while running or when not known"
+        ),
+    )
     account: str = Field(default="", description="Owning account email, when known")
     create_attempt_state: str = Field(
         default="", description="creating / interrupted / failed for create-attempt rows; empty for real workspaces"
@@ -119,6 +126,14 @@ class UiWorkspaceEntry(FrozenModel):
             "For remote rows: 'available' when this device can read the workspace's backups now, 'locked' when "
             "the synced credentials need the master password here, 'unavailable' when no credentials reach this "
             "device; empty for live rows"
+        ),
+    )
+    key_state: str = Field(
+        default="",
+        description=(
+            "For a live cloud row this device holds no SSH key for (so it cannot open the machine): 'locked' "
+            "when the synced key needs the master password here, 'syncing' when the account is unlocked and "
+            "the key has not arrived yet, 'unavailable' when no key can reach this device; empty otherwise"
         ),
     )
 

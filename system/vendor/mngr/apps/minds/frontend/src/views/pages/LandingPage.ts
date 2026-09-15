@@ -9,7 +9,7 @@ import m from "mithril";
 import { getAppContext } from "../../app-context";
 import { electronBridge } from "../../electron-bridge";
 import type { LandingExtras, MindLiveness } from "../../models/create";
-import { MIND_LIVENESS_LABELS, MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
+import { MindLivenessTracker, fetchLandingExtras, recoveryRoute } from "../../models/create";
 import type { UiWorkspaceEntry } from "../../channel/messages";
 import type { UiProviderEntry } from "../../generated/ui";
 import { Button, ButtonLink } from "../components/Button";
@@ -22,10 +22,13 @@ import {
   backupsControlFor,
   healthBadgeLabelFor,
   isMachineStateKnown,
+  keyStateChipFor,
   lifecycleConfirmation,
+  livenessBadgeLabelFor,
   mindControlsFor,
   remoteLocationBadgeFor,
   remoteStateChipFor,
+  rowClickActionFor,
 } from "./landing-controls";
 import { Spinner } from "../components/Spinner";
 import { StatusBadge } from "../components/StatusBadge";
@@ -211,9 +214,9 @@ export const LandingPage: m.ClosureComponent = () => {
     });
   }
 
-  function livenessBadge(liveness: MindLiveness): m.Children {
+  function livenessBadge(liveness: MindLiveness, stopKind: string): m.Children {
     if (liveness === "RUNNING") return null;
-    const label = MIND_LIVENESS_LABELS[liveness] ?? "Status unknown";
+    const label = livenessBadgeLabelFor(liveness, stopKind);
     const tone =
       liveness === "STOPPING" || liveness === "STARTING"
         ? "bg-warning/15 text-warning"
@@ -426,22 +429,41 @@ export const LandingPage: m.ClosureComponent = () => {
         : ("UNKNOWN" as MindLiveness);
     const controls = mindControlsFor(entry, liveness, discoveryHealth);
     const providerLabel = entry.provider_label ?? "";
+    // A row whose click would go nowhere (a cloud machine this device holds no
+    // key for, a stop an operator holds) is not clickable; the chip or the
+    // badge says why in place of an open that would hang. Decided by the same
+    // rule the click runs, so the two cannot disagree.
+    const keyChip = keyStateChipFor(entry.key_state ?? "");
+    const isHealthy = stores.health.statusFor(entry.id) === "healthy";
+    const isOpenable =
+      rowClickActionFor(entry, state.tracker.displayedLiveness(entry.id, entry.liveness ?? ""), isHealthy) !==
+      "blocked";
     const row = m(
       Card,
       {
         layout: "row",
-        interactive: true,
-        extra: "accent-spine relative overflow-hidden cursor-pointer",
+        interactive: isOpenable,
+        extra: `accent-spine relative overflow-hidden ${isOpenable ? "cursor-pointer" : "cursor-default"}`,
         style: `--workspace-accent: ${entry.accent};`,
         "data-agent-id": entry.id,
-        onclick: () => rowClick(entry),
+        onclick: isOpenable ? () => rowClick(entry) : undefined,
       },
       [
         m("span", { class: "flex-1 min-w-0 truncate font-semibold text-primary pl-1" }, entry.name),
         providerLabel ? m("span", { class: `${BADGE_CLASS} bg-fill-subtle text-secondary` }, providerLabel) : null,
+        keyChip === null
+          ? null
+          : m(
+              "span",
+              {
+                class: `${BADGE_CLASS} bg-fill-subtle text-important landing-key-state-chip`,
+                "data-tooltip": keyChip.tooltip,
+              },
+              keyChip.label,
+            ),
         // Slot for the backup badge (T4 wires the backup-status data source).
         m("span", { class: "landing-backup-badge hidden" }),
-        (entry.supports_shutdown ?? false) ? livenessBadge(liveness) : null,
+        (entry.supports_shutdown ?? false) ? livenessBadge(liveness, entry.stop_kind ?? "") : null,
         healthBadge(entry, liveness),
         updateBadge(entry),
         backupsButton(entry, liveness),
@@ -500,25 +522,27 @@ export const LandingPage: m.ClosureComponent = () => {
               m(Icon16, { name: "restart" }),
             )
           : null,
-        m(
-          Button,
-          {
-            variant: "ghost",
-            size: "icon",
-            "aria-label": "Open machine in new window",
-            "data-tooltip": "Open in new window",
-            onclick: (event: MouseEvent) => {
-              event.stopPropagation();
-              if (electronBridge.isDesktop) {
-                electronBridge.openWorkspaceInNewWindow(entry.id);
-              } else {
-                const forwardOrigin = getAppContext().shell.mngrForwardOrigin;
-                window.open(`${forwardOrigin}/goto/${entry.id}/`, "_blank", "noopener");
-              }
-            },
-          },
-          m(Icon16, { name: "arrow-up-right" }),
-        ),
+        !isOpenable
+          ? null
+          : m(
+              Button,
+              {
+                variant: "ghost",
+                size: "icon",
+                "aria-label": "Open machine in new window",
+                "data-tooltip": "Open in new window",
+                onclick: (event: MouseEvent) => {
+                  event.stopPropagation();
+                  if (electronBridge.isDesktop) {
+                    electronBridge.openWorkspaceInNewWindow(entry.id);
+                  } else {
+                    const forwardOrigin = getAppContext().shell.mngrForwardOrigin;
+                    window.open(`${forwardOrigin}/goto/${entry.id}/`, "_blank", "noopener");
+                  }
+                },
+              },
+              m(Icon16, { name: "arrow-up-right" }),
+            ),
         m(
           Button,
           {

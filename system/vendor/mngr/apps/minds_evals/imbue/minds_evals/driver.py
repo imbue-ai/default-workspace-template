@@ -389,6 +389,8 @@ def derive_key_env(lane: HarnessLane, key_provider: str) -> str:
     match lane:
         case HarnessLane.ANTHROPIC:
             return "ANTHROPIC_API_KEY"
+        case HarnessLane.OPENAI:
+            return "OPENAI_API_KEY"
         case HarnessLane.OPENROUTER:
             return "OPENROUTER_API_KEY"
         case HarnessLane.API_KEY:
@@ -466,34 +468,84 @@ def parse_harness_config(
 
 
 # A table for claude alone, whose catalog ids are aliases (`haiku`, `opus[1m]`) that never appear in
-# a reported model name: only the table says which name each alias answers under. pi needs no entry,
-# because it reports the tag minus its first segment -- `anthropic/claude-haiku-4-5` reports as
-# `claude-haiku-4-5` and `openrouter/openai/gpt-5-mini` as `openai/gpt-5-mini`, both measured on real
-# trials -- which is the generic split reported_model_prefix falls back to for every non-claude id.
+# a reported model name: only the table says which name each alias answers under.
 _REPORTED_MODEL_BY_CATALOG_ID: Final[Mapping[str, str]] = {
     "haiku": "claude-haiku-4-5",
     "sonnet[1m]": "claude-sonnet-5",
     "opus[1m]": "claude-opus-5",
-    "fable[1m]": "claude-fable-5",
+    "fable[1m]": "claude-fable-5-1",
 }
 
 
 @pure
-def reported_model_prefix(catalog_id: str) -> str:
+def _reported_model_name(lane: HarnessLane, catalog_id: str) -> str:
     """What a catalog id's model is reported as in the transcript, or empty when it is not known.
 
-    pi-coding tags a model with the provider whose key serves it and reports everything after that
-    provider: `anthropic/claude-haiku-4-5` reports as `claude-haiku-4-5`, and a gateway tag keeps the
-    vendor it routes to, `openrouter/openai/gpt-5-mini` reporting as `openai/gpt-5-mini`. So a tag
-    resolves itself by dropping its first segment.
+    Each harness names its models its own way, and the lane is what says which harness reads the id,
+    so the rule is picked by lane rather than inferred from the id's shape: a bare `haiku` and a bare
+    `gpt-5.5` are indistinguishable as strings and resolve to different things.
+
+    claude's ids are aliases that appear nowhere in a reported name, so only the table above
+    translates one and an id it does not carry stays unknown. pi-coding tags a model with the
+    provider whose key serves it and reports everything after that provider, so a tag resolves itself
+    by dropping its first segment: `anthropic/claude-haiku-4-5` reports as `claude-haiku-4-5`, and a
+    gateway tag keeps the vendor it routes to, `openrouter/openai/gpt-5-mini` reporting as
+    `openai/gpt-5-mini` -- both measured on real trials, as is claude's table.
+
+    codex's rule is the one that is not: a codex id is taken to resolve to itself, because codex is
+    switched to ids out of its own catalog. No trial has yet observed one, since mngr's codex
+    transcript emitter writes no per-step model name at all, so treat the codex case below as the
+    assumption it is until a trial reports a model to check it against.
     """
-    known_prefix = _REPORTED_MODEL_BY_CATALOG_ID.get(catalog_id)
-    if known_prefix is not None:
-        return known_prefix
-    _provider, separator, model = catalog_id.partition("/")
-    if separator and model:
-        return model
-    return ""
+    match lane:
+        case HarnessLane.ANTHROPIC:
+            return _REPORTED_MODEL_BY_CATALOG_ID.get(catalog_id, "")
+        case HarnessLane.OPENAI:
+            return catalog_id
+        case HarnessLane.API_KEY | HarnessLane.OPENROUTER | HarnessLane.OPENCODE_GO:
+            _provider, separator, model = catalog_id.partition("/")
+            return model if separator and model else ""
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def _is_observed_model_the_requested_one(lane: HarnessLane, requested_reported_name: str, observed_model: str) -> bool:
+    """Whether an observed model name is the requested model's, under its lane's naming.
+
+    The operator differs by lane because the decoration does. claude appends a release date the
+    reported-name resolution cannot predict (`haiku` answers as `claude-haiku-4-5-20251001`), so it
+    is matched by prefix, and pi-coding shares that lenient operator because the model half of a
+    provider tag is the provider's own name to decorate. codex reports back the very id it was
+    switched to, so there is no decoration to allow for and the match is exact: a prefix there would
+    read a chat that landed on `gpt-5.5-mini` as one that landed on `gpt-5.5`, which is the confusion
+    this whole confirmation exists to catch.
+
+    The requested name must already be resolved: an empty one would make the prefix lanes confirm
+    every observed model there is, which is why a caller turns an id its lane cannot name into
+    silence before it gets here.
+    """
+    assert requested_reported_name, "a model with no resolved reported name is silence, not something to compare"
+    match lane:
+        case HarnessLane.OPENAI:
+            return observed_model == requested_reported_name
+        case HarnessLane.ANTHROPIC | HarnessLane.API_KEY | HarnessLane.OPENROUTER | HarnessLane.OPENCODE_GO:
+            return observed_model.startswith(requested_reported_name)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def _requested_reported_name(harness_config: HarnessConfig) -> str:
+    """The name the config's requested model reports as, or empty when there is nothing to confirm.
+
+    Empty covers both silences a confirmation has to treat alike: a config that requested no switch
+    has no model to be wrong about, and one whose lane's naming cannot resolve its id has no name to
+    compare an observed one against.
+    """
+    if not harness_config.is_switch_requested:
+        return ""
+    return _reported_model_name(harness_config.lane, harness_config.model)
 
 
 @pure
@@ -505,12 +557,12 @@ def is_model_confirmed(harness_config: HarnessConfig, observed_models: Sequence[
     that gave up before a turn). An unrecognised model name and a missing transcript are both
     silence, not evidence, so False is reserved for a trial that observably ran on something else.
     """
-    expected_prefix = reported_model_prefix(harness_config.model) if harness_config.is_switch_requested else ""
-    if not expected_prefix or not observed_models:
+    expected_name = _requested_reported_name(harness_config)
+    if not expected_name or not observed_models:
         return None
     if len(observed_models) != 1:
         return False
-    return observed_models[0].startswith(expected_prefix)
+    return _is_observed_model_the_requested_one(harness_config.lane, expected_name, observed_models[0])
 
 
 @pure
@@ -525,10 +577,14 @@ def is_proxy_model_confirmed(
     answered the greeting. A trial whose greeting is not known and that ran on more than one model
     cannot be told apart from one that switched away, and answers None rather than accusing it.
     """
-    expected_prefix = reported_model_prefix(harness_config.model) if harness_config.is_switch_requested else ""
-    if not expected_prefix or not metered_models:
+    expected_name = _requested_reported_name(harness_config)
+    if not expected_name or not metered_models:
         return None
-    other_models = [model for model in metered_models if not model.startswith(expected_prefix)]
+    other_models = [
+        model
+        for model in metered_models
+        if not _is_observed_model_the_requested_one(harness_config.lane, expected_name, model)
+    ]
     if len(other_models) == len(metered_models):
         return False
     elif not other_models:
@@ -1073,6 +1129,19 @@ def _settled_worker_count(
     )
 
 
+@pure
+def _worker_trajectory_id(capture: WorkerCapture) -> str:
+    """The id a worker's stream-built document is embedded under.
+
+    Normally the mngr agent id the capture resolved. When neither the listing nor the captured
+    document named one, the stream itself cannot supply it -- its header hashes the agent id rather
+    than carrying it -- so the launch name stands in, which is unique per trial and cannot be
+    mistaken for an mngr id. Embedding under a stand-in keeps the worker's evidence in the
+    trajectory; `WorkerCapture.agent_id` stays empty, so nothing reports a made-up mngr id.
+    """
+    return capture.agent_id or "worker-{}".format(capture.launch.name)
+
+
 def _worker_document_or_none(capture: WorkerCapture) -> dict[str, Any] | None:
     """The worker's document: the one mngr built inside the workspace when it was captured, else one
     built here from its stream (a destroyed worker only leaves its preserved stream), else None."""
@@ -1087,16 +1156,12 @@ def _worker_document_or_none(capture: WorkerCapture) -> dict[str, Any] | None:
                 exc,
             )
     stream_path = capture.stream.host_path
-    if stream_path is None or not capture.agent_id:
-        logger.warning(
-            "Worker {} is not embedded in the trajectory: {}",
-            capture.launch.name,
-            "its stream was not captured" if stream_path is None else "no agent id was resolved to build it under",
-        )
+    if stream_path is None:
+        logger.warning("Worker {} is not embedded in the trajectory: its stream was not captured", capture.launch.name)
         return None
     try:
         return trajectory_building.build_worker_trajectory_from_stream(
-            stream_path.read_text(), capture.agent_id, capture.agent_type or _DEFAULT_WORKER_AGENT_TYPE
+            stream_path.read_text(), _worker_trajectory_id(capture), capture.agent_type or _DEFAULT_WORKER_AGENT_TYPE
         )
     except (OSError, TrajectoryDocumentError) as exc:
         logger.warning("Could not build worker {}'s trajectory from its stream: {}", capture.launch.name, exc)
@@ -1123,6 +1188,7 @@ def _embedded_workers(
         embedded_by_name[capture.launch.name] = trajectory_building.EmbeddedWorker(
             launch=capture.launch,
             document=trajectory_building.graft_worker_trajectories(document, children),
+            agent_id=capture.agent_id,
             state=capture.state,
             report_path=report_path.relative_to(host_logs_dir).as_posix() if report_path is not None else "",
         )

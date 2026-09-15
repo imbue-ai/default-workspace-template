@@ -76,7 +76,16 @@ def test_collector_config_has_a_memory_cap_and_a_file_backed_queue() -> None:
 
 def test_install_script_pins_and_verifies_the_collector_package() -> None:
     script = render_collector_install_script(_config(CollectorRole.BOX))
-    assert "otelcol-contrib_0.159.0_linux_${otelcol_goarch}.deb" in script
+    assert (
+        "https://apt.imbuepackages.com/artifacts/otelcol-contrib/0.159.0/otelcol-contrib_0.159.0_linux_amd64.deb"
+        in script
+    )
+    assert (
+        "https://apt.imbuepackages.com/artifacts/otelcol-contrib/0.159.0/otelcol-contrib_0.159.0_linux_arm64.deb"
+        in script
+    )
+    # The install never reaches GitHub: the mirror is the only download source.
+    assert "github.com" not in script
     assert "sha256sum -c -" in script
     assert "4ede8d750d6bf845e353be46cc550f590e6ccdaeeb60aae941cde6ad561877db" in script
     assert "430469fbfb48f123d08dfc896973bdc205ba393901cc506e92c9c928698a6d5e" in script

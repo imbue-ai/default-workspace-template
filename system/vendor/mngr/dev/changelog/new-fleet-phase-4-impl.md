@@ -1,0 +1,3 @@
+Phase 4 of the slice-fleet cutover, implementation PR: `blueprint/slice-fleet-cutover/plan-slice-fleet-cutover.md` notes the gen-2 disk-accounting change, and `specs/slice-fleet/spec.md` marks its box-disk-budget description as superseded by the measured-partition budget.
+
+The phase-4 spec's rehearsal Status section no longer attributes the fresh-slice fix-up to an "mngr start tmux race": the investigation proved the slices were in the bake's designed parked state (raw leases do not start the services agent) plus a leaked bootstrap chat agent from the bake's mistargeted chat teardown (fixed on main, mngr-internal#775).

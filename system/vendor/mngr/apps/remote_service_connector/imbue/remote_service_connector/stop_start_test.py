@@ -1,16 +1,27 @@
+import base64
 import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import pytest
 
 import imbue.remote_service_connector.storage as connector_storage_module
-from imbue.remote_service_connector import box_scripts
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.box_commands import build_qemu_slice_env_file
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_CONTAINER_SSH_PORT_PLACEHOLDER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import GEN2_VM_SSH_PORT_PLACEHOLDER
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.sizing import compute_machine_vcpus
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.transfer import TRANSFER_DIR_ROOT
+from imbue.remote_service_connector.errors import WorkspaceTransitionError
+from imbue.remote_service_connector.stop_start import BoxRow
+from imbue.remote_service_connector.stop_start import _BOX_ROW_COLUMNS
 from imbue.remote_service_connector.stop_start import _WATCHDOG_BACKOFF_CAP_SECONDS
+from imbue.remote_service_connector.stop_start import _WORKSPACE_ROW_SELECT
 from imbue.remote_service_connector.stop_start import _redrive_delay_seconds
+from imbue.remote_service_connector.stop_start import _run_box_command
 from imbue.remote_service_connector.stop_start import _take_over_transition
 from imbue.remote_service_connector.stop_start import run_transition_supervisor
 from imbue.remote_service_connector.stop_start import run_transition_watchdog
@@ -47,8 +58,8 @@ def _seed_stopping_workspace(backend: Any) -> Any:
     row.leased_to_user = "0123456789abcdef"
     row.stop_requested_at = datetime.now(timezone.utc) - timedelta(seconds=10)
     row.bare_metal_server_id = _BOX_ID
-    row.lima_instance_name = "mngr-slice-test-" + "f" * 32
-    row.lima_disk_name = "mngr-slice-test-" + "f" * 32 + "-data"
+    row.slice_instance_name = "mngr-slice-test-" + "f" * 32
+    row.slice_disk_name = "mngr-slice-test-" + "f" * 32 + "-data"
     row.transition_id = _TEST_TRANSITION_ID
     return row
 
@@ -66,6 +77,34 @@ def _completed_manifest(row: Any, generation: int = 1) -> dict[str, Any]:
             "META": {"sha256": "cc33", "size_bytes": 10},
         },
     }
+
+
+def _make_box_row(*, box_generation: int) -> BoxRow:
+    return BoxRow(
+        server_id="00000000-0000-0000-0000-00000000dd01",
+        public_address="10.1.2.3",
+        slice_service_user="mngr",
+        box_host_public_key="ssh-ed25519 AAAA host",
+        slot_count=4,
+        box_generation=box_generation,
+        status="ready",
+        uplink_mbps=1000,
+        disk_gb=100,
+        ram_gb=16,
+        cpu_threads=8,
+        cpu_overcommit_ratio=1.0,
+    )
+
+
+def test_run_box_command_wraps_a_missing_gen2_certificate_as_a_transition_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gen-2 box with no stored certificate must fail with the structured error every caller of
+    ``_run_box_command`` already handles, not the raw ``SshCertificateBundleMissingError``."""
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.is_ssh_cert_bundle_missing = True
+    with pytest.raises(WorkspaceTransitionError, match="no management SSH credentials"):
+        _run_box_command(_make_box_row(box_generation=2), "true")
 
 
 def test_stop_supervisor_uploads_finalizes_and_frees_slot(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,8 +135,8 @@ def test_stop_supervisor_uploads_finalizes_and_frees_slot(monkeypatch: pytest.Mo
     assert "limactl stop" in joined_commands
     assert "setsid nohup bash upload.sh" in joined_commands
     assert "limactl delete --force" in joined_commands
-    assert f"{row.lima_instance_name}/env" in backend.box_file_writes
-    assert f"{row.lima_instance_name}/upload.sh" in backend.box_file_writes
+    assert f"{row.slice_instance_name}/env" in backend.box_file_writes
+    assert f"{row.slice_instance_name}/upload.sh" in backend.box_file_writes
 
 
 def test_second_stop_after_restore_mints_a_new_generation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,7 +164,7 @@ def test_second_stop_after_restore_mints_a_new_generation(monkeypatch: pytest.Mo
     assert row.wrapped_dek != old_wrapped
     assert connector_storage_module.unwrap_dek(backend.storage_config, row.wrapped_dek) == _TEST_IDENTITY
     # The upload env targets gen-2, and only the superseded gen-1 was deleted.
-    assert "gen-2" in backend.box_file_writes[f"{row.lima_instance_name}/env"]
+    assert "gen-2" in backend.box_file_writes[f"{row.slice_instance_name}/env"]
     assert backend.deleted_prefixes == [f"{row.host_id_str}/gen-1/"]
 
 
@@ -345,8 +384,8 @@ def _seed_stopped_workspace(backend: Any) -> Any:
     row.ssh_port = None
     row.container_ssh_port = None
     row.bare_metal_server_id = None
-    row.lima_instance_name = "mngr-slice-test-" + "f" * 32
-    row.lima_disk_name = "mngr-slice-test-" + "f" * 32 + "-data"
+    row.slice_instance_name = "mngr-slice-test-" + "f" * 32
+    row.slice_disk_name = "mngr-slice-test-" + "f" * 32 + "-data"
     row.artifact_generation = 1
     row.artifact_manifest = _completed_manifest(row)
     row.wrapped_dek = connector_storage_module.wrap_dek(backend.storage_config, _TEST_IDENTITY)
@@ -372,11 +411,11 @@ def test_start_supervisor_restores_onto_new_box(monkeypatch: pytest.MonkeyPatch)
     assert row.container_ssh_port == 23001
     assert row.bare_metal_server_id == _BOX_ID
     # The download identity reached the box env, and the download launched.
-    env_text = backend.box_file_writes[f"{row.lima_instance_name}/env"]
+    env_text = backend.box_file_writes[f"{row.slice_instance_name}/env"]
     assert _TEST_IDENTITY in env_text
     assert "setsid nohup bash download.sh" in "\n".join(backend.box_command_log)
     # The transfer dir (creds + status) is removed once the restore is done.
-    assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in backend.box_command_log
+    assert f'rm -rf "$HOME/{TRANSFER_DIR_ROOT}/{row.slice_instance_name}"' in backend.box_command_log
 
 
 def test_start_supervisor_failure_lands_back_on_stopped_with_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -396,9 +435,9 @@ def test_start_supervisor_failure_lands_back_on_stopped_with_error(monkeypatch: 
     # The hard reserve failure may have half-claimed the slot: the box is
     # rolled back (instance dir, disk dir, and the staged creds/env dir).
     joined_commands = "\n".join(backend.box_command_log)
-    assert f"rm -rf $HOME/.lima/{row.lima_instance_name}" in joined_commands
-    assert f"rm -rf $HOME/.lima/_disks/{row.lima_disk_name}" in joined_commands
-    assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in joined_commands
+    assert f"rm -rf $HOME/.lima/{row.slice_instance_name}" in joined_commands
+    assert f"rm -rf $HOME/.lima/_disks/{row.slice_disk_name}" in joined_commands
+    assert f'rm -rf "$HOME/{TRANSFER_DIR_ROOT}/{row.slice_instance_name}"' in joined_commands
 
 
 def test_failed_start_within_retention_keeps_the_placement_for_the_next_try(
@@ -457,10 +496,10 @@ def test_start_supervisor_superseded_mid_download_rolls_back_the_claimed_slot(
     # before the dirs go, so the rollback never strands a waiter on the box's
     # download lock or a ghost qemu on unlinked inodes.
     assert "kill -TERM" in joined_commands
-    assert f"limactl delete --force {row.lima_instance_name}" in joined_commands
-    assert f"rm -rf $HOME/.lima/{row.lima_instance_name}" in joined_commands
-    assert f"rm -rf $HOME/.lima/_disks/{row.lima_disk_name}" in joined_commands
-    assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in joined_commands
+    assert f"limactl delete --force {row.slice_instance_name}" in joined_commands
+    assert f"rm -rf $HOME/.lima/{row.slice_instance_name}" in joined_commands
+    assert f"rm -rf $HOME/.lima/_disks/{row.slice_disk_name}" in joined_commands
+    assert f'rm -rf "$HOME/{TRANSFER_DIR_ROOT}/{row.slice_instance_name}"' in joined_commands
 
 
 def test_start_supervisor_rollback_warns_when_the_restore_vm_survives(
@@ -485,7 +524,7 @@ def test_start_supervisor_rollback_warns_when_the_restore_vm_survives(
     assert "limactl start" in (row.transition_error or "")
     survivor_warnings = [record for record in caplog.records if "survived the rollback" in record.getMessage()]
     assert len(survivor_warnings) == 1
-    assert row.lima_instance_name in survivor_warnings[0].getMessage()
+    assert row.slice_instance_name in survivor_warnings[0].getMessage()
 
 
 def test_start_supervisor_superseded_at_final_cas_tears_down_the_booted_vm(
@@ -517,9 +556,9 @@ def test_start_supervisor_superseded_at_final_cas_tears_down_the_booted_vm(
     assert outcome == "superseded"
     assert row.status == "removing"
     joined_commands = "\n".join(backend.box_command_log)
-    assert f"limactl delete --force {row.lima_instance_name}" in joined_commands
-    assert f"limactl disk delete --force {row.lima_disk_name}" in joined_commands
-    assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in joined_commands
+    assert f"limactl delete --force {row.slice_instance_name}" in joined_commands
+    assert f"limactl disk delete --force {row.slice_disk_name}" in joined_commands
+    assert f'rm -rf "$HOME/{TRANSFER_DIR_ROOT}/{row.slice_instance_name}"' in joined_commands
 
 
 def test_start_supervisor_reports_no_capacity_when_every_box_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -535,7 +574,7 @@ def test_start_supervisor_reports_no_capacity_when_every_box_is_full(monkeypatch
     assert row.status == "stopped"
     assert "no capacity" in (row.transition_error or "")
     # The staged env (S3 creds + age identity) is removed from the skipped box.
-    assert f'rm -rf "$HOME/{box_scripts.TRANSFER_DIR_ROOT}/{row.lima_instance_name}"' in backend.box_command_log
+    assert f'rm -rf "$HOME/{TRANSFER_DIR_ROOT}/{row.slice_instance_name}"' in backend.box_command_log
 
 
 def test_watchdog_takes_over_stale_transitions_under_a_fresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -672,7 +711,7 @@ def test_start_supervisor_tries_the_next_box_after_a_hard_reserve_failure(
     assert len(reserve_attempts) == 2
     # The failed candidate was rolled back (instance dir, disk dir, staged creds).
     joined_commands = "\n".join(backend.box_command_log)
-    assert f"rm -rf $HOME/.lima/{row.lima_instance_name}" in joined_commands
+    assert f"rm -rf $HOME/.lima/{row.slice_instance_name}" in joined_commands
 
 
 def test_start_supervisor_reports_the_last_hard_failure_when_every_box_is_broken(
@@ -690,3 +729,495 @@ def test_start_supervisor_reports_the_last_hard_failure_when_every_box_is_broken
     assert row.status == "stopped"
     assert "s5cmd: command not found" in (row.transition_error or "")
     assert "1 candidate(s) tried" in (row.transition_error or "")
+
+
+# ---------------------------------------------------------------------------
+# Generation-2 dispatch (raw-qemu boxes)
+# ---------------------------------------------------------------------------
+
+_SURVIVOR_BOX_ID = UUID("00000000-0000-0000-0000-00000000cc02")
+
+
+def _make_row_gen2(row: Any, backend: Any) -> None:
+    """Flip a seeded row (and its seeded origin box) to generation 2."""
+    row.box_generation = 2
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+
+
+def test_gen2_stop_supervisor_uses_systemd_and_the_qcow2_layout(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopping_workspace(backend)
+    _make_row_gen2(row, backend)
+    backend.transfer_status_sequence = ["", _FINAL_UPLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "stopped"
+    assert row.status == "stopped"
+    joined_commands = "\n".join(backend.box_command_log)
+    # The VM is halted + taken out of boot autostart via its unit, never limactl.
+    assert 'sudo /usr/bin/systemctl stop "mngr-slice@$ordinal"' in joined_commands
+    assert 'sudo /usr/bin/systemctl disable "mngr-slice@$ordinal"' in joined_commands
+    assert "limactl" not in joined_commands
+    # The upload targets the gen-2 instance-dir layout.
+    upload_script = backend.box_file_writes[f"{row.slice_instance_name}/upload.sh"]
+    assert "disk.qcow2" in upload_script
+    assert "/srv/mngr-slices/instances" in upload_script
+    # The retention finalize tears down via the gen-2 destroy script.
+    assert 'rm -rf "$slice_dir"' in joined_commands
+
+
+def test_gen2_restart_in_place_reenables_the_unit_and_waits_for_banners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopping_workspace(backend)
+    _make_row_gen2(row, backend)
+    row.status = "starting"
+    row.artifact_generation = 1
+    row.artifact_manifest = _completed_manifest(row)
+    backend.vm_exists_on_origin = True
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restarted-in-place"
+    assert row.status == "leased"
+    joined_commands = "\n".join(backend.box_command_log)
+    assert 'sudo /usr/bin/systemctl enable "mngr-slice@$ordinal"' in joined_commands
+    assert 'sudo /usr/bin/systemctl start "mngr-slice@$ordinal"' in joined_commands
+    assert "/dev/tcp/127.0.0.1/22000" in joined_commands
+    assert "/dev/tcp/127.0.0.1/22001" in joined_commands
+    assert "limactl" not in joined_commands
+
+
+def test_gen2_restore_lands_on_a_gen2_box_with_a_fresh_ordinal(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+        box["uplink_mbps"] = 1000
+        box["disk_gb"] = 3000
+    backend.vm_exists_on_origin = False
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001 5\n"
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.status == "leased"
+    assert row.ssh_port == 23000
+    assert row.container_ssh_port == 23001
+    assert row.box_generation == 2
+    # The gen-2 reserve + download were used (fresh cidata, systemd boot).
+    reserve_script = backend.box_file_writes[f"{row.slice_instance_name}/reserve.sh"]
+    assert "genisoimage" in reserve_script
+    assert 'cp "$TD/meta/$WS_INSTANCE/user-data"' in reserve_script
+    download_script = backend.box_file_writes[f"{row.slice_instance_name}/download.sh"]
+    assert 'sudo /usr/bin/systemctl enable "mngr-slice@5"' in download_script
+    assert "wait_ssh 23001" in download_script
+
+
+@pytest.mark.parametrize("row_generation, box_generation", [(2, 1), (1, 2)])
+def test_restore_only_lands_on_a_box_of_the_artifacts_own_generation(
+    monkeypatch: pytest.MonkeyPatch, row_generation: int, box_generation: int
+) -> None:
+    """Nothing converts an artifact between generations: when the only candidate
+    boxes are of the other generation the start fails cleanly and the row keeps
+    its generation (the gen-1 -> gen-2 move is the operator cutover)."""
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = row_generation
+    for box in backend.box_rows:
+        box["box_generation"] = box_generation
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "start-failed"
+    assert row.status == "stopped"
+    assert row.box_generation == row_generation
+    assert "no capacity" in (row.transition_error or "")
+    assert "reserve.sh" not in "\n".join(backend.box_command_log)
+
+
+def test_draining_origin_box_forces_the_restore_and_reaps_the_abandoned_vm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A start within the retention window whose origin box is draining must
+    NOT restart in place: it restores onto a surviving box and then deletes
+    the halted VM left on the draining origin (nothing else ever would)."""
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopping_workspace(backend)
+    row.status = "starting"
+    row.stopped_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    row.artifact_generation = 1
+    row.artifact_manifest = _completed_manifest(row)
+    row.wrapped_dek = connector_storage_module.wrap_dek(backend.storage_config, _TEST_IDENTITY)
+    backend.box_rows[0]["status"] = "draining"
+    backend.add_box(_SURVIVOR_BOX_ID, public_address="10.9.9.10", region="vin")
+    backend.vm_exists_on_origin = True
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001\n"
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.status == "leased"
+    assert row.bare_metal_server_id == _SURVIVOR_BOX_ID
+    joined_commands = "\n".join(backend.box_command_log)
+    # The in-place restart path was never taken...
+    assert "limactl --log-level=warn start" not in joined_commands
+    # ...and the abandoned origin VM was deleted after the restore landed.
+    assert f"limactl delete --force {row.slice_instance_name}" in joined_commands
+
+
+def test_draining_box_is_excluded_from_restore_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    backend.box_rows[0]["status"] = "draining"
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "start-failed"
+    assert row.status == "stopped"
+    assert "no capacity" in (row.transition_error or "")
+
+
+def _seed_stopped_gen2_workspace_on_origin(backend: Any) -> Any:
+    """A stopped gen-2 machine whose halted VM is still on its (gen-2) origin box."""
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.vps_address = "10.9.9.9"
+    row.ssh_port = 22000
+    row.container_ssh_port = 22001
+    row.bare_metal_server_id = _BOX_ID
+    row.memory_units = 8
+    row.disk_gb = 28
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+        box["uplink_mbps"] = 1000
+    return row
+
+
+def test_in_place_restart_applies_the_pending_resize_and_restamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_gen2_workspace_on_origin(backend)
+    row.target_memory_units = 16
+    row.target_disk_gb = 56
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restarted-in-place"
+    assert row.status == "leased"
+    # The start applied the targets: current = target, targets cleared.
+    assert row.memory_units == 16
+    assert row.disk_gb == 56
+    assert row.target_memory_units is None
+    assert row.target_disk_gb is None
+    # The on-box resize script ran before the unit restart, at the target size
+    # (the env template rides base64-encoded, so assert on its encoded form).
+    resize_script = backend.box_file_writes[f"{row.slice_instance_name}/resize.sh"]
+    expected_env_template = build_qemu_slice_env_file(
+        instance_name=row.slice_instance_name,
+        ordinal=None,
+        vcpus=compute_machine_vcpus(16, 2.0, 16, 120),
+        units=16,
+        total_units=120,
+        data_disk_gib=56,
+        vm_ssh_host_port=GEN2_VM_SSH_PORT_PLACEHOLDER,
+        container_ssh_host_port=GEN2_CONTAINER_SSH_PORT_PLACEHOLDER,
+        uplink_mbps=1000,
+    )
+    assert base64.b64encode(expected_env_template.encode()).decode() in resize_script
+    assert 'qemu-img resize -q "$slice_dir/datadisk.qcow2" 56G' in resize_script
+    resize_command_idx = next(idx for idx, cmd in enumerate(backend.box_command_log) if "resize.sh" in cmd)
+    restart_command_idx = next(idx for idx, cmd in enumerate(backend.box_command_log) if "systemctl start" in cmd)
+    assert resize_command_idx < restart_command_idx
+
+
+def test_in_place_restart_without_pending_targets_skips_the_resize_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_gen2_workspace_on_origin(backend)
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restarted-in-place"
+    assert f"{row.slice_instance_name}/resize.sh" not in backend.box_file_writes
+
+
+def test_in_place_restart_clamps_a_stale_disk_target_below_the_recorded_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_gen2_workspace_on_origin(backend)
+    # A stale target below the recorded size (the disk was grown after the
+    # target was granted) never shrinks the disk: the in-place restart applies
+    # (and restamps) the larger recorded size, exactly like the restore path.
+    row.disk_gb = 40
+    row.target_disk_gb = 32
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restarted-in-place"
+    assert row.status == "leased"
+    assert row.disk_gb == 40
+    assert row.target_disk_gb is None
+    # The on-box resize script ran at the clamped 40GB size (its grow guard
+    # then no-ops against the already-40GB qcow2 -- never a shrink).
+    resize_script = backend.box_file_writes[f"{row.slice_instance_name}/resize.sh"]
+    assert 'qemu-img resize -q "$slice_dir/datadisk.qcow2" 40G' in resize_script
+    assert "32G" not in resize_script
+
+
+def test_in_place_resize_capacity_refusal_falls_back_to_the_restore_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_gen2_workspace_on_origin(backend)
+    row.target_memory_units = 64
+    backend.resize_rc = 4
+    backend.resize_stderr = "MNGR_SLICE_NO_UNITS used_mib=1 requested_mib=2 budget_mib=3\n"
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001 5\n"
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.status == "leased"
+    # The restore applied the target.
+    assert row.memory_units == 64
+    assert row.target_memory_units is None
+    # The restore path's reserve ran at the target size.
+    reserve_script = backend.box_file_writes[f"{row.slice_instance_name}/reserve.sh"]
+    assert "requested_mib=" in reserve_script
+
+
+def test_gen2_restore_applies_a_pending_disk_grow_before_the_boot(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.memory_units = 8
+    row.disk_gb = 28
+    row.target_disk_gb = 56
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+    backend.vm_exists_on_origin = False
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001 5\n"
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.disk_gb == 56
+    assert row.target_disk_gb is None
+    download_script = backend.box_file_writes[f"{row.slice_instance_name}/download.sh"]
+    assert 'qemu-img resize -q "$SLICE_DIR/datadisk.qcow2" 56G' in download_script
+
+
+def test_gen2_restore_clamps_a_stale_disk_target_below_the_recorded_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.memory_units = 8
+    # A stale target below the recorded size (the disk was grown after the
+    # target was granted) never shrinks the disk: the start applies the larger
+    # recorded size.
+    row.disk_gb = 40
+    row.target_disk_gb = 32
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+    backend.vm_exists_on_origin = False
+    backend.reserve_stdout = "MNGR_RESTORE_RESERVED 23000 23001 5\n"
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    # The recorded size wins; the stale smaller target is cleared, and the
+    # qcow2 (already 40GB) is never resized downward.
+    assert row.disk_gb == 40
+    assert row.target_disk_gb is None
+    download_script = backend.box_file_writes[f"{row.slice_instance_name}/download.sh"]
+    assert "qemu-img resize" not in download_script
+
+
+def test_gen2_stop_records_the_disks_measured_virtual_sizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopping_workspace(backend)
+    _make_row_gen2(row, backend)
+    row.disk_gb = 44
+    backend.transfer_status_sequence = [
+        "",
+        _FINAL_UPLOAD_STATUS + f"VIRTUAL_BYTES_DISK={10 * 1024**3}\nVIRTUAL_BYTES_DATADISK={44 * 1024**3}\n",
+    ]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "stopped"
+    # The recorded size is the row's own; the upload's measurement is kept
+    # on the manifest for operators.
+    assert row.disk_gb == 44
+    manifest = row.artifact_manifest
+    assert manifest is not None
+    assert manifest["disk_virtual_bytes"] == 10 * 1024**3
+    assert manifest["datadisk_virtual_bytes"] == 44 * 1024**3
+
+
+def test_restore_evicts_unleased_rows_when_every_candidate_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.memory_units = 8
+    row.disk_gb = 28
+    row.target_memory_units = 64
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+    backend.vm_exists_on_origin = False
+    # An unleased available machine occupies most of the box's DB-visible
+    # budget; destroying it makes room for the 64-unit target.
+    evictable_id = UUID("00000000-0000-0000-0000-00000000ab99")
+    evictable = backend.add_available_host(
+        host_id=evictable_id, version="v1", vps_address="10.9.9.9", region="US-EAST-VA"
+    )
+    evictable.bare_metal_server_id = _BOX_ID
+    evictable.memory_units = 64
+    evictable.disk_gb = 224
+    evictable.slice_instance_name = "mngr-slice-test-" + "e" * 32
+    evictable.slice_disk_name = "mngr-slice-test-" + "e" * 32 + "-data"
+    # Pass 1 refuses for capacity; the post-eviction retry admits.
+    backend.reserve_response_sequence = [
+        (4, "", "MNGR_SLICE_NO_UNITS used_mib=1 requested_mib=2 budget_mib=3\n"),
+        (0, "MNGR_RESTORE_RESERVED 23000 23001 5\n", ""),
+    ]
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.status == "leased"
+    assert row.memory_units == 64
+    # The evicted row is gone (its VM torn down on the box).
+    assert backend.find_pool_row(evictable_id) is None
+    assert any("mngr-slice-test-" + "e" * 32 in cmd for cmd in backend.box_command_log)
+
+
+def test_eviction_planning_excludes_the_restoring_machines_own_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The restoring row's own footprint must not count against the box (the
+    # reserve reclaims its same-instance dir), or a near-budget target can
+    # never fit anywhere: a 112-unit target on a 120-unit box with the
+    # machine's own 8-unit row still recorded there fits exactly iff self is
+    # excluded.
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.memory_units = 8
+    row.disk_gb = 28
+    row.target_memory_units = 112
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+    backend.vm_exists_on_origin = False
+    evictable_id = UUID("00000000-0000-0000-0000-00000000ac88")
+    evictable = backend.add_available_host(
+        host_id=evictable_id, version="v1", vps_address="10.9.9.10", region="US-EAST-VA"
+    )
+    evictable.bare_metal_server_id = _BOX_ID
+    evictable.memory_units = 8
+    evictable.disk_gb = 28
+    evictable.slice_instance_name = "mngr-slice-test-" + "f" * 32
+    evictable.slice_disk_name = "mngr-slice-test-" + "f" * 32 + "-data"
+    backend.reserve_response_sequence = [
+        (4, "", "MNGR_SLICE_NO_UNITS used_mib=8704 requested_mib=115712 budget_mib=122880\n"),
+        (0, "MNGR_RESTORE_RESERVED 23000 23001 5\n", ""),
+    ]
+    backend.transfer_status_sequence = [_FINAL_DOWNLOAD_STATUS]
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "restored"
+    assert row.status == "leased"
+    assert row.memory_units == 112
+    assert backend.find_pool_row(evictable_id) is None
+
+
+def test_restore_fails_cleanly_when_even_eviction_cannot_fit_the_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _client, backend = _make_pool_test_client(monkeypatch)
+    backend.storage_config = make_storage_config()
+    row = _seed_stopped_workspace(backend)
+    row.box_generation = 2
+    row.memory_units = 8
+    row.disk_gb = 28
+    row.target_memory_units = 128
+    for box in backend.box_rows:
+        box["box_generation"] = 2
+        # A box whose budget can never fit 128 units, evictions or not.
+        box["ram_gb"] = 64
+    backend.vm_exists_on_origin = False
+    backend.reserve_rc = 4
+    backend.reserve_stderr = "MNGR_SLICE_NO_UNITS used_mib=0 requested_mib=131584 budget_mib=57344\n"
+
+    outcome = run_transition_supervisor(str(_WS_ID), _TEST_TRANSITION_ID)
+
+    assert outcome == "start-failed"
+    assert row.status == "stopped"
+    # The machine's data is intact and the refusal names the way out.
+    assert row.target_memory_units == 128
+    assert "try a smaller size" in (row.transition_error or "")
+
+
+def test_uplink_migration_backfills_the_fleet_before_tightening_the_column() -> None:
+    # Every gen-2 box's shaping, egress signal and link-speed audit read
+    # uplink_mbps, so the column must never be NULL again: the migration
+    # backfills the one plan the fleet has rented (1 Gbps) and then tightens.
+    migration_sql = (
+        (Path(__file__).parent.parent.parent / "migrations" / "040_uplink_mbps_not_null.sql").read_text().lower()
+    )
+    backfill = "update bare_metal_servers set uplink_mbps = 1000 where uplink_mbps is null"
+    tighten = "alter table bare_metal_servers alter column uplink_mbps set not null"
+    assert backfill in migration_sql
+    assert tighten in migration_sql
+    assert migration_sql.index(backfill) < migration_sql.index(tighten)
+
+
+def test_migration_041_adds_the_generic_slice_columns_and_backfills_them_from_the_lima_ones() -> None:
+    # Additive like 037: the old columns stay (pre-rename checkouts keep writing
+    # them), the new ones are backfilled, and the connector reads COALESCE(new, old).
+    migration_sql = (
+        (Path(__file__).parent.parent.parent / "migrations" / "041_slice_column_names.sql").read_text().lower()
+    )
+    for added_column in (
+        "alter table bare_metal_servers add column slice_service_user text",
+        "alter table pool_hosts add column slice_instance_name text",
+        "alter table pool_hosts add column slice_disk_name text",
+    ):
+        assert added_column in migration_sql
+    assert "update bare_metal_servers set slice_service_user = lima_service_user" in migration_sql
+    assert "update pool_hosts set slice_instance_name = lima_instance_name, slice_disk_name = lima_disk_name" in (
+        migration_sql
+    )
+    assert "drop column" not in migration_sql
+    assert "rename column" not in migration_sql
+    # The connector's reads fall back to the legacy columns until the cleanup.
+    assert "coalesce(slice_instance_name, lima_instance_name)" in _WORKSPACE_ROW_SELECT.lower()
+    assert "coalesce(slice_service_user, lima_service_user)" in _BOX_ROW_COLUMNS.lower()

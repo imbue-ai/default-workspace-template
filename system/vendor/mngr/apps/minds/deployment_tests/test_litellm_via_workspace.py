@@ -511,9 +511,14 @@ def test_litellm_spend_tracking_via_local_workspace(
         logger.info("litellm recorded spend {} for key alias {}", spend, key_alias)
 
 
-# Every lane whose sign-in is a file write, so it needs no browser and no real credential.
-# The OAuth lanes (Anthropic subscription, OpenAI device, Google) cannot be reached without a
-# human in a browser; their PTY driving is covered by unit tests against recorded output.
+# Lanes whose sign-in is a file write, so each needs no browser and no real credential. Two lanes
+# that also offer one are deliberately absent: `anthropic`, whose paste method
+# `test_litellm_spend_tracking_via_local_workspace` above already drives end to end including a real
+# turn, and `openai` (a raw key into codex's auth.json), because this test runs against whatever
+# template ref the deployment orchestrator prepared, released tags included, and on one that
+# predates that method the sign-in 404s. Every remaining sign-in is a PTY flow needing a human at a
+# browser -- claude's subscription login, codex's device auth, antigravity's Google flow -- and
+# their PTY driving is covered by unit tests against recorded output.
 _PASTE_LANES: tuple[tuple[str, str | None, str], ...] = (
     ("opencode-go", None, "Opencode Go (Pi)"),
     ("openrouter", None, "OpenRouter (Pi)"),
@@ -531,8 +536,7 @@ def test_every_paste_lane_binds_a_chat_to_its_own_account(
     The other half of the sign-in artifact. `test_litellm_spend_tracking_via_local_workspace`
     proves one lane end to end including a real turn; this proves the part that is common to
     all of them -- account minted, credential written where the harness looks, chat created
-    against it, agent pointed at that folder -- for every lane that can be driven without a
-    human in a browser.
+    against it, agent pointed at that folder -- for each lane in `_PASTE_LANES`.
 
     Deliberately fake keys. What fails silently here is the BINDING, not the key: a chat
     bound to nothing is indistinguishable from a working one until its first turn, and the

@@ -13,6 +13,8 @@ from imbue.remote_service_connector.testing import make_storage_config
 
 _TARGET_EMAIL = "suspect@example.com"
 _WS_ID = UUID("00000000-0000-0000-0000-00000000bb01")
+_OWNER_STOPPED_WS_ID = UUID("00000000-0000-0000-0000-00000000bb02")
+_CRASHED_WS_ID = UUID("00000000-0000-0000-0000-00000000bb03")
 
 
 def _create_target_account(st_backend: FakeSuperTokensBackend, session_count: int = 1) -> str:
@@ -101,6 +103,7 @@ def test_suspend_runs_the_full_fanout(monkeypatch: pytest.MonkeyPatch) -> None:
     ws_row = backend.find_pool_row(_WS_ID)
     assert ws_row is not None
     assert ws_row.status == "stopping"
+    assert ws_row.stop_kind == "suspension"
     # The spawned supervisor owns the transition_id the fan-out's stop CAS minted.
     assert ws_row.transition_id is not None
     assert backend.spawned_supervisor_tokens == [(str(_WS_ID), ws_row.transition_id)]
@@ -199,6 +202,15 @@ def test_unsuspend_restores_keys_shares_and_signin_flag(monkeypatch: pytest.Monk
     user_id = _create_target_account(st_backend)
     backend.storage_config = make_storage_config()
     _seed_leased_workspace(backend, user_id)
+    # Two of the user's rows the unsuspend step must leave alone: a stop the
+    # user made before the suspension, and a crashed row still carrying the
+    # suspension's kind (a kind describes a stop, and a crashed row has none).
+    owner_stopped = _seed_leased_workspace(backend, user_id, host_id=_OWNER_STOPPED_WS_ID)
+    owner_stopped.status = "stopped"
+    owner_stopped.stop_kind = "owner"
+    crashed = _seed_leased_workspace(backend, user_id, host_id=_CRASHED_WS_ID)
+    crashed.status = "crashed"
+    crashed.stop_kind = "suspension"
     _seed_llm_key(litellm, user_id)
     token_id = _seed_r2_key(fake_cf, key_store, user_id)
     user_label = derive_share_user_label(user_id)
@@ -225,11 +237,16 @@ def test_unsuspend_restores_keys_shares_and_signin_flag(monkeypatch: pytest.Monk
     stored_key = key_store.get_key(token_id)
     assert stored_key is not None
     assert stored_key["suspension_access"] is None
-    # Shares are active again; workspaces deliberately stay stopped.
+    # Shares are active again; workspaces deliberately stay stopped, but their
+    # stops are the user's to end now.
     assert all(share["state"] == "active" for share in backend.share_rows)
     ws_row = backend.find_pool_row(_WS_ID)
     assert ws_row is not None
     assert ws_row.status == "stopping"
+    assert ws_row.stop_kind == "idle"
+    assert owner_stopped.stop_kind == "owner"
+    assert crashed.stop_kind == "suspension"
+    assert resp.json()["steps"]["workspaces"]["restamped_count"] == 1
 
 
 def test_unsuspend_restores_quota_downgraded_key_to_read_only(monkeypatch: pytest.MonkeyPatch) -> None:

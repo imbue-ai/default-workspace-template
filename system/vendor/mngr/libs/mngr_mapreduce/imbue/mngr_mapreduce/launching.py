@@ -2,6 +2,7 @@
 
 import math
 import time
+from collections.abc import Sequence
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Final
@@ -46,6 +47,7 @@ from imbue.mngr_mapreduce.data_types import MapReduceRecipe
 from imbue.mngr_mapreduce.data_types import MapReduceTask
 from imbue.mngr_mapreduce.data_types import MapperInfo
 from imbue.mngr_mapreduce.data_types import ReducerInfo
+from imbue.mngr_mapreduce.data_types import SnapshotHost
 from imbue.mngr_mapreduce.utils import dedup_name
 from imbue.mngr_mapreduce.utils import resolve_templates
 from imbue.mngr_mapreduce.utils import sanitize_for_agent_name
@@ -193,12 +195,20 @@ def _build_agent_options(
     task_id: str | None = None,
     target_path: Path | None = None,
     transfer_mode: TransferMode = TransferMode.GIT_MIRROR,
+    role_override: str | None = None,
+    base_ref: str | None = None,
 ) -> CreateAgentOptions:
     """Build CreateAgentOptions for a map-reduce agent.
 
     ``kind`` is stamped onto ``label_options`` as the ``mapreduce_role`` label,
     overriding any prior value carried on ``config``. ``task_id`` is stamped as
     the ``mapreduce_task_id`` label; only mappers have one.
+
+    ``role_override`` replaces the label's value without changing how ``kind``
+    resolves the environment or the work_dir, which is how a pipeline node
+    stamps its own name as the role. ``base_ref`` replaces
+    ``config.base_commit`` as the ref the agent starts from, which is how a
+    later pipeline node starts from an earlier one's branch.
 
     ``target_path`` overrides where the agent's work_dir is placed on the
     host (used to pin the snapshotter to ``/code``). ``transfer_mode``
@@ -210,7 +220,7 @@ def _build_agent_options(
     from a snapshot sources from the host's own ``/code``).
     """
     is_remote = config.provider_name.lower() != LOCAL_PROVIDER_NAME
-    labels = {**config.label_options.labels, ROLE_LABEL_KEY: kind.value}
+    labels = {**config.label_options.labels, ROLE_LABEL_KEY: role_override or kind.value}
     if task_id is not None:
         labels[TASK_ID_LABEL_KEY] = task_id
     label_options = AgentLabelOptions(labels=labels)
@@ -221,7 +231,7 @@ def _build_agent_options(
         target_path=target_path,
         transfer_mode=transfer_mode,
         git=AgentGitOptions(
-            base_branch=config.base_commit,
+            base_branch=base_ref if base_ref is not None else config.base_commit,
             new_branch_name=branch_name,
         ),
         data_options=AgentDataOptions(is_rsync_enabled=False),
@@ -241,6 +251,8 @@ def _create_agent(
     task_id: str | None = None,
     existing_host: OnlineHostInterface | None = None,
     host_name: HostName | None = None,
+    role_override: str | None = None,
+    base_ref: str | None = None,
 ) -> CreateAgentResult:
     """Create an agent on the configured provider with an optional initial message.
 
@@ -312,6 +324,8 @@ def _create_agent(
         task_id=task_id,
         target_path=target_path,
         transfer_mode=transfer_mode,
+        role_override=role_override,
+        base_ref=base_ref,
     )
 
     return api_create(
@@ -395,6 +409,118 @@ def _create_snapshot_host(
         return snapshot_name
     finally:
         stop_agent_on_host(snapshotter_host, snapshotter_agent_id, agent_name)
+
+
+def create_agent_for_node(
+    agent_name: AgentName,
+    branch_name: str,
+    config: LaunchConfig,
+    mngr_ctx: MngrContext,
+    role: str,
+    base_ref: str,
+    initial_message: str | None = None,
+    existing_host: OnlineHostInterface | None = None,
+    host_name: HostName | None = None,
+    is_snapshotter: bool = False,
+) -> CreateAgentResult:
+    """Create one pipeline node's agent, stamping the node name as its role.
+
+    The recipe path classifies agents by ``AgentKind``; a pipeline classifies
+    them by node name. Both land in the same ``mapreduce_role`` label, so
+    ``mngr ls`` finds either kind of run the same way. ``is_snapshotter`` picks
+    the kind that pins the work_dir to ``/code``, which is the only place the
+    kind still matters here: a pipeline's ``LaunchConfig`` carries no
+    reducer-only environment, so environment resolution is kind-independent.
+    """
+    return _create_agent(
+        agent_name=agent_name,
+        branch_name=branch_name,
+        config=config,
+        mngr_ctx=mngr_ctx,
+        kind=AgentKind.SNAPSHOTTER if is_snapshotter else AgentKind.MAPPER,
+        initial_message=initial_message,
+        existing_host=existing_host,
+        host_name=host_name,
+        role_override=role,
+        base_ref=base_ref,
+    )
+
+
+def create_snapshot_host_named(
+    agent_name: AgentName,
+    host_name: HostName,
+    branch_name: str,
+    config: LaunchConfig,
+    mngr_ctx: MngrContext,
+) -> SnapshotHost:
+    """Launch a snapshotter agent, snapshot its host, stop the agent, and return both.
+
+    The recipe path's ``_create_snapshot_host`` derives its names from a recipe
+    and run name and returns only the snapshot; a pipeline names its own and
+    needs the host back too, so it can destroy it when the node ends.
+    """
+    logger.info("Launching snapshotter agent '{}' for provisioning...", agent_name)
+    create_result = create_agent_for_node(
+        agent_name=agent_name,
+        branch_name=branch_name,
+        config=config,
+        mngr_ctx=mngr_ctx,
+        role=AgentKind.SNAPSHOTTER.value,
+        base_ref=config.base_commit,
+        host_name=host_name,
+        is_snapshotter=True,
+    )
+    try:
+        provider = get_provider_instance(config.provider_name, mngr_ctx)
+        snapshot_name = SnapshotName(str(provider.create_snapshot(create_result.host)))
+        logger.info("Created snapshot '{}' from snapshotter host", snapshot_name)
+        return SnapshotHost(snapshot=snapshot_name, host=create_result.host)
+    finally:
+        stop_agent_on_host(create_result.host, create_result.agent.id, agent_name)
+
+
+def create_hosts_named(
+    host_names: Sequence[HostName],
+    config: LaunchConfig,
+    mngr_ctx: MngrContext,
+    max_parallel: int,
+) -> list[OnlineHostInterface]:
+    """Pre-create one host per name, in parallel.
+
+    Raises HostPoolCreationError when so many hosts failed that the survivors
+    would each carry several times their intended share of agents.
+    """
+    hosts: list[OnlineHostInterface] = []
+    build = _resolve_build_options(config, mngr_ctx)
+    host_environment = _build_host_environment(config)
+    with ConcurrencyGroupExecutor(
+        parent_cg=mngr_ctx.concurrency_group,
+        name="mapreduce_create_hosts",
+        max_workers=max_parallel,
+    ) as executor:
+        futures = [
+            executor.submit(
+                resolve_target_host,
+                NewHostOptions(
+                    provider=config.provider_name, name=host_name, build=build, environment=host_environment
+                ),
+                mngr_ctx,
+            )
+            for host_name in host_names
+        ]
+        for future in futures:
+            try:
+                hosts.append(future.result())
+            except (MngrError, OSError, BaseExceptionGroup) as exc:
+                logger.warning("Failed to create host: {}", exc)
+
+    logger.info("Created {} host(s) for agent placement", len(hosts))
+    if is_host_pool_failure_ratio_exceeded(len(hosts), len(host_names)):
+        raise HostPoolCreationError(
+            f"Only {len(hosts)} of the {len(host_names)} requested hosts were created, so each one would take "
+            f"several times its intended share of this run's agents. Aborting the run."
+        )
+    return hosts
 
 
 def stop_agent_on_host(host: OnlineHostInterface, agent_id: AgentId, agent_name: AgentName) -> None:

@@ -114,19 +114,25 @@ def test_web_chrome_unlock_overview_and_destroy_loop(shared_env: Callable[[str],
             page.get_by_role("button", name="Set password").click()
 
             # The overview renders the seeded records: the unshared cloud row
-            # is desktop-only (share status has no row for it), the tombstone
-            # renders destroyed without probing anything.
+            # is desktop-only (share status has no row for it). Destroyed
+            # workspaces linger for the whole backup-retention window, so the
+            # overview hides them behind an explicit toggle; the tombstone
+            # renders destroyed (without probing anything) once it is shown.
             page.wait_for_selector("text=Workspaces", timeout=_UI_TIMEOUT_MS)
             page.wait_for_selector("text=Seeded Cloud WS", timeout=_UI_TIMEOUT_MS)
-            page.wait_for_selector("text=Tombstoned WS", timeout=_UI_TIMEOUT_MS)
             page.wait_for_selector("text=desktop-only", timeout=_UI_TIMEOUT_MS)
+            page.get_by_role("button", name="Show 1 destroyed workspace").click()
+            page.wait_for_selector("text=Tombstoned WS", timeout=_UI_TIMEOUT_MS)
             page.wait_for_selector("text=destroyed", timeout=_UI_TIMEOUT_MS)
 
             # -- Destroy the active record. There is no lease behind it (the
             # exact state of a workspace whose lease is already gone), so the
-            # flow is: confirm dialog -> CAS-tombstone the record.
+            # flow is: confirm dialog -> CAS-tombstone the record. With the
+            # toggle on, both tiles then carry a destroyed badge.
             page.on("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name="Destroy").click()
+            # exact: the toggle now reads "Hide destroyed workspaces", which a
+            # substring match on "Destroy" would also resolve to.
+            page.get_by_role("button", name="Destroy", exact=True).click()
             page.wait_for_function(
                 "() => document.querySelectorAll('span').length > 0 && "
                 "[...document.querySelectorAll('span')].filter(s => s.textContent === 'destroyed').length >= 2",
@@ -152,6 +158,10 @@ def test_web_chrome_unlock_overview_and_destroy_loop(shared_env: Callable[[str],
             second_page.get_by_placeholder("Master password").fill(_MASTER_PASSWORD)
             second_page.get_by_role("button", name="Unlock").click()
             second_page.wait_for_selector("text=Workspaces", timeout=_UI_TIMEOUT_MS)
+            # Both records are tombstones now, so the fresh session hides them
+            # until the toggle reveals them; the decrypted names prove the unlock.
+            second_page.get_by_role("button", name="Show 2 destroyed workspaces").click()
             second_page.wait_for_selector("text=Seeded Cloud WS", timeout=_UI_TIMEOUT_MS)
+            second_page.wait_for_selector("text=Tombstoned WS", timeout=_UI_TIMEOUT_MS)
         finally:
             browser.close()

@@ -196,6 +196,9 @@ export class ShellState {
       case "enter":
         this.enterWorkspace(entry.id);
         return;
+      case "blocked":
+        // The row is not rendered clickable; there is nowhere useful to go.
+        return;
     }
   }
 

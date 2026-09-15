@@ -36,6 +36,7 @@ import modal
 import tenacity
 
 from imbue.modal_app_kit.database import direct_database_url
+from imbue.modal_app_kit.deploy import WEB_FUNCTION_REGION
 from imbue.modal_app_kit.deploy import deploy_metadata_secret
 from imbue.modal_app_kit.deploy import read_deploy_env
 from imbue.modal_app_kit.deploy import read_deploy_id
@@ -228,6 +229,9 @@ app = modal.App(name=f"llm-{_DEPLOY_ENV}", image=image)
     # None when unset, so Modal uses its own default); dev pins this high so
     # the no-warm-pool proxy stays hot across a dev session.
     scaledown_window=_SCALEDOWN_WINDOW,
+    # US-only scheduling: every LLM response streams through this function, so
+    # its distance from the user is the product's latency (see WEB_FUNCTION_REGION).
+    region=WEB_FUNCTION_REGION,
     timeout=600,
 )
 @modal.asgi_app()

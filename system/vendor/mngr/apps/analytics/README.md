@@ -47,7 +47,9 @@ The service lives in `imbue/analytics/`:
   duration warnings.
 - `aggregation.py` -- the gold-table SQL (windowed, idempotent) and the run
   function, including the transcript-metrics derivation.
-- `collection.py` -- the collection runner: SSH hops with the pool key,
+- `collection.py` -- the collection runner: SSH hops with the tier's
+  management credentials (a CA-signed certificate from the connector's
+  certificate Dict on gen-2, the pool key on gen-1),
   script injection, untrusted-output validation, lake writes, runner-owned
   cursors, per-attempt audit rows.
 - `consent.py` -- explorer-plan consent sync and online-workspace

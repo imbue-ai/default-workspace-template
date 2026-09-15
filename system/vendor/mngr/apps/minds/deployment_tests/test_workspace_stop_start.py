@@ -14,15 +14,12 @@ instead when running against an env that legitimately has no pool (e.g.
 ``just minds-test-services-against dev-<you> ...``, which sets it). Missing
 workspace storage still skips.
 
-Opt-in via ``MINDS_STOP_START_RELEASE_TEST=1`` (the ``MNGR_AWS_RELEASE_TESTS``
-pattern): the full cycle's measured wall time against the standing CI box was
-~2.6 HOURS (the ~13GB artifact upload ran at ~1.4MB/s effective), which no CI
-job budget fits -- see the spec's open questions for the follow-ups (raise the
-ci tier's upload throttle or shrink the test workspace). Until one lands, the
-test runs only where an operator explicitly opts in.
+The full cycle was opt-in while the CI boxes were gen-1: the ~13GB artifact
+upload ran at ~1.4MB/s effective there (~2.6 hours). The gen-2 CI boxes upload
+over the S3 IPv4 pin at ~100MB/s (minutes), so the test now runs in every
+release dispatch; the deadlines below are budgeted to the gen-2 cycle.
 """
 
-import os
 import socket
 from collections.abc import Callable
 from typing import Any
@@ -32,23 +29,19 @@ import pytest
 
 from imbue.minds.deployment_tests.data_types import SharedEnvHandle
 from imbue.minds.deployment_tests.data_types import VerifiedUserHandle
+from imbue.minds.deployment_tests.helpers import LEASE_MAX_BOX_GENERATION
 from imbue.minds.deployment_tests.helpers import wait_for_env_ready
 from imbue.minds.deployment_tests.testing import handle_no_pool_capacity
 from imbue.mngr.utils.polling import poll_for_value
 
 pytestmark = [pytest.mark.release, pytest.mark.minds_services]
 
-# The opt-in gate (see the module docstring); a skipif marker rather than an
-# in-body skip so the verified_user fixture never provisions a real user for
-# a run that is about to skip.
-_STOP_START_OPT_IN = os.environ.get("MINDS_STOP_START_RELEASE_TEST") == "1"
-
 _HTTP_TIMEOUT_SECONDS = 60.0
-# The row lands on "stopped" the moment the upload verifies. Measured against
-# the standing CI box, the ~13GB upload ran at ~1.4MB/s effective (~2.6h), so
-# the deadline budgets that plus margin. The start downloads at ~1 GB/s and
-# boots in seconds.
-_STOP_DEADLINE_SECONDS = 3.5 * 3600.0
+# The row lands on "stopped" the moment the upload verifies: a VM halt and
+# snapshot, then the ~13GB artifact at ~100MB/s over the gen-2 box's S3 IPv4
+# pin (a couple of minutes); the budget leaves room for a box under load. The
+# start downloads at ~1 GB/s and boots in seconds.
+_STOP_DEADLINE_SECONDS = 30 * 60.0
 # After "stopped" the halted local VM (and the slot) is kept until the env's
 # local-retention window -- which runs concurrently with the upload, from the
 # stop request -- closes and the retention finalize clears the placement.
@@ -138,17 +131,10 @@ def _assert_ssh_banner(address: str, port: int) -> None:
     assert banner.startswith(b"SSH"), f"{address}:{port} did not answer with an SSH banner: {banner!r}"
 
 
-# The stop deadline (3.5h) plus the slot-free (1.25h) and start (20min)
-# deadlines plus lease/SSH/poll overhead; the test is opt-in (see above), so
-# this long budget never holds up a default run.
-@pytest.mark.timeout(6 * 3600)
-@pytest.mark.skipif(
-    not _STOP_START_OPT_IN,
-    reason=(
-        "stop/start's full cycle measured ~2.6h against the standing CI box (upload-bound), which no CI "
-        "job budget fits; set MINDS_STOP_START_RELEASE_TEST=1 to run it (see the module docstring)"
-    ),
-)
+# The stop (30min), slot-free (1.25h, covering an env on the default retention
+# window) and start (20min) deadlines plus lease/SSH/poll overhead. Against the
+# CI envs (60s retention) the whole cycle is minutes.
+@pytest.mark.timeout(2 * 3600 + 15 * 60)
 def test_workspace_stop_uploads_frees_slot_and_start_restores(
     shared_env: Callable[[str], SharedEnvHandle], verified_user: VerifiedUserHandle
 ) -> None:
@@ -164,6 +150,7 @@ def test_workspace_stop_uploads_frees_slot_and_start_restores(
                 "ssh_public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderTestKeyForStopStart",
                 "host_name": "stop-start-probe",
                 "attributes": {},
+                "max_box_generation": LEASE_MAX_BOX_GENERATION,
             },
         )
         if lease.status_code == 503:

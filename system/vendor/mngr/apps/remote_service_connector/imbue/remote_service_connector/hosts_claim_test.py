@@ -13,6 +13,7 @@ from imbue.remote_service_connector.testing import _USER_STUB_USER_ID_PREFIX
 from imbue.remote_service_connector.testing import _make_pool_quota_test_client
 from imbue.remote_service_connector.testing import _seed_entitlements_row
 from imbue.remote_service_connector.testing import _user_headers
+from imbue.remote_service_connector.testing import hold_web_template_ref
 
 _HOST_DB_ID = UUID("00000000-0000-0000-0000-0000000000cc")
 _HOST_ID_STR = "host-" + "c" * 32
@@ -28,8 +29,12 @@ def _install_claim_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MINDS_WEB_TEMPLATE_REF", _TEMPLATE_REF)
 
 
+def _row_at(template_ref: str) -> dict[str, object]:
+    return {"repo_url": _TEMPLATE_REPO, "repo_branch_or_tag": template_ref, "cpus": 2}
+
+
 def _pinned_attributes() -> dict[str, object]:
-    return {"repo_url": _TEMPLATE_REPO, "repo_branch_or_tag": _TEMPLATE_REF, "cpus": 2}
+    return _row_at(_TEMPLATE_REF)
 
 
 def _claim_body(display_name: str | None = "My Workspace") -> dict[str, object]:
@@ -375,3 +380,92 @@ def test_claim_writes_a_record_stub_carrying_the_display_name(monkeypatch: pytes
     assert stub["agent_id"] == _AGENT_ID
     assert stub["display_name"] == "My Workspace"
     assert stub["state"] == "active"
+
+
+_CHANNEL_REF = "minds-v0.6.1"
+
+
+def test_claim_leases_the_channel_pin_over_the_deploy_time_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The deploy-time pin names an older ref than the channel file does; only
+    # the row at the channel's tag may be leased.
+    _install_claim_env(monkeypatch)
+    hold_web_template_ref(monkeypatch, "stable", _CHANNEL_REF)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=UUID("00000000-0000-0000-0000-0000000000ee"),
+        version="v0.1.0",
+        agent_id="agent-deploy-time-pin",
+        attributes=_pinned_attributes(),
+    )
+    backend.add_available_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        agent_id=_AGENT_ID,
+        host_id_str=_HOST_ID_STR,
+        attributes=_row_at(_CHANNEL_REF),
+    )
+
+    resp = client.post("/hosts/claim", json=_claim_body(), headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["agent_id"] == _AGENT_ID
+
+
+def test_claim_honors_the_channel_the_body_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_claim_env(monkeypatch)
+    hold_web_template_ref(monkeypatch, "stable", _CHANNEL_REF)
+    hold_web_template_ref(monkeypatch, "alpha", "minds-v0.7.0")
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        agent_id=_AGENT_ID,
+        host_id_str=_HOST_ID_STR,
+        attributes=_row_at("minds-v0.7.0"),
+    )
+
+    stable_resp = client.post("/hosts/claim", json=_claim_body(), headers=_user_headers())
+    assert stable_resp.status_code == 503
+    assert backend.pool_rows[0].status == "available"
+
+    alpha_resp = client.post("/hosts/claim", json={**_claim_body(), "channel": "alpha"}, headers=_user_headers())
+    assert alpha_resp.status_code == 200
+    assert alpha_resp.json()["agent_id"] == _AGENT_ID
+
+
+def test_claim_treats_an_unknown_channel_as_stable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_claim_env(monkeypatch)
+    hold_web_template_ref(monkeypatch, "stable", _CHANNEL_REF)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        agent_id=_AGENT_ID,
+        host_id_str=_HOST_ID_STR,
+        attributes=_row_at(_CHANNEL_REF),
+    )
+
+    resp = client.post("/hosts/claim", json={**_claim_body(), "channel": "nightly"}, headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["agent_id"] == _AGENT_ID
+
+
+def test_claim_falls_back_to_the_deploy_time_ref_when_the_feed_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_claim_env(monkeypatch)
+    hold_web_template_ref(monkeypatch, "stable", None)
+    client, backend, _entitlements, _litellm = _make_pool_quota_test_client(monkeypatch)
+    backend.add_available_host(
+        host_id=_HOST_DB_ID,
+        version="v0.1.0",
+        agent_id=_AGENT_ID,
+        host_id_str=_HOST_ID_STR,
+        attributes=_pinned_attributes(),
+    )
+
+    resp = client.post("/hosts/claim", json=_claim_body(), headers=_user_headers())
+
+    assert resp.status_code == 200
+    assert resp.json()["agent_id"] == _AGENT_ID

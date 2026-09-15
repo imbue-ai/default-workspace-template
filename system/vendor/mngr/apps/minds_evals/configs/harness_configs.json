@@ -35,6 +35,27 @@
       "effort": "medium"
     },
     {
+      "name": "codex-sol-low",
+      "is_nightly": true,
+      "lane": "openai",
+      "model": "gpt-5.6-sol",
+      "effort": "low"
+    },
+    {
+      "name": "codex-terra",
+      "is_nightly": true,
+      "lane": "openai",
+      "model": "gpt-5.6-terra",
+      "effort": "medium"
+    },
+    {
+      "name": "codex-astra-low",
+      "is_nightly": false,
+      "lane": "openai",
+      "model": "gpt-6-astra",
+      "effort": "low"
+    },
+    {
       "name": "opus-standard",
       "is_nightly": false,
       "lane": "anthropic",

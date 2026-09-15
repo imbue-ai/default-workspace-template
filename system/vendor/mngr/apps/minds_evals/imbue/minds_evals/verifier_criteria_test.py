@@ -8,6 +8,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
+
 from imbue.minds_evals.testing import atif_document
 
 
@@ -251,26 +253,38 @@ def test_harness_score_keeps_discriminating_past_the_half_mark_and_never_reaches
     assert three > ten > 0.0
 
 
-def test_a_turn_ended_by_a_stop_sequence_or_an_output_limit_is_still_the_turns_answer(
-    message_length_guard: ModuleType, tmp_path: Path
+@pytest.mark.parametrize(
+    ("interim_reason", "terminal_reason"),
+    [
+        ("tool_use", "end_turn"),
+        ("tool_use", "stop_sequence"),
+        ("tool_use", "max_tokens"),
+        ("toolUse", "stop"),
+        ("toolUse", "length"),
+    ],
+)
+def test_a_turn_ended_on_any_terminal_stop_reason_is_the_turns_answer(
+    message_length_guard: ModuleType, tmp_path: Path, interim_reason: str, terminal_reason: str
 ) -> None:
-    # A delivery message truncated at max_tokens ended the turn just as surely as one that stopped on
-    # end_turn. Reading only end_turn as terminal holds that long answer to the interim limit and fails
-    # the turn for being long, which inverts what the criterion is for.
+    # Each harness records the end of a turn in its own vocabulary (Anthropic's end_turn, stop_sequence
+    # and max_tokens; pi's stop and length), and a message truncated at the output limit ended the turn
+    # as surely as one that stopped on its own. A reason missing from the terminal set holds that long
+    # answer to the interim limit and fails the turn for being long, which inverts what the criterion
+    # is for.
     long_answer = " ".join(["word"] * 250)
     trajectory_path = _write_trajectory(
         tmp_path,
         [
             {"step_id": 1, "source": "user", "message": "Build it"},
-            {"step_id": 2, "source": "agent", "message": "On it.", "extra": {"finish_reason": "tool_use"}},
-            {"step_id": 3, "source": "agent", "message": long_answer, "extra": {"finish_reason": "max_tokens"}},
+            {"step_id": 2, "source": "agent", "message": "On it.", "extra": {"finish_reason": interim_reason}},
+            {"step_id": 3, "source": "agent", "message": long_answer, "extra": {"finish_reason": terminal_reason}},
         ],
     )
 
-    turns, _records_endings = message_length_guard._agent_turn_messages(trajectory_path)
+    turns, does_document_record_endings = message_length_guard._agent_turn_messages(trajectory_path)
 
     assert turns == [[(2, False), (250, True)]]
-    assert message_length_guard.is_turn_within_limits(turns[0], True)
+    assert message_length_guard.is_turn_within_limits(turns[0], does_document_record_endings)
 
 
 def test_the_criterion_reports_the_fraction_of_turns_that_kept_their_limits(

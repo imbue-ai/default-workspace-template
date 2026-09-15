@@ -136,8 +136,9 @@ def program_block(program: str, *registrations: tuple[str, str]) -> str:
     return '[program:{}]\ncommand=bash -c "{}"\n\n'.format(program, forwards)
 
 
-# The workspace's own system/supervisord.conf, which before the first turn is still the pinned
-# template's file verbatim. Only an app whose forward_port.py call sits in the config is visible
+# The workspace's own supervisord config as the capture prints it -- the main file followed by the
+# drop-ins under `system/supervisord.conf.d/` -- which before the first turn is still the pinned
+# template's own files. Only an app whose forward_port.py call sits in the config is visible
 # through it.
 TEMPLATE_SUPERVISORD_CONF: Final[str] = "".join(
     (
@@ -660,19 +661,18 @@ def worker_listing_json(worker_state: str) -> str:
     )
 
 
-def worker_listing_output(listing_json: str) -> str:
-    return probe_sections(list_exit="0\n", listing=listing_json, stderr="")
+def worker_listing_output(listing_json: str, *, list_exit: str = "0") -> str:
+    return probe_sections(list_exit=list_exit + "\n", listing=listing_json, stderr="")
 
 
 def worker_capture_output(
-    document_exit: str, stream_exit: str, preserved: str, report_path: str, stderr: str, *, report_exit: str = "0"
+    document_exit: str, stream_exit: str, report_path: str, stderr: str, *, report_exit: str = "0"
 ) -> str:
     """What one `worker_capture_command` run prints for a launch that named a task file: the report
     sections carry the path the task file named and, when it named one, the copy's exit status."""
     return probe_sections(
         document_exit=document_exit + "\n",
         stream_exit=stream_exit + "\n",
-        preserved=preserved + ("\n" if preserved else ""),
         report_path=report_path + ("\n" if report_path else ""),
         report_exit=report_exit + "\n" if report_path else "",
         stderr=stderr,
@@ -703,3 +703,18 @@ def worker_trial_downloads(is_document_included: bool = True) -> dict[str, str]:
         BOX_WORKSPACE_TRAJECTORY_PATH: json.dumps(atif_document_with_worker_launch()),
         **captured_worker_downloads(WORKER_AGENT_ID, is_document_included=is_document_included),
     }
+
+
+# A live codex trial's captured document (codex 0.147.0 in code mode), trimmed to the steps that
+# exercise how codex reaches its shell: `tk create --step` declarations, a command built in a template
+# literal inside a loop, a program that failed, a worker launch whose output came back through `wait`,
+# and a later `wait` that failed. Kept as JSON rather than as Python so its programs keep the `await`
+# a real one carries.
+CODEX_CODE_MODE_TRAJECTORY_PATH: Final[Path] = (
+    Path(__file__).parent / "test_fixtures" / "codex_code_mode_trajectory.json"
+)
+
+
+def codex_code_mode_trajectory_document() -> dict[str, Any]:
+    """The trimmed live codex document at CODEX_CODE_MODE_TRAJECTORY_PATH."""
+    return json.loads(CODEX_CODE_MODE_TRAJECTORY_PATH.read_text())

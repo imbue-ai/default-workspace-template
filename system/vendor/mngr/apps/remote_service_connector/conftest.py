@@ -5,6 +5,7 @@ import sentry_sdk
 
 import imbue.remote_service_connector.auth as auth_mod
 from imbue.imbue_common.conftest_hooks import register_conftest_hooks
+from imbue.remote_service_connector.testing import clear_web_template_refs
 from imbue.remote_service_connector.testing import hold_stable_download_link
 
 register_conftest_hooks(globals())
@@ -45,6 +46,12 @@ def _hold_a_stable_download_link() -> None:
     what the link resolves to hold their own.
     """
     hold_stable_download_link(None)
+
+
+@pytest.fixture(autouse=True)
+def _clear_web_template_refs() -> None:
+    """Drop the web-pin cache so a channel entry one test held never reaches another."""
+    clear_web_template_refs()
 
 
 @pytest.fixture(autouse=True)

@@ -1,0 +1,1 @@
+New `read_modal_proxy` deploy helper: reads a Modal Proxy name from a deploy-time env var and returns the lazy `modal.Proxy` handle (or None when unset), following the same lockstep env-var contract as the other deploy knobs. Used by the connector to attach the tier's static-egress proxy (slice-fleet-gen2 phase 3).

@@ -115,10 +115,11 @@ def explorer_workspace_rows(
             )
             cursor.execute(
                 "INSERT INTO pool_hosts (id, vps_address, vps_instance_id, agent_id, host_id, host_name,"
-                " ssh_port, ssh_user, container_ssh_port, status, leased_to_user, created_at)"
+                " ssh_port, ssh_user, container_ssh_port, status, leased_to_user, memory_units, disk_gb, created_at)"
                 # 127.0.0.1:9 (discard) refuses SSH immediately; this row must
-                # never gain a reachable placement.
-                " VALUES (gen_random_uuid(), '127.0.0.1', %s, %s, %s, %s, 9, 'user', 9, 'leased', %s, NOW())",
+                # never gain a reachable placement. The sizing columns are NOT
+                # NULL; the default machine size (8 units, 44 GB) satisfies them.
+                " VALUES (gen_random_uuid(), '127.0.0.1', %s, %s, %s, %s, 9, 'user', 9, 'leased', %s, 8, 44, NOW())",
                 (
                     f"analytics-test-{uuid4().hex}",
                     f"agent-{uuid4().hex}",
@@ -152,6 +153,7 @@ def test_collection_poll_consents_enumerates_and_audits_a_refused_hop_against_re
     rsc_dsn, user_id, host_id = explorer_workspace_rows
     collection_settings = CollectionSettings(
         pool_ssh_private_key=SecretStr(_THROWAWAY_ED25519_PEM),
+        gen2_credentials=None,
         interval_seconds=3600,
         parallelism=2,
         workspace_timeout_seconds=30,

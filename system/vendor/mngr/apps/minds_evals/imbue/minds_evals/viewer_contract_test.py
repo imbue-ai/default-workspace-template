@@ -190,6 +190,7 @@ def test_the_viewer_reads_the_worker_block_the_harness_writes() -> None:
             EmbeddedWorker(
                 launch=worker_launch(),
                 document=worker_document(WORKER_AGENT_ID),
+                agent_id=WORKER_AGENT_ID,
                 state=WorkerState.RUNNING,
                 report_path="",
             )

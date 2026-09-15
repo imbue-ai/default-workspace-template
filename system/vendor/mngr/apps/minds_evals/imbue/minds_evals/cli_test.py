@@ -13,6 +13,7 @@ from imbue.minds_evals.cleanup_environments import format_ci_user_id_prefix
 from imbue.minds_evals.cleanup_environments import parse_ci_timestamp
 from imbue.minds_evals.cli import main
 from imbue.minds_evals.cli import run_cleanup_environments
+from imbue.minds_evals.minds_bridge import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.minds_evals.mock_modal_admin_test import MockModalEnvironmentAdmin
 from imbue.minds_evals.testing import CI_SWEEP_PREFIX
 from imbue.minds_evals.testing import DEVELOPER_ENVIRONMENT_NAME
@@ -260,3 +261,29 @@ def test_ci_user_id_prefix_mints_a_prefix_the_sweep_can_scope_and_age(tmp_path: 
     prefix = output_path.read_text().strip()
     assert prefix.startswith(CI_NAME_MARKER)
     assert parse_ci_timestamp("minds-staging-evals-{}todo-app-cafe1234".format(prefix)) is not None
+
+
+def test_flow_lab_refuses_a_run_with_no_api_key_before_it_launches_anything(tmp_path: Path) -> None:
+    """The lab drives the real verification agent, so a missing key has to be refused up front --
+    reaching it later would mean a browser already launched and a flow already part-way through."""
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "flow-lab",
+            "--app",
+            str(app_dir),
+            "--actions",
+            "Add a task named 'walk dog'.",
+            "--expect",
+            "'walk dog' is listed",
+            "--output",
+            str(tmp_path / "flow"),
+        ],
+        env={ANTHROPIC_API_KEY_ENV_VAR: None},
+    )
+
+    assert result.exit_code != 0
+    assert ANTHROPIC_API_KEY_ENV_VAR in result.output
