@@ -99,7 +99,7 @@ def test_an_agy_account_on_a_pasted_key_binds_by_the_env_file_and_the_mode(tmp_p
 
     assert args == ["--env-file", str(gemini_env_path(tmp_path)), "--setting", GEMINI_MODE_SETTING]
     # The setting names the mngr agent type, not agy's `agy` alias, or it resolves to nothing.
-    assert GEMINI_MODE_SETTING == "agent_types.antigravity.settings_overrides.modelProvider=gemini"
+    assert GEMINI_MODE_SETTING == 'agent_types.antigravity.settings_overrides__extend={"modelProvider":"gemini"}'
 
 
 def test_an_agy_account_without_a_key_still_binds_by_the_symlink(tmp_path: Path) -> None:

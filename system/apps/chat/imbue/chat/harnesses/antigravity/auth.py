@@ -47,8 +47,14 @@ GEMINI_MODEL_PROVIDER: Final = "gemini"
 # gets its own `$HOME`, so the account's settings.json is not the one it reads: mngr builds that
 # file at provision from the agent type's `settings_overrides`, a free-form dict it folds in
 # whole, which is the only channel into it. The key is the mngr agent type, not the `agy` alias.
-GEMINI_MODE_SETTING: Final = (
-    f"agent_types.{HarnessType.ANTIGRAVITY.value}.settings_overrides.{MODEL_PROVIDER_KEY}={GEMINI_MODEL_PROVIDER}"
+#
+# Spelled with `__extend` and a JSON object, never as a bare dotted path: antigravity's
+# `settings_overrides` is a plain dict on the mngr side (unlike claude's, which deep-merges), so
+# a dotted assignment over the non-empty table `.mngr/settings.toml` already gives the type is
+# refused by mngr's settings narrowing guard, and the create fails before any agent exists.
+# Same shape as the `first` template's codex entry, for the same reason.
+GEMINI_MODE_SETTING: Final = "agent_types.{}.settings_overrides__extend={}".format(
+    HarnessType.ANTIGRAVITY.value, json.dumps({MODEL_PROVIDER_KEY: GEMINI_MODEL_PROVIDER}, separators=(",", ":"))
 )
 
 
