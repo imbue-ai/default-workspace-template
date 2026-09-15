@@ -1,6 +1,6 @@
 """Surfacing the tab of a chat created from outside the workspace, once, where the user is.
 
-A chat the Minds app starts -- the update run behind "Update now", the help chat behind "Ask
+A chat the Mind app starts -- the update run behind "Update now", the help chat behind "Ask
 an agent" -- carries a label asking for its tab to be opened when it appears. The app cannot
 dock a tab itself: it is outside the workspace, and the user may not be looking yet. So the
 chat app reacts to the label on a newly observed agent and asks the shell to open the chat's
@@ -38,7 +38,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 
 logger = _loguru_logger
 
-# ``assist`` is the label the Minds app's help flow has always set; ``auto_open`` is the
+# ``assist`` is the label the Mind app's help flow has always set; ``auto_open`` is the
 # purpose-neutral form any spawner can set. The app sets both.
 AUTO_OPEN_LABELS: Final[tuple[str, ...]] = ("auto_open", "assist")
 
@@ -135,7 +135,7 @@ class AutoOpenLedger(MutableModel):
         """Take chats as already shown without showing them, and leave a ledger behind either way.
 
         What a first boot with no ledger finds is history this app cannot see: every chat the
-        Minds app ever labeled here, back to the workspace's first day. The file is written
+        Mind app ever labeled here, back to the workspace's first day. The file is written
         even when there is nothing to adopt, so that its existence is what tells the next boot
         the set it reads is the real one.
         """

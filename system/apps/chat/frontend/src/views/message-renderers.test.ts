@@ -113,7 +113,7 @@ describe("renderAssistantMessageChildren API errors", () => {
     const classes = collectClasses(children);
     expect(classes).toContain("message-api-error");
     expect(classes).toContain("message-api-error-note");
-    expect(allText(children)).toContain("isn't Minds' fault");
+    expect(allText(children)).toContain("isn't Mind's fault");
     expect(allText(children)).toContain("overloaded");
   });
 

@@ -188,7 +188,7 @@ describe("the messages a template's actions seed", () => {
     const orchard = catalogTemplateRecord("orchard");
     expect(adoptTemplateMessage(orchard)).toBe("/use-template https://github.com/someone/orchard");
     expect(createMachineFromTemplateMessage(orchard)).toContain("https://github.com/someone/orchard");
-    expect(createMachineFromTemplateMessage(orchard)).toContain("new Minds machine");
+    expect(createMachineFromTemplateMessage(orchard)).toContain("new Mind machine");
   });
 });
 

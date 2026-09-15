@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Minds Apps Homepage: a grid of shared app tiles with a recipient badge and an A-H layout switcher">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 160" role="img" aria-label="Mind Apps Homepage: a grid of shared app tiles with a recipient badge and an A-H layout switcher">
   <!-- Bespoke thumbnail: App Store-style squircle grid + share badge + A-H design-switcher. -->
   <rect width="240" height="160" rx="14" fill="#f2efe7"/>
   <rect x="0.75" y="0.75" width="238.5" height="158.5" rx="13.25" fill="none" stroke="#e0dacb" stroke-width="1.5"/>

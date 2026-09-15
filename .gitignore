@@ -351,7 +351,7 @@ system/scripts/notify_user.local.sh
 **/test-results
 **/current.tar.gz
 
-# Minds deploy-time build artifacts
+# Mind deploy-time build artifacts
 **/.minds/
 
 # Autofix session artifacts
