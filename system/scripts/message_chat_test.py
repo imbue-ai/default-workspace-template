@@ -340,9 +340,6 @@ def test_no_message_on_a_terminal_is_a_usage_error(
     assert fake_chat_app.posted == []
 
 
-# --- the create mode ---
-
-
 def test_a_create_asks_the_chat_app_to_wait_and_prints_the_chat_it_made(
     fake_chat_app: Any, fake_mngr: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
