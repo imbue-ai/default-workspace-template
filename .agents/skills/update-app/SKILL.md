@@ -204,7 +204,7 @@ the user's whole view instead:
 python3 system/scripts/refresh_workspace_view.py
 ```
 
-Nothing else does this for you. The Minds app only intervenes when a workspace
+Nothing else does this for you. The Mind app only intervenes when a workspace
 looks unreachable for a sustained stretch, and a services restart that comes
 back quickly never crosses that bar, so the user is left reading the page the
 previous build rendered. The helper is fire-and-forget and always exits 0; it

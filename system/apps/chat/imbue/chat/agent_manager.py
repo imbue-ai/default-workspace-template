@@ -761,7 +761,7 @@ class AgentManager:
     # nudge rides ``_broadcast_chats_updated``. ``SilentNudger`` until ``main`` installs the
     # real one, so a manager built by a test posts nothing to the workspace shell.
     _nudger: InstanceNudgerInterface
-    # Surfaces the tab of a chat created from outside with an auto-open label (the Minds
+    # Surfaces the tab of a chat created from outside with an auto-open label (the Mind
     # app's update and help chats): fed the agents that appear and go, seeded once with the
     # agents found at startup. Delivers through the shell, so ``main`` installs one that can
     # reach it; the default reaches nobody, so a manager a test builds opens no tabs.
@@ -1196,7 +1196,7 @@ class AgentManager:
         nothing on screen to say why.
 
         Every agent bound to the account carries the label, not only the chats this app
-        created: a worker, an automation, or a chat the Minds app started on the workspace's
+        created: a worker, an automation, or a chat the Mind app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is

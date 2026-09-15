@@ -432,7 +432,7 @@ create one or change its settings. Never fall back to a token-in-URL push.
   A NON-fast-forward rejection means the published `main` moved since §2b's check
   (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
   the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
-  push-protection on the baked-in Minds Google OAuth client) exactly as
+  push-protection on the baked-in Mind Google OAuth client) exactly as
   `publish-template` §8's "Failure handling" list does.
 
 - **Move / create the version tag** (the design's `template/<slug>/v<n>` tag
