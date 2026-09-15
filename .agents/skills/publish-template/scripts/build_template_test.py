@@ -123,6 +123,15 @@ def _update_self(source: Path, base_ref: str) -> None:
     _git("commit", "-qm", "Improve the app being published", cwd=source)
 
 
+def _resolve_base(source: Path) -> str:
+    return subprocess.run(
+        [sys.executable, str(_RESOLVE_TEMPLATE_BASE), "--repo", str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def _assemble(cwd: Path, base_ref: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -248,12 +257,7 @@ def test_an_updated_workspace_publishes_only_the_selected_app(tmp_path: Path) ->
     source, base_ref = _make_source_repo(tmp_path)
     _update_self(source, base_ref)
     music_scout_commit = _git("rev-parse", "HEAD~2", cwd=source)
-    resolved = subprocess.run(
-        [sys.executable, str(_RESOLVE_TEMPLATE_BASE), "--repo", str(source)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    resolved = _resolve_base(source)
     worktree = tmp_path / "wt"
     _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
 
@@ -290,12 +294,7 @@ def test_a_mind_created_from_a_published_template_can_publish(tmp_path: Path) ->
     (source / "system/apps/demo/main.py").write_text("x = 30\n")
     _git("add", "-A", cwd=source)
     _git("commit", "-qm", "Remix the adopted app", cwd=source)
-    resolved = subprocess.run(
-        [sys.executable, str(_RESOLVE_TEMPLATE_BASE), "--repo", str(source)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    resolved = _resolve_base(source)
     worktree = tmp_path / "wt"
     _git("worktree", "add", "-q", str(worktree), "HEAD", cwd=source)
 
