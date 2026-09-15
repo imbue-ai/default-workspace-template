@@ -28,6 +28,9 @@ import httpx
 from loguru import logger as _loguru_logger
 
 from imbue.chat.harnesses.account_scope import account_env
+from imbue.chat.harnesses.antigravity.auth import GEMINI_API_KEY_ENV_VAR
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
+from imbue.chat.harnesses.antigravity.auth import has_gemini_api_key
 from imbue.chat.harnesses.antigravity.auth import read_gemini_api_key
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -109,11 +112,21 @@ def is_signed_in(
     command's output or a response's status, not about the command or the fetch.
     """
     # The key file is only there when this account signed in by pasting one, so it is also what
-    # picks between the two routes on this lane; an agy account on a browser login has none.
-    if harness is HarnessType.ANTIGRAVITY:
+    # picks between the two routes on this lane; an agy account on a browser login has none. The
+    # test is the file's presence, the same one binding uses to put an agent into key mode: a file
+    # that is there but names no key still binds that way, and agy exits before its first turn on
+    # it, so answering through the CLI probe -- which says yes to any key -- would call such an
+    # account healthy.
+    if harness is HarnessType.ANTIGRAVITY and has_gemini_api_key(account_dir):
         api_key = read_gemini_api_key(account_dir)
-        if api_key is not None:
-            return _gemini_key_verdict(api_key, http_get)
+        if api_key is None:
+            logger.warning(
+                "{} names no {}, so agy has nothing to run on",
+                gemini_env_path(account_dir),
+                GEMINI_API_KEY_ENV_VAR,
+            )
+            return SignedIn.NO
+        return _gemini_key_verdict(api_key, http_get)
     probe = _PROBES.get(harness)
     if probe is None:
         # Nothing to ask. A file write either happened or raised.

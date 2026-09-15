@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
+from imbue.chat.harnesses.antigravity.auth import gemini_env_path
 from imbue.chat.harnesses.antigravity.auth import write_gemini_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.signed_in import SignedIn
@@ -175,6 +176,18 @@ def test_a_check_that_cannot_reach_google_is_unknown(tmp_path: Path) -> None:
         raise httpx.ConnectTimeout("no route")
 
     assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, get) is SignedIn.UNKNOWN
+
+
+def test_a_key_file_that_names_no_key_is_signed_out_rather_than_asked_of_agy(tmp_path: Path) -> None:
+    """The file's presence is what puts an agent into key mode, so a file that lost its key still
+    binds that way and agy exits before its first turn. Falling through to the CLI probe, which says
+    yes to any key, would call such an account healthy."""
+    gemini_env_path(tmp_path).write_text("# nothing here\n")
+
+    def no_fetch(_url: str, **_kwargs: Any) -> httpx.Response:
+        raise AssertionError("there is no key to validate")
+
+    assert is_signed_in(HarnessType.ANTIGRAVITY, tmp_path, _refusing_runner, no_fetch) is SignedIn.NO
 
 
 def test_an_agy_account_without_a_key_is_still_asked_through_the_cli(tmp_path: Path) -> None:
