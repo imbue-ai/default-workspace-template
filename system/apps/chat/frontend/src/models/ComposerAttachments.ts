@@ -36,22 +36,22 @@ export interface ComposerAttachment {
 }
 
 let _nextLocalId = 0;
-const _attachmentsByAgent: Record<string, ComposerAttachment[]> = {};
+const _attachmentsByChat: Record<string, ComposerAttachment[]> = {};
 
-export function getComposerAttachments(agentId: string): ComposerAttachment[] {
-  return _attachmentsByAgent[agentId] ?? [];
+export function getComposerAttachments(chatId: string): ComposerAttachment[] {
+  return _attachmentsByChat[chatId] ?? [];
 }
 
-function _setAttachments(agentId: string, attachments: ComposerAttachment[]): void {
-  _attachmentsByAgent[agentId] = attachments;
+function _setAttachments(chatId: string, attachments: ComposerAttachment[]): void {
+  _attachmentsByChat[chatId] = attachments;
 }
 
-function _patchAttachment(agentId: string, localId: string, patch: Partial<ComposerAttachment>): void {
-  const list = _attachmentsByAgent[agentId];
+function _patchAttachment(chatId: string, localId: string, patch: Partial<ComposerAttachment>): void {
+  const list = _attachmentsByChat[chatId];
   if (list === undefined) {
     return;
   }
-  _attachmentsByAgent[agentId] = list.map((item) => (item.localId === localId ? { ...item, ...patch } : item));
+  _attachmentsByChat[chatId] = list.map((item) => (item.localId === localId ? { ...item, ...patch } : item));
   m.redraw();
 }
 
@@ -59,7 +59,7 @@ function _patchAttachment(agentId: string, localId: string, patch: Partial<Compo
  * Upload each dropped / pasted / picked file to the agent VM, staging it as a
  * composer attachment. Returns immediately; status transitions drive redraws.
  */
-export function uploadFilesToComposer(agentId: string, files: FileList | readonly File[] | null | undefined): void {
+export function uploadFilesToComposer(chatId: string, files: FileList | readonly File[] | null | undefined): void {
   if (!files) {
     return;
   }
@@ -75,13 +75,13 @@ export function uploadFilesToComposer(agentId: string, files: FileList | readonl
       isImage: file.type.startsWith("image/") || isImagePath(file.name),
       status: "uploading",
     };
-    _setAttachments(agentId, [...getComposerAttachments(agentId), item]);
+    _setAttachments(chatId, [...getComposerAttachments(chatId), item]);
     item.uploadSettled = uploadAttachment(file)
       .then((uploaded) => {
-        _patchAttachment(agentId, localId, { status: "ready", uploaded });
+        _patchAttachment(chatId, localId, { status: "ready", uploaded });
       })
       .catch((error: unknown) => {
-        _patchAttachment(agentId, localId, { status: "error", error: describeRequestError(error) });
+        _patchAttachment(chatId, localId, { status: "error", error: describeRequestError(error) });
       });
   }
   m.redraw();
@@ -91,11 +91,11 @@ export function uploadFilesToComposer(agentId: string, files: FileList | readonl
  * Remove an attachment from the composer, deleting its VM copy so a removed file
  * does not linger on the agent (removal is treated as revoking access).
  */
-export function removeComposerAttachment(agentId: string, localId: string): void {
-  const list = getComposerAttachments(agentId);
+export function removeComposerAttachment(chatId: string, localId: string): void {
+  const list = getComposerAttachments(chatId);
   const item = list.find((attachment) => attachment.localId === localId);
   _setAttachments(
-    agentId,
+    chatId,
     list.filter((attachment) => attachment.localId !== localId),
   );
   m.redraw();
@@ -105,8 +105,8 @@ export function removeComposerAttachment(agentId: string, localId: string): void
 }
 
 /** Await any in-flight uploads so their paths are available before sending. */
-export async function waitForComposerUploads(agentId: string): Promise<void> {
-  const pending = getComposerAttachments(agentId)
+export async function waitForComposerUploads(chatId: string): Promise<void> {
+  const pending = getComposerAttachments(chatId)
     .filter((attachment) => attachment.status === "uploading" && attachment.uploadSettled)
     .map((attachment) => attachment.uploadSettled as Promise<void>);
   if (pending.length > 0) {
@@ -114,27 +114,27 @@ export async function waitForComposerUploads(agentId: string): Promise<void> {
   }
 }
 
-export function getReadyAttachmentPaths(agentId: string): string[] {
-  return getComposerAttachments(agentId)
+export function getReadyAttachmentPaths(chatId: string): string[] {
+  return getComposerAttachments(chatId)
     .filter((attachment) => attachment.status === "ready" && attachment.uploaded)
     .map((attachment) => (attachment.uploaded as UploadedAttachment).path);
 }
 
-export function hasReadyAttachments(agentId: string): boolean {
-  return getComposerAttachments(agentId).some((attachment) => attachment.status === "ready");
+export function hasReadyAttachments(chatId: string): boolean {
+  return getComposerAttachments(chatId).some((attachment) => attachment.status === "ready");
 }
 
 /**
  * Clear the composer's attachments WITHOUT deleting the VM copies -- used after a
  * successful send, where the files are now referenced by the sent message.
  */
-export function clearComposerAttachments(agentId: string): void {
-  _setAttachments(agentId, []);
+export function clearComposerAttachments(chatId: string): void {
+  _setAttachments(chatId, []);
   m.redraw();
 }
 
 /** Restore a snapshot of attachments (used to roll back a failed send). */
-export function restoreComposerAttachments(agentId: string, attachments: readonly ComposerAttachment[]): void {
-  _setAttachments(agentId, [...attachments]);
+export function restoreComposerAttachments(chatId: string, attachments: readonly ComposerAttachment[]): void {
+  _setAttachments(chatId, [...attachments]);
   m.redraw();
 }

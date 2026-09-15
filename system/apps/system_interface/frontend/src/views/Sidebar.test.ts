@@ -148,8 +148,14 @@ describe("Sidebar", () => {
     m.redraw.sync();
   }
 
+  function isExpanded(): boolean {
+    // The search pill renders only while the rail is expanded.
+    return root.querySelector(".project-rail-search") !== null;
+  }
+
   it("runs a project's shortcut and unpins it from the hover control", () => {
     const attrs = mount({});
+    expand();
     root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
     expect(attrs.onRunShortcut).toHaveBeenCalledWith({ app: "terminal", action: "new", mode: "new" });
     root.querySelector<HTMLElement>(".project-rail-shortcut-unpin")!.click();
@@ -158,6 +164,7 @@ describe("Sidebar", () => {
 
   it("shows every app's primary action under Everything with nothing to unpin", () => {
     mount({ activeViewId: EVERYTHING_VIEW_ID });
+    expand();
     const shortcuts = Array.from(root.querySelectorAll<HTMLElement>("[data-shortcut]")).map(
       (el) => el.dataset.shortcut,
     );
@@ -219,6 +226,7 @@ describe("Sidebar", () => {
 
   it("offers the app's own Stop on the rail's shortcut row menu", () => {
     const attrs = mount({});
+    expand();
     root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
     m.redraw.sync();
     const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).map((el) =>
@@ -229,6 +237,93 @@ describe("Sidebar", () => {
       .find((el) => el.textContent?.trim() === "Stop Terminal")!
       .click();
     expect(attrs.onAppLifecycle).toHaveBeenCalledWith("terminal", "stop");
+  });
+
+  describe("getting out of the way", () => {
+    it("collapses when a shortcut row puts a tab on screen", () => {
+      mount({});
+      expand();
+      expect(isExpanded()).toBe(true);
+      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
+      m.redraw.sync();
+      expect(isExpanded()).toBe(false);
+    });
+
+    it("collapses whether the row it opened was already docked or not", () => {
+      for (const address of ["app:terminal?instance=one", "app:chat?instance=one"]) {
+        mount({});
+        expand();
+        root.querySelector<HTMLElement>(`[data-address="${address}"]`)!.click();
+        m.redraw.sync();
+        expect(isExpanded(), address).toBe(false);
+        m.mount(root, null);
+      }
+    });
+
+    it("collapses when the All apps popover runs an action", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>(".project-rail-all-apps")!.click();
+      m.redraw.sync();
+      // terminal is pinned in this fixture, so the popover offers chat.
+      root.querySelector<HTMLElement>('.project-rail-app[data-app="chat"]')!.click();
+      m.redraw.sync();
+      expect(attrs.onRunAppAction).toHaveBeenCalled();
+      expect(isExpanded()).toBe(false);
+    });
+
+    it("collapses when the shortcut menu focuses an instance", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>('[aria-label="Shortcut options for Terminal"]')!.click();
+      m.redraw.sync();
+      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .find((el) => el.textContent?.trim() === "Focus last Terminal")!
+        .click();
+      m.redraw.sync();
+      expect(attrs.onFocusLastOfShortcut).toHaveBeenCalled();
+      expect(isExpanded()).toBe(false);
+    });
+
+    it("leaves nothing to aim at once it has collapsed under the pointer", () => {
+      mount({});
+      expand();
+      expect(root.querySelector(".project-rail-shortcut-unpin")).not.toBeNull();
+      expect(root.querySelector('[aria-label="Shortcut options for Terminal"]')).not.toBeNull();
+
+      root.querySelector<HTMLElement>('[data-shortcut="terminal:new"]')!.click();
+      m.redraw.sync();
+
+      // The row's controls sit at the right edge of the slot, which a collapsed rail puts on top
+      // of the icon the pointer just clicked.
+      expect(root.querySelector(".project-rail-shortcut-unpin")).toBeNull();
+      expect(root.querySelector('[aria-label="Shortcut options for Terminal"]')).toBeNull();
+      const slot = root.querySelector(".project-rail-shortcut-slot")!;
+      expect(slot.className).not.toContain("hover:bg-fill-hover");
+      expect(root.querySelector(".project-rail-header")!.className).not.toContain("hover:bg-fill-hover");
+    });
+
+    it("stays open for a pick that acts on the rail rather than the dock", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>(".project-rail-shortcut-unpin")!.click();
+      m.redraw.sync();
+      expect(attrs.onRemoveShortcut).toHaveBeenCalled();
+      expect(isExpanded()).toBe(true);
+    });
+
+    it("stays open for a view switch, which changes what it lists rather than opening a tab", () => {
+      const attrs = mount({});
+      expand();
+      root.querySelector<HTMLElement>(".project-rail-header")!.click();
+      m.redraw.sync();
+      Array.from(root.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .find((el) => el.textContent?.includes("Beta"))!
+        .click();
+      m.redraw.sync();
+      expect(attrs.onSelectView).toHaveBeenCalledWith("beta");
+      expect(isExpanded()).toBe(true);
+    });
   });
 
   it("switches views from the header menu", () => {

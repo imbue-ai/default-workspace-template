@@ -1,5 +1,6 @@
 from enum import auto
 
+from app_instances.data_types import InstanceStatus
 from pydantic import Field
 from pydantic import SecretStr
 
@@ -9,6 +10,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelOption
+from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -63,7 +65,7 @@ class AgentListResponse(FrozenModel):
 
 
 class SendMessageRequest(FrozenModel):
-    """Request body for sending a message to an agent."""
+    """Request body for sending a message to a chat."""
 
     message: str = Field(description="The message text to send")
     message_id: str = Field(
@@ -88,7 +90,7 @@ class SendMessageResponse(FrozenModel):
 
 
 class SetModelChoiceRequest(FrozenModel):
-    """Request body for POST /api/agents/{id}/model.
+    """Request body for POST /api/chats/{id}/model.
 
     One shape covering all three axes. ``effort`` is omitted for a model with no
     effort axis, and defaults to None; ``fast`` is the intended fast state.
@@ -104,7 +106,7 @@ class SetModelChoiceRequest(FrozenModel):
 
 
 class ModelOptionsResponse(FrozenModel):
-    """Response from GET /api/agents/{id}/model-options.
+    """Response from GET /api/chats/{id}/model-options.
 
     Two shapes, one per picker kind. A static/catalog-backed harness (claude, pi) returns ``models``
     -- the ids to offer, matched back to the static catalog for labels/efforts (or null = offer the
@@ -124,13 +126,13 @@ class ModelOptionsResponse(FrozenModel):
 
 
 class PoweredByResponse(FrozenModel):
-    """Response from GET /api/agents/{id}/powered-by."""
+    """Response from GET /api/chats/{id}/powered-by."""
 
     label: str = Field(description="The agent harness's verbatim credit text, or '' when that harness shows no credit")
 
 
 class FastModePromptAnsweredResponse(FrozenModel):
-    """Response from POST /api/agents/<id>/fast-mode-answered."""
+    """Response from POST /api/chats/<id>/fast-mode-answered."""
 
     status: str = Field(description="'ok' when the answered label was recorded")
 
@@ -143,13 +145,13 @@ class AttachmentUploadResponse(FrozenModel):
 
 
 class InterruptAgentResponse(FrozenModel):
-    """Response from the /api/agents/{id}/interrupt endpoint."""
+    """Response from the /api/chats/{id}/interrupt endpoint."""
 
     status: str = Field(description="Status of the interrupt operation")
 
 
 class DrainToComposerResponse(FrozenModel):
-    """Response from POST /api/agents/{id}/drain-to-composer.
+    """Response from POST /api/chats/{id}/drain-to-composer.
 
     Carries the concatenated queued block the frontend drops into the composer
     (unsent) for the user to edit and send. Empty when the queue was already
@@ -160,7 +162,7 @@ class DrainToComposerResponse(FrozenModel):
 
 
 class ShoulderTapAtomicResponse(FrozenModel):
-    """Response from POST /api/agents/{id}/shoulder-tap-atomic.
+    """Response from POST /api/chats/{id}/shoulder-tap-atomic.
 
     ``status`` is ``"tapped"`` when a control line targeting the live open turn was written
     (the patched codex will merge the parked messages into that turn), ``"no_open_turn"``
@@ -228,12 +230,12 @@ class QueuedMessageState(FrozenModel):
 
 
 class AgentStateItem(FrozenModel):
-    """Agent state for the unified WebSocket stream."""
+    """One tracked mngr agent: the agent-level record a chat's snapshot is built from."""
 
     id: str = Field(description="The agent's unique identifier")
     name: str = Field(description="The agent's human-readable name")
     state: str = Field(description="The agent's lifecycle state")
-    labels: dict[str, str] = Field(description="Agent labels (e.g., user_created, chat_parent_id)")
+    labels: dict[str, str] = Field(description="Agent labels (e.g., user_created, display_name, account)")
     work_dir: str | None = Field(description="The agent's working directory path")
     harness: HarnessType = Field(
         default=DEFAULT_HARNESS,
@@ -269,6 +271,59 @@ class AgentStateItem(FrozenModel):
     )
 
 
+class HandoffPhase(LowerCaseStrEnum):
+    """Where a chat that is moving to another harness stands (``null`` on the wire while it is not)."""
+
+    DRAINING = auto()
+    SUMMARIZING = auto()
+    SWITCHING = auto()
+    FAILED = auto()
+
+
+class HandoffState(FrozenModel):
+    """The in-progress handoff a chat snapshot carries while the chat is converging."""
+
+    phase: HandoffPhase = Field(description="Which step of the handoff the chat is in")
+    target_lane: str = Field(description="The lane the chat is moving to")
+    target_account_id: str = Field(description="The account the chat is moving to")
+
+
+class ActiveAgentSnapshot(FrozenModel):
+    """The agent-level facts about a chat's active agent that the chat pages render."""
+
+    agent_id: str = Field(description="The active agent's mngr id")
+    name: str = Field(description="The active agent's mngr name (the chat's canonical name)")
+    harness: HarnessType = Field(description="The harness the active agent runs")
+    account_id: str | None = Field(description="The account the active agent is bound to (its ``account`` label)")
+    state: str = Field(description="The active agent's mngr lifecycle state")
+    activity_state: ActivityState | None = Field(description="THINKING / TOOL_RUNNING / IDLE, or None when untracked")
+    model_choice: ModelChoice | None = Field(description="The live model/effort/fast selection, or None")
+    queued_messages: tuple[QueuedMessageState, ...] = Field(description="The harness queue, in enqueue order")
+    shoulder_tap_available: bool = Field(description="Whether something is queued and no send is in flight")
+
+
+class ChatSnapshot(FrozenModel):
+    """One chat as the chat pages see it: what the ``chats_updated`` WebSocket message carries."""
+
+    chat_id: ChatId = Field(description="The chat's id")
+    title: str = Field(description="The name the user sees (the ``display_name`` label, else the mngr name)")
+    name: str = Field(description="The chat's canonical mngr name")
+    project: str | None = Field(description="The project the chat was created in, or None")
+    status: InstanceStatus = Field(description="The chat's status, as its instance record reports it")
+    labels: dict[str, str] = Field(description="The active agent's mngr labels")
+    agent_ids: tuple[str, ...] = Field(description="Every agent of the chat, in order; the last is the active one")
+    handoff: HandoffState | None = Field(
+        description="The in-progress handoff, or None while the chat is not converging"
+    )
+    active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
+
+
+class ChatListResponse(FrozenModel):
+    """Response from GET /api/chats: every chat this app lists, as the pages see it."""
+
+    chats: tuple[ChatSnapshot, ...] = Field(description="One snapshot per listed chat")
+
+
 class CreateChatRequest(FrozenModel):
     """Request body for creating a chat agent. The account decides which harness it runs on."""
 
@@ -281,7 +336,7 @@ class CreateChatRequest(FrozenModel):
         default="",
         description="Signed-in account to bind the chat to; empty picks the most recently used one",
     )
-    agent_id: str = Field(
+    chat_id: str = Field(
         default="",
         description="A chat minted earlier while nothing was signed in (or one whose create failed) to launch now",
     )
@@ -304,13 +359,13 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
 
 
 class ProvisionalChat(FrozenModel):
-    """A chat the app has minted but mngr does not know yet (a "proto agent").
+    """A chat the app has minted but whose first agent mngr does not know yet.
 
-    Listed as a referenced instance under the id mngr will give it, and pushed to the chat
-    pages verbatim as the ``proto_agent_created`` message.
+    Listed as a referenced instance under its chat id (the id mngr will give its first agent),
+    and pushed to the chat pages verbatim as the ``provisional_chat_created`` message.
     """
 
-    agent_id: str = Field(description="The id the agent will carry")
+    chat_id: ChatId = Field(description="The chat's id, which its first agent will carry")
     name: str = Field(description="The display name minted for it")
     project_id: str = Field(default="", description="The project it was started in, for the agent's label")
     account_id: str = Field(default="", description="The account it launches on; empty while awaiting one")
@@ -319,19 +374,28 @@ class ProvisionalChat(FrozenModel):
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
 
 
-class CreatedChatAgent(FrozenModel):
-    """A freshly-created chat agent's identity: its id and its name pair."""
+class CreatedChat(FrozenModel):
+    """A freshly-created chat's identity: its id and its name pair."""
 
-    agent_id: str = Field(description="The pre-generated agent ID")
-    name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
+    chat_id: ChatId = Field(description="The chat's id (its first agent's id, minted before the create)")
+    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
+    display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
+
+
+class CreateChatResponse(FrozenModel):
+    """Response from POST /api/chats/create."""
+
+    chat_id: str = Field(description="The chat's id (its first agent's id, minted before the create)")
+    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 
 class CreateAgentResponse(FrozenModel):
-    """Response from agent creation endpoints."""
+    """Response from the agent-keyed create alias, POST /api/agents/create-chat."""
 
-    agent_id: str = Field(description="The pre-generated agent ID")
-    name: str = Field(description="The agent's true (canonical) name, e.g. 'Chat-2'")
+    # CLEANUP: drop with the /api/agents/... aliases in phase 7 of the chat-agent split.
+    agent_id: str = Field(description="The chat's id, under the alias's field name")
+    name: str = Field(description="The chat's true (canonical) name, e.g. 'Chat-2'")
     display_name: str = Field(description="The human-readable display name, e.g. 'Chat 2'")
 
 

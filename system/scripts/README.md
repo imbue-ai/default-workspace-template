@@ -5,7 +5,10 @@ Provisioning and utility scripts:
 - Image build / provisioning: `setup_system.sh`, `install_dependencies.sh`,
   `build_workspace.sh`, `write_apt_sources.sh`, `seed_home_skeleton.sh`,
   `default_workspace_template_seed.sh`, `install_secret_scanners.sh`,
-  `_provision_guard.sh`, and the boot-convergence units in `env.d/`.
+  `_provision_guard.sh`, `_tool_env.sh`, `install_mngr.py`, `tool_env.py`
+  (vendored byte-identically into `.agents/skills/update-self/scripts/`, which
+  the apply runs as a self-contained unit), and the boot-convergence units in
+  `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
   `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi
   spawns their `*_check.py` checkers from `.pi/extensions/`. See
@@ -14,7 +17,10 @@ Provisioning and utility scripts:
   (`claude_status_line.sh`, `claude_update_plugin.sh`), wired in
   `.claude/settings.json`.
 - Utility scripts: `forward_port.py` (port registry), `layout.py` (dockview
-  layout ops), `refresh_workspace_view.py` (rebuild the user's view after the
+  layout ops), `message_chat.py` (send a message to a chat by its id through
+  the chat app, with `mngr message` as the backoff; the in-workspace
+  replacement for `mngr message <agent>`), `require_create_account.py` (the
+  create gate), `refresh_workspace_view.py` (rebuild the user's view after the
   interface changes), `migrate_claude_auth.py` (one-time auth migration),
   `migrate_workspace_layouts.py` (one-time carry-over of the old per-agent
   projects and layouts into the shell's state files; see

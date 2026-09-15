@@ -9,8 +9,8 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addressFor } from "@imbue/workspace-ui/src/addresses";
-import { createChatAgent } from "./models/AgentManager";
-import type { CreatedChatAgent } from "./models/AgentManager";
+import { createChat, getChatById } from "./models/Chats";
+import type { CreatedChat } from "./models/Chats";
 import { isEverythingView } from "@imbue/workspace-ui/src/views";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
@@ -50,7 +50,7 @@ export function shellViewId(): string {
 
 export interface ChatShellOptions {
   /**
-   * Whether this page reports its presence for `agentId`. A chat's own page does; a subagent
+   * Whether this page reports its presence for `chatId`. A chat's own page does; a subagent
    * view does not, because the chat app keeps one report per chat and client, and a second
    * page of the same chat in the same client would overwrite the chat page's own.
    */
@@ -58,11 +58,11 @@ export interface ChatShellOptions {
 }
 
 /**
- * Connect the page for `agentId`: adopt the client identity the shell hands over, follow the
+ * Connect the page for `chatId`: adopt the client identity the shell hands over, follow the
  * tab's visibility for the panel and (when this page reports it) for presence, and forward
  * focus so the shell activates the tab.
  */
-export function connectChatToShell(agentId: string, options: ChatShellOptions): ShellConnection {
+export function connectChatToShell(chatId: string, options: ChatShellOptions): ShellConnection {
   const { isPresenceReported } = options;
   connection = connectToShell({
     onHandshake: (received) => {
@@ -70,7 +70,7 @@ export function connectChatToShell(agentId: string, options: ChatShellOptions): 
       adoptClientIdentity({ clientId: received.clientId, deviceKind: received.deviceKind, viewId: received.viewId });
       // Hidden until the shell says shown: a page can load into a background tab, and open
       // (any client's unexpired report) is what a hidden report keeps.
-      if (isPresenceReported) startPresenceReporting(agentId, received.clientId, isShown ? "visible" : "hidden");
+      if (isPresenceReported) startPresenceReporting(chatId, received.clientId, isShown ? "visible" : "hidden");
       m.redraw();
     },
     onShown: () => {
@@ -88,7 +88,7 @@ export function connectChatToShell(agentId: string, options: ChatShellOptions): 
     // A direct visit has no shell to say when the page is showing; the document's own
     // visibility is the closest fact, and there is no shell-handed client id to key on.
     if (isPresenceReported) {
-      startPresenceReporting(agentId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
+      startPresenceReporting(chatId, "direct-visit", document.visibilityState === "visible" ? "visible" : "hidden");
       document.addEventListener("visibilitychange", () => {
         reportPresence(document.visibilityState === "visible" ? "visible" : "hidden");
       });
@@ -114,14 +114,14 @@ export function connectChatToShell(agentId: string, options: ChatShellOptions): 
 export async function startChatOnAccount(accountId: string): Promise<void> {
   const viewId = shellViewId();
   const projectId = viewId !== "" && !isEverythingView(viewId) ? viewId : "";
-  let created: CreatedChatAgent;
+  let created: CreatedChat;
   try {
-    created = await createChatAgent(projectId, accountId);
+    created = await createChat(projectId, accountId);
   } catch (e) {
     alert(`Failed to create chat: ${(e as Error).message}`);
     return;
   }
-  connection?.open(chatAddress(created.agentId));
+  connection?.open(chatAddress(created.chatId));
   m.redraw();
 }
 
@@ -129,13 +129,18 @@ export async function startChatOnAccount(accountId: string): Promise<void> {
  * Open the subagent view for `sessionId` of this page's chat beside it. The instance is
  * created first through the chat app's own instances API (its `subagent` action, on this
  * page's origin), which nudges the shell, so the shell lists it before it is asked to dock it.
+ * The session belongs to the chat's active agent, which is what the app keys the view on.
  */
-export async function openSubagentTab(agentId: string, sessionId: string, description: string): Promise<void> {
-  const key = `${agentId}.${sessionId}`;
+export async function openSubagentTab(chatId: string, sessionId: string, description: string): Promise<void> {
+  // CLEANUP: a chat the page does not list yet is its own first agent under the own-chat
+  // rule; drop the fallback once the chat record store (phase 3 of the chat-agent split)
+  // names the active agent for every chat.
+  const agentId = getChatById(chatId)?.active_agent.agent_id ?? chatId;
+  const key = `${chatId}.${agentId}.${sessionId}`;
   try {
     await postJson(apiUrl("/_instances"), {
       action: "subagent",
-      params: { parent: agentId, session: sessionId, description },
+      params: { parent: chatId, session: sessionId, description },
     });
   } catch (error) {
     console.warn(`[chat] could not create the subagent instance ${key}`, error);

@@ -49,6 +49,7 @@ re-read from byte 0) the same user bubble dedups instead of duplicating.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -59,6 +60,7 @@ from loguru import logger as _loguru_logger
 from imbue.chat.harnesses.auth_errors import is_auth_error_text
 from imbue.chat.harnesses.codex.tool_labels import is_single_delegated_call
 from imbue.chat.harnesses.codex.tool_labels import shell_command
+from imbue.chat.harnesses.codex.tool_labels import shell_commands
 from imbue.chat.harnesses.codex.tool_labels import tool_labels
 from imbue.chat.harnesses.error_patterns import classify_api_error
 from imbue.chat.harnesses.error_patterns import is_provider_fault
@@ -140,6 +142,37 @@ def _tool_call_raw_input(payload: dict[str, Any]) -> str:
     return "" if raw is None else str(raw)
 
 
+def _tk_output_text(output: str) -> str:
+    """Unwrap code-mode command results for decoration, keeping raw detail unchanged.
+
+    ``text(result)`` prints a JSON envelope; ``text(result.output)`` prints plain stdout.
+    Adjacent calls can concatenate envelopes on one line. Decode only complete command
+    result envelopes, never arbitrary JSON embedded in prose or a command's stdout.
+    """
+    if "-step-" not in output:
+        return output
+    decoder = json.JSONDecoder()
+    lines: list[str] = []
+    for line in output.splitlines():
+        remaining = line.strip()
+        outputs: list[str] = []
+        while remaining.startswith("{"):
+            try:
+                value, end = decoder.raw_decode(remaining)
+            except (json.JSONDecodeError, RecursionError) as exc:
+                logger.warning("Could not decode code-mode task output: {}", exc)
+                break
+            if not isinstance(value, dict) or not isinstance(value.get("chunk_id"), str):
+                break
+            stdout = value.get("output")
+            if not isinstance(stdout, str):
+                break
+            outputs.append(stdout)
+            remaining = remaining[end:].lstrip()
+        lines.append("\n".join(outputs) if outputs and not remaining else line)
+    return "\n".join(lines)
+
+
 def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[str, Any]:
     """A tool call carrying its own human labels.
 
@@ -175,8 +208,9 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
         tool_call["display"] = display.value
     # The step progress view reads step titles/summaries out of a tk lifecycle command
     # itself, so that one command is stamped resident.
-    if command is not None and is_tk_lifecycle_anywhere(command):
-        tool_call["tk_command"] = command
+    tk_commands = [command for command in shell_commands(tool_name, raw_input) if is_tk_lifecycle_anywhere(command)]
+    if tk_commands:
+        tool_call["tk_command"] = "\n".join(tk_commands)
     return tool_call
 
 
@@ -435,7 +469,8 @@ def parse_lines(
         if payload_type == "item_completed":
             item = payload.get("item")
             if isinstance(item, dict) and item.get("type") == "UserMessage":
-                client_id = item.get("clientId")
+                # Rollouts use snake_case; the live app-server item uses clientId.
+                client_id = item.get("client_id")
                 return _user_message_events(
                     timestamp,
                     _item_content_text(item.get("content")),
@@ -577,7 +612,7 @@ def parse_lines(
         snippet = error_snippet(raw_output) if is_error else ""
         if snippet:
             event["error_snippet"] = snippet
-        stamped_tk = tk_stamp(raw_output)
+        stamped_tk = tk_stamp(_tk_output_text(raw_output))
         if stamped_tk:
             event["tk_stamp"] = stamped_tk
         return [event]
