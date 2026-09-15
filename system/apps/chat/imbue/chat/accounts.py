@@ -431,6 +431,13 @@ def delete_account(account_id: str, home: Path | None = None) -> None:
     answering until it next restarts -- observed, not assumed. What stops immediately is
     anything that reads the folder afresh, which includes starting a new chat on it.
 
+    That last rule covers a credential the harness reads from this folder, which is all of them
+    but one: an agy account signed in with a pasted Gemini key is bound by COPY, because mngr
+    folds the key file into each agent's own env file at create and re-sources that file on
+    every restart. Deleting such an account therefore does not take the key away from the chats
+    already on it, restart or no restart -- the same limit re-keying one has (see
+    `harnesses/binding.py`).
+
     Agents bound here keep their transcripts (see `KEPT_ON_DISCARD`) and nothing rebinds them:
     their `account` label becomes a dangling reference, which is the cost of delete-and-re-add
     over re-authenticating in place. Killing them instead would be worse -- it destroys a chat
