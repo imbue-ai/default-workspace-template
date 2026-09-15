@@ -28,8 +28,10 @@ def _write_settings(account_dir: Path, content: str) -> Path:
 
 
 def test_the_mode_merges_over_the_settings_agy_already_wrote(tmp_path: Path) -> None:
-    """agy owns this file and the workspace's own agent type seeds it with the surfaces a headless
-    chat turns off. Replacing it would silently switch those back on."""
+    """agy writes this file itself, running under `HOME=<account folder>` during a browser sign-in
+    on this same lane; nothing else puts anything in it (`binding.seed_account` seeds agy with
+    nothing, and the agent type's `settings_overrides` reach the PER-AGENT settings.json instead).
+    Replacing it would discard whatever that sign-in left behind."""
     _write_settings(tmp_path, json.dumps({"enableTelemetry": False, "showTips": False}))
 
     write_gemini_api_key(tmp_path, "AIzaSyValid")
