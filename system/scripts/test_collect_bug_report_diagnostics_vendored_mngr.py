@@ -40,7 +40,11 @@ def _load_collector(mngr_binary: str) -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.MNGR_BINARY = mngr_binary
+    namespace = module.__dict__
+    assert "MNGR_BINARY" in namespace, (
+        "the collector no longer defines MNGR_BINARY; update this test"
+    )
+    namespace["MNGR_BINARY"] = mngr_binary
     return module
 
 
