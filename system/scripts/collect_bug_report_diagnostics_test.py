@@ -217,18 +217,24 @@ def _write_mngr_stub(
     agents: Sequence[str] = (),
     events_by_agent: Mapping[str, str] | None = None,
     panes_by_agent: Mapping[str, str] | None = None,
+    chat_of_agent: Mapping[str, tuple[str, int]] | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
 
     The collector asks mngr three things -- which agents exist, what was said in
     one, and what is on one's pane -- so the stub answers exactly those three
-    shapes: the pipe template ``{name}|{id}|{id}@{host.id}.{host.provider_name}``
+    shapes: the pipe template
+    ``{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}``
     for ``list``, raw JSONL for ``transcript``, and pane text for ``capture``. Both
     per-agent targets arrive as the pinned ``id@host-id.provider`` form the
     listing handed out, so the stub keys its canned answers by the id in front
     of the ``@``. An agent with no canned pane exits nonzero, as the real
     ``mngr capture`` does for an agent that is not running.
+
+    ``chat_of_agent`` maps an agent name to the ``(chat id, sequence)`` it is a
+    segment of; an agent absent from it lists with both label columns empty,
+    which is what mngr prints for an agent carrying neither.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
@@ -238,8 +244,15 @@ def _write_mngr_stub(
     panes_dir.mkdir(parents=True, exist_ok=True)
     for agent_name, pane in (panes_by_agent or {}).items():
         (panes_dir / _agent_id_for(agent_name)).write_text(pane, encoding="utf-8")
+    chat_labels = chat_of_agent or {}
     listing = "".join(
-        f"{name}|{_agent_id_for(name)}|{_target_for(name)}\n" for name in agents
+        "{}|{}|{}|{}|{}\n".format(
+            name,
+            _agent_id_for(name),
+            _target_for(name),
+            *(chat_labels.get(name) or ("", "")),
+        )
+        for name in agents
     )
     listing_path = tmp_path / "stub-listing.txt"
     listing_path.write_text(listing, encoding="utf-8")
@@ -478,13 +491,15 @@ def test_every_agent_is_a_transcript_candidate(
     collector = _load_collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
-        ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local"),
+        ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local", "", 1),
         (
             "system-services",
             "agent-system-services",
             "agent-system-services@stub-host-id.local",
+            "",
+            1,
         ),
-        ("worker", "agent-worker", "agent-worker@stub-host-id.local"),
+        ("worker", "agent-worker", "agent-worker@stub-host-id.local", "", 1),
     ]
 
 
@@ -534,6 +549,100 @@ def test_the_collector_reads_conversations_with_the_transcript_command(
     assert len(transcript_calls) == 1, invocations
     assert transcript_calls[0].endswith(" --format jsonl"), transcript_calls[0]
     assert not [line for line in invocations.splitlines() if line.startswith("event ")]
+
+
+def test_a_chat_handed_to_another_harness_attaches_as_one_conversation(
+    tmp_path: Path,
+) -> None:
+    """A chat outlives the agent running it, and the report is about the chat.
+
+    Handing one to another harness archives the agent and starts a successor,
+    so the conversation the user held in one place is spread over two agents'
+    streams. Attached separately, a reader has to stitch them back together --
+    and the selection below would rank the halves against each other.
+    """
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("archived-1-Chat-1-agent-x", "Chat-1"),
+        events_by_agent={
+            "archived-1-Chat-1-agent-x": _chat_events(
+                "first-half", age_seconds=600, source="claude"
+            ),
+            "Chat-1": _chat_events("second-half", age_seconds=60, source="codex"),
+        },
+        chat_of_agent={
+            "archived-1-Chat-1-agent-x": ("agent-chat-1", 1),
+            "Chat-1": ("agent-chat-1", 2),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    # Named for the segment the chat is live on, and for the harness it is on now.
+    assert [name for name, _, _ in members] == ["chats/Chat-1-codex.jsonl"]
+    conversation = members[0][1]
+    assert conversation.index("first-half") < conversation.index("second-half")
+
+
+def test_an_unlabelled_agent_is_a_chat_of_its_own(tmp_path: Path) -> None:
+    """Every agent in a workspace whose chat app predates handoffs carries no chat labels."""
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("chatty", "worker"),
+        events_by_agent={
+            "chatty": _chat_events("chatty-said"),
+            "worker": _chat_events("worker-said"),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    assert sorted(name for name, _, _ in members) == [
+        "chats/chatty-claude.jsonl",
+        "chats/worker-claude.jsonl",
+    ]
+
+
+def test_an_older_segment_rides_along_with_the_chat_it_belongs_to(
+    tmp_path: Path,
+) -> None:
+    """The floor counts conversations, so a chat's own beginning never competes with other chats.
+
+    Ranked as its own agent, a segment last written to before the window would
+    fall below the newest MIN_TRANSCRIPT_COUNT and take the start of a live
+    conversation with it.
+    """
+    chats = {
+        f"other-{index}": _chat_events(f"other-{index}", age_seconds=60 * (index + 1))
+        for index in range(5)
+    }
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("archived-1-Chat-1-agent-x", "Chat-1", *chats),
+        events_by_agent={
+            "archived-1-Chat-1-agent-x": _chat_events(
+                "the-beginning", age_seconds=60 * 60 * 24
+            ),
+            "Chat-1": _chat_events("the-end", age_seconds=30),
+            **chats,
+        },
+        chat_of_agent={
+            "archived-1-Chat-1-agent-x": ("agent-chat-1", 1),
+            "Chat-1": ("agent-chat-1", 2),
+        },
+    )
+    collector = _load_collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(5.0)
+
+    handed_off = [
+        content for name, content, _ in members if name.startswith("chats/Chat-1-")
+    ]
+    assert len(handed_off) == 1, [name for name, _, _ in members]
+    assert "the-beginning" in handed_off[0]
+    assert "the-end" in handed_off[0]
 
 
 def test_an_agent_with_no_conversation_contributes_no_member(tmp_path: Path) -> None:
@@ -1997,5 +2106,6 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
     list_calls = [line for line in invocations.splitlines() if line.startswith("list ")]
     assert list_calls == [
-        "list --provider local --format {name}|{id}|{id}@{host.id}.{host.provider_name}"
+        "list --provider local --format "
+        "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}"
     ], invocations
