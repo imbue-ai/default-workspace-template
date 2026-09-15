@@ -105,10 +105,7 @@ class ChatAutoCompactor:
                 is_checked=True,
                 timeout=self._command_timeout_seconds,
             )
-        except ProcessError as e:
-            logger.error("Failed to run autocompact for {}: {}", agent_name, e)
-            return None
-        except (ProcessSetupError, OSError) as e:
+        except (ProcessError, ProcessSetupError, OSError) as e:
             logger.warning("Failed to run autocompact for {}: {}", agent_name, e)
             return None
 
