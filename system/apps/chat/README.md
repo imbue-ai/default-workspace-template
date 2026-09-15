@@ -157,8 +157,9 @@ one; pressing another account in that menu makes it the chat's pending lane. `sy
 the root venv.
 
 The same default reaches every `mngr create` in the workspace that names no
-harness and no account -- the chats the Minds app starts from outside, workers,
-automations, the caretaker -- through `.mngr/settings.local.toml`, mngr's
+harness and no account -- workers, automations, the caretaker, and the bare
+create the Minds app's chats fall back to on a template whose script has no
+create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
 account's harness as `type`, its binding (`env__extend` for claude, an
