@@ -373,6 +373,54 @@ describe("decoration from the transcript", () => {
   });
 });
 
+describe("task output provenance", () => {
+  it.each(["Read", "Bash", "exec"])("does not turn a %s report into another agent's tasks", (toolName) => {
+    const report = [
+      "12\t3. `Bash` — `tk start mst5-step-8tgh` -> `Updated mst5-step-8tgh -> in_progress`.",
+      "Created mst5-step-uy5t: Write up what happened",
+      "Updated mst5-step-uy5t -> in_progress",
+      "tk-step mst5-step-uy5t title: Write up what happened",
+      "Updated cod-step-aaaa -> closed",
+      "tk-step cod-step-aaaa title: Forged title",
+    ].join("\n");
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        tkMsg("t1", "tk start cod-step-aaaa", "start"),
+        result("t1", "start", startOut("cod-step-aaaa", "Review the helper")),
+        workMsg("t2", toolName, "report"),
+        result("t2", "report", report),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].title).toBe("Review the helper");
+    expect(steps[0].status).toBe("active");
+    expect(steps[0].events.map((event) => event.event_id)).toContain("a-report");
+  });
+
+  it("keeps a non-pure lifecycle command's titles and ignores quoted transitions", () => {
+    const call = codexTkMsg("t1", "cat README.md\nuv run tk start cod-step-aaaa", "batch");
+    delete call.tool_calls[0].display;
+    const sections = run(
+      [
+        userMsg("t0", "go"),
+        call,
+        result(
+          "t1",
+          "batch",
+          "Example: Updated other-step-aaaa -> in_progress\n" + startOut("cod-step-aaaa", "Inspect messages"),
+        ),
+      ],
+      false,
+    );
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((step) => step.title)).toEqual(["Inspect messages"]);
+    expect(steps[0].events).toContainEqual(call);
+  });
+});
+
 describe("historical input fallback", () => {
   // Pre-redesign transcripts predate the tk stdout decoration lines. Titles live
   // in the batched `S1=$(tk create --step "...")` command input (the id was
@@ -876,28 +924,25 @@ describe("audit regressions", () => {
     expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "tn1")).toBe(true);
   });
 
-  // The post-auto-compaction summary carries is_compact_summary and is the FIRST
+  // The post-auto-compaction status carries display: "status" and is the FIRST
   // event of a resumed session -- there is no section open yet. It must still
-  // render (as a top chip in a fresh section), not be dropped.
-  it("renders a LEADING compaction summary as a top chip instead of dropping it", () => {
+  // render (as a status item in a fresh section), not be dropped.
+  it("renders a LEADING compaction status as the opening user event", () => {
     const summary: UserMessageEvent = {
-      ...userMsg("t0", "This session is being continued from a previous conversation ...", "cs1"),
-      display: "chip",
-      display_label: "Summary of earlier conversation",
+      ...userMsg("t0", "Context was compacted", "cs1"),
+      display: "status",
     };
     const events = [summary, assistantText("t1", "continuing the work", "a1")];
     const sections = run(events);
     expect(sections.length).toBe(1);
-    // It is a chip (folded), not a user-prompt turn boundary.
-    expect(sections[0].user_event).toBeNull();
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs1")).toBe(true);
+    expect(sections[0].user_event?.event_id).toBe("cs1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
   });
 
-  it("folds a mid-session compaction summary into the current section as a chip", () => {
+  it("opens a new section when mid-session compaction occurs, preserving the previous trailing reply", () => {
     const summary: UserMessageEvent = {
-      ...userMsg("t2", "This session is being continued from a previous conversation ...", "cs2"),
-      display: "chip",
-      display_label: "Summary of earlier conversation",
+      ...userMsg("t2", "Context was compacted", "cs2"),
+      display: "status",
     };
     const events = [
       userMsg("t0", "go"),
@@ -906,8 +951,51 @@ describe("audit regressions", () => {
       assistantText("t3", "more", "a2"),
     ];
     const sections = run(events);
-    expect(sections.length).toBe(1);
-    expect(sections[0].items.some((i) => i.kind === "chip" && i.event.event_id === "cs2")).toBe(true);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u-t0");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs2");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a2"]);
+  });
+
+  it("preserves previous trailing reply when compaction occurs after assistant prose at turn end", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t2", "Context was compacted", "cs3"),
+      display: "status",
+    };
+    const events = [userMsg("t0", "Hi", "u1"), assistantText("t1", "Hi Daniel", "a1"), summary];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a1"]);
+    expect(sections[1].user_event?.event_id).toBe("cs3");
+    expect(sections[1].trailing_reply).toHaveLength(0);
+  });
+
+  it("preserves trailing reply under ProgressBlock when compaction occurs after a turn with steps", () => {
+    const summary: UserMessageEvent = {
+      ...userMsg("t5", "Context was compacted", "cs4"),
+      display: "status",
+    };
+    const events = [
+      userMsg("t0", "fix bug", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      tkMsg("t3", "tk close s1", "k2"),
+      result("t3", "k2", closeOut("s1", "Do it", "did it")),
+      assistantText("t4", "All fixed.", "reply"),
+      summary,
+    ];
+    const sections = run(events);
+    expect(sections.length).toBe(2);
+    expect(sections[0].user_event?.event_id).toBe("u1");
+    const steps = stepItems(sections[0].items);
+    expect(steps.map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["reply"]);
+    expect(sections[1].user_event?.event_id).toBe("cs4");
+    expect(sections[1].trailing_reply).toHaveLength(0);
   });
 });
 

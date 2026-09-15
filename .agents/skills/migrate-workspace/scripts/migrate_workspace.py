@@ -1055,6 +1055,27 @@ def _read_file_command(path: str) -> str:
     )
 
 
+def _supervisord_dropin_listing_command(supervisord_conf: str) -> str:
+    """Shell that prints, one per line, every regular file in ``<supervisord_conf>.d/``.
+
+    That directory is the template's convention for where every program lives (pinned by
+    ``system/test_supervisord_layout.py``), so it is assumed rather than read out of the config.
+    The glob is the shell's own, against the quoted path, so a source path holding a space stays
+    one path and a source with no drop-in directory prints nothing.
+
+    A builder rather than an inline argument so it can be run against a real shell without an SSH
+    target, the way :func:`_read_file_command` is.
+    """
+    quoted = _shell_quote(supervisord_conf)
+    return f"for path in {quoted}.d/*.conf; do [ -f \"$path\" ] || continue; printf '%s\\n' \"$path\"; done"
+
+
+def _list_remote_supervisord_dropins(target: SshTarget, supervisord_conf: str) -> list[str]:
+    """The SOURCE's drop-in paths, or [] when it has none (a source predating the split)."""
+    listing = run_remote(target, _supervisord_dropin_listing_command(supervisord_conf))
+    return sorted(line.strip() for line in listing.splitlines() if line.strip())
+
+
 def _read_remote_files(target: SshTarget, paths: Sequence[str]) -> dict[str, str]:
     """Read many remote files in as few round trips as possible, keyed by path.
 
@@ -1361,6 +1382,13 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
             "runtime/applications.toml",
         )
     ]
+    # The source's programs live one per file under system/supervisord.conf.d/, so the fixed
+    # list above would find none of them. Enumerate the drop-ins first (one extra round trip)
+    # and read them in the same batched pass; a source predating the split declares its
+    # programs in the main config, which is already listed.
+    remote_paths.extend(
+        _list_remote_supervisord_dropins(target, f"{repo_root}/system/supervisord.conf")
+    )
     remote_files = _read_remote_files(target, remote_paths)
     source_ports: list[AppPort] = []
     for path, text in sorted(remote_files.items()):
@@ -1387,13 +1415,32 @@ def _cmd_list_ports(args: argparse.Namespace) -> int:
 def _local_ports() -> list[AppPort]:
     """The app ports already taken in this workspace, from its own config and registry."""
     ports: list[AppPort] = []
-    supervisord = Path("system/supervisord.conf")
-    if supervisord.is_file():
-        ports.extend(parse_supervisord_ports(supervisord.read_text(encoding="utf-8")))
+    # Every program lives in its own drop-in, so scanning only the main config would see
+    # no ports at all and report every real app as free -- collisions would surface as two
+    # programs bound to the same port after the migration, not here.
+    for conf in _local_supervisord_configs(Path()):
+        ports.extend(parse_supervisord_ports(conf.read_text(encoding="utf-8")))
     registry = Path("data/.state/apps.toml")
     if registry.is_file():
         ports.extend(parse_apps_registry(registry.read_text(encoding="utf-8")))
     return ports
+
+
+def _local_supervisord_configs(repo_root: Path) -> list[Path]:
+    """This workspace's supervisord config files: the main one plus every drop-in beside it.
+
+    The drop-in directory is ``system/supervisord.conf.d/`` by convention (pinned by
+    ``system/test_supervisord_layout.py``), the same directory the source-side listing assumes.
+    """
+    main = repo_root / "system/supervisord.conf"
+    if not main.is_file():
+        return []
+    dropins = sorted(
+        path
+        for path in (repo_root / "system/supervisord.conf.d").glob("*.conf")
+        if path.is_file()
+    )
+    return [main] + dropins
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> int:
