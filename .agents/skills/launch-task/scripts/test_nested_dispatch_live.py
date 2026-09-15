@@ -632,7 +632,32 @@ def _clone_repo_at_head(
     _run_git(
         ["commit", "--quiet", "-m", "Isolate this test clone's mngr config"], clone
     )
+    _name_a_default_create_type(clone)
     return clone
+
+
+def _name_a_default_create_type(clone: Path) -> None:
+    """Give the clone the ``settings.local.toml`` a signed-in workspace has.
+
+    ``.mngr/settings.toml``'s ``create`` pre-command refuses a create whose cwd is
+    the running agent's own work dir unless that file names a default type -- the
+    stand-in for "an account is signed in", which the chat app normally writes.
+    This harness stamps ``MNGR_AGENT_WORK_DIR`` at the clone, so it is exactly
+    that shape, and so is the outer worker when it creates the inner one (the
+    file reaches the worker's worktree through ``work_dir_extra_paths``'s SHARE).
+    Without it both creates fail on a sign-in message that has nothing to do with
+    what this test is exercising.
+
+    Left uncommitted deliberately: the path is gitignored, so ``launch``'s
+    clean-tree check does not see it.
+    """
+    local_settings = clone / ".mngr" / "settings.local.toml"
+    local_settings.write_text(
+        "# Written by test_nested_dispatch_live.py; see _name_a_default_create_type.\n"
+        "[commands.create]\n"
+        'type = "worker"\n',
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.timeout(1800, func_only=False)

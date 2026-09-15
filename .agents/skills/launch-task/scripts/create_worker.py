@@ -172,13 +172,18 @@ the ``<NAME>:<PATH>`` agent endpoint). The trailing slash on both ends makes
 rsync copy directory *contents* into the destination. The local source is
 ``./``-prefixed so mngr reads it as a path rather than an agent name, while the
 agent destination stays repo-relative so mngr resolves it against the worker's
-workdir. The destination is always a runtime dir under gitignored ``data/``, so
-``--uncommitted-changes=clobber`` is the right mode: there is nothing tracked at
-the destination for the sync to overwrite, and unlike ``merge`` it does not run
-``git stash push -u`` / pop on the worker's tree. That matters because the git
-stash stack is shared by every worktree of the repo: two dispatches syncing at
-once (a lead and one of its workers, or two siblings) would pop each other's
-entries and corrupt both trees.
+workdir. The teardown pull reverses the two and is otherwise identical.
+
+Every one of these paths sits under ``data/``, and ``launch`` refuses a sync
+source that does not (``_sync_path_refusal``), because that boundary is what
+makes ``--uncommitted-changes=clobber`` right rather than merely convenient:
+``data/`` is gitignored, so there is nothing tracked at either destination for
+the sync to lose. ``merge`` would instead run ``git stash push -u`` and a pop on
+the destination worktree -- the worker's on the push, the *lead's own* on the
+pull -- and a repo has one stash stack shared by all of its worktrees, so two
+dispatches syncing at once (a lead and one of its workers, or two hardening
+siblings) pop each other's entries into the wrong trees. See ``rsync_dir`` and
+``rsync_dir_from`` for the full reasoning on each direction.
 
 Why the task message goes *after* the syncs (instead of using ``mngr create
 --message-file``): if the worker reads its first message before the runtime
@@ -608,6 +613,54 @@ def _repo_relative_path(path: Path, toplevel: Path | None) -> str:
     return relative.as_posix()
 
 
+# The workspace's data root. Everything a dispatch syncs has to sit under it,
+# because that is the boundary ``--uncommitted-changes=clobber`` relies on: the
+# tree is gitignored (``.gitignore``'s ``data/*``) apart from the README stubs
+# the directory skeleton ships, so overwriting at the destination cannot lose
+# tracked work. See ``rsync_dir``.
+_SYNC_ROOT = "data"
+
+
+def _sync_path_refusal(
+    flag: str, source_dir: Path, toplevel: Path | None
+) -> str | None:
+    """Why ``source_dir`` may not be synced into a worker, or ``None`` if it may.
+
+    The judgement is on the *destination*: what ``_rsync_endpoints`` puts on the
+    agent side is the repo-relative path, which mngr resolves against the
+    worker's own worktree root, so that is the path the sync will write to
+    inside the worker. It has to be under ``data/`` -- both because a dispatch's
+    runtime state belongs there (AGENTS.md) and because that is what makes
+    ``clobber`` safe. A ``--runtime-dir`` of ``system/apps/foo`` would otherwise
+    overwrite the worker's checkout of tracked source with the lead's copy,
+    silently, before the worker had read a word of its task.
+
+    A path outside the repo has no repo-relative form, so ``_repo_relative_path``
+    hands back the absolute path and it is refused here too: mngr uses an
+    absolute agent-side path verbatim, which lands outside the worker's worktree
+    entirely. The one case this cannot judge is an absolute path with no repo
+    root resolved (``git rev-parse`` failed, i.e. a launch from outside a git
+    checkout), where there is nothing to be relative *to*; it passes rather than
+    guessing, and ``mngr create`` refuses that situation on its own anyway.
+    """
+    rel = _repo_relative_path(source_dir, toplevel)
+    if Path(rel).is_absolute():
+        if toplevel is None:
+            return None
+        return (
+            f"create_worker: {flag} is outside the repo ({source_dir}); it has no "
+            f"path relative to {toplevel} for the worker to receive it at."
+        )
+    if Path(rel).parts[:1] == (_SYNC_ROOT,):
+        return None
+    return (
+        f"create_worker: {flag} must be under {_SYNC_ROOT}/, got {rel}. Everything "
+        "a dispatch syncs is runtime state and belongs in the workspace's data "
+        f"tree; syncing from anywhere else would overwrite the worker's own "
+        "tracked files at that path."
+    )
+
+
 def _local_rsync_path(rel: str) -> str:
     """``rel`` spelled so ``mngr rsync`` reads it as a local path.
 
@@ -644,17 +697,36 @@ def rsync_dir(
 ) -> None:
     """Rsync ``source_dir`` into agent ``name``'s worktree at the same path.
 
-    Nothing here is specific to which level of a dispatch is launching: a chat
-    agent and a worker launching a sub-worker push the runtime dir down the same
-    way, addressing the same repo-relative path (``_rsync_endpoints``).
+    The **push**: the lead hands a worker its runtime dir (the task file and the
+    reports directory the lead will poll) and any ``source_artifacts_dir`` the
+    task declares, before the task message goes out. Nothing here is specific to
+    which level of a dispatch is launching -- a chat agent and a worker
+    launching a sub-worker push the same way, addressing the same repo-relative
+    path (``_rsync_endpoints``), which mngr resolves against whichever worktree
+    it is talking to.
 
-    ``--uncommitted-changes=clobber`` rather than ``merge``: every directory
-    synced this way is a runtime dir under gitignored ``data/``, so there is
-    nothing tracked at the destination that overwriting could lose. ``merge``
-    would instead wrap the sync in ``git stash push -u`` and a pop -- and the
-    git stash stack is shared by every worktree of the repo, so two dispatches
-    syncing at the same time (a lead and one of its own workers, or two
-    siblings) can pop each other's entries and leave both trees wrong.
+    Both endpoints are under ``data/``, and ``launch`` refuses a source that is
+    not (``_sync_path_refusal``). That is what makes
+    ``--uncommitted-changes=clobber`` the right mode rather than ``merge``:
+
+    - **Nothing tracked is at risk.** ``data/`` is gitignored apart from the
+      README stubs the directory skeleton ships, and no runtime dir is one of
+      those, so overwriting at the destination cannot lose committed work.
+    - **``merge`` would touch a stack that is not ours.** It wraps the sync in
+      ``git stash push -u`` and a pop on the *destination* worktree
+      (``mngr``'s ``stash_guard``). mngr creates a local agent as a git worktree
+      of the lead's own repo, and a repo has one stash stack shared by every
+      worktree on it -- so two dispatches syncing at once (a lead and one of its
+      own workers, or two hardening siblings) interleave push/pop and each pops
+      the other's entry into the wrong tree. Parallel sibling workers make that
+      a routine schedule, not a corner case.
+    - **``clobber`` is not the lax choice here.** It is the *narrower* one: mngr
+      skips the git handling entirely for it, so the sync neither stashes nor
+      consults the destination's git state. The default ``fail`` mode is not an
+      option either way -- a worker's tree has uncommitted changes from the
+      moment it is created -- so the real choice is only ever ``clobber`` or
+      ``merge``, and ``merge`` buys protection for tracked files that are not
+      there to protect.
     """
     local, rel = _rsync_endpoints(source_dir, toplevel)
     runner.run(
@@ -673,13 +745,27 @@ def rsync_dir_from(
     """Rsync repo-relative ``source_dir`` out of agent ``name``'s worktree into
     the same path under the caller's repo root; returns whether it landed.
 
-    The pull form of ``rsync_dir``: the agent endpoint is the SOURCE and the
-    local path the DESTINATION, same trailing slashes, same ``clobber``. The
-    destination may already exist, so rsync merges into it, ``--update`` keeps
-    the newer copy of any file present on both sides, and each of ``excludes``
-    (an rsync pattern, relative to ``source_dir``) is left out. ``mngr rsync``
-    needs only the *host* to be reachable, so the source agent may be STOPPED.
-    A failure (non-zero, or the hard timeout) is returned, not raised.
+    The **pull**, and the mirror image of ``rsync_dir``: the agent endpoint is
+    the SOURCE and the local path the DESTINATION, same trailing slashes, same
+    ``clobber``. One caller, ``_relocate_task_dirs``, which lifts a worker's
+    ``data/.tasks/`` tree out before a ``destroy`` removes its worktree, so the
+    runtime dirs of the workers *it* dispatched survive. The destination may
+    already exist, so rsync merges into it, ``--update`` keeps the newer copy of
+    any file present on both sides, and each of ``excludes`` (an rsync pattern,
+    relative to ``source_dir``) is left out. ``mngr rsync`` needs only the *host*
+    to be reachable, so the source agent may be STOPPED. A failure (non-zero, or
+    the hard timeout) is returned, not raised.
+
+    ``clobber`` matters more on this side than on the push, because here the
+    destination is the **lead's own checkout** -- an agent mid-turn, with real
+    uncommitted work in its tree. ``merge`` would stash that work and pop it
+    back around a teardown, on the stack every worktree of the repo shares; a
+    concurrent dispatch anywhere in the tree could then pop it into the wrong
+    place. Nothing tracked is at stake to justify the risk: the source is always
+    ``data/.tasks/`` (``_TASKS_DIR``, not caller-supplied), whose only tracked
+    file is the ``README.md`` stub both sides hold identically from the same
+    commit -- and ``--update`` leaves even that alone unless the worker's copy
+    is newer.
     """
     rel = _normalize_dir(source_dir.as_posix())
     local = _normalize_dir(str(toplevel / rel)) if toplevel else _local_rsync_path(rel)
@@ -769,7 +855,8 @@ def launch(
     the task's ``finish_report_path`` -- a stale report from a previous run
     would satisfy ``await`` instantly, so launch refuses until the caller has
     confirmed it was handled and moved it aside (likewise an unconsumed
-    milestone beside it). So does a dirty working tree:
+    milestone beside it). So does either sync source resolving outside ``data/``
+    (see ``_sync_path_refusal``). So does a dirty working tree:
     the worker branches from committed HEAD, so uncommitted changes never reach
     it (and ``mngr create`` refuses a dirty tree anyway) -- launch stops with an
     actionable "commit first" message rather than letting that surface as an
@@ -843,6 +930,22 @@ def launch(
             )
             return 2
 
+    # The repo root, resolved once: it decides where each sync lands inside the
+    # worker, relativizes the ``runtime_dir`` label, and stamps the task file's
+    # own path. Read here rather than just before the create so a sync source
+    # pointing outside ``data/`` stops the launch before anything is stamped.
+    toplevel = _repo_toplevel(runner)
+    # Both sync sources have to land under ``data/`` inside the worker; see
+    # ``_sync_path_refusal`` for why that boundary is what keeps the sync safe.
+    for flag, source_dir in (
+        ("--runtime-dir", runtime_dir),
+        *((("source_artifacts_dir", artifacts_dir),) if artifacts_dir else ()),
+    ):
+        refusal = _sync_path_refusal(flag, source_dir, toplevel)
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
+            return 2
+
     # A dirty working tree is fatal: the worker is created from committed HEAD,
     # so uncommitted changes never reach it, and ``mngr create`` refuses a dirty
     # tree regardless. Catch it here with an actionable message. Commit -- never
@@ -883,9 +986,7 @@ def launch(
     if lead.exit_code is not None:
         return lead.exit_code
     # Stamp the task file's own path too, so the worker reads where its task
-    # file is instead of searching for it. The same repo root relativizes the
-    # ``runtime_dir`` label and the syncs below.
-    toplevel = _repo_toplevel(runner)
+    # file is instead of searching for it.
     _ensure_task_file_path(task_file, toplevel)
 
     create_argv = [
