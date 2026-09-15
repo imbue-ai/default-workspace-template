@@ -723,7 +723,9 @@ class AgentManager:
     _observe_process: RunningProcess | None
     _creation_cg: ConcurrencyGroup
     # Set once a chat's creation thread has settled its record, whichever way; what
-    # ``wait_for_chat_creation`` waits on, dropped once waited on or with the record.
+    # ``wait_for_chat_creation`` waits on. Dropped once waited on, with the record, or with
+    # the chat, so what is held is bounded by the chats the workspace has rather than by
+    # every chat it has ever created (nothing waits on most of them).
     _creation_settled_by_chat: dict[ChatId, threading.Event]
     _mngr_binary: str
     _host_dir: Path
@@ -2484,7 +2486,11 @@ class AgentManager:
         """
         with self._lock:
             settled = self._creation_settled_by_chat.get(chat_id)
-        if settled is None or not settled.wait(timeout):
+        if settled is None:
+            return None
+        if not settled.wait(timeout):
+            with self._lock:
+                self._creation_settled_by_chat.pop(chat_id, None)
             return None
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
@@ -2632,10 +2638,13 @@ class AgentManager:
         )
 
     def _forget_chat(self, chat_id: ChatId) -> None:
-        """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the auto-open ledger entry."""
+        """Drop every per-chat record of a chat whose agent is gone: presence, stamps, the
+        auto-open ledger entry, the create's settled event."""
         self._oom_prioritizer.forget_chat(chat_id)
         self._message_stamps.forget(chat_id)
         self._auto_open.forget(chat_id)
+        with self._lock:
+            self._creation_settled_by_chat.pop(chat_id, None)
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""
