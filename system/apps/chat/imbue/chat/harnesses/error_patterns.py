@@ -19,7 +19,8 @@ so they are deliberately NOT classified here. That is enforced rather than left 
 :func:`classify_api_error` returns ``None`` for anything the auth vocabulary claims, so a
 message can never carry both subtexts. Without it the two families overlap by construction --
 Anthropic reports exhausted third-party usage as a 400 ``invalid_request_error``, which is in
-BOTH this module's type table and the auth one.
+BOTH this module's type table and the auth one. :func:`kind_for_status` is the exception: it
+sees a status and no text, so it leaves that decision to its caller.
 
 The kind set and the provider-fault split are ordinary HTTP semantics, so they
 are harness-agnostic; only the two surface-form regexes are Claude-shaped. A
@@ -95,6 +96,25 @@ def classify_api_error(text: str) -> str | None:
         if type_kind is not None:
             return type_kind
     return None
+
+
+def kind_for_status(status: int | None) -> str | None:
+    """Return a normalized API-error kind for an HTTP status a harness recorded as a FIELD,
+    or ``None`` when the status is absent or not one we name.
+
+    The counterpart to :func:`classify_api_error` for a harness that states the status
+    instead of wording it: a stated status is the same fact without the prose in between,
+    and a failure whose wording never mentions a status still has one. Each harness narrows
+    its own transcript's value to an ``int`` before calling; this is shared code and should
+    not widen for one caller's convenience.
+
+    Unlike that function it does NOT screen the auth family, having no text to screen it
+    with, so the caller must settle the auth question first: ``403`` is named here as
+    ``permission`` and claimed by the auth vocabulary too.
+    """
+    if status is None:
+        return None
+    return _STATUS_KINDS.get(str(status))
 
 
 def is_provider_fault(kind: str | None) -> bool:

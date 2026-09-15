@@ -7,16 +7,18 @@ import pytest
 from imbue.minds_evals import forward_instance
 from imbue.minds_evals import minds_bridge
 from imbue.minds_evals import ui_flows
+from imbue.minds_evals.resources.flow_step_protocol import StepReaction
 from imbue.minds_evals.testing import FAKE_WORKSPACE_AGENT_ID
 
 
 def _action(
-    kind: ui_flows.FlowActionKind, role: str = "", target: str = "", text: str = "", amount: int = 0
+    kind: ui_flows.FlowActionKind, role: str = "", target: str = "", text: str = "", amount: int = 0, ref: str = ""
 ) -> ui_flows.FlowAction:
     return ui_flows.FlowAction(
         kind=kind,
         role=role,
         target=target,
+        ref=ref,
         text=text,
         amount=amount,
         reasoning="the page",
@@ -44,10 +46,14 @@ def test_every_executor_level_reason_stops_the_flow(reason: str) -> None:
     assert ui_flows.is_instrument_reason(reason) is True
 
 
-@pytest.mark.parametrize("reason", ["", ui_flows.REASON_ACTION_TIMED_OUT, ui_flows.REASON_STEP_BUDGET_EXHAUSTED])
+@pytest.mark.parametrize(
+    "reason",
+    ["", ui_flows.REASON_ACTION_TIMED_OUT, ui_flows.REASON_STEP_BUDGET_EXHAUSTED, ui_flows.REASON_STALE_REF],
+)
 def test_an_action_that_simply_did_not_work_keeps_the_flow_going(reason: str) -> None:
-    # An element that is not there is the app falling short; the browser is fine and the next step
-    # sees the real page, so writing the flow off here would excuse a genuine app failure.
+    # An element that is not there is the app falling short, and a ref that moved is the agent
+    # behind the page; the browser is fine and the next step sees the real page either way, so
+    # writing the flow off here would excuse a genuine app failure.
     assert ui_flows.is_instrument_reason(reason) is False
 
 
@@ -161,9 +167,24 @@ def test_build_step_request_carries_role_and_name_rather_than_an_index() -> None
         "kind": "input",
         "role": "textbox",
         "target": "Add a task",
+        "ref": "",
         "text": "buy milk",
         "amount": 0,
     }
+
+
+def test_build_step_request_carries_the_ref_of_a_nameless_element() -> None:
+    request = json.loads(
+        ui_flows.build_step_request(
+            _action(ui_flows.FlowActionKind.CLICK, role="checkbox", ref="e9"),
+            "/logs/shot.png",
+            cdp_endpoint_url=ui_flows.cdp_endpoint(ui_flows.flow_browser_port(0)),
+            preauth_cookie="",
+            cookie_domain="",
+        )
+    )
+
+    assert (request["action"]["role"], request["action"]["target"], request["action"]["ref"]) == ("checkbox", "", "e9")
 
 
 def test_step_command_runs_the_uploaded_script_in_the_boxs_own_venv() -> None:
@@ -256,8 +277,80 @@ def test_parse_action_rejects_an_action_that_does_not_exist() -> None:
 
 @pytest.mark.parametrize("kind", ["click", "input"])
 def test_parse_action_rejects_an_element_action_that_names_no_element(kind: str) -> None:
-    # An unnamed target would resolve to whatever the page happens to list first.
+    # An unaddressed target would resolve to whatever the page happens to list first.
     assert ui_flows.parse_action({"action": kind, "role": "button", "reasoning": "clicking"}) is None
+
+
+def test_parse_action_addresses_a_nameless_element_by_its_ref() -> None:
+    # The tree lists a checkbox with no name; the ref is the only handle the page gives it.
+    action = ui_flows.parse_action({"action": "click", "role": "checkbox", "ref": "e9", "reasoning": "mark it"})
+
+    assert action is not None
+    assert (action.role, action.target, action.ref) == ("checkbox", "", "e9")
+
+
+def test_parse_action_drops_a_ref_given_beside_a_name() -> None:
+    # A named element is addressed by its name; the record must then say so, not that it was nameless.
+    action = ui_flows.parse_action(
+        {"action": "click", "role": "checkbox", "target": "buy milk", "ref": "e9", "reasoning": "mark it"}
+    )
+
+    assert action is not None
+    assert (action.target, action.ref) == ("buy milk", "")
+
+
+def test_parse_action_rejects_a_ref_with_no_role_to_check_it_against() -> None:
+    # The role is what the step script checks the ref against on the page as it now stands, so a
+    # ref without one would be acted on whatever it has come to name.
+    assert ui_flows.parse_action({"action": "click", "ref": "e9", "reasoning": "mark it"}) is None
+    assert "no role to check it against" in ui_flows.describe_unusable_action({"action": "click", "ref": "e9"})
+
+
+def test_parse_action_drops_a_ref_on_a_kind_that_addresses_no_element() -> None:
+    # `target_ref` on a record claims the step acted on a control the page left unnamed, so it must
+    # not be set by a decision that addressed nothing at all.
+    action = ui_flows.parse_action({"action": "done", "role": "checkbox", "ref": "e9", "reasoning": "finished"})
+
+    assert action is not None
+    assert action.ref == ""
+
+
+def test_parse_action_rejects_a_ref_that_is_not_shaped_like_one() -> None:
+    assert (
+        ui_flows.parse_action({"action": "click", "role": "checkbox", "ref": "the third one", "reasoning": "x"})
+        is None
+    )
+
+
+def test_describe_unusable_action_says_what_the_decision_asked_for() -> None:
+    # The manifest entry names only the layer; this is what tells a reader of the log which of the
+    # ways a decision can be unusable it was, in the decision's own words.
+    assert ui_flows.describe_unusable_action(None) == "the model call produced no tool payload"
+    assert "'teleport', which does not exist" in ui_flows.describe_unusable_action({"action": "teleport"})
+    unaddressed = ui_flows.describe_unusable_action(
+        {"action": "click", "role": "checkbox", "reasoning": "The checkbox has no name so I cannot address it."}
+    )
+    assert unaddressed.startswith("it asked to click a checkbox without naming it or giving its ref")
+    assert "cannot address it" in unaddressed
+    assert (
+        ui_flows.describe_unusable_action({"action": "click", "role": "checkbox", "ref": "e9"})
+        == "the payload was usable"
+    )
+
+
+def test_describe_unusable_action_bounds_what_it_quotes_from_the_payload() -> None:
+    # The explanation is written into the manifest and into the flow log the judge reads, so a
+    # payload field of any length must not be able to crowd the page state out of either.
+    explained = ui_flows.describe_unusable_action({"action": "x" * 5_000})
+
+    assert len(explained) < 300 and "'xxx" in explained
+
+
+def test_the_action_prompt_allows_a_ref_only_for_a_nameless_element() -> None:
+    prompt = ui_flows._SYSTEM_PROMPT
+
+    assert "[ref=e9]" in prompt and "leave target empty" in prompt
+    assert "Use a ref for nothing else" in prompt
 
 
 def test_reload_is_its_own_action_rather_than_a_re_open() -> None:
@@ -275,6 +368,13 @@ def test_describe_action_names_the_element_a_reader_can_find() -> None:
     )
 
     assert described == "type 'buy milk' into the textbox named 'Add a task'"
+
+
+def test_describe_action_says_when_the_element_had_no_name() -> None:
+    # The record tells the reader what the page failed to label, not only what was clicked.
+    described = ui_flows.describe_action(_action(ui_flows.FlowActionKind.CLICK, role="checkbox", ref="e9"))
+
+    assert described == "click the checkbox that has no accessible name (ref e9)"
 
 
 def test_build_action_prompt_says_so_when_nothing_has_happened_yet() -> None:
@@ -318,12 +418,44 @@ def test_flow_step_record_keeps_the_page_state_verbatim() -> None:
 
     record = json.loads(
         ui_flows.flow_step_record(
-            0, "click the button", "a delete button", "the row goes", "", state, "step_000.png", "", "t"
+            0,
+            "click the button",
+            "",
+            "a delete button",
+            "the row goes",
+            "",
+            StepReaction.SETTLED,
+            state,
+            "step_000.png",
+            "",
+            "t",
         )
     )
 
     assert record["state"] == state
     assert (record["step_index"], record["screenshot"]) == (0, "step_000.png")
+
+
+def test_flow_step_record_carries_the_ref_a_nameless_element_was_addressed_by() -> None:
+    # Its own field beside the prose: the judge's digest and a later measure of unlabeled controls
+    # read it rather than the sentence.
+    record = json.loads(
+        ui_flows.flow_step_record(
+            2,
+            "click the checkbox that has no accessible name (ref e9)",
+            "e9",
+            "mark it complete",
+            "the row is struck through",
+            "",
+            StepReaction.SETTLED,
+            "- checkbox [ref=e9]",
+            "s.png",
+            "",
+            "t",
+        )
+    )
+
+    assert record["target_ref"] == "e9"
 
 
 def test_flow_step_record_says_when_the_action_never_ran() -> None:
@@ -333,9 +465,11 @@ def test_flow_step_record_says_when_the_action_never_ran() -> None:
         ui_flows.flow_step_record(
             2,
             "click the button named 'Delete'",
+            "",
             "a delete button",
             "the row goes",
             "",
+            StepReaction.UNOBSERVED,
             "- heading",
             "s.png",
             "no such",
@@ -350,7 +484,11 @@ def test_every_record_kind_names_itself() -> None:
     # A reader dispatches on the kind rather than inferring from which fields are present, so a
     # record that named none would be read as whatever the reader's fallback happens to be.
     init = json.loads(ui_flows.flow_init_record("open it", "it opens", "https://x/", "- heading", "s.png", "t"))
-    action = json.loads(ui_flows.flow_step_record(1, "click", "a button", "a row goes", "", "- heading", "", "", "t"))
+    action = json.loads(
+        ui_flows.flow_step_record(
+            1, "click", "", "a button", "a row goes", "", StepReaction.SETTLED, "- heading", "", "", "t"
+        )
+    )
     final = json.loads(ui_flows.flow_final_record(2, "the row is gone", "- heading", "t"))
 
     assert (init["kind"], action["kind"], final["kind"]) == ("init", "action", "final")
@@ -373,9 +511,11 @@ def test_an_action_records_what_it_predicted_and_what_followed() -> None:
         ui_flows.flow_step_record(
             3,
             "click the button named 'Platform'",
+            "",
             "a team button",
             "the list narrows",
             "- button [pressed]",
+            StepReaction.SETTLED,
             "- x",
             "",
             "",
@@ -385,6 +525,9 @@ def test_an_action_records_what_it_predicted_and_what_followed() -> None:
 
     assert (record["reasoning"], record["expected"]) == ("a team button", "the list narrows")
     assert record["observed"] == "- button [pressed]"
+    # The executor's raw word travels beside the prose, so a tally of unanswered actions can count
+    # it rather than parse sentences.
+    assert record["reaction"] == "settled"
 
 
 def test_an_unchanged_page_is_said_in_so_many_words() -> None:
@@ -535,3 +678,91 @@ def test_a_real_change_survives_the_normalising() -> None:
     after = '- textbox "Add a task" [active] [ref=e9]\n- text: buy milk'
 
     assert ui_flows.summarize_state_change(before, after) == "new: - text: buy milk"
+
+
+# --- what a step's effect says, given what the executor saw the DOM do ---
+
+
+@pytest.mark.parametrize(
+    ("reaction", "expected_summary"),
+    [
+        (StepReaction.UNOBSERVED, ui_flows.UNCHANGED_STATE_SUMMARY),
+        (StepReaction.NONE, ui_flows.NO_REACTION_SUMMARY),
+        (StepReaction.SETTLED, ui_flows.ACKNOWLEDGED_ONLY_SUMMARY),
+        (StepReaction.STILL_CHANGING, ui_flows.STILL_CHANGING_UNCHANGED_SUMMARY),
+    ],
+)
+def test_an_unchanged_tree_is_qualified_by_what_the_dom_did(reaction: StepReaction, expected_summary: str) -> None:
+    # A dead control and a control that answered with nothing but a highlight look identical in
+    # the tree, and call for opposite next moves; only the executor's word on the DOM tells them
+    # apart. Each sentence is distinct, so the agent cannot mistake one for another.
+    state = '- button "Delete" [ref=e15]'
+
+    assert ui_flows.summarize_step_effect(state, state, reaction) == expected_summary
+
+
+def test_a_tree_that_moved_speaks_for_itself() -> None:
+    before = "- heading"
+    after = "- heading\n- text: buy milk"
+
+    assert ui_flows.summarize_step_effect(before, after, StepReaction.SETTLED) == "new: - text: buy milk"
+    assert ui_flows.summarize_step_effect(before, after, StepReaction.NONE) == "new: - text: buy milk"
+
+
+def test_a_tree_read_while_the_page_was_still_moving_says_so() -> None:
+    # The agent is about to act on this state, and it may not be the state the page ends up in.
+    before = "- heading"
+    after = "- heading\n- text: 250 ms"
+
+    summary = ui_flows.summarize_step_effect(before, after, StepReaction.STILL_CHANGING)
+
+    assert summary == "{} new: - text: 250 ms".format(ui_flows.STILL_CHANGING_PREFIX)
+
+
+def test_the_four_unchanged_sentences_are_told_apart_by_their_first_words() -> None:
+    # The history is what the agent reads them from, and its rules key on how each one begins.
+    sentences = [
+        ui_flows.UNCHANGED_STATE_SUMMARY,
+        ui_flows.NO_REACTION_SUMMARY,
+        ui_flows.ACKNOWLEDGED_ONLY_SUMMARY,
+        ui_flows.STILL_CHANGING_UNCHANGED_SUMMARY,
+    ]
+
+    assert len({sentence.split(":")[0] for sentence in sentences}) == len(sentences)
+    assert ui_flows.NO_REACTION_SUMMARY.startswith("nothing happened")
+    assert ui_flows.ACKNOWLEDGED_ONLY_SUMMARY.startswith("the page reacted but shows nothing new")
+
+
+def test_the_prompt_exempts_a_scroll_from_the_rule_against_repeating_an_action() -> None:
+    # A scroll's own effect is the viewport, which neither the DOM watch nor the accessible tree
+    # shows, so every scroll on a page without lazy loading reports "nothing happened". Without the
+    # exemption the rule above it would leave the agent one scroll per flow, and no way down a page.
+    assert "'scroll' is the exception" in ui_flows._SYSTEM_PROMPT
+    assert "Repeat it to reach further down the page" in ui_flows._SYSTEM_PROMPT
+
+
+def test_wait_is_an_action_the_agent_can_choose_and_a_reader_can_name() -> None:
+    action = ui_flows.parse_action({"action": "wait", "reasoning": "the page says saving", "expected": "it finishes"})
+
+    assert action is not None and action.kind is ui_flows.FlowActionKind.WAIT
+    assert ui_flows.describe_action(action) == "wait for the page to change"
+    assert (
+        json.loads(ui_flows.build_step_request(action, "", "http://127.0.0.1:1", "", ""))["action"]["kind"] == "wait"
+    )
+
+
+def test_the_prompt_tells_the_agent_when_to_wait_and_when_a_reload_counts_against_the_app() -> None:
+    assert "choose 'wait'" in ui_flows._SYSTEM_PROMPT
+    assert "Choose 'reload' only where the declared actions say to reload" in ui_flows._SYSTEM_PROMPT
+    assert "wait: " in str(ui_flows._ACTION_TOOL["input_schema"])
+
+
+def test_parse_step_result_carries_the_executors_word_on_the_dom() -> None:
+    outcome = ui_flows.parse_step_result(
+        json.dumps({"is_ok": True, "url": "https://x/", "title": "T", "snapshot": "- heading", "reaction": "none"})
+    )
+
+    assert outcome.reaction is StepReaction.NONE
+    # A reply from a step that never watched carries the default rather than failing to parse.
+    unwatched = ui_flows.parse_step_result(json.dumps({"is_ok": True, "url": "https://x/", "snapshot": "- h"}))
+    assert unwatched.reaction is StepReaction.UNOBSERVED

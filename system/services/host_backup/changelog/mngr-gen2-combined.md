@@ -1,0 +1,1 @@
+Integration branch for the imbue_cloud slice-fleet generation 2 program (mngr-internal `mngr/gen2-combined`). For host_backup it carries the gen-2 snapshot-retention changes detailed in `new-fleet-runsc-prototype.md` (`max_local_snapshots` default 5 -> 1) and `new-fleet-phase-2.md` (no btrfs snapshot kept between ticks; the setting removed).

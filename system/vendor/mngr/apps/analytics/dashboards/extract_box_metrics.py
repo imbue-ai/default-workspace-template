@@ -220,6 +220,33 @@ def _materialize_servers_table(connection: Any) -> int:
     return int(row[0]) if row is not None else 0
 
 
+@pure
+def _network_delta_statement(table_name: str, device_predicate: str, is_per_device: bool) -> tuple[str, str]:
+    """A bytes/second table over ``raw_system_network_io``'s cumulative per-device counters.
+
+    Per-bucket deltas of the counters become 5-minute-average rates;
+    ``is_per_device`` keeps the device as an output dimension instead of
+    summing across the predicate's devices.
+    """
+    device_output_column = " device," if is_per_device else ""
+    return (
+        table_name,
+        f"CREATE OR REPLACE TABLE {table_name} AS "
+        "WITH sampled AS ("
+        " SELECT host_name, device, direction, time_bucket(INTERVAL 5 MINUTE, observed_at) AS bucket_at,"
+        "  max(value) AS total_bytes"
+        f" FROM raw_system_network_io WHERE {device_predicate} GROUP BY ALL"
+        "), deltas AS ("
+        " SELECT host_name, device, direction, bucket_at,"
+        "  total_bytes - lag(total_bytes) OVER (PARTITION BY host_name, device, direction ORDER BY bucket_at)"
+        "   AS delta_bytes"
+        " FROM sampled"
+        ") "
+        f"SELECT host_name,{device_output_column} direction, bucket_at, sum(delta_bytes) / 300.0 AS bytes_per_second "
+        "FROM deltas WHERE delta_bytes IS NOT NULL AND delta_bytes >= 0 GROUP BY ALL",
+    )
+
+
 # Chart-ready tables, each a single statement over the raw stream views. All
 # bucketing happens here so the Evidence pages stay simple selects.
 _TABLE_STATEMENTS: Final[tuple[tuple[str, str], ...]] = (
@@ -298,24 +325,13 @@ _TABLE_STATEMENTS: Final[tuple[tuple[str, str], ...]] = (
         " GROUP BY ALL"
         ") GROUP BY ALL",
     ),
-    (
-        "network_throughput",
-        # system_network_io is a cumulative byte counter per device/direction;
-        # per-bucket deltas over the physical devices become bytes/second.
-        "CREATE OR REPLACE TABLE network_throughput AS "
-        "WITH sampled AS ("
-        " SELECT host_name, device, direction, time_bucket(INTERVAL 5 MINUTE, observed_at) AS bucket_at,"
-        "  max(value) AS total_bytes"
-        " FROM raw_system_network_io WHERE device != 'lo' GROUP BY ALL"
-        "), deltas AS ("
-        " SELECT host_name, device, direction, bucket_at,"
-        "  total_bytes - lag(total_bytes) OVER (PARTITION BY host_name, device, direction ORDER BY bucket_at)"
-        "   AS delta_bytes"
-        " FROM sampled"
-        ") "
-        "SELECT host_name, direction, bucket_at, sum(delta_bytes) / 300.0 AS bytes_per_second "
-        "FROM deltas WHERE delta_bytes IS NOT NULL AND delta_bytes >= 0 GROUP BY ALL",
-    ),
+    # system_network_io is a cumulative byte counter per device/direction;
+    # per-bucket deltas over the physical devices become bytes/second.
+    _network_delta_statement("network_throughput", "device != 'lo'", is_per_device=False),
+    # Per-slice traffic on gen-2 boxes: each slice VM's routed tap is an
+    # ordinary msliceN interface, so the same cumulative-counter deltas
+    # become per-slice bytes/second (specs/slice-fleet-gen2 phase 4).
+    _network_delta_statement("tap_throughput", "device LIKE 'mslice%'", is_per_device=True),
     (
         "qemu_slices",
         # The box-level qemu process metrics are the per-slice visibility

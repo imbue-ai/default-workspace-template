@@ -3,7 +3,9 @@
 Targets are leased slice pool hosts named by ``--host-id`` (or, with
 ``--all-leased``, every leased slice in the pool, probe only); each is probed
 (the default), migrated, or rolled back through one script run as root in its
-VM (see ``imbue.minds_admin.slices.home_layout``). The pool SSH key and pool
+VM (see ``imbue.minds_admin.slices.home_layout``). Gen-1 boxes only: the
+script runs through the lima client's ``run_in_vm_as_root``, so a target on a
+gen-2 box is skipped and reported as unreachable. The pool SSH key and pool
 DSN resolve from the activated env, exactly like ``repair-keys``.
 """
 
@@ -14,17 +16,20 @@ from loguru import logger
 from imbue.minds_admin.cli._tier_secrets import DATABASE_URL_HELP
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_database_url
 from imbue.minds_admin.cli._tier_secrets import resolve_pool_private_key_pem
-from imbue.minds_admin.cli.server import pool_private_key_path
 from imbue.minds_admin.slices.bare_metal_db import POOL_HOST_STATUS_LEASED
 from imbue.minds_admin.slices.bare_metal_db import fetch_leased_slice_hosts
 from imbue.minds_admin.slices.bare_metal_db import fetch_slice_hosts_by_host_id
+from imbue.minds_admin.slices.box_access import resolve_server_management_dial
 from imbue.minds_admin.slices.home_layout import HomeLayoutAction
 from imbue.minds_admin.slices.home_layout import HomeLayoutOutcome
 from imbue.minds_admin.slices.home_layout import HomeLayoutTarget
 from imbue.minds_admin.slices.home_layout import build_home_layout_report
 from imbue.minds_admin.slices.home_layout import repair_home_layout_on_target
+from imbue.minds_admin.slices.operator_identity import pool_private_key_path
 from imbue.mngr_imbue_cloud.cli._common import emit_json
 from imbue.mngr_imbue_cloud.errors import BareMetalProvisioningError
+from imbue.mngr_imbue_cloud.slices.bare_metal import box_service_user
+from imbue.mngr_imbue_cloud.slices.gen2_scripts.layout import FIRST_QEMU_BOX_GENERATION
 from imbue.mngr_imbue_cloud.slices.lima_slice_client import LimaSliceVpsClient
 from imbue.mngr_lima.errors import LimaCommandError
 
@@ -71,7 +76,9 @@ def repair_home_layout(
     bake produces -- after stopping the workspace's chats and services for the
     duration (minutes). A read-only btrfs snapshot of the volume and the
     container's old home tree are kept for --rollback. Without a flag the
-    command only reports each workspace's layout.
+    command only reports each workspace's layout. Gen-1 boxes only: a target
+    on a gen-2 box is skipped (the repair runs through the lima client) and
+    counted as unreachable in the report.
     """
     if is_migrate and is_rollback:
         raise click.ClickException("--migrate and --rollback are mutually exclusive")
@@ -103,7 +110,7 @@ def repair_home_layout(
             host_id=row.host_id,
             host_name=row.host_name,
             status=row.status,
-            vm_name=row.lima_instance_name,
+            vm_name=row.slice_instance_name,
             server=row.server,
         )
         for row in rows
@@ -125,9 +132,23 @@ def repair_home_layout(
                 logger.warning("Box {} has no public_address; skipping {}", target.server.id, target.host_id)
                 unreachable.append(target.host_id)
                 continue
+            if target.server.box_generation >= FIRST_QEMU_BOX_GENERATION:
+                # The in-VM script runs through the lima client's
+                # ``run_in_vm_as_root`` (``limactl shell``), which a raw-qemu
+                # slice has no counterpart for.
+                logger.warning(
+                    "Skipping {} ({}): its box {} is gen-2, which this lima-based repair cannot reach",
+                    target.host_name,
+                    target.host_id,
+                    target.server.id,
+                )
+                unreachable.append(target.host_id)
+                continue
+            dial = resolve_server_management_dial(target.server)
             client = LimaSliceVpsClient(
-                box_address=str(target.server.public_address),
-                box_ssh_user=target.server.lima_service_user or "limahost",
+                box_address=dial.host,
+                box_ssh_port=dial.port,
+                box_ssh_user=box_service_user(target.server),
                 private_key_path=str(private_key_path),
                 box_host_public_key=target.server.box_host_public_key,
             )
@@ -141,6 +162,6 @@ def repair_home_layout(
     emit_json(report.model_dump(mode="json"))
     if report.failed or report.unreachable:
         raise click.ClickException(
-            f"{report.failed} workspace(s) failed and {len(report.unreachable)} were unreachable or not leased; "
-            "see the JSON above."
+            f"{report.failed} workspace(s) failed and {len(report.unreachable)} were unreachable, not leased, or on "
+            "a gen-2 box; see the JSON above."
         )

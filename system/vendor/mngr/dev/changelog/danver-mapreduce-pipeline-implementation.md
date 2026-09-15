@@ -1,0 +1,1 @@
+`uv.lock` picks up `jinja2` as a dependency of `libs/mngr_mapreduce`, whose pipeline nodes render their agents' prompts from Jinja templates. It was already a dependency of `mngr_tmr` and `mngr_forward`, so no new package enters the lock.

@@ -49,7 +49,7 @@ Naming and structure rules:
   `README` is reserved, so no `.feature` file may be named `README`.
   Every `README.md` opens with this incipit, verbatim, as its first line after the folder's title heading:
 
-  > Understanding this behavior corpus calls for the tmr-behaviors skill; consult it when reading this file.
+  > Understanding this behavior corpus calls for the behaviors skill; consult it when reading this file.
 
   Definitions live in the repo's committed glossaries (e.g. `apps/minds/docs/workspace/glossary.md`); a `README.md` references them and weaves any corpus-specific definitions into its prose rather than keeping a glossary section.
 - `invariants.feature` is the other reserved filename (see "Invariants and scope").

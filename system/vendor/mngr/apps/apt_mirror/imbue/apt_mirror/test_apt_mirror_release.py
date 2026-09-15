@@ -11,14 +11,16 @@ import pytest
 
 from imbue.apt_mirror.cli import CURRENT_TIMESTAMP_PATH
 from imbue.apt_mirror.cli import read_current_timestamp
-
-_LIVE_MIRROR_BASE_URL = "https://apt.imbuepackages.com"
+from imbue.apt_mirror.data_types import APT_MIRROR_PUBLIC_BASE_URL
+from imbue.apt_mirror.data_types import DEBIAN_ARCHIVE
+from imbue.apt_mirror.data_types import DEBIAN_SECURITY_ARCHIVE
+from imbue.apt_mirror.parsing import snapshot_archive_url
 
 
 def _pinned_sources_script(timestamp: str) -> str:
     """A container script mirroring dwt's write_apt_sources.sh: pin sources, update, install."""
-    debian_uri = f"{_LIVE_MIRROR_BASE_URL}/snap/{timestamp}/debian"
-    security_uri = f"{_LIVE_MIRROR_BASE_URL}/snap/{timestamp}/debian-security"
+    debian_uri = snapshot_archive_url(APT_MIRROR_PUBLIC_BASE_URL, timestamp, DEBIAN_ARCHIVE.name)
+    security_uri = snapshot_archive_url(APT_MIRROR_PUBLIC_BASE_URL, timestamp, DEBIAN_SECURITY_ARCHIVE.name)
     return "\n".join(
         [
             "set -euo pipefail",

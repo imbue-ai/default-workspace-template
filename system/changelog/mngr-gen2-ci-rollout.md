@@ -1,0 +1,1 @@
+`system/vendor/mngr` refreshed to the mngr commit tagged `minds-v0.6.0` (the gen-2 slice-fleet release: the workspace's vendored mngr gains the 0.6.0 version pin, the gen-2 CI fixes, and everything the gen-2 merge brought), with the root `uv.lock` relocked against it.

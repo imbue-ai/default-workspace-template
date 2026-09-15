@@ -16,12 +16,14 @@ Covers:
   deploy-activated shell fully clears.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from imbue.minds.envs.primitives import InvalidDevEnvNameError
+from imbue.minds.primitives import OutputFormat
 from imbue.minds_admin.cli._activated_env import MODAL_PROFILE_ENV_VAR
 from imbue.minds_admin.cli.env import _destroy_agents_and_state_container_for_wipe
 from imbue.minds_admin.cli.env import env
@@ -229,6 +231,57 @@ def test_env_destroy_refuses_without_deploy_activation(_isolated_env: Path, monk
     result = runner.invoke(env, ["destroy"], obj={})
     assert result.exit_code != 0, result.output
     assert "minds-admin env activate --deploy dev-foo" in result.output
+
+
+# -- stop-local --
+
+
+def test_env_stop_local_reports_nothing_for_an_idle_env_root(_isolated_env: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(env, ["stop-local", "dev-foo"], obj={})
+    assert result.exit_code == 0, result.output
+    assert "Nothing on this machine holds" in result.output
+    assert ".minds-dev-foo" in result.output
+
+
+def test_env_stop_local_list_only_names_the_live_supervisor_without_stopping_it(
+    _held_dev_foo_forward_lock: Path,
+) -> None:
+    """``--list-only`` reports the holder and leaves it running (the lock stays held by this process)."""
+    runner = CliRunner()
+    result = runner.invoke(env, ["stop-local", "--list-only", "dev-foo"], obj={})
+    assert result.exit_code == 0, result.output
+    assert "Local processes holding" in result.output
+    assert str(_held_dev_foo_forward_lock) in result.output
+    assert "`mngr latchkey forward` supervisor" in result.output
+    assert "Stopped" not in result.output
+
+
+def test_env_stop_local_json_reports_the_holders(_held_dev_foo_forward_lock: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(env, ["stop-local", "--list-only", "dev-foo"], obj={"output_format": OutputFormat.JSON})
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["name"] == "dev-foo"
+    assert payload["env_root"] == str(_held_dev_foo_forward_lock)
+    assert payload["status"] == "running"
+    assert payload["latchkey_forward_pid"] is not None
+    assert payload["desktop_pids"] == []
+
+
+def test_env_stop_local_defaults_to_the_activated_env(_isolated_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINDS_ROOT_NAME", "minds-dev-foo")
+    runner = CliRunner()
+    result = runner.invoke(env, ["stop-local"], obj={})
+    assert result.exit_code == 0, result.output
+    assert ".minds-dev-foo" in result.output
+
+
+def test_env_stop_local_refuses_an_invalid_env_name(_isolated_env: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(env, ["stop-local", "not-an-env"], obj={})
+    assert result.exit_code != 0, result.output
+    assert "Invalid env name" in result.output
 
 
 # -- deactivate --

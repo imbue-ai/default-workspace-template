@@ -652,7 +652,7 @@ def _stepped_config() -> dict[str, Any]:
                             "ui_flows": [
                                 {
                                     "name": "updated-content",
-                                    "steps": "Open the roadmap.",
+                                    "actions": "Open the roadmap.",
                                     "expect": "The updated export's milestones are shown.",
                                 }
                             ],

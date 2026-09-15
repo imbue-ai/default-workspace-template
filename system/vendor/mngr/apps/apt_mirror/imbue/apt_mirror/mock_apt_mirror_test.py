@@ -32,3 +32,6 @@ class MappingUpstreamFetcher(UpstreamFetcherInterface):
     def fetch(self, url: str) -> bytes | None:
         self.fetched_urls.append(url)
         return self.responses_by_url.get(url)
+
+    def is_served(self, url: str) -> bool:
+        return url in self.responses_by_url

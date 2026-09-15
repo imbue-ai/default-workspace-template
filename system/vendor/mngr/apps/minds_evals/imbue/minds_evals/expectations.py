@@ -38,7 +38,7 @@ _EXPECTATIONS_KEYS: Final[frozenset[str]] = frozenset(
 _DELIVERABLE_KEYS: Final[frozenset[str]] = frozenset({"kind", "min_registered_apps", "http", "files"})
 _HTTP_KEYS: Final[frozenset[str]] = frozenset({"target", "expect_status", "expect_body_regex"})
 _FILES_KEYS: Final[frozenset[str]] = frozenset({"glob", "min_count"})
-_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "steps", "expect", "script", "surface"})
+_UI_FLOW_KEYS: Final[frozenset[str]] = frozenset({"name", "actions", "expect", "script", "surface"})
 
 _DEFAULT_FILES_MIN_COUNT: Final[int] = 1
 
@@ -183,24 +183,24 @@ def _parse_ui_flow(raw_entry: object, case_id: str, index: int) -> UiFlow:
     name = str(raw.get("name") or "").strip()
     if not name:
         raise EvalConfigError("case {!r}: {} needs a 'name'".format(case_id, what))
-    steps = str(raw.get("steps") or "").strip()
+    actions = str(raw.get("actions") or "").strip()
     expect = str(raw.get("expect") or "").strip()
     script = str(raw.get("script") or "").strip()
     # A flow is either natural language the verification agent executes, or a per-case script for a
     # UI with stable selectors -- never both, and never neither.
-    if script and (steps or expect):
-        raise EvalConfigError("case {!r}: {} carries both 'script' and 'steps'/'expect'".format(case_id, what))
-    if not script and not (steps and expect):
-        raise EvalConfigError("case {!r}: {} needs either 'steps' + 'expect' or 'script'".format(case_id, what))
+    if script and (actions or expect):
+        raise EvalConfigError("case {!r}: {} carries both 'script' and 'actions'/'expect'".format(case_id, what))
+    if not script and not (actions and expect):
+        raise EvalConfigError("case {!r}: {} needs either 'actions' + 'expect' or 'script'".format(case_id, what))
     if script:
         # The field is reserved, not implemented. Accepting it would hand a case author a green
         # generation and a completed trial for verification that never ran -- the one failure mode a
         # reserved field must not have.
         raise EvalConfigError(
             "case {!r}: {} uses 'script', which is a known but unimplemented field -- scripted flow "
-            "execution has no semantics yet, so nothing would run it. Use 'steps' + 'expect'.".format(case_id, what)
+            "execution has no semantics yet, so nothing would run it. Use 'actions' + 'expect'.".format(case_id, what)
         )
-    return UiFlow(name=name, steps=steps, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
+    return UiFlow(name=name, actions=actions, expect=expect, script=script, surface=_parse_surface(raw, case_id, what))
 
 
 @pure
@@ -321,7 +321,7 @@ def _expand_ui_flows(flows: tuple[UiFlow, ...]) -> tuple[UiFlowCheck, ...]:
         UiFlowCheck(
             check_id="ui_flow_{}_{}".format(index, slugify(flow.name)),
             name=flow.name,
-            steps=flow.steps,
+            actions=flow.actions,
             expect=flow.expect,
             surface=flow.surface,
         )

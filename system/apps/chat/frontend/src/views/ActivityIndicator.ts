@@ -3,7 +3,7 @@
  *
  * The backend (the chat app) is the source of truth for *which* state the agent
  * is in -- IDLE / THINKING / TOOL_RUNNING -- delivered on ``activity_state`` via the
- * ``agents_updated`` WS payload. This component's job is to render a label:
+ * ``chats_updated`` WS payload. This component's job is to render a label:
  *   - IDLE / null      -> hidden
  *   - THINKING         -> "Thinking…"
  *   - TOOL_RUNNING     -> the in-flight tool call, captioned by the agent's harness
@@ -11,7 +11,7 @@
  * The TOOL_RUNNING caption is read straight off the tool call: the harness's own
  * parser labelled it, so this view needs no notion of which harness is running.
  * A null ``activity_state`` means the server has no per-agent activity tracking
- * for this agent (proto-agents, remote agents) -- the strip collapses.
+ * for this chat (provisional chats, remote agents) -- the strip collapses.
  *
  * One state has no backend signal at all: the beat between the user resolving a
  * permission request and the agent being told. The verdict reaches this page
@@ -26,7 +26,7 @@
 import m from "mithril";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import type { ToolCall, TranscriptEvent } from "../models/Response";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 
@@ -186,7 +186,7 @@ export function wakeUpSpinnerDeadline(events: TranscriptEvent[], now: number): n
 const TOOL_CAPTION_MIN_MS = 700;
 
 interface ActivityIndicatorAttrs {
-  agentId: string;
+  chatId: string;
   events: TranscriptEvent[];
 }
 
@@ -220,8 +220,8 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
       cancelWake();
     },
     view(vnode) {
-      const { agentId, events } = vnode.attrs;
-      const state = getAgentById(agentId)?.activity_state ?? null;
+      const { chatId, events } = vnode.attrs;
+      const state = getChatById(chatId)?.active_agent.activity_state ?? null;
       const label = labelForActivityState(state, events);
 
       const now = Date.now();

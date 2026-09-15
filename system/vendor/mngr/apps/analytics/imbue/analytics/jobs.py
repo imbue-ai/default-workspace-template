@@ -43,6 +43,7 @@ from imbue.analytics.log_views import DEFAULT_BODY_COLUMN
 from imbue.analytics.log_views import DEFAULT_TIMESTAMP_COLUMN
 from imbue.analytics.log_views import create_log_views
 from imbue.analytics.settings import AnalyticsSettings
+from imbue.analytics.settings import ManagementSshCredentials
 from imbue.analytics.settings import SNAPSHOT_RETENTION_DAYS
 from imbue.analytics.settings import load_analytics_settings
 from imbue.analytics.settings import load_collection_settings
@@ -292,8 +293,8 @@ def run_lake_maintenance_job() -> dict[str, int]:
     )
 
 
-def _collection_body(settings: AnalyticsSettings) -> dict[str, int]:
-    collection_settings = load_collection_settings()
+def _collection_body(settings: AnalyticsSettings, gen2_credentials: ManagementSshCredentials | None) -> dict[str, int]:
+    collection_settings = load_collection_settings(gen2_credentials)
     lake_connection = _build_dual_lake_session(settings)
     try:
         counters = run_collection_poll(
@@ -306,12 +307,12 @@ def _collection_body(settings: AnalyticsSettings) -> dict[str, int]:
     return counters
 
 
-def run_collection_poll_job() -> dict[str, int]:
+def run_collection_poll_job(gen2_credentials: ManagementSshCredentials | None) -> dict[str, int]:
     settings = load_analytics_settings()
     return run_recorded_job(
         COLLECTION_POLL_JOB_NAME,
         COLLECTION_POLL_WARN_SECONDS,
-        job_body=lambda: _collection_body(settings),
+        job_body=lambda: _collection_body(settings, gen2_credentials),
         record_run=lambda record: record_run_row_in_ops_db(
             lambda: ops_db.get_ops_db_connection(settings.ops_dsn.get_secret_value()), record
         ),

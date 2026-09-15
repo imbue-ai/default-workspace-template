@@ -65,6 +65,7 @@ MOCK_ACCOUNT_FLOW_ID: Final[str] = "flow-mock-1"
 # decides the harness, which is why signing in on a lane is how a run chooses one.
 MOCK_HARNESS_BY_LANE: Final[Mapping[str, str]] = {
     "anthropic": "claude",
+    "openai": "codex",
     "api-key": "pi-coding",
     "openrouter": "pi-coding",
     "opencode-go": "pi-coding",

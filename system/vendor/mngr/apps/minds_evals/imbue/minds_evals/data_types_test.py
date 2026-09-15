@@ -23,7 +23,13 @@ def test_captured_file_refuses_an_uncaptured_file_without_a_reason() -> None:
 def test_every_lane_is_spelled_the_way_the_command_line_and_the_workspace_spell_it() -> None:
     """The enum member names carry underscores and the ids do not, so the two would drift silently:
     a lane sent to the accounts API under the wrong spelling is a sign-in the workspace refuses."""
-    assert {lane_id(lane) for lane in HarnessLane} == {"anthropic", "api-key", "openrouter", "opencode-go"}
+    assert {lane_id(lane) for lane in HarnessLane} == {
+        "anthropic",
+        "openai",
+        "api-key",
+        "openrouter",
+        "opencode-go",
+    }
 
 
 def test_a_harness_config_requests_a_switch_exactly_when_it_names_a_model() -> None:

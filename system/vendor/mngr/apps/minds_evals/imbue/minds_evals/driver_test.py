@@ -653,6 +653,9 @@ def _proxy_rules(usage_log: str) -> list[ScriptedExecRule]:
 
 # The key the driver signs the workspace in with, supplied the way harbor supplies it.
 _TRIAL_API_KEY: Final[str] = "sk-eval-test"
+# The openai lane's own key, kept distinct from the one above so a test on that lane can tell which
+# variable the derivation read.
+_OPENAI_TRIAL_API_KEY: Final[str] = "sk-eval-test-openai"
 
 
 def _driver_kwargs(
@@ -738,6 +741,7 @@ def _run_driver(
     user_id_prefix: str = "",
     snapshot_mode: str = "per-turn",
     harness_kwargs: dict[str, Any] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[MindsPersonaDriver, MockBoxEnvironment, AgentContext]:
     driver = (
         _make_driver(
@@ -747,6 +751,7 @@ def _run_driver(
             snapshot_mode=snapshot_mode,
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
         )
         if scripted_sources is None
         else _make_scripted_driver(
@@ -757,6 +762,7 @@ def _run_driver(
             snapshot_mode=snapshot_mode,
             harness_kwargs=harness_kwargs,
             user_id_prefix=user_id_prefix,
+            extra_env=extra_env,
         )
     )
     environment = MockBoxEnvironment(
@@ -1347,7 +1353,7 @@ def _worker_rules(capture_output: str, listing_json: str = worker_listing_json("
         ScriptedExecRule(
             "MINDS_EVALS_SECTION:list_exit", [ok_result(mngr_exec_json(worker_listing_output(listing_json)))]
         ),
-        ScriptedExecRule("mngr transcript {}".format(WORKER_NAME), [ok_result(mngr_exec_json(capture_output))]),
+        ScriptedExecRule("mngr transcript {}".format(WORKER_AGENT_ID), [ok_result(mngr_exec_json(capture_output))]),
         *_setup_rules(),
     ]
 
@@ -1359,7 +1365,7 @@ def test_driver_embeds_a_launched_worker_under_its_launching_call(tmp_path: Path
         _one_turn_conversation(),
         trial_name="todo-app__worker1",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=worker_trial_downloads(),
     )
 
@@ -1408,7 +1414,7 @@ def test_driver_builds_a_listed_workers_trajectory_from_its_stream_as_its_own_ty
         trial_name="todo-app__worker2",
         timeout_seconds=1800.0,
         rules=_worker_rules(
-            worker_capture_output("1", "0", "", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
+            worker_capture_output("1", "0", WORKER_TASK_FILE, "unusable stream"), listing_json=json.dumps(listing)
         ),
         downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
     )
@@ -1435,7 +1441,7 @@ def test_driver_rebuilds_an_invalid_worker_document_from_its_stream_and_keeps_th
         _one_turn_conversation(),
         trial_name="todo-app__worker3",
         timeout_seconds=1800.0,
-        rules=_worker_rules(worker_capture_output("0", "0", "", WORKER_TASK_FILE, "")),
+        rules=_worker_rules(worker_capture_output("0", "0", WORKER_TASK_FILE, "")),
         downloadable_content_by_source=downloads,
     )
 
@@ -3402,6 +3408,23 @@ def test_parse_harness_config_defaults_to_the_lane_and_credentials_every_run_use
     assert not harness_config.is_switch_requested
 
 
+def test_parse_harness_config_reads_the_openai_lane_the_workspace_runs_codex_on() -> None:
+    """The lane is named on the command line the way the workspace's accounts API spells it, and it
+    needs no key_provider: it serves one provider, whose key variable it derives on its own."""
+    harness_config = parse_harness_config(
+        lane="openai", key_provider="", key_env="", model="gpt-5.5", effort="medium", fast=""
+    )
+
+    assert harness_config == HarnessConfig(
+        lane=HarnessLane.OPENAI,
+        key_provider="",
+        key_env="OPENAI_API_KEY",
+        model="gpt-5.5",
+        effort="medium",
+        is_fast=False,
+    )
+
+
 def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_command_line() -> None:
     # harbor JSON-parses every `--ak key=value`, so `fast=false` reaches the driver as a bool and
     # never as the string the CLI syntax suggests.
@@ -3431,6 +3454,8 @@ def test_parse_harness_config_reads_the_switch_harbor_json_parsed_out_of_the_com
         ({"effort": "medium"}, "needs a model"),
         ({"fast": False}, "needs a model"),
         ({"lane": "openrouter", "key_provider": "anthropic"}, "belongs to the api-key lane"),
+        # A lane serving one provider has no use for the field, and the openai lane is one of them.
+        ({"lane": "openai", "key_provider": "openai"}, "belongs to the api-key lane"),
         ({"lane": "api-key"}, "needs a key_provider"),
         ({"lane": "gemini"}, "is not a provider lane"),
         ({"lane": "opencode-go"}, "has no default key variable"),
@@ -3451,6 +3476,7 @@ def test_parse_harness_config_refuses_a_config_the_workspace_could_never_honour(
     ("lane", "key_provider", "expected_key_env"),
     [
         (HarnessLane.ANTHROPIC, "", "ANTHROPIC_API_KEY"),
+        (HarnessLane.OPENAI, "", "OPENAI_API_KEY"),
         (HarnessLane.OPENROUTER, "", "OPENROUTER_API_KEY"),
         (HarnessLane.API_KEY, "openai", "OPENAI_API_KEY"),
         (HarnessLane.API_KEY, "openrouter", "OPENROUTER_API_KEY"),
@@ -3627,63 +3653,83 @@ def test_observed_harness_models_attributes_nothing_when_the_first_turn_is_not_i
     assert observed_harness_models(steps, first_client_message) is None
 
 
-def _harness_config(model: str) -> HarnessConfig:
-    """A config that asks for the given catalog id, or for no switch at all when it is empty. Effort
-    comes with the model because the parser refuses one without the other."""
+def _harness_config(model: str, lane: str = "anthropic") -> HarnessConfig:
+    """A config on the given lane that asks for the given catalog id, or for no switch at all when it
+    is empty. Effort comes with the model because the parser refuses one without the other."""
     return parse_harness_config(
-        lane="", key_provider="", key_env="", model=model, effort="medium" if model else "", fast=""
+        lane=lane, key_provider="", key_env="", model=model, effort="medium" if model else "", fast=""
     )
 
 
 @pytest.mark.parametrize(
-    ("model", "observed_models", "expected"),
+    ("lane", "model", "observed_models", "expected"),
     [
         # A claude catalog id reports as a model name carrying a release date, which is not part of
         # the id.
-        ("haiku", ("claude-haiku-4-5-20251001",), True),
-        ("opus[1m]", ("claude-opus-5-20260401",), True),
-        ("haiku", ("claude-opus-5-20260401",), False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), True),
+        ("anthropic", "opus[1m]", ("claude-opus-5-20260401",), True),
+        ("anthropic", "haiku", ("claude-opus-5-20260401",), False),
         # pi tags a model with the provider whose key serves it and reports the model alone.
-        ("anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), True),
+        ("openrouter", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), True),
         # Two models after turn 1 is a trial that did not stay on the one it asked for.
-        ("haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), False),
         # A trial whose transcript was never captured observed nothing, which is silence rather
         # than evidence of a wrong model.
-        ("haiku", (), None),
+        ("anthropic", "haiku", (), None),
         # A claude-shaped id the naming table does not carry cannot be translated into a reported
         # name, and an untranslatable id is silence too: the model that answered may well be it.
-        ("claude-mythos-5", ("claude-mythos-5",), None),
+        ("anthropic", "claude-mythos-5", ("claude-mythos-5",), None),
+        # The two inputs that say the rule is picked by lane rather than guessed from the id's
+        # shape. A provider tag is untranslatable on claude's lane, which reads ids through the
+        # table alone, and a table alias is untranslatable on a pi lane, which reads them by
+        # dropping a first segment that is not there.
+        ("anthropic", "anthropic/claude-haiku-4-5", ("claude-haiku-4-5",), None),
+        ("openrouter", "haiku", ("claude-haiku-4-5-20251001",), None),
         # A gateway tag keeps the vendor it routes to: pi reports everything after the first segment.
-        ("openrouter/some-vendor/some-model", ("some-vendor/some-model",), True),
-        ("openrouter/some-vendor/some-model", ("some-model",), False),
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-vendor/some-model",), True),
+        ("openrouter", "openrouter/some-vendor/some-model", ("some-model",), False),
+        # codex reports back the very id it was switched to, so its catalog ids need no table and
+        # nothing about them is ever untranslatable.
+        ("openai", "gpt-5.5", ("gpt-5.5",), True),
+        ("openai", "gpt-5.5", ("gpt-5.2",), False),
+        ("openai", "gpt-5.5", (), None),
+        # Nothing decorates a codex name, so the match is exact: an id that merely starts with the
+        # requested one is a different model out of the same catalog, which is the confusion worth
+        # catching.
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), False),
+        ("openai", "gpt-5.5-mini", ("gpt-5.5-mini",), True),
         # A config that requested no switch has nothing to confirm.
-        ("", ("claude-opus-4-8",), None),
+        ("anthropic", "", ("claude-opus-4-8",), None),
     ],
 )
 def test_is_model_confirmed_reads_the_harnesss_own_naming(
-    model: str, observed_models: tuple[str, ...], expected: bool | None
+    lane: str, model: str, observed_models: tuple[str, ...], expected: bool | None
 ) -> None:
-    assert is_model_confirmed(_harness_config(model), observed_models) is expected
+    assert is_model_confirmed(_harness_config(model, lane), observed_models) is expected
 
 
 @pytest.mark.parametrize(
-    ("metered_models", "welcome_model", "expected"),
+    ("lane", "model", "metered_models", "welcome_model", "expected"),
     [
         # The proxy cannot tell which turn served which request, so the requested model has to be there
         # and every other model has to be the one that answered the greeting.
-        (("claude-haiku-4-5-20251001", "claude-opus-4-8"), "claude-opus-4-8", True),
-        (("claude-haiku-4-5-20251001",), "claude-opus-4-8", True),
-        (("claude-haiku-4-5-20251001", "claude-sonnet-5"), "claude-opus-4-8", False),
-        (("claude-opus-4-8",), "claude-opus-4-8", False),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001",), "claude-opus-4-8", True),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-sonnet-5"), "claude-opus-4-8", False),
+        ("anthropic", "haiku", ("claude-opus-4-8",), "claude-opus-4-8", False),
         # A greeting whose model is unknown leaves a second model unattributable, which is not the
         # same claim as a trial that switched away.
-        (("claude-haiku-4-5-20251001", "claude-opus-4-8"), "", None),
+        ("anthropic", "haiku", ("claude-haiku-4-5-20251001", "claude-opus-4-8"), "", None),
+        # Both confirmations name a metered or observed model through one lane-aware predicate, so
+        # codex's exact match holds here too, wherever a proxy comes to meter that lane.
+        ("openai", "gpt-5.5", ("gpt-5.5", "gpt-5.2"), "gpt-5.2", True),
+        ("openai", "gpt-5.5", ("gpt-5.5-codex",), "gpt-5.2", False),
     ],
 )
 def test_is_proxy_model_confirmed_reads_the_account_the_proxy_metered(
-    metered_models: tuple[str, ...], welcome_model: str, expected: bool | None
+    lane: str, model: str, metered_models: tuple[str, ...], welcome_model: str, expected: bool | None
 ) -> None:
-    assert is_proxy_model_confirmed(_harness_config("haiku"), metered_models, welcome_model) is expected
+    assert is_proxy_model_confirmed(_harness_config(model, lane), metered_models, welcome_model) is expected
 
 
 def _arm_block(environment: MockBoxEnvironment) -> dict[str, Any]:
@@ -3696,12 +3742,34 @@ def _harness_config_block(environment: MockBoxEnvironment) -> dict[str, Any]:
     return _arm_block(environment)["harness_config"]
 
 
-def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, str]:
+def _switched_transcript_downloads(
+    conversation_model_name: str,
+    welcome_model_name: str = "claude-opus-4-8",
+    is_metrics_written: bool = True,
+    agent_name: str = "",
+) -> dict[str, str]:
     """A captured transcript whose greeting ran on the workspace's default and whose one client turn
     was answered on another model -- the shape every switched trial has, since the create template
-    delivers the greeting before any switch can be applied."""
+    delivers the greeting before any switch can be applied.
+
+    An emitter that stamps no model on a step, or no token metrics, leaves the key out rather than
+    writing an empty one, so an empty name and `is_metrics_written=False` produce a step without it.
+
+    `agent_name` is the harness the document says wrote it, which is what decides whether the
+    claude-shaped `harness_quality` criteria are scored against the trial; empty keeps the one the
+    shared document carries.
+    """
+    welcome_model = {"model_name": welcome_model_name} if welcome_model_name else {}
+    answer_model = {"model_name": conversation_model_name} if conversation_model_name else {}
+    metrics: dict[str, Any] = (
+        {"metrics": {"prompt_tokens": 1_200, "completion_tokens": 40, "cached_tokens": 1_000}}
+        if is_metrics_written
+        else {}
+    )
+    base_document = atif_document()
     document = {
-        **atif_document(),
+        **base_document,
+        "agent": {**base_document["agent"], "name": agent_name or base_document["agent"]["name"]},
         "steps": [
             {"step_id": 1, "timestamp": "2026-09-01T00:00:00Z", "source": "system", "message": "<welcome skill>"},
             {
@@ -3709,7 +3777,7 @@ def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, st
                 "timestamp": "2026-09-01T00:00:01Z",
                 "source": "agent",
                 "message": "Hi! What shall we build?",
-                "model_name": "claude-opus-4-8",
+                **welcome_model,
             },
             {"step_id": 3, "timestamp": "2026-09-01T00:00:02Z", "source": "user", "message": "Build it"},
             {
@@ -3717,8 +3785,8 @@ def _switched_transcript_downloads(conversation_model_name: str) -> dict[str, st
                 "timestamp": "2026-09-01T00:00:05Z",
                 "source": "agent",
                 "message": "Building it now.",
-                "model_name": conversation_model_name,
-                "metrics": {"prompt_tokens": 1_200, "completion_tokens": 40, "cached_tokens": 1_000},
+                **answer_model,
+                **metrics,
             },
         ],
         "subagent_trajectories": None,
@@ -3978,6 +4046,92 @@ def test_a_pi_lane_config_is_confirmed_against_the_name_pi_reports_its_model_und
     assert context.metadata["test_state"] == "finished"
 
 
+def _codex_transcript_downloads() -> dict[str, str]:
+    """A captured transcript in the shape mngr's codex emitter writes: a document naming codex as the
+    harness that wrote it, whose agent steps carry neither the model that answered them nor token
+    metrics.
+
+    The steps are otherwise the shape every switched trial has, so a reading that goes empty here
+    goes empty because the emitter says nothing, not because the trial's turns are missing.
+    """
+    return _switched_transcript_downloads("", welcome_model_name="", is_metrics_written=False, agent_name="codex")
+
+
+def _codex_turn_events() -> list[dict]:
+    """One turn's events in the shape the workspace's chat app reports a codex turn: the model it ran
+    on is named, and the token count beside it is null, where a claude turn carries a usage block.
+
+    The model is named for fidelity with that feed rather than because the accounting reads it: a
+    turn reporting no usage is skipped before its model is looked at, so this event and one naming
+    no model at all sum to the same empty account.
+    """
+    events = _reply_events("Building it now.")
+    return [*events[:-1], {**events[-1], "model": "gpt-5.5", "usage": None}]
+
+
+def test_the_openai_lane_runs_a_trial_on_codex_and_reads_its_harness_back(tmp_path: Path) -> None:
+    """The openai lane takes a pasted key like the other single-provider lanes, so the accounts flow
+    drives it unchanged, and the workspace answers `codex` for the harness the account runs.
+
+    The observed half stays empty because mngr's codex transcript emitter writes no per-step model,
+    which leaves the confirmation None -- silence about the model, never evidence of a wrong one.
+    The trial's spend is silence too, for its own reason: the workspace names the model a codex turn
+    ran on but reports no token count for it, and a turn that reports none is skipped rather than
+    priced at zero.
+    """
+    conversation = ConversationModel(chat_agent_id="chat-1", turn_reply_events=[_codex_turn_events()])
+    driver, environment, context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        conversation,
+        trial_name="todo-app__armcodex",
+        timeout_seconds=1800.0,
+        extra_env={"ANTHROPIC_API_KEY": _TRIAL_API_KEY, "OPENAI_API_KEY": _OPENAI_TRIAL_API_KEY},
+        downloadable_content_by_source=_codex_transcript_downloads(),
+        harness_kwargs={"lane": "openai", "model": "gpt-5.5", "effort": "medium"},
+    )
+
+    start_command = next(
+        command
+        for command in environment.exec_commands
+        if "/api/accounts" in command and "/flow/" not in command and "lane_id" in command
+    )
+    assert '"lane_id": "openai"' in start_command
+    # A lane that serves one provider is sent no key_provider; the workspace refuses the field there.
+    submit_command = next(command for command in environment.exec_commands if "/api/accounts/flow/" in command)
+    assert "key_provider" not in submit_command
+    # The key the lane derives, not the one every trial needs for the decider and the judges: the two
+    # are distinct here so that a derivation falling back to ANTHROPIC_API_KEY fails this test.
+    assert '"api_key": "{}"'.format(_OPENAI_TRIAL_API_KEY) in submit_command
+
+    (switch_command,) = conversation.model_choice_commands
+    assert '"model_id": "gpt-5.5"' in switch_command
+    assert _harness_config_block(environment) == {
+        "lane": "openai",
+        "key_provider": "",
+        "account_id": MOCK_ACCOUNT_ID,
+        "harness": "codex",
+        "model": "gpt-5.5",
+        "effort": "medium",
+        "fast": False,
+        "model_choice_switch": MODEL_SWITCH_APPLIED,
+        "observed_models": [],
+        "welcome_model": "",
+        "is_model_confirmed": None,
+    }
+    # Unknown rather than free: a cost of zero would average into an arm comparison as if the trial
+    # had been measured, which is the one reading of a codex trial that would mislead.
+    workspace_usage = json.loads((driver.logs_dir / "usage.json").read_text())["workspace_agent"]
+    assert workspace_usage["cost_usd"] is None
+    assert workspace_usage["message_count"] == 0
+    # is_cost_complete asks only whether delegated and worker traffic is accounted for, so it stays
+    # true on a trial that accounted for nothing at all. A filter reading it alone takes this trial
+    # for a measurement, which is why `cost_usd` is the field that has to be read.
+    assert workspace_usage["is_cost_complete"] is True
+    assert context.metadata is not None
+    assert context.metadata["test_state"] == "finished"
+
+
 def test_a_lane_that_signs_in_without_naming_an_account_leaves_the_harness_unrecorded(
     tmp_path: Path,
 ) -> None:
@@ -4103,3 +4257,42 @@ def test_a_proxied_trial_confirms_its_model_against_what_the_proxy_metered(tmp_p
     assert harness_config["observed_models"] == ["claude-opus-4-8"]
     assert is_model_confirmed(_harness_config("haiku"), harness_config["observed_models"]) is False
     assert harness_config["is_model_confirmed"] is True
+
+
+def test_driver_embeds_an_unidentified_worker_built_from_its_stream(tmp_path: Path) -> None:
+    # Neither the listing nor the captured document names the worker, so no mngr agent id is in
+    # hand. Its stream still is, so the worker is embedded under a launch-derived stand-in rather
+    # than dropped from the trajectory.
+    listing = json.loads(worker_listing_json("WAITING"))
+    listing["agents"] = listing["agents"][:1]
+
+    _driver, environment, _context = _run_driver(
+        tmp_path,
+        ("Build it",),
+        _one_turn_conversation(),
+        trial_name="todo-app__worker4",
+        timeout_seconds=1800.0,
+        rules=[
+            ScriptedExecRule(
+                "MINDS_EVALS_SECTION:list_exit",
+                [ok_result(mngr_exec_json(worker_listing_output(json.dumps(listing))))],
+            ),
+            ScriptedExecRule(
+                "mngr transcript {}".format(WORKER_NAME),
+                [ok_result(mngr_exec_json(worker_capture_output("1", "0", WORKER_TASK_FILE, "no document")))],
+            ),
+            *_setup_rules(),
+        ],
+        downloadable_content_by_source=worker_trial_downloads(is_document_included=False),
+    )
+
+    worker = _box_trajectory(environment)["subagent_trajectories"][1]
+    assert worker["trajectory_id"] == "worker-{}".format(WORKER_NAME)
+    # The stand-in is only what the evidence is filed under; the block that names the worker
+    # reports that no mngr agent id was resolved.
+    assert worker["extra"]["worker"]["agent_id"] == ""
+    assert worker["extra"]["worker"]["name"] == WORKER_NAME
+    assert [step["message"] for step in worker["steps"]] == [
+        "Harden the todo app and report back.",
+        "Hardened; report pushed.",
+    ]

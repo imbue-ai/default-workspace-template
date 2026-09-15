@@ -129,7 +129,9 @@ def test_prevent_yaml_usage() -> None:
     # box_scripts_test staging that file to stand in for a lima instance. The
     # rest is ``accounts_web`` reading electron-updater's channel manifest,
     # whose ``.yml`` extension and YAML body are fixed by the shipped binary
-    # that consumes it. The connector configures nothing in YAML.
+    # that consumes it. The gen-2 cloud-init material (YAML by external
+    # contract) is rendered by the shared ``mngr_imbue_cloud.slices.gen2_scripts``
+    # subpackage, outside this tree. The connector configures nothing in YAML.
     rc.check_yaml_usage(_DIR, snapshot(17))
 
 

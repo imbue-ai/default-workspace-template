@@ -48,6 +48,8 @@ from imbue.remote_service_connector.errors import CloudflareApiError
 from imbue.remote_service_connector.errors import InvalidPaidListEntryError
 from imbue.remote_service_connector.hosts import count_leased_hosts
 from imbue.remote_service_connector.hosts import count_total_workspaces
+from imbue.remote_service_connector.hosts import sum_active_machine_units
+from imbue.remote_service_connector.hosts import sum_total_machine_disk_gb
 from imbue.remote_service_connector.http_api import handle_endpoint_errors
 from imbue.remote_service_connector.r2.buckets import list_owned_buckets
 from imbue.remote_service_connector.r2.buckets import read_bucket_usage_bytes_concurrently
@@ -70,6 +72,17 @@ class AccountUsage(BaseModel):
         default=None, description="When the rolling LLM budget period resets (from LiteLLM), if known"
     )
     active_synced_workspaces: int = Field(description="Current ACTIVE synced workspace records")
+    active_machine_units: int = Field(
+        default=0,
+        description=(
+            "Machine units counted against max_active_machine_units (running machines, pending "
+            "resize targets included)"
+        ),
+    )
+    total_machine_disk_gb: int = Field(
+        default=0,
+        description="Data-disk GB counted against max_total_machine_disk_gb (running + stopped machines)",
+    )
 
 
 class AccountInfoResponse(BaseModel):
@@ -286,6 +299,8 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
         llm_spend_future = pool.submit(litellm_client.get_litellm_user_spend, user_id)
         leased_host_count = count_leased_hosts(user_id_prefix)
         total_workspace_count = count_total_workspaces(user_id_prefix)
+        active_machine_units = sum_active_machine_units(user_id_prefix)
+        total_machine_disk_gb = sum_total_machine_disk_gb(user_id_prefix)
         active_sync_count = _count_active_sync_records(user_id)
         bucket_count, total_bucket_bytes = bucket_summary_future.result()
         spend, reset_at = llm_spend_future.result()
@@ -297,6 +312,8 @@ def compute_account_usage(ops: CloudflareOps, user_id_prefix: str, user_id: str)
         llm_spend_usd_this_period=spend,
         llm_budget_resets_at=reset_at,
         active_synced_workspaces=active_sync_count,
+        active_machine_units=active_machine_units,
+        total_machine_disk_gb=total_machine_disk_gb,
     )
 
 

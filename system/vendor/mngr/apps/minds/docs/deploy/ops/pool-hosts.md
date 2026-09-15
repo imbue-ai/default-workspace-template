@@ -89,8 +89,8 @@ was deleted — reads emptier than it is, and the bake refuses mid-run with
 `MNGR_SLICE_BOX_FULL`. `server-audit` SSHes each box and counts the lima **data
 disks** present across every env; a disk outlives its VM, so a carve that died
 before registering still holds its slot. It also flags a box a bake would now
-refuse: one carrying another tier's slices, or one whose lima user authorizes
-more than the single pool key `prep` writes.
+refuse: one carrying another tier's slices, one whose service user authorizes a
+static key it should not, or a gen-2 box whose pinned SSH CA is not the tier's.
 
 Per box, require:
 
@@ -98,8 +98,9 @@ Per box, require:
 |---|---|---|
 | `status` | `ready` | anything else and the bake refuses |
 | `slot_count - box_used_slots` | ≥ your count | genuinely free capacity |
-| `authorized_key_count` | exactly `1` | prep writes one key; a second means someone added one by hand, and that holder has `limactl`, hence root, over every workspace on the box |
-| `foreign_tier_slices` | `[]` | a box carrying two tiers' slices is a box both tiers' pool keys can SSH |
+| `authorized_key_count` | equals `expected_authorized_key_count` (`1` on gen-1, `0` on gen-2) | gen-1 prep writes the one pool key; gen-2 prep writes none (management SSH is by certificate). Any extra key was added by hand, and its holder has the slice helper, hence root, over every workspace on the box |
+| `is_trusted_ca_correct` | `true` | gen-2: the box's `TrustedUserCAKeys` is exactly the tier's committed `[ssh_ca] public_key`; another tier's (or an unknown) CA can mint certificates the box accepts. Always `true` on gen-1, which has no CA |
+| `foreign_tier_slices` | `[]` | a box carrying two tiers' slices is a box both tiers' management credentials can SSH |
 | `is_foreign_tier_checked` | `true` | `false` means an empty `foreign_tier_slices` is NOT CHECKED, not clean |
 | `degraded_md_arrays` | `[]` | not a blocker, but a degraded array is one disk failure from losing every workspace on the box |
 
@@ -144,8 +145,8 @@ just pool-bake <LEASE_REGION> "$VERSION" <count> --server-id <BOX_ID> --dry-run
 ```
 
 `--dry-run` is a full rehearsal, not a stub: by the time it prints JSON it has
-verified the tag on the remote, cloned it, read the pool key from Vault, SSHed
-the box, listed its lima disks, and run the tier-exclusivity assertion. Check
+verified the tag on the remote, cloned it, signed your operator certificate
+(gen-2; read the pool key from Vault on gen-1), SSHed the box, listed its lima disks, and run the tier-exclusivity assertion. Check
 `env_name`, `free_slots >= count`, and that `attributes.repo_branch_or_tag`
 equals `$VERSION` — that is the exact string a client of this release sends at
 lease time, derived from `--from-tag` and never typed.
@@ -189,6 +190,13 @@ activated**, which is how an un-activated bake leaks a box slot.
 healthy: sshd hardening, the git-identity clear, and the deferred-install wait
 are all best-effort in the bake — logged, never raised.
 
+On a **gen-2** box the containers trust the tier's SSH CA, so the key to hop
+with is your operator identity: `~/.mindsadmin/<tier>/ssh_id`, whose
+certificate any preceding `minds-admin` box command (the bake itself) signed
+into `ssh_id-cert.pub` beside it; `ssh -i` picks the certificate up on its
+own. Point `POOL_KEY` at that path and skip the Vault read below. On a
+**gen-1** box the containers authorize the tier's pool key:
+
 ```bash
 umask 077
 # Substitute the tier you are verifying (staging, production, ...).
@@ -213,12 +221,12 @@ for P in "$@"; do
   run "$P" 'test -x /opt/fortress/tilion-fortress/tilion && echo DEFERRED_INSTALL_OK || echo DEFERRED_INSTALL_INCOMPLETE'
   run "$P" 'cd /home/user/workspace && uv run mngr list 2>/dev/null | tail -1'
   run "$P" 'git -C /home/user/workspace config --local --get user.name'
-  run "$P" 'grep -rl provider-chooser /home/user/workspace/system/apps/system_interface/imbue/system_interface/static/ >/dev/null 2>&1 && echo CONTENT_OK || echo CONTENT_STALE'
+  run "$P" "grep -q 'FALLBACK_BRANCH: Final\[str\] = \"${TAG:?set TAG to the baked minds-v tag}\"' /home/user/workspace/system/vendor/mngr/apps/minds/imbue/minds/build_info.py && echo CONTENT_OK || echo CONTENT_STALE"
   echo
 done
 SCRIPT
 chmod +x /tmp/verify-slices.sh
-POOL_KEY=/tmp/pool-<tier>.key /tmp/verify-slices.sh <BOX_ADDRESS> <container_ssh_port> [<port>...]
+TAG=minds-v<version> POOL_KEY=/tmp/pool-<tier>.key /tmp/verify-slices.sh <BOX_ADDRESS> <container_ssh_port> [<port>...]
 ```
 
 Use the script rather than inline `ssh … "…"` loops: the nested quoting and line
@@ -233,15 +241,16 @@ which reaches the outer VM instead of the workspace container.
 | `git config user.name` | a neutral value such as `minds-bootstrap`, **not the operator's name** | finalize unsets the operator identity; the dwt bootstrap then supplies its own neutral fallback on every boot. A *present* identity is correct — the failure is seeing your own name |
 | `CONTENT_OK` | ok | the real content proof |
 
-`CONTENT_OK` greps the **built** frontend bundle for a string only this release's
-content has (`provider-chooser` from 0.5.0 onward; pick a fresh marker for later
-releases). Grep the bundle, not the source, and do not bother comparing
-`git rev-parse HEAD` to the tag — `/home/user/workspace` is a **fresh repo** the
-seed creates, with its own `Initial workspace commit`, so its SHA differs per
-slice and never equals the tag. The bundle grep matters because the per-box image
-cache is keyed by tag **name**, not content: if a tag is ever moved, a box that
-already holds that tar silently loads the stale image while reporting N/N
-succeeded. This is why tags are immutable once anything has run against them.
+`CONTENT_OK` greps the vendored mngr's `build_info.py` inside the container for
+the `FALLBACK_BRANCH` line naming exactly the baked tag -- a marker every release
+carries (the 0.6.0 cut verified its slices this way), unlike a frontend string
+whose file moves between releases. Do not bother comparing `git rev-parse HEAD` to the
+tag — `/home/user/workspace` is a **fresh repo** the seed creates, with its own
+`Initial workspace commit`, so its SHA differs per slice and never equals the
+tag. The content grep matters because the per-box image cache is keyed by tag
+**name**, not content: if a tag is ever moved, a box that already holds that tar
+silently loads the stale image while reporting N/N succeeded. This is why tags
+are immutable once anything has run against them.
 
 **These checks prove the container. They do not prove the row is leasable** —
 that takes an actual lease, which happens by driving the desktop app:
@@ -252,21 +261,31 @@ sequenced by the `release-minds` skill.
 `rm -P /tmp/pool-<tier>.key` when done -- and use a per-tier filename as above, so a staging key can never linger at the path a production run reuses.
 
 A blank result or `SSH_FAILED` on **every** check is not a failing slice: it is
-the wrong tier's pool key, or a box you cannot reach. `SSH_FAILED` on *some*
+the wrong tier's credentials (a pool key or an operator certificate signed by
+another tier's CA), an operator certificate that has expired since the bake
+(re-run any `minds-admin` box command to re-sign), or a box you cannot reach. `SSH_FAILED` on *some*
 ports, with the log showing the key was accepted, is a stale host key — which the
 throwaway `known_hosts` above exists to prevent. Either way, re-read the Vault
 path before concluding anything about the bake.
 
 ## Production
 
-Same sequence as above, against production, with three additions: sizing from
-the live fleet, retiring the old generation, and the connector deploy.
+Same sequence as above, against production, with two additions: sizing from the
+live fleet, and a retire of the old generation that waits on the web channels.
+The connector deploy ([services.md](./services.md)) precedes this section on
+production; the `release-minds` skill sequences the two.
 
-**Bake before you deploy.** A deploy freezes `MINDS_WEB_TEMPLATE_REF` from
-`FALLBACK_BRANCH` in the tree it ships, and browser creates (`/hosts/claim`)
-match that tag exactly with **no rebuild fallback** — unlike the desktop, which
-falls back to a slow rebuild. Deploying ahead of the bake breaks browser creates
-until the bake lands.
+**Bake before you repoint the web channels.** Browser creates (`/hosts/claim`)
+lease an exact match on the tag the release feed's `<channel>-web.json` names
+(`[web_channels.*]` in `apps/minds/release-channels.toml`), with **no rebuild
+fallback** — unlike the desktop, which falls back to a slow rebuild. Repointing
+a web channel at a tag the pool is not yet baked at breaks that channel's browser
+creates until the bake lands. A connector deploy no longer moves the pin on
+production; the `FALLBACK_BRANCH` it freezes into `MINDS_WEB_TEMPLATE_REF`
+serves only while the feed cannot be read (and outright on tiers with no feed).
+So on production the order is deploy, bake, then repoint
+([app-release.md](./app-release.md) step 9b); the bake sits in the middle, and
+the rows the web channels still pin to stay `available` until the repoint lands.
 
 Assume a fresh shell — a release usually pauses before this point:
 
@@ -275,14 +294,15 @@ cd "$MNGR"                                    # the mngr checkout; every recipe 
 export VERSION=minds-v<version>               # the tag to bake
 export VAULT_ADDR=https://vault-cluster-public-vault-df29b16f.9b573ab7.z1.hashicorp.cloud:8200 VAULT_NAMESPACE=admin
 vault login -method=oidc role=minds_production
-vault kv get -mount=secrets -field=value minds/production/pool-ssh/POOL_SSH_PRIVATE_KEY >/dev/null && echo "pool key readable"
+vault read -field=public_key minds-production-ssh/config/ca >/dev/null && echo "ssh ca readable"   # gen-2 boxes
+vault kv get -mount=secrets -field=value minds/production/pool-ssh/POOL_SSH_PRIVATE_KEY >/dev/null && echo "pool key readable"   # gen-1 boxes
 ls .minds-deploy-recover-target-*.json 2>/dev/null && echo "resolve this before continuing"
 eval "$(uv run minds-admin env activate production)"
 ```
 
 Prove the Vault scope now -- a token on the wrong role fails at the
-bake, several minutes later, with an error about the pool key rather than about
-your login.
+bake, several minutes later, with an error about signing your certificate (or
+reading the pool key) rather than about your login.
 
 A leftover recover-target file from an interrupted deploy — staging's included —
 blocks every `minds-admin env` command until resolved.
@@ -314,7 +334,17 @@ are safe: run the regions in parallel shells.
 
 Bake and verify exactly as above, then lease one from the desktop and confirm it
 served your bake ([app-release.md](./app-release.md), *Verifying a release in a
-running workspace*). Only then retire the old generation:
+running workspace*).
+
+Retiring the old generation waits for one more thing on production: the web
+channels. Its `available` rows are what browser creates lease until
+`[web_channels.*]` moves off its tag ([app-release.md](./app-release.md) step
+9b). The connector reads that pin from the feed's `<channel>-web.json`, served
+with a one-minute cache and cached another minute in the connector, so retire a
+tag's rows only once `curl -s https://updates.imbueminds.com/<channel>-web.json`
+names another tag for every channel and a further minute has passed. A channel
+left behind — stable, during a gradual desktop rollout — keeps leasing its tag,
+and its rows stay. Then:
 
 ```bash
 # One old generation's available, never-leased rows: the only set safe to destroy.

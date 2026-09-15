@@ -5,25 +5,35 @@ Each command is a thin front end over the module that owns the work (`generate`,
 one place while the logic stays importable without click.
 """
 
+import asyncio
 import json
+import os
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
 import click
 from loguru import logger
+from pydantic import SecretStr
 
 from imbue.imbue_common.logging import setup_logging
 from imbue.minds_evals import check_run
 from imbue.minds_evals import ci_matrix
 from imbue.minds_evals import ci_report
 from imbue.minds_evals import cleanup_environments
+from imbue.minds_evals import flow_browser
+from imbue.minds_evals import flow_lab
+from imbue.minds_evals import ui_flows
+from imbue.minds_evals.data_types import CheckStatus
 from imbue.minds_evals.data_types import CiReportContext
 from imbue.minds_evals.data_types import PairDecision
+from imbue.minds_evals.decider import DEFAULT_DECIDER_MODEL
 from imbue.minds_evals.errors import CiMatrixError
 from imbue.minds_evals.errors import CleanupScopeError
 from imbue.minds_evals.generate import MNGR_REPO
 from imbue.minds_evals.generate import generate_dataset
+from imbue.minds_evals.minds_bridge import ANTHROPIC_API_KEY_ENV_VAR
+from imbue.mngr.cli.output_helpers import write_human_line
 
 
 @click.group()
@@ -430,6 +440,76 @@ def ci_report_command(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payloads, indent=2))
     logger.info("Wrote {} run report message(s) to {}", len(payloads), output_path)
+
+
+@main.command("flow-lab")
+@click.option(
+    "--app",
+    "app_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    help="Directory served as the app's origin; a fixture under flow_lab_apps/, or an app taken out of a trial",
+)
+@click.option(
+    "--page",
+    default="",
+    help="Appended to the served origin: empty for its index, or a query such as '?latency=300'",
+)
+@click.option("--actions", required=True, help="What the flow does in the UI, as a case would state it")
+@click.option("--expect", required=True, help="The flow's end condition, recorded in the log for the judge")
+@click.option(
+    "--output",
+    "output_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Where log.jsonl and the step frames are written, shaped as a trial's flow directory",
+)
+@click.option(
+    "--model",
+    default=DEFAULT_DECIDER_MODEL,
+    show_default=True,
+    help="The model the verification agent reasons with",
+)
+def flow_lab_command(app_dir: Path, page: str, actions: str, expect: str, output_dir: Path, model: str) -> None:
+    """Drive one UI flow against a local app with the real verification agent, and no box at all.
+
+    Needs ANTHROPIC_API_KEY for the agent's calls. Exits non-zero when the flow did not complete
+    its declared actions; whether the `expect` holds is not decided here, exactly as at trial time.
+    """
+    api_key = os.environ.get(ANTHROPIC_API_KEY_ENV_VAR, "")
+    if not api_key:
+        raise click.UsageError("{} is not set; the verification agent cannot be run".format(ANTHROPIC_API_KEY_ENV_VAR))
+    agent = ui_flows.AnthropicVerificationAgent(
+        model=model, api_key=SecretStr(api_key), timeout_seconds=ui_flows.DEFAULT_CALL_TIMEOUT_SECONDS
+    )
+    # Resolved before the loop starts: playwright's sync API refuses to run inside one.
+    chromium_path = flow_browser.resolve_chromium_path()
+    if not chromium_path.exists():
+        raise click.UsageError(flow_browser.missing_chromium_message(chromium_path))
+    run = asyncio.run(
+        flow_lab.run_lab_flow(
+            app_dir=app_dir,
+            page=page,
+            check=flow_lab.lab_flow_check("lab", actions, expect),
+            agent=agent,
+            output_dir=output_dir,
+            chromium_path=chromium_path,
+        )
+    )
+    for record in run.records:
+        write_human_line(flow_lab.describe_record(record))
+    usage = ui_flows.summarize_verifier_usage(tuple(agent.calls), model)
+    logger.info(
+        "Flow {}{}; {} agent call(s), {} input / {} output tokens; evidence in {}",
+        run.status.value,
+        " ({})".format(run.reason) if run.reason else "",
+        usage.call_count,
+        usage.input_token_count,
+        usage.output_token_count,
+        output_dir,
+    )
+    if run.status is not CheckStatus.PASSED:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

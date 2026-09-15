@@ -69,6 +69,9 @@ WRONG_MODEL_HARNESS_CONFIG: Final[Mapping[str, Any]] = {
 # captured, or the catalog id has no known reported name. The driver writes null there, which is
 # silence rather than evidence of a wrong model, so the trial still passes.
 UNCONFIRMED_HARNESS_CONFIG: Final[Mapping[str, Any]] = {"lane": "anthropic", "model": "haiku", "effort": "medium"}
+# The same silence, on a lane that can never be anything else: mngr's codex transcript emitter names
+# no model on a step, so every trial of a codex arm records null however well its switch went.
+CODEX_HARNESS_CONFIG: Final[Mapping[str, Any]] = {"lane": "openai", "model": "gpt-5.6-sol", "effort": "low"}
 
 
 def make_pair(pair_name: str, decision: PairDecision) -> DecidedPair:
@@ -476,6 +479,29 @@ def test_render_slack_report_names_a_passing_arm_whose_model_nothing_confirmed(t
     # details block is what carries it, naming the arm it belongs to.
     assert read_failed_trials(message) == ()
     assert read_details(message) == "*haiku* `todo-app`: model haiku unconfirmed"
+
+
+def test_render_slack_report_says_nothing_about_a_lane_that_can_never_confirm_a_model(tmp_path: Path) -> None:
+    """A codex arm records null every trial of every night, so the note above would never clear
+    there. A permanent line is one a reader learns to skim, which costs the arms that raise it for a
+    reason, so the lane's known shape is left to the docs and the trial's own arm block."""
+    matrix_path = tmp_path / "matrix.json"
+    summaries_dir = tmp_path / "summaries"
+    write_matrix(
+        matrix_path, [make_pair("main", PairDecision.RUN)], [make_cell("main", "codex-sol-low", CellDecision.RUN)]
+    )
+    write_passing_oracle(summaries_dir, tmp_path)
+    write_summary(
+        live_summary_path(summaries_dir, "main", "codex-sol-low"),
+        tmp_path / "main-codex-live",
+        harness_config=CODEX_HARNESS_CONFIG,
+    )
+
+    (message,) = render_slack_report(matrix_path, summaries_dir, make_context())
+
+    assert read_header(message) == "minds-evals: main -- passed"
+    assert read_grid(message) == (("case", "codex-sol-low"), ("todo-app", "large_green_square 0.75"))
+    assert "unconfirmed" not in message.text
 
 
 def test_render_slack_report_marks_a_green_cell_of_a_running_pair_as_not_attempted(tmp_path: Path) -> None:

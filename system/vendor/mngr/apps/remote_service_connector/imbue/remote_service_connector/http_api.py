@@ -50,6 +50,7 @@ from imbue.remote_service_connector.errors import RelayNotFoundError
 from imbue.remote_service_connector.errors import ShareNotFoundError
 from imbue.remote_service_connector.errors import ShareQuotaExceededError
 from imbue.remote_service_connector.errors import WorkspaceRecordLeaseActiveError
+from imbue.remote_service_connector.ssh_certs import SshCertificateBundleMissingError
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,14 @@ def raise_as_http(exc: Exception) -> NoReturn:
     if isinstance(exc, CloudflareApiError):
         logger.warning("Cloudflare API error: %s", exc)
         raise HTTPException(status_code=exc.status_code, detail={"errors": exc.cf_errors}) from exc
+    if isinstance(exc, SshCertificateBundleMissingError):
+        # The gen-2 management certificate is minted by the refresh cron; until it
+        # has run (or while Vault is unreachable past the certificate's life) the
+        # SSH-bearing paths are unavailable, and the client should retry later.
+        logger.error("Management SSH certificate unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail={"code": "management_certificate_unavailable", "message": str(exc)}
+        ) from exc
     if isinstance(exc, PoolHostCleanupError):
         # A release that could not finish its teardown -- surface as a server
         # error so the client retries rather than treating the lease as gone.

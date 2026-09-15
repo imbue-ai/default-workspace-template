@@ -25,6 +25,7 @@ from imbue.minds.config.data_types import PlanQuotasConfig
 from imbue.minds.config.data_types import ScaledownWindowConfig
 from imbue.minds.config.data_types import StorageDeployConfig
 from imbue.minds.config.data_types import WebWorkspacesConfig
+from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.envs.docker_cleanup import DockerCleanupError
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import SecretTemplateValidationError
@@ -55,10 +56,13 @@ from imbue.minds_admin.envs.provisioning import destroy_env
 from imbue.minds_admin.envs.provisioning import list_dev_envs
 from imbue.minds_admin.envs.provisioning import resolve_analytics_enablement
 from imbue.minds_admin.envs.provisioning import resolve_web_template_pin
+from imbue.minds_admin.envs.provisioning import update_feed_base_url_for_tier
 from imbue.minds_admin.envs.provisioning import with_analytics_enablement
+from imbue.minds_admin.envs.provisioning import workspace_storage_key_prefix
 from imbue.minds_admin.envs.recover import RecoverTargetAlreadyExistsError
 from imbue.minds_admin.envs.testing import make_workspace_storage_vault_values
 from imbue.mngr_imbue_cloud.primitives import DEV_TIER
+from imbue.mngr_imbue_cloud.primitives import PRODUCTION_TIER
 from imbue.mngr_imbue_cloud.primitives import STAGING_TIER
 
 
@@ -444,6 +448,12 @@ def _build_fake_providers(
         ensure_generation_id=ensure_generation_id,
         delete_generation_id=delete_generation_id,
     )
+
+
+def test_workspace_storage_key_prefix_follows_the_tier_modal_env_strategy() -> None:
+    # Per-env tiers share their tier's bucket under an <env>/ prefix; shared tiers own the whole keyspace.
+    assert workspace_storage_key_prefix(DevEnvName("dev-josh"), _DEV_LIFECYCLE) == "dev-josh/"
+    assert workspace_storage_key_prefix(DevEnvName("production"), _SHARED_TIER_LIFECYCLE) == ""
 
 
 def test_deploy_dev_env_writes_split_files(_isolated_home: Path, _root_cg: ConcurrencyGroup) -> None:
@@ -1159,6 +1169,8 @@ def _explorer_plan_quotas() -> PlanQuotasConfig:
         max_total_bucket_gb=NonNegativeInt(50),
         monthly_llm_spend_usd=NonNegativeFloat(0.0),
         max_active_synced_workspaces=NonNegativeInt(200),
+        max_active_machine_units=NonNegativeInt(16),
+        max_total_machine_disk_gb=NonNegativeInt(280),
     )
 
 
@@ -1186,6 +1198,8 @@ def test_deploy_env_writes_plan_definitions(_isolated_home: Path, _root_cg: Conc
     assert sorted(rows_by_name) == ["explorer"]
     assert rows_by_name["explorer"]["max_total_bucket_bytes"] == 50 * 1024**3
     assert rows_by_name["explorer"]["monthly_llm_spend_usd"] == 0.0
+    assert rows_by_name["explorer"]["max_active_machine_units"] == 16
+    assert rows_by_name["explorer"]["max_total_machine_disk_gb"] == 280
     assert _step_position(call_log, "write_plan_defaults") > _step_position(call_log, "apply_pool_hosts_migrations")
 
 
@@ -1883,6 +1897,23 @@ def test_resolve_web_template_pin_dev_tier_uses_the_explicit_ref_env_var(
     template_repo, template_ref = resolve_web_template_pin(WebWorkspacesConfig(), tier=DEV_TIER)
     assert template_repo == DEFAULT_WEB_TEMPLATE_REPO_KEY
     assert template_ref == "minds-v9.9.9"
+
+
+def test_update_feed_base_url_for_tier_reads_the_committed_production_feed() -> None:
+    lifecycle = load_deploy_config(PRODUCTION_TIER).lifecycle
+    assert update_feed_base_url_for_tier(PRODUCTION_TIER, lifecycle) == "https://updates.imbueminds.com"
+
+
+def test_update_feed_base_url_for_tier_is_empty_where_no_feed_is_committed() -> None:
+    lifecycle = load_deploy_config(STAGING_TIER).lifecycle
+    assert update_feed_base_url_for_tier(STAGING_TIER, lifecycle) == ""
+
+
+def test_update_feed_base_url_for_tier_is_empty_for_tiers_that_write_local_state() -> None:
+    # Dev envs have no committed client.toml to read, and publish no feed.
+    lifecycle = load_deploy_config(DEV_TIER).lifecycle
+    assert lifecycle.writes_local_state
+    assert update_feed_base_url_for_tier(DEV_TIER, lifecycle) == ""
 
 
 def test_deploy_env_dev_tier_with_web_workspaces_refuses_before_any_cloud_mutation(

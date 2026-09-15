@@ -7,7 +7,7 @@ Houses deterministic stand-ins for outside-world dependencies that
 rather than being copy-pasted into each test module.
 
 Also houses `build_test_state`, the test-side composition root: it builds a
-`ChatState` with fakes for whichever collaborators a test overrides and cheap real
+`ChatAppState` with fakes for whichever collaborators a test overrides and cheap real
 instances for the rest, mirroring `main.build_production_state` without ever starting
 the agent manager.
 """
@@ -21,6 +21,7 @@ import socket
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Generator
@@ -57,6 +58,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.config import Config
+from imbue.chat.create_defaults import TYPE_KEY
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
@@ -64,11 +66,13 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.models import AgentStateItem
+from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
-from imbue.chat.state import ChatState
+from imbue.chat.state import ChatAppState
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
@@ -180,6 +184,33 @@ class RecordingMngrMessenger(MngrMessenger):
         return self.press_succeeds
 
 
+class RecordingShell(MutableModel):
+    """A shell for the auto-open reactor whose connected clients a test sets, recording every open it is asked for."""
+
+    model_config = {"extra": "forbid", "frozen": False}
+
+    client_ids: list[str] = []
+    refused_client_ids: list[str] = []
+    opens: list[tuple[str, str]] = []
+
+    def connected_client_ids(self) -> list[str]:
+        return list(self.client_ids)
+
+    def open_chat(self, chat_id: ChatId, client_id: str) -> bool:
+        self.opens.append((chat_id, client_id))
+        return client_id not in self.refused_client_ids
+
+
+def read_create_defaults_type(path: Path) -> str | None:
+    """The `commands.create.type` the workspace's local mngr settings name, or None when they name none."""
+    if not path.exists():
+        return None
+    raw = tomllib.loads(path.read_text())
+    create = raw.get("commands", {}).get("create", {})
+    agent_type = create.get(TYPE_KEY) if isinstance(create, dict) else None
+    return agent_type if isinstance(agent_type, str) and agent_type else None
+
+
 class RecordingClientActivityShell:
     """A stand-in shell that records every body posted to ``/api/client-activity``."""
 
@@ -202,8 +233,8 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
-) -> ChatState:
-    """Build a `ChatState` for tests, injecting fakes where provided.
+) -> ChatAppState:
+    """Build a `ChatAppState` for tests, injecting fakes where provided.
 
     Every collaborator left unset gets a cheap default production instance;
     pass one to substitute a fake. The agent manager is built but never started,
@@ -215,7 +246,7 @@ def build_test_state(
     event_queues = AgentEventQueues()
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
-    state = ChatState(
+    state = ChatAppState(
         # Never the production probe: it shells out to whatever claude/codex/agy/pi this
         # machine happens to have, over the network, from any test that reaches a sign-in
         # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
@@ -488,7 +519,7 @@ class RunningWorkspace(FrozenModel):
     agent_info: AgentInfo = Field(description="The fixture chat's agent")
     session_file: Path = Field(description="The fixture chat's session file, appended to for streaming tests")
     state_dir: Path = Field(description="The shell's state directory")
-    chat_state: ChatState = Field(description="The chat app's state, for the manager behind its routes")
+    chat_state: ChatAppState = Field(description="The chat app's state, for the manager behind its routes")
     stub_source: StubInstanceSource | None = Field(description="The stub app's instances, when offered")
     stub_url: str | None = Field(description="The stub app's loopback URL, when offered")
 
@@ -618,6 +649,10 @@ def running_workspace(
                 "MNGR_AGENT_WORK_DIR": str(tmp_path / "work"),
                 "PATH": f"{fake_bin_dir}:{os.environ.get('PATH', '')}",
                 "MINDS_ACCOUNTS_ROOT": str(tmp_path / "accounts"),
+                # Committing the account below rewrites the workspace's create defaults beside
+                # mngr's project config, which the writer finds through this; without it they
+                # land in the .mngr of whatever directory the suite runs from.
+                "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
             },

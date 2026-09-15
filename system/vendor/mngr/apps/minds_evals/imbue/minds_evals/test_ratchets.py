@@ -101,8 +101,11 @@ def test_prevent_setattr() -> None:
 # --- Banned libraries and patterns ---
 
 
+# Every hit is an `asyncio.run` bridging blocking code into the async surface harbor forces (see the
+# async/await ratchet below): the tests that drive the driver and the collector, the flow lab's
+# tests and its CLI command, which drive the flow loop the collector shares.
 def test_prevent_asyncio_import() -> None:
-    rc.check_asyncio_import(_DIR, snapshot(7))
+    rc.check_asyncio_import(_DIR, snapshot(9))
 
 
 def test_prevent_pandas_import() -> None:
@@ -132,7 +135,9 @@ def test_prevent_exit_stack() -> None:
 # harbor's agent and environment interfaces are async (`BaseAgent.run`, `BaseEnvironment.exec`), so
 # every call that reaches the box or the workspace has to be async too. `driver.py`,
 # `minds_bridge.py` and `evidence_collection.py` are that forced surface, and `driver_test.py`,
-# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it, so all six are
+# `minds_bridge_test.py` and `mock_environment_test.py` drive or stand in for it. The UI-flow loop
+# in `flow_runner.py` is async because the collector drives it, and `flow_lab.py` and
+# `test_flow_lab.py` implement and drive that loop's executor interface, so all of them are
 # excluded: their hits track how many trials the tests exercise rather than how much async the
 # project chooses. Within those files, keep new async to what harbor's interfaces force.
 # What remains counted is the async that is optional. Today that is two LiteLLM proxy callbacks in
@@ -150,6 +155,9 @@ def test_prevent_async_await() -> None:
             "minds_bridge_test.py",
             "evidence_collection.py",
             "mock_environment_test.py",
+            "flow_runner.py",
+            "flow_lab.py",
+            "test_flow_lab.py",
         ),
     )
 

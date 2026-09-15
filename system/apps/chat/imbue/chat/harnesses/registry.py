@@ -8,7 +8,7 @@ branches on the harness name.
 Adding a harness is one :class:`HarnessSpec` entry here, one subclass per concern, and --
 if it emits markers of its own -- one member of
 :class:`~imbue.chat.harnesses.events.SpecialEventKind`. Nothing else changes:
-``ChatState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
+``ChatAppState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
 trackers through :func:`build_tracker`, and neither names a harness.
 
 One spec per harness rather than a dict per concern, deliberately: parallel registries

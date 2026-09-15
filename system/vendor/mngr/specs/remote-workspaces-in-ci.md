@@ -22,7 +22,7 @@ These resources exist and are the substrate the rest of this spec builds on:
   Its pooled DSN lives at the previously-templated-but-empty Vault leaf `secrets/minds/ci/neon/DATABASE_URL`.
   This DB is the canonical registry of CI bare-metal boxes: the `bare_metal_servers` rows (status, public address, pinned sshd host key, slice sizing) live here, and the `minds-admin server` order/await/setup/prep/list commands operate against it.
 - The CI tier's `ovh` and `pool-ssh` Vault entries were already populated; the `neon` leaf was populated as part of this work.
-- Both boxes are provisioned to `ready` (OS reinstalled, prepped, host keys recorded).
+- Both boxes are provisioned to `ready` (OS reinstalled, prepped, host keys recorded), and were repaved to gen-2 on 2026-09-13 (`minds-admin cutover repave` from the `ci-infra` activation; encrypted storage, the ci tier's SSH CA, no `:22` lockdown since the tier has no management plane).
 - `secrets/minds/ci/storage/*` is populated (mirrored from the dev tier's entry, sharing its bucket) with `WORKSPACE_STOP_RETENTION_SECONDS=60`, so per-run ci envs deploy with workspace stop/start enabled and a CI-sized retention window.
 - A read-only deploy key on the template repo lives at `secrets/minds/ci/dwt/DWT_READ_KEY_B64` (deliberately not the read-write vendor-sync key).
 
@@ -40,7 +40,7 @@ Normal pushes and PRs never touch the boxes, never bake, and never run these ste
    Runs in parallel with `build-minds-ci-env`, so the cold image build overlaps env deploy instead of following it.
 2. **Deploy the per-run ci env** (existing `build-minds-ci-env` job, unchanged in essence).
 3. **Import the CI boxes into the per-run env** (new step in `build-minds-ci-env`, after the env deploy): a new `minds-admin server import-boxes` command copies the `ready` `bare_metal_servers` rows (same UUIDs, same pinned host keys) from the infra DB into the per-run env's `host_pool` DB, so the env's connector can SSH the boxes at lease/release time.
-4. **Sweep stale CI slices** (new step, same job): destroy any `ci-*`-owned lima instance on the boxes whose env no longer exists or that is older than a staleness threshold (see "Sweeps" below).
+4. **Sweep stale CI slices** (new step, same job): destroy any `ci-*`-owned slice instance on the boxes whose env no longer exists or that is older than a staleness threshold (see "Sweeps" below).
    Running the sweep *before* baking guarantees a wedged prior run cannot eat slots and cause spurious capacity failures.
 5. **Bake the run's slices** (new step, same job): one `minds-admin pool create` invocation with `--workspace-dir` pointing at the run's default-workspace-template checkout, `--mngr-source` pointing at the run's mngr checkout, `--content-addressed-cache`, and `--count` = the number of remote-workspace tests selected for the run plus two spares.
    The existing seed/fill fan-out applies: with the tar already published by the warm job (or by this invocation's own seed phase, in the phase 1 world), every slice is carve + `docker load` + finalize.
@@ -97,9 +97,11 @@ This is the same tradeoff production `--from-tag` caching already accepts.
 
 A new `minds-admin server sweep-ci-slices` command (run against the infra DB's box rows, with the CI pool key):
 
-- Enumerates the lima instances + disks on each `ready` CI box, parses the owning env from the slice resource name (the connector's `slice_name_env_owner` logic).
+- Enumerates the slice instances + disks on each `ready` CI box through the box generation's slice client (gen-1 lima or gen-2 raw qemu), parses the owning env from the slice resource name (the connector's `slice_name_env_owner` logic).
 - Destroys any `ci-*`-owned slice whose on-box age exceeds a staleness threshold (default 4 hours, matching the ci env sweep), including warm-verb throwaway slices.
   Phase 1 deliberately implements only the age criterion (no Modal-env-existence check): a slice whose env died young is torn down by the normal `minds-admin env destroy` path, and anything that survives it ages into this sweep; release runs are serialized, so nothing younger than the threshold can be another run's live slice.
+  A stale VM is destroyed whether or not it is running: a crashed run leaves its VMs running.
+- After the VM sweep, reclaims any `ci-*`-owned data disk whose VM is no longer on the box (leaked by an earlier failed carve or teardown), regardless of the disk's age; a disk whose VM is still on the box -- young, foreign, or a destroy that just failed -- is held by it and never touched.
 - Never touches slices owned by non-`ci` envs (there should be none on a CI-tier box; if found they are reported loudly as tier contamination, mirroring `audit-boxes`).
 - Invoked in the bake-stage prologue and in `destroy-minds-ci-env`; existing nets (the ci Modal-env sweep, `minds-admin env destroy`'s unleased-slice teardown, the connector's box reconcile) are unchanged.
 
@@ -120,7 +122,7 @@ A new `minds-admin server sweep-ci-slices` command (run against the infra DB's b
 - The env deploy already stamps a per-env `WORKSPACE_STORAGE_KEY_PREFIX` (`<env>/`) for per-env-Modal-env tiers and `minds-admin env destroy` already reclaims the prefix, so no code changes are needed -- populating the Vault entry lights the whole path up.
 - `test_workspace_stop_start` then stops skipping.
   **Measured (phase 1):** the full cycle against the standing vin box took ~2.6 hours -- the ~13 GB artifact upload ran at ~1.4 MB/s effective, far below the 6-25 MB/s the stop/start docs assume -- which no CI job budget fits.
-  The test is therefore gated behind an explicit `MINDS_STOP_START_RELEASE_TEST=1` opt-in (the `MNGR_AWS_RELEASE_TESTS` pattern) until one of the open-questions follow-ups lands; the CI services step does not set it.
+  The test was therefore gated behind an explicit `MINDS_STOP_START_RELEASE_TEST=1` opt-in while the CI boxes were gen-1; with the CI boxes repaved to gen-2 (2026-09-13), whose uploads ride the S3 IPv4 pin at ~100 MB/s, the gate is gone and the test runs in every release dispatch.
 
 ### Empty-pool semantics
 
@@ -142,7 +144,7 @@ A new `minds-admin server sweep-ci-slices` command (run against the infra DB's b
 - `test_lease_isolation_and_release` (`minds_services`; the deferred test from minds-deployment-tests.md, slice-era): lease a pre-baked slice as verified user A, assert user B cannot see the host via the user-facing API (404, not 403), release, assert the slot is freed and the row gone.
 - `test_fast_path_create_and_destroy` (`minds_services`): configure an imbue_cloud provider instance against the per-run env, `mngr create` with `-b fast_mode=require` and the run's `(repo_url, repo_branch_or_tag)` pair (fast-path matching requires both), assert the pre-baked agent is adopted and its services boot (the workspace's `system_interface` answers), then `mngr destroy` the workspace and drive the explicit `hosts release` path (destroy itself defers lease release to GC's grace period), asserting the lease disappears from the connector.
   This is the layer where adoption, key rotation, and workspace boot are actually exercised.
-- `test_workspace_stop_start` (existing): capacity + storage config are now provided, but the measured ~2.6h cycle keeps it behind the `MINDS_STOP_START_RELEASE_TEST=1` opt-in for now (see "Stop/start integration").
+- `test_workspace_stop_start` (existing): capacity + storage config are provided, and since the gen-2 CI cutover it runs un-gated (see "Stop/start integration").
 
 ### Later (enabled by this work, not in scope)
 
@@ -219,6 +221,7 @@ just list-servers            # or await-delivery / setup-server / prep-server <i
 ```
 
 The `ci-infra` env root is activation-only scaffolding (no Modal env, no deploy); the ci Modal-env sweep never sees it.
+The orchestrator's `warm-pool-cache` and `sweep-ci-slices` commands (the CI warm job and the release teardown's crash backstop, both of which run outside any per-run env) create and activate the same root on the runner, because a gen-2 CI box is dialed with an operator certificate the ci tier's Vault SSH CA signs, and the signer needs the activation to know the tier.
 A box replacement is: order + setup the new box (rows land in the infra DB), then destroy the old box's row and cancel the OVH service.
 
 ## Open questions and risks

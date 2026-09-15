@@ -112,7 +112,7 @@ The rule becomes: **connector modules may import stdlib, the pip-installed third
 This must be enforced by a test (e.g. a project ratchet in `test_project_ratchets.py`, or an import-walking unit test) since nothing structural prevents it anymore.
 The same test should assert that no module under the package imports `imbue.remote_service_connector.app` (the entrypoint is excluded from the mount, so such an import only fails at runtime in the container).
 
-An alternative -- shipping `imbue_common` as a second `add_local_python_source` module -- was rejected: it drags in `loguru`/pydantic-model conventions and grows the shipped surface for no current need.
+An alternative -- shipping `imbue_common` as a second `add_local_python_source` module -- was rejected: it drags in `loguru`/pydantic-model conventions and grows the shipped surface for no current need. Revisited 2026-08-28 (slice-fleet cutover phase 3): the connector now ships `imbue.imbue_common` (for the frozen-model base the shared gen-2 script renderers use) and `imbue.mngr_imbue_cloud.slices.gen2_scripts` as two more names in the same `add_local_python_source` call; the import-boundary test became transitive (`modal_app_kit.testing.transitive_shipped_imports`) so only the stdlib/pydantic-only modules of `imbue_common` can ever be reached from shipped code.
 If genuinely shared code emerges later, add it as an explicit second dotted module name and extend the import-boundary test.
 
 ### Sketch of the decomposition (non-binding)

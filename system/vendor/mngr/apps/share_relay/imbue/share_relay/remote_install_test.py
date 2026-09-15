@@ -1,4 +1,3 @@
-import os
 import stat
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from pydantic import SecretStr
 
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.share_relay.data_types import RelayConfiguration
+from imbue.share_relay.data_types import SshdWaitPolicy
 from imbue.share_relay.primitives import ContentDomain
 from imbue.share_relay.primitives import RegionCode
 from imbue.share_relay.primitives import RelayId
@@ -15,6 +15,7 @@ from imbue.share_relay.remote_install import FRP_VERSION
 from imbue.share_relay.remote_install import REMOTE_ARTIFACT_PATHS
 from imbue.share_relay.remote_install import REMOTE_STAGING_DIR
 from imbue.share_relay.remote_install import RelayDeployError
+from imbue.share_relay.remote_install import RelaySshUnreachableError
 from imbue.share_relay.remote_install import deploy_relay
 from imbue.share_relay.remote_install import render_relay_install_script
 
@@ -66,6 +67,9 @@ def _deploy_config() -> RelayConfiguration:
     )
 
 
+_FAST_SSHD_WAIT = SshdWaitPolicy(wait_seconds=30.0, poll_interval_seconds=0.05)
+
+
 def _write_recording_tool(bin_dir: Path, name: str, log_path: Path, exit_code: int = 0) -> None:
     """A fake ssh/scp that appends its argv to ``log_path`` and exits with ``exit_code``."""
     tool = bin_dir / name
@@ -73,20 +77,15 @@ def _write_recording_tool(bin_dir: Path, name: str, log_path: Path, exit_code: i
     tool.chmod(0o755)
 
 
-def test_deploy_relay_stages_artifacts_owner_only_and_installs_over_ssh(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_deploy_relay_stages_artifacts_owner_only_and_installs_over_ssh(tmp_path: Path, fake_tool_bin: Path) -> None:
     """The full deploy: render locally with tight modes, stage via scp, sudo-install, clean up."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
     call_log = tmp_path / "calls.log"
-    _write_recording_tool(bin_dir, "ssh", call_log)
-    _write_recording_tool(bin_dir, "scp", call_log)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    _write_recording_tool(fake_tool_bin, "ssh", call_log)
+    _write_recording_tool(fake_tool_bin, "scp", call_log)
     work_dir = tmp_path / "work"
 
     with ConcurrencyGroup(name="deploy-relay-test") as concurrency_group:
-        deploy_relay(concurrency_group, "203.0.113.7", "debian", _deploy_config(), work_dir)
+        deploy_relay(concurrency_group, "203.0.113.7", "debian", _deploy_config(), work_dir, sshd_wait=_FAST_SSHD_WAIT)
 
     # Local staging is owner-only: the frps.toml artifact embeds the plugin-auth secret.
     assert stat.S_IMODE(work_dir.stat().st_mode) == 0o700
@@ -98,25 +97,78 @@ def test_deploy_relay_stages_artifacts_owner_only_and_installs_over_ssh(
     calls = call_log.read_text().splitlines()
     ssh_calls = [line for line in calls if line.startswith("ssh ")]
     scp_calls = [line for line in calls if line.startswith("scp ")]
-    # Staging dir is recreated fresh (no -p: a raced pre-existing dir must fail
-    # loudly), one scp per artifact, then the sudo install, then cleanup.
-    assert "rm -rf /tmp/share-relay-staging && mkdir -m 700 /tmp/share-relay-staging" in ssh_calls[0]
+    # The sshd probe first, then the staging dir recreated fresh (no -p: a raced
+    # pre-existing dir must fail loudly), one scp per artifact, then the sudo
+    # install, then cleanup.
+    assert ssh_calls[0].endswith(" true")
+    assert "rm -rf /tmp/share-relay-staging && mkdir -m 700 /tmp/share-relay-staging" in ssh_calls[1]
     assert len(scp_calls) == 4
     assert all("debian@203.0.113.7:/tmp/share-relay-staging/" in line for line in scp_calls)
     assert any("sudo bash -c " in line for line in ssh_calls)
     assert ssh_calls[-1].endswith("rm -rf /tmp/share-relay-staging")
 
 
-def test_deploy_relay_wraps_ssh_failures_in_relay_deploy_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+def test_deploy_relay_wraps_ssh_failures_in_relay_deploy_error(tmp_path: Path, fake_tool_bin: Path) -> None:
     call_log = tmp_path / "calls.log"
-    _write_recording_tool(bin_dir, "ssh", call_log, exit_code=1)
-    _write_recording_tool(bin_dir, "scp", call_log)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    _write_recording_tool(fake_tool_bin, "ssh", call_log, exit_code=1)
+    _write_recording_tool(fake_tool_bin, "scp", call_log)
 
     with ConcurrencyGroup(name="deploy-relay-failure-test") as concurrency_group:
         with pytest.raises(RelayDeployError, match="ssh to 203.0.113.9 failed"):
-            deploy_relay(concurrency_group, "203.0.113.9", "debian", _deploy_config(), tmp_path / "work")
+            deploy_relay(
+                concurrency_group,
+                "203.0.113.9",
+                "debian",
+                _deploy_config(),
+                tmp_path / "work",
+                sshd_wait=_FAST_SSHD_WAIT,
+            )
+
+
+def _write_ssh_refusing_first_calls(bin_dir: Path, log_path: Path, refused_call_count: int) -> None:
+    """A fake ssh that exits 255 (transport failure) for its first N calls and then succeeds."""
+    counter = bin_dir / "ssh-calls"
+    tool = bin_dir / "ssh"
+    tool.write_text(
+        "#!/bin/sh\n"
+        f'echo "ssh $@" >> "{log_path}"\n'
+        f'n=$(cat "{counter}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "{counter}"\n'
+        f'[ "$n" -le {refused_call_count} ] && exit 255\n'
+        "exit 0\n"
+    )
+    tool.chmod(0o755)
+
+
+def test_deploy_relay_waits_for_a_booting_host_sshd_before_installing(tmp_path: Path, fake_tool_bin: Path) -> None:
+    call_log = tmp_path / "calls.log"
+    _write_ssh_refusing_first_calls(fake_tool_bin, call_log, refused_call_count=2)
+    _write_recording_tool(fake_tool_bin, "scp", call_log)
+
+    with ConcurrencyGroup(name="deploy-relay-sshd-wait-test") as concurrency_group:
+        deploy_relay(
+            concurrency_group, "203.0.113.7", "debian", _deploy_config(), tmp_path / "work", sshd_wait=_FAST_SSHD_WAIT
+        )
+
+    ssh_calls = [line for line in call_log.read_text().splitlines() if line.startswith("ssh ")]
+    # Two refused probes, one accepted probe, and only then the staging step.
+    assert [call.endswith(" true") for call in ssh_calls[:4]] == [True, True, True, False]
+    assert "mkdir -m 700 /tmp/share-relay-staging" in ssh_calls[3]
+
+
+def test_deploy_relay_gives_up_when_the_host_sshd_never_answers(tmp_path: Path, fake_tool_bin: Path) -> None:
+    call_log = tmp_path / "calls.log"
+    _write_recording_tool(fake_tool_bin, "ssh", call_log, exit_code=255)
+    _write_recording_tool(fake_tool_bin, "scp", call_log)
+
+    with ConcurrencyGroup(name="deploy-relay-sshd-timeout-test") as concurrency_group:
+        with pytest.raises(RelaySshUnreachableError, match="ssh to 203.0.113.9 failed"):
+            deploy_relay(
+                concurrency_group,
+                "203.0.113.9",
+                "debian",
+                _deploy_config(),
+                tmp_path / "work",
+                sshd_wait=SshdWaitPolicy(wait_seconds=0.3, poll_interval_seconds=0.05),
+            )
+    # Nothing past the probe ran.
+    assert not any("mkdir -m 700" in line for line in call_log.read_text().splitlines())

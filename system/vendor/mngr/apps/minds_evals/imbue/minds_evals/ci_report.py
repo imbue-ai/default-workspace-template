@@ -51,6 +51,7 @@ from imbue.minds_evals.data_types import MatrixCell
 from imbue.minds_evals.data_types import PairDecision
 from imbue.minds_evals.data_types import RunCheck
 from imbue.minds_evals.data_types import TrialCheck
+from imbue.minds_evals.data_types import is_model_observable_on_lane
 from imbue.minds_evals.reporting import SHORT_SHA_LENGTH
 
 # The pattern the notify job downloads every summary artifact under, and the stems of the files
@@ -510,7 +511,15 @@ def is_model_unconfirmed(trial: TrialCheck) -> bool:
     `null` is silence rather than evidence of a wrong model -- no transcript was captured, or the
     catalog id has no known reported name -- so the trial still passes, and the reader has to be
     told, or a green arm reads as measured on the model it names.
+
+    A lane that can never name a model is the exception, because there the silence is the lane's
+    known shape rather than anything about this trial: a line every trial of that arm carries every
+    night is one a reader learns to skim, which costs the arms that raise it for a reason. Such a
+    trial that observably ran on the wrong model still answers `False` rather than `None`, and fails
+    into the failures table.
     """
+    if not is_model_observable_on_lane(trial.lane):
+        return False
     return trial.is_passed and bool(trial.requested_model) and trial.is_model_confirmed is None
 
 

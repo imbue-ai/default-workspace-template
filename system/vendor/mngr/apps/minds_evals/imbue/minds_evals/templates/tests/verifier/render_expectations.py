@@ -16,6 +16,17 @@ CASE_PATH = Path("/tests/case.json")
 EXPECTATIONS_PATH = Path("/logs/agent/expectations.md")
 
 
+def _declared_actions(check: dict[str, Any]) -> str:
+    """What the flow declares it does. Read as `actions`, with `steps` as the name a dataset
+    generated before the rename carries; a regrade of such a trial still has to show the judge the
+    flow it ran.
+
+    CLEANUP: drop the `steps` fallback once no trial generated before 2026-09-11 is regraded any
+    more (after the next minds release ships with the rename).
+    """
+    return str(check.get("actions") or check.get("steps") or "")
+
+
 def render_expectations(case: dict[str, Any]) -> str:
     """The judge-facing markdown for one case: the outcome prose plus every declared check."""
     expectations = case.get("expectations") or {}
@@ -61,7 +72,7 @@ def render_expectations(case: dict[str, Any]) -> str:
         lines += ["## UI flows", ""]
         for check in ui_flow_checks:
             lines.append("- **{}**".format(check.get("name")))
-            lines.append("  - Steps: {}".format(check.get("steps")))
+            lines.append("  - Actions: {}".format(_declared_actions(check)))
             lines.append("  - Expected end state: {}".format(check.get("expect")))
         lines.append("")
 

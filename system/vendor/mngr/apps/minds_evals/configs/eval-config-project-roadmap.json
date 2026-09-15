@@ -36,7 +36,7 @@
             "ui_flows": [
               {
                 "name": "roadmap-content",
-                "steps": "Open the app. Look over the roadmap items it shows.",
+                "actions": "Open the app. Look over the roadmap items it shows.",
                 "expect": "The roadmap shows items drawn from the client's uploaded project data (engineering, design, and product workstreams), not placeholder or demo content."
               }
             ]
@@ -69,12 +69,12 @@
             "ui_flows": [
               {
                 "name": "updated-content",
-                "steps": "Open the roadmap. Look once over the items it shows for work that only appears in the newer data pull, such as on-call playbook automation (ENG-902357, 'Surgical agentlet: AutoFlow for on-call playbook execution and contextual helpers') or other items dated mid-February through March. One look is enough; do not repeat a check that has already answered.",
+                "actions": "Open the roadmap. Look once over the items it shows for work that only appears in the newer data pull, such as on-call playbook automation (ENG-902357, 'Surgical agentlet: AutoFlow for on-call playbook execution and contextual helpers') or other items dated mid-February through March. One look is enough; do not repeat a check that has already answered.",
                 "expect": "The roadmap includes work drawn from the newer pull, not only the items from the original upload."
               },
               {
                 "name": "drill-down",
-                "steps": "Interact with an item to see lower level details.",
+                "actions": "Interact with an item to see lower level details.",
                 "expect": "Interacting allows you to see more details than in the roadmap view."
               }
             ]

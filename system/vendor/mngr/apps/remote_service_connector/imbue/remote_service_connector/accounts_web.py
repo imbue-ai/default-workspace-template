@@ -178,7 +178,7 @@ _MAC_ARM64_PLATFORM: Final[str] = "mac-arm64"
 _DEFAULT_TARGET_BY_PLATFORM: Final[dict[str, str]] = {
     # For _MAC_ARM64_PLATFORM, this is the hardcoded fallback, used only when the live manifest is down.
     _MAC_ARM64_PLATFORM: (
-        "https://download.todesktop.com/26032588hqdzk/Minds%200.5.0%20-%20Build%20260902shwco3ynx-arm64.dmg"
+        "https://download.todesktop.com/26032588hqdzk/Minds%200.5.2%20-%20Build%20260909wnd3gb4z1-arm64.dmg"
     ),
     "source": "https://github.com/imbue-ai/mngr",
 }
@@ -212,6 +212,12 @@ _MANIFEST_PARSE_FAILURES: Final[tuple[type[Exception], ...]] = (
 _TODESKTOP_DOWNLOAD_PREFIX: Final[str] = "https://download.todesktop.com/"
 
 
+# CLEANUP: ``web_template_channel.py`` reads the release feed's
+# ``<channel>-web.json`` with its own copy of this fetch/retry/cache shape,
+# written apart from this reader so it neither depends on the per-platform
+# rewrite of it on mngr/linux-packaging (imbue-ai/mngr-internal#943) nor
+# conflicts with it textually. Consolidate the two into one feed reader once
+# both branches are on main -- owed by whichever merges second.
 @retry(
     retry=retry_if_exception_type(_MANIFEST_FETCH_FAILURES),
     stop=stop_after_attempt(_STABLE_CHANNEL_FETCH_ATTEMPTS),

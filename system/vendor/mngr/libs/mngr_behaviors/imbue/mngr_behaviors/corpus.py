@@ -171,10 +171,10 @@ _README_BASENAME: Final[str] = "README"
 _README_FILE_NAME: Final[str] = "README.md"
 
 # Every README.md must open with this incipit, verbatim, so anyone reaching a
-# corpus file is pointed at the tmr-behaviors skill. The behaviors skill mandates
+# corpus file is pointed at the behaviors skill. The behaviors skill mandates
 # the wording; this constant is the single source of truth for it.
 REQUIRED_README_INCIPIT: Final[str] = (
-    "Understanding this behavior corpus calls for the tmr-behaviors skill; consult it when reading this file."
+    "Understanding this behavior corpus calls for the behaviors skill; consult it when reading this file."
 )
 
 

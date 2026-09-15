@@ -15,6 +15,7 @@ import tomllib
 from collections.abc import Mapping
 from http import HTTPStatus
 from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import Any
 from typing import Final
@@ -1164,6 +1165,11 @@ async def start_reverse_tunnel(
         log=service_log_path(TUNNEL_LOG_FILENAME),
     )
     await check_run_in_box(environment, command, env, _QUICK_EXEC_TIMEOUT_SECONDS)
+
+
+def flow_step_script() -> Traversable:
+    """The step script as packaged, with the protocol module it imports beside it."""
+    return _RESOURCES / BOX_FLOW_STEP_FILENAME
 
 
 async def upload_flow_step_script(environment: BaseEnvironment, target_path: str) -> None:

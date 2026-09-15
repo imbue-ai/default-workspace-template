@@ -109,7 +109,9 @@ class UiFlow(FrozenModel):
     """One behavioral flow through the delivered UI, exactly as authored."""
 
     name: str = Field(description="Stable flow name; names the flow's evidence directory")
-    steps: str = Field(description="Natural-language step sequence (empty when the flow carries a script)")
+    actions: str = Field(
+        description="What to do in the UI, in natural language (empty when the flow carries a script)"
+    )
     expect: str = Field(description="The verifiable end condition (empty when the flow carries a script)")
     script: str = Field(description="Per-case script file for flows anchored in a known app (empty otherwise)")
     surface: FlowSurface = Field(description="Where the flow enters the app; defaults to the forwarded origin")
@@ -153,13 +155,15 @@ class FilesCheck(FrozenModel):
 class UiFlowCheck(FrozenModel):
     """An expanded UI flow: one natural-language flow the verification agent drives at trial time.
 
-    Only flows authored as `steps` + `expect` expand to a check; the reserved `script` and
+    Only flows authored as `actions` + `expect` expand to a check; the reserved `script` and
     `minds-ui` spellings are rejected at parse time and never reach here.
     """
 
     check_id: str = Field(description="Stable id, used as the manifest entry's id")
     name: str = Field(description="The flow's name; names its evidence directory under flows/")
-    steps: str = Field(description="Natural-language step sequence the verification agent executes")
+    actions: str = Field(
+        description="What to do in the UI, in natural language; the verification agent carries it out"
+    )
     expect: str = Field(description="The verifiable end condition the agent judges the final state against")
     surface: FlowSurface = Field(description="Where the flow enters the app; the forwarded origin in v1")
 
@@ -258,8 +262,9 @@ class CapturedFile(FrozenModel):
 
 class WorkerState(LowerCaseStrEnum):
     """A background worker's state at collection time: the listing's lifecycle state folded down when
-    the worker is listed, DESTROYED when only mngr's preserved copy of it remains, and UNKNOWN when
-    neither the listing nor a preserved directory says."""
+    the worker is listed, DESTROYED when a complete listing did not name it but its stream still came
+    out of mngr's archive, and UNKNOWN whenever that falls short -- no listing that could speak for
+    it, or no stream to show for its absence."""
 
     STOPPED = auto()
     RUNNING = auto()
@@ -289,13 +294,31 @@ class WorkerListingEntry(FrozenModel):
     work_dir: str = Field(description="The agent's work dir, which launch commands' paths are relative to")
 
 
+class WorkerListing(FrozenModel):
+    """The workspace's agents as one collection attempt saw them.
+
+    `is_complete` is what licenses reading a worker's *absence* as meaning something: `mngr list`
+    defaults to --on-error continue, so it can answer with some agents and a non-zero exit when a
+    provider was unreachable. Only a listing that reported every agent it was asked for can say that
+    an agent it does not name is gone.
+    """
+
+    entries: tuple[WorkerListingEntry, ...] = Field(
+        default=(), description="The agents the listing named, in the order it named them"
+    )
+    is_complete: bool = Field(default=False, description="Whether the listing reported every agent without error")
+
+
 class WorkerCapture(FrozenModel):
     """What the evidence phase brought out for one launched worker: its ATIF document, its stream, and the
     report it pushed back to its lead, each recorded on its own."""
 
     launch: WorkerLaunch = Field(description="The launch this capture answers")
     agent_id: str = Field(description="The worker's mngr agent id; empty when it could not be resolved")
-    agent_type: str = Field(description="The worker's agent type from the listing; empty when it was not listed")
+    agent_type: str = Field(
+        description="The worker's agent type: the listing's, or the captured document's when the listing "
+        "did not name the worker; empty when neither said"
+    )
     state: WorkerState = Field(description="The worker's state at collection time")
     document: CapturedFile = Field(description="The ATIF document mngr built for the worker")
     stream: CapturedFile = Field(description="The worker's common-transcript stream, live or preserved")
@@ -457,15 +480,18 @@ class StepBoundary(FrozenModel):
 
 
 class HarnessLane(LowerCaseStrEnum):
-    """A provider lane a workspace can be signed in on without a human at a device prompt.
+    """A provider lane a workspace can be signed in on with nobody present.
 
     The lane decides the harness, because that is how the product itself decides it: a chat runs on
-    the harness of the lane its account was minted on. ANTHROPIC serves claude; the rest serve
-    pi-coding, differing in whose key they take. The `openai` lane (codex) has no member here because
-    its sign-in cannot be driven by a run.
+    the harness of the lane its account was minted on. ANTHROPIC serves claude and OPENAI serves
+    codex; the rest serve pi-coding, differing in whose key they take. A lane is a member exactly
+    when it offers a pasted-key sign-in, because that is the only kind a run can drive; one whose
+    every method is a browser or device flow on a PTY needs a person at it, which is what leaves
+    `google` (antigravity) out.
     """
 
     ANTHROPIC = auto()
+    OPENAI = auto()
     API_KEY = auto()
     OPENROUTER = auto()
     OPENCODE_GO = auto()
@@ -476,6 +502,28 @@ def lane_id(lane: HarnessLane) -> str:
     """The lane as the workspace's accounts API and the command line spell it: dashes, not
     underscores (`--ak lane=api-key`)."""
     return lane.value.replace("_", "-")
+
+
+# Lanes whose harness names no model on a transcript step, so a trial on one can never confirm the
+# model it asked for. mngr's codex transcript emitter writes no per-step model name, which leaves
+# every `openai` trial's observed models empty.
+# CLEANUP: drop this set and the two renderers' branches that read it once mngr's codex transcript
+# emitter stamps a per-step model name. From then on an empty observation here means what it means
+# on every other lane -- a trial whose transcript said nothing -- and treating it as the lane's shape
+# would hide a real silence rather than a structural one.
+_LANES_WITH_NO_OBSERVABLE_MODEL: Final[frozenset[str]] = frozenset({lane_id(HarnessLane.OPENAI)})
+
+
+@pure
+def is_model_observable_on_lane(lane: str) -> bool:
+    """Whether a trial on this lane can say at all which model answered it.
+
+    False is the lane's known shape rather than anything about a given trial, which is why both
+    renderers of the confirmation ask this before reporting a model as unconfirmed: a line every
+    trial of an arm carries every night is one a reader learns to skim, and that costs the arms
+    raising it for a reason.
+    """
+    return lane not in _LANES_WITH_NO_OBSERVABLE_MODEL
 
 
 class HarnessConfig(FrozenModel):

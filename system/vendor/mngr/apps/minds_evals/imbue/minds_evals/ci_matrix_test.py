@@ -63,7 +63,13 @@ def test_the_checked_in_files_nightly_set_is_exactly_these_configs() -> None:
 
     nightly = ci_matrix.select_harness_configs(entries, "")
 
-    assert sorted(entry.name for entry in nightly) == ["default", "haiku", "pi-gpt-5-mini"]
+    assert sorted(entry.name for entry in nightly) == [
+        "codex-sol-low",
+        "codex-terra",
+        "default",
+        "haiku",
+        "pi-gpt-5-mini",
+    ]
 
 
 def test_the_checked_in_file_holds_a_default_config_that_requests_no_model() -> None:

@@ -5,10 +5,10 @@ import pluggy
 from imbue.mngr_tmr.plugin import register_cli_commands
 
 
-def test_register_cli_commands_returns_both_tmr_family_commands() -> None:
+def test_register_cli_commands_returns_the_tmr_command() -> None:
     commands = register_cli_commands()
     assert commands is not None
-    assert [command.name for command in commands] == ["tmr", "tmr-behaviors"]
+    assert [command.name for command in commands] == ["tmr"]
 
 
 def test_plugin_registers_with_pluggy(plugin_manager: pluggy.PluginManager) -> None:
@@ -19,4 +19,3 @@ def test_plugin_registers_with_pluggy(plugin_manager: pluggy.PluginManager) -> N
             for cmd in result:
                 command_names.append(cmd.name)
     assert "tmr" in command_names
-    assert "tmr-behaviors" in command_names

@@ -22,7 +22,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getAgentById } from "../models/AgentManager";
+import { getChatById } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { ensureHarnessCatalogs, getHarnessCatalog } from "../models/HarnessCatalog";
 import { changedAxes, effectiveChoice, setModelChoice } from "../models/ModelSettings";
@@ -70,7 +70,7 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-export function ModelProviderMenu(): m.Component<{ agentId: string }> {
+export function ModelProviderMenu(): m.Component<{ chatId: string }> {
   // The current model-search query (only used when the harness's picker_mode is "search").
   let modelQuery = "";
   // The account-gated set of model ids to OFFER in a search picker, fetched fresh each
@@ -104,7 +104,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
   let draggingEffortIndex: number | null = null;
   // What the last view saw, for the menu's own open hook to read: which agent this is, and
   // whether its picker is the kind whose model list is worth warming.
-  let viewedAgentId = "";
+  let viewedChatId = "";
   let viewedPickerIsFetched = false;
 
   /** What is scoped to a submenu: reset whenever the open submenu changes. */
@@ -130,7 +130,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
       // crossed the menu it is usually already back. With hover-opened submenus this is what
       // makes the Model row cheap to pass over -- by the time the hover lands, the list is warm
       // and its own request is a no-op.
-      if (viewedPickerIsFetched) warmOfferedModels(viewedAgentId);
+      if (viewedPickerIsFetched) warmOfferedModels(viewedChatId);
     },
     onClose: () => {
       // A drag that never released (the menu can be torn down mid-gesture) would otherwise
@@ -154,11 +154,11 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
     },
   });
 
-  // Recompute the offerable models for `agentId`. Called on every picker-open so a fresh
+  // Recompute the offerable models for `chatId`. Called on every picker-open so a fresh
   // /login is reflected without reloading the page. A null `models` (offer everything) and
   // a fetch failure both leave `offeredModels` null -- the picker then shows the whole
   // catalog rather than an empty list.
-  async function fetchOfferedModels(agentId: string): Promise<void> {
+  async function fetchOfferedModels(chatId: string): Promise<void> {
     offeredLoading = true;
     offeredLoaded = false;
     offeredModels = null;
@@ -167,8 +167,8 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
     try {
       const response = await m.request<{ models: string[] | null; options?: CatalogModelOption[] | null }>({
         method: "GET",
-        url: apiUrl("/api/agents/:agentId/model-options"),
-        params: { agentId },
+        url: apiUrl("/api/chats/:chatId/model-options"),
+        params: { chatId },
       });
       // A DYNAMIC harness (codex) answers with the full per-agent `options`; a static/gated harness
       // answers with `models` (ids), null meaning "offer the whole catalog".
@@ -185,10 +185,10 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
   }
 
   /** Load this agent's offerable models once per open. See `offeredFetchedForOpen`. */
-  function warmOfferedModels(agentId: string): void {
+  function warmOfferedModels(chatId: string): void {
     if (offeredFetchedForOpen) return;
     offeredFetchedForOpen = true;
-    void fetchOfferedModels(agentId);
+    void fetchOfferedModels(chatId);
   }
 
   function tooltipAttrs(text: string | null): m.Attributes {
@@ -339,8 +339,8 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
   /** The chat's reversible process verb: ``mngr stop`` on the agent, which a later message or
    *  start brings back. No confirmation -- it is one message away from undone. The agent list
    *  catches up through the observe stream. */
-  function stopAgent(targetAgentId: string): void {
-    void fetch(apiUrl(`/api/agents/${encodeURIComponent(targetAgentId)}/stop`), { method: "POST" })
+  function stopAgent(targetChatId: string): void {
+    void fetch(apiUrl(`/api/chats/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
       .then(async (response) => {
         if (response.ok) return;
         const data = (await response.json().catch(() => ({}))) as { detail?: string };
@@ -440,7 +440,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
 
   /** The Model row's submenu: the models this account can actually use. */
   function modelSubmenu(
-    agentId: string,
+    chatId: string,
     sourceOptions: readonly CatalogModelOption[],
     matched: CatalogModelOption | null,
     currentIdentity: ModelIdentity,
@@ -502,7 +502,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
                         effort: clampEffort(option, currentIdentity.effort),
                         fast: option.supports_fast ? currentIdentity.fast : false,
                       };
-                      setModelChoice(agentId, next, option, changedAxes(currentIdentity, next), optimistic);
+                      setModelChoice(chatId, next, option, changedAxes(currentIdentity, next), optimistic);
                       // The pick is done; the menu stays, with the new model's effort and fast
                       // rows there to adjust.
                       menu.closeSubmenu();
@@ -532,11 +532,11 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
     },
 
     view(vnode) {
-      const { agentId } = vnode.attrs;
-      const agent = getAgentById(agentId);
-      const account = accountForAgent(agent?.labels?.account);
-      const catalog: HarnessCatalog | null = getHarnessCatalog(agent?.harness);
-      const choice = catalog === null ? null : effectiveChoice(agentId, agent?.model_choice);
+      const { chatId } = vnode.attrs;
+      const chat = getChatById(chatId);
+      const account = accountForAgent(chat?.active_agent.account_id ?? undefined);
+      const catalog: HarnessCatalog | null = getHarnessCatalog(chat?.active_agent.harness);
+      const choice = catalog === null ? null : effectiveChoice(chatId, chat?.active_agent.model_choice);
       const matched = choice?.matched ?? null;
 
       // THREE states have no model, not one, and the Provider row must render in all of them:
@@ -544,7 +544,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (agent === undefined) return null;
+      if (chat === undefined) return null;
       // Nothing at all to say: no account to name and no model to show.
       if (account === null && matched === null) return null;
 
@@ -559,7 +559,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
       const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
       const searchable = catalog?.picker_mode === "search";
       const dynamic = catalog?.picker_mode === "dynamic";
-      viewedAgentId = agentId;
+      viewedChatId = chatId;
       viewedPickerIsFetched = searchable || dynamic;
 
       // The chip states the WHOLE choice, from the same three values the menu's rows read --
@@ -625,10 +625,10 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
                 truncateValue: "start",
                 maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
                 onOpen: () => {
-                  if (searchable || dynamic) warmOfferedModels(agentId);
+                  if (searchable || dynamic) warmOfferedModels(chatId);
                 },
                 content: () =>
-                  modelSubmenu(agentId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
+                  modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
               }
             : {
                 kind: "value",
@@ -650,7 +650,7 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
               tooltip: readOnlyTooltip,
               onPick: (level) => {
                 const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
-                setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
               },
             }),
         });
@@ -665,14 +665,14 @@ export function ModelProviderMenu(): m.Component<{ agentId: string }> {
                 tooltip: readOnlyTooltip,
                 onToggle: () => {
                   const next: ModelIdentity = { model_id: matched.id, effort: currentEffort, fast: !currentFast };
-                  setModelChoice(agentId, next, matched, changedAxes(currentIdentity, next), optimistic);
+                  setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
                 },
               }),
           });
         }
       }
       rows.push({ kind: "divider" });
-      rows.push({ kind: "action", key: "stop-agent", label: "Stop agent", onSelect: () => stopAgent(agentId) });
+      rows.push({ kind: "action", key: "stop-agent", label: "Stop agent", onSelect: () => stopAgent(chatId) });
 
       return [trigger, menu.view(rows)];
     },

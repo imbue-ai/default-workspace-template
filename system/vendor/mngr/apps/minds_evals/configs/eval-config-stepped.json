@@ -38,7 +38,7 @@
             "ui_flows": [
               {
                 "name": "filter-by-team",
-                "steps": "Open the roadmap. Read the milestones and their owning teams. Filter the view down to a single team.",
+                "actions": "Open the roadmap. Read the milestones and their owning teams. Filter the view down to a single team.",
                 "expect": "Only that team's milestones remain visible, including milestones that team co-owns."
               }
             ]
@@ -61,12 +61,12 @@
             "ui_flows": [
               {
                 "name": "updated-content",
-                "steps": "Open the roadmap. Check once whether milestone M-141 ('Usage-based invoicing') is listed. Then check once whether milestone M-107 ('Referral program pilot') is listed. One look each is enough; do not repeat a check that has already answered.",
+                "actions": "Open the roadmap. Check once whether milestone M-141 ('Usage-based invoicing') is listed. Then check once whether milestone M-107 ('Referral program pilot') is listed. One look each is enough; do not repeat a check that has already answered.",
                 "expect": "M-141 is listed and M-107 is not."
               },
               {
                 "name": "edit-persistence",
-                "steps": "Edit a milestone's title to 'Renamed by eval'. Reload the page.",
+                "actions": "Edit a milestone's title to 'Renamed by eval'. Reload the page.",
                 "expect": "'Renamed by eval' is still visible after the reload."
               }
             ]

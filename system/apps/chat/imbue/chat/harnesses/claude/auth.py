@@ -363,7 +363,7 @@ class ClaudeAuthService(MutableModel):
     """The read side of claude's auth: what `claude auth status` reports for an environment.
 
     Holds the injected `command_runner`. One instance is created per application and
-    stored on the app's `ChatState`; tests construct isolated instances with a
+    stored on the app's `ChatAppState`; tests construct isolated instances with a
     deterministic fake runner.
     """
 

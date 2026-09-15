@@ -1,0 +1,1 @@
+Added the plan for app-launched chats resolving like the workspace's own (`blueprint/app-launched-chats-via-local-settings/`): the design doc for the paired minds app, mngr, and default-workspace-template change that moves the account and harness a `mngr create` in a workspace runs on into the workspace's own local mngr settings.

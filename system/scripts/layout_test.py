@@ -68,6 +68,16 @@ def test_self_is_the_callers_chat_when_the_agent_id_is_known(
     assert layout._resolve_address("self") == "self"
 
 
+def test_self_is_the_chat_the_chat_app_named_over_the_agents_own_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An agent the chat app created carries its chat's id, which is not its own id once a
+    # chat has handed off between agents.
+    monkeypatch.setenv(layout.ENV_MNGR_AGENT_ID, "agent-42")
+    monkeypatch.setenv(layout.ENV_MINDS_CHAT_ID, "agent-41")
+    assert layout._resolve_address("self") == "app:chat?instance=agent-41"
+
+
 @pytest.mark.parametrize(
     ("spelling", "expected_hint"),
     [
@@ -78,7 +88,7 @@ def test_self_is_the_callers_chat_when_the_agent_id_is_known(
         ("service:files?instance=files-2", "use app:files?instance=files-2"),
         ("service:browser?session=riley", "app:browser?instance=riley"),
         ("url:abcd1234", "layout.py open https://"),
-        ("subagent:abcd", "app:chat?instance=<parent-agent-id>.<session>"),
+        ("subagent:abcd", "app:chat?instance=<chat-id>.<agent-id>.<session>"),
         ("https://example.com", "only 'open' takes one"),
     ],
 )

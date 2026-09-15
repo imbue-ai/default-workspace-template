@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { appRecord } from "../testing/records";
 import {
   actionKey,
+  answeredLauncherToRetire,
   equalTabWidth,
   isTitleTruncated,
   mostRecentAddressOfApp,
@@ -112,5 +113,34 @@ describe("stoppedPlaceholderForApp", () => {
 
     const critical = stoppedPlaceholderForApp(appRecord("docs", { is_running: false, critical: true }));
     expect(critical?.onStart).toBeNull();
+  });
+});
+
+describe("answeredLauncherToRetire", () => {
+  const launcher = (id: string) => ({ id, isLauncher: true });
+  const instance = (id: string) => ({ id, isLauncher: false });
+
+  it("answers the New Tab that stood for the pane", () => {
+    expect(answeredLauncherToRetire([launcher("new-tab-1"), instance("tab-a")], "tab-a")).toBe("new-tab-1");
+  });
+
+  it("leaves a New Tab alone once another tab shares its pane", () => {
+    expect(
+      answeredLauncherToRetire([instance("tab-a"), launcher("new-tab-1"), instance("tab-b")], "tab-b"),
+    ).toBeNull();
+  });
+
+  it("leaves New Tabs alone when the pane holds more than one", () => {
+    expect(
+      answeredLauncherToRetire([launcher("new-tab-1"), launcher("new-tab-2"), instance("tab-a")], "tab-a"),
+    ).toBeNull();
+  });
+
+  it("answers nothing when the pane held no New Tab", () => {
+    expect(answeredLauncherToRetire([instance("tab-a"), instance("tab-b")], "tab-b")).toBeNull();
+  });
+
+  it("answers nothing when the docked tab is all the pane holds", () => {
+    expect(answeredLauncherToRetire([instance("tab-a")], "tab-a")).toBeNull();
   });
 });

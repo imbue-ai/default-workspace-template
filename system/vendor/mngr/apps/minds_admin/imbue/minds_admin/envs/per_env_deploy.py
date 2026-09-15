@@ -42,6 +42,7 @@ from imbue.imbue_common.logging import info_span
 from imbue.imbue_common.modal_image_requirements import image_requirements_export_command
 from imbue.imbue_common.modal_image_requirements import image_requirements_path
 from imbue.imbue_common.pure import pure
+from imbue.minds.config.loader import load_deploy_config
 from imbue.minds.envs.primitives import DeployStrategy
 from imbue.minds.envs.primitives import DevEnvName
 from imbue.minds.envs.primitives import SecretTemplateValidationError
@@ -79,6 +80,9 @@ _IMAGE_REQUIREMENTS_EXPORT_TIMEOUT_SECONDS: Final[float] = 60.0
 # side and the app side stay in lockstep -- changing either name in
 # isolation would silently fall back to the in-app default (0).
 CONNECTOR_MIN_CONTAINERS_ENV_VAR: Final[str] = "MINDS_CONNECTOR_MIN_CONTAINERS"
+# The connector function `minds-admin env deploy` runs once after every connector
+# deploy to mint the gen-2 management SSH certificates (imbue-ai/mngr-internal#850).
+CONNECTOR_SSH_CERT_REFRESH_FUNCTION: Final[str] = "ssh_cert_refresh"
 LITELLM_PROXY_MIN_CONTAINERS_ENV_VAR: Final[str] = "MINDS_LITELLM_PROXY_MIN_CONTAINERS"
 
 # Env-var names the deployed modal apps read at module load to set their
@@ -92,6 +96,20 @@ LITELLM_PROXY_SCALEDOWN_WINDOW_ENV_VAR: Final[str] = "MINDS_LITELLM_PROXY_SCALED
 # Modal custom domains (comma-separated hosts from the tier's ``[origins]``
 # deploy.toml block; unset means none). Same lockstep contract as above.
 CONNECTOR_CUSTOM_DOMAINS_ENV_VAR: Final[str] = "MINDS_CONNECTOR_CUSTOM_DOMAINS"
+
+# Env-var name the deployed connector app reads at module load to attach the
+# tier's Modal Proxy (static egress IPs -- the gen-2 management-plane
+# lockdown's allowlisted addresses) to every connector function. The value
+# comes from the tier's committed ``[management_plane]`` table; empty means no
+# proxy (direct egress). Same lockstep contract as above.
+CONNECTOR_MODAL_PROXY_NAME_ENV_VAR: Final[str] = "MINDS_CONNECTOR_MODAL_PROXY_NAME"
+
+# The Modal environment the tier's proxy lives in (proxy lookup is
+# environment-scoped and a workspace holds at most one proxy, so per-env
+# tiers keep the shared proxy in one environment -- see
+# ``ManagementModalProxyConfig.environment_name``). Empty means "the
+# deploy's own environment". Same lockstep contract as above.
+CONNECTOR_MODAL_PROXY_ENVIRONMENT_ENV_VAR: Final[str] = "MINDS_CONNECTOR_MODAL_PROXY_ENVIRONMENT"
 
 # Env-var name the deployed modal apps read at module load to pick
 # which timestamped Modal Secret bundle to attach. Mirrors the same
@@ -663,6 +681,12 @@ def deploy_remote_service_connector(
     stale value in the ambient env) -- every named domain must already be
     registered and verified in the tier's Modal workspace or the deploy fails.
 
+    The tier's Modal Proxy name (from the ``[management_plane]`` table of its committed ``deploy.toml``;
+    specs/slice-fleet-gen2) is always threaded as
+    ``MINDS_CONNECTOR_MODAL_PROXY_NAME`` under the same contract (empty string
+    = no proxy, direct egress) -- a named proxy must already exist in the
+    tier's Modal workspace or the deploy fails.
+
     ``deploy_id`` is threaded into the subprocess env as ``MINDS_DEPLOY_ID``
     so the deployed connector attaches to the matching ``<svc>-<tier>-<id>``
     Modal Secrets minted by this deploy. Missing the id at the app's module
@@ -671,6 +695,21 @@ def deploy_remote_service_connector(
     _verify_image_requirements_fresh("remote-service-connector", parent_cg)
     with info_span("building the connector frontends (accounts + web chrome)"):
         _build_connector_frontends(parent_cg, deploy_id)
+    # The tier's Modal Proxy (gen-2 management plane; specs/slice-fleet-gen2)
+    # comes from the committed deploy.toml rather than the seam: it is consumed
+    # only by this deploy, and loading it here keeps the deploy flow's provider
+    # signature stable.
+    management_plane_config = load_deploy_config(tier).management_plane
+    modal_proxy_name = (
+        str(management_plane_config.modal_proxy.proxy_name)
+        if management_plane_config is not None and management_plane_config.modal_proxy is not None
+        else ""
+    )
+    modal_proxy_environment = (
+        str(management_plane_config.modal_proxy.environment_name or "")
+        if management_plane_config is not None and management_plane_config.modal_proxy is not None
+        else ""
+    )
     extra_env = {
         CONNECTOR_MIN_CONTAINERS_ENV_VAR: str(min_containers),
         CONNECTOR_SCALEDOWN_WINDOW_ENV_VAR: str(scaledown_window),
@@ -678,15 +717,20 @@ def deploy_remote_service_connector(
         # None) so a stale value exported in the operator's shell can never
         # leak into the deploy through the inherited os.environ.
         CONNECTOR_CUSTOM_DOMAINS_ENV_VAR: ",".join(custom_domains),
+        # Same always-set contract: empty = no proxy attach.
+        CONNECTOR_MODAL_PROXY_NAME_ENV_VAR: modal_proxy_name,
+        # Empty = resolve the proxy in the deploy's own Modal environment.
+        CONNECTOR_MODAL_PROXY_ENVIRONMENT_ENV_VAR: modal_proxy_environment,
     }
     with info_span(
-        "modal deploy rsc-{} into env {!r} (strategy={}, custom_domains={})",
+        "modal deploy rsc-{} into env {!r} (strategy={}, custom_domains={}, modal_proxy={})",
         tier,
         modal_env,
         strategy.value,
         list(custom_domains),
+        modal_proxy_name or "<none>",
     ):
-        return _deploy_modal_app(
+        connector_url = _deploy_modal_app(
             app_file=_connector_app_file(),
             app_name=f"rsc-{tier}",
             modal_env=modal_env,
@@ -696,6 +740,21 @@ def deploy_remote_service_connector(
             extra_env=extra_env,
             parent_cg=parent_cg,
         )
+    # Seed the gen-2 management SSH certificates right away (the refresh cron
+    # would otherwise leave a fresh env without one until its next tick). The
+    # function itself skips cleanly when the tier's ssh-ca secret is still
+    # unpopulated, so a deploy before the Vault SSH CA bring-up still succeeds.
+    with info_span("Seeding the management SSH certificates for rsc-{} in env {!r}", tier, modal_env):
+        _run_modal_function(
+            app_file=_connector_app_file(),
+            function_name=CONNECTOR_SSH_CERT_REFRESH_FUNCTION,
+            modal_env=modal_env,
+            tier=tier,
+            deploy_id=deploy_id,
+            parent_cg=parent_cg,
+            extra_env=extra_env,
+        )
+    return connector_url
 
 
 def _parse_deploy_url_from_stdout(stdout: str) -> AnyUrl | None:
@@ -822,6 +881,9 @@ def _run_modal_function(
     tier: str,
     deploy_id: str,
     parent_cg: ConcurrencyGroup,
+    # Extra deploy-time env the app module reads at import (the connector's
+    # proxy / domain knobs); empty for apps that read none.
+    extra_env: Mapping[str, str] | None = None,
 ) -> None:
     """Invoke a Modal Function defined in ``app_file`` via ``modal run``.
 
@@ -848,6 +910,7 @@ def _run_modal_function(
     subprocess_env = _modal_subprocess_env()
     subprocess_env["MNGR_DEPLOY_ENV"] = tier
     subprocess_env[MINDS_DEPLOY_ID_ENV_VAR] = deploy_id
+    subprocess_env.update(extra_env or {})
     cg = parent_cg.make_concurrency_group(name=f"modal-run-{function_name}")
     with cg:
         result = cg.run_process_to_completion(
