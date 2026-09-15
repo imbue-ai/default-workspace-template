@@ -984,6 +984,13 @@ def _write_paste(sink: PasteSink, account_path: Path, api_key: str, key_provider
             write_claude_env(account_path, claude_env_from_paste(api_key))
             return lane.provider_name
         case PasteSink.ANTIGRAVITY_GEMINI_ENV:
+            # The key becomes one line of a dotenv file, and mngr merges that file WHOLE into
+            # the environment of every agent bound to the account -- so a value carrying a line
+            # break would define variables of its own there. Refused rather than quoted: a
+            # Gemini key is a single token, so whitespace in one is a bad paste either way (the
+            # field next door takes a `KEY=value` block, which is what gets pasted here).
+            if not api_key or any(character.isspace() for character in api_key):
+                raise FlowError("A Gemini API key is a single token, with no spaces or line breaks in it.")
             try:
                 write_gemini_api_key(account_path, api_key)
             except AntigravitySettingsError as e:
