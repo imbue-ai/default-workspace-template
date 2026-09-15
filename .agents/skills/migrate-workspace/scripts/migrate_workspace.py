@@ -74,6 +74,7 @@ below, which carry all the logic and are covered by ``migrate_workspace_test.py`
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 import subprocess
@@ -385,46 +386,24 @@ def rewrite_legacy_references(text: str) -> tuple[str, list[Substitution]]:
 
 # --- Template base resolution ----------------------------------------------
 
-# The subjects that mark a commit as a *template state*: bootstrap writes
-# ``Initial workspace commit`` on top of the cloned template, and update-self
-# writes an ``update-self:`` merge. Both versions of the template write these, so
-# the marker set is layout-independent.
-_TEMPLATE_BASE_SUBJECT = "Initial workspace commit"
-_TEMPLATE_BASE_PREFIX = "update-self:"
+# The template-base rule is shared with publish-template and
+# update-published-template, so it lives in one stdlib-only script; this module
+# applies it to the source's log, which it reads over SSH.
+_RESOLVE_TEMPLATE_BASE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "shared"
+    / "scripts"
+    / "resolve_template_base.py"
+)
+_resolve_template_base_spec = importlib.util.spec_from_file_location(
+    "resolve_template_base", _RESOLVE_TEMPLATE_BASE_PATH
+)
+assert _resolve_template_base_spec is not None
+assert _resolve_template_base_spec.loader is not None
+_resolve_template_base = importlib.util.module_from_spec(_resolve_template_base_spec)
+_resolve_template_base_spec.loader.exec_module(_resolve_template_base)
 
-# Tab-separated so a subject containing spaces parses unambiguously.
-FIRST_PARENT_LOG_FORMAT = "%H%x09%P%x09%s"
-
-
-def find_template_base(first_parent_log: Sequence[str]) -> str | None:
-    """Return the template base named by the NEWEST marker in a first-parent log.
-
-    ``first_parent_log`` is ``git log --first-parent --format=<FIRST_PARENT_LOG_FORMAT>``
-    output, newest first. An ``Initial workspace commit`` is its own base; an
-    ``update-self:`` merge's base is its second parent, the upstream template
-    commit it merged -- the merge itself already holds everything the user built
-    before the update, so diffing against it would drop that work. A subject
-    that starts ``update-self:`` on anything but a two-parent merge merged nothing
-    and is not a marker. Diffing the working tree against the base yields what
-    the user authored and excludes template-version drift by construction.
-
-    The shared ``.agents/shared/scripts/resolve_template_base.py`` applies the
-    same rule to a local repo; change both together. (The update apply's origin
-    seed -- ``_origin_line`` in ``update-self``'s ``scripts/update_self.py`` --
-    walks the same markers but takes the OLDEST, because it wants where the mind
-    started.) Returns ``None`` when no marker exists, which means the source
-    cannot be migrated automatically.
-    """
-    for line in first_parent_log:
-        if not line.strip():
-            continue
-        sha, parents, subject = line.split("\t", 2)
-        if subject == _TEMPLATE_BASE_SUBJECT:
-            return sha
-        parent_shas = parents.split()
-        if subject.startswith(_TEMPLATE_BASE_PREFIX) and len(parent_shas) == 2:
-            return parent_shas[1]
-    return None
+find_template_base = _resolve_template_base.find_template_base
 
 
 class BaselineEntry(NamedTuple):
@@ -1213,7 +1192,9 @@ def _cmd_baseline_diff(args: argparse.Namespace) -> int:
     log_lines = _remote_git(
         target,
         args.repo_root,
-        f"log --first-parent --format='{FIRST_PARENT_LOG_FORMAT}' HEAD",
+        " ".join(
+            _shell_quote(arg) for arg in _resolve_template_base.FIRST_PARENT_LOG_ARGS
+        ),
     ).splitlines()
     base = find_template_base(log_lines)
     if base is None:
