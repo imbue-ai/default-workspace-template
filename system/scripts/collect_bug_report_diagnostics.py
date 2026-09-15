@@ -65,6 +65,10 @@ SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-template/scripts"
 # them. Named here rather than inline so a test can point it at a stub.
 MNGR_BINARY = "mngr"
 
+# The error class mngr reports for a transcript written before its ATIF cutover.
+# Matched on the class rather than the message, which is prose that may be reworded.
+OLD_FORMAT_TRANSCRIPT_ERROR = "OldFormatTranscriptError"
+
 # The kernel's own readings, named here rather than inline so the host-health
 # section can be exercised against fixtures.
 MEMINFO_PATH = "/proc/meminfo"
@@ -693,6 +697,22 @@ def transcript_member_name(name: str, harness: str, used_names: set[str]) -> str
     return unique_member_name("{}/{}.jsonl".format(CHAT_MEMBER_DIR, stem), used_names)
 
 
+def _run_mngr(
+    args: Sequence[str], timeout: float
+) -> subprocess.CompletedProcess[str] | None:
+    """One finished ``mngr`` subcommand, or None when it could not be run at all.
+
+    Kept apart from ``run_mngr`` for the one caller that has to tell mngr's
+    failures apart rather than treat them alike.
+    """
+    try:
+        return subprocess.run(
+            [MNGR_BINARY, *args], capture_output=True, text=True, timeout=timeout
+        )
+    except Exception:
+        return None
+
+
 def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     """Stdout of a ``mngr`` subcommand, or None when it could not be run.
 
@@ -702,13 +722,8 @@ def run_mngr(args: Sequence[str], timeout: float) -> str | None:
     caller reports no transcript: a collector that guessed at mngr's state
     would be the duplicate this exists to avoid.
     """
-    try:
-        proc = subprocess.run(
-            [MNGR_BINARY, *args], capture_output=True, text=True, timeout=timeout
-        )
-    except Exception:
-        return None
-    if proc.returncode != 0:
+    proc = _run_mngr(args, timeout)
+    if proc is None or proc.returncode != 0:
         return None
     return proc.stdout
 
@@ -796,8 +811,54 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
     itself, so the harness stays mngr's business rather than a list kept here
     (an agent of type ``chat`` writes its events under ``claude/``), and the
     converter's own stdout under ``logs/`` is already not what it reads.
+
+    A stream written before mngr's ATIF cutover is the one conversation
+    ``transcript`` will not read, so that one failure -- and only that one --
+    falls back to the event reader. Every other failure means no conversation
+    to attach, and a second call would cost a share of the budget to learn
+    nothing.
     """
-    events = run_mngr(["transcript", target, "--format", "jsonl"], timeout)
+    proc = _run_mngr(["transcript", target, "--format", "jsonl"], timeout)
+    if proc is None:
+        return None
+    if proc.returncode != 0:
+        if OLD_FORMAT_TRANSCRIPT_ERROR in proc.stdout or OLD_FORMAT_TRANSCRIPT_ERROR in proc.stderr:
+            return fetch_pre_atif_transcript(target, timeout)
+        return None
+    return proc.stdout if proc.stdout.strip() else None
+
+
+# CLEANUP: drop fetch_pre_atif_transcript and its caller once no agent
+# provisioned before mngr's 2026-08-25 ATIF cutover is still in the field. An
+# agent keeps the emitter it was provisioned with, so this is retired by those
+# agents going away, not by an mngr release.
+def fetch_pre_atif_transcript(target: str, timeout: float) -> str | None:
+    """One agent's conversation as the event reader gives it, for the streams ``transcript`` refuses.
+
+    ``mngr transcript`` reports a pre-ATIF stream as unsupported rather than
+    rendering it, and an agent keeps the emitter it was provisioned with, so
+    such a stream never becomes readable -- and a chat that has been open since
+    before the cutover is exactly the long-lived one a report is usually about.
+    Its records name the speaker in ``type`` rather than in ``source``, so
+    nothing is lost to the event reader's rewriting of ``source`` here.
+
+    ``logs/`` is excluded deliberately: everything under it is the converter's
+    own stdout -- it records *that* it converted, not what was said -- so
+    including it would attach a log of conversions in place of the conversation.
+    """
+    events = run_mngr(
+        [
+            "event",
+            target,
+            "--include",
+            'source.endsWith("common_transcript")',
+            "--exclude",
+            'source.startsWith("logs/")',
+            "--format",
+            "jsonl",
+        ],
+        timeout,
+    )
     if events is None or not events.strip():
         return None
     return events
@@ -806,20 +867,23 @@ def fetch_transcript(target: str, timeout: float) -> str | None:
 def transcript_source(events: str) -> str:
     """The harness that wrote these events (``claude``, ``codex``, ...).
 
-    Taken from the records' own ``emitter`` (``claude/common_transcript``),
-    which every ATIF record carries, rather than the agent's type, which does
-    not name it: a ``chat`` agent's events live under ``claude/``.
+    Taken from the records' own stream name rather than the agent's type, which
+    does not name it: a ``chat`` agent's events live under ``claude/``. An ATIF
+    record carries that name as ``emitter``; a pre-ATIF one, read through the
+    event reader, carries it as ``source``. Requiring the ``/`` is what keeps an
+    ATIF step's ``source`` -- the speaker, ``user`` -- out of the answer.
     """
     for line in events.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            emitter = json.loads(line).get("emitter")
+            record = json.loads(line)
         except ValueError:
             continue
-        if isinstance(emitter, str) and "/" in emitter:
-            return emitter.split("/", 1)[0]
+        stream = record.get("emitter") or record.get("source")
+        if isinstance(stream, str) and "/" in stream:
+            return stream.split("/", 1)[0]
     return "chat"
 
 
