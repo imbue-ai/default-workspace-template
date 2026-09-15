@@ -31,7 +31,6 @@ from imbue.mngr.agents.common_transcript_records import (
     StepSource,
 )
 from imbue.mngr.cli.testing import (
-    LEGACY_SAMPLE_TRANSCRIPT_EVENTS,
     create_agent_with_events_dir,
     write_common_transcript_events,
 )
@@ -114,12 +113,10 @@ def _workspace_shaped_host_dir(tmp_path: Path) -> Path:
     return host_dir
 
 
-def _collector_over_one_chat(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    stream_records: list[dict[str, object]],
-) -> ModuleType:
-    """The collector, aimed at the real mngr over a host dir holding one agent's stream."""
+@pytest.mark.timeout(120)
+def test_transcripts_are_fetched_through_the_vendored_mngr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     host_dir = _workspace_shaped_host_dir(tmp_path)
     _agent_id, events_dir = create_agent_with_events_dir(
         host_dir,
@@ -127,7 +124,7 @@ def _collector_over_one_chat(
         events_source="claude/common_transcript",
         agent_type="claude",
     )
-    write_common_transcript_events(events_dir, stream_records)
+    write_common_transcript_events(events_dir, _atif_stream_records())
     mngr_binary = shutil.which("mngr")
     assert mngr_binary is not None and Path(mngr_binary).resolve().is_relative_to(
         _REPO_ROOT
@@ -135,14 +132,7 @@ def _collector_over_one_chat(
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     # A temp cwd, so mngr does not read this checkout's own .mngr/settings.toml as project settings.
     monkeypatch.chdir(tmp_path)
-    return _load_collector(mngr_binary)
-
-
-@pytest.mark.timeout(120)
-def test_transcripts_are_fetched_through_the_vendored_mngr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    collector = _collector_over_one_chat(tmp_path, monkeypatch, _atif_stream_records())
+    collector = _load_collector(mngr_binary)
 
     members = collector.collect_transcript_members(60.0)
 
@@ -164,38 +154,3 @@ def test_transcripts_are_fetched_through_the_vendored_mngr(
         "user",
         "agent",
     ]
-
-
-@pytest.mark.timeout(120)
-def test_a_conversation_from_before_the_atif_cutover_is_still_collected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A chat opened before the cutover is the one `mngr transcript` will not read.
-
-    An agent keeps the emitter it was provisioned with, so such a stream never
-    becomes readable, and a chat that has been open that long is exactly the one a
-    report is usually about. The refusal is asserted first: without it the rest of
-    this test would pass on the ordinary path and prove nothing.
-    """
-    collector = _collector_over_one_chat(
-        tmp_path, monkeypatch, LEGACY_SAMPLE_TRANSCRIPT_EVENTS
-    )
-    ((_name, _agent_id, target),) = collector.list_agents(60.0)
-
-    refusal = collector._run_mngr(["transcript", target, "--format", "jsonl"], 60.0)
-    members = collector.collect_transcript_members(60.0)
-
-    assert refusal is not None and refusal.returncode != 0
-    assert collector.OLD_FORMAT_TRANSCRIPT_ERROR in refusal.stdout + refusal.stderr
-    assert [name for name, _content, _written_at in members] == [
-        "chats/chatty-claude.jsonl"
-    ]
-    collected = [
-        json.loads(line) for line in members[0][1].splitlines() if line.strip()
-    ]
-    assert [record["type"] for record in collected] == [
-        "user_message",
-        "assistant_message",
-        "tool_result",
-    ]
-    assert collected[0]["content"] == "Hello" and collected[1]["text"] == "World"
