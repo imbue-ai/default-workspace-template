@@ -391,21 +391,27 @@ class CreateRequest:
         self.is_installation_check_skipped = is_installation_check_skipped
 
 
-def _run_mngr_with_message_file(
+def _run_mngr(
     argv_before_file: list[str],
-    text: str,
+    text: str | None,
     argv_after_file: list[str],
     capture_stdout: bool,
 ) -> subprocess.CompletedProcess[str] | None:
-    """Run ``mngr`` with ``text`` in a file named by ``--message-file``; None when there is no ``mngr`` to run."""
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", suffix=".md", delete=False
-    ) as message_file:
-        message_file.write(text)
-        message_path = message_file.name
+    """Run ``mngr``, with ``text`` in a file named by ``--message-file``; None when there is no ``mngr`` to run.
+
+    ``text`` of None runs mngr with no message at all, for a create that seeds none.
+    """
+    message_path: str | None = None
+    if text is not None:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".md", delete=False
+        ) as message_file:
+            message_file.write(text)
+            message_path = message_file.name
+    message_argv = [] if message_path is None else ["--message-file", message_path]
     try:
         return subprocess.run(
-            [*argv_before_file, "--message-file", message_path, *argv_after_file],
+            [*argv_before_file, *message_argv, *argv_after_file],
             check=False,
             stdout=subprocess.PIPE if capture_stdout else None,
             text=True,
@@ -414,12 +420,13 @@ def _run_mngr_with_message_file(
         print(f"The backoff could not run `mngr`: {exc}", file=sys.stderr)
         return None
     finally:
-        os.unlink(message_path)
+        if message_path is not None:
+            os.unlink(message_path)
 
 
 def send_through_mngr(chat_id: str, text: str) -> int:
     """The backoff: ``mngr message --start`` straight to the agent, its exit status passed through."""
-    completed = _run_mngr_with_message_file(
+    completed = _run_mngr(
         ["mngr", "message", chat_id, "--start"], text, [], capture_stdout=False
     )
     return EXIT_FAILED if completed is None else completed.returncode
@@ -452,19 +459,9 @@ def create_through_mngr(request: CreateRequest) -> int:
         argv += ["--label", f"{key}={value}"]
     if request.is_installation_check_skipped:
         argv += ["-S", SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
-    after_file = ["--format", "jsonl"]
-    if request.message:
-        completed = _run_mngr_with_message_file(
-            argv, request.message, after_file, capture_stdout=True
-        )
-    else:
-        try:
-            completed = subprocess.run(
-                [*argv, *after_file], check=False, stdout=subprocess.PIPE, text=True
-            )
-        except FileNotFoundError as exc:
-            print(f"The backoff could not run `mngr`: {exc}", file=sys.stderr)
-            completed = None
+    completed = _run_mngr(
+        argv, request.message or None, ["--format", "jsonl"], capture_stdout=True
+    )
     if completed is None:
         return EXIT_FAILED
     if completed.returncode != 0:
