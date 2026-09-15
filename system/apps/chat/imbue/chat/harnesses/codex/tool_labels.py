@@ -6,7 +6,7 @@ operation arrives as one ``exec`` tool whose input is a JavaScript program calli
 labels come from the inner function -- which is why codex needs a translation table
 claude does not (``apply_patch`` -> ``Tool: Edit``).
 
-Tool surface and argument shapes, from a live Minds codex agent on codex-cli 0.146.0.
+Tool surface and argument shapes, from a live Mind codex agent on codex-cli 0.146.0.
 Re-confirm when CODEX_VERSION moves.
 
     top level:

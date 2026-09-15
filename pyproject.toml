@@ -127,6 +127,10 @@ norecursedirs = [
     # collecting one alongside the in-tree copy kills a bare `uv run pytest`
     # with an import-file basename collision.
     "data",
+    # Test scratch, never part of the suite, and the same collision as above: an
+    # interrupted test_nested_dispatch_live.py run leaves a full clone of the
+    # tree here.
+    ".test_output",
     ".git",
     ".claude",
     ".github",

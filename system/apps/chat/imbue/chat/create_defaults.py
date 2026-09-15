@@ -1,7 +1,7 @@
 """The `mngr create` defaults the workspace keeps for its default provider account.
 
 Every `mngr create` in the workspace that names no harness and no account -- the chats the
-Minds app starts from outside, workers, automations, the caretaker -- resolves through
+Mind app starts from outside, workers, automations, the caretaker -- resolves through
 `.mngr/settings.local.toml`, mngr's git-ignored local config layer, which sits above the
 committed `.mngr/settings.toml` and below the CLI. Its managed `[commands.create]` keys name
 the default account's harness as `type`, its binding (the variable claude is scoped by, or
