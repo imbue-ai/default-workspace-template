@@ -8,6 +8,7 @@ the runner is injected rather than shelling out to whatever binaries this machin
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +131,7 @@ def _refusing_runner(**_kwargs: Any) -> _Finished:
     raise AssertionError("a key account must not be judged by the CLI")
 
 
-def _responder(response: httpx.Response, seen: dict[str, Any] | None = None):
+def _responder(response: httpx.Response, seen: dict[str, Any] | None = None) -> Callable[..., httpx.Response]:
     def get(url: str, **kwargs: Any) -> httpx.Response:
         if seen is not None:
             seen.update({"url": url, **kwargs})
