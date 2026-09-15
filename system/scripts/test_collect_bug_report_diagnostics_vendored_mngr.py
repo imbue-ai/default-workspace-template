@@ -26,7 +26,7 @@ from imbue.mngr.cli.testing import (
     create_agent_with_events_dir,
     write_common_transcript_events,
 )
-from imbue.mngr.hosts.host import CertifiedHostData
+from imbue.mngr.interfaces.data_types import CertifiedHostData
 from imbue.mngr.primitives import HostId
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
