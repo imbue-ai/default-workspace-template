@@ -430,10 +430,43 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "project_id": "",
         "account_id": signed_in.id,
         "message": "",
+        "labels": {},
+        "is_installation_check_skipped": False,
         "phase": "creating",
         "error": None,
     }
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
+
+
+def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
+) -> None:
+    """An update chat whose create failed on the claude pin is retried from the page with the same
+    waiver and labels, or the retry fails the same way; the record carries them like the message."""
+    (signed_in,) = read_index().accounts
+    with agent_manager._lock:
+        agent_manager._provisional_chats[ChatId("failed-2")] = ProvisionalChat(
+            chat_id=ChatId("failed-2"),
+            name="update-self-1a2b3c",
+            account_id=signed_in.id,
+            message="/update-self",
+            labels={"auto_open": "true"},
+            is_installation_check_skipped=True,
+            phase=ProvisionalChatPhase.FAILED,
+            error="mngr create exited with code 1",
+        )
+    q = broadcaster.register()
+
+    agent_manager.create_chat("", chat_id="failed-2", account_id=signed_in.id)
+    agent_manager.stop()
+
+    raw = q.get_nowait()
+    assert raw is not None
+    pushed = json.loads(raw)
+    assert pushed["phase"] == "creating"
+    assert pushed["labels"] == {"auto_open": "true"}
+    assert pushed["is_installation_check_skipped"] is True
+    assert pushed["message"] == "/update-self"
 
 
 def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentManager) -> None:
@@ -476,6 +509,9 @@ def test_a_waited_create_reports_the_failure_the_record_holds(
         failed = manager.get_provisional_chat(created.chat_id)
         assert failed is not None and failed.phase is ProvisionalChatPhase.FAILED
         assert manager.wait_for_chat_creation(ChatId("never-created"), timeout=0.0) is None
+        # The settled event is dropped once waited on; the record it settled stays for the page.
+        assert manager.wait_for_chat_creation(created.chat_id, timeout=0.0) is None
+        assert manager.get_provisional_chat(created.chat_id) is not None
     finally:
         manager.stop()
 

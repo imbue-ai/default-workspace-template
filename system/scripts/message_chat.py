@@ -57,7 +57,8 @@ The script waits for the chat app to finish the create and exits 0 with one
 JSON line on stdout, ``{"chat_id", "name", "display_name"}``, or 1 with the
 create's own failure on stderr. The backoff is a plain ``mngr create --template
 chat`` with the same name, labels, and message, taken on the same terms as the
-send's: only when the chat app cannot be reached or has no create route.
+send's: only when the chat app cannot be reached, has no create route, or has a
+create route from before these fields (which refuses them by name).
 
 Standard library only: skills run this as ``python3 system/scripts/...`` and
 cron runs it before any venv exists. The chat app is found through its row in
@@ -102,6 +103,9 @@ EXIT_DELIVERED_BUT_BLOCKED = 7
 INPUT_BLOCKED_KIND = "input_blocked"
 
 CREATE_CHAT_PATH = "/api/chats/create"
+# The create route's field that asks it to answer once the create has finished; a route
+# from before it rejects the field by name.
+WAIT_FIELD = "should_wait"
 
 # Mirrors ``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING`` in the chat app's ``agent_manager.py``,
 # the setting the create route applies for ``is_installation_check_skipped``.
@@ -347,11 +351,15 @@ def create_through_chat_app(
         "message": request.message,
         "labels": dict(request.labels),
         "is_installation_check_skipped": request.is_installation_check_skipped,
-        "should_wait": True,
+        WAIT_FIELD: True,
     }
     answer = _post_until_answered(base_url, CREATE_CHAT_PATH, body, clock, sleep)
     if isinstance(answer, SendResult):
         return answer
+    if answer.status == 400 and WAIT_FIELD in answer.detail:
+        # The route predates these fields (a chat app not yet restarted after an update):
+        # its refusal names the field it does not know, and mngr makes the chat instead.
+        return SendResult(Outcome.NOT_FOUND, answer.detail)
     if not 200 <= answer.status < 300:
         return SendResult(Outcome.REFUSED, answer.detail)
     if not isinstance(answer.body, dict) or not isinstance(

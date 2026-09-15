@@ -502,6 +502,34 @@ def test_an_unreachable_chat_app_hands_the_create_to_mngr_with_the_same_terms(
     }
 
 
+def test_a_chat_app_from_before_the_create_fields_hands_the_create_to_mngr(
+    fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route existed before its `should_wait`, `labels`, and waiver fields, and refuses unknown
+    fields by name: the chat app running through an update is one from before them, so its 400 is
+    the backoff's case rather than a final refusal."""
+    fake_chat_app.answers = [
+        (
+            400,
+            {
+                "detail": "3 validation errors for CreateChatRequest\nlabels\n  Extra inputs are not permitted\n"
+                "should_wait\n  Extra inputs are not permitted\n"
+            },
+        )
+    ]
+    monkeypatch.setenv(
+        "FAKE_MNGR_STDOUT",
+        '{"event": "created", "agent_id": "%s", "host_id": "h", "host_name": "ws"}\n'
+        % _CHAT_ID,
+    )
+
+    rc, _ = _run_create("--name", "assist-1a2b3c", "-m", "/assist")
+
+    assert rc == message_chat.EXIT_DELIVERED
+    [call] = _mngr_calls(fake_mngr)
+    assert call["argv"][:2] == ["create", "assist-1a2b3c"]
+
+
 def test_a_chat_app_without_the_create_route_hands_the_create_to_mngr(
     fake_chat_app: Any, fake_mngr: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
