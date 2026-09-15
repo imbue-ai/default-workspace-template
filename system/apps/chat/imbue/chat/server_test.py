@@ -2974,6 +2974,15 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
+    # A rebind keeps the agent's model settings, so a pick beside it is refused rather than dropped.
+    second, _ = mint_account_dir()
+    commit_account(second, "anthropic", "Anthropic")
+    with_pick = client.post(
+        f"/api/chats/{first}/handoff",
+        json={"account_id": second, "message": "x", "model": {"model_id": "opus", "effort": "high"}},
+    )
+    assert with_pick.status_code == 400
+    assert "keeps its model settings" in with_pick.get_json()["detail"]
 
 
 def test_a_failed_handoff_retries_the_create_through_the_route(tmp_path: Path) -> None:

@@ -109,18 +109,33 @@ phase, and the retry offers the accounts of the same harness and lane.
 may be rebound on; a same-lane target on any other harness is a handoff.
 
 The page drives both from the composer's provider menu: pressing any account
-but the chat's own makes it the chat's pending lane ("next"), the send button
-then reads "Switch and send" and asks a confirm (two lines for a handoff, one
-for a rebind, with "Start a new chat instead" as the other way out), and the
-typed message becomes the first the chat sends after the switch. While the chat converges the held messages
-render from the snapshot's `handoff.held_sends` with the phase as their
-caption, the activity strip and the placeholder say what is happening, and for
-a handoff the Stop button is "Cancel switch" until the old agent is stopped; a
-failed start shows its reason over the composer with a retry (on any signed-in
-account after a handoff, on the same harness and lane after a rebind) and
-"Start a new chat instead". The verbs the app refuses meanwhile answer 409 with
-a detail written for the user, which the page and the shell's tab menu show as
-is.
+but the chat's own opens the switch dialog ("Switch to Codex?", one line for a
+rebind), which for a handoff also takes the model the successor runs on.
+"Switch this chat" arms the switch: a strip above the composer says what the
+next message does, the model bar reads as the target, and the send button
+reads "Switch and send" and carries the switch out with the typed message as
+the first the chat sends after it, with no second confirmation. "Start a new
+chat" opens a chat on that account and model instead, with the draft moved
+over. A chat that has had no user turn skips the dialog: it switches at once,
+with no summary and no handoff prompt, since there is nothing to hand over.
+While the chat converges the held messages render from the snapshot's
+`handoff.held_sends`, one handoff node in the transcript shows the switch's
+progress ("Handing off to Codex...", then "Handed off from Claude to Codex",
+expandable to the summary turn), the activity strip and the placeholder say
+what is happening, and for a handoff the Stop button is "Cancel switch" until
+the old agent is stopped; a failed start or a model pick the successor cannot
+take shows its reason over the composer with a retry (on any signed-in account
+after a handoff, on the same harness and lane after a rebind) and "Start a new
+chat instead". The verbs the app refuses meanwhile answer 409 with a detail
+written for the user, which the page and the shell's tab menu show as is.
+
+A handoff's successor is created silent: its model pick is applied first
+(`POST /api/chats/<chat-id>/handoff` takes `model`), then the handoff prompt
+goes to it through the send path, then the held messages. A new chat created
+with a pick (`POST /api/chats/create` takes `model` too) is set up the same
+way. `GET /api/accounts/<account-id>/model-options` is what the dialog offers a
+successor's models from: the catalog for a static harness, the options the
+account's last agent was offered for codex.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's

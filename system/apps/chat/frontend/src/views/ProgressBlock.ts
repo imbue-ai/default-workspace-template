@@ -22,7 +22,7 @@ import {
   renderUserMessage,
 } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
-import { renderAgentSwitchChip } from "./agent-switch-chip";
+import { renderHandoffNode } from "./handoff-node";
 import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "@imbue/workspace-ui/src/components/icons";
 
 interface ProgressBlockAttrs {
@@ -192,9 +192,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
-      // Index of the last step item, so only it gets the `--last` thread cap.
+      // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
       let lastStepIdx = -1;
-      for (let i = 0; i < items.length; i++) if (items[i].kind === "step") lastStepIdx = i;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === "step" || items[i].kind === "handoff") lastStepIdx = i;
+      }
 
       const timelineNodes: m.Children[] = items.map((item, idx) => {
         if (item.kind === "step") {
@@ -228,14 +230,12 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             renderPermissionItem(item.event, toolResults, chatId, item.resolutionsByRequestId),
           );
         }
-        if (item.kind === "switch") {
-          // The chat moved to another agent here; the chip breaks the thread the same
-          // way a stop-hook chip does. z-[2]: design-system-exception, as above.
-          return m(
-            "div",
-            { class: "pv-switch relative z-[2] mt-1.5 mb-3.5 bg-chat", key: `switch-${item.event.event_id}` },
-            renderAgentSwitchChip(item.event),
-          );
+        if (item.kind === "handoff") {
+          // The chat's handoff to another agent, a node on the thread like a step.
+          return renderHandoffNode(item.node, chatId, toolResults, {
+            isLast: idx === lastStepIdx,
+            expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
+          });
         }
         // A stop-hook chip woven into the timeline at the point the hook
         // fired; the opaque pure-white chat background masks the thread

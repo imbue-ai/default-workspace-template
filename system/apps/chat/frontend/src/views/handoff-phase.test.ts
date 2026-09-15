@@ -62,7 +62,7 @@ describe("the words for a chat changing account in place", () => {
 });
 
 describe("the held-send bubbles", () => {
-  it("renders every held message from the snapshot, captioned with the phase", () => {
+  it("renders every held message from the snapshot, captioned like any send", () => {
     chats.set(
       "agent-1",
       chatSnapshotFixture("agent-1", {
@@ -80,15 +80,16 @@ describe("the held-send bubbles", () => {
     const text = JSON.stringify(bubbles);
     expect(text).toContain("Carry on in Codex");
     expect(text).toContain("and this");
-    expect(text).toContain("Claude is writing a summary…");
-    expect(text).not.toContain("Sending…");
+    // The switch's progress is the handoff node's to tell, not the bubbles'.
+    expect(text).toContain("Sending…");
+    expect(text).not.toContain("Claude is writing a summary…");
   });
 
-  it("captions a rebind's held messages with the restart", () => {
+  it("captions a rebind's held messages the same way", () => {
     chats.set("agent-3", chatSnapshotFixture("agent-3", { handoff: rebindStateFixture() }));
     const text = JSON.stringify(renderHeldSends("agent-3"));
     expect(text).toContain("Carry on on the other account");
-    expect(text).toContain("Restarting Claude on Anthropic 2 (Claude Code)…");
+    expect(text).toContain("Sending…");
   });
 
   it("renders nothing for a chat that is not switching", () => {

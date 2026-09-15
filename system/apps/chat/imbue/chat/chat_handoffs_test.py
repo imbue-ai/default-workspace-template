@@ -24,12 +24,13 @@ from imbue.chat.chat_handoffs import HandoffRunner
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import archive_rename_command
 from imbue.chat.chat_handoffs import archived_agent_name
+from imbue.chat.chat_handoffs import has_user_turn
 from imbue.chat.chat_handoffs import is_duplicate_id_refusal
 from imbue.chat.chat_handoffs import is_summary_fresh
 from imbue.chat.chat_handoffs import is_summary_written
 from imbue.chat.chat_handoffs import last_user_turn_epoch
 from imbue.chat.chat_handoffs import mngr_failure_reason
-from imbue.chat.chat_handoffs import prompt_path
+from imbue.chat.chat_handoffs import prompt_message_id
 from imbue.chat.chat_handoffs import summary_path
 from imbue.chat.chat_handoffs import summary_request_message
 from imbue.chat.chat_records import ChatAgentEntry
@@ -38,13 +39,17 @@ from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_transcript import AGENT_SWITCH_EVENT_TYPE
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReader
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.models import ActivityState
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import HandoffFailedStep
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSend
 from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelApplyError
+from imbue.chat.models import ModelPick
 from imbue.chat.models import SummaryOutcome
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
@@ -56,6 +61,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 
 _NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 _OPENAI_ACCOUNT = Account(id="acct-openai", lane="openai", seq=1, display="OpenAI")
+_PICK = ModelPick(model_id="gpt-6-astra", effort="high", fast=False)
 
 
 class _EventsReader(ListTranscriptReader):
@@ -85,13 +91,20 @@ class _FakeWorkspace(MutableModel):
     activity_by_agent: dict[str, ActivityState | None] = Field(default_factory=dict)
     events_by_agent: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     delivered: list[tuple[str, str, str]] = Field(default_factory=list)
+    applied: list[tuple[str, ModelPick]] = Field(default_factory=list)
+    # Every deliver and apply in the order they happened, so a test can assert the pick landed
+    # before the successor's first message.
+    steps: list[str] = Field(default_factory=list)
     broadcasts: list[tuple[str, list[dict[str, Any]]]] = Field(default_factory=list)
     drained: list[str] = Field(default_factory=list)
     stopped: list[str] = Field(default_factory=list)
     drain_block: str = ""
     # What ``deliver`` does with the summary request: write the file, or nothing.
     is_summary_written_on_request: bool = True
-    is_delivery_refused: bool = False
+    # Whether the summary request is refused (the agent is blocked on a dialog, say); every other
+    # send lands, so the successor's prompt can still be read off ``delivered``.
+    is_summary_request_refused: bool = False
+    is_model_apply_refused: bool = False
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     mngr_log: Path
     fail_dir: Path
@@ -154,12 +167,25 @@ class _FakeWorkspace(MutableModel):
         )
 
     def deliver(self, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-        if self.is_delivery_refused:
+        if self.is_summary_request_refused and text.startswith(HANDOFF_SUMMARY_COMMAND):
             raise SendFailedError("the agent is in shell mode", kind="INPUT_BLOCKED")
         self.delivered.append((agent_info.id, text, message_id))
+        self.steps.append(f"deliver:{message_id}")
         if self.is_summary_written_on_request:
             write_summary_for_request(text)
         return SendOutcome.OK
+
+    def apply_model(self, agent_info: AgentInfo, pick: ModelPick) -> None:
+        if self.is_model_apply_refused:
+            raise ModelApplyError(f"Unknown model '{pick.model_id}'")
+        self.applied.append((agent_info.id, pick))
+        self.steps.append("apply")
+
+    def delivered_prompt(self, handoff_id: str = "h-1") -> str:
+        """The handoff prompt the successor received, the one send under the prompt's own id."""
+        texts = [text for _agent, text, message_id in self.delivered if message_id == prompt_message_id(handoff_id)]
+        assert len(texts) == 1, texts
+        return texts[0]
 
     def drain_to_composer(self, agent_info: AgentInfo) -> str:
         self.drained.append(agent_info.id)
@@ -200,7 +226,6 @@ class _FakeWorkspace(MutableModel):
             spec.project_id,
             _account_binding_args(spec.harness, spec.account_id, self.tmp_path / "agents" / spec.agent_id),
             extra_labels=spec.extra_labels,
-            message_file=spec.message_file,
         )
 
     def broadcast(self, chat_id: ChatId, events: list[dict[str, Any]]) -> None:
@@ -314,6 +339,7 @@ def _runner(workspace: _FakeWorkspace, **overrides: Any) -> HandoffRunner:
         get_agent_info=workspace.get_agent_info,
         resolve_account=lambda account_id: _OPENAI_ACCOUNT,
         deliver=workspace.deliver,
+        apply_model=workspace.apply_model,
         drain_to_composer=workspace.drain_to_composer,
         ensure_watcher=workspace.ensure_watcher,
         stop_agent=workspace.stop_agent,
@@ -437,16 +463,16 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     )
     assert workspace.agents[first].name == archived_agent_name(1, "Chat-1", first)
     assert workspace.agents[first].labels["archived_at"] == _NOW.isoformat()
-    # The successor is created under its pre-minted id, with the chat's name, membership, account, and the prompt file.
+    # The successor is created under its pre-minted id, with the chat's name, membership, and account, and
+    # silent: the prompt follows through the send path, so a model pick can land before the first turn.
     create = argv[1].split(" ")
     assert create[:3] == ["create", "Chat-1", "--id"] and create[3] == successor
     assert "--type codex" in argv[1]
     assert f"--label chat_id={chat_id} --label chat_seq=2" in argv[1]
     assert f"--label account={_OPENAI_ACCOUNT.id}" in argv[1]
     assert "--label project=inbox" in argv[1]
-    prompt_file = prompt_path(tmp_path / "chats", chat_id, 2)
-    assert argv[1].endswith(f"--message-file {prompt_file}")
-    prompt = prompt_file.read_text()
+    assert "--message" not in argv[1]
+    prompt = workspace.delivered_prompt()
     assert "Now do it in Codex" in prompt
     assert f"summary is at {summary}" in prompt
     assert "${" not in prompt
@@ -457,7 +483,12 @@ def test_a_handoff_runs_every_phase_and_the_successor_takes_over(tmp_path: Path)
     ]
     switch = workspace.broadcasts[0][1][0]
     assert (switch["from_agent_id"], switch["to_agent_id"], switch["to_harness"]) == (first, successor, "codex")
-    assert workspace.delivered[1:] == [(successor, "and also this", "m-2")]
+    assert workspace.delivered[1:] == [
+        (successor, prompt, prompt_message_id("h-1")),
+        (successor, "and also this", "m-2"),
+    ]
+    # No pick was made, so the successor keeps its harness's default.
+    assert workspace.applied == []
 
 
 def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: Path) -> None:
@@ -475,7 +506,7 @@ def test_a_fresh_summary_is_reused_and_a_stale_one_is_asked_for_again(tmp_path: 
 
     # Fresh: nothing was asked, and the prompt points at it.
     assert not any(text.startswith("/handoff-summary") for _agent, text, _id in workspace.delivered)
-    assert f"summary is at {summary}" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    assert f"summary is at {summary}" in workspace.delivered_prompt()
 
     assert is_summary_fresh(stale - 1.0, stale) is False
     assert is_summary_fresh(stale + 1.0, stale) is True
@@ -501,7 +532,7 @@ def test_a_stale_summary_is_not_taken_for_the_one_just_requested(tmp_path: Path)
     # The request went out, the turn ended without a new file, and the successor is told so.
     assert workspace.delivered[0][1].startswith("/handoff-summary ")
     assert workspace.clock == pytest.approx(3.0)
-    assert "did not produce a summary" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    assert "did not produce a summary" in workspace.delivered_prompt()
     assert is_summary_written(stale - 60.0, stale - 60.0) is False
     assert is_summary_written(None, stale - 60.0) is False
     assert is_summary_written(stale + 1.0, stale - 60.0) is True
@@ -565,7 +596,7 @@ def test_the_prompt_names_an_earlier_predecessor_by_the_archival_name_it_was_giv
     _runner(workspace).run(workspace.chat_id, "h-1")
 
     assert workspace.record().handoff is None
-    prompt = prompt_path(tmp_path / "chats", workspace.chat_id, 3).read_text()
+    prompt = workspace.delivered_prompt()
     assert f"- seq 1: {archived_agent_name(1, 'Old-Name', first)}, id {first}" in prompt
     assert f"- seq 2: {archived_agent_name(2, 'Chat-1', second)}, id {second}" in prompt
     assert archived_agent_name(1, "Chat-1", first) not in prompt
@@ -585,7 +616,7 @@ def test_a_turn_that_ends_without_a_summary_moves_on_and_the_prompt_says_so(tmp_
     # The request landed, the agent went idle with no file, and the wait ended at the grace period.
     assert workspace.delivered[0][1].startswith("/handoff-summary ")
     assert workspace.clock == pytest.approx(3.0)
-    assert "did not produce a summary" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    assert "did not produce a summary" in workspace.delivered_prompt()
 
 
 def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
@@ -609,12 +640,12 @@ def test_a_busy_agent_is_waited_for_until_it_goes_idle(tmp_path: Path) -> None:
 
 def test_a_refused_summary_request_is_a_missing_summary_not_a_stuck_handoff(tmp_path: Path) -> None:
     workspace, _first, _successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
-    workspace.is_delivery_refused = True
+    workspace.is_summary_request_refused = True
 
     _runner(workspace).run(workspace.chat_id, "h-1")
 
     assert workspace.record().handoff is None
-    assert "did not produce a summary" in prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    assert "did not produce a summary" in workspace.delivered_prompt()
 
 
 def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reuses_the_prompt(tmp_path: Path) -> None:
@@ -627,12 +658,14 @@ def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reu
     record = workspace.record()
     assert record.handoff is not None
     assert record.handoff.phase is HandoffPhase.FAILED
+    assert record.handoff.failed_step is HandoffFailedStep.START
     assert record.handoff.error is not None
     assert "exited with code 3" in record.handoff.error and "No provider account is signed in" in record.handoff.error
     # The retiring agent is archived and measured; only the successor is missing.
     assert record.agents[0].archived_name == archived_agent_name(1, "Chat-1", first)
     assert successor not in workspace.agents
-    prompt_before = prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text()
+    prompt_before = record.handoff.prompt
+    assert prompt_before is not None and "Now do it in Codex" in prompt_before
 
     # A retry (what the route writes) runs the create again with the same prompt and nothing else.
     (workspace.fail_dir / "fail-create").unlink()
@@ -657,8 +690,133 @@ def test_a_failed_create_leaves_the_failed_phase_with_the_reason_and_a_retry_reu
     assert workspace.record().handoff is None
     new_argv = workspace.argv_lines()[len(argv_before) :]
     assert [line.split(" ")[0] for line in new_argv] == ["create"]
-    assert prompt_path(tmp_path / "chats", workspace.chat_id, 2).read_text() == prompt_before
+    assert workspace.delivered_prompt() == prompt_before
     assert workspace.agents[successor].harness is HarnessType.CODEX
+
+
+def test_a_model_pick_is_applied_to_the_successor_before_its_first_message(tmp_path: Path) -> None:
+    """The pick governs the whole segment: it lands on the created, still silent successor, and only then
+    does the prompt go out."""
+    workspace, _first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(to_update(current.handoff.field_ref().model_pick, _PICK))
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    assert workspace.record().handoff is None
+    assert workspace.applied == [(successor, _PICK)]
+    assert workspace.steps.index("apply") < workspace.steps.index(f"deliver:{prompt_message_id('h-1')}")
+
+
+def test_a_refused_model_pick_fails_the_switch_at_that_step_and_a_retry_adopts_the_successor(tmp_path: Path) -> None:
+    """The successor exists but is not the chat's yet; the failed page names the pick; a retry on the same
+    account reruns only the pick and the delivery, with no second create."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.is_model_apply_refused = True
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(to_update(current.handoff.field_ref().model_pick, _PICK))
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+    runner = _runner(workspace)
+
+    runner.run(workspace.chat_id, "h-1")
+
+    record = workspace.record()
+    assert record.handoff is not None
+    assert record.handoff.phase is HandoffPhase.FAILED
+    assert record.handoff.failed_step is HandoffFailedStep.MODEL
+    assert record.handoff.error == "Unknown model 'gpt-6-astra'"
+    # The successor was created and is tracked, but the chat still lists only its retiring agent, and
+    # nothing reached the successor.
+    assert successor in workspace.agents
+    assert [entry.agent_id for entry in record.agents] == [first]
+    assert [message_id for _agent, _text, message_id in workspace.delivered] == ["handoff-summary-h-1"]
+    assert workspace.broadcasts == []
+
+    workspace.is_model_apply_refused = False
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(
+                    to_update(current.handoff.field_ref().phase, HandoffPhase.SWITCHING),
+                    to_update(current.handoff.field_ref().error, None),
+                    to_update(current.handoff.field_ref().failed_step, None),
+                )
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+    argv_before = workspace.argv_lines()
+    runner.run(workspace.chat_id, "h-1")
+
+    finished = workspace.record()
+    assert finished.handoff is None
+    assert [entry.agent_id for entry in finished.agents] == [first, successor]
+    assert workspace.argv_lines() == argv_before
+    assert workspace.applied == [(successor, _PICK)]
+    assert workspace.delivered[-1] == (successor, workspace.delivered_prompt(), prompt_message_id("h-1"))
+
+
+def test_a_fresh_start_asks_for_no_summary_and_hands_the_successor_the_message_as_is(tmp_path: Path) -> None:
+    """A retiring agent that never received a user turn has no context to carry: no summary request, no
+    prompt, and the confirming message (when there is one) reaches the successor as an ordinary send."""
+    workspace, first, successor = _workspace(tmp_path, phase=HandoffPhase.SUMMARIZING)
+    workspace.update_record(
+        workspace.chat_id,
+        "h-1",
+        lambda current: current.model_copy_update(
+            to_update(
+                current.field_ref().handoff,
+                current.handoff.model_copy_update(to_update(current.handoff.field_ref().is_fresh_start, True))
+                if current.handoff is not None
+                else None,
+            )
+        ),
+    )
+
+    _runner(workspace).run(workspace.chat_id, "h-1")
+
+    finished = workspace.record()
+    assert finished.handoff is None
+    assert [entry.agent_id for entry in finished.agents] == [first, successor]
+    assert workspace.delivered == [(successor, "Now do it in Codex", "m-trigger")]
+    assert not (tmp_path / "chats" / workspace.chat_id / "summaries").exists()
+    assert [event["type"] for _chat, events in workspace.broadcasts for event in events] == [AGENT_SWITCH_EVENT_TYPE]
+
+
+def test_a_transcript_counts_as_having_a_user_turn_only_for_a_message_the_user_typed() -> None:
+    """The fresh-start rule: the hidden ``/welcome`` and a system chip are not the user's turns."""
+    welcome_only = [
+        {"event_id": "u-0", "type": "user_message", "display": "hidden", "timestamp": "2026-09-13T11:00:00+00:00"},
+        {"event_id": "a-0", "type": "assistant_message", "timestamp": "2026-09-13T11:00:05+00:00"},
+        {"event_id": "u-chip", "type": "user_message", "display": "chip", "timestamp": "2026-09-13T11:01:00+00:00"},
+    ]
+    assert has_user_turn(welcome_only) is False
+    assert has_user_turn([]) is False
+    typed = [*welcome_only, {"event_id": "u-1", "type": "user_message", "timestamp": "2026-09-13T11:02:00+00:00"}]
+    assert has_user_turn(typed) is True
 
 
 def test_a_half_made_successor_is_destroyed_and_created_again(tmp_path: Path) -> None:
@@ -756,8 +914,8 @@ def test_a_resumed_switch_finds_its_earlier_steps_done_and_adopts_the_successor(
     assert [entry.agent_id for entry in finished.agents] == [first, successor]
     assert finished.agents[0].archived_name == archival and finished.agents[0].final_event_count == 3
     assert workspace.argv_lines() == [] and workspace.stopped == []
-    # The adopted agent got the prompt from its own create; nothing else was held for it.
-    assert workspace.delivered == []
+    # The adopted agent had not been prompted yet, so the resume hands it the stored prompt.
+    assert workspace.delivered == [(successor, "the stored prompt", prompt_message_id("h-1"))]
 
 
 def _write_record_mid_delivery(workspace: _FakeWorkspace, successor: str) -> ChatRecord:
@@ -787,6 +945,7 @@ def _write_record_mid_delivery(workspace: _FakeWorkspace, successor: str) -> Cha
             record.field_ref().handoff,
             record.handoff.model_copy_update(
                 to_update(record.handoff.field_ref().prompt, "the stored prompt"),
+                to_update(record.handoff.field_ref().is_prompt_delivered, True),
                 to_update(record.handoff.field_ref().summary_outcome, SummaryOutcome.WRITTEN),
                 to_update(record.handoff.field_ref().held_sends, (late,)),
             ),

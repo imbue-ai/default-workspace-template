@@ -6,8 +6,8 @@ import type {
   AgentSwitchEvent,
   UserMessageEvent,
 } from "../models/Response";
-import type { StepNode, TimelineItem } from "./turn-grouping";
-import { buildSections } from "./turn-grouping";
+import type { HandoffNode, StepNode, TimelineItem } from "./turn-grouping";
+import { buildSections, hasOpenHandoffRequest, hasUserTurn } from "./turn-grouping";
 import type { PermissionResolution } from "./message-classification";
 
 // --- Event builders ---
@@ -1494,8 +1494,21 @@ function agentSwitch(ts: string, id: string, fromHarness = "claude", toHarness =
   };
 }
 
+/** The chat app's summary request, as the retiring agent's transcript records it: a chip. */
+function summaryRequest(ts: string, id = `u-${ts}`): UserMessageEvent {
+  return userMsg(ts, "/handoff-summary data/.apps/chat/chats/agent-a/summaries/1.md", id, {
+    display: "chip",
+    display_label: "Asked for a handoff summary",
+  });
+}
+
+function handoffNodeOf(item: TimelineItem | undefined): HandoffNode {
+  if (item === undefined || item.kind !== "handoff") throw new Error(`expected a handoff node, got ${item?.kind}`);
+  return item.node;
+}
+
 describe("agent switches", () => {
-  it("closes the prior turn on a switch and opens a bubble-less section on the chip", () => {
+  it("closes the prior turn on a switch with no summary and opens a bubble-less section for the new agent", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "before the switch"),
       assistantText("t2", "done on claude"),
@@ -1506,13 +1519,70 @@ describe("agent switches", () => {
     const sections = buildSections(events, new Map(), true);
 
     expect(sections.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", null, "u-t5"]);
-    // The switch section opens on the chip, and the new agent's greeting is its reply.
-    expect(sections[1].items.map((i) => i.kind)).toEqual(["switch"]);
-    const chip = sections[1].items[0];
-    expect(chip.kind === "switch" && chip.event.event_id).toBe("sw1");
+    // With no summary request the switch itself is the node, at the end of the retiring agent's
+    // turn; what that agent said before it stays above the node rather than sinking below.
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["ungrouped", "handoff"]);
+    const node = handoffNodeOf(sections[0].items[1]);
+    expect(node.switch?.event_id).toBe("sw1");
+    expect(node.request).toBeNull();
+    expect(sections[0].trailing_reply).toEqual([]);
+    // The new agent's section opens with nothing but its greeting as its reply.
+    expect(sections[1].items).toEqual([]);
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t4"]);
-    // The prior turn keeps its own reply.
-    expect(sections[0].trailing_reply.map((e) => e.event_id)).toEqual(["a-t2"]);
+  });
+
+  it("folds the summary request, the retiring agent's answer, and the switch into one node", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do the thing"),
+      assistantText("t2", "on it"),
+      summaryRequest("t3"),
+      workMsg("t4", "Write", "w1"),
+      assistantText("t5", ""),
+      agentSwitch("t6", "sw1"),
+      assistantText("t7", "hello from codex"),
+    ];
+    const sections = buildSections(events, new Map(), true);
+
+    expect(sections).toHaveLength(2);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["ungrouped", "handoff"]);
+    const node = handoffNodeOf(sections[0].items[1]);
+    expect(node.request?.event_id).toBe("u-t3");
+    expect(node.events.map((e) => e.event_id)).toEqual(["a-w1", "a-t5"]);
+    expect(node.switch?.event_id).toBe("sw1");
+    // Nothing of the summary turn leaks into the section's own flow or reply.
+    expect(sections[0].trailing_reply).toEqual([]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t7"]);
+  });
+
+  it("keeps the node open while the switch has not landed, and reports the open request", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "do the thing"),
+      summaryRequest("t2"),
+      workMsg("t3", "Write", "w1"),
+    ];
+    const sections = buildSections(events, new Map(), false);
+
+    expect(sections).toHaveLength(1);
+    const node = handoffNodeOf(sections[0].items[0]);
+    expect(node.switch).toBeNull();
+    expect(node.events.map((e) => e.event_id)).toEqual(["a-w1"]);
+    expect(hasOpenHandoffRequest(events)).toBe(true);
+    // Once the switch lands, the live segment has no open request.
+    expect(hasOpenHandoffRequest([...events, agentSwitch("t4", "sw1")])).toBe(false);
+    // A handoff called off leaves the node where it was, and a later turn is its own section.
+    const cancelled = [...events, userMsg("t5", "never mind, carry on here"), assistantText("t6", "ok")];
+    const after = buildSections(cancelled, new Map(), true);
+    expect(after.map((s) => s.user_event?.event_id ?? null)).toEqual(["u-t1", "u-t5"]);
+    expect(handoffNodeOf(after[0].items[0]).switch).toBeNull();
+    expect(after[1].trailing_reply.map((e) => e.event_id)).toEqual(["a-t6"]);
+  });
+
+  it("counts a user turn only for a message the user typed", () => {
+    // The fresh-start rule the page shares with the backend: hidden and chip messages are not turns.
+    const welcome = userMsg("t1", "/welcome", "u-w", { display: "hidden" });
+    const chip = userMsg("t2", "Stop hook feedback:\nx", "u-c", { display: "chip" });
+    expect(hasUserTurn([welcome, assistantText("t3", "hi"), chip])).toBe(false);
+    expect(hasUserTurn([welcome, userMsg("t4", "hello")])).toBe(true);
   });
 
   it("carries a step still open at the switch over into the new agent's section", () => {
@@ -1533,7 +1603,9 @@ describe("agent switches", () => {
     const carried = sections[1].items.filter((i): i is Extract<TimelineItem, { kind: "step" }> => i.kind === "step");
     expect(carried.map((i) => i.step.ticket_id)).toEqual(["cod-step-aaaa"]);
     expect(carried[0].step.is_carryover).toBe(true);
-    // A carried step leads its section, as it does after a user turn; the chip follows it.
-    expect(sections[1].items.map((i) => i.kind)).toEqual(["step", "switch"]);
+    // A carried step leads its section, as it does after a user turn; the switch node stays behind
+    // in the retiring agent's turn.
+    expect(sections[1].items.map((i) => i.kind)).toEqual(["step"]);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["step", "handoff"]);
   });
 });

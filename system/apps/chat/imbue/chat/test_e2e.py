@@ -741,27 +741,27 @@ def _open_provider_menu(chat: FrameLocator) -> None:
 
 
 def _choose_pending_account(chat: FrameLocator, provider: str, label: str) -> None:
-    """Press an account on another harness in the provider menu, which makes it the chat's pending lane.
+    """Press an account in the provider menu and arm the switch from the dialog it opens.
 
     The row shows the provider and the harness as two spans, so it is found by the provider word;
-    the Provider row then names the account by its composed label.
+    the strip above the composer then names the account by its composed label.
     """
     _open_provider_menu(chat)
     chat.locator('[data-model-popover="flyout"] button', has_text=provider).first.click()
-    expect(chat.locator('[data-card-row="providers"]')).to_contain_text(f"next: {label}")
-    # The card stays up; a click on the transcript takes it down before typing.
-    chat.locator(".message-list").first.click()
+    dialog = chat.locator(".modal-card")
+    expect(dialog).to_contain_text("Switch to")
+    dialog.get_by_role("button", name="Switch this chat").click()
+    expect(chat.locator(".message-input-switch-strip")).to_contain_text(
+        f"Your next message switches this chat to {label}"
+    )
 
 
 def _switch_and_send(chat: FrameLocator, message: str) -> None:
-    """Type the message, press Switch and send, and confirm."""
+    """Type the message and press Switch and send; the choice was made in the dialog, so nothing asks again."""
     chat.locator(".message-input-textbox").fill(message)
     switch_button = chat.locator(".message-input-send-button--switch")
     expect(switch_button).to_contain_text("Switch and send")
     switch_button.click()
-    dialog = chat.locator(".modal-card")
-    expect(dialog).to_contain_text("Claude wraps up what it is doing and stops.")
-    dialog.get_by_role("button", name="Switch and send").click()
 
 
 def _switched_workspace(
@@ -780,8 +780,8 @@ def _switched_workspace(
 
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: Page) -> None:
-    """The whole switch through the browser: the pending lane, Switch and send, the confirm, the phase
-    text on the held message, the switch chip, and the provider row on the new account."""
+    """The whole switch through the browser: the dialog, the armed strip, Switch and send, the held message,
+    the handoff node's progress and completion, and the provider row on the new account."""
     with _switched_workspace(tmp_path, messenger=SummaryWritingMngrMessenger()) as server:
         page.goto(server.shell_url)
         _open_fixture_chat(page)
@@ -795,31 +795,34 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
         _switch_and_send(chat, "Carry on in Codex")
 
-        # The typed message stays visible as a held bubble captioned with the switch's phase, and
-        # the strip above the composer reports the switch rather than a turn.
+        # The typed message stays visible as a held bubble, the handoff node reports the switch's
+        # progress, and the strip above the composer reports the switch rather than a turn.
         held = chat.locator(".held-send", has_text="Carry on in Codex")
         expect(held).to_be_visible(timeout=15000)
-        expect(held).to_contain_text(re.compile(r"Wrapping up with Claude|Claude is writing a summary|Starting Codex"))
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
         expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_be_visible()
         expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
+        expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
-        # The switch completes against the fake mngr: the chip lands live, and the chat is on Codex.
-        expect(chat.locator(".message-agent-switch")).to_contain_text("Switched from Claude to Codex", timeout=30000)
+        # The switch completes against the fake mngr: the node closes live, and the chat is on Codex.
+        expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
+            "Handed off from Claude to Codex", timeout=30000
+        )
         snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and snapshot.handoff is None
         assert snapshot.active_agent.harness.value == "codex"
         assert snapshot.active_agent.account_id == server.account_ids[1]
         assert len(snapshot.agent_ids) == 2
-        # The provider row follows the new account, and the pending lane is spent.
+        # The provider row follows the new account, and the armed switch is spent.
         chat.locator(".model-selector-trigger").click()
         provider_row = chat.locator('[data-card-row="providers"]')
         expect(provider_row).to_contain_text("OpenAI")
-        expect(provider_row).not_to_contain_text("next:")
+        expect(provider_row).not_to_contain_text("after your next message")
 
 
 @pytest.mark.timeout(90, func_only=False)
 def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Page) -> None:
-    """The rebind through the browser: a second account on the chat's own lane is a switch too, its confirm
+    """The rebind through the browser: a second account on the chat's own lane is a switch too, its dialog
     is one line and offers a new chat instead, and the chat comes back on the same agent with its transcript,
     now read from the new account's folder."""
     with _switched_workspace(tmp_path, additional_accounts=(("anthropic", "Anthropic"),)) as server:
@@ -828,17 +831,20 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         chat = _chat(page)
         expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
-        _choose_pending_account(chat, "Anthropic 2", "Anthropic 2 (Claude Code)")
+        _open_provider_menu(chat)
+        chat.locator('[data-model-popover="flyout"] button', has_text="Anthropic 2").first.click()
+        dialog = chat.locator(".modal-card")
+        expect(dialog).to_contain_text("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation.")
+        expect(dialog).not_to_contain_text("wraps up what it is doing")
+        expect(dialog.locator("select")).to_have_count(0)
+        expect(dialog.get_by_role("button", name="Start a new chat")).to_be_visible()
+        dialog.get_by_role("button", name="Switch this chat").click()
+        expect(chat.locator(".message-input-switch-strip")).to_contain_text("Anthropic 2 (Claude Code)")
 
         chat.locator(".message-input-textbox").fill("Carry on on the other account")
         switch_button = chat.locator(".message-input-send-button--switch")
         expect(switch_button).to_contain_text("Switch and send")
         switch_button.click()
-        dialog = chat.locator(".modal-card")
-        expect(dialog).to_contain_text("Claude restarts on Anthropic 2 (Claude Code) and keeps this conversation.")
-        expect(dialog).not_to_contain_text("wraps up what it is doing")
-        expect(dialog.get_by_role("button", name="Start a new chat instead")).to_be_visible()
-        dialog.get_by_role("button", name="Switch and send").click()
 
         # The rebind runs against the fake mngr and lands the same agent on the second account.
         manager = server.chat_state.agent_manager
@@ -861,16 +867,16 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         messenger = manager._messenger
         assert isinstance(messenger, RecordingMngrMessenger)
         wait_for(lambda: (FIXTURE_AGENT_ID, "Carry on on the other account") in messenger.sent, timeout=10.0)
-        # The page keeps the transcript, no switch chip appears (the agent did not change), the held
-        # bubble is gone, and the provider row names the new account with the lane spent.
+        # The page keeps the transcript, no handoff node remains (the agent did not change), the held
+        # bubble is gone, and the provider row names the new account with the choice spent.
         expect(chat.locator(".message-list")).to_contain_text("Hello agent!")
-        expect(chat.locator(".message-agent-switch")).to_have_count(0)
         expect(chat.locator(".held-send")).to_have_count(0, timeout=15000)
+        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
         expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
         chat.locator(".model-selector-trigger").click()
         provider_row = chat.locator('[data-card-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
-        expect(provider_row).not_to_contain_text("next:")
+        expect(provider_row).not_to_contain_text("after your next message")
 
 
 @pytest.mark.timeout(90, func_only=False)
@@ -888,19 +894,23 @@ def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_come
         _switch_and_send(chat, "Carry on in Codex")
 
         # The recording messenger never writes the summary, so summarizing lasts the idle grace
-        # period, long enough to call the switch off.
+        # period, long enough to call the switch off. The node reports the switch meanwhile.
         cancel = chat.locator(".message-input-cancel-switch-button")
         expect(cancel).to_be_visible(timeout=15000)
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
         cancel.click()
 
         expect(chat.locator(".message-input-textbox")).to_have_value("Carry on in Codex", timeout=15000)
         expect(chat.locator(".message-input-cancel-switch-button")).to_have_count(0)
         expect(chat.locator(".held-send")).to_have_count(0)
-        # The pending lane survives the cancel, so the next send offers the switch again.
+        # The armed switch survives the cancel, so the next send offers it again. The recording
+        # messenger never lands the summary request in the fixture transcript, so no node is left
+        # behind here (a real agent records the request, and the node then reads as called off:
+        # ``handoff-node.test.ts``).
         expect(chat.locator(".message-input-send-button--switch")).to_contain_text("Switch and send")
         snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and snapshot.handoff is None and len(snapshot.agent_ids) == 1
-        expect(chat.locator(".message-agent-switch")).to_have_count(0)
+        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -936,8 +946,8 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         notice.locator(".handoff-retry-account").select_option(server.account_ids[2])
         notice.locator(".handoff-retry-button").click()
 
-        expect(chat.locator(".message-agent-switch")).to_contain_text(
-            "Switched from Claude to Antigravity", timeout=30000
+        expect(chat.locator('[data-handoff-status="done"]')).to_contain_text(
+            "Handed off from Claude to Antigravity", timeout=30000
         )
         expect(chat.locator(".handoff-failed-notice")).to_have_count(0)
         settled = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)

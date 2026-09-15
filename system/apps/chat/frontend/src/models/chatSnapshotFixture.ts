@@ -44,6 +44,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
     target_label: "Codex",
     held_sends: [{ message_id: "trigger-1", text: "Carry on in Codex" }],
     error: null,
+    failed_step: null,
     ...overrides,
   };
 }
@@ -60,6 +61,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     target_label: "Anthropic 2 (Claude Code)",
     held_sends: [{ message_id: "trigger-1", text: "Carry on on the other account" }],
     error: null,
+    failed_step: null,
     ...overrides,
   };
 }
